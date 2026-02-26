@@ -1,4 +1,4 @@
-import type { Chat, ChatListItem, OllamaModel } from "../types";
+import type { Chat, ChatListItem, MessageUsage, OllamaModel } from "../types";
 
 const BASE = "/api";
 
@@ -26,7 +26,7 @@ export async function createChat(modelId: string): Promise<Chat> {
 
 export async function updateChat(
   id: string,
-  data: { title?: string; modelId?: string }
+  data: { title?: string; modelId?: string; systemPrompt?: string }
 ): Promise<Chat> {
   const res = await fetch(`${BASE}/chats/${id}`, {
     method: "PATCH",
@@ -42,12 +42,17 @@ export async function deleteChat(id: string): Promise<void> {
   if (!res.ok) throw new Error("Failed to delete chat");
 }
 
+export interface StreamCallbacks {
+  onDelta: (delta: string) => void;
+  onThinkingDelta: (delta: string) => void;
+  onDone: (message: { thinking?: string; usage?: MessageUsage }) => void;
+  onError: (error: string) => void;
+}
+
 export function sendMessage(
   chatId: string,
   message: string,
-  onDelta: (delta: string) => void,
-  onDone: () => void,
-  onError: (error: string) => void
+  callbacks: StreamCallbacks
 ): AbortController {
   const controller = new AbortController();
 
@@ -60,13 +65,14 @@ export function sendMessage(
     .then(async (res) => {
       if (!res.ok) {
         const err = await res.json();
-        onError(err.error || "Request failed");
+        callbacks.onError(err.error || "Request failed");
         return;
       }
 
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let currentEvent = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -78,28 +84,22 @@ export function sendMessage(
 
         for (const line of lines) {
           if (line.startsWith("event: ")) {
-            const eventType = line.slice(7).trim();
-            // Next line should be data
-            const dataIdx = lines.indexOf(line) + 1;
-            if (dataIdx < lines.length && lines[dataIdx].startsWith("data: ")) {
-              // handled below
-            }
+            currentEvent = line.slice(7).trim();
             continue;
           }
           if (line.startsWith("data: ")) {
-            const jsonStr = line.slice(6);
             try {
-              const data = JSON.parse(jsonStr);
-              if (data.delta !== undefined) {
-                onDelta(data.delta);
-              } else if (data.message) {
-                onDone();
-              } else if (data.error) {
-                onError(data.error);
-              }
+              const data = JSON.parse(line.slice(6));
+              processSSEEvent(currentEvent, data, callbacks);
             } catch {
               // skip malformed
             }
+            currentEvent = "";
+            continue;
+          }
+          // Empty line resets event type
+          if (line.trim() === "") {
+            currentEvent = "";
           }
         }
       }
@@ -107,24 +107,52 @@ export function sendMessage(
       // Process remaining buffer
       if (buffer.trim()) {
         for (const line of buffer.split("\n")) {
-          if (line.startsWith("data: ")) {
+          if (line.startsWith("event: ")) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-              if (data.delta !== undefined) onDelta(data.delta);
-              else if (data.message) onDone();
-              else if (data.error) onError(data.error);
+              processSSEEvent(currentEvent, data, callbacks);
             } catch {}
+            currentEvent = "";
           }
         }
       }
-
-      onDone();
     })
     .catch((e) => {
       if (e.name !== "AbortError") {
-        onError(e.message);
+        callbacks.onError(e.message);
       }
     });
 
   return controller;
+}
+
+function processSSEEvent(
+  eventType: string,
+  data: any,
+  callbacks: StreamCallbacks
+) {
+  switch (eventType) {
+    case "text_delta":
+      if (data.delta !== undefined) callbacks.onDelta(data.delta);
+      break;
+    case "thinking_delta":
+      if (data.delta !== undefined) callbacks.onThinkingDelta(data.delta);
+      break;
+    case "done":
+      callbacks.onDone({
+        thinking: data.message?.thinking,
+        usage: data.message?.usage,
+      });
+      break;
+    case "error":
+      callbacks.onError(data.error || "Unknown error");
+      break;
+    default:
+      // Fallback for untyped events
+      if (data.delta !== undefined) callbacks.onDelta(data.delta);
+      else if (data.message) callbacks.onDone({ thinking: data.message?.thinking, usage: data.message?.usage });
+      else if (data.error) callbacks.onError(data.error);
+  }
 }

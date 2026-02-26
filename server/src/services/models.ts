@@ -25,20 +25,26 @@ export async function discoverOllamaModels(): Promise<OllamaModel[]> {
       id: m.name,
       name: formatModelName(m.name, m.details.parameter_size),
       parameterSize: m.details.parameter_size,
+      family: m.details.family,
       contextWindow: guessContextWindow(m.details.family),
     }));
+}
+
+function supportsReasoning(family: string): boolean {
+  return family.startsWith("qwen3");
 }
 
 export function createPiModel(
   ollamaModel: OllamaModel
 ): Model<"openai-completions"> {
+  const reasoning = supportsReasoning(ollamaModel.family);
   return {
     id: ollamaModel.id,
     name: ollamaModel.name,
     api: "openai-completions",
     provider: "ollama",
     baseUrl: `${OLLAMA_BASE}/v1`,
-    reasoning: false,
+    reasoning,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: ollamaModel.contextWindow,
@@ -49,6 +55,7 @@ export function createPiModel(
       supportsReasoningEffort: false,
       maxTokensField: "max_tokens",
       supportsStrictMode: false,
+      thinkingFormat: reasoning ? "qwen" : undefined,
     },
   };
 }

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { useChats } from "./hooks/useChats";
@@ -12,16 +12,28 @@ export default function App() {
   const { chats, createChat, removeChat, refresh } = useChats();
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
-  const { messages, streaming, error, send, abort, loadMessages } =
-    useChat(activeChatId);
+  const {
+    messages,
+    streaming,
+    streamingThinking,
+    totalUsage,
+    error,
+    send,
+    abort,
+    loadMessages,
+  } = useChat(activeChatId);
+
+  // Find context window for active model
+  const contextWindow = useMemo(() => {
+    const model = models.find((m) => m.id === activeChat?.modelId);
+    return model?.contextWindow || 32768;
+  }, [models, activeChat?.modelId]);
 
   // Fetch full chat when selecting one (we need messages)
   const selectChat = useCallback(
     async (id: string) => {
       setActiveChatId(id);
       try {
-        // Fetch full chat data including messages via GET /api/chats/:id
-        // Since we don't have this route, let's add logic to get it
         const res = await fetch(`/api/chats/${id}`);
         if (res.ok) {
           const chat: Chat = await res.json();
@@ -74,6 +86,15 @@ export default function App() {
     [activeChatId, activeChat]
   );
 
+  const handleSystemPromptChange = useCallback(
+    async (systemPrompt: string) => {
+      if (!activeChatId || !activeChat) return;
+      await apiUpdateChat(activeChatId, { systemPrompt });
+      setActiveChat((prev) => (prev ? { ...prev, systemPrompt } : prev));
+    },
+    [activeChatId, activeChat]
+  );
+
   return (
     <div className="flex h-screen">
       <Sidebar
@@ -88,12 +109,17 @@ export default function App() {
         chatTitle={activeChat?.title || "New Chat"}
         messages={messages}
         streaming={streaming}
+        streamingThinking={streamingThinking}
+        totalUsage={totalUsage}
+        contextWindow={contextWindow}
         error={error}
         models={models}
         selectedModelId={activeChat?.modelId || models[0]?.id || ""}
+        systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}
         onSend={handleSend}
         onAbort={abort}
         onModelChange={handleModelChange}
+        onSystemPromptChange={handleSystemPromptChange}
       />
     </div>
   );

@@ -1,10 +1,11 @@
 import { useState, useCallback, useRef } from "react";
 import { sendMessage } from "../api/client";
-import type { ChatMessage } from "../types";
+import type { ChatMessage, MessageUsage } from "../types";
 
 export function useChat(chatId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [streamingThinking, setStreamingThinking] = useState("");
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
@@ -25,6 +26,7 @@ export function useChat(chatId: string | null) {
 
       setMessages((prev) => [...prev, userMsg]);
       setStreaming(true);
+      setStreamingThinking("");
       setError(null);
       doneCalledRef.current = false;
 
@@ -36,11 +38,8 @@ export function useChat(chatId: string | null) {
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
-      abortRef.current = sendMessage(
-        chatId,
-        text,
-        // onDelta
-        (delta) => {
+      abortRef.current = sendMessage(chatId, text, {
+        onDelta: (delta) => {
           setMessages((prev) => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
@@ -53,19 +52,34 @@ export function useChat(chatId: string | null) {
             return updated;
           });
         },
-        // onDone
-        () => {
+        onThinkingDelta: (delta) => {
+          setStreamingThinking((prev) => prev + delta);
+        },
+        onDone: ({ thinking, usage }) => {
           if (!doneCalledRef.current) {
             doneCalledRef.current = true;
+            // Save thinking and usage into the last assistant message
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last.role === "assistant") {
+                updated[updated.length - 1] = {
+                  ...last,
+                  thinking: thinking || undefined,
+                  usage: usage || undefined,
+                };
+              }
+              return updated;
+            });
+            setStreamingThinking("");
             setStreaming(false);
           }
         },
-        // onError
-        (err) => {
+        onError: (err) => {
           setError(err);
           setStreaming(false);
-        }
-      );
+        },
+      });
     },
     [chatId, streaming]
   );
@@ -75,5 +89,27 @@ export function useChat(chatId: string | null) {
     setStreaming(false);
   }, []);
 
-  return { messages, streaming, error, send, abort, loadMessages };
+  // Compute total usage across all messages
+  const totalUsage: MessageUsage = messages.reduce(
+    (acc, msg) => {
+      if (msg.usage) {
+        acc.input += msg.usage.input;
+        acc.output += msg.usage.output;
+        acc.totalTokens += msg.usage.totalTokens;
+      }
+      return acc;
+    },
+    { input: 0, output: 0, totalTokens: 0 }
+  );
+
+  return {
+    messages,
+    streaming,
+    streamingThinking,
+    totalUsage,
+    error,
+    send,
+    abort,
+    loadMessages,
+  };
 }

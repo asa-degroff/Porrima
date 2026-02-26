@@ -1,16 +1,27 @@
 import type { ChatMessage } from "../types";
 import { StreamingText } from "./StreamingText";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { ThinkingBlock } from "./ThinkingBlock";
 
 interface Props {
   message: ChatMessage;
   isStreaming: boolean;
   isLast: boolean;
+  streamingThinking?: string;
 }
 
-export function MessageBubble({ message, isStreaming, isLast }: Props) {
+export function MessageBubble({
+  message,
+  isStreaming,
+  isLast,
+  streamingThinking,
+}: Props) {
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;
+
+  // During streaming, use live thinking; after done, use saved thinking
+  const thinkingText = showStreaming ? streamingThinking : message.thinking;
+  const isThinkingStreaming = showStreaming && !message.content;
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4`}>
@@ -25,14 +36,27 @@ export function MessageBubble({ message, isStreaming, isLast }: Props) {
           <p className="whitespace-pre-wrap text-sm leading-relaxed">
             {message.content}
           </p>
-        ) : showStreaming ? (
-          <div className="text-sm leading-relaxed">
-            <StreamingText content={message.content} isStreaming />
-          </div>
         ) : (
-          <div className="text-sm leading-relaxed">
-            <MarkdownRenderer content={message.content} />
-          </div>
+          <>
+            {thinkingText && (
+              <ThinkingBlock
+                thinking={thinkingText}
+                isStreaming={showStreaming}
+              />
+            )}
+            {showStreaming ? (
+              <div className="text-sm leading-relaxed">
+                <StreamingText
+                  content={message.content}
+                  isStreaming={!isThinkingStreaming}
+                />
+              </div>
+            ) : (
+              <div className="text-sm leading-relaxed">
+                <MarkdownRenderer content={message.content} />
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

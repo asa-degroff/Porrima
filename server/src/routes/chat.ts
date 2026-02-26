@@ -49,10 +49,15 @@ router.post("/", async (req, res) => {
     const assistantMsg = await streamChat(
       chat.modelId,
       chat.messages,
+      chat.systemPrompt || "You are a helpful assistant.",
       (event) => {
         if (event.type === "text_delta") {
           res.write(
             `event: text_delta\ndata: ${JSON.stringify({ delta: event.delta })}\n\n`
+          );
+        } else if (event.type === "thinking_delta") {
+          res.write(
+            `event: thinking_delta\ndata: ${JSON.stringify({ delta: event.delta })}\n\n`
           );
         }
       },

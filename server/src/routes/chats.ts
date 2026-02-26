@@ -25,6 +25,7 @@ router.post("/", async (req, res) => {
     id: uuid(),
     title: "New Chat",
     modelId: modelId || "qwen3:8b",
+    systemPrompt: "You are a helpful assistant.",
     messages: [],
     createdAt: new Date().toISOString(),
     lastModified: new Date().toISOString(),
@@ -40,6 +41,7 @@ router.patch("/:id", async (req, res) => {
 
   if (req.body.title !== undefined) chat.title = req.body.title;
   if (req.body.modelId !== undefined) chat.modelId = req.body.modelId;
+  if (req.body.systemPrompt !== undefined) chat.systemPrompt = req.body.systemPrompt;
 
   await saveChat(chat);
   res.json(chat);
