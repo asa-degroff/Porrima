@@ -36,3 +36,8 @@ export interface OllamaModel {
   family: string;
   contextWindow: number;
 }
+
+export interface Settings {
+  defaultModelId: string;
+  defaultSystemPrompt: string;
+}

@@ -1,17 +1,21 @@
 import { useState, useCallback, useMemo } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
+import { SettingsModal } from "./components/SettingsModal";
 import { useChats } from "./hooks/useChats";
 import { useChat } from "./hooks/useChat";
 import { useModels } from "./hooks/useModels";
+import { useSettings } from "./hooks/useSettings";
 import { updateChat as apiUpdateChat } from "./api/client";
 import type { Chat } from "./types";
 
 export default function App() {
   const { models } = useModels();
   const { chats, createChat, removeChat, refresh } = useChats();
+  const { settings, updateSettings } = useSettings();
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const {
     messages,
     streaming,
@@ -48,12 +52,12 @@ export default function App() {
   );
 
   const handleNewChat = useCallback(async () => {
-    const defaultModel = models[0]?.id || "qwen3:8b";
-    const chat = await createChat(defaultModel);
+    const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
+    const chat = await createChat(modelId);
     setActiveChatId(chat.id);
     setActiveChat(chat);
     loadMessages([]);
-  }, [models, createChat, loadMessages]);
+  }, [settings.defaultModelId, models, createChat, loadMessages]);
 
   const handleDeleteChat = useCallback(
     async (id: string) => {
@@ -103,6 +107,7 @@ export default function App() {
         onSelectChat={selectChat}
         onNewChat={handleNewChat}
         onDeleteChat={handleDeleteChat}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <ChatView
         chatId={activeChatId}
@@ -121,6 +126,17 @@ export default function App() {
         onModelChange={handleModelChange}
         onSystemPromptChange={handleSystemPromptChange}
       />
+      {settingsOpen && (
+        <SettingsModal
+          settings={settings}
+          models={models}
+          onSave={async (s) => {
+            await updateSettings(s);
+            setSettingsOpen(false);
+          }}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </div>
   );
 }

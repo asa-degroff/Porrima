@@ -1,4 +1,4 @@
-import type { Chat, ChatListItem, MessageUsage, OllamaModel } from "../types";
+import type { Chat, ChatListItem, MessageUsage, OllamaModel, Settings } from "../types";
 
 const BASE = "/api";
 
@@ -40,6 +40,22 @@ export async function updateChat(
 export async function deleteChat(id: string): Promise<void> {
   const res = await fetch(`${BASE}/chats/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Failed to delete chat");
+}
+
+export async function fetchSettings(): Promise<Settings> {
+  const res = await fetch(`${BASE}/settings`);
+  if (!res.ok) throw new Error("Failed to fetch settings");
+  return res.json();
+}
+
+export async function updateSettings(settings: Settings): Promise<Settings> {
+  const res = await fetch(`${BASE}/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error("Failed to save settings");
+  return res.json();
 }
 
 export interface StreamCallbacks {

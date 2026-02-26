@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
-import { listChats, getChat, saveChat, deleteChat } from "../services/storage.js";
+import { listChats, getChat, saveChat, deleteChat, getSettings } from "../services/storage.js";
 import type { Chat } from "../types.js";
 
 const router = Router();
@@ -21,11 +21,12 @@ router.get("/:id", async (req, res) => {
 // Create a new chat
 router.post("/", async (req, res) => {
   const { modelId } = req.body;
+  const settings = await getSettings();
   const chat: Chat = {
     id: uuid(),
     title: "New Chat",
-    modelId: modelId || "qwen3:8b",
-    systemPrompt: "You are a helpful assistant.",
+    modelId: modelId || settings.defaultModelId || "qwen3:8b",
+    systemPrompt: settings.defaultSystemPrompt,
     messages: [],
     createdAt: new Date().toISOString(),
     lastModified: new Date().toISOString(),

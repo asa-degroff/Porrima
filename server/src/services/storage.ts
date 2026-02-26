@@ -1,9 +1,11 @@
 import { readFile, writeFile, readdir, unlink, mkdir } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
-import type { Chat, ChatListItem } from "../types.js";
+import type { Chat, ChatListItem, Settings } from "../types.js";
 
-const STORAGE_DIR = join(homedir(), ".pi-webui", "chats");
+const BASE_DIR = join(homedir(), ".pi-webui");
+const STORAGE_DIR = join(BASE_DIR, "chats");
+const SETTINGS_PATH = join(BASE_DIR, "settings.json");
 
 async function ensureDir() {
   await mkdir(STORAGE_DIR, { recursive: true });
@@ -64,4 +66,25 @@ export async function deleteChat(id: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+const DEFAULT_SETTINGS: Settings = {
+  defaultModelId: "",
+  defaultSystemPrompt: "You are a helpful assistant.",
+};
+
+export async function getSettings(): Promise<Settings> {
+  try {
+    const data = await readFile(SETTINGS_PATH, "utf-8");
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+export async function saveSettings(settings: Settings): Promise<Settings> {
+  await mkdir(BASE_DIR, { recursive: true });
+  const merged = { ...DEFAULT_SETTINGS, ...settings };
+  await writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
+  return merged;
 }
