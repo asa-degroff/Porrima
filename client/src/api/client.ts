@@ -1,4 +1,4 @@
-import type { Chat, ChatListItem, MessageUsage, OllamaModel, Settings } from "../types";
+import type { Chat, ChatListItem, ChatType, MessageUsage, OllamaModel, Settings } from "../types";
 
 const BASE = "/api";
 
@@ -14,11 +14,11 @@ export async function fetchChats(): Promise<ChatListItem[]> {
   return res.json();
 }
 
-export async function createChat(modelId: string): Promise<Chat> {
+export async function createChat(modelId: string, type: ChatType = "quick"): Promise<Chat> {
   const res = await fetch(`${BASE}/chats`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ modelId }),
+    body: JSON.stringify({ modelId, type }),
   });
   if (!res.ok) throw new Error("Failed to create chat");
   return res.json();
@@ -63,6 +63,7 @@ export interface StreamCallbacks {
   onThinkingDelta: (delta: string) => void;
   onDone: (message: { thinking?: string; usage?: MessageUsage }) => void;
   onError: (error: string) => void;
+  onToolResult?: (result: { name: string; success: boolean; result: string }) => void;
 }
 
 export function sendMessage(
@@ -161,6 +162,9 @@ function processSSEEvent(
         thinking: data.message?.thinking,
         usage: data.message?.usage,
       });
+      break;
+    case "tool_result":
+      callbacks.onToolResult?.(data);
       break;
     case "error":
       callbacks.onError(data.error || "Unknown error");

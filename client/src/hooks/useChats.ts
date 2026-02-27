@@ -4,7 +4,7 @@ import {
   createChat as apiCreateChat,
   deleteChat as apiDeleteChat,
 } from "../api/client";
-import type { ChatListItem } from "../types";
+import type { ChatListItem, ChatType } from "../types";
 
 export function useChats() {
   const [chats, setChats] = useState<ChatListItem[]>([]);
@@ -25,8 +25,8 @@ export function useChats() {
   }, [refresh]);
 
   const createChat = useCallback(
-    async (modelId: string) => {
-      const chat = await apiCreateChat(modelId);
+    async (modelId: string, type: ChatType = "quick") => {
+      const chat = await apiCreateChat(modelId, type);
       await refresh();
       return chat;
     },

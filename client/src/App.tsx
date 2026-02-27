@@ -7,7 +7,7 @@ import { useChat } from "./hooks/useChat";
 import { useModels } from "./hooks/useModels";
 import { useSettings } from "./hooks/useSettings";
 import { updateChat as apiUpdateChat } from "./api/client";
-import type { Chat } from "./types";
+import type { Chat, ChatType } from "./types";
 
 export default function App() {
   const { models } = useModels();
@@ -20,6 +20,7 @@ export default function App() {
     messages,
     streaming,
     streamingThinking,
+    lastToolResults,
     totalUsage,
     error,
     send,
@@ -51,9 +52,9 @@ export default function App() {
     [loadMessages]
   );
 
-  const handleNewChat = useCallback(async () => {
+  const handleNewChat = useCallback(async (type: ChatType = "quick") => {
     const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
-    const chat = await createChat(modelId);
+    const chat = await createChat(modelId, type);
     setActiveChatId(chat.id);
     setActiveChat(chat);
     loadMessages([]);
@@ -115,6 +116,7 @@ export default function App() {
         messages={messages}
         streaming={streaming}
         streamingThinking={streamingThinking}
+        toolResults={lastToolResults}
         totalUsage={totalUsage}
         contextWindow={contextWindow}
         error={error}

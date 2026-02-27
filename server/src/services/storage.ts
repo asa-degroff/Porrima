@@ -29,6 +29,7 @@ export async function listChats(): Promise<ChatListItem[]> {
       chats.push({
         id: chat.id,
         title: chat.title,
+        type: chat.type || "quick",
         lastModified: chat.lastModified,
         preview: lastMsg
           ? lastMsg.content.slice(0, 100)
@@ -47,7 +48,9 @@ export async function listChats(): Promise<ChatListItem[]> {
 export async function getChat(id: string): Promise<Chat | null> {
   try {
     const data = await readFile(chatPath(id), "utf-8");
-    return JSON.parse(data) as Chat;
+    const chat = JSON.parse(data) as Chat;
+    if (!chat.type) chat.type = "quick";
+    return chat;
   } catch {
     return null;
   }

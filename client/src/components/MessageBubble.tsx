@@ -8,6 +8,7 @@ interface Props {
   isStreaming: boolean;
   isLast: boolean;
   streamingThinking?: string;
+  toolResults?: string[];
 }
 
 export function MessageBubble({
@@ -15,6 +16,7 @@ export function MessageBubble({
   isStreaming,
   isLast,
   streamingThinking,
+  toolResults,
 }: Props) {
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;
@@ -32,6 +34,22 @@ export function MessageBubble({
             : "bg-white/5 border border-white/10 text-white/90"
         }`}
       >
+        {/* Tool result pills */}
+        {!isUser && toolResults && toolResults.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {toolResults.map((label, i) => (
+              <span
+                key={i}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                {label}
+              </span>
+            ))}
+          </div>
+        )}
         {isUser ? (
           <p className="whitespace-pre-wrap text-sm leading-relaxed">
             {message.content}

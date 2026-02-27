@@ -1,5 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { OllamaModel, Settings } from "../types";
+
+interface MemoryStatus {
+  memoryCount: number;
+  lastSynthesis: string | null;
+  embeddingModelAvailable: boolean;
+}
 
 interface Props {
   settings: Settings;
@@ -11,6 +17,8 @@ interface Props {
 export function SettingsModal({ settings, models, onSave, onClose }: Props) {
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
+  const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
+  const [synthesisRunning, setSynthesisRunning] = useState(false);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -20,9 +28,31 @@ export function SettingsModal({ settings, models, onSave, onClose }: Props) {
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
+  // Fetch memory status
+  useEffect(() => {
+    fetch("/api/memory/status")
+      .then((r) => r.json())
+      .then(setMemoryStatus)
+      .catch(() => {});
+  }, []);
+
   const handleSave = () => {
     onSave({ defaultModelId, defaultSystemPrompt: defaultSystemPrompt.trim() });
   };
+
+  const handleRunSynthesis = useCallback(async () => {
+    setSynthesisRunning(true);
+    try {
+      const res = await fetch("/api/memory/synthesis/run", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setMemoryStatus((prev) =>
+          prev ? { ...prev, memoryCount: data.memoryCount, lastSynthesis: data.lastSynthesis } : prev
+        );
+      }
+    } catch {}
+    setSynthesisRunning(false);
+  }, []);
 
   return (
     <div
@@ -31,9 +61,9 @@ export function SettingsModal({ settings, models, onSave, onClose }: Props) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-lg mx-4 backdrop-blur-xl bg-white/[0.08] border border-white/15 rounded-2xl shadow-2xl">
+      <div className="w-full max-w-lg mx-4 backdrop-blur-xl bg-white/[0.08] border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
           <h2 className="text-lg font-semibold text-white/90">Settings</h2>
           <button
             onClick={onClose}
@@ -47,7 +77,7 @@ export function SettingsModal({ settings, models, onSave, onClose }: Props) {
         </div>
 
         {/* Body */}
-        <div className="px-6 py-5 space-y-5">
+        <div className="px-6 py-5 space-y-5 overflow-y-auto">
           {/* Default Model */}
           <div className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Default Model</label>
@@ -79,10 +109,48 @@ export function SettingsModal({ settings, models, onSave, onClose }: Props) {
               placeholder="You are a helpful assistant."
             />
           </div>
+
+          {/* Memory Section */}
+          <div className="space-y-3 pt-2 border-t border-white/10">
+            <h3 className="text-sm font-medium text-white/70">Memory</h3>
+
+            {memoryStatus ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-white/50">Stored memories</span>
+                  <span className="text-white/80">{memoryStatus.memoryCount}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-white/50">Embedding model</span>
+                  <span className={memoryStatus.embeddingModelAvailable ? "text-green-400/80" : "text-red-400/80"}>
+                    {memoryStatus.embeddingModelAvailable ? "Available" : "Not found"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-white/50">Last synthesis</span>
+                  <span className="text-white/80">
+                    {memoryStatus.lastSynthesis
+                      ? new Date(memoryStatus.lastSynthesis).toLocaleDateString()
+                      : "Never"}
+                  </span>
+                </div>
+
+                <button
+                  onClick={handleRunSynthesis}
+                  disabled={synthesisRunning || memoryStatus.memoryCount === 0}
+                  className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {synthesisRunning ? "Running Synthesis..." : "Run Synthesis"}
+                </button>
+              </div>
+            ) : (
+              <p className="text-white/30 text-sm">Loading memory status...</p>
+            )}
+          </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-white/10">
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-white/10 shrink-0">
           <button
             onClick={onClose}
             className="px-4 py-2 rounded-lg text-sm text-white/60 hover:text-white/80 hover:bg-white/5 transition-all"

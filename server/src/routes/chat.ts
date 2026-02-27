@@ -1,6 +1,14 @@
 import { Router } from "express";
 import { getChat, saveChat } from "../services/storage.js";
 import { streamChat } from "../services/agent.js";
+import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
+import { discoverOllamaModels } from "../services/models.js";
+import { buildMemoryAugmentedPrompt } from "../services/memory-context.js";
+import {
+  parseToolCalls,
+  executeMemoryTool,
+  stripToolBlocks,
+} from "../services/memory-tools.js";
 import type { ChatMessage } from "../types.js";
 
 const router = Router();
@@ -46,10 +54,19 @@ router.post("/", async (req, res) => {
   req.on("close", () => abortController.abort());
 
   try {
-    const assistantMsg = await streamChat(
+    // Augment system prompt with memories for agent chats
+    let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+    if (chat.type === "agent") {
+      systemPrompt = await buildMemoryAugmentedPrompt(
+        systemPrompt,
+        chat.messages
+      );
+    }
+
+    let assistantMsg = await streamChat(
       chat.modelId,
       chat.messages,
-      chat.systemPrompt || "You are a helpful assistant.",
+      systemPrompt,
       (event) => {
         if (event.type === "text_delta") {
           res.write(
@@ -64,6 +81,64 @@ router.post("/", async (req, res) => {
       abortController.signal
     );
 
+    // Check for tool calls in agent chats
+    if (chat.type === "agent") {
+      const toolCalls = parseToolCalls(assistantMsg.content);
+      if (toolCalls.length > 0) {
+        // Execute all tools
+        for (const tool of toolCalls) {
+          console.log(`[memory-tool] Executing ${tool.name}:`, tool.args);
+          const result = await executeMemoryTool(tool, chat.id);
+
+          // Send tool result event to client
+          res.write(
+            `event: tool_result\ndata: ${JSON.stringify({ name: result.name, success: result.success, result: result.result })}\n\n`
+          );
+
+          // Add tool interaction to chat context for follow-up
+          chat.messages.push({
+            role: "assistant",
+            content: assistantMsg.content,
+            thinking: assistantMsg.thinking,
+            timestamp: Date.now(),
+          });
+          chat.messages.push({
+            role: "user",
+            content: `[Tool result for ${result.name}]: ${result.result}`,
+            timestamp: Date.now(),
+          });
+        }
+
+        // Stream a follow-up response incorporating tool results
+        const followUp = await streamChat(
+          chat.modelId,
+          chat.messages,
+          systemPrompt,
+          (event) => {
+            if (event.type === "text_delta") {
+              res.write(
+                `event: text_delta\ndata: ${JSON.stringify({ delta: event.delta })}\n\n`
+              );
+            }
+          },
+          abortController.signal
+        );
+
+        // Remove the temporary tool context messages
+        chat.messages.splice(chat.messages.length - 2, 2);
+
+        // Save the cleaned-up assistant message (tool blocks stripped + follow-up appended)
+        const cleanedContent = stripToolBlocks(assistantMsg.content);
+        assistantMsg = {
+          ...followUp,
+          content: cleanedContent
+            ? `${cleanedContent}\n\n${followUp.content}`
+            : followUp.content,
+          thinking: assistantMsg.thinking,
+        };
+      }
+    }
+
     // Save the assistant message
     chat.messages.push(assistantMsg);
     await saveChat(chat);
@@ -71,6 +146,27 @@ router.post("/", async (req, res) => {
     res.write(
       `event: done\ndata: ${JSON.stringify({ message: assistantMsg })}\n\n`
     );
+
+    // Fire-and-forget memory extraction for agent chats
+    if (chat.type === "agent") {
+      extractMemories(chat.modelId, chat.id, message, assistantMsg.content)
+        .catch((err) => console.error("[memory] extraction failed:", err));
+
+      // Check for pre-compaction flush if usage is high
+      if (assistantMsg.usage) {
+        try {
+          const models = await discoverOllamaModels();
+          const model = models.find((m) => m.id === chat.modelId);
+          if (model) {
+            const usageRatio = assistantMsg.usage.totalTokens / model.contextWindow;
+            if (usageRatio > 0.75) {
+              preCompactionFlush(chat.modelId, chat.id, chat.messages)
+                .catch((err) => console.error("[memory] pre-compaction flush failed:", err));
+            }
+          }
+        } catch {}
+      }
+    }
   } catch (e: any) {
     if (e.name !== "AbortError") {
       res.write(

@@ -12,6 +12,7 @@ interface Props {
   messages: ChatMessage[];
   streaming: boolean;
   streamingThinking: string;
+  toolResults: string[];
   totalUsage: MessageUsage;
   contextWindow: number;
   error: string | null;
@@ -30,6 +31,7 @@ export function ChatView({
   messages,
   streaming,
   streamingThinking,
+  toolResults,
   totalUsage,
   contextWindow,
   error,
@@ -120,6 +122,9 @@ export function ChatView({
             isLast={i === messages.length - 1}
             streamingThinking={
               i === messages.length - 1 ? streamingThinking : undefined
+            }
+            toolResults={
+              i === messages.length - 1 ? toolResults : undefined
             }
           />
         ))}

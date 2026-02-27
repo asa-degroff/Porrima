@@ -6,6 +6,7 @@ export function useChat(chatId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingThinking, setStreamingThinking] = useState("");
+  const [lastToolResults, setLastToolResults] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
@@ -27,6 +28,7 @@ export function useChat(chatId: string | null) {
       setMessages((prev) => [...prev, userMsg]);
       setStreaming(true);
       setStreamingThinking("");
+      setLastToolResults([]);
       setError(null);
       doneCalledRef.current = false;
 
@@ -75,6 +77,12 @@ export function useChat(chatId: string | null) {
             setStreaming(false);
           }
         },
+        onToolResult: (result) => {
+          const label = result.success
+            ? `${result.name.replace("_", " ")}`
+            : `${result.name} failed`;
+          setLastToolResults((prev) => [...prev, label]);
+        },
         onError: (err) => {
           setError(err);
           setStreaming(false);
@@ -106,6 +114,7 @@ export function useChat(chatId: string | null) {
     messages,
     streaming,
     streamingThinking,
+    lastToolResults,
     totalUsage,
     error,
     send,
