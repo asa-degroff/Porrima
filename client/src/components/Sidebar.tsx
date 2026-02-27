@@ -33,7 +33,7 @@ export function Sidebar({
       {/* Header */}
       <div className="p-4 border-b border-white/10 flex items-center justify-between">
         <h1 className="text-lg font-semibold text-white/90 tracking-tight">
-          Pi Web UI
+          qu.je
         </h1>
         <button
           onClick={onOpenSettings}

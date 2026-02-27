@@ -4,7 +4,7 @@ import { homedir } from "os";
 import { cosineSimilarity } from "./embeddings.js";
 import type { Memory, MemoryStore } from "../types.js";
 
-const BASE_DIR = join(homedir(), ".pi-webui");
+const BASE_DIR = join(homedir(), ".quje-agent");
 const MEMORY_DIR = join(BASE_DIR, "memory");
 const MEMORY_FILE = join(MEMORY_DIR, "memories.json");
 const DAILY_DIR = join(MEMORY_DIR, "daily");

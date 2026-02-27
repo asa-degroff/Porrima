@@ -1,5 +1,5 @@
 {
-  "name": "pi-webui",
+  "name": "quje-agent",
   "private": true,
   "workspaces": ["server", "client"]
 }

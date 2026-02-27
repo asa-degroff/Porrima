@@ -3,7 +3,7 @@ import { join } from "path";
 import { homedir } from "os";
 import type { Chat, ChatListItem, Settings } from "../types.js";
 
-const BASE_DIR = join(homedir(), ".pi-webui");
+const BASE_DIR = join(homedir(), ".quje-agent");
 const STORAGE_DIR = join(BASE_DIR, "chats");
 const SETTINGS_PATH = join(BASE_DIR, "settings.json");
 

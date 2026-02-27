@@ -20,6 +20,6 @@ app.use("/api/settings", settingsRouter);
 app.use("/api/memory", memoryRouter);
 
 app.listen(PORT, () => {
-  console.log(`Pi Web UI server running on http://localhost:${PORT}`);
+  console.log(`qu.je agent server running on http://localhost:${PORT}`);
   startScheduler();
 });

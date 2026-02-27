@@ -1,5 +1,5 @@
 {
-  "name": "pi-webui-client",
+  "name": "quje-agent-client",
   "private": true,
   "type": "module",
   "scripts": {
