@@ -2,14 +2,16 @@ import { useState, useCallback, useMemo } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { SettingsModal } from "./components/SettingsModal";
+import { LoginPage } from "./components/LoginPage";
 import { useChats } from "./hooks/useChats";
 import { useChat } from "./hooks/useChat";
 import { useModels } from "./hooks/useModels";
 import { useSettings } from "./hooks/useSettings";
+import { useAuth } from "./hooks/useAuth";
 import { updateChat as apiUpdateChat } from "./api/client";
 import type { Chat, ChatType } from "./types";
 
-export default function App() {
+function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { models } = useModels();
   const { chats, createChat, removeChat, refresh } = useChats();
   const { settings, updateSettings } = useSettings();
@@ -43,7 +45,7 @@ export default function App() {
     async (id: string) => {
       setActiveChatId(id);
       try {
-        const res = await fetch(`/api/chats/${id}`);
+        const res = await fetch(`/api/chats/${id}`, { credentials: "include" });
         if (res.ok) {
           const chat: Chat = await res.json();
           setActiveChat(chat);
@@ -135,6 +137,7 @@ export default function App() {
         onNewChat={handleNewChat}
         onDeleteChat={handleDeleteChat}
         onOpenSettings={() => setSettingsOpen(true)}
+        onLogout={onLogout}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
@@ -178,4 +181,29 @@ export default function App() {
       )}
     </div>
   );
+}
+
+export default function App() {
+  const { authState, error, register, login, logout } = useAuth();
+
+  if (authState === "loading") {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="w-6 h-6 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (authState === "needs-setup" || authState === "needs-login") {
+    return (
+      <LoginPage
+        authState={authState}
+        error={error}
+        onRegister={register}
+        onLogin={login}
+      />
+    );
+  }
+
+  return <AuthenticatedApp onLogout={logout} />;
 }

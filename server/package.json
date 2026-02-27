@@ -10,14 +10,17 @@
   "dependencies": {
     "@mariozechner/pi-agent-core": "^0.55.1",
     "@mariozechner/pi-ai": "^0.55.1",
+    "@simplewebauthn/server": "^13.2.3",
     "@sinclair/typebox": "^0.34.48",
     "cors": "^2.8.5",
     "express": "^5.1.0",
+    "express-session": "^1.19.0",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
+    "@types/express-session": "^1.18.2",
     "@types/uuid": "^10.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"

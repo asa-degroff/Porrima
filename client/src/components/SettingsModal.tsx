@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
+import { startRegistration } from "@simplewebauthn/browser";
+import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import type { OllamaModel, Settings } from "../types";
 
 interface MemoryStatus {
@@ -19,6 +21,8 @@ export function SettingsModal({ settings, models, onSave, onClose }: Props) {
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
   const [synthesisRunning, setSynthesisRunning] = useState(false);
+  const [passkeyAdding, setPasskeyAdding] = useState(false);
+  const [passkeyMessage, setPasskeyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -30,7 +34,7 @@ export function SettingsModal({ settings, models, onSave, onClose }: Props) {
 
   // Fetch memory status
   useEffect(() => {
-    fetch("/api/memory/status")
+    fetch("/api/memory/status", { credentials: "include" })
       .then((r) => r.json())
       .then(setMemoryStatus)
       .catch(() => {});
@@ -40,10 +44,26 @@ export function SettingsModal({ settings, models, onSave, onClose }: Props) {
     onSave({ defaultModelId, defaultSystemPrompt: defaultSystemPrompt.trim() });
   };
 
+  const handleAddPasskey = useCallback(async () => {
+    setPasskeyAdding(true);
+    setPasskeyMessage(null);
+    try {
+      const options = await fetchRegisterOptions();
+      const response = await startRegistration({ optionsJSON: options });
+      const result = await verifyRegistration(response);
+      if (result.verified) {
+        setPasskeyMessage({ type: "ok", text: "Passkey added" });
+      }
+    } catch (err: any) {
+      setPasskeyMessage({ type: "err", text: err.message || "Failed to add passkey" });
+    }
+    setPasskeyAdding(false);
+  }, []);
+
   const handleRunSynthesis = useCallback(async () => {
     setSynthesisRunning(true);
     try {
-      const res = await fetch("/api/memory/synthesis/run", { method: "POST" });
+      const res = await fetch("/api/memory/synthesis/run", { method: "POST", credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setMemoryStatus((prev) =>
@@ -146,6 +166,30 @@ export function SettingsModal({ settings, models, onSave, onClose }: Props) {
             ) : (
               <p className="text-white/30 text-sm">Loading memory status...</p>
             )}
+          </div>
+
+          {/* Passkeys Section */}
+          <div className="space-y-3 pt-2 border-t border-white/10">
+            <h3 className="text-sm font-medium text-white/70">Passkeys</h3>
+            {passkeyMessage && (
+              <p className={`text-sm ${passkeyMessage.type === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
+                {passkeyMessage.text}
+              </p>
+            )}
+            <button
+              onClick={handleAddPasskey}
+              disabled={passkeyAdding}
+              className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z" />
+                <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+              </svg>
+              {passkeyAdding ? "Waiting for authenticator..." : "Add Passkey"}
+            </button>
+            <p className="text-white/30 text-xs">
+              Register a security key or another device to sign in from anywhere.
+            </p>
           </div>
         </div>
 

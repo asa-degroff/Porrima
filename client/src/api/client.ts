@@ -2,20 +2,36 @@ import type { Artifact, Chat, ChatListItem, ChatType, MessageUsage, OllamaModel,
 
 const BASE = "/api";
 
+function emitUnauthorized() {
+  window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+}
+
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, {
+    ...init,
+    credentials: "include",
+  });
+  if (res.status === 401) {
+    emitUnauthorized();
+    throw new Error("Authentication required");
+  }
+  return res;
+}
+
 export async function fetchModels(): Promise<OllamaModel[]> {
-  const res = await fetch(`${BASE}/models`);
+  const res = await apiFetch(`${BASE}/models`);
   if (!res.ok) throw new Error("Failed to fetch models");
   return res.json();
 }
 
 export async function fetchChats(): Promise<ChatListItem[]> {
-  const res = await fetch(`${BASE}/chats`);
+  const res = await apiFetch(`${BASE}/chats`);
   if (!res.ok) throw new Error("Failed to fetch chats");
   return res.json();
 }
 
 export async function createChat(modelId: string, type: ChatType = "quick"): Promise<Chat> {
-  const res = await fetch(`${BASE}/chats`, {
+  const res = await apiFetch(`${BASE}/chats`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ modelId, type }),
@@ -28,7 +44,7 @@ export async function updateChat(
   id: string,
   data: { title?: string; modelId?: string; systemPrompt?: string; contextWindow?: number | null }
 ): Promise<Chat> {
-  const res = await fetch(`${BASE}/chats/${id}`, {
+  const res = await apiFetch(`${BASE}/chats/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -38,24 +54,24 @@ export async function updateChat(
 }
 
 export async function fetchRenderedPrompt(id: string): Promise<{ systemPrompt: string; tools: { name: string; description: string }[] }> {
-  const res = await fetch(`${BASE}/chats/${id}/rendered-prompt`);
+  const res = await apiFetch(`${BASE}/chats/${id}/rendered-prompt`);
   if (!res.ok) throw new Error("Failed to fetch rendered prompt");
   return res.json();
 }
 
 export async function deleteChat(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/chats/${id}`, { method: "DELETE" });
+  const res = await apiFetch(`${BASE}/chats/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Failed to delete chat");
 }
 
 export async function fetchSettings(): Promise<Settings> {
-  const res = await fetch(`${BASE}/settings`);
+  const res = await apiFetch(`${BASE}/settings`);
   if (!res.ok) throw new Error("Failed to fetch settings");
   return res.json();
 }
 
 export async function updateSettings(settings: Settings): Promise<Settings> {
-  const res = await fetch(`${BASE}/settings`, {
+  const res = await apiFetch(`${BASE}/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
@@ -92,8 +108,14 @@ export function sendMessage(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chatId, message }),
     signal: controller.signal,
+    credentials: "include",
   })
     .then(async (res) => {
+      if (res.status === 401) {
+        emitUnauthorized();
+        callbacks.onError("Authentication required");
+        return;
+      }
       if (!res.ok) {
         const err = await res.json();
         callbacks.onError(err.error || "Request failed");

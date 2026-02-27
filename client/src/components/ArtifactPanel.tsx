@@ -16,7 +16,7 @@ export function ArtifactPanel({ artifact }: Props) {
   useEffect(() => {
     let url: string | null = null;
     let cancelled = false;
-    fetch(artifact.url)
+    fetch(artifact.url, { credentials: "include" })
       .then((r) => r.text())
       .then((html) => {
         if (cancelled) return;
