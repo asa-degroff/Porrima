@@ -108,6 +108,9 @@ router.post("/", async (req, res) => {
       piMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
     }
 
+    console.log(`[chat] type=${chat.type} tools=${tools ? tools.map(t => t.name).join(",") : "none"}`);
+
+
     let finalContent = "";
     let finalThinking: string | undefined;
     let finalUsage: ChatMessage["usage"];
