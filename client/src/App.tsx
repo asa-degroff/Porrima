@@ -31,6 +31,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     totalUsage,
     error,
     send,
+    editMessage,
     abort,
     loadMessages,
   } = useChat(activeChatId);
@@ -110,6 +111,16 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     [send, refresh]
   );
 
+  const handleEditMessage = useCallback(
+    (index: number, newText: string) => {
+      editMessage(index, newText);
+      // Refresh chat list after a short delay to pick up title changes
+      setTimeout(() => refresh(), 500);
+      setTimeout(() => refresh(), 2000);
+    },
+    [editMessage, refresh]
+  );
+
   const handleModelChange = useCallback(
     async (modelId: string) => {
       if (!activeChatId || !activeChat) return;
@@ -182,6 +193,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         selectedModelId={activeChat?.modelId || models[0]?.id || ""}
         systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}
         onSend={handleSend}
+        onEditMessage={handleEditMessage}
         onAbort={abort}
         onModelChange={handleModelChange}
         onSystemPromptChange={handleSystemPromptChange}

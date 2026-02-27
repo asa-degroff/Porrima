@@ -29,6 +29,7 @@ interface Props {
   selectedModelId: string;
   systemPrompt: string;
   onSend: (text: string) => void;
+  onEditMessage: (index: number, newText: string) => void;
   onAbort: () => void;
   onModelChange: (modelId: string) => void;
   onSystemPromptChange: (value: string) => void;
@@ -54,6 +55,7 @@ export function ChatView({
   selectedModelId,
   systemPrompt,
   onSend,
+  onEditMessage,
   onAbort,
   onModelChange,
   onSystemPromptChange,
@@ -247,6 +249,8 @@ export function ChatView({
             artifacts={
               i === messages.length - 1 && streaming ? artifacts : undefined
             }
+            editable={msg.role === "user" && !streaming}
+            onEdit={msg.role === "user" ? (newText) => onEditMessage(i, newText) : undefined}
           />
         ))}
         {error && (

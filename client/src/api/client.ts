@@ -96,17 +96,17 @@ export interface StreamCallbacks {
   onAskUser?: (question: string) => void;
 }
 
-export function sendMessage(
-  chatId: string,
-  message: string,
+function streamSSE(
+  url: string,
+  body: Record<string, unknown>,
   callbacks: StreamCallbacks
 ): AbortController {
   const controller = new AbortController();
 
-  fetch(`${BASE}/chat`, {
+  fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chatId, message }),
+    body: JSON.stringify(body),
     signal: controller.signal,
     credentials: "include",
   })
@@ -179,6 +179,23 @@ export function sendMessage(
     });
 
   return controller;
+}
+
+export function sendMessage(
+  chatId: string,
+  message: string,
+  callbacks: StreamCallbacks
+): AbortController {
+  return streamSSE(`${BASE}/chat`, { chatId, message }, callbacks);
+}
+
+export function editMessage(
+  chatId: string,
+  messageIndex: number,
+  message: string,
+  callbacks: StreamCallbacks
+): AbortController {
+  return streamSSE(`${BASE}/chat/edit`, { chatId, messageIndex, message }, callbacks);
 }
 
 function processSSEEvent(

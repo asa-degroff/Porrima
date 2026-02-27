@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { Request, Response } from "express";
 import type { Message, ToolResultMessage, ToolCall } from "@mariozechner/pi-ai";
 import { getChat, saveChat } from "../services/storage.js";
 import { streamChat, chatMessagesToPiMessages } from "../services/agent.js";
@@ -11,27 +12,25 @@ import {
   savePendingState,
   hasPendingState,
 } from "../services/agent-state.js";
-import type { Artifact, ChatMessage, ChatToolCall, ChatToolResult } from "../types.js";
+import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult } from "../types.js";
 
 const router = Router();
 
 const MAX_TOOL_ITERATIONS = 20;
 
-// Send message and stream response via SSE
-router.post("/", async (req, res) => {
-  const { chatId, message } = req.body as {
-    chatId: string;
-    message: string;
-  };
-
-  if (!chatId || !message) {
-    return res.status(400).json({ error: "chatId and message are required" });
-  }
-
-  const chat = await getChat(chatId);
-  if (!chat) return res.status(404).json({ error: "Chat not found" });
-
-  // Set up SSE
+/**
+ * Shared SSE streaming + tool-loop handler.
+ * Both POST / (send) and POST /edit call this after their own setup.
+ */
+async function handleChatStream(
+  chat: Chat,
+  userMessage: string,
+  piMessages: Message[],
+  systemPrompt: string,
+  tools: ReturnType<typeof getAgentTools> | undefined,
+  req: Request,
+  res: Response
+) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -43,74 +42,11 @@ router.post("/", async (req, res) => {
   req.on("close", () => abortController.abort());
 
   try {
-    // Check for pending agent state (ask_user resume flow)
-    const pendingState = await loadPendingState(chatId);
-
-    let piMessages: Message[];
-    let systemPrompt: string;
-    let tools: ReturnType<typeof getAgentTools> | undefined;
-
-    // Collect all tool calls, results, and artifacts across iterations for persistence
     const allToolCalls: ChatToolCall[] = [];
     const allToolResults: ChatToolResult[] = [];
     const allArtifacts: Artifact[] = [];
 
-    if (pendingState) {
-      // RESUME: the user's message is the answer to ask_user
-      // Inject it as a ToolResultMessage for the pending ask_user call
-      piMessages = pendingState.piMessages;
-      systemPrompt = pendingState.systemPrompt;
-      tools = chat.type === "agent" ? getAgentTools() : undefined;
-
-      const toolResultMsg: ToolResultMessage = {
-        role: "toolResult",
-        toolCallId: pendingState.askToolCallId,
-        toolName: "ask_user",
-        content: [{ type: "text", text: message }],
-        isError: false,
-        timestamp: Date.now(),
-      };
-      piMessages.push(toolResultMsg);
-
-      // Don't add user message to chat history — it's captured as tool result
-      // But we do want to show it in the UI, so add it as a user message
-      chat.messages.push({
-        role: "user",
-        content: message,
-        timestamp: Date.now(),
-      });
-      await saveChat(chat);
-    } else {
-      // NORMAL: add user message and build fresh context
-      const userMsg: ChatMessage = {
-        role: "user",
-        content: message,
-        timestamp: Date.now(),
-      };
-      chat.messages.push(userMsg);
-
-      // Auto-generate title from first message
-      if (chat.messages.length === 1) {
-        chat.title = message.slice(0, 50) + (message.length > 50 ? "..." : "");
-      }
-
-      await saveChat(chat);
-
-      // Augment system prompt with memories for agent chats
-      systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
-      if (chat.type === "agent") {
-        systemPrompt = await buildMemoryAugmentedPrompt(
-          systemPrompt,
-          chat.messages
-        );
-      }
-
-      tools = chat.type === "agent" ? getAgentTools() : undefined;
-      piMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
-    }
-
     console.log(`[chat] type=${chat.type} tools=${tools ? tools.map(t => t.name).join(",") : "none"}`);
-
 
     let finalContent = "";
     let finalThinking: string | undefined;
@@ -175,7 +111,7 @@ router.post("/", async (req, res) => {
         );
 
         // Save pending state for resume
-        await savePendingState(chatId, {
+        await savePendingState(chat.id, {
           piMessages,
           systemPrompt,
           askToolCallId: askUserCall.id,
@@ -242,48 +178,33 @@ router.post("/", async (req, res) => {
       // Continue loop — model will generate another response
     }
 
+    // Build the final assistant message
+    const assistantMsg: ChatMessage = {
+      role: "assistant",
+      content: finalContent,
+      thinking: finalThinking,
+      usage: finalUsage,
+      toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+      toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+      artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+      timestamp: Date.now(),
+    };
+
+    chat.messages.push(assistantMsg);
+    await saveChat(chat);
+
     if (waitingForInput) {
-      // Save partial assistant message with tool calls so far
-      const assistantMsg: ChatMessage = {
-        role: "assistant",
-        content: finalContent,
-        thinking: finalThinking,
-        usage: finalUsage,
-        toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-        toolResults: allToolResults.length > 0 ? allToolResults : undefined,
-        artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
-        timestamp: Date.now(),
-      };
-
-      chat.messages.push(assistantMsg);
-      await saveChat(chat);
-
       res.write(
         `event: done\ndata: ${JSON.stringify({ message: assistantMsg, waitingForInput: true })}\n\n`
       );
     } else {
-      // Build the final assistant message to save
-      const assistantMsg: ChatMessage = {
-        role: "assistant",
-        content: finalContent,
-        thinking: finalThinking,
-        usage: finalUsage,
-        toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-        toolResults: allToolResults.length > 0 ? allToolResults : undefined,
-        artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
-        timestamp: Date.now(),
-      };
-
-      chat.messages.push(assistantMsg);
-      await saveChat(chat);
-
       res.write(
         `event: done\ndata: ${JSON.stringify({ message: assistantMsg })}\n\n`
       );
 
       // Fire-and-forget memory extraction for agent chats
       if (chat.type === "agent") {
-        extractMemories(chat.modelId, chat.id, message, assistantMsg.content)
+        extractMemories(chat.modelId, chat.id, userMessage, assistantMsg.content)
           .catch((err) => console.error("[memory] extraction failed:", err));
 
         // Check for pre-compaction flush if usage is high
@@ -312,6 +233,137 @@ router.post("/", async (req, res) => {
   } finally {
     res.end();
   }
+}
+
+// Send message and stream response via SSE
+router.post("/", async (req, res) => {
+  const { chatId, message } = req.body as {
+    chatId: string;
+    message: string;
+  };
+
+  if (!chatId || !message) {
+    return res.status(400).json({ error: "chatId and message are required" });
+  }
+
+  const chat = await getChat(chatId);
+  if (!chat) return res.status(404).json({ error: "Chat not found" });
+
+  // Check for pending agent state (ask_user resume flow)
+  const pendingState = await loadPendingState(chatId);
+
+  let piMessages: Message[];
+  let systemPrompt: string;
+  let tools: ReturnType<typeof getAgentTools> | undefined;
+
+  if (pendingState) {
+    // RESUME: the user's message is the answer to ask_user
+    // Inject it as a ToolResultMessage for the pending ask_user call
+    piMessages = pendingState.piMessages;
+    systemPrompt = pendingState.systemPrompt;
+    tools = chat.type === "agent" ? getAgentTools() : undefined;
+
+    const toolResultMsg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: pendingState.askToolCallId,
+      toolName: "ask_user",
+      content: [{ type: "text", text: message }],
+      isError: false,
+      timestamp: Date.now(),
+    };
+    piMessages.push(toolResultMsg);
+
+    // Don't add user message to chat history — it's captured as tool result
+    // But we do want to show it in the UI, so add it as a user message
+    chat.messages.push({
+      role: "user",
+      content: message,
+      timestamp: Date.now(),
+    });
+    await saveChat(chat);
+  } else {
+    // NORMAL: add user message and build fresh context
+    const userMsg: ChatMessage = {
+      role: "user",
+      content: message,
+      timestamp: Date.now(),
+    };
+    chat.messages.push(userMsg);
+
+    // Auto-generate title from first message
+    if (chat.messages.length === 1) {
+      chat.title = message.slice(0, 50) + (message.length > 50 ? "..." : "");
+    }
+
+    await saveChat(chat);
+
+    // Augment system prompt with memories for agent chats
+    systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+    if (chat.type === "agent") {
+      systemPrompt = await buildMemoryAugmentedPrompt(
+        systemPrompt,
+        chat.messages
+      );
+    }
+
+    tools = chat.type === "agent" ? getAgentTools() : undefined;
+    piMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
+  }
+
+  await handleChatStream(chat, message, piMessages, systemPrompt, tools, req, res);
+});
+
+// Edit message at index and regenerate response via SSE
+router.post("/edit", async (req, res) => {
+  const { chatId, messageIndex, message } = req.body as {
+    chatId: string;
+    messageIndex: number;
+    message: string;
+  };
+
+  if (!chatId || messageIndex == null || !message) {
+    return res.status(400).json({ error: "chatId, messageIndex, and message are required" });
+  }
+
+  const chat = await getChat(chatId);
+  if (!chat) return res.status(404).json({ error: "Chat not found" });
+
+  if (messageIndex < 0 || messageIndex >= chat.messages.length) {
+    return res.status(400).json({ error: "messageIndex out of bounds" });
+  }
+
+  if (chat.messages[messageIndex].role !== "user") {
+    return res.status(400).json({ error: "messageIndex must point to a user message" });
+  }
+
+  // Truncate everything from messageIndex onwards
+  chat.messages = chat.messages.slice(0, messageIndex);
+
+  // Add edited user message
+  const userMsg: ChatMessage = {
+    role: "user",
+    content: message,
+    timestamp: Date.now(),
+  };
+  chat.messages.push(userMsg);
+
+  // Update title if editing the first message
+  if (messageIndex === 0) {
+    chat.title = message.slice(0, 50) + (message.length > 50 ? "..." : "");
+  }
+
+  await saveChat(chat);
+
+  // Build context
+  let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+  if (chat.type === "agent") {
+    systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages);
+  }
+
+  const tools = chat.type === "agent" ? getAgentTools() : undefined;
+  const piMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
+
+  await handleChatStream(chat, message, piMessages, systemPrompt, tools, req, res);
 });
 
 export default router;

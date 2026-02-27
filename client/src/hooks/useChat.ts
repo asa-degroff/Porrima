@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { sendMessage } from "../api/client";
-import type { ToolStatus } from "../api/client";
+import { sendMessage, editMessage as apiEditMessage } from "../api/client";
+import type { StreamCallbacks, ToolStatus } from "../api/client";
 import type { Artifact, ChatMessage, MessageUsage } from "../types";
 
 export function useChat(chatId: string | null) {
@@ -28,6 +28,85 @@ export function useChat(chatId: string | null) {
     setMessages(msgs);
   }, []);
 
+  // Shared SSE callbacks for both send and edit
+  const makeStreamCallbacks = useCallback((): StreamCallbacks => ({
+    onDelta: (delta) => {
+      setMessages((prev) => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last.role === "assistant") {
+          updated[updated.length - 1] = {
+            ...last,
+            content: last.content + delta,
+          };
+        }
+        return updated;
+      });
+    },
+    onThinkingDelta: (delta) => {
+      setStreamingThinking((prev) => prev + delta);
+    },
+    onDone: ({ thinking, usage, artifacts: doneArtifacts, waitingForInput: wfi }) => {
+      if (!doneCalledRef.current) {
+        doneCalledRef.current = true;
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last.role === "assistant") {
+            updated[updated.length - 1] = {
+              ...last,
+              thinking: thinking || undefined,
+              usage: usage || undefined,
+              artifacts: doneArtifacts || undefined,
+            };
+          }
+          return updated;
+        });
+        setStreamingThinking("");
+        setStreaming(false);
+        if (wfi) {
+          setWaitingForInput(true);
+        }
+      }
+    },
+    onToolStatus: (status) => {
+      setActiveTools((prev) => {
+        // If this tool is done/error, update existing entry
+        const existing = prev.findIndex(
+          (t) => t.name === status.name && t.status === "running"
+        );
+        if (existing >= 0 && status.status !== "running") {
+          const updated = [...prev];
+          updated[existing] = status;
+          return updated;
+        }
+        // Otherwise add new entry
+        return [...prev, status];
+      });
+    },
+    onAskUser: (_question) => {
+      setWaitingForInput(true);
+    },
+    onArtifact: (artifact) => {
+      setArtifacts((prev) => [...prev, artifact]);
+    },
+    onError: (err) => {
+      setError(err);
+      setStreaming(false);
+    },
+  }), []);
+
+  // Shared pre-stream state reset
+  const prepareStream = useCallback(() => {
+    setStreaming(true);
+    setStreamingThinking("");
+    setActiveTools([]);
+    setArtifacts([]);
+    setWaitingForInput(false);
+    setError(null);
+    doneCalledRef.current = false;
+  }, []);
+
   const send = useCallback(
     (text: string) => {
       if (!chatId || streaming) return;
@@ -39,13 +118,7 @@ export function useChat(chatId: string | null) {
       };
 
       setMessages((prev) => [...prev, userMsg]);
-      setStreaming(true);
-      setStreamingThinking("");
-      setActiveTools([]);
-      setArtifacts([]);
-      setWaitingForInput(false);
-      setError(null);
-      doneCalledRef.current = false;
+      prepareStream();
 
       // Add a placeholder assistant message
       const assistantMsg: ChatMessage = {
@@ -55,76 +128,30 @@ export function useChat(chatId: string | null) {
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
-      abortRef.current = sendMessage(chatId, text, {
-        onDelta: (delta) => {
-          setMessages((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            if (last.role === "assistant") {
-              updated[updated.length - 1] = {
-                ...last,
-                content: last.content + delta,
-              };
-            }
-            return updated;
-          });
-        },
-        onThinkingDelta: (delta) => {
-          setStreamingThinking((prev) => prev + delta);
-        },
-        onDone: ({ thinking, usage, artifacts: doneArtifacts, waitingForInput: wfi }) => {
-          if (!doneCalledRef.current) {
-            doneCalledRef.current = true;
-            setMessages((prev) => {
-              const updated = [...prev];
-              const last = updated[updated.length - 1];
-              if (last.role === "assistant") {
-                updated[updated.length - 1] = {
-                  ...last,
-                  thinking: thinking || undefined,
-                  usage: usage || undefined,
-                  artifacts: doneArtifacts || undefined,
-                };
-              }
-              return updated;
-            });
-            setStreamingThinking("");
-            setStreaming(false);
-            if (wfi) {
-              setWaitingForInput(true);
-            }
-          }
-        },
-        onToolStatus: (status) => {
-          setActiveTools((prev) => {
-            // If this tool is done/error, update existing entry
-            const existing = prev.findIndex(
-              (t) => t.name === status.name && t.status === "running"
-            );
-            if (existing >= 0 && status.status !== "running") {
-              const updated = [...prev];
-              updated[existing] = status;
-              return updated;
-            }
-            // Otherwise add new entry
-            return [...prev, status];
-          });
-        },
-        onAskUser: (question) => {
-          // The question is already part of the assistant's streamed content
-          // or sent as a separate event — we just need to flag the state
-          setWaitingForInput(true);
-        },
-        onArtifact: (artifact) => {
-          setArtifacts((prev) => [...prev, artifact]);
-        },
-        onError: (err) => {
-          setError(err);
-          setStreaming(false);
-        },
-      });
+      abortRef.current = sendMessage(chatId, text, makeStreamCallbacks());
     },
-    [chatId, streaming]
+    [chatId, streaming, prepareStream, makeStreamCallbacks]
+  );
+
+  const editMessage = useCallback(
+    (index: number, newText: string) => {
+      if (!chatId || streaming) return;
+
+      // Truncate to edit point, add new user msg + placeholder assistant msg
+      setMessages((prev) => {
+        const truncated = prev.slice(0, index);
+        return [
+          ...truncated,
+          { role: "user" as const, content: newText, timestamp: Date.now() },
+          { role: "assistant" as const, content: "", timestamp: Date.now() },
+        ];
+      });
+
+      prepareStream();
+
+      abortRef.current = apiEditMessage(chatId, index, newText, makeStreamCallbacks());
+    },
+    [chatId, streaming, prepareStream, makeStreamCallbacks]
   );
 
   const abort = useCallback(() => {
@@ -155,6 +182,7 @@ export function useChat(chatId: string | null) {
     totalUsage,
     error,
     send,
+    editMessage,
     abort,
     loadMessages,
   };
