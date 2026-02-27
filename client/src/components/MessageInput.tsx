@@ -5,9 +5,10 @@ interface Props {
   disabled: boolean;
   onAbort?: () => void;
   streaming?: boolean;
+  waitingForInput?: boolean;
 }
 
-export function MessageInput({ onSend, disabled, onAbort, streaming }: Props) {
+export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForInput }: Props) {
   const [text, setText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -39,14 +40,14 @@ export function MessageInput({ onSend, disabled, onAbort, streaming }: Props) {
 
   return (
     <div className="p-4">
-      <div className="backdrop-blur-xl bg-white/5 border border-white/15 rounded-2xl p-3 focus-within:ring-2 focus-within:ring-blue-400/30 focus-within:border-blue-400/30 transition-all">
+      <div className={`backdrop-blur-xl bg-white/5 border rounded-2xl p-3 focus-within:ring-2 focus-within:ring-blue-400/30 focus-within:border-blue-400/30 transition-all ${waitingForInput ? "border-amber-400/40 ring-1 ring-amber-400/20" : "border-white/15"}`}>
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           onInput={handleInput}
-          placeholder="Send a message..."
+          placeholder={waitingForInput ? "Answer the agent's question..." : "Send a message..."}
           rows={1}
           className="w-full bg-transparent text-white/90 placeholder-white/30 text-sm resize-none outline-none"
         />

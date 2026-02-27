@@ -20,7 +20,9 @@ export default function App() {
     messages,
     streaming,
     streamingThinking,
-    lastToolResults,
+    activeTools,
+    artifacts,
+    waitingForInput,
     totalUsage,
     error,
     send,
@@ -116,7 +118,8 @@ export default function App() {
         messages={messages}
         streaming={streaming}
         streamingThinking={streamingThinking}
-        toolResults={lastToolResults}
+        activeTools={activeTools}
+        artifacts={artifacts}
         totalUsage={totalUsage}
         contextWindow={contextWindow}
         error={error}
@@ -127,6 +130,7 @@ export default function App() {
         onAbort={abort}
         onModelChange={handleModelChange}
         onSystemPromptChange={handleSystemPromptChange}
+        waitingForInput={waitingForInput}
       />
       {settingsOpen && (
         <SettingsModal

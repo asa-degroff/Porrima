@@ -4,11 +4,26 @@ export interface MessageUsage {
   totalTokens: number;
 }
 
+export interface ChatToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, any>;
+}
+
+export interface ChatToolResult {
+  toolCallId: string;
+  toolName: string;
+  content: string;
+  isError: boolean;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   thinking?: string;
   usage?: MessageUsage;
+  toolCalls?: ChatToolCall[];
+  toolResults?: ChatToolResult[];
   timestamp: number;
 }
 
@@ -66,3 +81,9 @@ export interface MemoryStore {
 }
 
 export type MemorySummary = Omit<Memory, "embedding">;
+
+export interface Artifact {
+  id: string;
+  title: string;
+  url: string;
+}

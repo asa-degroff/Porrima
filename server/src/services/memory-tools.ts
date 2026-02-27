@@ -1,83 +1,73 @@
+import { Type } from "@sinclair/typebox";
 import { v4 as uuid } from "uuid";
-import { embed, cosineSimilarity } from "./embeddings.js";
+import { embed } from "./embeddings.js";
 import {
-  loadMemoryStore,
   addMemory,
   deleteMemory,
   searchMemories,
 } from "./memory-storage.js";
+import type { Tool, ToolCall } from "@mariozechner/pi-ai";
 import type { Memory, MemoryCategory } from "../types.js";
+import { StringEnum } from "@mariozechner/pi-ai";
 
-export const MEMORY_TOOLS_PROMPT = `
-## Memory Tools
-
-You have tools to manage your memory about the user. Use them when appropriate:
-
-### save_memory
-Save an important fact about the user. Use when they share personal info, preferences, or ask you to remember something.
-\`\`\`tool
-{"name": "save_memory", "args": {"text": "fact about the user", "category": "preference|fact|behavior|instruction", "importance": 5}}
-\`\`\`
-
-### search_memory
-Search your memories for relevant information. Use when you need to recall something specific.
-\`\`\`tool
-{"name": "search_memory", "args": {"query": "what to search for"}}
-\`\`\`
-
-### forget_memory
-Delete a memory. Use when the user asks you to forget something. Search first to find the memory ID.
-\`\`\`tool
-{"name": "forget_memory", "args": {"id": "memory-id"}}
-\`\`\`
-
-When using tools, place the tool block in your response. You'll receive the result and can continue your response.
-Only use tools when genuinely useful — don't use them for every message.`;
-
-export interface ToolCall {
-  name: string;
-  args: Record<string, any>;
-}
+export const MEMORY_TOOLS: Tool[] = [
+  {
+    name: "save_memory",
+    description:
+      "Save an important fact about the user. Use when they share personal info, preferences, or ask you to remember something.",
+    parameters: Type.Object({
+      text: Type.String({ description: "The fact to remember" }),
+      category: StringEnum(
+        ["preference", "fact", "behavior", "instruction"] as const,
+        { description: "Category of the memory" }
+      ),
+      importance: Type.Number({
+        description: "Importance from 1-10",
+        minimum: 1,
+        maximum: 10,
+      }),
+    }),
+  },
+  {
+    name: "search_memory",
+    description:
+      "Search your memories for relevant information. Use when you need to recall something specific about the user.",
+    parameters: Type.Object({
+      query: Type.String({ description: "What to search for" }),
+    }),
+  },
+  {
+    name: "forget_memory",
+    description:
+      "Delete a memory. Use when the user asks you to forget something. Search first to find the memory ID.",
+    parameters: Type.Object({
+      id: Type.Optional(Type.String({ description: "Memory ID to delete" })),
+      query: Type.Optional(
+        Type.String({ description: "Search query to find memory to delete" })
+      ),
+    }),
+  },
+];
 
 export interface ToolResult {
-  name: string;
-  success: boolean;
-  result: string;
-}
-
-export function parseToolCalls(text: string): ToolCall[] {
-  const toolCalls: ToolCall[] = [];
-  const regex = /```tool\s*\n([\s\S]*?)```/g;
-  let match;
-
-  while ((match = regex.exec(text)) !== null) {
-    try {
-      const parsed = JSON.parse(match[1].trim());
-      if (parsed.name && parsed.args) {
-        toolCalls.push({ name: parsed.name, args: parsed.args });
-      }
-    } catch {
-      // Skip malformed tool calls
-    }
-  }
-
-  return toolCalls;
+  content: string;
+  isError: boolean;
 }
 
 export async function executeMemoryTool(
-  tool: ToolCall,
+  toolCall: ToolCall,
   chatId: string
 ): Promise<ToolResult> {
-  switch (tool.name) {
+  switch (toolCall.name) {
     case "save_memory": {
-      const { text, category, importance } = tool.args;
-      if (!text) return { name: tool.name, success: false, result: "Missing text" };
+      const { text, category, importance } = toolCall.arguments;
+      if (!text) return { content: "Missing text", isError: true };
 
       let embedding: number[];
       try {
         embedding = await embed(text);
       } catch (e: any) {
-        return { name: tool.name, success: false, result: `Embedding failed: ${e.message}` };
+        return { content: `Embedding failed: ${e.message}`, isError: true };
       }
 
       const now = new Date().toISOString();
@@ -94,23 +84,23 @@ export async function executeMemoryTool(
       };
 
       await addMemory(memory);
-      return { name: tool.name, success: true, result: `Saved memory: "${text}"` };
+      return { content: `Saved memory: "${text}"`, isError: false };
     }
 
     case "search_memory": {
-      const { query } = tool.args;
-      if (!query) return { name: tool.name, success: false, result: "Missing query" };
+      const { query } = toolCall.arguments;
+      if (!query) return { content: "Missing query", isError: true };
 
       let queryEmbedding: number[];
       try {
         queryEmbedding = await embed(query);
       } catch (e: any) {
-        return { name: tool.name, success: false, result: `Embedding failed: ${e.message}` };
+        return { content: `Embedding failed: ${e.message}`, isError: true };
       }
 
       const results = await searchMemories(queryEmbedding, 5);
       if (results.length === 0) {
-        return { name: tool.name, success: true, result: "No relevant memories found." };
+        return { content: "No relevant memories found.", isError: false };
       }
 
       const formatted = results
@@ -120,43 +110,43 @@ export async function executeMemoryTool(
         )
         .join("\n");
 
-      return { name: tool.name, success: true, result: `Found memories:\n${formatted}` };
+      return { content: `Found memories:\n${formatted}`, isError: false };
     }
 
     case "forget_memory": {
-      const { id } = tool.args;
+      const { id, query } = toolCall.arguments;
       if (!id) {
-        // If no ID but a query is given, try to find and delete by text match
-        const { query } = tool.args;
         if (query) {
           let queryEmbedding: number[];
           try {
             queryEmbedding = await embed(query);
           } catch (e: any) {
-            return { name: tool.name, success: false, result: `Embedding failed: ${e.message}` };
+            return { content: `Embedding failed: ${e.message}`, isError: true };
           }
           const results = await searchMemories(queryEmbedding, 1);
           if (results.length > 0 && results[0].score > 0.5) {
             const deleted = await deleteMemory(results[0].memory.id);
             if (deleted) {
-              return { name: tool.name, success: true, result: `Deleted memory: "${results[0].memory.text}"` };
+              return {
+                content: `Deleted memory: "${results[0].memory.text}"`,
+                isError: false,
+              };
             }
           }
-          return { name: tool.name, success: false, result: "No matching memory found to delete." };
+          return {
+            content: "No matching memory found to delete.",
+            isError: true,
+          };
         }
-        return { name: tool.name, success: false, result: "Missing id or query" };
+        return { content: "Missing id or query", isError: true };
       }
 
       const deleted = await deleteMemory(id);
-      if (!deleted) return { name: tool.name, success: false, result: "Memory not found" };
-      return { name: tool.name, success: true, result: "Memory deleted." };
+      if (!deleted) return { content: "Memory not found", isError: true };
+      return { content: "Memory deleted.", isError: false };
     }
 
     default:
-      return { name: tool.name, success: false, result: `Unknown tool: ${tool.name}` };
+      return { content: `Unknown tool: ${toolCall.name}`, isError: true };
   }
-}
-
-export function stripToolBlocks(text: string): string {
-  return text.replace(/```tool\s*\n[\s\S]*?```/g, "").trim();
 }

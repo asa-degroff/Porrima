@@ -1,14 +1,18 @@
-import type { ChatMessage } from "../types";
+import type { Artifact, ChatMessage } from "../types";
+import type { ToolStatus } from "../api/client";
 import { StreamingText } from "./StreamingText";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { ArtifactPanel } from "./ArtifactPanel";
+import { ToolCallDisplay } from "./ToolCallDisplay";
 
 interface Props {
   message: ChatMessage;
   isStreaming: boolean;
   isLast: boolean;
   streamingThinking?: string;
-  toolResults?: string[];
+  activeTools?: ToolStatus[];
+  artifacts?: Artifact[];
 }
 
 export function MessageBubble({
@@ -16,7 +20,8 @@ export function MessageBubble({
   isStreaming,
   isLast,
   streamingThinking,
-  toolResults,
+  activeTools,
+  artifacts,
 }: Props) {
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;
@@ -24,6 +29,12 @@ export function MessageBubble({
   // During streaming, use live thinking; after done, use saved thinking
   const thinkingText = showStreaming ? streamingThinking : message.thinking;
   const isThinkingStreaming = showStreaming && !message.content;
+
+  // Build tool call displays
+  const hasToolCalls = !isUser && (
+    (showStreaming && activeTools && activeTools.length > 0) ||
+    (message.toolCalls && message.toolCalls.length > 0)
+  );
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4`}>
@@ -34,22 +45,6 @@ export function MessageBubble({
             : "bg-white/5 border border-white/10 text-white/90"
         }`}
       >
-        {/* Tool result pills */}
-        {!isUser && toolResults && toolResults.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {toolResults.map((label, i) => (
-              <span
-                key={i}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-                {label}
-              </span>
-            ))}
-          </div>
-        )}
         {isUser ? (
           <p className="whitespace-pre-wrap text-sm leading-relaxed">
             {message.content}
@@ -62,6 +57,27 @@ export function MessageBubble({
                 isStreaming={showStreaming}
               />
             )}
+
+            {/* Tool calls - streaming (live status) */}
+            {showStreaming && activeTools && activeTools.map((tool, i) => (
+              <ToolCallDisplay
+                key={`live-${i}`}
+                liveStatus={tool}
+              />
+            ))}
+
+            {/* Tool calls - persisted (from chat history) */}
+            {!showStreaming && message.toolCalls && message.toolCalls.map((tc, i) => {
+              const tr = message.toolResults?.find((r) => r.toolCallId === tc.id);
+              return (
+                <ToolCallDisplay
+                  key={tc.id}
+                  toolCall={tc}
+                  toolResult={tr}
+                />
+              );
+            })}
+
             {showStreaming ? (
               <div className="text-sm leading-relaxed">
                 <StreamingText
@@ -70,10 +86,17 @@ export function MessageBubble({
                 />
               </div>
             ) : (
-              <div className="text-sm leading-relaxed">
-                <MarkdownRenderer content={message.content} />
-              </div>
+              message.content && (
+                <div className="text-sm leading-relaxed">
+                  <MarkdownRenderer content={message.content} />
+                </div>
+              )
             )}
+
+            {/* Inline artifacts */}
+            {artifacts && artifacts.map((artifact) => (
+              <ArtifactPanel key={artifact.id} artifact={artifact} />
+            ))}
           </>
         )}
       </div>

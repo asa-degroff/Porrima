@@ -8,8 +8,9 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@mariozechner/pi-ai": "^0.55.1",
     "@mariozechner/pi-agent-core": "^0.55.1",
+    "@mariozechner/pi-ai": "^0.55.1",
+    "@sinclair/typebox": "^0.34.48",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "uuid": "^11.1.0"

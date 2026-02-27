@@ -1,4 +1,4 @@
-import type { Chat, ChatListItem, ChatType, MessageUsage, OllamaModel, Settings } from "../types";
+import type { Artifact, Chat, ChatListItem, ChatType, MessageUsage, OllamaModel, Settings } from "../types";
 
 const BASE = "/api";
 
@@ -58,12 +58,20 @@ export async function updateSettings(settings: Settings): Promise<Settings> {
   return res.json();
 }
 
+export interface ToolStatus {
+  name: string;
+  status: "running" | "done" | "error";
+  result?: string;
+}
+
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { thinking?: string; usage?: MessageUsage }) => void;
+  onDone: (message: { thinking?: string; usage?: MessageUsage; waitingForInput?: boolean }) => void;
   onError: (error: string) => void;
-  onToolResult?: (result: { name: string; success: boolean; result: string }) => void;
+  onToolStatus?: (status: ToolStatus) => void;
+  onArtifact?: (artifact: Artifact) => void;
+  onAskUser?: (question: string) => void;
 }
 
 export function sendMessage(
@@ -161,10 +169,17 @@ function processSSEEvent(
       callbacks.onDone({
         thinking: data.message?.thinking,
         usage: data.message?.usage,
+        waitingForInput: data.waitingForInput,
       });
       break;
-    case "tool_result":
-      callbacks.onToolResult?.(data);
+    case "tool_status":
+      callbacks.onToolStatus?.(data);
+      break;
+    case "artifact":
+      callbacks.onArtifact?.(data);
+      break;
+    case "ask_user":
+      callbacks.onAskUser?.(data.question);
       break;
     case "error":
       callbacks.onError(data.error || "Unknown error");

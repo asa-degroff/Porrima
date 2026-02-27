@@ -1,12 +1,15 @@
 import { useState, useCallback, useRef } from "react";
 import { sendMessage } from "../api/client";
-import type { ChatMessage, MessageUsage } from "../types";
+import type { ToolStatus } from "../api/client";
+import type { Artifact, ChatMessage, MessageUsage } from "../types";
 
 export function useChat(chatId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingThinking, setStreamingThinking] = useState("");
-  const [lastToolResults, setLastToolResults] = useState<string[]>([]);
+  const [activeTools, setActiveTools] = useState<ToolStatus[]>([]);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [waitingForInput, setWaitingForInput] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
@@ -28,7 +31,9 @@ export function useChat(chatId: string | null) {
       setMessages((prev) => [...prev, userMsg]);
       setStreaming(true);
       setStreamingThinking("");
-      setLastToolResults([]);
+      setActiveTools([]);
+      setArtifacts([]);
+      setWaitingForInput(false);
       setError(null);
       doneCalledRef.current = false;
 
@@ -57,10 +62,9 @@ export function useChat(chatId: string | null) {
         onThinkingDelta: (delta) => {
           setStreamingThinking((prev) => prev + delta);
         },
-        onDone: ({ thinking, usage }) => {
+        onDone: ({ thinking, usage, waitingForInput: wfi }) => {
           if (!doneCalledRef.current) {
             doneCalledRef.current = true;
-            // Save thinking and usage into the last assistant message
             setMessages((prev) => {
               const updated = [...prev];
               const last = updated[updated.length - 1];
@@ -75,13 +79,33 @@ export function useChat(chatId: string | null) {
             });
             setStreamingThinking("");
             setStreaming(false);
+            if (wfi) {
+              setWaitingForInput(true);
+            }
           }
         },
-        onToolResult: (result) => {
-          const label = result.success
-            ? `${result.name.replace("_", " ")}`
-            : `${result.name} failed`;
-          setLastToolResults((prev) => [...prev, label]);
+        onToolStatus: (status) => {
+          setActiveTools((prev) => {
+            // If this tool is done/error, update existing entry
+            const existing = prev.findIndex(
+              (t) => t.name === status.name && t.status === "running"
+            );
+            if (existing >= 0 && status.status !== "running") {
+              const updated = [...prev];
+              updated[existing] = status;
+              return updated;
+            }
+            // Otherwise add new entry
+            return [...prev, status];
+          });
+        },
+        onAskUser: (question) => {
+          // The question is already part of the assistant's streamed content
+          // or sent as a separate event — we just need to flag the state
+          setWaitingForInput(true);
+        },
+        onArtifact: (artifact) => {
+          setArtifacts((prev) => [...prev, artifact]);
         },
         onError: (err) => {
           setError(err);
@@ -114,7 +138,9 @@ export function useChat(chatId: string | null) {
     messages,
     streaming,
     streamingThinking,
-    lastToolResults,
+    activeTools,
+    artifacts,
+    waitingForInput,
     totalUsage,
     error,
     send,

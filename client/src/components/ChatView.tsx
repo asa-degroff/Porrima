@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import type { ChatMessage, MessageUsage, OllamaModel } from "../types";
+import type { Artifact, ChatMessage, MessageUsage, OllamaModel } from "../types";
+import type { ToolStatus } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
 import { MessageInput } from "./MessageInput";
 import { ModelSelector } from "./ModelSelector";
@@ -12,7 +13,8 @@ interface Props {
   messages: ChatMessage[];
   streaming: boolean;
   streamingThinking: string;
-  toolResults: string[];
+  activeTools: ToolStatus[];
+  artifacts: Artifact[];
   totalUsage: MessageUsage;
   contextWindow: number;
   error: string | null;
@@ -23,6 +25,7 @@ interface Props {
   onAbort: () => void;
   onModelChange: (modelId: string) => void;
   onSystemPromptChange: (value: string) => void;
+  waitingForInput: boolean;
 }
 
 export function ChatView({
@@ -31,7 +34,8 @@ export function ChatView({
   messages,
   streaming,
   streamingThinking,
-  toolResults,
+  activeTools,
+  artifacts,
   totalUsage,
   contextWindow,
   error,
@@ -42,6 +46,7 @@ export function ChatView({
   onAbort,
   onModelChange,
   onSystemPromptChange,
+  waitingForInput,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -123,8 +128,11 @@ export function ChatView({
             streamingThinking={
               i === messages.length - 1 ? streamingThinking : undefined
             }
-            toolResults={
-              i === messages.length - 1 ? toolResults : undefined
+            activeTools={
+              i === messages.length - 1 ? activeTools : undefined
+            }
+            artifacts={
+              i === messages.length - 1 ? artifacts : undefined
             }
           />
         ))}
@@ -141,6 +149,7 @@ export function ChatView({
         disabled={!chatId || streaming}
         onAbort={onAbort}
         streaming={streaming}
+        waitingForInput={waitingForInput}
       />
     </div>
   );

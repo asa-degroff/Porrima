@@ -1,6 +1,5 @@
 import { embed } from "./embeddings.js";
 import { searchMemories, updateMemory } from "./memory-storage.js";
-import { MEMORY_TOOLS_PROMPT } from "./memory-tools.js";
 import type { ChatMessage } from "../types.js";
 
 export async function buildMemoryAugmentedPrompt(
@@ -43,10 +42,9 @@ export async function buildMemoryAugmentedPrompt(
       }
     }
 
-    return `${baseSystemPrompt}${memoriesSection}\n${MEMORY_TOOLS_PROMPT}`;
+    return `${baseSystemPrompt}${memoriesSection}`;
   } catch (e) {
     console.error("[memory] Context augmentation failed, using base prompt:", e);
-    // Still include tools even on retrieval failure
-    return `${baseSystemPrompt}\n${MEMORY_TOOLS_PROMPT}`;
+    return baseSystemPrompt;
   }
 }
