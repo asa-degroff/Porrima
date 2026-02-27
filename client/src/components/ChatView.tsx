@@ -217,7 +217,7 @@ export function ChatView({
               i === messages.length - 1 ? activeTools : undefined
             }
             artifacts={
-              i === messages.length - 1 ? artifacts : undefined
+              i === messages.length - 1 && streaming ? artifacts : undefined
             }
           />
         ))}

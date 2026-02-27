@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { Artifact } from "../types";
 
 interface Props {
@@ -8,6 +8,31 @@ interface Props {
 export function ArtifactPanel({ artifact }: Props) {
   const [showCode, setShowCode] = useState(false);
   const [iframeError, setIframeError] = useState(false);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [sourceCode, setSourceCode] = useState<string | null>(null);
+
+  // Fetch artifact HTML and create a blob URL so the iframe is same-origin,
+  // avoiding Chrome's requestAnimationFrame throttling for cross-origin iframes.
+  useEffect(() => {
+    let url: string | null = null;
+    let cancelled = false;
+    fetch(artifact.url)
+      .then((r) => r.text())
+      .then((html) => {
+        if (cancelled) return;
+        setSourceCode(html);
+        const blob = new Blob([html], { type: "text/html" });
+        url = URL.createObjectURL(blob);
+        setBlobUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setIframeError(true);
+      });
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [artifact.url]);
 
   return (
     <div className="mt-3 rounded-xl border border-white/10 overflow-hidden bg-black/20">
@@ -49,7 +74,7 @@ export function ArtifactPanel({ artifact }: Props) {
       {showCode ? (
         <div className="p-3 max-h-[400px] overflow-auto">
           <pre className="text-xs text-white/70 font-mono whitespace-pre-wrap">
-            Loading source...
+            {sourceCode ?? "Loading source..."}
           </pre>
         </div>
       ) : (
@@ -58,14 +83,17 @@ export function ArtifactPanel({ artifact }: Props) {
             <div className="p-4 text-center text-sm text-gray-500">
               Failed to load artifact preview
             </div>
-          ) : (
+          ) : blobUrl ? (
             <iframe
-              src={artifact.url}
-              sandbox="allow-scripts allow-forms allow-same-origin"
+              src={blobUrl}
               className="w-full h-[400px] border-0"
               title={artifact.title}
               onError={() => setIframeError(true)}
             />
+          ) : (
+            <div className="flex items-center justify-center h-[400px]">
+              <div className="text-sm text-gray-400">Loading preview...</div>
+            </div>
           )}
         </div>
       )}

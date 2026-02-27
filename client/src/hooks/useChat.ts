@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { sendMessage } from "../api/client";
 import type { ToolStatus } from "../api/client";
 import type { Artifact, ChatMessage, MessageUsage } from "../types";
@@ -13,6 +13,16 @@ export function useChat(chatId: string | null) {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
+
+  // Reset all ephemeral state when switching chats
+  useEffect(() => {
+    setStreaming(false);
+    setStreamingThinking("");
+    setActiveTools([]);
+    setArtifacts([]);
+    setWaitingForInput(false);
+    setError(null);
+  }, [chatId]);
 
   const loadMessages = useCallback((msgs: ChatMessage[]) => {
     setMessages(msgs);
