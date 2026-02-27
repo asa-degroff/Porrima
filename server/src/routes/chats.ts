@@ -20,7 +20,7 @@ router.get("/:id", async (req, res) => {
 
 // Create a new chat
 router.post("/", async (req, res) => {
-  const { modelId, type } = req.body;
+  const { modelId, type, contextWindow } = req.body;
   const settings = await getSettings();
   const chat: Chat = {
     id: uuid(),
@@ -28,6 +28,7 @@ router.post("/", async (req, res) => {
     type: type === "agent" ? "agent" : "quick",
     modelId: modelId || settings.defaultModelId || "qwen3:8b",
     systemPrompt: settings.defaultSystemPrompt,
+    ...(contextWindow ? { contextWindow } : {}),
     messages: [],
     createdAt: new Date().toISOString(),
     lastModified: new Date().toISOString(),
@@ -44,6 +45,13 @@ router.patch("/:id", async (req, res) => {
   if (req.body.title !== undefined) chat.title = req.body.title;
   if (req.body.modelId !== undefined) chat.modelId = req.body.modelId;
   if (req.body.systemPrompt !== undefined) chat.systemPrompt = req.body.systemPrompt;
+  if (req.body.contextWindow !== undefined) {
+    if (req.body.contextWindow === null) {
+      delete chat.contextWindow;
+    } else {
+      chat.contextWindow = req.body.contextWindow;
+    }
+  }
 
   await saveChat(chat);
   res.json(chat);

@@ -14,20 +14,45 @@ interface OllamaTagResponse {
   }>;
 }
 
+async function getContextWindow(modelName: string): Promise<number> {
+  try {
+    const res = await fetch(`${OLLAMA_BASE}/api/show`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: modelName }),
+    });
+    if (!res.ok) return 32768;
+    const data = await res.json();
+    const modelInfo = data.model_info as Record<string, unknown> | undefined;
+    if (modelInfo) {
+      for (const key of Object.keys(modelInfo)) {
+        if (key.endsWith(".context_length") && typeof modelInfo[key] === "number") {
+          return modelInfo[key] as number;
+        }
+      }
+    }
+  } catch {}
+  return 32768;
+}
+
 export async function discoverOllamaModels(): Promise<OllamaModel[]> {
   const res = await fetch(`${OLLAMA_BASE}/api/tags`);
   if (!res.ok) throw new Error(`Ollama not reachable: ${res.status}`);
   const data = (await res.json()) as OllamaTagResponse;
 
-  return data.models
-    .filter((m) => !m.name.includes("embedding"))
-    .map((m) => ({
+  const filtered = data.models.filter((m) => !m.name.includes("embedding"));
+
+  const modelsWithContext = await Promise.all(
+    filtered.map(async (m) => ({
       id: m.name,
       name: formatModelName(m.name, m.details.parameter_size),
       parameterSize: m.details.parameter_size,
       family: m.details.family,
-      contextWindow: guessContextWindow(m.details.family),
-    }));
+      contextWindow: await getContextWindow(m.name),
+    }))
+  );
+
+  return modelsWithContext;
 }
 
 function supportsReasoning(family: string): boolean {
@@ -65,9 +90,4 @@ function formatModelName(id: string, paramSize: string): string {
   const parts = base.split(/[-_]/);
   const name = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
   return paramSize ? `${name} ${paramSize}` : name;
-}
-
-function guessContextWindow(family: string): number {
-  if (family.includes("qwen3")) return 32768;
-  return 32768; // safe default
 }

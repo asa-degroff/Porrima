@@ -35,6 +35,7 @@ export interface Chat {
   type: ChatType;
   modelId: string;
   systemPrompt: string;
+  contextWindow?: number;
   messages: ChatMessage[];
   createdAt: string;
   lastModified: string;

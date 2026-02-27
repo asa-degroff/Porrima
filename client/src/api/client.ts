@@ -26,7 +26,7 @@ export async function createChat(modelId: string, type: ChatType = "quick"): Pro
 
 export async function updateChat(
   id: string,
-  data: { title?: string; modelId?: string; systemPrompt?: string }
+  data: { title?: string; modelId?: string; systemPrompt?: string; contextWindow?: number | null }
 ): Promise<Chat> {
   const res = await fetch(`${BASE}/chats/${id}`, {
     method: "PATCH",

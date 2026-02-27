@@ -30,11 +30,12 @@ export default function App() {
     loadMessages,
   } = useChat(activeChatId);
 
-  // Find context window for active model
+  // Find context window for active model (chat override takes precedence)
   const contextWindow = useMemo(() => {
+    if (activeChat?.contextWindow) return activeChat.contextWindow;
     const model = models.find((m) => m.id === activeChat?.modelId);
     return model?.contextWindow || 32768;
-  }, [models, activeChat?.modelId]);
+  }, [models, activeChat]);
 
   // Fetch full chat when selecting one (we need messages)
   const selectChat = useCallback(
@@ -102,6 +103,28 @@ export default function App() {
     [activeChatId, activeChat]
   );
 
+  const handleContextWindowChange = useCallback(
+    async (value: number | null) => {
+      if (!activeChatId || !activeChat) return;
+      await apiUpdateChat(activeChatId, { contextWindow: value });
+      setActiveChat((prev) => {
+        if (!prev) return prev;
+        if (value === null) {
+          const { contextWindow: _, ...rest } = prev;
+          return rest as Chat;
+        }
+        return { ...prev, contextWindow: value };
+      });
+    },
+    [activeChatId, activeChat]
+  );
+
+  // Model default context window (for reset-to-default in editor)
+  const modelContextWindow = useMemo(() => {
+    const model = models.find((m) => m.id === activeChat?.modelId);
+    return model?.contextWindow || 32768;
+  }, [models, activeChat?.modelId]);
+
   return (
     <div className="flex h-screen">
       <Sidebar
@@ -130,6 +153,9 @@ export default function App() {
         onAbort={abort}
         onModelChange={handleModelChange}
         onSystemPromptChange={handleSystemPromptChange}
+        onContextWindowChange={handleContextWindowChange}
+        modelContextWindow={modelContextWindow}
+        hasContextWindowOverride={activeChat?.contextWindow != null}
         waitingForInput={waitingForInput}
       />
       {settingsOpen && (

@@ -288,7 +288,8 @@ router.post("/", async (req, res) => {
             const models = await discoverOllamaModels();
             const model = models.find((m) => m.id === chat.modelId);
             if (model) {
-              const usageRatio = assistantMsg.usage.totalTokens / model.contextWindow;
+              const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
+              const usageRatio = assistantMsg.usage.totalTokens / effectiveContextWindow;
               if (usageRatio > 0.75) {
                 preCompactionFlush(chat.modelId, chat.id, chat.messages)
                   .catch((err) => console.error("[memory] pre-compaction flush failed:", err));
