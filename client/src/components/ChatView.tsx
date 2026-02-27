@@ -36,6 +36,7 @@ interface Props {
   modelContextWindow: number;
   hasContextWindowOverride: boolean;
   waitingForInput: boolean;
+  onOpenSidebar: () => void;
 }
 
 export function ChatView({
@@ -60,6 +61,7 @@ export function ChatView({
   modelContextWindow,
   hasContextWindowOverride,
   waitingForInput,
+  onOpenSidebar,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [editingCtx, setEditingCtx] = useState(false);
@@ -85,27 +87,41 @@ export function ChatView({
 
   if (!chatId) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-6xl mb-4 opacity-20">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="64"
-              height="64"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="mx-auto text-white/20"
-            >
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      <div className="flex-1 flex flex-col">
+        <div className="px-3 py-3 md:hidden">
+          <button
+            onClick={onOpenSidebar}
+            className="text-white/50 hover:text-white/80 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="18" x2="21" y2="18" />
             </svg>
+          </button>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-6xl mb-4 opacity-20">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="64"
+                height="64"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="mx-auto text-white/20"
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </div>
+            <p className="text-white/30 text-lg">
+              Select a chat or start a new one
+            </p>
           </div>
-          <p className="text-white/30 text-lg">
-            Select a chat or start a new one
-          </p>
         </div>
       </div>
     );
@@ -114,10 +130,22 @@ export function ChatView({
   return (
     <div className="flex-1 flex flex-col min-w-0">
       {/* Chat Header */}
-      <div className="px-6 py-3 border-b border-white/10 flex items-center justify-between gap-3 backdrop-blur-sm bg-white/[0.03]">
-        <h2 className="text-sm font-medium text-white/80 truncate">
-          {chatTitle}
-        </h2>
+      <div className="px-3 md:px-6 py-3 border-b border-white/10 flex items-center justify-between gap-3 backdrop-blur-sm bg-white/[0.03]">
+        <div className="flex items-center gap-2 min-w-0">
+          <button
+            onClick={onOpenSidebar}
+            className="md:hidden text-white/50 hover:text-white/80 transition-colors p-1 rounded-lg hover:bg-white/5 shrink-0"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
+          <h2 className="text-sm font-medium text-white/80 truncate">
+            {chatTitle}
+          </h2>
+        </div>
         <div className="flex items-center gap-3 shrink-0">
           <TokenIndicator usage={totalUsage} contextWindow={contextWindow} />
           {/* Context window editor */}
@@ -173,7 +201,7 @@ export function ChatView({
             </button>
           )}
           <button
-            className="text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors text-white/30 hover:text-white/50"
+            className="hidden md:inline-block text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors text-white/30 hover:text-white/50"
             title="View rendered system prompt and tools"
             onClick={openPromptViewer}
           >
@@ -196,7 +224,7 @@ export function ChatView({
       />
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 md:px-6 py-3 md:py-4">
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full">
             <p className="text-white/25 text-sm">
@@ -244,7 +272,7 @@ export function ChatView({
           onClick={() => setPromptModal(null)}
         >
           <div
-            className="bg-[#1a1a2e] border border-white/10 rounded-2xl w-[640px] max-h-[80vh] flex flex-col shadow-2xl"
+            className="bg-[#1a1a2e] border border-white/10 rounded-2xl w-full max-w-[640px] mx-4 max-h-[80vh] flex flex-col shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">

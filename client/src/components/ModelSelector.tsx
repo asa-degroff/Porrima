@@ -13,7 +13,7 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
       value={selectedId}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
-      className="bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 focus:ring-2 focus:ring-blue-400/30 transition-all disabled:opacity-40 cursor-pointer appearance-none"
+      className="bg-white/5 border border-white/15 rounded-lg px-2 md:px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 focus:ring-2 focus:ring-blue-400/30 transition-all disabled:opacity-40 cursor-pointer appearance-none max-w-[100px] md:max-w-none"
       style={{ backgroundImage: "none" }}
     >
       {models.map((m) => (

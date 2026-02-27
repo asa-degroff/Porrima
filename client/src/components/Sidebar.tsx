@@ -9,6 +9,8 @@ interface Props {
   onNewChat: (type: ChatType) => void;
   onDeleteChat: (id: string) => void;
   onOpenSettings: () => void;
+  isOpen: boolean;
+  onClose: () => void;
 }
 
 export function Sidebar({
@@ -18,6 +20,8 @@ export function Sidebar({
   onNewChat,
   onDeleteChat,
   onOpenSettings,
+  isOpen,
+  onClose,
 }: Props) {
   const agentChats = useMemo(
     () => chats.filter((c) => c.type === "agent"),
@@ -29,7 +33,7 @@ export function Sidebar({
   );
 
   return (
-    <div className="w-72 h-full flex flex-col backdrop-blur-xl bg-white/[0.08] border-r border-white/10">
+    <div className={`w-72 h-full flex flex-col backdrop-blur-xl bg-white/[0.08] border-r border-white/10 fixed inset-y-0 left-0 z-30 transition-transform duration-300 ease-in-out md:static md:translate-x-0 md:z-auto ${isOpen ? "translate-x-0" : "-translate-x-full"}`}>
       {/* Header */}
       <div className="p-4 border-b border-white/10 flex items-center justify-between">
         <h1 className="text-lg font-semibold text-white/90 tracking-tight">
@@ -57,7 +61,7 @@ export function Sidebar({
             </span>
           </div>
           <button
-            onClick={() => onNewChat("agent")}
+            onClick={() => { onNewChat("agent"); onClose(); }}
             className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2 mb-1"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -72,7 +76,7 @@ export function Sidebar({
                 key={chat.id}
                 chat={chat}
                 active={chat.id === activeChatId}
-                onSelect={() => onSelectChat(chat.id)}
+                onSelect={() => { onSelectChat(chat.id); onClose(); }}
                 onDelete={() => onDeleteChat(chat.id)}
               />
             ))}
@@ -95,7 +99,7 @@ export function Sidebar({
             </span>
           </div>
           <button
-            onClick={() => onNewChat("quick")}
+            onClick={() => { onNewChat("quick"); onClose(); }}
             className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-sm font-medium hover:bg-blue-500/25 transition-all flex items-center justify-center gap-2 mb-1"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -110,7 +114,7 @@ export function Sidebar({
                 key={chat.id}
                 chat={chat}
                 active={chat.id === activeChatId}
-                onSelect={() => onSelectChat(chat.id)}
+                onSelect={() => { onSelectChat(chat.id); onClose(); }}
                 onDelete={() => onDeleteChat(chat.id)}
               />
             ))}

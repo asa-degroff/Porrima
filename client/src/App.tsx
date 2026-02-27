@@ -16,6 +16,7 @@ export default function App() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const {
     messages,
     streaming,
@@ -126,7 +127,7 @@ export default function App() {
   }, [models, activeChat?.modelId]);
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen overflow-hidden">
       <Sidebar
         chats={chats}
         activeChatId={activeChatId}
@@ -134,10 +135,16 @@ export default function App() {
         onNewChat={handleNewChat}
         onDeleteChat={handleDeleteChat}
         onOpenSettings={() => setSettingsOpen(true)}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
       />
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} />
+      )}
       <ChatView
         chatId={activeChatId}
         chatTitle={activeChat?.title || "New Chat"}
+        onOpenSidebar={() => setSidebarOpen(true)}
         messages={messages}
         streaming={streaming}
         streamingThinking={streamingThinking}

@@ -27,7 +27,7 @@ export function SystemPromptEditor({ value, onChange, disabled }: Props) {
     <div className="border-b border-white/10">
       <button
         onClick={() => setExpanded((e) => !e)}
-        className="w-full flex items-center gap-2 px-6 py-2 text-xs text-white/40 hover:text-white/60 transition-colors"
+        className="w-full flex items-center gap-2 px-3 md:px-6 py-2 text-xs text-white/40 hover:text-white/60 transition-colors"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -49,7 +49,7 @@ export function SystemPromptEditor({ value, onChange, disabled }: Props) {
         )}
       </button>
       {expanded && (
-        <div className="px-6 pb-3">
+        <div className="px-3 md:px-6 pb-3">
           <textarea
             ref={textareaRef}
             value={localValue}

@@ -39,8 +39,8 @@ export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForI
   };
 
   return (
-    <div className="p-4">
-      <div className={`backdrop-blur-xl bg-white/5 border rounded-2xl p-3 focus-within:ring-2 focus-within:ring-blue-400/30 focus-within:border-blue-400/30 transition-all ${waitingForInput ? "border-amber-400/40 ring-1 ring-amber-400/20" : "border-white/15"}`}>
+    <div className="p-3 md:p-4">
+      <div className={`backdrop-blur-xl bg-white/5 border rounded-2xl p-2.5 md:p-3 focus-within:ring-2 focus-within:ring-blue-400/30 focus-within:border-blue-400/30 transition-all ${waitingForInput ? "border-amber-400/40 ring-1 ring-amber-400/20" : "border-white/15"}`}>
         <textarea
           ref={textareaRef}
           value={text}
