@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { SettingsModal } from "./components/SettingsModal";
@@ -15,7 +15,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { models } = useModels();
   const { chats, createChat, removeChat, refresh } = useChats();
   const { settings, updateSettings } = useSettings();
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [activeChatId, setActiveChatId] = useState<string | null>(() => {
+    return sessionStorage.getItem("activeChatId");
+  });
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -32,6 +34,22 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     abort,
     loadMessages,
   } = useChat(activeChatId);
+
+  // Persist active chat ID across reloads
+  useEffect(() => {
+    if (activeChatId) {
+      sessionStorage.setItem("activeChatId", activeChatId);
+    } else {
+      sessionStorage.removeItem("activeChatId");
+    }
+  }, [activeChatId]);
+
+  // Restore active chat on mount
+  useEffect(() => {
+    if (activeChatId && !activeChat) {
+      selectChat(activeChatId);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Find context window for active model (chat override takes precedence)
   const contextWindow = useMemo(() => {
@@ -50,9 +68,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           const chat: Chat = await res.json();
           setActiveChat(chat);
           loadMessages(chat.messages);
+        } else {
+          setActiveChatId(null);
+          setActiveChat(null);
         }
       } catch {
-        // fallback
+        setActiveChatId(null);
+        setActiveChat(null);
       }
     },
     [loadMessages]
