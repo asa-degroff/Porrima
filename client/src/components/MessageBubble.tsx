@@ -93,8 +93,8 @@ export function MessageBubble({
               )
             )}
 
-            {/* Inline artifacts */}
-            {artifacts && artifacts.map((artifact) => (
+            {/* Inline artifacts - streaming (live) or persisted (from message) */}
+            {(artifacts || message.artifacts)?.map((artifact) => (
               <ArtifactPanel key={artifact.id} artifact={artifact} />
             ))}
           </>

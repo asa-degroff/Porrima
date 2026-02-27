@@ -11,7 +11,7 @@ import {
   savePendingState,
   hasPendingState,
 } from "../services/agent-state.js";
-import type { ChatMessage, ChatToolCall, ChatToolResult } from "../types.js";
+import type { Artifact, ChatMessage, ChatToolCall, ChatToolResult } from "../types.js";
 
 const router = Router();
 
@@ -50,9 +50,10 @@ router.post("/", async (req, res) => {
     let systemPrompt: string;
     let tools: ReturnType<typeof getAgentTools> | undefined;
 
-    // Collect all tool calls and results across iterations for persistence
+    // Collect all tool calls, results, and artifacts across iterations for persistence
     const allToolCalls: ChatToolCall[] = [];
     const allToolResults: ChatToolResult[] = [];
+    const allArtifacts: Artifact[] = [];
 
     if (pendingState) {
       // RESUME: the user's message is the answer to ask_user
@@ -197,6 +198,7 @@ router.post("/", async (req, res) => {
 
         const toolResult = await executeTool(toolCall, chat.id, (event) => {
           if (event.type === "artifact") {
+            allArtifacts.push(event.data as Artifact);
             res.write(
               `event: artifact\ndata: ${JSON.stringify(event.data)}\n\n`
             );
@@ -249,6 +251,7 @@ router.post("/", async (req, res) => {
         usage: finalUsage,
         toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+        artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
         timestamp: Date.now(),
       };
 
@@ -267,6 +270,7 @@ router.post("/", async (req, res) => {
         usage: finalUsage,
         toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+        artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
         timestamp: Date.now(),
       };
 

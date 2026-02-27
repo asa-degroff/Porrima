@@ -61,7 +61,7 @@ export function ArtifactPanel({ artifact }: Props) {
           ) : (
             <iframe
               src={artifact.url}
-              sandbox="allow-scripts allow-forms"
+              sandbox="allow-scripts allow-forms allow-same-origin"
               className="w-full h-[400px] border-0"
               title={artifact.title}
               onError={() => setIframeError(true)}

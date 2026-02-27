@@ -33,54 +33,86 @@ export function chatMessagesToPiMessages(
 
   for (const m of messages) {
     if (m.role === "assistant") {
-      const content: any[] = [];
-      if (m.thinking) {
-        content.push({ type: "thinking", thinking: m.thinking });
-      }
-      if (m.content) {
-        content.push({ type: "text", text: m.content });
-      }
-      // Reconstruct tool calls if present
-      if (m.toolCalls) {
+      const dummyUsage = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+
+      if (m.toolCalls?.length) {
+        // Reconstruct tool-calling turn: assistant with tool calls only
+        const toolContent: any[] = [];
+        if (m.thinking) {
+          toolContent.push({ type: "thinking", thinking: m.thinking });
+        }
         for (const tc of m.toolCalls) {
-          content.push({
+          toolContent.push({
             type: "toolCall",
             id: tc.id,
             name: tc.name,
             arguments: tc.arguments,
           });
         }
-      }
-      result.push({
-        role: "assistant" as const,
-        content,
-        api: "openai-completions" as const,
-        provider: "ollama",
-        model: modelId,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: (m.toolCalls?.length ? "toolUse" : "stop") as StopReason,
-        timestamp: m.timestamp,
-      } as AssistantMessage);
+        result.push({
+          role: "assistant" as const,
+          content: toolContent,
+          api: "openai-completions" as const,
+          provider: "ollama",
+          model: modelId,
+          usage: dummyUsage,
+          stopReason: "toolUse" as StopReason,
+          timestamp: m.timestamp,
+        } as AssistantMessage);
 
-      // Reconstruct tool result messages after the assistant message
-      if (m.toolResults) {
-        for (const tr of m.toolResults) {
-          result.push({
-            role: "toolResult" as const,
-            toolCallId: tr.toolCallId,
-            toolName: tr.toolName,
-            content: [{ type: "text" as const, text: tr.content }],
-            isError: tr.isError,
-            timestamp: m.timestamp,
-          } as ToolResultMessage);
+        // Tool results follow the tool-calling assistant message
+        if (m.toolResults) {
+          for (const tr of m.toolResults) {
+            result.push({
+              role: "toolResult" as const,
+              toolCallId: tr.toolCallId,
+              toolName: tr.toolName,
+              content: [{ type: "text" as const, text: tr.content }],
+              isError: tr.isError,
+              timestamp: m.timestamp,
+            } as ToolResultMessage);
+          }
         }
+
+        // Then the final text response as a separate assistant message
+        if (m.content) {
+          result.push({
+            role: "assistant" as const,
+            content: [{ type: "text", text: m.content }],
+            api: "openai-completions" as const,
+            provider: "ollama",
+            model: modelId,
+            usage: dummyUsage,
+            stopReason: "stop" as StopReason,
+            timestamp: m.timestamp,
+          } as AssistantMessage);
+        }
+      } else {
+        // No tool calls — simple text response
+        const content: any[] = [];
+        if (m.thinking) {
+          content.push({ type: "thinking", thinking: m.thinking });
+        }
+        if (m.content) {
+          content.push({ type: "text", text: m.content });
+        }
+        result.push({
+          role: "assistant" as const,
+          content,
+          api: "openai-completions" as const,
+          provider: "ollama",
+          model: modelId,
+          usage: dummyUsage,
+          stopReason: "stop" as StopReason,
+          timestamp: m.timestamp,
+        } as AssistantMessage);
       }
     } else {
       result.push({

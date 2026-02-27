@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import type { Artifact, ChatMessage, MessageUsage, OllamaModel } from "../types";
 import type { ToolStatus } from "../api/client";
+import { fetchRenderedPrompt } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
 import { MessageInput } from "./MessageInput";
 import { ModelSelector } from "./ModelSelector";
@@ -63,6 +64,17 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [editingCtx, setEditingCtx] = useState(false);
   const [ctxInput, setCtxInput] = useState("");
+  const [promptModal, setPromptModal] = useState<{ systemPrompt: string; tools: { name: string; description: string }[] } | null>(null);
+
+  const openPromptViewer = useCallback(async () => {
+    if (!chatId) return;
+    try {
+      const data = await fetchRenderedPrompt(chatId);
+      setPromptModal(data);
+    } catch {
+      setPromptModal({ systemPrompt: "(Failed to load)", tools: [] });
+    }
+  }, [chatId]);
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -160,6 +172,13 @@ export function ChatView({
               {formatCtxWindow(contextWindow)}
             </button>
           )}
+          <button
+            className="text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors text-white/30 hover:text-white/50"
+            title="View rendered system prompt and tools"
+            onClick={openPromptViewer}
+          >
+            Prompt
+          </button>
           <ModelSelector
             models={models}
             selectedId={selectedModelId}
@@ -217,6 +236,52 @@ export function ChatView({
         streaming={streaming}
         waitingForInput={waitingForInput}
       />
+
+      {/* Rendered Prompt Viewer Modal */}
+      {promptModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => setPromptModal(null)}
+        >
+          <div
+            className="bg-[#1a1a2e] border border-white/10 rounded-2xl w-[640px] max-h-[80vh] flex flex-col shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
+              <h3 className="text-sm font-medium text-white/80">Rendered Agent Context</h3>
+              <button
+                className="text-white/30 hover:text-white/60 text-lg leading-none"
+                onClick={() => setPromptModal(null)}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              <div>
+                <h4 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">System Prompt</h4>
+                <pre className="text-xs text-white/70 font-mono whitespace-pre-wrap bg-white/5 rounded-lg p-3 border border-white/5 max-h-[40vh] overflow-y-auto">
+                  {promptModal.systemPrompt}
+                </pre>
+              </div>
+              {promptModal.tools.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">
+                    Tools ({promptModal.tools.length})
+                  </h4>
+                  <div className="space-y-1.5">
+                    {promptModal.tools.map((t) => (
+                      <div key={t.name} className="text-xs bg-white/5 rounded-lg px-3 py-2 border border-white/5">
+                        <span className="text-blue-300/70 font-mono">{t.name}</span>
+                        <span className="text-white/40 ml-2">{t.description}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

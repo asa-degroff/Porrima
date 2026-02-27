@@ -24,6 +24,7 @@ export interface ChatMessage {
   usage?: MessageUsage;
   toolCalls?: ChatToolCall[];
   toolResults?: ChatToolResult[];
+  artifacts?: Artifact[];
   timestamp: number;
 }
 

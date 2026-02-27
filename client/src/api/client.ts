@@ -37,6 +37,12 @@ export async function updateChat(
   return res.json();
 }
 
+export async function fetchRenderedPrompt(id: string): Promise<{ systemPrompt: string; tools: { name: string; description: string }[] }> {
+  const res = await fetch(`${BASE}/chats/${id}/rendered-prompt`);
+  if (!res.ok) throw new Error("Failed to fetch rendered prompt");
+  return res.json();
+}
+
 export async function deleteChat(id: string): Promise<void> {
   const res = await fetch(`${BASE}/chats/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Failed to delete chat");
@@ -67,7 +73,7 @@ export interface ToolStatus {
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { thinking?: string; usage?: MessageUsage; waitingForInput?: boolean }) => void;
+  onDone: (message: { thinking?: string; usage?: MessageUsage; artifacts?: Artifact[]; waitingForInput?: boolean }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
   onArtifact?: (artifact: Artifact) => void;
@@ -169,6 +175,7 @@ function processSSEEvent(
       callbacks.onDone({
         thinking: data.message?.thinking,
         usage: data.message?.usage,
+        artifacts: data.message?.artifacts,
         waitingForInput: data.waitingForInput,
       });
       break;

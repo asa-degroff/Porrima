@@ -62,7 +62,7 @@ export function useChat(chatId: string | null) {
         onThinkingDelta: (delta) => {
           setStreamingThinking((prev) => prev + delta);
         },
-        onDone: ({ thinking, usage, waitingForInput: wfi }) => {
+        onDone: ({ thinking, usage, artifacts: doneArtifacts, waitingForInput: wfi }) => {
           if (!doneCalledRef.current) {
             doneCalledRef.current = true;
             setMessages((prev) => {
@@ -73,6 +73,7 @@ export function useChat(chatId: string | null) {
                   ...last,
                   thinking: thinking || undefined,
                   usage: usage || undefined,
+                  artifacts: doneArtifacts || undefined,
                 };
               }
               return updated;
