@@ -57,14 +57,14 @@ export function Sidebar({
   return (
     <div className={`w-72 h-full flex flex-col backdrop-blur-xl bg-white/[0.08] border-r border-white/10 fixed inset-y-0 left-0 z-30 transition-transform duration-300 ease-in-out md:static md:translate-x-0 md:z-auto ${isOpen ? "translate-x-0" : "-translate-x-full"}`}>
       {/* Header */}
-      <div className="p-4 border-b border-white/10 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
-          <h1 className="text-lg font-semibold text-white/90 tracking-tight">
-            qu.je
-          </h1>
-        </div>
-        <div className="flex items-center gap-1">
+      <div className="px-3 pt-3 pb-2 shrink-0">
+        <div className="flex items-center justify-between rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]">
+          <div className="flex items-center gap-2">
+            <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
+            <h1 className="text-lg font-semibold text-white/90 tracking-tight">
+              qu.je
+            </h1>
+          </div>
           <button
             onClick={onOpenSettings}
             className="text-white/40 hover:text-white/70 transition-colors p-1 rounded-lg hover:bg-white/5"
