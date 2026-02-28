@@ -170,7 +170,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onNewChat={handleNewChat}
         onDeleteChat={handleDeleteChat}
         onOpenSettings={() => setSettingsOpen(true)}
-        onLogout={onLogout}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
@@ -211,6 +210,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             setSettingsOpen(false);
           }}
           onClose={() => setSettingsOpen(false)}
+          onLogout={onLogout}
         />
       )}
     </div>
