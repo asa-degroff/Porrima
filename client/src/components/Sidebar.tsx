@@ -38,9 +38,12 @@ export function Sidebar({
     <div className={`w-72 h-full flex flex-col backdrop-blur-xl bg-white/[0.08] border-r border-white/10 fixed inset-y-0 left-0 z-30 transition-transform duration-300 ease-in-out md:static md:translate-x-0 md:z-auto ${isOpen ? "translate-x-0" : "-translate-x-full"}`}>
       {/* Header */}
       <div className="p-4 border-b border-white/10 flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-white/90 tracking-tight">
-          qu.je
-        </h1>
+        <div className="flex items-center gap-2">
+          <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
+          <h1 className="text-lg font-semibold text-white/90 tracking-tight">
+            qu.je
+          </h1>
+        </div>
         <div className="flex items-center gap-1">
           <button
             onClick={onOpenSettings}

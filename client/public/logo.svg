@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1100" width="1100" height="1100">
+  <!-- Top-left quadrant (lightest) -->
+  <polygon points="550,185 185,550 550,550" fill="#F5B85A"/>
+  <!-- Top-right quadrant (light) -->
+  <polygon points="550,185 915,550 550,550" fill="#F0A63E"/>
+  <!-- Bottom-left quadrant (dark) -->
+  <polygon points="185,550 550,915 550,550" fill="#D48A28"/>
+  <!-- Bottom-right quadrant (darkest) -->
+  <polygon points="915,550 550,915 550,550" fill="#C87A1E"/>
+</svg>
