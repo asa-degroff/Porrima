@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
-import { listChats, getChat, saveChat, deleteChat, getSettings } from "../services/storage.js";
+import { listChats, getChat, saveChat, deleteChat, getSettings, saveSettings } from "../services/storage.js";
 import { buildMemoryAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import type { Chat } from "../types.js";
@@ -24,13 +24,15 @@ router.get("/:id", async (req, res) => {
 router.post("/", async (req, res) => {
   const { modelId, type, contextWindow } = req.body;
   const settings = await getSettings();
+  const effectiveModelId = modelId || settings.defaultModelId || "qwen3:8b";
+  const savedContextWindow = settings.modelContextWindows?.[effectiveModelId];
   const chat: Chat = {
     id: uuid(),
     title: type === "agent" ? "New Agent Chat" : "New Chat",
     type: type === "agent" ? "agent" : "quick",
-    modelId: modelId || settings.defaultModelId || "qwen3:8b",
+    modelId: effectiveModelId,
     systemPrompt: settings.defaultSystemPrompt,
-    ...(contextWindow ? { contextWindow } : {}),
+    ...(contextWindow ?? savedContextWindow ? { contextWindow: contextWindow ?? savedContextWindow } : {}),
     messages: [],
     createdAt: new Date().toISOString(),
     lastModified: new Date().toISOString(),
@@ -50,8 +52,19 @@ router.patch("/:id", async (req, res) => {
   if (req.body.contextWindow !== undefined) {
     if (req.body.contextWindow === null) {
       delete chat.contextWindow;
+      // Remove per-model override
+      const settings = await getSettings();
+      if (settings.modelContextWindows?.[chat.modelId]) {
+        delete settings.modelContextWindows[chat.modelId];
+        await saveSettings(settings);
+      }
     } else {
       chat.contextWindow = req.body.contextWindow;
+      // Persist per-model for future chats
+      const settings = await getSettings();
+      const mcw = settings.modelContextWindows ?? {};
+      mcw[chat.modelId] = req.body.contextWindow;
+      await saveSettings({ ...settings, modelContextWindows: mcw });
     }
   }
 

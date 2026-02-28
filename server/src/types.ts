@@ -62,6 +62,7 @@ export interface Settings {
   defaultModelId: string;
   defaultSystemPrompt: string;
   braveApiKey: string;
+  modelContextWindows?: Record<string, number>;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction";
