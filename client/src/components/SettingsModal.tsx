@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { startRegistration } from "@simplewebauthn/browser";
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import type { OllamaModel, Settings } from "../types";
+import type { OllamaModel, Settings, Theme } from "../types";
 
 interface MemoryStatus {
   memoryCount: number;
@@ -21,6 +21,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
+  const [theme, setTheme] = useState<Theme>(settings.theme || "default");
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
   const [synthesisRunning, setSynthesisRunning] = useState(false);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
@@ -43,7 +44,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   }, []);
 
   const handleSave = () => {
-    onSave({ defaultModelId, defaultSystemPrompt: defaultSystemPrompt.trim(), braveApiKey: braveApiKey.trim() });
+    onSave({ defaultModelId, defaultSystemPrompt: defaultSystemPrompt.trim(), braveApiKey: braveApiKey.trim(), theme });
   };
 
   const handleAddPasskey = useCallback(async () => {
@@ -118,6 +119,29 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* Theme */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-white/60">Theme</label>
+            <div className="flex gap-2">
+              {([
+                { value: "default" as Theme, label: "Default" },
+                { value: "ripple-grid" as Theme, label: "Ripple Grid" },
+              ]).map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setTheme(opt.value)}
+                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${
+                    theme === opt.value
+                      ? "bg-purple-500/20 border-purple-400/30 text-purple-300"
+                      : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:text-white/70"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Default System Prompt */}

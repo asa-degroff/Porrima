@@ -58,11 +58,14 @@ export interface OllamaModel {
   contextWindow: number;
 }
 
+export type Theme = "default" | "ripple-grid";
+
 export interface Settings {
   defaultModelId: string;
   defaultSystemPrompt: string;
   braveApiKey: string;
   modelContextWindows?: Record<string, number>;
+  theme?: Theme;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction";
