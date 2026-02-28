@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { Artifact } from "../types";
 
 interface Props {
@@ -10,6 +10,9 @@ export function ArtifactPanel({ artifact }: Props) {
   const [iframeError, setIframeError] = useState(false);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [sourceCode, setSourceCode] = useState<string | null>(null);
+  const [iframeLoaded, setIframeLoaded] = useState(false);
+
+  const handleIframeLoad = useCallback(() => setIframeLoaded(true), []);
 
   // Fetch artifact HTML and create a blob URL so the iframe is same-origin,
   // avoiding Chrome's requestAnimationFrame throttling for cross-origin iframes.
@@ -21,6 +24,7 @@ export function ArtifactPanel({ artifact }: Props) {
       .then((html) => {
         if (cancelled) return;
         setSourceCode(html);
+        setIframeLoaded(false);
         const blob = new Blob([html], { type: "text/html" });
         url = URL.createObjectURL(blob);
         setBlobUrl(url);
@@ -78,7 +82,7 @@ export function ArtifactPanel({ artifact }: Props) {
           </pre>
         </div>
       ) : (
-        <div className="bg-white rounded-b-xl">
+        <div className={`rounded-b-xl transition-colors duration-150 ${iframeLoaded ? "bg-white" : "bg-black/20"}`}>
           {iframeError ? (
             <div className="p-4 text-center text-sm text-gray-500">
               Failed to load artifact preview
@@ -86,13 +90,15 @@ export function ArtifactPanel({ artifact }: Props) {
           ) : blobUrl ? (
             <iframe
               src={blobUrl}
-              className="w-full h-[400px] border-0"
+              className={`w-full h-[400px] border-0 transition-opacity duration-150 ${iframeLoaded ? "opacity-100" : "opacity-0"}`}
+              style={{ colorScheme: "normal", background: "transparent" }}
               title={artifact.title}
+              onLoad={handleIframeLoad}
               onError={() => setIframeError(true)}
             />
           ) : (
             <div className="flex items-center justify-center h-[400px]">
-              <div className="text-sm text-gray-400">Loading preview...</div>
+              <div className="text-sm text-white/40">Loading preview...</div>
             </div>
           )}
         </div>
