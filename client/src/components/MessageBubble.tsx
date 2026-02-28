@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect } from "react";
-import type { Artifact, ChatMessage } from "../types";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
+import type { Artifact, ChatMessage, ImageAttachment } from "../types";
 import type { ToolStatus } from "../api/client";
 import { StreamingText } from "./StreamingText";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -33,6 +34,7 @@ export function MessageBubble({
 
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
+  const [lightboxImage, setLightboxImage] = useState<ImageAttachment | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -137,18 +139,13 @@ export function MessageBubble({
               {message.images && message.images.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-2">
                   {message.images.map((img, i) => (
-                    <a
+                    <img
                       key={i}
-                      href={`data:${img.mimeType};base64,${img.data}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <img
-                        src={`data:${img.mimeType};base64,${img.data}`}
-                        alt={img.name}
-                        className="rounded-lg max-h-64 cursor-pointer hover:opacity-90 transition-opacity"
-                      />
-                    </a>
+                      src={`data:${img.mimeType};base64,${img.data}`}
+                      alt={img.name}
+                      onClick={() => setLightboxImage(img)}
+                      className="rounded-lg max-h-64 cursor-pointer hover:opacity-90 transition-opacity"
+                    />
                   ))}
                 </div>
               )}
@@ -210,6 +207,43 @@ export function MessageBubble({
           </>
         )}
       </div>
+
+      {/* Image lightbox */}
+      {lightboxImage && createPortal(
+        <ImageLightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />,
+        document.body
+      )}
+    </div>
+  );
+}
+
+function ImageLightbox({ image, onClose }: { image: ImageAttachment; onClose: () => void }) {
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white text-2xl flex items-center justify-center transition-colors"
+      >
+        ×
+      </button>
+      <img
+        src={`data:${image.mimeType};base64,${image.data}`}
+        alt={image.name}
+        onClick={(e) => e.stopPropagation()}
+        className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
+      />
+      <span className="absolute bottom-4 text-white/50 text-sm">{image.name}</span>
     </div>
   );
 }
