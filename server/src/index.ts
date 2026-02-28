@@ -15,10 +15,15 @@ import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
 
 const isProd = process.env.NODE_ENV === "production";
-const PORT = 3001;
+const PORT = parseInt(process.env.PORT || "3001");
 const sessionSecret = await getSessionSecret();
 
 const app = express();
+
+// Trust proxy (Cloudflare Tunnel terminates TLS upstream)
+if (isProd) {
+  app.set("trust proxy", 1);
+}
 
 // Session middleware
 app.use(
@@ -64,7 +69,7 @@ if (isProd) {
   const clientDist = join(__dirname, "../../client/dist");
   app.use(express.static(clientDist));
   // SPA fallback for non-API routes
-  app.get("*", (_req, res) => {
+  app.get("*path", (_req, res) => {
     res.sendFile(join(clientDist, "index.html"));
   });
 }

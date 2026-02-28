@@ -18,7 +18,14 @@ import type { AuthenticatorTransportFuture } from "@simplewebauthn/server";
 const router = Router();
 
 const rpName = "qu.je";
-const rpID = process.env.RP_ID || "localhost";
+
+function getRpID(req: Request): string {
+  if (process.env.RP_ID) return process.env.RP_ID;
+  // Use hostname from request (strips port) — works for both localhost and production domains
+  const forwarded = req.headers["x-forwarded-host"];
+  const host = (typeof forwarded === "string" ? forwarded : req.hostname);
+  return host.split(":")[0];
+}
 
 function getExpectedOrigin(req: Request): string {
   if (process.env.ORIGIN) return process.env.ORIGIN;
@@ -53,6 +60,7 @@ router.post("/register/options", async (req, res) => {
     transports: c.transports as AuthenticatorTransportFuture[] | undefined,
   }));
 
+  const rpID = getRpID(req);
   const options = await generateRegistrationOptions({
     rpName,
     rpID,
@@ -85,6 +93,7 @@ router.post("/register/verify", async (req, res) => {
   }
 
   try {
+    const rpID = getRpID(req);
     const verification = await verifyRegistrationResponse({
       response: req.body,
       expectedChallenge,
@@ -126,6 +135,7 @@ router.post("/login/options", async (req, res) => {
     transports: c.transports as AuthenticatorTransportFuture[] | undefined,
   }));
 
+  const rpID = getRpID(req);
   const options = await generateAuthenticationOptions({
     rpID,
     allowCredentials,
@@ -152,6 +162,7 @@ router.post("/login/verify", async (req, res) => {
       return;
     }
 
+    const rpID = getRpID(req);
     const verification = await verifyAuthenticationResponse({
       response: req.body,
       expectedChallenge,
