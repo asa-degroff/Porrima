@@ -20,6 +20,7 @@ interface Props {
 export function SettingsModal({ settings, models, onSave, onClose, onLogout }: Props) {
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
+  const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
   const [synthesisRunning, setSynthesisRunning] = useState(false);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
@@ -42,7 +43,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   }, []);
 
   const handleSave = () => {
-    onSave({ defaultModelId, defaultSystemPrompt: defaultSystemPrompt.trim() });
+    onSave({ defaultModelId, defaultSystemPrompt: defaultSystemPrompt.trim(), braveApiKey: braveApiKey.trim() });
   };
 
   const handleAddPasskey = useCallback(async () => {
@@ -129,6 +130,28 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
               placeholder="You are a helpful assistant."
             />
+          </div>
+
+          {/* API Keys Section */}
+          <div className="space-y-3 pt-2 border-t border-white/10">
+            <h3 className="text-sm font-medium text-white/70">API Keys</h3>
+            <div className="space-y-2">
+              <label className="block text-sm text-white/50">Brave Search API Key</label>
+              <input
+                type="password"
+                value={braveApiKey}
+                onChange={(e) => setBraveApiKey(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
+                placeholder="BSA..."
+                autoComplete="off"
+              />
+              <p className="text-white/30 text-xs">
+                Required for the web_search agent tool. Get a key at{" "}
+                <a href="https://brave.com/search/api/" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
+                  brave.com/search/api
+                </a>
+              </p>
+            </div>
           </div>
 
           {/* Memory Section */}

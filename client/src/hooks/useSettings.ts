@@ -5,6 +5,7 @@ import type { Settings } from "../types";
 const DEFAULT_SETTINGS: Settings = {
   defaultModelId: "",
   defaultSystemPrompt: "You are a helpful assistant.",
+  braveApiKey: "",
 };
 
 export function useSettings() {

@@ -61,6 +61,7 @@ export interface OllamaModel {
 export interface Settings {
   defaultModelId: string;
   defaultSystemPrompt: string;
+  braveApiKey: string;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction";

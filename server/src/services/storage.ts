@@ -74,6 +74,7 @@ export async function deleteChat(id: string): Promise<boolean> {
 const DEFAULT_SETTINGS: Settings = {
   defaultModelId: "",
   defaultSystemPrompt: "You are a helpful assistant.",
+  braveApiKey: "",
 };
 
 export async function getSettings(): Promise<Settings> {

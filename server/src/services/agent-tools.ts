@@ -6,6 +6,7 @@ import { resolve, dirname, join, relative } from "path";
 import { homedir } from "os";
 import { glob } from "fs/promises";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
+import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
 import { executePython, createArtifact } from "./sandbox.js";
 import { v4 as uuid } from "uuid";
 
@@ -98,7 +99,7 @@ const FILESYSTEM_TOOLS: Tool[] = [
 
 /** Get all tools available for agent chats */
 export function getAgentTools(): Tool[] {
-  return [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS];
+  return [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS];
 }
 
 /** Resolve a path relative to $HOME */
@@ -126,6 +127,11 @@ export async function executeTool(
   // Memory tools
   if (["save_memory", "search_memory", "forget_memory"].includes(toolCall.name)) {
     return executeMemoryTool(toolCall, chatId);
+  }
+
+  // Web tools
+  if (["web_search", "web_fetch"].includes(toolCall.name)) {
+    return executeWebTool(toolCall);
   }
 
   // Filesystem & sandbox tools
