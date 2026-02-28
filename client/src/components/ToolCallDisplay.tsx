@@ -2,6 +2,31 @@ import { useState } from "react";
 import type { ChatToolCall, ChatToolResult } from "../types";
 import type { ToolStatus } from "../api/client";
 
+const statusColors = {
+  running: "border-yellow-400/20 bg-yellow-500/5",
+  done: "border-emerald-400/20 bg-emerald-500/5",
+  error: "border-red-400/20 bg-red-500/5",
+};
+
+const statusIcons = {
+  running: (
+    <svg className="animate-spin shrink-0" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
+  ),
+  done: (
+    <svg className="shrink-0 text-emerald-400" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  ),
+  error: (
+    <svg className="shrink-0 text-red-400" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  ),
+};
+
 interface Props {
   toolCall?: ChatToolCall;
   toolResult?: ChatToolResult;
@@ -19,31 +44,6 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
   const argsDisplay = toolCall?.arguments
     ? formatArgs(name, toolCall.arguments)
     : undefined;
-
-  const statusColors = {
-    running: "border-yellow-400/20 bg-yellow-500/5",
-    done: "border-emerald-400/20 bg-emerald-500/5",
-    error: "border-red-400/20 bg-red-500/5",
-  };
-
-  const statusIcons = {
-    running: (
-      <svg className="animate-spin shrink-0" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-      </svg>
-    ),
-    done: (
-      <svg className="shrink-0 text-emerald-400" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="20 6 9 17 4 12" />
-      </svg>
-    ),
-    error: (
-      <svg className="shrink-0 text-red-400" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-        <line x1="18" y1="6" x2="6" y2="18" />
-        <line x1="6" y1="6" x2="18" y2="18" />
-      </svg>
-    ),
-  };
 
   const toolIcon = getToolIcon(name);
 
@@ -140,6 +140,8 @@ function getToolIcon(name: string): string {
   }
 }
 
+const MONOSPACE_TOOLS = new Set(["bash", "read_file", "run_python", "list_files", "search_memory"]);
+
 function isMonospaceOutput(name: string): boolean {
-  return ["bash", "read_file", "run_python", "list_files", "search_memory"].includes(name);
+  return MONOSPACE_TOOLS.has(name);
 }

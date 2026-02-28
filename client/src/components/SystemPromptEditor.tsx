@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 
 interface Props {
   value: string;
@@ -10,11 +10,13 @@ export function SystemPromptEditor({ value, onChange, disabled }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [localValue, setLocalValue] = useState(value);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const prevValueRef = useRef(value);
 
-  // Sync external value changes
-  useEffect(() => {
+  // Sync external value changes during render (no effect needed)
+  if (prevValueRef.current !== value) {
+    prevValueRef.current = value;
     setLocalValue(value);
-  }, [value]);
+  }
 
   const handleBlur = () => {
     const trimmed = localValue.trim();

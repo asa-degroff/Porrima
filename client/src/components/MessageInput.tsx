@@ -41,14 +41,15 @@ export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForI
   const canSend = (text.trim() || images.length > 0) && !disabled;
 
   const handleSubmit = useCallback(() => {
-    if (!canSend) return;
-    onSend(text.trim(), images.length > 0 ? images : undefined);
+    const trimmed = text.trim();
+    if ((!trimmed && images.length === 0) || disabled) return;
+    onSend(trimmed, images.length > 0 ? images : undefined);
     setText("");
     setImages([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [text, images, canSend, onSend]);
+  }, [text, images, disabled, onSend]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {

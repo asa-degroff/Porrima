@@ -1,4 +1,8 @@
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { lazy, Suspense } from "react";
+
+const MarkdownRenderer = lazy(() =>
+  import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
+);
 
 interface Props {
   content: string;
@@ -16,7 +20,9 @@ export function StreamingText({ content, isStreaming }: Props) {
 
   return (
     <span className={isStreaming ? "streaming-cursor" : ""}>
-      <MarkdownRenderer content={content} />
+      <Suspense fallback={<span className="text-sm whitespace-pre-wrap">{content}</span>}>
+        <MarkdownRenderer content={content} />
+      </Suspense>
     </span>
   );
 }

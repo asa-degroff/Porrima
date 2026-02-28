@@ -43,7 +43,7 @@ export function RippleGridBackground() {
     }
 
     resize();
-    window.addEventListener("resize", resize);
+    window.addEventListener("resize", resize, { passive: true });
 
     function draw() {
       const w = canvas!.width;

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { startRegistration } from "@simplewebauthn/browser";
+// @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import type { OllamaModel, Settings, Theme } from "../types";
 
@@ -52,6 +52,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     setPasskeyMessage(null);
     try {
       const options = await fetchRegisterOptions();
+      const { startRegistration } = await import("@simplewebauthn/browser");
       const response = await startRegistration({ optionsJSON: options });
       const result = await verifyRegistration(response);
       if (result.verified) {

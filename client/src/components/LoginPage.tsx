@@ -1,5 +1,9 @@
+import { lazy, Suspense } from "react";
 import type { AuthState } from "../hooks/useAuth";
-import { RippleGridBackground } from "./RippleGridBackground";
+
+const RippleGridBackground = lazy(() =>
+  import("./RippleGridBackground").then((m) => ({ default: m.RippleGridBackground }))
+);
 
 interface Props {
   authState: "needs-setup" | "needs-login";
@@ -13,7 +17,9 @@ export function LoginPage({ authState, error, onRegister, onLogin }: Props) {
 
   return (
     <div className="flex items-center justify-center h-screen relative">
-      <RippleGridBackground />
+      <Suspense fallback={null}>
+        <RippleGridBackground />
+      </Suspense>
       <div className="relative z-10 backdrop-blur-xl bg-white/[0.08] border border-white/10 rounded-2xl p-8 max-w-sm w-full mx-4 text-center">
         <h1 className="text-2xl font-semibold text-white/90 tracking-tight mb-2">
           {isSetup ? "Welcome to qu.je" : "qu.je"}

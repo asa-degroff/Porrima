@@ -8,6 +8,22 @@ import { ModelSelector } from "./ModelSelector";
 import { TokenIndicator } from "./TokenIndicator";
 import { SystemPromptEditor } from "./SystemPromptEditor";
 
+const hamburgerIconLg = (
+  <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="18" x2="21" y2="18" />
+  </svg>
+);
+
+const hamburgerIconSm = (
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="18" x2="21" y2="18" />
+  </svg>
+);
+
 function formatCtxWindow(n: number): string {
   if (n >= 1000000) return (n / 1000000).toFixed(n % 1000000 === 0 ? 0 : 1) + "M";
   if (n >= 1000) return (n / 1000).toFixed(n % 1000 === 0 ? 0 : 1) + "K";
@@ -83,7 +99,10 @@ export function ChatView({
   // Auto-scroll on new messages
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const el = scrollRef.current;
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
     }
   }, [messages, streamingThinking]);
 
@@ -95,11 +114,7 @@ export function ChatView({
             onClick={onOpenSidebar}
             className="text-white/50 hover:text-white/80 transition-colors p-1.5 rounded-lg hover:bg-white/5"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="3" y1="6" x2="21" y2="6" />
-              <line x1="3" y1="12" x2="21" y2="12" />
-              <line x1="3" y1="18" x2="21" y2="18" />
-            </svg>
+            {hamburgerIconLg}
           </button>
         </div>
         <div className="flex-1 flex items-center justify-center">
@@ -138,11 +153,7 @@ export function ChatView({
             onClick={onOpenSidebar}
             className="md:hidden text-white/50 hover:text-white/80 transition-colors p-1 rounded-lg hover:bg-white/5 shrink-0"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="3" y1="6" x2="21" y2="6" />
-              <line x1="3" y1="12" x2="21" y2="12" />
-              <line x1="3" y1="18" x2="21" y2="18" />
-            </svg>
+            {hamburgerIconSm}
           </button>
           <h2 className="text-sm font-medium text-white/80 truncate">
             {chatTitle}
@@ -234,25 +245,23 @@ export function ChatView({
             </p>
           </div>
         )}
-        {messages.map((msg, i) => (
-          <MessageBubble
-            key={`${msg.timestamp}-${i}`}
-            message={msg}
-            isStreaming={streaming}
-            isLast={i === messages.length - 1}
-            streamingThinking={
-              i === messages.length - 1 ? streamingThinking : undefined
-            }
-            activeTools={
-              i === messages.length - 1 ? activeTools : undefined
-            }
-            artifacts={
-              i === messages.length - 1 && streaming ? artifacts : undefined
-            }
-            editable={msg.role === "user" && !streaming}
-            onEdit={msg.role === "user" ? (newText) => onEditMessage(i, newText) : undefined}
-          />
-        ))}
+        {messages.map((msg, i) => {
+          const isLast = i === messages.length - 1;
+          return (
+            <div key={`${msg.timestamp}-${i}`} className={!isLast ? "message-item" : undefined}>
+              <MessageBubble
+                message={msg}
+                isStreaming={streaming}
+                isLast={isLast}
+                streamingThinking={isLast ? streamingThinking : undefined}
+                activeTools={isLast ? activeTools : undefined}
+                artifacts={isLast && streaming ? artifacts : undefined}
+                editable={msg.role === "user" && !streaming}
+                onEdit={msg.role === "user" ? (newText) => onEditMessage(i, newText) : undefined}
+              />
+            </div>
+          );
+        })}
         {error && (
           <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-400/20 text-red-300 text-sm">
             {error}

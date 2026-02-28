@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage } from "../api/client";
 import type { StreamCallbacks, ToolStatus } from "../api/client";
 import type { Artifact, ChatMessage, ImageAttachment, MessageUsage } from "../types";
@@ -13,6 +13,8 @@ export function useChat(chatId: string | null) {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
+  const streamingContentRef = useRef("");
+  const rafRef = useRef<number | null>(null);
 
   // Reset all ephemeral state when switching chats
   useEffect(() => {
@@ -28,20 +30,28 @@ export function useChat(chatId: string | null) {
     setMessages(msgs);
   }, []);
 
+  // Flush accumulated streaming content to React state (batched per frame)
+  const flushStreamingContent = useCallback(() => {
+    const content = streamingContentRef.current;
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.role === "assistant" && last.content !== content) {
+        const updated = prev.slice(0, -1);
+        updated.push({ ...last, content });
+        return updated;
+      }
+      return prev;
+    });
+    rafRef.current = null;
+  }, []);
+
   // Shared SSE callbacks for both send and edit
   const makeStreamCallbacks = useCallback((): StreamCallbacks => ({
     onDelta: (delta) => {
-      setMessages((prev) => {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        if (last.role === "assistant") {
-          updated[updated.length - 1] = {
-            ...last,
-            content: last.content + delta,
-          };
-        }
-        return updated;
-      });
+      streamingContentRef.current += delta;
+      if (rafRef.current === null) {
+        rafRef.current = requestAnimationFrame(flushStreamingContent);
+      }
     },
     onThinkingDelta: (delta) => {
       setStreamingThinking((prev) => prev + delta);
@@ -49,16 +59,23 @@ export function useChat(chatId: string | null) {
     onDone: ({ thinking, usage, artifacts: doneArtifacts, waitingForInput: wfi }) => {
       if (!doneCalledRef.current) {
         doneCalledRef.current = true;
+        // Cancel any pending rAF and do a final flush with metadata
+        if (rafRef.current !== null) {
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = null;
+        }
+        const finalContent = streamingContentRef.current;
         setMessages((prev) => {
-          const updated = [...prev];
-          const last = updated[updated.length - 1];
-          if (last.role === "assistant") {
-            updated[updated.length - 1] = {
+          const updated = prev.slice(0, -1);
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant") {
+            updated.push({
               ...last,
+              content: finalContent,
               thinking: thinking || undefined,
               usage: usage || undefined,
               artifacts: doneArtifacts || undefined,
-            };
+            });
           }
           return updated;
         });
@@ -94,7 +111,7 @@ export function useChat(chatId: string | null) {
       setError(err);
       setStreaming(false);
     },
-  }), []);
+  }), [flushStreamingContent]);
 
   // Shared pre-stream state reset
   const prepareStream = useCallback(() => {
@@ -105,6 +122,11 @@ export function useChat(chatId: string | null) {
     setWaitingForInput(false);
     setError(null);
     doneCalledRef.current = false;
+    streamingContentRef.current = "";
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
   }, []);
 
   const send = useCallback(
@@ -161,16 +183,20 @@ export function useChat(chatId: string | null) {
   }, []);
 
   // Compute total usage across all messages
-  const totalUsage: MessageUsage = messages.reduce(
-    (acc, msg) => {
-      if (msg.usage) {
-        acc.input += msg.usage.input;
-        acc.output += msg.usage.output;
-        acc.totalTokens += msg.usage.totalTokens;
-      }
-      return acc;
-    },
-    { input: 0, output: 0, totalTokens: 0 }
+  const totalUsage: MessageUsage = useMemo(
+    () =>
+      messages.reduce(
+        (acc, msg) => {
+          if (msg.usage) {
+            acc.input += msg.usage.input;
+            acc.output += msg.usage.output;
+            acc.totalTokens += msg.usage.totalTokens;
+          }
+          return acc;
+        },
+        { input: 0, output: 0, totalTokens: 0 }
+      ),
+    [messages]
   );
 
   return {

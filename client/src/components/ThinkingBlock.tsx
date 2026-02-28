@@ -6,17 +6,23 @@ interface Props {
 }
 
 export function ThinkingBlock({ thinking, isStreaming }: Props) {
-  const [expanded, setExpanded] = useState(isStreaming);
+  const [userToggled, setUserToggled] = useState(false);
+  const [userExpanded, setUserExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const prevStreamingRef = useRef(isStreaming);
 
-  // Auto-expand when streaming starts, auto-collapse when done
-  useEffect(() => {
-    if (isStreaming) {
-      setExpanded(true);
-    } else {
-      setExpanded(false);
-    }
-  }, [isStreaming]);
+  // Reset user override when streaming state transitions
+  if (prevStreamingRef.current !== isStreaming) {
+    prevStreamingRef.current = isStreaming;
+    setUserToggled(false);
+  }
+
+  const expanded = userToggled ? userExpanded : isStreaming;
+
+  const handleToggle = () => {
+    setUserToggled(true);
+    setUserExpanded(!expanded);
+  };
 
   // Auto-scroll thinking content during streaming
   useEffect(() => {
@@ -30,7 +36,7 @@ export function ThinkingBlock({ thinking, isStreaming }: Props) {
   return (
     <div className="mb-2 rounded-xl bg-purple-500/10 border border-purple-400/15 overflow-hidden">
       <button
-        onClick={() => setExpanded((e) => !e)}
+        onClick={handleToggle}
         className="w-full flex items-center gap-2 px-3 py-2 text-xs text-purple-300/80 hover:text-purple-200 transition-colors"
       >
         <svg

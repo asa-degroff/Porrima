@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { startRegistration, startAuthentication } from "@simplewebauthn/browser";
+// @simplewebauthn/browser is dynamically imported in register/login
 import {
   fetchAuthStatus,
   fetchRegisterOptions,
@@ -47,6 +47,7 @@ export function useAuth() {
     setError(null);
     try {
       const options = await fetchRegisterOptions();
+      const { startRegistration } = await import("@simplewebauthn/browser");
       const response = await startRegistration({ optionsJSON: options });
       const result = await verifyRegistration(response);
       if (result.verified) {
@@ -61,6 +62,7 @@ export function useAuth() {
     setError(null);
     try {
       const options = await fetchLoginOptions();
+      const { startAuthentication } = await import("@simplewebauthn/browser");
       const response = await startAuthentication({ optionsJSON: options });
       const result = await verifyLogin(response);
       if (result.verified) {

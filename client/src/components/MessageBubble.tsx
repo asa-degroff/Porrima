@@ -1,12 +1,15 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import type { Artifact, ChatMessage, ImageAttachment } from "../types";
 import type { ToolStatus } from "../api/client";
 import { StreamingText } from "./StreamingText";
-import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ArtifactPanel } from "./ArtifactPanel";
 import { ToolCallDisplay } from "./ToolCallDisplay";
+
+const MarkdownRenderer = lazy(() =>
+  import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
+);
 
 interface Props {
   message: ChatMessage;
@@ -195,7 +198,9 @@ export function MessageBubble({
             ) : (
               message.content && (
                 <div className="text-sm leading-relaxed">
-                  <MarkdownRenderer content={message.content} />
+                  <Suspense fallback={<span className="whitespace-pre-wrap">{message.content}</span>}>
+                    <MarkdownRenderer content={message.content} />
+                  </Suspense>
                 </div>
               )
             )}

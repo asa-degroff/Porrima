@@ -1,9 +1,12 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, lazy, Suspense } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { SettingsModal } from "./components/SettingsModal";
 import { LoginPage } from "./components/LoginPage";
-import { RippleGridBackground } from "./components/RippleGridBackground";
+
+const RippleGridBackground = lazy(() =>
+  import("./components/RippleGridBackground").then((m) => ({ default: m.RippleGridBackground }))
+);
 import { useChats } from "./hooks/useChats";
 import { useChat } from "./hooks/useChat";
 import { useModels } from "./hooks/useModels";
@@ -122,27 +125,29 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     [editMessage, refresh]
   );
 
+  const hasActiveChat = activeChat != null;
+
   const handleModelChange = useCallback(
     async (modelId: string) => {
-      if (!activeChatId || !activeChat) return;
+      if (!activeChatId || !hasActiveChat) return;
       await apiUpdateChat(activeChatId, { modelId });
       setActiveChat((prev) => (prev ? { ...prev, modelId } : prev));
     },
-    [activeChatId, activeChat]
+    [activeChatId, hasActiveChat]
   );
 
   const handleSystemPromptChange = useCallback(
     async (systemPrompt: string) => {
-      if (!activeChatId || !activeChat) return;
+      if (!activeChatId || !hasActiveChat) return;
       await apiUpdateChat(activeChatId, { systemPrompt });
       setActiveChat((prev) => (prev ? { ...prev, systemPrompt } : prev));
     },
-    [activeChatId, activeChat]
+    [activeChatId, hasActiveChat]
   );
 
   const handleContextWindowChange = useCallback(
     async (value: number | null) => {
-      if (!activeChatId || !activeChat) return;
+      if (!activeChatId || !hasActiveChat) return;
       await apiUpdateChat(activeChatId, { contextWindow: value });
       setActiveChat((prev) => {
         if (!prev) return prev;
@@ -153,7 +158,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         return { ...prev, contextWindow: value };
       });
     },
-    [activeChatId, activeChat]
+    [activeChatId, hasActiveChat]
   );
 
   // Model default context window (for reset-to-default in editor)
@@ -162,26 +167,42 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     return model?.contextWindow || 32768;
   }, [models, activeChat?.modelId]);
 
+  const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
+  const handleCloseSidebar = useCallback(() => setSidebarOpen(false), []);
+  const handleOpenSidebar = useCallback(() => setSidebarOpen(true), []);
+  const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
+  const handleSaveSettings = useCallback(
+    async (s: import("./types").Settings) => {
+      await updateSettings(s);
+      setSettingsOpen(false);
+    },
+    [updateSettings]
+  );
+
   return (
     <div className="flex h-screen overflow-hidden relative">
-      {settings.theme === "ripple-grid" && <RippleGridBackground />}
+      {settings.theme === "ripple-grid" && (
+        <Suspense fallback={null}>
+          <RippleGridBackground />
+        </Suspense>
+      )}
       <Sidebar
         chats={chats}
         activeChatId={activeChatId}
         onSelectChat={selectChat}
         onNewChat={handleNewChat}
         onDeleteChat={handleDeleteChat}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={handleOpenSettings}
         isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
+        onClose={handleCloseSidebar}
       />
       {sidebarOpen && (
-        <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} />
+        <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={handleCloseSidebar} />
       )}
       <ChatView
         chatId={activeChatId}
         chatTitle={activeChat?.title || "New Chat"}
-        onOpenSidebar={() => setSidebarOpen(true)}
+        onOpenSidebar={handleOpenSidebar}
         messages={messages}
         streaming={streaming}
         streamingThinking={streamingThinking}
@@ -207,11 +228,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <SettingsModal
           settings={settings}
           models={models}
-          onSave={async (s) => {
-            await updateSettings(s);
-            setSettingsOpen(false);
-          }}
-          onClose={() => setSettingsOpen(false)}
+          onSave={handleSaveSettings}
+          onClose={handleCloseSettings}
           onLogout={onLogout}
         />
       )}
