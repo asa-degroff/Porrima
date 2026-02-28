@@ -32,6 +32,7 @@ export interface ChatMessage {
   toolResults?: ChatToolResult[];
   artifacts?: Artifact[];
   images?: ImageAttachment[];
+  queued?: boolean;
   timestamp: number;
 }
 

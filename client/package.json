@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.2.2",
+    "idb": "^8.0.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
@@ -21,6 +22,7 @@
     "@vitejs/plugin-react": "^4.4.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.7.0",
-    "vite": "^6.3.0"
+    "vite": "^6.3.0",
+    "vite-plugin-pwa": "^0.21.2"
   }
 }

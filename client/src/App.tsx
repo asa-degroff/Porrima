@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, lazy, Suspense } from "react";
+import { useState, useCallback, useMemo, useEffect, lazy, Suspense, useRef } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { SettingsModal } from "./components/SettingsModal";
@@ -12,13 +12,17 @@ import { useChat } from "./hooks/useChat";
 import { useModels } from "./hooks/useModels";
 import { useSettings } from "./hooks/useSettings";
 import { useAuth } from "./hooks/useAuth";
+import { useOnlineStatus } from "./hooks/useOnlineStatus";
 import { updateChat as apiUpdateChat } from "./api/client";
+import { setCachedChat, getCachedChat, clearCachedChat } from "./lib/db";
 import type { Chat, ChatType } from "./types";
 
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { models } = useModels();
   const { chats, createChat, removeChat, refresh } = useChats();
   const { settings, updateSettings } = useSettings();
+  const { isOnline } = useOnlineStatus();
+  const prevOnlineRef = useRef(isOnline);
   const [activeChatId, setActiveChatId] = useState<string | null>(() => {
     return sessionStorage.getItem("activeChatId");
   });
@@ -38,6 +42,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     editMessage,
     abort,
     loadMessages,
+    setActiveChatData,
+    processQueue,
+    queueProcessing,
   } = useChat(activeChatId);
 
   // Persist active chat ID across reloads
@@ -56,6 +63,15 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Process message queue when coming back online
+  useEffect(() => {
+    if (isOnline && !prevOnlineRef.current) {
+      refresh();
+      processQueue();
+    }
+    prevOnlineRef.current = isOnline;
+  }, [isOnline, refresh, processQueue]);
+
   // Find context window for active model (chat override takes precedence)
   const contextWindow = useMemo(() => {
     if (activeChat?.contextWindow) return activeChat.contextWindow;
@@ -72,30 +88,46 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         if (res.ok) {
           const chat: Chat = await res.json();
           setActiveChat(chat);
+          setActiveChatData(chat);
           loadMessages(chat.messages);
+          setCachedChat(chat).catch(() => {});
         } else {
           setActiveChatId(null);
           setActiveChat(null);
         }
       } catch {
-        setActiveChatId(null);
-        setActiveChat(null);
+        // Network error — try IDB cache
+        const cached = await getCachedChat(id);
+        if (cached) {
+          setActiveChat(cached);
+          setActiveChatData(cached);
+          loadMessages(cached.messages);
+        } else {
+          setActiveChatId(null);
+          setActiveChat(null);
+        }
       }
     },
-    [loadMessages]
+    [loadMessages, setActiveChatData]
   );
 
   const handleNewChat = useCallback(async (type: ChatType = "quick") => {
-    const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
-    const chat = await createChat(modelId, type);
-    setActiveChatId(chat.id);
-    setActiveChat(chat);
-    loadMessages([]);
-  }, [settings.defaultModelId, models, createChat, loadMessages]);
+    try {
+      const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
+      const chat = await createChat(modelId, type);
+      setActiveChatId(chat.id);
+      setActiveChat(chat);
+      setActiveChatData(chat);
+      loadMessages([]);
+    } catch {
+      // Can't create chats offline
+    }
+  }, [settings.defaultModelId, models, createChat, loadMessages, setActiveChatData]);
 
   const handleDeleteChat = useCallback(
     async (id: string) => {
       await removeChat(id);
+      clearCachedChat(id).catch(() => {});
       if (activeChatId === id) {
         setActiveChatId(null);
         setActiveChat(null);
@@ -223,6 +255,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         modelContextWindow={modelContextWindow}
         hasContextWindowOverride={activeChat?.contextWindow != null}
         waitingForInput={waitingForInput}
+        isOnline={isOnline}
+        queueProcessing={queueProcessing}
       />
       {settingsOpen && (
         <SettingsModal

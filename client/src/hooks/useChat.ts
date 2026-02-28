@@ -2,6 +2,13 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage } from "../api/client";
 import type { StreamCallbacks, ToolStatus } from "../api/client";
 import type { Artifact, ChatMessage, ImageAttachment, MessageUsage } from "../types";
+import {
+  enqueueMessage,
+  dequeueMessage,
+  getQueuedMessagesForChat,
+  setCachedChat,
+} from "../lib/db";
+import type { Chat } from "../types";
 
 export function useChat(chatId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -11,10 +18,12 @@ export function useChat(chatId: string | null) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [waitingForInput, setWaitingForInput] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [queueProcessing, setQueueProcessing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
   const streamingContentRef = useRef("");
   const rafRef = useRef<number | null>(null);
+  const activeChatRef = useRef<Chat | null>(null);
 
   // Reset all ephemeral state when switching chats
   useEffect(() => {
@@ -28,6 +37,19 @@ export function useChat(chatId: string | null) {
 
   const loadMessages = useCallback((msgs: ChatMessage[]) => {
     setMessages(msgs);
+  }, []);
+
+  // Store active chat reference for IDB caching
+  const setActiveChatData = useCallback((chat: Chat | null) => {
+    activeChatRef.current = chat;
+  }, []);
+
+  // Update IDB cache with current messages
+  const updateChatCache = useCallback((msgs: ChatMessage[]) => {
+    const chat = activeChatRef.current;
+    if (chat) {
+      setCachedChat({ ...chat, messages: msgs }).catch(() => {});
+    }
   }, []);
 
   // Flush accumulated streaming content to React state (batched per frame)
@@ -46,7 +68,7 @@ export function useChat(chatId: string | null) {
   }, []);
 
   // Shared SSE callbacks for both send and edit
-  const makeStreamCallbacks = useCallback((): StreamCallbacks => ({
+  const makeStreamCallbacks = useCallback((onDoneExtra?: (msgs: ChatMessage[]) => void): StreamCallbacks => ({
     onDelta: (delta) => {
       streamingContentRef.current += delta;
       if (rafRef.current === null) {
@@ -77,7 +99,10 @@ export function useChat(chatId: string | null) {
               artifacts: doneArtifacts || undefined,
             });
           }
-          return updated;
+          const finalMsgs = updated;
+          updateChatCache(finalMsgs);
+          onDoneExtra?.(finalMsgs);
+          return finalMsgs;
         });
         setStreamingThinking("");
         setStreaming(false);
@@ -108,10 +133,32 @@ export function useChat(chatId: string | null) {
       setArtifacts((prev) => [...prev, artifact]);
     },
     onError: (err) => {
-      setError(err);
+      // Detect offline sentinel from streamSSE
+      if (err.startsWith("__OFFLINE__:")) {
+        setError("Network unavailable — message queued");
+        // Queue the last user message
+        if (chatId) {
+          setMessages((prev) => {
+            // Find the last user message and mark it as queued
+            const lastUserIdx = prev.map((m) => m.role).lastIndexOf("user");
+            if (lastUserIdx >= 0) {
+              const userMsg = prev[lastUserIdx];
+              enqueueMessage(chatId, userMsg.content, userMsg.images).catch(() => {});
+              // Remove the empty assistant placeholder, mark user msg queued
+              const updated = prev.filter((_, i) => i !== prev.length - 1 || prev[prev.length - 1].role !== "assistant");
+              return updated.map((m, i) =>
+                i === lastUserIdx ? { ...m, queued: true } : m
+              );
+            }
+            return prev;
+          });
+        }
+      } else {
+        setError(err);
+      }
       setStreaming(false);
     },
-  }), [flushStreamingContent]);
+  }), [chatId, flushStreamingContent, updateChatCache]);
 
   // Shared pre-stream state reset
   const prepareStream = useCallback(() => {
@@ -140,6 +187,14 @@ export function useChat(chatId: string | null) {
         timestamp: Date.now(),
       };
 
+      // If offline, queue the message
+      if (!navigator.onLine) {
+        const queuedMsg: ChatMessage = { ...userMsg, queued: true };
+        setMessages((prev) => [...prev, queuedMsg]);
+        enqueueMessage(chatId, text, images).catch(() => {});
+        return;
+      }
+
       setMessages((prev) => [...prev, userMsg]);
       prepareStream();
 
@@ -158,7 +213,7 @@ export function useChat(chatId: string | null) {
 
   const editMessage = useCallback(
     (index: number, newText: string) => {
-      if (!chatId || streaming) return;
+      if (!chatId || streaming || !navigator.onLine) return;
 
       // Truncate to edit point, add new user msg + placeholder assistant msg
       setMessages((prev) => {
@@ -181,6 +236,60 @@ export function useChat(chatId: string | null) {
     abortRef.current?.abort();
     setStreaming(false);
   }, []);
+
+  // Process queued messages for the current chat
+  const processQueue = useCallback(async () => {
+    if (!chatId || streaming || queueProcessing) return;
+
+    const queued = await getQueuedMessagesForChat(chatId);
+    if (queued.length === 0) return;
+
+    setQueueProcessing(true);
+
+    for (const item of queued) {
+      if (!navigator.onLine) break;
+
+      // Remove "queued" flag from the user message in UI
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.queued && m.content === item.message ? { ...m, queued: false } : m
+        )
+      );
+
+      // Send and wait for completion
+      const sent = await new Promise<boolean>((resolve) => {
+        prepareStream();
+
+        // Add placeholder assistant message
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant" as const, content: "", timestamp: Date.now() },
+        ]);
+
+        const callbacks = makeStreamCallbacks(() => {
+          resolve(true);
+        });
+        // Override onError to detect further offline
+        const origOnError = callbacks.onError;
+        callbacks.onError = (err) => {
+          if (err.startsWith("__OFFLINE__:")) {
+            resolve(false);
+          } else {
+            origOnError(err);
+            resolve(true); // still dequeue on non-offline errors
+          }
+        };
+
+        abortRef.current = sendMessage(chatId, item.message, callbacks, item.images);
+      });
+
+      await dequeueMessage(item.id!);
+
+      if (!sent) break; // network dropped mid-processing
+    }
+
+    setQueueProcessing(false);
+  }, [chatId, streaming, queueProcessing, prepareStream, makeStreamCallbacks]);
 
   // Compute total usage across all messages
   const totalUsage: MessageUsage = useMemo(
@@ -212,5 +321,8 @@ export function useChat(chatId: string | null) {
     editMessage,
     abort,
     loadMessages,
+    setActiveChatData,
+    processQueue,
+    queueProcessing,
   };
 }

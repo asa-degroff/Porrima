@@ -7,6 +7,7 @@ import { MessageInput } from "./MessageInput";
 import { ModelSelector } from "./ModelSelector";
 import { TokenIndicator } from "./TokenIndicator";
 import { SystemPromptEditor } from "./SystemPromptEditor";
+import { OfflineIndicator } from "./OfflineIndicator";
 
 const hamburgerIconLg = (
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -54,6 +55,8 @@ interface Props {
   hasContextWindowOverride: boolean;
   waitingForInput: boolean;
   onOpenSidebar: () => void;
+  isOnline?: boolean;
+  queueProcessing?: boolean;
 }
 
 export function ChatView({
@@ -80,6 +83,8 @@ export function ChatView({
   hasContextWindowOverride,
   waitingForInput,
   onOpenSidebar,
+  isOnline = true,
+  queueProcessing = false,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [editingCtx, setEditingCtx] = useState(false);
@@ -160,6 +165,7 @@ export function ChatView({
           </h2>
         </div>
         <div className="flex items-center gap-3 shrink-0">
+          <OfflineIndicator isOnline={isOnline} queueProcessing={queueProcessing} />
           <TokenIndicator usage={totalUsage} contextWindow={contextWindow} />
           {/* Context window editor */}
           {editingCtx ? (
@@ -256,7 +262,7 @@ export function ChatView({
                 streamingThinking={isLast ? streamingThinking : undefined}
                 activeTools={isLast ? activeTools : undefined}
                 artifacts={isLast && streaming ? artifacts : undefined}
-                editable={msg.role === "user" && !streaming}
+                editable={msg.role === "user" && !streaming && isOnline}
                 onEdit={msg.role === "user" ? (newText) => onEditMessage(i, newText) : undefined}
               />
             </div>
@@ -276,6 +282,7 @@ export function ChatView({
         onAbort={onAbort}
         streaming={streaming}
         waitingForInput={waitingForInput}
+        isOnline={isOnline}
       />
 
       {/* Rendered Prompt Viewer Modal */}

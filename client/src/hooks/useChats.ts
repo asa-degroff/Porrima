@@ -3,19 +3,35 @@ import {
   fetchChats,
   createChat as apiCreateChat,
   deleteChat as apiDeleteChat,
+  OfflineError,
 } from "../api/client";
+import {
+  setCachedChatList,
+  getCachedChatList,
+  clearCachedChat,
+} from "../lib/db";
 import type { ChatListItem, ChatType } from "../types";
 
 export function useChats() {
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isFromCache, setIsFromCache] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       const list = await fetchChats();
       setChats(list);
-    } catch {
-      // silently fail
+      setIsFromCache(false);
+      setCachedChatList(list).catch(() => {});
+    } catch (e) {
+      if (e instanceof OfflineError) {
+        const cached = await getCachedChatList();
+        if (cached) {
+          setChats(cached);
+          setIsFromCache(true);
+        }
+      }
+      // else silently fail
     }
     setLoading(false);
   }, []);
@@ -36,10 +52,11 @@ export function useChats() {
   const removeChat = useCallback(
     async (id: string) => {
       await apiDeleteChat(id);
+      clearCachedChat(id).catch(() => {});
       await refresh();
     },
     [refresh]
   );
 
-  return { chats, loading, createChat, removeChat, refresh };
+  return { chats, loading, createChat, removeChat, refresh, isFromCache };
 }

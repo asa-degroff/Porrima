@@ -105,7 +105,7 @@ export function MessageBubble({
           isUser
             ? "bg-blue-500/20 border border-blue-400/20 text-white/95"
             : "bg-white/5 border border-white/10 text-white/90"
-        }`}
+        } ${message.queued ? "opacity-60" : ""}`}
       >
         {isUser ? (
           editing ? (
@@ -156,6 +156,15 @@ export function MessageBubble({
                 <p className="whitespace-pre-wrap text-sm leading-relaxed">
                   {message.content}
                 </p>
+              )}
+              {message.queued && (
+                <div className="flex items-center gap-1 mt-1.5 text-[11px] text-amber-300/70">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                  Queued
+                </div>
               )}
             </div>
           )

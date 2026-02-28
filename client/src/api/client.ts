@@ -2,15 +2,27 @@ import type { Artifact, Chat, ChatListItem, ChatType, ImageAttachment, MessageUs
 
 const BASE = "/api";
 
+export class OfflineError extends Error {
+  constructor(message = "Network unavailable") {
+    super(message);
+    this.name = "OfflineError";
+  }
+}
+
 function emitUnauthorized() {
   window.dispatchEvent(new CustomEvent("auth:unauthorized"));
 }
 
 async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(input, {
-    ...init,
-    credentials: "include",
-  });
+  let res: Response;
+  try {
+    res = await fetch(input, {
+      ...init,
+      credentials: "include",
+    });
+  } catch (e) {
+    throw new OfflineError();
+  }
   if (res.status === 401) {
     emitUnauthorized();
     throw new Error("Authentication required");
@@ -173,7 +185,10 @@ function streamSSE(
       }
     })
     .catch((e) => {
-      if (e.name !== "AbortError") {
+      if (e.name === "AbortError") return;
+      if (e instanceof TypeError || e.name === "TypeError") {
+        callbacks.onError("__OFFLINE__:" + e.message);
+      } else {
         callbacks.onError(e.message);
       }
     });

@@ -7,6 +7,7 @@ interface Props {
   onAbort?: () => void;
   streaming?: boolean;
   waitingForInput?: boolean;
+  isOnline?: boolean;
 }
 
 function processFiles(files: FileList | File[]): Promise<ImageAttachment[]> {
@@ -30,7 +31,7 @@ function processFiles(files: FileList | File[]): Promise<ImageAttachment[]> {
   );
 }
 
-export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForInput }: Props) {
+export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true }: Props) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -38,11 +39,12 @@ export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForI
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounterRef = useRef(0);
 
-  const canSend = (text.trim() || images.length > 0) && !disabled;
+  const hasContent = text.trim() || images.length > 0;
+  const canSend = hasContent && (!disabled || !isOnline);
 
   const handleSubmit = useCallback(() => {
     const trimmed = text.trim();
-    if ((!trimmed && images.length === 0) || disabled) return;
+    if ((!trimmed && images.length === 0) || (disabled && isOnline)) return;
     onSend(trimmed, images.length > 0 ? images : undefined);
     setText("");
     setImages([]);
@@ -209,6 +211,19 @@ export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForI
               className="px-4 py-1.5 rounded-lg bg-red-500/20 border border-red-400/30 text-red-300 text-sm hover:bg-red-500/30 transition-colors"
             >
               Stop
+            </button>
+          ) : !isOnline ? (
+            <button
+              onClick={handleSubmit}
+              disabled={!canSend}
+              className="px-4 py-1.5 rounded-lg bg-amber-500/20 border border-amber-400/30 text-amber-300 text-sm hover:bg-amber-500/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+              title="Message will be sent when back online"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              Queue
             </button>
           ) : (
             <button
