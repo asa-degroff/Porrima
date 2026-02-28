@@ -17,6 +17,12 @@ export interface ChatToolResult {
   isError: boolean;
 }
 
+export interface ImageAttachment {
+  data: string;      // base64-encoded (no data: prefix)
+  mimeType: string;  // e.g. "image/png"
+  name: string;      // original filename
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -25,6 +31,7 @@ export interface ChatMessage {
   toolCalls?: ChatToolCall[];
   toolResults?: ChatToolResult[];
   artifacts?: Artifact[];
+  images?: ImageAttachment[];
   timestamp: number;
 }
 

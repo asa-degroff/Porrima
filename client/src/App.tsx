@@ -103,8 +103,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   );
 
   const handleSend = useCallback(
-    (text: string) => {
-      send(text);
+    (text: string, images?: import("./types").ImageAttachment[]) => {
+      send(text, images);
       // Refresh chat list after a short delay to pick up title changes
       setTimeout(() => refresh(), 500);
       setTimeout(() => refresh(), 2000);

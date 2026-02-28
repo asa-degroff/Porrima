@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { sendMessage, editMessage as apiEditMessage } from "../api/client";
 import type { StreamCallbacks, ToolStatus } from "../api/client";
-import type { Artifact, ChatMessage, MessageUsage } from "../types";
+import type { Artifact, ChatMessage, ImageAttachment, MessageUsage } from "../types";
 
 export function useChat(chatId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -108,12 +108,13 @@ export function useChat(chatId: string | null) {
   }, []);
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, images?: ImageAttachment[]) => {
       if (!chatId || streaming) return;
 
       const userMsg: ChatMessage = {
         role: "user",
         content: text,
+        images: images?.length ? images : undefined,
         timestamp: Date.now(),
       };
 
@@ -128,7 +129,7 @@ export function useChat(chatId: string | null) {
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
-      abortRef.current = sendMessage(chatId, text, makeStreamCallbacks());
+      abortRef.current = sendMessage(chatId, text, makeStreamCallbacks(), images);
     },
     [chatId, streaming, prepareStream, makeStreamCallbacks]
   );

@@ -28,7 +28,7 @@ interface Props {
   models: OllamaModel[];
   selectedModelId: string;
   systemPrompt: string;
-  onSend: (text: string) => void;
+  onSend: (text: string, images?: import("../types").ImageAttachment[]) => void;
   onEditMessage: (index: number, newText: string) => void;
   onAbort: () => void;
   onModelChange: (modelId: string) => void;

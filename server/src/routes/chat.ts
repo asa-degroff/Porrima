@@ -12,7 +12,7 @@ import {
   savePendingState,
   hasPendingState,
 } from "../services/agent-state.js";
-import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult } from "../types.js";
+import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, ImageAttachment } from "../types.js";
 
 const router = Router();
 
@@ -237,13 +237,14 @@ async function handleChatStream(
 
 // Send message and stream response via SSE
 router.post("/", async (req, res) => {
-  const { chatId, message } = req.body as {
+  const { chatId, message, images } = req.body as {
     chatId: string;
     message: string;
+    images?: ImageAttachment[];
   };
 
-  if (!chatId || !message) {
-    return res.status(400).json({ error: "chatId and message are required" });
+  if (!chatId || (!message && (!images || images.length === 0))) {
+    return res.status(400).json({ error: "chatId and message (or images) are required" });
   }
 
   const chat = await getChat(chatId);
@@ -278,6 +279,7 @@ router.post("/", async (req, res) => {
     chat.messages.push({
       role: "user",
       content: message,
+      images: images?.length ? images : undefined,
       timestamp: Date.now(),
     });
     await saveChat(chat);
@@ -286,6 +288,7 @@ router.post("/", async (req, res) => {
     const userMsg: ChatMessage = {
       role: "user",
       content: message,
+      images: images?.length ? images : undefined,
       timestamp: Date.now(),
     };
     chat.messages.push(userMsg);

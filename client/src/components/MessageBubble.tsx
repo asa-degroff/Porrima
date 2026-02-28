@@ -133,9 +133,31 @@ export function MessageBubble({
               </div>
             </div>
           ) : (
-            <p className="whitespace-pre-wrap text-sm leading-relaxed">
-              {message.content}
-            </p>
+            <div>
+              {message.images && message.images.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {message.images.map((img, i) => (
+                    <a
+                      key={i}
+                      href={`data:${img.mimeType};base64,${img.data}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <img
+                        src={`data:${img.mimeType};base64,${img.data}`}
+                        alt={img.name}
+                        className="rounded-lg max-h-64 cursor-pointer hover:opacity-90 transition-opacity"
+                      />
+                    </a>
+                  ))}
+                </div>
+              )}
+              {message.content && (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                  {message.content}
+                </p>
+              )}
+            </div>
           )
         ) : (
           <>

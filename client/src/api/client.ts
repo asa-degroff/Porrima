@@ -1,4 +1,4 @@
-import type { Artifact, Chat, ChatListItem, ChatType, MessageUsage, OllamaModel, Settings } from "../types";
+import type { Artifact, Chat, ChatListItem, ChatType, ImageAttachment, MessageUsage, OllamaModel, Settings } from "../types";
 
 const BASE = "/api";
 
@@ -184,9 +184,10 @@ function streamSSE(
 export function sendMessage(
   chatId: string,
   message: string,
-  callbacks: StreamCallbacks
+  callbacks: StreamCallbacks,
+  images?: ImageAttachment[]
 ): AbortController {
-  return streamSSE(`${BASE}/chat`, { chatId, message }, callbacks);
+  return streamSSE(`${BASE}/chat`, { chatId, message, images: images?.length ? images : undefined }, callbacks);
 }
 
 export function editMessage(

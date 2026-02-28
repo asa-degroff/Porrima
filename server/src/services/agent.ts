@@ -115,11 +115,20 @@ export function chatMessagesToPiMessages(
         } as AssistantMessage);
       }
     } else {
-      result.push({
-        role: "user" as const,
-        content: m.content,
-        timestamp: m.timestamp,
-      });
+      if (m.images?.length) {
+        const content: any[] = [];
+        if (m.content) content.push({ type: "text", text: m.content });
+        for (const img of m.images) {
+          content.push({ type: "image", data: img.data, mimeType: img.mimeType });
+        }
+        result.push({ role: "user" as const, content, timestamp: m.timestamp });
+      } else {
+        result.push({
+          role: "user" as const,
+          content: m.content,
+          timestamp: m.timestamp,
+        });
+      }
     }
   }
 
