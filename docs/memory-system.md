@@ -93,19 +93,55 @@ Used by the REST API to return memories without the (large) embedding vectors.
 
 **File**: `server/src/services/memory-storage.ts`
 
-All memories persist as a single JSON file at `~/.quje-agent/memory/memories.json`. The storage layer provides five operations:
+All memories persist as a single JSON file at `~/.quje-agent/memory/memories.json`. The storage layer provides the following operations:
 
 | Function | Description |
 |---|---|
 | `loadMemoryStore()` | Reads and parses the JSON file. Returns `{ memories: [], lastSynthesis: null }` if the file doesn't exist. |
-| `saveMemoryStore(store)` | Serializes the full store and writes it atomically. |
-| `addMemory(memory)` | Loads, pushes, saves. |
-| `updateMemory(id, updates)` | Loads, finds by ID, shallow-merges updates, saves. Returns `false` if not found. |
-| `deleteMemory(id)` | Loads, filters out by ID, saves. Returns `false` if not found. |
-| `searchMemories(queryEmbedding, topK, now?)` | Scores every memory against the query, sorts descending, returns top K. |
+| `saveMemoryStore(store)` | Serializes the full store and writes atomically. |
+| `addMemory(memory)` | Wraps load-push-save in `withWriteLock()` for thread-safe concurrent writes. |
+| `updateMemory(id, updates)` | Wraps load-find-merge-save in `withWriteLock()`. Returns `false` if not found. |
+| `deleteMemory(id)` | Wraps load-filter-save in `withWriteLock()`. Returns `false` if not found. |
+| `searchMemories(queryEmbedding, topK, now?)` | Scores every memory against the query, sorts descending, returns top K. (Read-only, no lock needed) |
 | `saveDailyLog(date, content)` | Writes a markdown file to `~/.quje-agent/memory/daily/{date}.md`. |
+| `withWriteLock(fn)` | Promise-based mutex that serializes all write operations to prevent race conditions. |
 
-Every write operation does a full load-modify-save cycle. There is no in-memory caching or locking — reads always go to disk.
+### Write Locking Mechanism
+
+All write operations serialize through a Promise-based mutex to prevent race conditions from concurrent extractions (e.g., normal extraction + pre-compaction flush firing simultaneously):
+
+```typescript
+let writeLock: Promise<void> = Promise.resolve();
+
+export function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = writeLock.then(fn, fn);
+  // Update the lock chain but don't propagate errors to subsequent callers
+  writeLock = next.then(() => {}, () => {});
+  return next;
+}
+```
+
+The error recovery pattern (`next.then(() => {}, () => {})`) ensures that a single failed write doesn't break the lock chain for future operations.
+
+### Atomic Dedup+Save
+
+The `dedupAndSave()` function (exported from `memory-extraction.ts`) performs deduplication and persistence in a single locked transaction, ensuring no partial state ever persists:
+
+```typescript
+export async function dedupAndSave(
+  facts: ExtractedFact[],
+  embeddings: number[][],
+  chatId: string
+): Promise<void> {
+  await withWriteLock(async () => {
+    const store = await loadMemoryStore();
+    // Dedup logic inline...
+    await saveMemoryStore(store);
+  });
+}
+```
+
+This is used by both automatic extraction and the `save_memory` tool to ensure consistent deduplication across all creation pathways.
 
 ---
 
@@ -140,11 +176,17 @@ User sends message → LLM responds → response saved → extractMemories() fir
 The extraction pipeline:
 
 1. **Build prompt**: Concatenates the user message and assistant response.
-2. **LLM call**: Sends the prompt to the same chat model with `EXTRACTION_SYSTEM_PROMPT`, which instructs it to output a JSON array of `{ text, category, importance }` objects.
+2. **LLM call with retry**: Sends the prompt to the same chat model with `EXTRACTION_SYSTEM_PROMPT`. The call is wrapped in `withRetry()` with exponential backoff (1s, 2s, 4s max retries).
 3. **Parse**: `parseExtractionResponse()` strips markdown fences, finds the JSON array, validates each fact has a non-empty `text` and a valid category.
-4. **Deduplicate and store**: For each extracted fact, embeds it and checks against all existing memories (see [Deduplication](#deduplication)).
+4. **Batch embedding**: All extracted facts are embedded in a single `embedBatch()` call (not sequential calls).
+5. **Atomic dedup+save**: Calls `dedupAndSave()` which performs deduplication and persistence in a single locked transaction.
 
-This is fully fire-and-forget — errors are caught and logged but never surface to the user. The extraction call uses the same `streamChat()` function as normal chat, but discards the streaming events and only collects the final text.
+**Error Handling**: 
+- LLM/embedding failures retry up to 2 times with exponential backoff
+- Persistent failures logged to `~/.quje-agent/logs/memory-errors.log`
+- Extraction metrics tracked in-memory (exposed via `GET /api/memory/status`)
+
+This is fully fire-and-forget — errors never surface to the user. The extraction call uses the same `streamChat()` function as normal chat, but discards the streaming events and only collects the final text.
 
 ### 2. Explicit Tool Calls (Agent-Initiated)
 
@@ -156,7 +198,12 @@ The agent LLM can directly invoke three memory tools during its tool loop:
 
 Parameters: `{ text: string, category: MemoryCategory, importance: number }`
 
-Creates a new memory immediately. Embeds the text, constructs a full `Memory` object, and calls `addMemory()`. Does NOT deduplicate — this is a direct save. The agent is trusted to use this when the user explicitly asks to remember something.
+Creates a new memory with deduplication. Embeds the text, then calls `dedupAndSave()` which:
+1. Checks for existing memories with cosine similarity > 0.85
+2. If a match exists: updates the existing memory with the new text/embedding and takes the max importance
+3. If no match: creates a new memory
+
+This ensures explicit saves go through the same dedup logic as automatic extraction, preventing duplicates when the agent saves something already captured.
 
 #### `search_memory`
 
@@ -182,25 +229,32 @@ The full CRUD API (see [REST API Routes](#rest-api-routes)) allows creating, rea
 
 ## Deduplication
 
-**File**: `server/src/services/memory-extraction.ts` (lines 59, 103-141)
+**File**: `server/src/services/memory-extraction.ts` (function `dedupAndSave()`)
 
 **Threshold**: cosine similarity > 0.85
 
-When a new fact is extracted (via automatic extraction or pre-compaction flush), it's compared against every existing memory:
+When a new fact is created (via automatic extraction, pre-compaction flush, or explicit `save_memory` tool), it's processed by `dedupAndSave()` which performs atomic deduplication inside a write lock:
 
-1. Embed the new fact.
-2. Compute cosine similarity against each existing memory's embedding.
-3. If the best match exceeds 0.85:
+1. Embed the new fact (batch embedding for multiple facts).
+2. Load the memory store inside the lock.
+3. For each fact, compute cosine similarity against every existing memory.
+4. If the best match exceeds 0.85:
    - **Update** the existing memory's text to the new version (assumes the newer phrasing is more current).
    - **Update** the embedding to match the new text.
    - **Keep the higher importance** of the two (`Math.max`).
    - **Refresh** `lastAccessed` to now.
-4. If no match exceeds 0.85:
+5. If no match exceeds 0.85:
    - **Create** a new memory.
+6. Save the entire store (single write).
 
-Newly created memories within the same extraction batch are also added to the comparison pool (`existingMemories.push(memory)` at line 139), so two similar facts from the same conversation won't both be saved as separate memories.
+**Batch dedup**: Newly created memories within the same extraction batch are added to the comparison pool inline, so two similar facts from the same conversation won't both be saved as separate memories.
 
-Note: The `save_memory` tool (explicit agent calls) does NOT run deduplication. Only the automatic extraction and pre-compaction flush pathways do.
+**Pathways using dedup**:
+- ✅ Automatic extraction (after each response)
+- ✅ Pre-compaction flush (at 75% context window)
+- ✅ Explicit `save_memory` tool calls
+
+All three pathways use the same `dedupAndSave()` function for consistency.
 
 ---
 
@@ -218,10 +272,13 @@ Called at the start of every agent chat request (chat.ts:305-309). This is the p
 4. **Filter**: Drops results with score ≤ 0.01 (effectively noise).
 5. **Inject**: Appends a `## What you remember about this user` section to the system prompt containing the relevant memories.
 6. **Update access metadata**: Fire-and-forget updates to `lastAccessed` and `accessCount` for each recalled memory.
+7. **Cache**: The augmented prompt is cached per-chat via `setCachedAugmentedPrompt()` for instant retrieval by the prompt viewer UI.
 
 The injected prompt section includes natural-language instructions: *"Use these memories naturally in conversation — don't list them unless asked. If memories seem outdated or contradictory, trust the user's latest statements."*
 
 If anything fails (embedding model down, no memories exist, etc.), the function silently returns the base system prompt unchanged.
+
+**Potential enhancement**: Consider using only the most recent user message (not last 3) for queries during topic switches to avoid pulling irrelevant memories.
 
 ### 2. Search Tool (Explicit)
 
@@ -255,30 +312,39 @@ score = cosine_similarity × recency_decay × importance_weight
 
 ## Memory Deletion
 
-Three pathways:
+Four pathways:
 
 1. **`forget_memory` tool**: Agent-initiated, by ID or semantic query (score > 0.5 threshold).
 2. **REST API `DELETE /api/memory/:id`**: Direct deletion by ID.
 3. **Synthesis merge**: Near-duplicate memories (cosine > 0.90) are consolidated — the lower-scoring duplicate is removed.
+4. **Automatic purge**: During synthesis, memories not accessed in 6+ months with importance ≤2 are permanently deleted.
 
-There is no automatic garbage collection based on age or score. Low-importance old memories simply score too low to ever be recalled, but they remain in storage.
+The automatic purge prevents unbounded memory growth and removes genuinely stale, low-value memories that haven't been useful for an extended period.
 
 ---
 
 ## Pre-Compaction Flush
 
-**File**: `server/src/services/memory-extraction.ts` (lines 144-231)
-**Trigger**: After an assistant response, if `totalTokens / effectiveContextWindow > 0.75` (chat.ts:211-224)
+**File**: `server/src/services/memory-extraction.ts` (lines 234-297)
+**Trigger**: After an assistant response, if `estimatedUsage / effectiveContextWindow > 0.75` (chat.ts:224-243)
 
 When a conversation approaches 75% of its context window, the system does a one-time sweep of the **entire conversation history** to extract all memorable facts before older messages get pushed out by new ones.
+
+**Token Estimation**: Uses a dual heuristic for accuracy:
+```typescript
+const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
+const cumulativeOutput = chat.messages.reduce((sum, m) => sum + (m.usage?.output ?? 0), 0);
+const estimatedUsage = Math.max(lastUsage, cumulativeOutput);
+```
 
 Pipeline:
 
 1. Concatenates all messages (`role: content`) into a single text block.
-2. Sends it to the LLM with `PRE_COMPACTION_SYSTEM_PROMPT` — a more aggressive extraction prompt that emphasizes thoroughness ("this is the last chance to capture information before it's lost").
-3. Extracts and deduplicates using the same logic as normal extraction (0.85 threshold).
+2. **LLM call with retry**: Sends to the LLM with `PRE_COMPACTION_SYSTEM_PROMPT` — wrapped in `withRetry()` with exponential backoff.
+3. **Batch embedding**: All extracted facts embedded in a single `embedBatch()` call.
+4. Atomic dedup+save via `dedupAndSave()` with 0.85 threshold.
 
-This is also fire-and-forget. It runs alongside normal extraction (both fire concurrently after the same response).
+This is fire-and-forget. It runs concurrently with normal extraction after the same response (both protected by the write lock).
 
 ---
 
@@ -286,31 +352,43 @@ This is also fire-and-forget. It runs alongside normal extraction (both fire con
 
 **File**: `server/src/services/synthesis.ts`
 
-A maintenance job that runs once per 24-hour period. Three steps:
+A maintenance job that runs once per 24-hour period. The entire synthesis process is wrapped in `withWriteLock()` to prevent concurrent memory mutations during the operation.
 
 ### Step 1: Consolidate Near-Duplicates
 
 **Threshold**: cosine similarity > 0.90 (stricter than the 0.85 extraction dedup)
 
-Compares every memory pair. When two memories are near-identical:
+Compares every memory pair using O(n²) pairwise comparison. The `merged` set ensures a memory is only merged once per synthesis run. When two memories are near-identical:
 - The more important one survives (keeps its text and embedding).
 - `importance` is set to `max(a, b)`.
 - `accessCount` values are summed.
 - The duplicate is removed.
 
-Uses an O(n²) pairwise comparison. The `merged` set ensures a memory is only merged once per synthesis run.
+**Scaling note**: Fine for hundreds of memories, but could slow at thousands. Future optimization: approximate nearest neighbors (ANN) index.
 
-### Step 2: Importance Decay
+### Step 2: Importance Decay and Memory Purge
 
-For memories not accessed in over 30 days: `importance = max(1, importance - 1)`.
+**Importance Decay**: For memories not accessed in over 30 days: `importance = max(1, importance - 1)`.
 
 This is separate from the recency decay in scoring. Scoring decay is continuous and reversible (accessing a memory resets the clock). Importance decay is discrete and permanent — once importance drops, it only goes back up if the memory is updated with a higher-importance version via dedup.
+
+**Memory Purge**: Memories that meet BOTH criteria are permanently deleted:
+- Not accessed in 6+ months (180 days)
+- Importance ≤ 2
+
+This automatic garbage collection prevents unbounded memory growth and removes genuinely stale, low-value memories. The purge count is logged during synthesis:
+
+```
+[synthesis] Purged X stale memories (>6 months, importance ≤2)
+```
 
 ### Step 3: Generate Daily Summary
 
 Sends all current memories to the LLM and asks for a 2-4 paragraph thematic summary. The output is saved as a markdown file at `~/.quje-agent/memory/daily/{YYYY-MM-DD}.md`.
 
-The summary includes a header with memory count and merge count. These daily logs are for human review — they're never read back by the system.
+The summary includes a header with memory count, merge count, and purge count. These daily logs are for human review — they're never read back by the system.
+
+**Note**: Daily logs accumulate indefinitely. Future enhancement: add log rotation or compression for logs older than N days.
 
 Finally, `lastSynthesis` is set to the current timestamp and the store is saved.
 
@@ -466,21 +544,30 @@ Update lastSynthesis, save store
 - **Access tracking**: `lastAccessed` and `accessCount` updates on recall create a positive feedback loop — useful memories stay fresh, unused ones fade.
 - **Pre-compaction flush**: Smart safeguard against information loss in long conversations.
 - **Batch dedup within extraction**: Adding newly created memories to the comparison pool within a single extraction pass prevents the same conversation from generating duplicate memories.
+- **Write locking**: All memory write operations serialize through a Promise-based mutex (`withWriteLock()`), preventing race conditions from concurrent extractions.
+- **Atomic dedup+save**: The `dedupAndSave()` function performs deduplication and persistence in a single locked transaction, used by both automatic extraction and explicit tool calls.
+- **Error resilience**: LLM and embedding calls retry with exponential backoff (up to 2 retries). Failures logged to `~/.quje-agent/logs/memory-errors.log`.
+- **Observability**: In-memory metrics track extraction success/failure rates, facts extracted, and timestamps — exposed via `GET /api/memory/status`.
+- **Memory purge**: Stale memories (6+ months unused, importance ≤2) are automatically removed during synthesis to prevent unbounded growth.
 
-### Potential Concerns
+### Resolved Concerns (Previously Noted)
 
-1. **No write locking**: Every write does `load → modify → save`. If two concurrent extractions complete at similar times (e.g., normal extraction + pre-compaction flush firing from the same response), one can overwrite the other's changes. This is a known trade-off for simplicity, and the impact is low (worst case: a memory is lost and re-extracted later), but it's worth noting for high-frequency usage.
+1. ~~**No write locking**~~ ✅ **FIXED** — All writes now serialize through `withWriteLock()` in `memory-storage.ts`. The mutex uses Promise chaining with error recovery to prevent lock chain breakage.
 
-2. **O(n²) synthesis dedup**: The pairwise comparison in `runDailySynthesis()` scales quadratically with memory count. Fine for hundreds of memories, but could become slow at thousands. A spatial index (e.g., approximate nearest neighbors) would fix this if scale becomes an issue.
+2. ~~**`save_memory` tool skips dedup**~~ ✅ **FIXED** — The `save_memory` tool now calls `dedupAndSave()` instead of direct `addMemory()`, ensuring explicit saves go through the same dedup logic as automatic extraction.
 
-3. **O(n) search with no index**: `searchMemories()` iterates all memories and computes similarity against each. Same scaling concern as above, same mitigation path.
+### Remaining Concerns
 
-4. **`save_memory` tool skips dedup**: When the agent explicitly saves a memory, it doesn't check for duplicates. This could lead to duplicates if the agent saves something that was already captured by automatic extraction. The synthesis job will eventually merge them (at the 0.90 threshold), but there's a window where duplicates coexist.
+1. **O(n²) synthesis dedup**: The pairwise comparison in `runDailySynthesis()` scales quadratically with memory count. Fine for hundreds of memories, but could become slow at thousands. A spatial index (e.g., approximate nearest neighbors) would fix this if scale becomes an issue.
 
-5. **Importance decay is one-way**: Once `importance` is decremented during synthesis, only a dedup merge with a higher-importance version can restore it. There's no mechanism for the system to re-evaluate and increase the importance of a memory that becomes relevant again (though accessing it does reset the recency decay, which partially compensates).
+2. **O(n) search with no index**: `searchMemories()` iterates all memories and computes similarity against each. Same scaling concern as above, same mitigation path.
 
-6. **Daily log is write-only**: The synthesis summaries in `~/.quje-agent/memory/daily/` are never read by the system. They're purely for human auditing. If disk space becomes a concern, there's no rotation or cleanup.
+3. **Importance decay is one-way**: Once `importance` is decremented during synthesis, only a dedup merge with a higher-importance version can restore it. There's no mechanism for the system to re-evaluate and increase the importance of a memory that becomes relevant again (though accessing it does reset the recency decay, which partially compensates).
 
-7. **Single embedding model**: The embedding model (`qwen3-embedding:0.6b`) is hardcoded. If you change it, existing embeddings become incompatible with new ones (different vector spaces), which would silently break similarity calculations. A migration path (re-embed all memories) would be needed.
+4. **Daily log is write-only**: The synthesis summaries in `~/.quje-agent/memory/daily/` are never read by the system. They're purely for human auditing. If disk space becomes a concern, there's no rotation or cleanup.
 
-8. **Context augmentation query construction**: The system concatenates the last 3 user messages as the recall query. In conversations where the user switches topics, old messages could pull in irrelevant memories. A single-message or topic-aware query strategy might be more precise, though the current approach has the advantage of maintaining continuity across multi-turn discussions.
+5. **Single embedding model**: The embedding model (`qwen3-embedding:0.6b`) is hardcoded. If you change it, existing embeddings become incompatible with new ones (different vector spaces), which would silently break similarity calculations. A migration path (re-embed all memories) would be needed.
+
+6. **Context augmentation query construction**: The system concatenates the last 3 user messages as the recall query. In conversations where the user switches topics, old messages could pull in irrelevant memories. A single-message or topic-aware query strategy might be more precise, though the current approach has the advantage of maintaining continuity across multi-turn discussions.
+
+7. **No embedding model versioning**: The `MemoryStore` doesn't track which embedding model version was used. Adding an `embeddingModel` field would enable future migration tooling.
