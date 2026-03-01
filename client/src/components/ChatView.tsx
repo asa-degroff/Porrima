@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { Artifact, ChatMessage, MessageUsage, OllamaModel } from "../types";
+import type { Artifact, ChatMessage, MessageUsage, OllamaModel, SystemPromptPreset } from "../types";
 import type { ToolStatus } from "../api/client";
 import { fetchRenderedPrompt } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
@@ -45,6 +45,7 @@ interface Props {
   models: OllamaModel[];
   selectedModelId: string;
   systemPrompt: string;
+  systemPromptPresets?: SystemPromptPreset[];
   onSend: (text: string, images?: import("../types").ImageAttachment[]) => void;
   onEditMessage: (index: number, newText: string) => void;
   onAbort: () => void;
@@ -73,6 +74,7 @@ export function ChatView({
   models,
   selectedModelId,
   systemPrompt,
+  systemPromptPresets,
   onSend,
   onEditMessage,
   onAbort,
@@ -240,6 +242,7 @@ export function ChatView({
         value={systemPrompt}
         onChange={onSystemPromptChange}
         disabled={streaming}
+        presets={systemPromptPresets}
       />
 
       {/* Messages */}

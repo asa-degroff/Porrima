@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import type { OllamaModel, Settings, Theme } from "../types";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme } from "../types";
 
 interface MemoryStatus {
   memoryCount: number;
@@ -22,6 +22,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
+  const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
   const [synthesisRunning, setSynthesisRunning] = useState(false);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
@@ -44,7 +45,50 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   }, []);
 
   const handleSave = () => {
-    onSave({ defaultModelId, defaultSystemPrompt: defaultSystemPrompt.trim(), braveApiKey: braveApiKey.trim(), theme });
+    const defaultPreset = presets.find((p) => p.isDefault);
+    const effectivePrompt = defaultPreset ? defaultPreset.content.trim() : defaultSystemPrompt.trim();
+    onSave({
+      defaultModelId,
+      defaultSystemPrompt: effectivePrompt,
+      braveApiKey: braveApiKey.trim(),
+      theme,
+      systemPromptPresets: presets.length > 0 ? presets : undefined,
+    });
+  };
+
+  const handleAddPreset = () => {
+    const newPreset: SystemPromptPreset = {
+      id: crypto.randomUUID(),
+      name: "",
+      content: "",
+      isDefault: presets.length === 0,
+    };
+    setPresets((prev) => [...prev, newPreset]);
+  };
+
+  const handleUpdatePreset = (id: string, updates: Partial<SystemPromptPreset>) => {
+    setPresets((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) {
+          // If we're setting a new default, unset others
+          if (updates.isDefault) return { ...p, isDefault: false };
+          return p;
+        }
+        return { ...p, ...updates };
+      })
+    );
+  };
+
+  const handleDeletePreset = (id: string) => {
+    setPresets((prev) => {
+      const remaining = prev.filter((p) => p.id !== id);
+      // If deleted preset was the default, make first remaining one default
+      const deleted = prev.find((p) => p.id === id);
+      if (deleted?.isDefault && remaining.length > 0) {
+        remaining[0] = { ...remaining[0], isDefault: true };
+      }
+      return remaining;
+    });
   };
 
   const handleAddPasskey = useCallback(async () => {
@@ -145,16 +189,81 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             </div>
           </div>
 
-          {/* Default System Prompt */}
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-white/60">Default System Prompt</label>
-            <textarea
-              value={defaultSystemPrompt}
-              onChange={(e) => setDefaultSystemPrompt(e.target.value)}
-              rows={4}
-              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
-              placeholder="You are a helpful assistant."
-            />
+          {/* System Prompt Presets */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="block text-sm font-medium text-white/60">System Prompt Presets</label>
+              <button
+                onClick={handleAddPreset}
+                className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all"
+              >
+                + Add Preset
+              </button>
+            </div>
+
+            {presets.length === 0 ? (
+              <div className="space-y-2">
+                <p className="text-white/30 text-xs">No presets. Using default prompt for new chats:</p>
+                <textarea
+                  value={defaultSystemPrompt}
+                  onChange={(e) => setDefaultSystemPrompt(e.target.value)}
+                  rows={3}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
+                  placeholder="You are a helpful assistant."
+                />
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {presets.map((preset) => (
+                  <div
+                    key={preset.id}
+                    className={`rounded-lg border p-3 space-y-2 transition-all ${
+                      preset.isDefault
+                        ? "border-purple-400/30 bg-purple-500/5"
+                        : "border-white/10 bg-white/[0.02]"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={preset.name}
+                        onChange={(e) => handleUpdatePreset(preset.id, { name: e.target.value })}
+                        className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 transition-all"
+                        placeholder="Preset name..."
+                      />
+                      <button
+                        onClick={() => handleUpdatePreset(preset.id, { isDefault: true })}
+                        className={`text-xs px-2 py-1 rounded transition-all shrink-0 ${
+                          preset.isDefault
+                            ? "bg-purple-500/20 text-purple-300 border border-purple-400/30"
+                            : "text-white/30 hover:text-white/50 border border-transparent hover:border-white/10"
+                        }`}
+                        title={preset.isDefault ? "Default for new chats" : "Set as default"}
+                      >
+                        {preset.isDefault ? "Default" : "Set default"}
+                      </button>
+                      <button
+                        onClick={() => handleDeletePreset(preset.id)}
+                        className="text-white/20 hover:text-red-400/70 transition-colors p-0.5"
+                        title="Delete preset"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M18 6L6 18" />
+                          <path d="M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                    <textarea
+                      value={preset.content}
+                      onChange={(e) => handleUpdatePreset(preset.id, { content: e.target.value })}
+                      rows={2}
+                      className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-white/70 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-blue-400/30 transition-all"
+                      placeholder="Prompt content..."
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* API Keys Section */}

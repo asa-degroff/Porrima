@@ -1,15 +1,19 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import type { SystemPromptPreset } from "../types";
 
 interface Props {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
+  presets?: SystemPromptPreset[];
 }
 
-export function SystemPromptEditor({ value, onChange, disabled }: Props) {
+export function SystemPromptEditor({ value, onChange, disabled, presets }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
   const [localValue, setLocalValue] = useState(value);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const prevValueRef = useRef(value);
 
   // Sync external value changes during render (no effect needed)
@@ -18,6 +22,18 @@ export function SystemPromptEditor({ value, onChange, disabled }: Props) {
     setLocalValue(value);
   }
 
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [dropdownOpen]);
+
   const handleBlur = () => {
     const trimmed = localValue.trim();
     if (trimmed !== value) {
@@ -25,31 +41,97 @@ export function SystemPromptEditor({ value, onChange, disabled }: Props) {
     }
   };
 
+  // Determine which preset matches current value (if any)
+  const matchingPreset = presets?.find((p) => p.content.trim() === localValue.trim());
+  const hasPresets = presets && presets.length > 0;
+
+  const handlePresetSelect = (presetId: string) => {
+    const preset = presets?.find((p) => p.id === presetId);
+    if (preset) {
+      setLocalValue(preset.content);
+      onChange(preset.content.trim());
+    }
+    setDropdownOpen(false);
+  };
+
   return (
     <div className="border-b border-white/10">
-      <button
-        onClick={() => setExpanded((e) => !e)}
-        className="w-full flex items-center gap-2 px-3 md:px-6 py-2 text-xs text-white/40 hover:text-white/60 transition-colors"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className={`transition-transform ${expanded ? "rotate-90" : ""}`}
+      <div className="flex items-center">
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="flex items-center gap-2 px-3 md:px-6 py-2 text-xs text-white/40 hover:text-white/60 transition-colors"
         >
-          <path d="M9 18l6-6-6-6" />
-        </svg>
-        System Prompt
-        {!expanded && localValue !== "You are a helpful assistant." && (
-          <span className="text-blue-400/50">(customized)</span>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`transition-transform ${expanded ? "rotate-90" : ""}`}
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+          System Prompt
+          {!expanded && !hasPresets && localValue !== "You are a helpful assistant." && (
+            <span className="text-blue-400/50">(customized)</span>
+          )}
+        </button>
+        {hasPresets && (
+          <div className="relative ml-auto mr-3 md:mr-6" ref={dropdownRef}>
+            <button
+              onClick={() => !disabled && setDropdownOpen((o) => !o)}
+              disabled={disabled}
+              className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border transition-all disabled:opacity-40 ${
+                matchingPreset
+                  ? "bg-purple-500/10 border-purple-400/20 text-purple-300/80 hover:bg-purple-500/20"
+                  : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:text-white/70"
+              }`}
+            >
+              {matchingPreset ? matchingPreset.name || "Untitled" : "Custom"}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={`transition-transform ${dropdownOpen ? "rotate-180" : ""}`}
+              >
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            {dropdownOpen && (
+              <div className="absolute right-0 top-full mt-1 z-30 min-w-[180px] backdrop-blur-xl bg-white/[0.08] border border-white/15 rounded-xl shadow-2xl py-1 overflow-hidden">
+                {presets.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => handlePresetSelect(p.id)}
+                    className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                      matchingPreset?.id === p.id
+                        ? "bg-purple-500/15 text-purple-200"
+                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    }`}
+                  >
+                    <span className="truncate flex-1">{p.name || "Untitled"}</span>
+                    {p.isDefault && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-300/60 border border-purple-400/15 shrink-0">
+                        default
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
-      </button>
+      </div>
       {expanded && (
         <div className="px-3 md:px-6 pb-3">
           <textarea

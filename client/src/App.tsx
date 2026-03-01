@@ -252,6 +252,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         models={models}
         selectedModelId={activeChat?.modelId || models[0]?.id || ""}
         systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}
+        systemPromptPresets={settings.systemPromptPresets}
         onSend={handleSend}
         onEditMessage={handleEditMessage}
         onAbort={abort}

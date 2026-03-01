@@ -68,12 +68,20 @@ export interface OllamaModel {
 
 export type Theme = "default" | "ripple-grid";
 
+export interface SystemPromptPreset {
+  id: string;
+  name: string;
+  content: string;
+  isDefault: boolean;
+}
+
 export interface Settings {
   defaultModelId: string;
   defaultSystemPrompt: string;
   braveApiKey: string;
   modelContextWindows?: Record<string, number>;
   theme?: Theme;
+  systemPromptPresets?: SystemPromptPreset[];
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction";
