@@ -4,6 +4,7 @@ import type { Message, ToolResultMessage, ToolCall } from "@mariozechner/pi-ai";
 import { getChat, saveChat } from "../services/storage.js";
 import { streamChat, chatMessagesToPiMessages } from "../services/agent.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
+import { truncateChatHistory } from "../services/compaction.js";
 import { discoverOllamaModels } from "../services/models.js";
 import { buildMemoryAugmentedPrompt, setCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentTools, executeTool } from "../services/agent-tools.js";
@@ -221,26 +222,26 @@ async function handleChatStream(
         extractMemories(chat.modelId, chat.id, userMessage, assistantMsg.content)
           .catch((err) => console.error("[memory] extraction failed:", err));
 
-        // Check for pre-compaction flush based on cumulative token usage
+        // Check for compaction: extract memories then truncate when nearing context limit
         try {
           const models = await discoverOllamaModels();
           const model = models.find((m) => m.id === chat.modelId);
           if (model) {
             const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-            // Use last message's totalTokens as primary signal (includes full context),
-            // but also sum output tokens across all messages as cumulative estimate
             const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
-            const cumulativeOutput = chat.messages.reduce(
-              (sum, m) => sum + (m.usage?.output ?? 0), 0
-            );
-            const estimatedUsage = Math.max(lastUsage, cumulativeOutput);
-            const usageRatio = estimatedUsage / effectiveContextWindow;
+            const usageRatio = lastUsage / effectiveContextWindow;
             if (usageRatio > 0.75) {
-              preCompactionFlush(chat.modelId, chat.id, chat.messages)
-                .catch((err) => console.error("[memory] pre-compaction flush failed:", err));
+              // Await flush so memories are saved before we truncate
+              await preCompactionFlush(chat.modelId, chat.id, chat.messages);
+              const truncated = await truncateChatHistory(chat, effectiveContextWindow);
+              if (truncated) {
+                await saveChat(chat);
+              }
             }
           }
-        } catch {}
+        } catch (err) {
+          console.error("[compaction] failed:", err);
+        }
       }
     }
   } catch (e: any) {

@@ -62,14 +62,26 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       console.log(`[synthesis] Consolidated ${merged.size} duplicate memories`);
     }
 
-    // Step 2: Apply importance decay for old, unused memories
+    // Step 2: Apply importance decay for old, unused memories + purge stale ones
     const now = Date.now();
+    const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
+    const staleIds = new Set<string>();
     for (const memory of store.memories) {
       const daysSinceAccess =
         (now - new Date(memory.lastAccessed).getTime()) / (24 * 60 * 60 * 1000);
       if (daysSinceAccess > 30 && memory.importance > 1) {
         memory.importance = Math.max(1, memory.importance - 1);
       }
+      // Purge memories not accessed in 6+ months with low importance
+      const msSinceAccess = now - new Date(memory.lastAccessed).getTime();
+      if (msSinceAccess > SIX_MONTHS_MS && memory.importance <= 2) {
+        staleIds.add(memory.id);
+      }
+    }
+
+    if (staleIds.size > 0) {
+      store.memories = store.memories.filter((m) => !staleIds.has(m.id));
+      console.log(`[synthesis] Purged ${staleIds.size} stale memories (>6 months, importance ≤2)`);
     }
 
     // Step 3: Generate daily summary via LLM

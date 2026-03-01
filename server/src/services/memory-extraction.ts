@@ -7,8 +7,8 @@ import { embedBatch } from "./embeddings.js";
 import { cosineSimilarity } from "./embeddings.js";
 import {
   loadMemoryStore,
-  addMemory,
-  updateMemory,
+  saveMemoryStore,
+  withWriteLock,
 } from "./memory-storage.js";
 import type { ChatMessage, Memory, MemoryCategory } from "../types.js";
 
@@ -111,6 +111,62 @@ export function parseExtractionResponse(text: string): ExtractedFact[] {
 
 const DEDUP_THRESHOLD = 0.85;
 
+/**
+ * Atomic dedup + save: loads store, checks each fact against existing memories,
+ * and writes back — all inside a single write lock.
+ */
+export async function dedupAndSave(
+  facts: ExtractedFact[],
+  embeddings: number[][],
+  chatId: string
+): Promise<void> {
+  await withWriteLock(async () => {
+    const store = await loadMemoryStore();
+
+    for (let i = 0; i < facts.length; i++) {
+      const fact = facts[i];
+      const factEmbedding = embeddings[i];
+
+      let bestMatch: { memory: Memory; similarity: number; idx: number } | null = null;
+      for (let j = 0; j < store.memories.length; j++) {
+        const sim = cosineSimilarity(factEmbedding, store.memories[j].embedding);
+        if (sim > DEDUP_THRESHOLD && (!bestMatch || sim > bestMatch.similarity)) {
+          bestMatch = { memory: store.memories[j], similarity: sim, idx: j };
+        }
+      }
+
+      if (bestMatch) {
+        console.log(
+          `[memory] Updating existing memory (sim=${bestMatch.similarity.toFixed(3)}): "${bestMatch.memory.text}" -> "${fact.text}"`
+        );
+        store.memories[bestMatch.idx] = {
+          ...store.memories[bestMatch.idx],
+          text: fact.text,
+          embedding: factEmbedding,
+          importance: Math.max(bestMatch.memory.importance, fact.importance),
+          lastAccessed: new Date().toISOString(),
+        };
+      } else {
+        console.log(`[memory] New memory: "${fact.text}"`);
+        const now = new Date().toISOString();
+        store.memories.push({
+          id: uuid(),
+          text: fact.text,
+          category: fact.category,
+          importance: Math.min(10, Math.max(1, fact.importance)),
+          embedding: factEmbedding,
+          createdAt: now,
+          lastAccessed: now,
+          accessCount: 0,
+          sourceChatId: chatId,
+        });
+      }
+    }
+
+    await saveMemoryStore(store);
+  });
+}
+
 export async function extractMemories(
   modelId: string,
   chatId: string,
@@ -162,53 +218,8 @@ export async function extractMemories(
     return;
   }
 
-  // Load existing memories for dedup
-  const store = await loadMemoryStore();
-  const existingMemories = store.memories;
-
-  for (let i = 0; i < facts.length; i++) {
-    const fact = facts[i];
-    const factEmbedding = embeddings[i];
-
-    // Check for duplicates
-    let bestMatch: { memory: Memory; similarity: number } | null = null;
-    for (const existing of existingMemories) {
-      const sim = cosineSimilarity(factEmbedding, existing.embedding);
-      if (sim > DEDUP_THRESHOLD && (!bestMatch || sim > bestMatch.similarity)) {
-        bestMatch = { memory: existing, similarity: sim };
-      }
-    }
-
-    if (bestMatch) {
-      // UPDATE: merge with existing memory
-      console.log(
-        `[memory] Updating existing memory (sim=${bestMatch.similarity.toFixed(3)}): "${bestMatch.memory.text}" -> "${fact.text}"`
-      );
-      await updateMemory(bestMatch.memory.id, {
-        text: fact.text,
-        embedding: factEmbedding,
-        importance: Math.max(bestMatch.memory.importance, fact.importance),
-        lastAccessed: new Date().toISOString(),
-      });
-    } else {
-      // ADD: create new memory
-      console.log(`[memory] New memory: "${fact.text}"`);
-      const now = new Date().toISOString();
-      const memory: Memory = {
-        id: uuid(),
-        text: fact.text,
-        category: fact.category,
-        importance: Math.min(10, Math.max(1, fact.importance)),
-        embedding: factEmbedding,
-        createdAt: now,
-        lastAccessed: now,
-        accessCount: 0,
-        sourceChatId: chatId,
-      };
-      await addMemory(memory);
-      existingMemories.push(memory); // So subsequent facts in this batch can dedup against it
-    }
-  }
+  // Dedup and save inside a single write lock to prevent concurrent overwrites
+  await dedupAndSave(facts, embeddings, chatId);
 
   extractionMetrics.successfulExtractions++;
   extractionMetrics.totalFactsExtracted += facts.length;
@@ -280,45 +291,7 @@ export async function preCompactionFlush(
     return;
   }
 
-  const store = await loadMemoryStore();
-  const existingMemories = store.memories;
-
-  for (let i = 0; i < facts.length; i++) {
-    const fact = facts[i];
-    const factEmbedding = embeddings[i];
-
-    let bestMatch: { memory: Memory; similarity: number } | null = null;
-    for (const existing of existingMemories) {
-      const sim = cosineSimilarity(factEmbedding, existing.embedding);
-      if (sim > DEDUP_THRESHOLD && (!bestMatch || sim > bestMatch.similarity)) {
-        bestMatch = { memory: existing, similarity: sim };
-      }
-    }
-
-    if (bestMatch) {
-      await updateMemory(bestMatch.memory.id, {
-        text: fact.text,
-        embedding: factEmbedding,
-        importance: Math.max(bestMatch.memory.importance, fact.importance),
-        lastAccessed: new Date().toISOString(),
-      });
-    } else {
-      const now = new Date().toISOString();
-      const memory: Memory = {
-        id: uuid(),
-        text: fact.text,
-        category: fact.category,
-        importance: Math.min(10, Math.max(1, fact.importance)),
-        embedding: factEmbedding,
-        createdAt: now,
-        lastAccessed: now,
-        accessCount: 0,
-        sourceChatId: chatId,
-      };
-      await addMemory(memory);
-      existingMemories.push(memory);
-    }
-  }
+  await dedupAndSave(facts, embeddings, chatId);
 
   console.log("[memory] Pre-compaction flush complete");
 }

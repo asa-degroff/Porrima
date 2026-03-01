@@ -1,13 +1,12 @@
 import { Type } from "@sinclair/typebox";
-import { v4 as uuid } from "uuid";
 import { embed } from "./embeddings.js";
 import {
-  addMemory,
   deleteMemory,
   searchMemories,
 } from "./memory-storage.js";
+import { dedupAndSave } from "./memory-extraction.js";
 import type { Tool, ToolCall } from "@mariozechner/pi-ai";
-import type { Memory, MemoryCategory } from "../types.js";
+import type { MemoryCategory } from "../types.js";
 import { StringEnum } from "@mariozechner/pi-ai";
 
 export const MEMORY_TOOLS: Tool[] = [
@@ -70,20 +69,13 @@ export async function executeMemoryTool(
         return { content: `Embedding failed: ${e.message}`, isError: true };
       }
 
-      const now = new Date().toISOString();
-      const memory: Memory = {
-        id: uuid(),
+      const fact = {
         text,
         category: (category as MemoryCategory) || "fact",
         importance: Math.min(10, Math.max(1, importance || 5)),
-        embedding,
-        createdAt: now,
-        lastAccessed: now,
-        accessCount: 0,
-        sourceChatId: chatId,
       };
 
-      await addMemory(memory);
+      await dedupAndSave([fact], [embedding], chatId);
       return { content: `Saved memory: "${text}"`, isError: false };
     }
 

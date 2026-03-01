@@ -10,11 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Improve Python sandbox isolation (#18)
 
 ### Added
+- Add garbage collection for stale memories (#32)
+- Add chat history truncation after memory extraction (#28)
 - Add memory extraction failure metrics and monitoring (#20)
 - Track cumulative token usage for pre-compaction flush (#27)
 - Batch embeddings during memory extraction (#22)
 
 ### Fixed
+- Add deduplication to save_memory tool (#31)
+- Fix race condition in memory storage write lock (#29)
 - Fix chat title truncation for multi-byte characters (#25)
 - Improve error handling for fire-and-forget memory extraction (#23)
 - Add mutex for memory write operations (#26)
@@ -24,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Hoist remarkPlugins array to module scope in MarkdownRenderer (#1)
 
 ### Changed
+- Simplify token usage estimation in compaction trigger (#30)
 - Add integration tests for tool loop and message conversion (#24)
 - Start session for code review improvements (#21)
 - Cache Ollama model discovery results (#19)
