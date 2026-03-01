@@ -89,6 +89,9 @@ export function ChatView({
   queueProcessing = false,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const prevChatIdRef = useRef<string | null>(null);
+  const prevMessageCountRef = useRef(0);
   const [editingCtx, setEditingCtx] = useState(false);
   const [ctxInput, setCtxInput] = useState("");
   const [promptModal, setPromptModal] = useState<{ systemPrompt: string; tools: { name: string; description: string }[] } | null>(null);
@@ -103,9 +106,38 @@ export function ChatView({
     }
   }, [chatId]);
 
-  // Auto-scroll on new messages
+  // Track whether user is scrolled near the bottom
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const threshold = 80;
+    isNearBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+  }, []);
+
+  // Scroll to bottom when switching chats
   useEffect(() => {
-    if (scrollRef.current) {
+    if (chatId !== prevChatIdRef.current) {
+      prevChatIdRef.current = chatId;
+      isNearBottomRef.current = true;
+      if (scrollRef.current) {
+        const el = scrollRef.current;
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight;
+        });
+      }
+    }
+  }, [chatId, messages]);
+
+  // Auto-scroll on new messages / streaming, but only if user is near bottom
+  useEffect(() => {
+    // Always scroll when new messages are added (user sent or assistant placeholder)
+    if (messages.length > prevMessageCountRef.current) {
+      isNearBottomRef.current = true;
+    }
+    prevMessageCountRef.current = messages.length;
+
+    if (isNearBottomRef.current && scrollRef.current) {
       const el = scrollRef.current;
       requestAnimationFrame(() => {
         el.scrollTop = el.scrollHeight;
@@ -246,7 +278,7 @@ export function ChatView({
       />
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 md:px-6 py-3 md:py-4">
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-3 md:px-6 py-3 md:py-4">
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full">
             <p className="text-white/25 text-sm">

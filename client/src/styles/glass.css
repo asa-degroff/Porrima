@@ -131,12 +131,6 @@ body {
   font-weight: 600;
 }
 
-/* Off-screen message optimization */
-.message-item {
-  content-visibility: auto;
-  contain-intrinsic-size: 0 120px;
-}
-
 /* Streaming cursor animation */
 @keyframes blink {
   0%, 50% { opacity: 1; }
