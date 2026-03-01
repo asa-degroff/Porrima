@@ -157,12 +157,31 @@ export async function executePython(
   }
 }
 
+const SCROLLBAR_STYLES = `<style>
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.15) transparent; }
+</style>`;
+
 export async function createArtifact(
   id: string,
   html: string
 ): Promise<string> {
   const artifactDir = join(ARTIFACTS_DIR, id);
   await mkdir(artifactDir, { recursive: true });
-  await writeFile(join(artifactDir, "index.html"), html, "utf-8");
+
+  // Inject scrollbar styling so artifacts match the parent UI
+  let styledHtml = html;
+  if (html.includes("</head>")) {
+    styledHtml = html.replace("</head>", `${SCROLLBAR_STYLES}\n</head>`);
+  } else if (html.includes("<body")) {
+    styledHtml = html.replace("<body", `${SCROLLBAR_STYLES}\n<body`);
+  } else {
+    styledHtml = SCROLLBAR_STYLES + "\n" + html;
+  }
+
+  await writeFile(join(artifactDir, "index.html"), styledHtml, "utf-8");
   return `/api/artifacts/${id}`;
 }
