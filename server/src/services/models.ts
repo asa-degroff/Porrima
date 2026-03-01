@@ -35,14 +35,22 @@ async function getContextWindow(modelName: string): Promise<number> {
   return 32768;
 }
 
+// Cache for model discovery results (TTL-based)
+const MODEL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let modelCache: { models: OllamaModel[]; timestamp: number } | null = null;
+
 export async function discoverOllamaModels(): Promise<OllamaModel[]> {
+  if (modelCache && Date.now() - modelCache.timestamp < MODEL_CACHE_TTL_MS) {
+    return modelCache.models;
+  }
+
   const res = await fetch(`${OLLAMA_BASE}/api/tags`);
   if (!res.ok) throw new Error(`Ollama not reachable: ${res.status}`);
   const data = (await res.json()) as OllamaTagResponse;
 
   const filtered = data.models.filter((m) => !m.name.includes("embedding"));
 
-  const modelsWithContext = await Promise.all(
+  const models = await Promise.all(
     filtered.map(async (m) => ({
       id: m.name,
       name: formatModelName(m.name, m.details.parameter_size),
@@ -52,7 +60,8 @@ export async function discoverOllamaModels(): Promise<OllamaModel[]> {
     }))
   );
 
-  return modelsWithContext;
+  modelCache = { models, timestamp: Date.now() };
+  return models;
 }
 
 function supportsReasoning(family: string): boolean {

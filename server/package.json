@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "PORT=3002 tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "@mariozechner/pi-agent-core": "^0.55.1",
@@ -28,6 +29,7 @@
     "@types/turndown": "^5.0.6",
     "@types/uuid": "^10.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
   }
 }

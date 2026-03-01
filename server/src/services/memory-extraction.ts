@@ -1,6 +1,9 @@
 import { v4 as uuid } from "uuid";
+import { appendFile, mkdir } from "fs/promises";
+import { join } from "path";
+import { homedir } from "os";
 import { streamChat } from "./agent.js";
-import { embed } from "./embeddings.js";
+import { embedBatch } from "./embeddings.js";
 import { cosineSimilarity } from "./embeddings.js";
 import {
   loadMemoryStore,
@@ -8,6 +11,56 @@ import {
   updateMemory,
 } from "./memory-storage.js";
 import type { ChatMessage, Memory, MemoryCategory } from "../types.js";
+
+const LOG_DIR = join(homedir(), ".quje-agent", "logs");
+
+// In-memory extraction metrics (reset on server restart)
+const extractionMetrics = {
+  totalExtractions: 0,
+  successfulExtractions: 0,
+  failedExtractions: 0,
+  totalFactsExtracted: 0,
+  lastExtractionAt: null as string | null,
+  lastFailureAt: null as string | null,
+};
+
+export function getExtractionMetrics() {
+  return { ...extractionMetrics };
+}
+
+async function logExtractionError(context: string, error: unknown): Promise<void> {
+  try {
+    await mkdir(LOG_DIR, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const message = error instanceof Error ? error.message : String(error);
+    const line = `[${timestamp}] ${context}: ${message}\n`;
+    await appendFile(join(LOG_DIR, "memory-errors.log"), line);
+  } catch {
+    // Don't let logging errors propagate
+  }
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  context: string,
+  maxRetries: number = 2
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+        console.warn(`[memory] ${context} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  await logExtractionError(context, lastError);
+  throw lastError;
+}
 
 const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction system. Your job is to extract atomic facts about the user from a conversation exchange.
 
@@ -64,41 +117,58 @@ export async function extractMemories(
   userMsg: string,
   assistantMsg: string
 ): Promise<void> {
+  extractionMetrics.totalExtractions++;
+  try {
   const extractionPrompt = `User message: ${userMsg}\n\nAssistant response: ${assistantMsg}`;
 
-  // Call the LLM to extract facts
+  // Call the LLM to extract facts (with retry)
   let responseText = "";
-  await streamChat(
-    modelId,
-    [{ role: "user", content: extractionPrompt, timestamp: Date.now() }],
-    EXTRACTION_SYSTEM_PROMPT,
-    (event) => {
-      if (event.type === "text_delta") {
-        responseText += event.delta;
-      }
-    }
+  await withRetry(
+    async () => {
+      responseText = "";
+      await streamChat(
+        modelId,
+        [{ role: "user", content: extractionPrompt, timestamp: Date.now() }],
+        EXTRACTION_SYSTEM_PROMPT,
+        (event) => {
+          if (event.type === "text_delta") {
+            responseText += event.delta;
+          }
+        }
+      );
+    },
+    `extractMemories LLM call (chat ${chatId})`
   );
 
   const facts = parseExtractionResponse(responseText);
   if (facts.length === 0) {
     console.log("[memory] No facts extracted from exchange");
+    extractionMetrics.successfulExtractions++;
+    extractionMetrics.lastExtractionAt = new Date().toISOString();
     return;
   }
 
-  console.log(`[memory] Extracted ${facts.length} fact(s), deduplicating...`);
+  console.log(`[memory] Extracted ${facts.length} fact(s), embedding batch...`);
+
+  // Batch-embed all facts in a single API call
+  let embeddings: number[][];
+  try {
+    embeddings = await withRetry(
+      () => embedBatch(facts.map((f) => f.text)),
+      `embedBatch for ${facts.length} facts (chat ${chatId})`
+    );
+  } catch (e) {
+    console.error("[memory] Batch embedding failed:", e);
+    return;
+  }
 
   // Load existing memories for dedup
   const store = await loadMemoryStore();
   const existingMemories = store.memories;
 
-  for (const fact of facts) {
-    let factEmbedding: number[];
-    try {
-      factEmbedding = await embed(fact.text);
-    } catch (e) {
-      console.error("[memory] Embedding failed for fact:", fact.text, e);
-      continue;
-    }
+  for (let i = 0; i < facts.length; i++) {
+    const fact = facts[i];
+    const factEmbedding = embeddings[i];
 
     // Check for duplicates
     let bestMatch: { memory: Memory; similarity: number } | null = null;
@@ -139,6 +209,15 @@ export async function extractMemories(
       existingMemories.push(memory); // So subsequent facts in this batch can dedup against it
     }
   }
+
+  extractionMetrics.successfulExtractions++;
+  extractionMetrics.totalFactsExtracted += facts.length;
+  extractionMetrics.lastExtractionAt = new Date().toISOString();
+  } catch (e) {
+    extractionMetrics.failedExtractions++;
+    extractionMetrics.lastFailureAt = new Date().toISOString();
+    throw e;
+  }
 }
 
 const PRE_COMPACTION_SYSTEM_PROMPT = `You are a memory preservation system. A conversation is approaching its context limit and will be truncated.
@@ -164,15 +243,21 @@ export async function preCompactionFlush(
     .join("\n\n");
 
   let responseText = "";
-  await streamChat(
-    modelId,
-    [{ role: "user", content: conversationText, timestamp: Date.now() }],
-    PRE_COMPACTION_SYSTEM_PROMPT,
-    (event) => {
-      if (event.type === "text_delta") {
-        responseText += event.delta;
-      }
-    }
+  await withRetry(
+    async () => {
+      responseText = "";
+      await streamChat(
+        modelId,
+        [{ role: "user", content: conversationText, timestamp: Date.now() }],
+        PRE_COMPACTION_SYSTEM_PROMPT,
+        (event) => {
+          if (event.type === "text_delta") {
+            responseText += event.delta;
+          }
+        }
+      );
+    },
+    `preCompactionFlush LLM call (chat ${chatId})`
   );
 
   const facts = parseExtractionResponse(responseText);
@@ -181,18 +266,26 @@ export async function preCompactionFlush(
     return;
   }
 
-  console.log(`[memory] Pre-compaction flush: ${facts.length} facts extracted`);
+  console.log(`[memory] Pre-compaction flush: ${facts.length} facts extracted, embedding batch...`);
+
+  // Batch-embed all facts in a single API call
+  let embeddings: number[][];
+  try {
+    embeddings = await withRetry(
+      () => embedBatch(facts.map((f) => f.text)),
+      `embedBatch for ${facts.length} pre-compaction facts (chat ${chatId})`
+    );
+  } catch (e) {
+    console.error("[memory] Pre-compaction batch embedding failed:", e);
+    return;
+  }
 
   const store = await loadMemoryStore();
   const existingMemories = store.memories;
 
-  for (const fact of facts) {
-    let factEmbedding: number[];
-    try {
-      factEmbedding = await embed(fact.text);
-    } catch {
-      continue;
-    }
+  for (let i = 0; i < facts.length; i++) {
+    const fact = facts[i];
+    const factEmbedding = embeddings[i];
 
     let bestMatch: { memory: Memory; similarity: number } | null = null;
     for (const existing of existingMemories) {

@@ -14,6 +14,20 @@ import {
 } from "../services/agent-state.js";
 import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, ImageAttachment } from "../types.js";
 
+/** Truncate a string to maxChars graphemes, preserving emoji and multi-byte characters */
+function truncateTitle(text: string, maxChars: number = 50): string {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const segments = segmenter.segment(text);
+  let result = "";
+  let count = 0;
+  for (const { segment } of segments) {
+    if (count >= maxChars) return result + "...";
+    result += segment;
+    count++;
+  }
+  return result;
+}
+
 const router = Router();
 
 const MAX_TOOL_ITERATIONS = 20;
@@ -207,21 +221,26 @@ async function handleChatStream(
         extractMemories(chat.modelId, chat.id, userMessage, assistantMsg.content)
           .catch((err) => console.error("[memory] extraction failed:", err));
 
-        // Check for pre-compaction flush if usage is high
-        if (assistantMsg.usage) {
-          try {
-            const models = await discoverOllamaModels();
-            const model = models.find((m) => m.id === chat.modelId);
-            if (model) {
-              const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-              const usageRatio = assistantMsg.usage.totalTokens / effectiveContextWindow;
-              if (usageRatio > 0.75) {
-                preCompactionFlush(chat.modelId, chat.id, chat.messages)
-                  .catch((err) => console.error("[memory] pre-compaction flush failed:", err));
-              }
+        // Check for pre-compaction flush based on cumulative token usage
+        try {
+          const models = await discoverOllamaModels();
+          const model = models.find((m) => m.id === chat.modelId);
+          if (model) {
+            const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
+            // Use last message's totalTokens as primary signal (includes full context),
+            // but also sum output tokens across all messages as cumulative estimate
+            const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
+            const cumulativeOutput = chat.messages.reduce(
+              (sum, m) => sum + (m.usage?.output ?? 0), 0
+            );
+            const estimatedUsage = Math.max(lastUsage, cumulativeOutput);
+            const usageRatio = estimatedUsage / effectiveContextWindow;
+            if (usageRatio > 0.75) {
+              preCompactionFlush(chat.modelId, chat.id, chat.messages)
+                .catch((err) => console.error("[memory] pre-compaction flush failed:", err));
             }
-          } catch {}
-        }
+          }
+        } catch {}
       }
     }
   } catch (e: any) {
@@ -295,7 +314,7 @@ router.post("/", async (req, res) => {
 
     // Auto-generate title from first message
     if (chat.messages.length === 1) {
-      chat.title = message.slice(0, 50) + (message.length > 50 ? "..." : "");
+      chat.title = truncateTitle(message);
     }
 
     await saveChat(chat);
@@ -353,7 +372,7 @@ router.post("/edit", async (req, res) => {
 
   // Update title if editing the first message
   if (messageIndex === 0) {
-    chat.title = message.slice(0, 50) + (message.length > 50 ? "..." : "");
+    chat.title = truncateTitle(message);
   }
 
   await saveChat(chat);

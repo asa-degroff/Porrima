@@ -1,5 +1,5 @@
 import { execFile } from "child_process";
-import { writeFile, mkdir, unlink } from "fs/promises";
+import { writeFile, mkdir, unlink, access } from "fs/promises";
 import { join } from "path";
 import { tmpdir, homedir } from "os";
 import { v4 as uuid } from "uuid";
@@ -12,24 +12,118 @@ export interface ExecutionResult {
   exitCode: number;
 }
 
+// Sensitive env var patterns to strip from sandbox environment
+const SENSITIVE_ENV_PATTERNS = [
+  /^SSH_/,
+  /^AWS_/,
+  /^GOOGLE_/,
+  /^AZURE_/,
+  /^GH_TOKEN$/,
+  /^GITHUB_TOKEN$/,
+  /^GITLAB_/,
+  /^NPM_TOKEN$/,
+  /^NODE_AUTH_TOKEN$/,
+  /^DOCKER_/,
+  /^KUBECONFIG$/,
+  /^OPENAI_/,
+  /^ANTHROPIC_/,
+  /^API_KEY$/,
+  /^SECRET/,
+  /TOKEN$/,
+  /^CREDENTIAL/,
+  /PASSWORD/,
+];
+
+function makeSafeEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (SENSITIVE_ENV_PATTERNS.some((p) => p.test(key))) continue;
+    env[key] = value;
+  }
+  // Override HOME to sandbox dir so scripts can't access ~/.ssh etc.
+  env.HOME = tmpdir();
+  env.PYTHONDONTWRITEBYTECODE = "1";
+  return env;
+}
+
+let bwrapAvailable: boolean | null = null;
+
+async function checkBwrap(): Promise<boolean> {
+  if (bwrapAvailable !== null) return bwrapAvailable;
+  try {
+    await access("/usr/bin/bwrap");
+    bwrapAvailable = true;
+  } catch {
+    bwrapAvailable = false;
+  }
+  return bwrapAvailable;
+}
+
+function buildBwrapArgs(scriptPath: string, sandboxDir: string): string[] {
+  return [
+    // New PID and network namespace (disables network access)
+    "--unshare-net",
+    "--unshare-pid",
+    // Mount /usr read-only (contains all binaries/libraries)
+    "--ro-bind", "/usr", "/usr",
+    // Recreate standard symlinks (lib, lib64, bin, sbin -> /usr/*)
+    "--symlink", "usr/lib", "/lib",
+    "--symlink", "usr/lib64", "/lib64",
+    "--symlink", "usr/bin", "/bin",
+    "--symlink", "usr/sbin", "/sbin",
+    // Minimal /etc for Python
+    "--ro-bind", "/etc/alternatives", "/etc/alternatives",
+    // Python needs /proc
+    "--proc", "/proc",
+    // Writable sandbox directory
+    "--bind", sandboxDir, sandboxDir,
+    // Writable /tmp inside sandbox
+    "--tmpfs", "/tmp",
+    // Mount the script read-only
+    "--ro-bind", scriptPath, scriptPath,
+    // Set HOME to sandbox
+    "--setenv", "HOME", sandboxDir,
+    "--setenv", "PYTHONDONTWRITEBYTECODE", "1",
+    // Drop to sandbox dir
+    "--chdir", sandboxDir,
+    // Run python
+    "python3", scriptPath,
+  ];
+}
+
 export async function executePython(
   code: string,
   timeout: number = 30
 ): Promise<ExecutionResult> {
-  const tempFile = join(tmpdir(), `quje-py-${uuid()}.py`);
+  const sandboxId = uuid();
+  const sandboxDir = join(tmpdir(), `quje-sandbox-${sandboxId}`);
+  const tempFile = join(sandboxDir, "script.py");
+
+  await mkdir(sandboxDir, { recursive: true });
 
   try {
     await writeFile(tempFile, code, "utf-8");
 
+    const useBwrap = await checkBwrap();
+
+    const cmd = useBwrap ? "/usr/bin/bwrap" : "python3";
+    const args = useBwrap
+      ? buildBwrapArgs(tempFile, sandboxDir)
+      : [tempFile];
+    const env = useBwrap ? process.env as Record<string, string> : makeSafeEnv();
+
+    console.log(`[sandbox] Executing Python (${useBwrap ? "bwrap" : "restricted"}): ${sandboxId}`);
+
     return await new Promise<ExecutionResult>((resolve) => {
       execFile(
-        "python3",
-        [tempFile],
+        cmd,
+        args,
         {
           timeout: timeout * 1000,
           maxBuffer: 1024 * 1024,
-          cwd: tmpdir(),
-          env: { ...process.env },
+          cwd: useBwrap ? undefined : sandboxDir,
+          env,
         },
         (error, stdout, stderr) => {
           if (error) {
@@ -57,7 +151,9 @@ export async function executePython(
       );
     });
   } finally {
-    unlink(tempFile).catch(() => {});
+    // Clean up the entire sandbox directory
+    const { rm } = await import("fs/promises");
+    rm(sandboxDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

@@ -9,6 +9,7 @@ import {
   searchMemories,
 } from "../services/memory-storage.js";
 import { runDailySynthesis } from "../services/synthesis.js";
+import { getExtractionMetrics } from "../services/memory-extraction.js";
 import type { Memory, MemorySummary } from "../types.js";
 
 const router = Router();
@@ -18,7 +19,7 @@ function stripEmbedding(memory: Memory): MemorySummary {
   return rest;
 }
 
-// Check embedding model availability
+// Check embedding model availability and extraction health
 router.get("/status", async (_req, res) => {
   const available = await isEmbeddingModelAvailable();
   const store = await loadMemoryStore();
@@ -26,6 +27,7 @@ router.get("/status", async (_req, res) => {
     embeddingModelAvailable: available,
     memoryCount: store.memories.length,
     lastSynthesis: store.lastSynthesis,
+    extraction: getExtractionMetrics(),
   });
 });
 

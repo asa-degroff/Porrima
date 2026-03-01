@@ -9,6 +9,16 @@ const MEMORY_DIR = join(BASE_DIR, "memory");
 const MEMORY_FILE = join(MEMORY_DIR, "memories.json");
 const DAILY_DIR = join(MEMORY_DIR, "daily");
 
+// Mutex for serializing write operations to prevent race conditions
+let writeLock: Promise<void> = Promise.resolve();
+
+export function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = writeLock.then(fn, fn);
+  // Update the lock chain but don't propagate errors to subsequent callers
+  writeLock = next.then(() => {}, () => {});
+  return next;
+}
+
 async function ensureMemoryDir() {
   await mkdir(MEMORY_DIR, { recursive: true });
 }
@@ -33,30 +43,36 @@ export async function saveMemoryStore(store: MemoryStore): Promise<void> {
 }
 
 export async function addMemory(memory: Memory): Promise<void> {
-  const store = await loadMemoryStore();
-  store.memories.push(memory);
-  await saveMemoryStore(store);
+  await withWriteLock(async () => {
+    const store = await loadMemoryStore();
+    store.memories.push(memory);
+    await saveMemoryStore(store);
+  });
 }
 
 export async function updateMemory(
   id: string,
   updates: Partial<Omit<Memory, "id">>
 ): Promise<boolean> {
-  const store = await loadMemoryStore();
-  const idx = store.memories.findIndex((m) => m.id === id);
-  if (idx === -1) return false;
-  store.memories[idx] = { ...store.memories[idx], ...updates };
-  await saveMemoryStore(store);
-  return true;
+  return withWriteLock(async () => {
+    const store = await loadMemoryStore();
+    const idx = store.memories.findIndex((m) => m.id === id);
+    if (idx === -1) return false;
+    store.memories[idx] = { ...store.memories[idx], ...updates };
+    await saveMemoryStore(store);
+    return true;
+  });
 }
 
 export async function deleteMemory(id: string): Promise<boolean> {
-  const store = await loadMemoryStore();
-  const before = store.memories.length;
-  store.memories = store.memories.filter((m) => m.id !== id);
-  if (store.memories.length === before) return false;
-  await saveMemoryStore(store);
-  return true;
+  return withWriteLock(async () => {
+    const store = await loadMemoryStore();
+    const before = store.memories.length;
+    store.memories = store.memories.filter((m) => m.id !== id);
+    if (store.memories.length === before) return false;
+    await saveMemoryStore(store);
+    return true;
+  });
 }
 
 export interface ScoredMemory {
