@@ -200,59 +200,63 @@ export function ChatView({
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <OfflineIndicator isOnline={isOnline} queueProcessing={queueProcessing} />
-          <TokenIndicator usage={totalUsage} contextWindow={contextWindow} />
-          {/* Context window editor */}
-          {editingCtx ? (
-            <form
-              className="flex items-center gap-1"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const val = parseInt(ctxInput, 10);
-                if (val && val > 0) onContextWindowChange(val);
-                setEditingCtx(false);
-              }}
-            >
-              <input
-                type="number"
-                className="w-20 px-1.5 py-0.5 text-xs bg-white/10 border border-white/20 rounded text-white/80 outline-none focus:border-white/40"
-                value={ctxInput}
-                onChange={(e) => setCtxInput(e.target.value)}
-                autoFocus
-                onBlur={() => setEditingCtx(false)}
-                min={1}
-              />
-              {hasContextWindowOverride && (
-                <button
-                  type="button"
-                  className="text-xs text-white/30 hover:text-white/60 px-1"
-                  title="Reset to model default"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    onContextWindowChange(null);
-                    setEditingCtx(false);
-                  }}
-                >
-                  &#x21ba;
-                </button>
-              )}
-            </form>
-          ) : (
-            <button
-              className={`text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors ${
-                hasContextWindowOverride ? "text-blue-300/70" : "text-white/30"
-              }`}
-              title={hasContextWindowOverride
-                ? `Custom context window (model default: ${formatCtxWindow(modelContextWindow)})`
-                : "Click to set custom context window"
-              }
-              onClick={() => {
-                setCtxInput(String(contextWindow));
-                setEditingCtx(true);
-              }}
-            >
-              {formatCtxWindow(contextWindow)}
-            </button>
-          )}
+          <span className="hidden md:contents">
+            <TokenIndicator usage={totalUsage} contextWindow={contextWindow} />
+          </span>
+          {/* Context window editor — hidden on mobile alongside token indicator */}
+          <span className="hidden md:contents">
+            {editingCtx ? (
+              <form
+                className="flex items-center gap-1"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const val = parseInt(ctxInput, 10);
+                  if (val && val > 0) onContextWindowChange(val);
+                  setEditingCtx(false);
+                }}
+              >
+                <input
+                  type="number"
+                  className="w-20 px-1.5 py-0.5 text-xs bg-white/10 border border-white/20 rounded text-white/80 outline-none focus:border-white/40"
+                  value={ctxInput}
+                  onChange={(e) => setCtxInput(e.target.value)}
+                  autoFocus
+                  onBlur={() => setEditingCtx(false)}
+                  min={1}
+                />
+                {hasContextWindowOverride && (
+                  <button
+                    type="button"
+                    className="text-xs text-white/30 hover:text-white/60 px-1"
+                    title="Reset to model default"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      onContextWindowChange(null);
+                      setEditingCtx(false);
+                    }}
+                  >
+                    &#x21ba;
+                  </button>
+                )}
+              </form>
+            ) : (
+              <button
+                className={`text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors ${
+                  hasContextWindowOverride ? "text-blue-300/70" : "text-white/30"
+                }`}
+                title={hasContextWindowOverride
+                  ? `Custom context window (model default: ${formatCtxWindow(modelContextWindow)})`
+                  : "Click to set custom context window"
+                }
+                onClick={() => {
+                  setCtxInput(String(contextWindow));
+                  setEditingCtx(true);
+                }}
+              >
+                {formatCtxWindow(contextWindow)}
+              </button>
+            )}
+          </span>
           <button
             className="hidden md:inline-block text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors text-white/30 hover:text-white/50"
             title="View rendered system prompt and tools"
