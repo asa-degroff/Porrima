@@ -181,7 +181,8 @@ export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForI
           onPaste={handlePaste}
           placeholder={waitingForInput ? "Answer the agent's question..." : "Send a message..."}
           rows={1}
-          className="w-full bg-transparent text-white/90 placeholder-white/30 text-sm resize-none outline-none"
+          enterKeyHint="send"
+          className="w-full bg-transparent text-white/90 placeholder-white/30 text-base resize-none outline-none"
         />
         <div className="flex justify-end items-center gap-2 mt-2">
           {/* Image picker button */}
@@ -203,6 +204,7 @@ export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForI
             multiple
             onChange={handleFileChange}
             className="hidden"
+            tabIndex={-1}
           />
 
           {streaming ? (

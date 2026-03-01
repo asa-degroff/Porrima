@@ -80,9 +80,20 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   }, [models, activeChat]);
 
   // Fetch full chat when selecting one (we need messages)
+  // Cache-first: show IDB cached data immediately, then refresh from server
   const selectChat = useCallback(
     async (id: string) => {
       setActiveChatId(id);
+
+      // Show cached data immediately for instant feel
+      const cached = await getCachedChat(id);
+      if (cached) {
+        setActiveChat(cached);
+        setActiveChatData(cached);
+        loadMessages(cached.messages);
+      }
+
+      // Fetch fresh data from server in parallel
       try {
         const res = await fetch(`/api/chats/${id}`, { credentials: "include" });
         if (res.ok) {
@@ -91,18 +102,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           setActiveChatData(chat);
           loadMessages(chat.messages);
           setCachedChat(chat).catch(() => {});
-        } else {
+        } else if (!cached) {
           setActiveChatId(null);
           setActiveChat(null);
         }
       } catch {
-        // Network error — try IDB cache
-        const cached = await getCachedChat(id);
-        if (cached) {
-          setActiveChat(cached);
-          setActiveChatData(cached);
-          loadMessages(cached.messages);
-        } else {
+        // Network error — if we already showed cached data, that's fine
+        if (!cached) {
           setActiveChatId(null);
           setActiveChat(null);
         }
@@ -212,7 +218,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   );
 
   return (
-    <div className="flex h-screen overflow-hidden relative">
+    <div className="flex h-full overflow-hidden relative">
       {settings.theme === "ripple-grid" && (
         <Suspense fallback={null}>
           <RippleGridBackground />
@@ -276,7 +282,7 @@ export default function App() {
 
   if (authState === "loading") {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div className="flex items-center justify-center h-full">
         <div className="w-6 h-6 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
       </div>
     );

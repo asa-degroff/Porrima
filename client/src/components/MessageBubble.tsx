@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, lazy, Suspense } from "react";
+import { useState, useRef, useEffect, useCallback, lazy, Suspense, memo } from "react";
 import { createPortal } from "react-dom";
 import type { Artifact, ChatMessage, ImageAttachment } from "../types";
 import type { ToolStatus } from "../api/client";
@@ -18,18 +18,20 @@ interface Props {
   streamingThinking?: string;
   activeTools?: ToolStatus[];
   artifacts?: Artifact[];
-  onEdit?: (newText: string) => void;
+  onEditMessage?: (index: number, newText: string) => void;
+  messageIndex?: number;
   editable?: boolean;
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   isStreaming,
   isLast,
   streamingThinking,
   activeTools,
   artifacts,
-  onEdit,
+  onEditMessage,
+  messageIndex,
   editable,
 }: Props) {
   const isUser = message.role === "user";
@@ -57,8 +59,8 @@ export function MessageBubble({
 
   const handleSave = () => {
     const trimmed = editText.trim();
-    if (trimmed && trimmed !== message.content) {
-      onEdit?.(trimmed);
+    if (trimmed && trimmed !== message.content && messageIndex != null) {
+      onEditMessage?.(messageIndex, trimmed);
     }
     setEditing(false);
   };
@@ -146,6 +148,8 @@ export function MessageBubble({
                       key={i}
                       src={`data:${img.mimeType};base64,${img.data}`}
                       alt={img.name}
+                      loading="lazy"
+                      decoding="async"
                       onClick={() => setLightboxImage(img)}
                       className="rounded-lg max-h-64 cursor-pointer hover:opacity-90 transition-opacity"
                     />
@@ -229,7 +233,7 @@ export function MessageBubble({
       )}
     </div>
   );
-}
+});
 
 function ImageLightbox({ image, onClose }: { image: ImageAttachment; onClose: () => void }) {
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
 import { listChats, getChat, saveChat, deleteChat, getSettings, saveSettings } from "../services/storage.js";
-import { buildMemoryAugmentedPrompt } from "../services/memory-context.js";
+import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import type { Chat } from "../types.js";
 
@@ -73,13 +73,20 @@ router.patch("/:id", async (req, res) => {
 });
 
 // Get the rendered system prompt and tools for debugging
+// Uses cached prompt from last message send when available to avoid
+// a cold Ollama embedding call that can take seconds on first use.
 router.get("/:id/rendered-prompt", async (req, res) => {
   const chat = await getChat(req.params.id);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
   if (chat.type === "agent") {
-    systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages);
+    const cached = getCachedAugmentedPrompt(chat.id);
+    if (cached) {
+      systemPrompt = cached;
+    } else {
+      systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages);
+    }
   }
 
   const tools = chat.type === "agent"

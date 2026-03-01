@@ -263,7 +263,8 @@ export function ChatView({
                 activeTools={isLast ? activeTools : undefined}
                 artifacts={isLast && streaming ? artifacts : undefined}
                 editable={msg.role === "user" && !streaming && isOnline}
-                onEdit={msg.role === "user" ? (newText) => onEditMessage(i, newText) : undefined}
+                onEditMessage={msg.role === "user" ? onEditMessage : undefined}
+                messageIndex={i}
               />
             </div>
           );

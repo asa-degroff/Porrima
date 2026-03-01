@@ -2,6 +2,18 @@ import { embed } from "./embeddings.js";
 import { searchMemories, updateMemory } from "./memory-storage.js";
 import type { ChatMessage } from "../types.js";
 
+// Cache the last-built augmented prompt per chat so the prompt viewer
+// can return it instantly without a cold Ollama embedding call.
+const promptCache = new Map<string, string>();
+
+export function getCachedAugmentedPrompt(chatId: string): string | undefined {
+  return promptCache.get(chatId);
+}
+
+export function setCachedAugmentedPrompt(chatId: string, prompt: string): void {
+  promptCache.set(chatId, prompt);
+}
+
 export async function buildMemoryAugmentedPrompt(
   baseSystemPrompt: string,
   recentMessages: ChatMessage[]

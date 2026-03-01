@@ -16,7 +16,7 @@ export function LoginPage({ authState, error, onRegister, onLogin }: Props) {
   const isSetup = authState === "needs-setup";
 
   return (
-    <div className="flex items-center justify-center h-screen relative">
+    <div className="flex items-center justify-center h-full relative">
       <Suspense fallback={null}>
         <RippleGridBackground />
       </Suspense>

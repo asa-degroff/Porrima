@@ -5,7 +5,7 @@ import { getChat, saveChat } from "../services/storage.js";
 import { streamChat, chatMessagesToPiMessages } from "../services/agent.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
 import { discoverOllamaModels } from "../services/models.js";
-import { buildMemoryAugmentedPrompt } from "../services/memory-context.js";
+import { buildMemoryAugmentedPrompt, setCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentTools, executeTool } from "../services/agent-tools.js";
 import {
   loadPendingState,
@@ -307,6 +307,7 @@ router.post("/", async (req, res) => {
         systemPrompt,
         chat.messages
       );
+      setCachedAugmentedPrompt(chat.id, systemPrompt);
     }
 
     tools = chat.type === "agent" ? getAgentTools() : undefined;
@@ -361,6 +362,7 @@ router.post("/edit", async (req, res) => {
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
   if (chat.type === "agent") {
     systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages);
+    setCachedAugmentedPrompt(chat.id, systemPrompt);
   }
 
   const tools = chat.type === "agent" ? getAgentTools() : undefined;
