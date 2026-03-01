@@ -7,15 +7,22 @@
   color-scheme: dark;
 }
 
-html, body {
-  height: 100%;
-  height: 100dvh;
-  overflow: hidden;
+html {
+  /* lvh = large viewport height — doesn't shrink when the mobile keyboard opens,
+     so the gradient stays behind the translucent keyboard instead of showing black */
+  min-height: 100lvh;
+  /* background-color must be set separately — the background shorthand resets it
+     to transparent, which shows as black behind the keyboard on mobile. Using the
+     gradient's edge color makes the transition seamless. */
+  background-color: #0f172a;
+  background-image: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
 }
 
 body {
+  /* dvh for content so the UI resizes above the keyboard */
+  height: 100dvh;
+  overflow: hidden;
   margin: 0;
-  background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
   color: rgba(255, 255, 255, 0.9);
 }
 

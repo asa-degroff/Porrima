@@ -13,6 +13,7 @@ import { useModels } from "./hooks/useModels";
 import { useSettings } from "./hooks/useSettings";
 import { useAuth } from "./hooks/useAuth";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
+import { useKeyboardInset } from "./hooks/useKeyboardInset";
 import { updateChat as apiUpdateChat } from "./api/client";
 import { setCachedChat, getCachedChat, clearCachedChat } from "./lib/db";
 import type { Chat, ChatType } from "./types";
@@ -22,6 +23,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { chats, createChat, removeChat, refresh } = useChats();
   const { settings, updateSettings } = useSettings();
   const { isOnline } = useOnlineStatus();
+  const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
   const [activeChatId, setActiveChatId] = useState<string | null>(() => {
     return sessionStorage.getItem("activeChatId");
@@ -218,7 +220,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   );
 
   return (
-    <div className="flex h-full overflow-hidden relative">
+    <div className="flex h-full overflow-hidden relative" style={keyboardInset ? { paddingBottom: keyboardInset } : undefined}>
       {settings.theme === "ripple-grid" && (
         <Suspense fallback={null}>
           <RippleGridBackground />
