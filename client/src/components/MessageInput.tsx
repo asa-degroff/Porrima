@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, memo } from "react";
 import type { ImageAttachment } from "../types";
 
 interface Props {
@@ -31,7 +31,7 @@ function processFiles(files: FileList | File[]): Promise<ImageAttachment[]> {
   );
 }
 
-export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true }: Props) {
+export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true }: Props) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -60,13 +60,13 @@ export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForI
     }
   };
 
-  const handleInput = () => {
+  const handleInput = useCallback(() => {
     const el = textareaRef.current;
     if (el) {
       el.style.height = "auto";
       el.style.height = Math.min(el.scrollHeight, 200) + "px";
     }
-  };
+  }, []);
 
   const addFiles = async (files: FileList | File[]) => {
     const newImages = await processFiles(files);
@@ -140,7 +140,7 @@ export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForI
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className={`backdrop-blur-xl bg-white/5 border rounded-2xl p-2.5 md:p-3 focus-within:ring-2 focus-within:ring-blue-400/30 focus-within:border-blue-400/30 transition-all ${
+        className={`backdrop-blur-xl bg-white/5 border rounded-2xl p-2.5 md:p-3 focus-within:ring-2 focus-within:ring-blue-400/30 focus-within:border-blue-400/30 transition-colors ${
           dragging
             ? "border-blue-400/50 ring-2 ring-blue-400/30 bg-blue-500/10"
             : waitingForInput
@@ -240,4 +240,4 @@ export function MessageInput({ onSend, disabled, onAbort, streaming, waitingForI
       </div>
     </div>
   );
-}
+});
