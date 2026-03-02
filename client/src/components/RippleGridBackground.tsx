@@ -38,12 +38,28 @@ export function RippleGridBackground() {
     const step = 6;
 
     function resize() {
+      // Use the layout viewport height (window.innerHeight) which stays constant
+      // with interactive-widget=overlays-content. This ensures the canvas covers
+      // the full screen including the area behind the keyboard.
       canvas!.width = window.innerWidth;
       canvas!.height = window.innerHeight;
+      // Position at the visual viewport's offset to match where content renders
+      const vv = window.visualViewport;
+      if (vv) {
+        canvas!.style.top = vv.offsetTop + 'px';
+        canvas!.style.left = vv.offsetLeft + 'px';
+      } else {
+        canvas!.style.top = '0';
+        canvas!.style.left = '0';
+      }
     }
 
     resize();
     window.addEventListener("resize", resize, { passive: true });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", resize, { passive: true });
+      window.visualViewport.addEventListener("scroll", resize, { passive: true });
+    }
 
     function draw() {
       const w = canvas!.width;
@@ -102,8 +118,8 @@ export function RippleGridBackground() {
   return (
     <canvas
       ref={canvasRef}
-      className="fixed inset-0 pointer-events-none"
-      style={{ zIndex: 0 }}
+      className="fixed pointer-events-none"
+      style={{ left: 0, right: 0, top: 0, zIndex: 0 }}
     />
   );
 }

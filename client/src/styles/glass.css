@@ -8,14 +8,9 @@
 }
 
 html {
-  /* lvh = large viewport height — doesn't shrink when the mobile keyboard opens,
-     so the gradient stays behind the translucent keyboard instead of showing black */
+  /* Ensure the document can extend behind the keyboard area */
   min-height: 100lvh;
-  /* background-color must be set separately — the background shorthand resets it
-     to transparent, which shows as black behind the keyboard on mobile. Using the
-     gradient's edge color makes the transition seamless. */
   background-color: #0f172a;
-  background-image: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
 }
 
 body {
@@ -24,6 +19,27 @@ body {
   overflow: hidden;
   margin: 0;
   color: rgba(255, 255, 255, 0.9);
+}
+
+/* 
+ * Fixed background layer that extends behind the keyboard on mobile.
+ * We use 100lvh to ensure the background covers the full layout viewport,
+ * including the area behind the translucent iOS keyboard.
+ * translateZ(0) forces iOS Safari to create a new compositing layer,
+ * which ensures the background is painted correctly when the keyboard first appears.
+ */
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100lvh;
+  background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+  z-index: -1;
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  pointer-events: none;
 }
 
 #root {
