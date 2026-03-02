@@ -14,15 +14,18 @@
     "@mozilla/readability": "^0.6.0",
     "@simplewebauthn/server": "^13.2.3",
     "@sinclair/typebox": "^0.34.48",
+    "better-sqlite3": "^12.6.2",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "express-session": "^1.19.0",
     "linkedom": "^0.18.12",
     "puppeteer-core": "^24.37.5",
+    "sqlite-vec": "^0.1.7-alpha.2",
     "turndown": "^7.2.2",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/express-session": "^1.18.2",

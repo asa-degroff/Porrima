@@ -4,11 +4,10 @@ import { join } from "path";
 import { homedir } from "os";
 import { streamChat } from "./agent.js";
 import { embedBatch } from "./embeddings.js";
-import { cosineSimilarity } from "./embeddings.js";
 import {
-  loadMemoryStore,
-  saveMemoryStore,
-  withWriteLock,
+  addMemory,
+  updateMemory,
+  findDuplicates,
 } from "./memory-storage.js";
 import type { ChatMessage, Memory, MemoryCategory } from "../types.js";
 
@@ -112,59 +111,46 @@ export function parseExtractionResponse(text: string): ExtractedFact[] {
 const DEDUP_THRESHOLD = 0.85;
 
 /**
- * Atomic dedup + save: loads store, checks each fact against existing memories,
- * and writes back — all inside a single write lock.
+ * Dedup + save: for each fact, find the nearest existing memory via sqlite-vec.
+ * If similarity > threshold, update in place; otherwise insert new.
  */
 export async function dedupAndSave(
   facts: ExtractedFact[],
   embeddings: number[][],
   chatId: string
 ): Promise<void> {
-  await withWriteLock(async () => {
-    const store = await loadMemoryStore();
+  for (let i = 0; i < facts.length; i++) {
+    const fact = facts[i];
+    const factEmbedding = embeddings[i];
 
-    for (let i = 0; i < facts.length; i++) {
-      const fact = facts[i];
-      const factEmbedding = embeddings[i];
+    const match = await findDuplicates(factEmbedding, DEDUP_THRESHOLD);
 
-      let bestMatch: { memory: Memory; similarity: number; idx: number } | null = null;
-      for (let j = 0; j < store.memories.length; j++) {
-        const sim = cosineSimilarity(factEmbedding, store.memories[j].embedding);
-        if (sim > DEDUP_THRESHOLD && (!bestMatch || sim > bestMatch.similarity)) {
-          bestMatch = { memory: store.memories[j], similarity: sim, idx: j };
-        }
-      }
-
-      if (bestMatch) {
-        console.log(
-          `[memory] Updating existing memory (sim=${bestMatch.similarity.toFixed(3)}): "${bestMatch.memory.text}" -> "${fact.text}"`
-        );
-        store.memories[bestMatch.idx] = {
-          ...store.memories[bestMatch.idx],
-          text: fact.text,
-          embedding: factEmbedding,
-          importance: Math.max(bestMatch.memory.importance, fact.importance),
-          lastAccessed: new Date().toISOString(),
-        };
-      } else {
-        console.log(`[memory] New memory: "${fact.text}"`);
-        const now = new Date().toISOString();
-        store.memories.push({
-          id: uuid(),
-          text: fact.text,
-          category: fact.category,
-          importance: Math.min(10, Math.max(1, fact.importance)),
-          embedding: factEmbedding,
-          createdAt: now,
-          lastAccessed: now,
-          accessCount: 0,
-          sourceChatId: chatId,
-        });
-      }
+    if (match) {
+      console.log(
+        `[memory] Updating existing memory (sim=${match.similarity.toFixed(3)}): "${match.memory.text}" -> "${fact.text}"`
+      );
+      await updateMemory(match.memory.id, {
+        text: fact.text,
+        embedding: factEmbedding,
+        importance: Math.max(match.memory.importance, fact.importance),
+        lastAccessed: new Date().toISOString(),
+      });
+    } else {
+      console.log(`[memory] New memory: "${fact.text}"`);
+      const now = new Date().toISOString();
+      await addMemory({
+        id: uuid(),
+        text: fact.text,
+        category: fact.category,
+        importance: Math.min(10, Math.max(1, fact.importance)),
+        embedding: factEmbedding,
+        createdAt: now,
+        lastAccessed: now,
+        accessCount: 0,
+        sourceChatId: chatId,
+      });
     }
-
-    await saveMemoryStore(store);
-  });
+  }
 }
 
 export async function extractMemories(

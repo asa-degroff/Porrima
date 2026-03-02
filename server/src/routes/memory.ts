@@ -2,11 +2,14 @@ import { Router } from "express";
 import { v4 as uuid } from "uuid";
 import { embed, isEmbeddingModelAvailable } from "../services/embeddings.js";
 import {
-  loadMemoryStore,
   addMemory,
   updateMemory,
   deleteMemory,
   searchMemories,
+  getMemoryById,
+  getMemoryCount,
+  getLastSynthesis,
+  getAllMemories,
 } from "../services/memory-storage.js";
 import { runDailySynthesis } from "../services/synthesis.js";
 import { getExtractionMetrics } from "../services/memory-extraction.js";
@@ -22,21 +25,23 @@ function stripEmbedding(memory: Memory): MemorySummary {
 // Check embedding model availability and extraction health
 router.get("/status", async (_req, res) => {
   const available = await isEmbeddingModelAvailable();
-  const store = await loadMemoryStore();
+  const memoryCount = await getMemoryCount();
+  const lastSynthesis = await getLastSynthesis();
   res.json({
     embeddingModelAvailable: available,
-    memoryCount: store.memories.length,
-    lastSynthesis: store.lastSynthesis,
+    memoryCount,
+    lastSynthesis,
     extraction: getExtractionMetrics(),
   });
 });
 
 // Synthesis status (must be before /:id to avoid matching "synthesis" as an id)
 router.get("/synthesis/status", async (_req, res) => {
-  const store = await loadMemoryStore();
+  const memoryCount = await getMemoryCount();
+  const lastSynthesis = await getLastSynthesis();
   res.json({
-    lastSynthesis: store.lastSynthesis,
-    memoryCount: store.memories.length,
+    lastSynthesis,
+    memoryCount,
   });
 });
 
@@ -44,11 +49,12 @@ router.get("/synthesis/status", async (_req, res) => {
 router.post("/synthesis/run", async (_req, res) => {
   try {
     await runDailySynthesis();
-    const store = await loadMemoryStore();
+    const memoryCount = await getMemoryCount();
+    const lastSynthesis = await getLastSynthesis();
     res.json({
       success: true,
-      lastSynthesis: store.lastSynthesis,
-      memoryCount: store.memories.length,
+      lastSynthesis,
+      memoryCount,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -78,8 +84,8 @@ router.post("/search", async (req, res) => {
 
 // List all memories (without embeddings)
 router.get("/", async (_req, res) => {
-  const store = await loadMemoryStore();
-  res.json(store.memories.map(stripEmbedding));
+  const memories = await getAllMemories();
+  res.json(memories);
 });
 
 // Create memory (auto-embeds)
@@ -113,8 +119,7 @@ router.post("/", async (req, res) => {
 
 // Get single memory
 router.get("/:id", async (req, res) => {
-  const store = await loadMemoryStore();
-  const memory = store.memories.find((m) => m.id === req.params.id);
+  const memory = await getMemoryById(req.params.id);
   if (!memory) return res.status(404).json({ error: "Memory not found" });
   res.json(stripEmbedding(memory));
 });
@@ -139,8 +144,7 @@ router.patch("/:id", async (req, res) => {
   const updated = await updateMemory(req.params.id, updates);
   if (!updated) return res.status(404).json({ error: "Memory not found" });
 
-  const store = await loadMemoryStore();
-  const memory = store.memories.find((m) => m.id === req.params.id);
+  const memory = await getMemoryById(req.params.id);
   res.json(stripEmbedding(memory!));
 });
 

@@ -5,6 +5,8 @@ import {
   saveMemoryStore,
   saveDailyLog,
   withWriteLock,
+  getMemoryCount,
+  getLastSynthesis,
 } from "./memory-storage.js";
 import { discoverOllamaModels } from "./models.js";
 
@@ -12,10 +14,12 @@ const SYNTHESIS_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MERGE_THRESHOLD = 0.90;
 
 export async function shouldRunSynthesis(): Promise<boolean> {
-  const store = await loadMemoryStore();
-  if (!store.lastSynthesis) return store.memories.length > 0;
-  const elapsed = Date.now() - new Date(store.lastSynthesis).getTime();
-  return elapsed >= SYNTHESIS_INTERVAL_MS && store.memories.length > 0;
+  const count = await getMemoryCount();
+  if (count === 0) return false;
+  const lastSynthesis = await getLastSynthesis();
+  if (!lastSynthesis) return true;
+  const elapsed = Date.now() - new Date(lastSynthesis).getTime();
+  return elapsed >= SYNTHESIS_INTERVAL_MS;
 }
 
 export async function runDailySynthesis(modelId?: string): Promise<void> {
