@@ -93,39 +93,90 @@ Used by the REST API to return memories without the (large) embedding vectors.
 
 **File**: `server/src/services/memory-storage.ts`
 
-All memories persist as a single JSON file at `~/.quje-agent/memory/memories.json`. The storage layer provides the following operations:
+Memories persist in a SQLite database at `~/.quje-agent/memory/memories.db`, using `better-sqlite3` for synchronous bindings and the `sqlite-vec` extension for vector similarity search.
+
+### Database Schema
+
+Three tables:
+
+```sql
+-- Memory metadata (supports normal UPDATE)
+CREATE TABLE memories (
+  id TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  category TEXT NOT NULL,
+  importance INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  last_accessed TEXT NOT NULL,
+  access_count INTEGER NOT NULL DEFAULT 0,
+  source_chat_id TEXT NOT NULL DEFAULT ''
+);
+
+-- Vector index for KNN search (vec0 virtual table)
+CREATE VIRTUAL TABLE vec_memories USING vec0(
+  id TEXT PRIMARY KEY,
+  embedding float[1024] distance_metric=cosine
+);
+
+-- Key-value store for system metadata
+CREATE TABLE metadata (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
+```
+
+The two-table design separates metadata (normal SQL operations) from embeddings (vec0 virtual table for SIMD-accelerated KNN search). The `metadata` table stores the `lastSynthesis` timestamp.
+
+### Operations
 
 | Function | Description |
 |---|---|
-| `loadMemoryStore()` | Reads and parses the JSON file. Returns `{ memories: [], lastSynthesis: null }` if the file doesn't exist. |
-| `saveMemoryStore(store)` | Serializes the full store and writes atomically. |
-| `addMemory(memory)` | Wraps load-push-save in `withWriteLock()` for thread-safe concurrent writes. |
-| `updateMemory(id, updates)` | Wraps load-find-merge-save in `withWriteLock()`. Returns `false` if not found. |
-| `deleteMemory(id)` | Wraps load-filter-save in `withWriteLock()`. Returns `false` if not found. |
-| `searchMemories(queryEmbedding, topK, now?)` | Scores every memory against the query, sorts descending, returns top K. (Read-only, no lock needed) |
+| `loadMemoryStore()` | JOINs `memories` + `vec_memories`, returns full `MemoryStore` shape. Used by synthesis. |
+| `saveMemoryStore(store)` | DELETE all + INSERT all in a transaction. Used by synthesis after bulk mutations. |
+| `addMemory(memory)` | INSERT into both tables in a transaction. |
+| `updateMemory(id, updates)` | Dynamic UPDATE on `memories`; if embedding changed, DELETE + re-INSERT on `vec_memories`. |
+| `deleteMemory(id)` | DELETE from both tables in a transaction. |
+| `searchMemories(queryEmbedding, topK, now?)` | KNN MATCH on `vec_memories`, JOIN metadata, re-rank with recency+importance in JS. |
+| `getMemoryById(id)` | Single-row lookup from `memories`. |
+| `getMemoryCount()` | `SELECT COUNT(*)` — avoids loading all data. |
+| `getLastSynthesis()` | Metadata key lookup. |
+| `setLastSynthesis(value)` | Metadata key upsert. |
+| `getAllMemories()` | All memories without embeddings — used by the list API. |
+| `findDuplicates(embedding, threshold)` | KNN nearest neighbor + threshold filter — used by dedup. |
 | `saveDailyLog(date, content)` | Writes a markdown file to `~/.quje-agent/memory/daily/{date}.md`. |
-| `withWriteLock(fn)` | Promise-based mutex that serializes all write operations to prevent race conditions. |
+| `withWriteLock(fn)` | No-op passthrough (SQLite handles concurrency via WAL mode). Preserved for API compatibility. |
 
-### Write Locking Mechanism
+### Database Initialization
 
-All write operations serialize through a Promise-based mutex to prevent race conditions from concurrent extractions (e.g., normal extraction + pre-compaction flush firing simultaneously):
+The database is initialized lazily via a `getDb()` singleton on first access:
 
-```typescript
-let writeLock: Promise<void> = Promise.resolve();
+1. Ensures `~/.quje-agent/memory/` directory exists
+2. Opens (or creates) `memories.db`
+3. Loads the `sqlite-vec` extension
+4. Enables WAL journal mode
+5. Creates tables (idempotent `CREATE TABLE IF NOT EXISTS`)
+6. If `memories.json` exists but `memories.db` does not, auto-migrates (see [Migration](#migration-from-json))
 
-export function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-  const next = writeLock.then(fn, fn);
-  // Update the lock chain but don't propagate errors to subsequent callers
-  writeLock = next.then(() => {}, () => {});
-  return next;
-}
-```
+### Migration from JSON
 
-The error recovery pattern (`next.then(() => {}, () => {})`) ensures that a single failed write doesn't break the lock chain for future operations.
+On first boot after the SQLite migration, `getDb()` detects `memories.json` without a corresponding `memories.db` and auto-migrates:
 
-### Atomic Dedup+Save
+1. Reads the JSON file synchronously
+2. Inserts all memories into both `memories` and `vec_memories` tables in a single transaction
+3. Copies the `lastSynthesis` timestamp to the `metadata` table
+4. Verifies the row count matches
+5. Renames `memories.json` to `memories.json.bak`
+6. Logs a migration summary to console
 
-The `dedupAndSave()` function (exported from `memory-extraction.ts`) performs deduplication and persistence in a single locked transaction, ensuring no partial state ever persists:
+Rollback: delete `memories.db`, rename `.bak` back, deploy pre-migration code.
+
+### Concurrency
+
+SQLite with WAL mode handles concurrent reads and serialized writes natively. The old Promise-based `withWriteLock()` mutex is preserved as a no-op passthrough for API compatibility with callers that still wrap operations in it.
+
+### Dedup via sqlite-vec
+
+The `dedupAndSave()` function (in `memory-extraction.ts`) performs per-fact deduplication using `findDuplicates()`, which runs a KNN MATCH query on `vec_memories` for the single nearest neighbor, then checks if similarity exceeds the threshold:
 
 ```typescript
 export async function dedupAndSave(
@@ -133,15 +184,18 @@ export async function dedupAndSave(
   embeddings: number[][],
   chatId: string
 ): Promise<void> {
-  await withWriteLock(async () => {
-    const store = await loadMemoryStore();
-    // Dedup logic inline...
-    await saveMemoryStore(store);
-  });
+  for (let i = 0; i < facts.length; i++) {
+    const match = await findDuplicates(factEmbedding, 0.85);
+    if (match) {
+      await updateMemory(match.memory.id, { text, embedding, ... });
+    } else {
+      await addMemory({ ... });
+    }
+  }
 }
 ```
 
-This is used by both automatic extraction and the `save_memory` tool to ensure consistent deduplication across all creation pathways.
+Each fact is an independent SQLite transaction — no need to load/save the entire store. This is used by both automatic extraction and the `save_memory` tool.
 
 ---
 
@@ -155,7 +209,7 @@ Uses Ollama's local embedding endpoint (`POST http://localhost:11434/api/embed`)
 |---|---|
 | `embed(text)` | Embeds a single string. Returns a `number[]` vector. |
 | `embedBatch(texts)` | Embeds multiple strings in one call. Returns `number[][]`. |
-| `cosineSimilarity(a, b)` | Dot product of two vectors. Works because Ollama returns L2-normalized vectors, so `dot(a,b) = cos(a,b)`. |
+| `cosineSimilarity(a, b)` | Dot product of two vectors. Works because Ollama returns L2-normalized vectors, so `dot(a,b) = cos(a,b)`. Used by synthesis for pairwise comparisons; search and dedup use sqlite-vec instead. |
 | `isEmbeddingModelAvailable()` | Checks Ollama's `/api/tags` to verify the model is pulled. |
 
 The embedding model is hardcoded to `qwen3-embedding:0.6b`. It's a compact model optimized for fast local inference.
@@ -233,26 +287,26 @@ The full CRUD API (see [REST API Routes](#rest-api-routes)) allows creating, rea
 
 **Threshold**: cosine similarity > 0.85
 
-When a new fact is created (via automatic extraction, pre-compaction flush, or explicit `save_memory` tool), it's processed by `dedupAndSave()` which performs atomic deduplication inside a write lock:
+When a new fact is created (via automatic extraction, pre-compaction flush, or explicit `save_memory` tool), it's processed by `dedupAndSave()` which performs per-fact deduplication via sqlite-vec:
 
 1. Embed the new fact (batch embedding for multiple facts).
-2. Load the memory store inside the lock.
-3. For each fact, compute cosine similarity against every existing memory.
-4. If the best match exceeds 0.85:
+2. For each fact, call `findDuplicates(embedding, 0.85)` — a KNN MATCH query on `vec_memories` for the single nearest neighbor.
+3. If the best match exceeds 0.85:
    - **Update** the existing memory's text to the new version (assumes the newer phrasing is more current).
-   - **Update** the embedding to match the new text.
+   - **Update** the embedding to match the new text (DELETE + re-INSERT on `vec_memories`).
    - **Keep the higher importance** of the two (`Math.max`).
    - **Refresh** `lastAccessed` to now.
-5. If no match exceeds 0.85:
-   - **Create** a new memory.
-6. Save the entire store (single write).
+4. If no match exceeds 0.85:
+   - **Create** a new memory (INSERT into both tables).
 
-**Batch dedup**: Newly created memories within the same extraction batch are added to the comparison pool inline, so two similar facts from the same conversation won't both be saved as separate memories.
+Each fact is an independent SQLite transaction — no need to load/save the entire memory store.
+
+**Batch dedup**: Because each fact is inserted before the next is checked, newly created memories within the same extraction batch are visible to subsequent `findDuplicates()` queries. Two similar facts from the same conversation won't both be saved as separate memories.
 
 **Pathways using dedup**:
-- ✅ Automatic extraction (after each response)
-- ✅ Pre-compaction flush (at 75% context window)
-- ✅ Explicit `save_memory` tool calls
+- Automatic extraction (after each response)
+- Pre-compaction flush (at 75% context window)
+- Explicit `save_memory` tool calls
 
 All three pathways use the same `dedupAndSave()` function for consistency.
 
@@ -290,7 +344,12 @@ The `search_memory` tool lets the agent actively query memories during a convers
 
 ## Scoring Algorithm
 
-**File**: `server/src/services/memory-storage.ts` (lines 67-86)
+**File**: `server/src/services/memory-storage.ts` (`searchMemories()`)
+
+Search uses a two-phase approach:
+
+1. **Phase 1 — sqlite-vec KNN**: Query `vec_memories` with `MATCH` for the top N nearest neighbors by cosine distance (oversampled at 3x `topK`, minimum 20). This runs in C with SIMD acceleration.
+2. **Phase 2 — JS re-ranking**: For each candidate, compute the full composite score and re-sort. Recency and importance can reorder pure cosine results, so oversampling ensures good candidates aren't missed.
 
 Each memory's relevance score is a product of three factors:
 
@@ -298,15 +357,19 @@ Each memory's relevance score is a product of three factors:
 score = cosine_similarity × recency_decay × importance_weight
 ```
 
+Where `cosine_similarity = 1 - distance` (sqlite-vec returns cosine distance).
+
 | Factor | Formula | Range | Purpose |
 |---|---|---|---|
-| `cosine_similarity` | `dot(query_embedding, memory_embedding)` | [-1, 1] (typically 0-1) | Semantic relevance to the current query |
+| `cosine_similarity` | `1 - vec_distance` | [-1, 1] (typically 0-1) | Semantic relevance to the current query |
 | `recency_decay` | `0.5 ^ (age_ms / HALF_LIFE_MS)` | (0, 1] | Exponential decay with 30-day half-life |
 | `importance_weight` | `importance / 10` | [0.1, 1.0] | Normalized importance (1-10 → 0.1-1.0) |
 
 **Half-life**: 30 days. A memory accessed 30 days ago has its recency factor halved. At 60 days it's at 0.25, at 90 days 0.125, etc. Accessing a memory resets its `lastAccessed`, effectively refreshing the decay clock.
 
 **Effect**: High-importance, recently-accessed, semantically-relevant memories dominate. Old but important memories can still surface if they're a strong semantic match. Low-importance old memories effectively disappear over time.
+
+**Performance**: The KNN query runs in native C code via sqlite-vec, so search is fast even at thousands of memories. The JS re-ranking phase only processes the oversampled candidates (not all memories).
 
 ---
 
@@ -352,7 +415,7 @@ This is fire-and-forget. It runs concurrently with normal extraction after the s
 
 **File**: `server/src/services/synthesis.ts`
 
-A maintenance job that runs once per 24-hour period. The entire synthesis process is wrapped in `withWriteLock()` to prevent concurrent memory mutations during the operation.
+A maintenance job that runs once per 24-hour period. The entire synthesis process uses `loadMemoryStore()` + in-memory mutations + `saveMemoryStore()` for its O(n²) pairwise comparisons, which is appropriate since it runs infrequently.
 
 ### Step 1: Consolidate Near-Duplicates
 
@@ -404,7 +467,7 @@ Simple timer-based scheduler:
 - Immediately checks if synthesis is due (`shouldRunSynthesis()`).
 - Then sets a 1-hour `setInterval` to check again.
 
-`shouldRunSynthesis()` returns `true` if:
+`shouldRunSynthesis()` uses `getMemoryCount()` + `getLastSynthesis()` (lightweight metadata lookups, no full table load) and returns `true` if:
 - There are memories AND `lastSynthesis` is null (never run), OR
 - There are memories AND 24+ hours have elapsed since `lastSynthesis`.
 
@@ -419,7 +482,7 @@ The synthesis can also be triggered manually via `POST /api/memory/synthesis/run
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/status` | Returns `{ embeddingModelAvailable, memoryCount, lastSynthesis }` |
+| `GET` | `/status` | Returns `{ embeddingModelAvailable, memoryCount, lastSynthesis, extraction }` |
 | `GET` | `/synthesis/status` | Returns `{ lastSynthesis, memoryCount }` |
 | `POST` | `/synthesis/run` | Manually triggers daily synthesis |
 | `POST` | `/search` | Semantic search. Body: `{ query, topK? }`. Returns scored results without embeddings. |
@@ -439,10 +502,10 @@ Route ordering matters: `/status`, `/synthesis/*`, and `/search` are defined **b
 server/src/
 ├── types.ts                        # Memory, MemoryStore, MemoryCategory, MemorySummary
 ├── routes/
-│   ├── chat.ts                     # Memory integration: augmentation (L305-309), extraction (L206-208), pre-compaction (L211-224)
+│   ├── chat.ts                     # Memory integration: augmentation, extraction, pre-compaction
 │   └── memory.ts                   # REST API for memory CRUD + synthesis
 └── services/
-    ├── memory-storage.ts           # Persistence layer (JSON file read/write, search)
+    ├── memory-storage.ts           # SQLite + sqlite-vec persistence layer (search, CRUD, targeted lookups)
     ├── memory-extraction.ts        # Automatic fact extraction + pre-compaction flush
     ├── memory-context.ts           # System prompt augmentation with recalled memories
     ├── memory-tools.ts             # save_memory, search_memory, forget_memory tool implementations
@@ -453,7 +516,9 @@ server/src/
     └── agent.ts                    # streamChat() — shared LLM interface used by extraction/synthesis
 
 ~/.quje-agent/memory/
-├── memories.json                   # The memory store (all memories + lastSynthesis timestamp)
+├── memories.db                     # SQLite database (memories table + vec_memories virtual table + metadata)
+├── memories.db-wal                 # WAL journal (auto-managed by SQLite)
+├── memories.db-shm                 # Shared memory file (auto-managed by SQLite)
 └── daily/
     └── {YYYY-MM-DD}.md            # Daily synthesis summaries
 ```
@@ -480,13 +545,16 @@ SSE "done" event sent to client          extractMemories() [fire-and-forget]
                                          LLM extracts JSON facts
                                                      │
                                                      ▼
+                                         embedBatch(all fact texts)
+                                                     │
+                                                     ▼
                                          For each fact:
-                                           ├── embed(fact.text)
-                                           ├── Compare vs all existing memories
+                                           ├── findDuplicates(embedding, 0.85)
+                                           │     (KNN MATCH on vec_memories)
                                            │     cosine > 0.85?
                                            │       ├── YES → updateMemory()
                                            │       └── NO  → addMemory()
-                                           └── Push to comparison pool
+                                           └── (new memory visible to next fact's query)
 ```
 
 ### Memory Recall (Context Augmentation)
@@ -500,7 +568,8 @@ buildMemoryAugmentedPrompt()
     ├── Concat last 3 user messages
     ├── embed(query)
     ├── searchMemories(embedding, top 5)
-    │     └── score = cosine × recency × importance
+    │     ├── Phase 1: KNN MATCH on vec_memories (oversample 3x)
+    │     └── Phase 2: Re-rank with score = cosine × recency × importance
     ├── Filter score > 0.01
     ├── Inject into system prompt
     └── Update lastAccessed + accessCount [fire-and-forget]
@@ -538,36 +607,40 @@ Update lastSynthesis, save store
 ### Strengths
 
 - **Clean separation of concerns**: Storage, extraction, context, tools, synthesis, and scheduling are each in their own file with focused responsibilities.
+- **SQLite + sqlite-vec storage**: Efficient per-row CRUD operations instead of loading/serializing the entire memory store. Vector similarity search runs in C with SIMD acceleration.
 - **Graceful degradation**: Memory failures never break chat. Every memory pathway is wrapped in try/catch or fire-and-forget, so the system works fine even if the embedding model is down.
 - **Dual dedup strategy**: 0.85 threshold at extraction time prevents new duplicates; 0.90 threshold at synthesis time catches drift duplicates that accumulated over time.
 - **Recency + importance + relevance scoring**: The three-factor scoring formula is well-designed. The 30-day half-life is a reasonable default that keeps recent context fresh without completely forgetting older knowledge.
 - **Access tracking**: `lastAccessed` and `accessCount` updates on recall create a positive feedback loop — useful memories stay fresh, unused ones fade.
 - **Pre-compaction flush**: Smart safeguard against information loss in long conversations.
-- **Batch dedup within extraction**: Adding newly created memories to the comparison pool within a single extraction pass prevents the same conversation from generating duplicate memories.
-- **Write locking**: All memory write operations serialize through a Promise-based mutex (`withWriteLock()`), preventing race conditions from concurrent extractions.
-- **Atomic dedup+save**: The `dedupAndSave()` function performs deduplication and persistence in a single locked transaction, used by both automatic extraction and explicit tool calls.
+- **Batch dedup within extraction**: Each fact is inserted before the next is checked, so newly created memories are visible to subsequent `findDuplicates()` queries within the same batch.
+- **Concurrency via SQLite WAL**: WAL mode allows concurrent reads with serialized writes, replacing the previous Promise-based mutex.
+- **Per-fact dedup transactions**: `dedupAndSave()` performs each fact as an independent SQLite transaction via `findDuplicates()` + `updateMemory()`/`addMemory()`.
 - **Error resilience**: LLM and embedding calls retry with exponential backoff (up to 2 retries). Failures logged to `~/.quje-agent/logs/memory-errors.log`.
 - **Observability**: In-memory metrics track extraction success/failure rates, facts extracted, and timestamps — exposed via `GET /api/memory/status`.
 - **Memory purge**: Stale memories (6+ months unused, importance ≤2) are automatically removed during synthesis to prevent unbounded growth.
+- **Auto-migration**: Seamless migration from JSON to SQLite on first boot — detects `memories.json`, imports all data, renames to `.bak`.
 
 ### Resolved Concerns (Previously Noted)
 
-1. ~~**No write locking**~~ ✅ **FIXED** — All writes now serialize through `withWriteLock()` in `memory-storage.ts`. The mutex uses Promise chaining with error recovery to prevent lock chain breakage.
+1. ~~**No write locking**~~ ✅ **FIXED** — Originally resolved with Promise-based mutex. Now superseded by SQLite WAL mode which handles concurrency natively.
 
-2. ~~**`save_memory` tool skips dedup**~~ ✅ **FIXED** — The `save_memory` tool now calls `dedupAndSave()` instead of direct `addMemory()`, ensuring explicit saves go through the same dedup logic as automatic extraction.
+2. ~~**`save_memory` tool skips dedup**~~ ✅ **FIXED** — The `save_memory` tool calls `dedupAndSave()` instead of direct `addMemory()`, ensuring explicit saves go through the same dedup logic as automatic extraction.
+
+3. ~~**O(n) search with no index**~~ ✅ **FIXED** — Search now uses sqlite-vec KNN MATCH queries running in C with SIMD acceleration. Still brute-force O(n) complexity, but the constant factor is orders of magnitude lower than the previous JS implementation.
+
+4. ~~**JSON file I/O bottleneck**~~ ✅ **FIXED** — Migrated from single JSON file (full load/save on every operation) to SQLite with per-row CRUD. Individual operations no longer require parsing or serializing multi-MB JSON.
 
 ### Remaining Concerns
 
-1. **O(n²) synthesis dedup**: The pairwise comparison in `runDailySynthesis()` scales quadratically with memory count. Fine for hundreds of memories, but could become slow at thousands. A spatial index (e.g., approximate nearest neighbors) would fix this if scale becomes an issue.
+1. **O(n²) synthesis dedup**: The pairwise comparison in `runDailySynthesis()` scales quadratically with memory count. Fine for hundreds of memories, but could become slow at thousands. This still loads the full store via `loadMemoryStore()` and does JS-level pairwise cosine comparisons. A future optimization could use sqlite-vec to find near-duplicates more efficiently.
 
-2. **O(n) search with no index**: `searchMemories()` iterates all memories and computes similarity against each. Same scaling concern as above, same mitigation path.
+2. **Importance decay is one-way**: Once `importance` is decremented during synthesis, only a dedup merge with a higher-importance version can restore it. There's no mechanism for the system to re-evaluate and increase the importance of a memory that becomes relevant again (though accessing it does reset the recency decay, which partially compensates).
 
-3. **Importance decay is one-way**: Once `importance` is decremented during synthesis, only a dedup merge with a higher-importance version can restore it. There's no mechanism for the system to re-evaluate and increase the importance of a memory that becomes relevant again (though accessing it does reset the recency decay, which partially compensates).
+3. **Daily log is write-only**: The synthesis summaries in `~/.quje-agent/memory/daily/` are never read by the system. They're purely for human auditing. If disk space becomes a concern, there's no rotation or cleanup.
 
-4. **Daily log is write-only**: The synthesis summaries in `~/.quje-agent/memory/daily/` are never read by the system. They're purely for human auditing. If disk space becomes a concern, there's no rotation or cleanup.
+4. **Single embedding model**: The embedding model (`qwen3-embedding:0.6b`) is hardcoded. If you change it, existing embeddings become incompatible with new ones (different vector spaces), which would silently break similarity calculations. A migration path (re-embed all memories) would be needed.
 
-5. **Single embedding model**: The embedding model (`qwen3-embedding:0.6b`) is hardcoded. If you change it, existing embeddings become incompatible with new ones (different vector spaces), which would silently break similarity calculations. A migration path (re-embed all memories) would be needed.
+5. **Context augmentation query construction**: The system concatenates the last 3 user messages as the recall query. In conversations where the user switches topics, old messages could pull in irrelevant memories. A single-message or topic-aware query strategy might be more precise, though the current approach has the advantage of maintaining continuity across multi-turn discussions.
 
-6. **Context augmentation query construction**: The system concatenates the last 3 user messages as the recall query. In conversations where the user switches topics, old messages could pull in irrelevant memories. A single-message or topic-aware query strategy might be more precise, though the current approach has the advantage of maintaining continuity across multi-turn discussions.
-
-7. **No embedding model versioning**: The `MemoryStore` doesn't track which embedding model version was used. Adding an `embeddingModel` field would enable future migration tooling.
+6. **No embedding model versioning**: The `metadata` table could store the embedding model name for future migration tooling, but this isn't implemented yet.

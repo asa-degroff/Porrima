@@ -24,7 +24,7 @@ A local chat UI for Ollama models with a persistent memory system. Agent chats l
 - Per-chat model selector and system prompt editor
 - Glassmorphism UI with Tailwind CSS v4
 - Markdown rendering with GFM support
-- JSON file persistence (no database required)
+- SQLite + sqlite-vec for memory storage with SIMD-accelerated vector search; JSON files for chat persistence
 
 ## Prerequisites
 
@@ -117,7 +117,7 @@ quje-agent/
 │       ├── models.ts                # Ollama model config + reasoning detection
 │       ├── storage.ts               # Chat JSON persistence (~/.quje-agent/chats/)
 │       ├── embeddings.ts            # Ollama embedding API wrapper
-│       ├── memory-storage.ts        # Memory JSON persistence + scored search
+│       ├── memory-storage.ts        # Memory SQLite + sqlite-vec persistence + KNN search
 │       ├── memory-extraction.ts     # Background fact extraction + pre-compaction flush
 │       ├── memory-context.ts        # System prompt augmentation with memories
 │       ├── memory-tools.ts          # Agent tool definitions, parsing, execution
@@ -140,7 +140,7 @@ All data is stored in `~/.quje-agent/`:
 ├── chats/              # One JSON file per chat
 ├── settings.json       # User preferences
 └── memory/
-    ├── memories.json   # Memory objects with embeddings
+    ├── memories.db     # SQLite database (memories + vector embeddings via sqlite-vec)
     └── daily/          # Daily synthesis logs (YYYY-MM-DD.md)
 ```
 

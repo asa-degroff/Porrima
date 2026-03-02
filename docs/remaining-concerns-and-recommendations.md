@@ -8,9 +8,9 @@
 
 ## Executive Summary
 
-The memory system is **production-ready for personal use** at scales up to several thousand memories. The critical issues from the original code review (write locking, deduplication consistency, error handling) have all been resolved.
+The memory system is **production-ready for personal use** at scales up to several thousand memories. The critical issues from the original code review (write locking, deduplication consistency, error handling) have all been resolved. The storage layer has been migrated from a single JSON file to **SQLite + sqlite-vec**, providing efficient per-row CRUD operations and SIMD-accelerated vector similarity search.
 
-This document outlines **7 remaining concerns** — none are blockers, but they represent technical debt that may matter as the system scales or evolves. Concerns are organized by priority with concrete implementation recommendations.
+This document outlines **7 original concerns** — 2 have been resolved by the SQLite migration, and 5 remain. None are blockers, but they represent technical debt that may matter as the system scales or evolves. Concerns are organized by priority with concrete implementation recommendations.
 
 ---
 
@@ -21,7 +21,7 @@ This document outlines **7 remaining concerns** — none are blockers, but they 
 | **Embedding model versioning** | 🔴 High | Low | Silent corruption if model changes |
 | **Memory purge testing** | 🔴 High | Low | Potential data loss if bug exists |
 | **Scaling (O(n²) synthesis)** | 🟡 Medium | Medium | Slow synthesis at 5,000+ memories |
-| **Scaling (O(n) search)** | 🟡 Medium | Medium | Slow recall at 10,000+ memories |
+| ~~**Scaling (O(n) search)**~~ | ✅ Resolved | — | Resolved by sqlite-vec migration |
 | **Query construction strategy** | 🟡 Medium | Low | Occasional irrelevant memory recalls |
 | **One-way importance decay** | 🟢 Low | Low | Memories may be underrated over time |
 | **Daily log rotation** | 🟢 Low | Low | Disk space usage over years |
@@ -338,6 +338,8 @@ for (let i = 0; i < store.memories.length; i++) {
 }
 ```
 
+**Note**: While the storage layer has been migrated to SQLite + sqlite-vec, the synthesis step still uses `loadMemoryStore()` to load all memories into JS and performs pairwise comparisons in JavaScript. This is acceptable because synthesis runs once per day, but the O(n²) complexity remains.
+
 **Performance characteristics**:
 
 | Memories | Comparisons | Estimated Time |
@@ -359,157 +361,51 @@ At 5,000+ memories, synthesis becomes noticeably slow.
 
 **Long-term (when needed)**:
 
-**Option A: Approximate Nearest Neighbors (ANN)**
+**Option A: Use sqlite-vec for near-duplicate detection**
 
-Use a library like `@xenova/transformers` with FAISS-style indexing:
-
-```typescript
-import { env, AutoModel } from '@xenova/transformers';
-
-// Build index during synthesis
-const index = new ApproximateNearestNeighbors({
-  dimensions: 384, // qwen3-embedding dimension
-  metric: 'cosine'
-});
-
-for (const memory of store.memories) {
-  index.insert(memory.id, memory.embedding);
-}
-
-// Find near-duplicates in O(n log n) instead of O(n²)
-const duplicates = index.findPairs(threshold: 0.90);
-```
-
-**Option B: Locality-Sensitive Hashing (LSH)**
-
-Hash embeddings into buckets; only compare within buckets:
+Since the storage layer already uses sqlite-vec, synthesis could query for each memory's nearest neighbors instead of doing pairwise comparisons:
 
 ```typescript
-function lshHash(embedding: number[], numBands: number): string {
-  // Simple LSH: hash chunks of the vector
-  const chunkSize = Math.floor(embedding.length / numBands);
-  const hash = embedding
-    .slice(0, chunkSize)
-    .map(v => Math.sign(v))
-    .join('');
-  return hash;
-}
-
-// Group by hash
-const buckets = new Map<string, Memory[]>();
-for (const memory of store.memories) {
-  const hash = lshHash(memory.embedding, 10);
-  if (!buckets.has(hash)) buckets.set(hash, []);
-  buckets.get(hash)!.push(memory);
-}
-
-// Only compare within buckets
-for (const bucket of buckets.values()) {
-  // O(k²) where k << n
-  for (let i = 0; i < bucket.length; i++) {
-    for (let j = i + 1; j < bucket.length; j++) {
-      // Compare...
-    }
+// For each memory, find its nearest neighbor via sqlite-vec
+for (const memory of memories) {
+  const match = await findDuplicates(memory.embedding, 0.90);
+  if (match && match.memory.id !== memory.id) {
+    // Merge the pair
   }
 }
 ```
 
-**Option C: Database Migration**
+This reduces O(n²) to O(n) KNN queries, each running in C with SIMD.
 
-Move from JSON file to SQLite with vector extensions:
+**Option B: Locality-Sensitive Hashing (LSH)**
 
-```sql
--- SQLite with sqlite-vec extension
-CREATE TABLE memories (
-  id TEXT PRIMARY KEY,
-  text TEXT,
-  embedding BLOB -- 384 float32
-);
-
--- Create vector index
-CREATE INDEX embedding_idx ON memories USING vec0 (
-  embedding float[384] metric=cosine
-);
-
--- Fast similarity search
-SELECT id, text, vec_distance_cosine(embedding, ?) AS score
-FROM memories
-ORDER BY score ASC
-LIMIT 5;
-```
+Hash embeddings into buckets; only compare within buckets. Reduces comparisons to O(k²) per bucket where k << n.
 
 ### Implementation Checklist
 
 - [ ] Add synthesis duration logging
 - [ ] Set up performance benchmarks
-- [ ] Document scaling characteristics in README
-- [ ] Research ANN libraries for Node.js
-- [ ] Prototype LSH bucketing (low effort, high impact)
-- [ ] Evaluate SQLite + sqlite-vec for production use
+- [ ] Refactor synthesis to use sqlite-vec `findDuplicates()` per memory
+- [ ] Benchmark: sqlite-vec KNN vs JS pairwise at various memory counts
 
 ### Estimated Effort
 - Short-term: **1-2 hours** (logging, docs)
-- Long-term: **1-2 weeks** (ANN/LSH implementation)
+- Long-term: **4-8 hours** (refactor synthesis to use sqlite-vec)
 
 ---
 
-## Concern 4: Scaling — O(n) Search
+## ~~Concern 4: Scaling — O(n) Search~~ ✅ RESOLVED
 
-### 🟡 **Priority: Medium** | Effort: Medium | Risk: Slow Recall at Scale
+### Resolution
 
-### Problem
+Search has been migrated from JS-level iteration to **sqlite-vec KNN MATCH queries** running in C with SIMD acceleration. While the algorithmic complexity is still O(n) (brute-force scan), the constant factor is orders of magnitude lower than the previous implementation:
 
-Every recall operation iterates all memories:
+- **Before**: Load entire JSON file → parse → iterate all memories in JS → compute dot products → sort → slice
+- **After**: `SELECT id, distance FROM vec_memories WHERE embedding MATCH ? ORDER BY distance LIMIT ?` → native C SIMD computation → JOIN metadata → JS re-ranking on small candidate set
 
-```typescript
-// memory-storage.ts
-export async function searchMemories(
-  queryEmbedding: number[],
-  topK: number
-): Promise<ScoredMemory[]> {
-  const store = await loadMemoryStore();
-  
-  const scored: ScoredMemory[] = store.memories.map((memory) => {
-    const sim = cosineSimilarity(queryEmbedding, memory.embedding);
-    // ...
-  });
-  
-  return scored.slice(0, topK);
-}
-```
+Additionally, individual CRUD operations no longer require loading/serializing the entire memory store, eliminating the I/O bottleneck that previously made every operation scale with total memory count.
 
-**Impact**: At 10,000 memories, every chat message triggers 10,000 similarity computations.
-
-### Recommendation
-
-**Same solutions as Concern 3** (ANN, LSH, or SQLite). The search operation benefits even more from indexing since it runs on every message.
-
-**Additional optimization**: Cache recent search results
-
-```typescript
-const searchCache = new LRUCache<string, ScoredMemory[]>({
-  max: 100,
-  ttl: 5 * 60 * 1000 // 5 minutes
-});
-
-export async function searchMemories(
-  queryEmbedding: number[],
-  topK: number
-): Promise<ScoredMemory[]> {
-  const cacheKey = queryEmbedding.slice(0, 10).join(','); // Hash first 10 dims
-  const cached = searchCache.get(cacheKey);
-  if (cached) return cached;
-  
-  // Full search...
-  const results = store.memories.map(...);
-  
-  searchCache.set(cacheKey, results);
-  return results;
-}
-```
-
-### Estimated Effort
-Same as Concern 3 (shared infrastructure)
+The two-phase search (KNN oversample 3x, then JS re-rank with recency/importance) ensures that the composite scoring formula still works correctly while leveraging native vector search performance.
 
 ---
 
@@ -776,15 +672,18 @@ npm run archive-logs -- --older-than=90
 
 ### Short-term (1-2 months)
 
-3. **Scaling instrumentation** — Add logging/benchmarks
+3. **Synthesis scaling instrumentation** — Add logging/benchmarks, consider refactoring to use sqlite-vec
 4. **Query construction A/B test** — Improve recall quality
 5. **Importance boost** — Better long-term memory management
 
 ### Long-term (6+ months, or when scale requires)
 
-6. **ANN/LSH indexing** — For 5,000+ memories
-7. **SQLite migration** — if JSON file becomes unwieldy
-8. **Daily log rotation** — If disk space becomes a concern
+6. **Daily log rotation** — If disk space becomes a concern
+
+### ✅ Already Resolved
+
+- ~~**O(n) search scaling**~~ — Resolved by sqlite-vec KNN MATCH queries
+- ~~**JSON file I/O bottleneck**~~ — Resolved by SQLite migration with per-row CRUD
 
 ---
 
@@ -799,8 +698,7 @@ Impact
   │  └─────────────────────┘
   │
   │  ┌─────────────────────┐
-  │  │  Scaling (O(n²))    │
-  │  │  Scaling (O(n))     │ ← When you hit 5k+ memories
+  │  │  Scaling (O(n²))    │ ← When you hit 5k+ memories
   │  │  Query Strategy     │
   │  └─────────────────────┘
   │
@@ -808,7 +706,7 @@ Impact
   │  │  Importance Boost   │
   │  │  Log Rotation       │ ← Nice-to-have
   │  └─────────────────────┘
-  │
+  │                              ✅ Resolved: O(n) search, JSON I/O bottleneck
   └───────────────────────────→ Effort
 ```
 
@@ -821,7 +719,9 @@ The memory system is in **excellent shape**. These concerns represent thoughtful
 **When to prioritize**:
 - Embedding versioning: Before switching embedding models
 - Purge testing: Before relying on purge for space management
-- Scaling optimizations: When synthesis takes >30 seconds or search latency is noticeable
+- Synthesis scaling: When synthesis takes >30 seconds (refactor to use sqlite-vec per-memory KNN)
 - Query strategy: If you notice irrelevant recalls during topic switches
 - Importance boost: If old memories seem undervalued in long-running chats
 - Log rotation: When the `daily/` directory exceeds ~10 MB
+
+**Note**: The SQLite + sqlite-vec migration (completed) resolved the O(n) search scaling concern and the JSON file I/O bottleneck. Search now runs KNN MATCH queries in native C with SIMD acceleration, and individual CRUD operations no longer require loading the entire memory store.

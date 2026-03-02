@@ -68,11 +68,11 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 
 - **Streaming**: SSE with event types `text_delta`, `thinking_delta`, `tool_status`, `artifact`, `ask_user`, `done`, `error`
 - **Types**: Shared interfaces in `server/src/types.ts` and `client/src/types.ts` (kept in sync manually)
-- **Storage**: All persistence is JSON files — `storage.ts` for chats, `memory-storage.ts` for memories. Both use `~/.quje-agent/` as the base directory with `mkdir({ recursive: true })`.
+- **Storage**: Chat persistence uses JSON files (`storage.ts`), memory persistence uses SQLite + sqlite-vec (`memory-storage.ts` → `~/.quje-agent/memory/memories.db`). Both use `~/.quje-agent/` as the base directory.
 - **Context window**: Fetched per-model from Ollama `/api/show` (`model_info.*.context_length`). Per-chat override via `chat.contextWindow`; effective value is `chat.contextWindow ?? model.contextWindow`.
 - **Embeddings**: Ollama `qwen3-embedding:0.6b` via `POST http://localhost:11434/api/embed`. Vectors are L2-normalized, so cosine similarity = dot product.
 - **Memory scoring**: `cosine_sim * recency_decay * (importance / 10)` with a 30-day half-life on recency.
-- **Memory dedup**: cosine > 0.85 between a new fact and existing memory triggers UPDATE instead of ADD.
+- **Memory dedup**: cosine > 0.85 between a new fact and existing memory triggers UPDATE instead of ADD. Uses sqlite-vec KNN MATCH for nearest-neighbor lookup.
 - **Backward compat**: `getChat()` and `listChats()` default missing `type` to "quick".
 
 ## Style
