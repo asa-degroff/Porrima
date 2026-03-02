@@ -10,7 +10,18 @@ interface Props {
 export function MarkdownRenderer({ content }: Props) {
   return (
     <div className="markdown-body">
-      <ReactMarkdown remarkPlugins={plugins}>{content}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={plugins}
+        components={{
+          table: ({ children, ...props }) => (
+            <div className="table-wrapper">
+              <table {...props}>{children}</table>
+            </div>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

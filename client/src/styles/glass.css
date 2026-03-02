@@ -136,10 +136,20 @@ body::before {
   color: rgba(255, 255, 255, 0.7);
 }
 
+/* Wrap tables in a scrollable container to prevent page-wide horizontal scrolling */
+.markdown-body .table-wrapper {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0.75em 0;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.5rem;
+}
+
 .markdown-body table {
   border-collapse: collapse;
-  margin: 0.75em 0;
+  margin: 0;
   width: 100%;
+  min-width: fit-content;
 }
 
 .markdown-body th,
