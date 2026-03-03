@@ -215,7 +215,7 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
             <button
               onClick={() => {
                 heavy(); // Haptic on stop
-                onAbort();
+                onAbort?.();
               }}
               className="px-4 py-1.5 rounded-lg bg-red-500/20 border border-red-400/30 text-red-300 text-sm hover:bg-red-500/30 transition-colors"
             >
