@@ -8,6 +8,7 @@ import { dedupAndSave } from "./memory-extraction.js";
 import type { Tool, ToolCall } from "@mariozechner/pi-ai";
 import type { MemoryCategory } from "../types.js";
 import { StringEnum } from "@mariozechner/pi-ai";
+import { savePersona, loadPersona } from "./persona-store.js";
 
 export const MEMORY_TOOLS: Tool[] = [
   {
@@ -44,6 +45,24 @@ export const MEMORY_TOOLS: Tool[] = [
       query: Type.Optional(
         Type.String({ description: "Search query to find memory to delete" })
       ),
+    }),
+  },
+  {
+    name: "update_persona",
+    description:
+      "Update the agent's persona document. Use sparingly—only for significant, recurring patterns that should become part of your core identity. Called automatically during synthesis when patterns emerge.",
+    parameters: Type.Object({
+      section: Type.String({
+        description:
+          "The persona section to update (e.g., 'Communication Style', 'Values & Principles')",
+      }),
+      content: Type.String({
+        description: "The new content for this section",
+      }),
+      reason: Type.String({
+        description:
+          "Why this change is being made (e.g., 'User has repeatedly emphasized X across multiple sessions')",
+      }),
     }),
   },
 ];
@@ -138,7 +157,74 @@ export async function executeMemoryTool(
       return { content: "Memory deleted.", isError: false };
     }
 
+    case "update_persona": {
+      const { section, content, reason } = toolCall.arguments;
+      if (!section || !content || !reason) {
+        return {
+          content: "Missing required fields: section, content, and reason",
+          isError: true,
+        };
+      }
+
+      try {
+        const persona = await loadPersona();
+        const updatedContent = updatePersonaSection(
+          persona.content,
+          section,
+          content
+        );
+        await savePersona(updatedContent, reason);
+        return {
+          content: `Persona updated: "${section}" - ${reason}`,
+          isError: false,
+        };
+      } catch (e: any) {
+        return {
+          content: `Persona update failed: ${e.message}`,
+          isError: true,
+        };
+      }
+    }
+
     default:
       return { content: `Unknown tool: ${toolCall.name}`, isError: true };
   }
+}
+
+/**
+ * Update a specific section in the persona markdown.
+ * If the section exists, replace its content. If not, append it.
+ */
+function updatePersonaSection(
+  currentPersona: string,
+  section: string,
+  newContent: string
+): string {
+  const sectionHeader = `## ${section}`;
+  const lines = currentPersona.split("\n");
+  const sectionIndex = lines.findIndex((line) =>
+    line.startsWith(sectionHeader)
+  );
+
+  if (sectionIndex === -1) {
+    // Section doesn't exist, append it
+    return (
+      currentPersona.trimEnd() +
+      `\n\n${sectionHeader}\n${newContent}\n`
+    );
+  }
+
+  // Find the next section (## or #) or end of file
+  let nextSectionIndex = lines.length;
+  for (let i = sectionIndex + 1; i < lines.length; i++) {
+    if (lines[i].startsWith("##") || lines[i].startsWith("#")) {
+      nextSectionIndex = i;
+      break;
+    }
+  }
+
+  // Replace the section content
+  const before = lines.slice(0, sectionIndex + 1).join("\n");
+  const after = lines.slice(nextSectionIndex).join("\n");
+  return `${before}\n${newContent}\n${after}`;
 }

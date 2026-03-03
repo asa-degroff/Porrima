@@ -5,7 +5,12 @@ export async function embed(text: string): Promise<number[]> {
   const res = await fetch(`${OLLAMA_BASE}/api/embed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: EMBEDDING_MODEL, input: text }),
+    body: JSON.stringify({
+      model: EMBEDDING_MODEL,
+      input: text,
+      keep_alive: 0,
+      options: { num_gpu: 0 },
+    }),
   });
 
   if (!res.ok) {
@@ -21,7 +26,12 @@ export async function embedBatch(texts: string[]): Promise<number[][]> {
   const res = await fetch(`${OLLAMA_BASE}/api/embed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: EMBEDDING_MODEL, input: texts }),
+    body: JSON.stringify({
+      model: EMBEDDING_MODEL,
+      input: texts,
+      keep_alive: 0,
+      options: { num_gpu: 0 },
+    }),
   });
 
   if (!res.ok) {

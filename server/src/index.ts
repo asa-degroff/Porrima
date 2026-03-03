@@ -11,13 +11,18 @@ import memoryRouter from "./routes/memory.js";
 import artifactsRouter from "./routes/artifacts.js";
 import imagesRouter from "./routes/images.js";
 import authRouter from "./routes/auth.js";
+import personaRouter from "./routes/persona.js";
 import { requireAuth } from "./middleware/auth.js";
 import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
+import { initializePersona } from "./services/persona-store.js";
 
 const isProd = process.env.NODE_ENV === "production";
 const PORT = parseInt(process.env.PORT || "3001");
 const sessionSecret = await getSessionSecret();
+
+// Initialize persona system on startup
+await initializePersona();
 
 const app = express();
 
@@ -62,6 +67,7 @@ app.use("/api/chats", chatsRouter);
 app.use("/api/chat", chatRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/memory", memoryRouter);
+app.use("/api/persona", personaRouter);
 app.use("/api/artifacts", artifactsRouter);
 app.use("/api/images", imagesRouter);
 

@@ -9,9 +9,12 @@ import {
   getLastSynthesis,
 } from "./memory-storage.js";
 import { discoverOllamaModels } from "./models.js";
+import { loadPersona, savePersona } from "./persona-store.js";
 
 const SYNTHESIS_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MERGE_THRESHOLD = 0.90;
+const PERSONA_PROMOTION_THRESHOLD = 0.85; // Similarity threshold for pattern detection
+const MIN_PATTERN_FREQUENCY = 3; // Minimum times a pattern must appear to consider for persona
 
 export async function shouldRunSynthesis(): Promise<boolean> {
   const count = await getMemoryCount();
@@ -126,12 +129,145 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       } catch (e) {
         console.error("[synthesis] Summary generation failed:", e);
       }
+
+      // Step 4: Analyze memories for persona promotion candidates
+      try {
+        await analyzeAndPromotePersonaPatterns(store.memories, resolvedModelId);
+      } catch (e) {
+        console.error("[synthesis] Persona pattern analysis failed:", e);
+      }
     }
 
     store.lastSynthesis = new Date().toISOString();
     await saveMemoryStore(store);
     console.log("[synthesis] Complete");
   });
+}
+
+/**
+ * Analyze memories for recurring patterns that should be promoted to persona.
+ * Looks for clusters of similar high-importance memories that appear frequently.
+ */
+async function analyzeAndPromotePersonaPatterns(
+  memories: Array<{
+    id: string;
+    text: string;
+    category: string;
+    importance: number;
+    embedding: number[];
+    accessCount: number;
+  }>,
+  modelId: string
+): Promise<void> {
+  console.log("[synthesis] Analyzing memories for persona patterns...");
+
+  // Filter to high-importance memories (importance >= 7) that have been accessed multiple times
+  const candidateMemories = memories.filter(
+    (m) => m.importance >= 7 && m.accessCount >= 2
+  );
+
+  if (candidateMemories.length < MIN_PATTERN_FREQUENCY) {
+    console.log(
+      `[synthesis] Not enough candidate memories for persona analysis (${candidateMemories.length} < ${MIN_PATTERN_FREQUENCY})`
+    );
+    return;
+  }
+
+  // Group memories by similarity to find clusters
+  const clusters: Array<{
+    centroid: number[];
+    members: typeof candidateMemories;
+    avgImportance: number;
+    totalAccesses: number;
+  }> = [];
+
+  for (const memory of candidateMemories) {
+    let assigned = false;
+    for (const cluster of clusters) {
+      const sim = cosineSimilarity(memory.embedding, cluster.centroid);
+      if (sim > PERSONA_PROMOTION_THRESHOLD) {
+        cluster.members.push(memory);
+        cluster.avgImportance =
+          (cluster.avgImportance * (cluster.members.length - 1) +
+            memory.importance) /
+          cluster.members.length;
+        cluster.totalAccesses += memory.accessCount;
+        // Update centroid (simple average)
+        cluster.centroid = cluster.centroid.map(
+          (val, i) =>
+            (val * (cluster.members.length - 1) + memory.embedding[i]) /
+            cluster.members.length
+        );
+        assigned = true;
+        break;
+      }
+    }
+    if (!assigned) {
+      clusters.push({
+        centroid: [...memory.embedding],
+        members: [memory],
+        avgImportance: memory.importance,
+        totalAccesses: memory.accessCount,
+      });
+    }
+  }
+
+  // Find clusters with enough members to warrant persona promotion
+  const significantClusters = clusters.filter(
+    (c) => c.members.length >= MIN_PATTERN_FREQUENCY
+  );
+
+  if (significantClusters.length === 0) {
+    console.log(
+      "[synthesis] No significant persona patterns found"
+    );
+    return;
+  }
+
+  console.log(
+    `[synthesis] Found ${significantClusters.length} significant persona pattern(s)`
+  );
+
+  // For each significant cluster, generate a persona update suggestion
+  for (const cluster of significantClusters) {
+    try {
+      const memberTexts = cluster.members
+        .map((m) => `- ${m.text} (importance: ${m.importance}, accesses: ${m.accessCount})`)
+        .join("\n");
+
+      let suggestedUpdate = "";
+      await streamChat(
+        modelId,
+        [
+          {
+            role: "user",
+            content: `The following memory pattern has been detected across ${cluster.members.length} related memories:\n\n${memberTexts}\n\nBased on this pattern, suggest a concise addition or update to the agent's persona document. Which section should this inform (Communication Style, Values & Principles, Behavioral Traits, Interaction Patterns, etc.)? Provide:\n1. The section name\n2. The suggested content (1-3 sentences)\n3. The reasoning for why this pattern warrants a persona change`,
+            timestamp: Date.now(),
+          },
+        ],
+        "You are analyzing user interaction patterns to improve the agent's core persona. Be conservative—only suggest changes for genuinely significant, recurring patterns.",
+        (event) => {
+          if (event.type === "text_delta") {
+            suggestedUpdate += event.delta;
+          }
+        }
+      );
+
+      console.log(
+        `[synthesis] Persona pattern suggestion:\n${suggestedUpdate}`
+      );
+
+      // Log to daily summary (automatic implementation would parse and apply)
+      // For now, this serves as an audit trail for manual review or future auto-implementation
+    } catch (e) {
+      console.error(
+        "[synthesis] Failed to generate persona suggestion for cluster:",
+        e
+      );
+    }
+  }
+
+  console.log("[synthesis] Persona pattern analysis complete");
 }
 
 async function getDefaultModelId(): Promise<string | null> {
