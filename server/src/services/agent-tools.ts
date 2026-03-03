@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { Tool, ToolCall } from "@mariozechner/pi-ai";
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { execFile } from "child_process";
 import { readFile, writeFile, mkdir, readdir, stat } from "fs/promises";
 import { resolve, dirname, join, relative } from "path";
@@ -8,9 +9,9 @@ import { glob } from "fs/promises";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
 import { IMAGE_TOOLS, executeImageTool } from "./image-tools.js";
-import type { ImageToolEvent } from "./image-tools.js";
 import { executePython, createArtifact } from "./sandbox.js";
 import { v4 as uuid } from "uuid";
+import type { Artifact, GeneratedImage } from "../types.js";
 
 const HOME = homedir();
 
@@ -88,6 +89,28 @@ const ASK_USER_TOOL: Tool = {
   }),
 };
 
+// --- Side-effects interface for tool execution ---
+
+export interface ToolSideEffects {
+  onArtifact: (artifact: Artifact) => void;
+  onGeneratedImage: (image: GeneratedImage) => void;
+  pendingAskUser: { question: string; toolCallId: string } | null;
+  abortController: AbortController;
+}
+
+// --- Adapter helpers ---
+
+/** Wrap a { content, isError } result into AgentToolResult, throwing on error */
+function wrapResult(result: { content: string; isError: boolean }): AgentToolResult<{}> {
+  if (result.isError) throw new Error(result.content);
+  return { content: [{ type: "text", text: result.content }], details: {} };
+}
+
+/** Build a pi-ai ToolCall object for existing executor functions */
+function makeToolCall(id: string, name: string, args: Record<string, any>): ToolCall {
+  return { type: "toolCall", id, name, arguments: args };
+}
+
 const FILESYSTEM_TOOLS: Tool[] = [
   READ_FILE_TOOL,
   WRITE_FILE_TOOL,
@@ -99,10 +122,123 @@ const FILESYSTEM_TOOLS: Tool[] = [
   ASK_USER_TOOL,
 ];
 
-/** Get all tools available for agent chats */
-export function getAgentTools(): Tool[] {
-  return [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS, ...IMAGE_TOOLS];
+/** Get tool definitions (name + description) for display/metadata only */
+export function getAgentToolDefinitions(): { name: string; description: string }[] {
+  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS, ...IMAGE_TOOLS];
+  return allTools.map(t => ({ name: t.name, description: t.description }));
 }
+
+/** Get all tools available for agent chats, wrapped as AgentTool */
+export function getAgentTools(chatId: string, effects: ToolSideEffects): AgentTool[] {
+  const tools: AgentTool[] = [];
+
+  // Memory tools
+  for (const tool of MEMORY_TOOLS) {
+    tools.push({
+      ...tool,
+      label: tool.name,
+      execute: async (toolCallId, params) => {
+        const args = params as Record<string, any>;
+        return wrapResult(await executeMemoryTool(makeToolCall(toolCallId, tool.name, args), chatId));
+      },
+    });
+  }
+
+  // Web tools
+  for (const tool of WEB_TOOLS) {
+    tools.push({
+      ...tool,
+      label: tool.name,
+      execute: async (toolCallId, params) => {
+        const args = params as Record<string, any>;
+        return wrapResult(await executeWebTool(makeToolCall(toolCallId, tool.name, args)));
+      },
+    });
+  }
+
+  // Image tools
+  for (const tool of IMAGE_TOOLS) {
+    tools.push({
+      ...tool,
+      label: tool.name,
+      execute: async (toolCallId, params) => {
+        const args = params as Record<string, any>;
+        return wrapResult(await executeImageTool(
+          makeToolCall(toolCallId, tool.name, args),
+          chatId,
+          (event) => { if (event.type === "generated_image") effects.onGeneratedImage(event.data); }
+        ));
+      },
+    });
+  }
+
+  // Filesystem tools
+  tools.push({
+    ...READ_FILE_TOOL,
+    label: "read_file",
+    execute: async (_id, params) => wrapResult(await executeReadFile(params as Record<string, any>)),
+  });
+
+  tools.push({
+    ...WRITE_FILE_TOOL,
+    label: "write_file",
+    execute: async (_id, params) => wrapResult(await executeWriteFile(params as Record<string, any>)),
+  });
+
+  tools.push({
+    ...EDIT_FILE_TOOL,
+    label: "edit_file",
+    execute: async (_id, params) => wrapResult(await executeEditFile(params as Record<string, any>)),
+  });
+
+  tools.push({
+    ...LIST_FILES_TOOL,
+    label: "list_files",
+    execute: async (_id, params) => wrapResult(await executeListFiles(params as Record<string, any>)),
+  });
+
+  tools.push({
+    ...BASH_TOOL,
+    label: "bash",
+    execute: async (_id, params) => wrapResult(await executeBash(params as Record<string, any>)),
+  });
+
+  tools.push({
+    ...RUN_PYTHON_TOOL,
+    label: "run_python",
+    execute: async (_id, params) => wrapResult(await executeRunPython(params as Record<string, any>)),
+  });
+
+  // create_artifact — uses effects.onArtifact callback
+  tools.push({
+    ...CREATE_ARTIFACT_TOOL,
+    label: "create_artifact",
+    execute: async (_id, params) => {
+      const args = params as Record<string, any>;
+      const id = uuid();
+      const url = await createArtifact(id, args.html);
+      effects.onArtifact({ id, title: args.title, url });
+      return { content: [{ type: "text", text: `Artifact created: ${args.title} (${url})` }], details: {} };
+    },
+  });
+
+  // ask_user — aborts the agent loop so the server can pause and wait for user input
+  tools.push({
+    ...ASK_USER_TOOL,
+    label: "ask_user",
+    execute: async (toolCallId, params) => {
+      const args = params as Record<string, any>;
+      const question = args.question || "What would you like me to do?";
+      effects.pendingAskUser = { question, toolCallId };
+      effects.abortController.abort();
+      return { content: [{ type: "text", text: "Waiting for user response..." }], details: {} };
+    },
+  });
+
+  return tools;
+}
+
+// --- Internal executor functions (unchanged) ---
 
 /** Resolve a path relative to $HOME */
 function resolvePath(inputPath: string): string {
@@ -113,56 +249,6 @@ function resolvePath(inputPath: string): string {
     return inputPath;
   }
   return resolve(HOME, inputPath);
-}
-
-export interface ToolExecutionEvent {
-  type: "artifact" | "generated_image";
-  data: any;
-}
-
-/** Execute a tool call and return the result */
-export async function executeTool(
-  toolCall: ToolCall,
-  chatId: string,
-  onEvent?: (event: ToolExecutionEvent) => void
-): Promise<{ content: string; isError: boolean }> {
-  // Memory tools
-  if (["save_memory", "search_memory", "forget_memory"].includes(toolCall.name)) {
-    return executeMemoryTool(toolCall, chatId);
-  }
-
-  // Web tools
-  if (["web_search", "web_fetch"].includes(toolCall.name)) {
-    return executeWebTool(toolCall);
-  }
-
-  // Image tools
-  if (toolCall.name === "generate_image") {
-    return executeImageTool(toolCall, chatId, onEvent as ((event: ImageToolEvent) => void) | undefined);
-  }
-
-  // Filesystem & sandbox tools
-  switch (toolCall.name) {
-    case "read_file":
-      return executeReadFile(toolCall.arguments);
-    case "write_file":
-      return executeWriteFile(toolCall.arguments);
-    case "edit_file":
-      return executeEditFile(toolCall.arguments);
-    case "list_files":
-      return executeListFiles(toolCall.arguments);
-    case "bash":
-      return executeBash(toolCall.arguments);
-    case "run_python":
-      return executeRunPython(toolCall.arguments);
-    case "create_artifact":
-      return executeCreateArtifact(toolCall.arguments, onEvent);
-    case "ask_user":
-      // Sentinel — the route handler intercepts this before execution
-      return { content: "__ASK_USER__", isError: false };
-    default:
-      return { content: `Unknown tool: ${toolCall.name}`, isError: true };
-  }
 }
 
 async function executeReadFile(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
@@ -257,26 +343,6 @@ async function executeRunPython(args: Record<string, any>): Promise<{ content: s
     return { content: output, isError: result.exitCode !== 0 };
   } catch (e: any) {
     return { content: `Error running Python: ${e.message}`, isError: true };
-  }
-}
-
-async function executeCreateArtifact(
-  args: Record<string, any>,
-  onEvent?: (event: ToolExecutionEvent) => void
-): Promise<{ content: string; isError: boolean }> {
-  try {
-    const id = uuid();
-    const url = await createArtifact(id, args.html);
-
-    // Notify client about the new artifact
-    onEvent?.({
-      type: "artifact",
-      data: { id, title: args.title, url },
-    });
-
-    return { content: `Artifact created: ${args.title} (${url})`, isError: false };
-  } catch (e: any) {
-    return { content: `Error creating artifact: ${e.message}`, isError: true };
   }
 }
 

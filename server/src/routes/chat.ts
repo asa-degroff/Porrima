@@ -1,17 +1,20 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
-import type { Message, ToolResultMessage, ToolCall } from "@mariozechner/pi-ai";
+import type { Message, ToolCall, ToolResultMessage, AssistantMessage } from "@mariozechner/pi-ai";
+import { streamSimple, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
+import type { AgentContext, AgentLoopConfig, StreamFn } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat } from "../services/storage.js";
-import { streamChat, chatMessagesToPiMessages } from "../services/agent.js";
+import { chatMessagesToPiMessages } from "../services/agent.js";
+import { createPiModel, discoverOllamaModels } from "../services/models.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
 import { truncateChatHistory } from "../services/compaction.js";
-import { discoverOllamaModels } from "../services/models.js";
 import { buildMemoryAugmentedPrompt, setCachedAugmentedPrompt } from "../services/memory-context.js";
-import { getAgentTools, executeTool } from "../services/agent-tools.js";
+import { getAgentTools } from "../services/agent-tools.js";
+import type { ToolSideEffects } from "../services/agent-tools.js";
 import {
   loadPendingState,
   savePendingState,
-  hasPendingState,
 } from "../services/agent-state.js";
 import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment } from "../types.js";
 
@@ -29,20 +32,64 @@ function truncateTitle(text: string, maxChars: number = 50): string {
   return result;
 }
 
-const router = Router();
-
-const MAX_TOOL_ITERATIONS = 20;
+/** Build a pi-ai Message from user input (text and/or images) */
+function buildUserPiMessage(message: string, images?: ImageAttachment[]): Message {
+  if (images?.length) {
+    const content: any[] = [];
+    if (message) content.push({ type: "text", text: message });
+    for (const img of images) {
+      content.push({ type: "image", data: img.data, mimeType: img.mimeType });
+    }
+    return { role: "user", content, timestamp: Date.now() };
+  }
+  return { role: "user", content: message, timestamp: Date.now() };
+}
 
 /**
- * Shared SSE streaming + tool-loop handler.
+ * Create a stream function that handles pre-aborted signals gracefully.
+ * When the signal is already aborted (e.g., ask_user triggered abort),
+ * returns an event stream that immediately emits an abort error
+ * instead of letting the fetch call throw.
+ */
+function createSafeStreamFn(): StreamFn {
+  return (model, ctx, options) => {
+    if (options?.signal?.aborted) {
+      const stream = createAssistantMessageEventStream();
+      const msg: AssistantMessage = {
+        role: "assistant",
+        content: [],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "aborted",
+        timestamp: Date.now(),
+      };
+      stream.push({ type: "error", reason: "aborted", error: msg });
+      return stream;
+    }
+    return streamSimple(model, ctx, options);
+  };
+}
+
+const router = Router();
+
+/**
+ * Shared SSE streaming handler using pi-agent-core's agentLoop.
  * Both POST / (send) and POST /edit call this after their own setup.
+ *
+ * @param userPiMessage - the user's prompt message for agentLoop, or null for resume (agentLoopContinue)
+ * @param contextMessages - conversation history (pi-ai Messages), excluding current user message for fresh, or full pending state for resume
  */
 async function handleChatStream(
   chat: Chat,
   userMessage: string,
-  piMessages: Message[],
+  contextMessages: Message[],
   systemPrompt: string,
-  tools: ReturnType<typeof getAgentTools> | undefined,
+  userPiMessage: Message | null,
   req: Request,
   res: Response
 ) {
@@ -56,180 +103,190 @@ async function handleChatStream(
   const abortController = new AbortController();
   req.on("close", () => abortController.abort());
 
+  // Accumulators for the final ChatMessage
+  const allToolCalls: ChatToolCall[] = [];
+  const allToolResults: ChatToolResult[] = [];
+  const allArtifacts: Artifact[] = [];
+  const allGeneratedImages: GeneratedImage[] = [];
+
+  // Side-effects bridge between tool execution and SSE output
+  const effects: ToolSideEffects = {
+    onArtifact: (artifact) => {
+      allArtifacts.push(artifact);
+      res.write(`event: artifact\ndata: ${JSON.stringify(artifact)}\n\n`);
+    },
+    onGeneratedImage: (image) => {
+      allGeneratedImages.push(image);
+      res.write(`event: generated_image\ndata: ${JSON.stringify(image)}\n\n`);
+    },
+    pendingAskUser: null,
+    abortController,
+  };
+
+  const isAgent = chat.type === "agent";
+  const agentTools = isAgent ? getAgentTools(chat.id, effects) : undefined;
+
+  let fullText = "";
+  let thinkingText = "";
+  let finalUsage: ChatMessage["usage"];
+  let iterations = 0;
+  let waitingForInput = false;
+
+  console.log(`[chat] type=${chat.type} tools=${agentTools ? agentTools.map(t => t.name).join(",") : "none"}`);
+
   try {
-    const allToolCalls: ChatToolCall[] = [];
-    const allToolResults: ChatToolResult[] = [];
-    const allArtifacts: Artifact[] = [];
-    const allGeneratedImages: GeneratedImage[] = [];
+    // Discover model
+    const ollamaModels = await discoverOllamaModels();
+    const ollamaModel = ollamaModels.find(m => m.id === chat.modelId);
+    if (!ollamaModel) throw new Error(`Model not found: ${chat.modelId}`);
+    const piModel = createPiModel(ollamaModel);
 
-    console.log(`[chat] type=${chat.type} tools=${tools ? tools.map(t => t.name).join(",") : "none"}`);
+    // Build agent context
+    const context: AgentContext = {
+      systemPrompt,
+      messages: [...contextMessages],
+      tools: agentTools,
+    };
 
-    let finalContent = "";
-    let finalThinking: string | undefined;
-    let finalUsage: ChatMessage["usage"];
-    let iterations = 0;
-    let waitingForInput = false;
+    const config: AgentLoopConfig = {
+      model: piModel,
+      apiKey: "ollama",
+      reasoning: piModel.reasoning ? "medium" : undefined,
+      convertToLlm: (msgs) => msgs as Message[],
+    };
 
-    // Agent tool loop
-    while (iterations < MAX_TOOL_ITERATIONS) {
-      iterations++;
+    const safeStreamFn = createSafeStreamFn();
 
-      const result = await streamChat(
-        chat.modelId,
-        piMessages,
-        systemPrompt,
-        (event) => {
-          if (event.type === "text_delta") {
-            res.write(
-              `event: text_delta\ndata: ${JSON.stringify({ delta: event.delta })}\n\n`
-            );
-          } else if (event.type === "thinking_delta") {
-            res.write(
-              `event: thinking_delta\ndata: ${JSON.stringify({ delta: event.delta })}\n\n`
-            );
-          } else if (event.type === "toolcall_start") {
-            const partial = event.partial.content[event.contentIndex] as ToolCall | undefined;
+    // Start the agent loop
+    const eventStream = userPiMessage
+      ? agentLoop([userPiMessage], context, config, abortController.signal, safeStreamFn)
+      : agentLoopContinue(context, config, abortController.signal, safeStreamFn);
+
+    // Process events → SSE
+    for await (const event of eventStream) {
+      switch (event.type) {
+        case "message_update": {
+          const ame = event.assistantMessageEvent;
+          if (ame.type === "text_delta") {
+            fullText += ame.delta;
+            res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+          } else if (ame.type === "thinking_delta") {
+            thinkingText += ame.delta;
+            res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+          } else if (ame.type === "toolcall_start") {
+            const partial = ame.partial.content[ame.contentIndex] as ToolCall | undefined;
             if (partial) {
-              res.write(
-                `event: tool_status\ndata: ${JSON.stringify({ name: partial.name || "...", status: "running" })}\n\n`
-              );
+              res.write(`event: tool_status\ndata: ${JSON.stringify({ name: partial.name || "...", status: "running" })}\n\n`);
             }
           }
-        },
-        { signal: abortController.signal, tools }
-      );
+          break;
+        }
 
-      // Log iteration details for observability
-      console.log(
-        `[chat] iter=${iterations} stop=${result.stopReason} tools=${result.toolCalls?.length || 0}` +
-        ` content=${result.content?.length || 0}ch thinking=${result.thinking?.length || 0}ch` +
-        ` tokens=${result.usage?.totalTokens || "?"}`,
-      );
+        case "tool_execution_start": {
+          allToolCalls.push({
+            id: event.toolCallId,
+            name: event.toolName,
+            arguments: event.args,
+          });
+          if (event.toolName !== "ask_user") {
+            console.log(`[tool] Executing ${event.toolName}:`, event.args);
+          }
+          break;
+        }
 
-      // Send iteration info to client for observability
-      res.write(
-        `event: iteration\ndata: ${JSON.stringify({
-          iteration: iterations,
-          stopReason: result.stopReason,
-          toolCount: result.toolCalls?.length || 0,
-        })}\n\n`
-      );
+        case "tool_execution_end": {
+          // ask_user gets a dedicated SSE event, not tool_status
+          if (event.toolName !== "ask_user") {
+            const resultText = event.result?.content?.[0]?.text || "";
+            res.write(`event: tool_status\ndata: ${JSON.stringify({
+              name: event.toolName,
+              status: event.isError ? "error" : "done",
+              result: resultText,
+            })}\n\n`);
+            allToolResults.push({
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              content: resultText,
+              isError: event.isError,
+            });
+          }
+          break;
+        }
 
-      // Accumulate content
-      if (result.content) {
-        finalContent += (finalContent ? "\n\n" : "") + result.content;
-      }
-      if (result.thinking) {
-        finalThinking = (finalThinking ? finalThinking + "\n\n" : "") + result.thinking;
-      }
-      finalUsage = result.usage;
+        case "turn_end": {
+          const msg = event.message as AssistantMessage;
+          const stopReason = msg.stopReason || "stop";
 
-      // If no tool use, we're done
-      if (result.stopReason !== "toolUse" || !result.toolCalls?.length) {
-        // Warn if stopped due to context window exhaustion
-        if (result.stopReason === "length") {
-          console.warn(`[chat] stopped due to context length at iteration ${iterations}`);
-          res.write(
-            `event: warning\ndata: ${JSON.stringify({
+          // Skip the synthetic aborted turn (from ask_user abort)
+          if (stopReason === "aborted") break;
+
+          iterations++;
+          console.log(
+            `[chat] iter=${iterations} stop=${stopReason} tools=${event.toolResults?.length || 0}` +
+            ` content=${fullText.length}ch thinking=${thinkingText.length}ch` +
+            ` tokens=${msg.usage?.totalTokens || "?"}`,
+          );
+
+          res.write(`event: iteration\ndata: ${JSON.stringify({
+            iteration: iterations,
+            stopReason,
+            toolCount: event.toolResults?.length || 0,
+          })}\n\n`);
+
+          if (msg.usage) {
+            finalUsage = {
+              input: msg.usage.input,
+              output: msg.usage.output,
+              totalTokens: msg.usage.totalTokens,
+            };
+          }
+
+          if (stopReason === "length") {
+            console.warn(`[chat] stopped due to context length at iteration ${iterations}`);
+            res.write(`event: warning\ndata: ${JSON.stringify({
               type: "context_length",
               message: "Response stopped — context window full",
-            })}\n\n`
-          );
-        }
-        break;
-      }
-
-      // Append assistant message to pi-ai context
-      piMessages.push(result.assistantMessage);
-
-      // Check for ask_user tool FIRST (it's special)
-      const askUserCall = result.toolCalls.find((tc) => tc.name === "ask_user");
-      if (askUserCall) {
-        const question = askUserCall.arguments.question || "What would you like me to do?";
-
-        // Send ask_user event to client
-        res.write(
-          `event: ask_user\ndata: ${JSON.stringify({ question })}\n\n`
-        );
-
-        // Save pending state for resume
-        await savePendingState(chat.id, {
-          piMessages,
-          systemPrompt,
-          askToolCallId: askUserCall.id,
-        });
-
-        // Track for persistence
-        allToolCalls.push({
-          id: askUserCall.id,
-          name: askUserCall.name,
-          arguments: askUserCall.arguments,
-        });
-
-        waitingForInput = true;
-        break;
-      }
-
-      // Execute each tool call
-      for (const toolCall of result.toolCalls) {
-        console.log(`[tool] Executing ${toolCall.name}:`, toolCall.arguments);
-
-        const toolResult = await executeTool(toolCall, chat.id, (event) => {
-          if (event.type === "artifact") {
-            allArtifacts.push(event.data as Artifact);
-            res.write(
-              `event: artifact\ndata: ${JSON.stringify(event.data)}\n\n`
-            );
-          } else if (event.type === "generated_image") {
-            allGeneratedImages.push(event.data as GeneratedImage);
-            res.write(
-              `event: generated_image\ndata: ${JSON.stringify(event.data)}\n\n`
-            );
+            })}\n\n`);
           }
-        });
+          break;
+        }
+      }
+    }
 
-        // Send tool status to client
-        res.write(
-          `event: tool_status\ndata: ${JSON.stringify({
-            name: toolCall.name,
-            status: toolResult.isError ? "error" : "done",
-            result: toolResult.content,
-          })}\n\n`
-        );
+    // --- Post-loop: handle ask_user, build message, compaction ---
 
-        // Track for persistence
-        allToolCalls.push({
-          id: toolCall.id,
-          name: toolCall.name,
-          arguments: toolCall.arguments,
-        });
-        allToolResults.push({
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          content: toolResult.content,
-          isError: toolResult.isError,
-        });
+    if (effects.pendingAskUser) {
+      waitingForInput = true;
 
-        // Build pi-ai ToolResultMessage
-        const toolResultMsg: ToolResultMessage = {
-          role: "toolResult",
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          content: [{ type: "text", text: toolResult.content }],
-          isError: toolResult.isError,
-          timestamp: Date.now(),
-        };
-        piMessages.push(toolResultMsg);
+      // Save pending state for resume. Trim context.messages to keep
+      // everything through the assistant message with ask_user, but drop
+      // the placeholder tool result and any aborted assistant message.
+      const savedMessages = [...context.messages];
+      while (savedMessages.length > 0) {
+        const last = savedMessages[savedMessages.length - 1] as any;
+        if (
+          last.role === "assistant" &&
+          last.content?.some?.((c: any) => c.type === "toolCall" && c.name === "ask_user")
+        ) {
+          break; // Keep this assistant message
+        }
+        savedMessages.pop();
       }
 
-      // Continue loop — model will generate another response
+      await savePendingState(chat.id, {
+        agentMessages: savedMessages,
+        systemPrompt,
+        askToolCallId: effects.pendingAskUser.toolCallId,
+      });
+
+      res.write(`event: ask_user\ndata: ${JSON.stringify({ question: effects.pendingAskUser.question })}\n\n`);
     }
 
     // Build the final assistant message
     const assistantMsg: ChatMessage = {
       role: "assistant",
-      content: finalContent,
-      thinking: finalThinking,
+      content: fullText,
+      thinking: thinkingText || undefined,
       usage: finalUsage,
       toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
       toolResults: allToolResults.length > 0 ? allToolResults : undefined,
@@ -259,14 +316,12 @@ async function handleChatStream(
 
         // Check for compaction: extract memories then truncate when nearing context limit
         try {
-          const models = await discoverOllamaModels();
-          const model = models.find((m) => m.id === chat.modelId);
+          const model = ollamaModels.find((m) => m.id === chat.modelId);
           if (model) {
             const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
             const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
             const usageRatio = lastUsage / effectiveContextWindow;
             if (usageRatio > 0.75) {
-              // Await flush so memories are saved before we truncate
               await preCompactionFlush(chat.modelId, chat.id, chat.messages);
               const truncated = await truncateChatHistory(chat, effectiveContextWindow);
               if (truncated) {
@@ -280,7 +335,45 @@ async function handleChatStream(
       }
     }
   } catch (e: any) {
-    if (e.name !== "AbortError") {
+    // ask_user abort is expected — handle it gracefully
+    if (effects.pendingAskUser) {
+      waitingForInput = true;
+
+      // Best-effort save of pending state
+      try {
+        const savedMessages = [...(contextMessages as any[])];
+        // On error path, context may not have been fully populated.
+        // Save what we have — the assistant message with ask_user should be present.
+        await savePendingState(chat.id, {
+          agentMessages: savedMessages,
+          systemPrompt,
+          askToolCallId: effects.pendingAskUser.toolCallId,
+        });
+      } catch (saveErr) {
+        console.error("[ask_user] failed to save pending state:", saveErr);
+      }
+
+      res.write(`event: ask_user\ndata: ${JSON.stringify({ question: effects.pendingAskUser.question })}\n\n`);
+
+      // Build partial assistant message
+      const assistantMsg: ChatMessage = {
+        role: "assistant",
+        content: fullText,
+        thinking: thinkingText || undefined,
+        usage: finalUsage,
+        toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+        toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+        artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+        generatedImages: allGeneratedImages.length > 0 ? allGeneratedImages : undefined,
+        timestamp: Date.now(),
+      };
+      chat.messages.push(assistantMsg);
+      await saveChat(chat);
+
+      res.write(
+        `event: done\ndata: ${JSON.stringify({ message: assistantMsg, waitingForInput: true, iterations })}\n\n`
+      );
+    } else if (e.name !== "AbortError") {
       res.write(
         `event: error\ndata: ${JSON.stringify({ error: e.message })}\n\n`
       );
@@ -308,17 +401,12 @@ router.post("/", async (req, res) => {
   // Check for pending agent state (ask_user resume flow)
   const pendingState = await loadPendingState(chatId);
 
-  let piMessages: Message[];
-  let systemPrompt: string;
-  let tools: ReturnType<typeof getAgentTools> | undefined;
-
   if (pendingState) {
     // RESUME: the user's message is the answer to ask_user
-    // Inject it as a ToolResultMessage for the pending ask_user call
-    piMessages = pendingState.piMessages;
-    systemPrompt = pendingState.systemPrompt;
-    tools = chat.type === "agent" ? getAgentTools() : undefined;
+    const systemPrompt = pendingState.systemPrompt;
+    const contextMessages = pendingState.agentMessages as Message[];
 
+    // Inject the user's answer as a ToolResultMessage for the pending ask_user call
     const toolResultMsg: ToolResultMessage = {
       role: "toolResult",
       toolCallId: pendingState.askToolCallId,
@@ -327,10 +415,9 @@ router.post("/", async (req, res) => {
       isError: false,
       timestamp: Date.now(),
     };
-    piMessages.push(toolResultMsg);
+    contextMessages.push(toolResultMsg);
 
-    // Don't add user message to chat history — it's captured as tool result
-    // But we do want to show it in the UI, so add it as a user message
+    // Show the answer in the UI as a user message
     chat.messages.push({
       role: "user",
       content: message,
@@ -338,6 +425,9 @@ router.post("/", async (req, res) => {
       timestamp: Date.now(),
     });
     await saveChat(chat);
+
+    // Resume: userPiMessage=null triggers agentLoopContinue
+    await handleChatStream(chat, message, contextMessages, systemPrompt, null, req, res);
   } else {
     // NORMAL: add user message and build fresh context
     const userMsg: ChatMessage = {
@@ -356,7 +446,7 @@ router.post("/", async (req, res) => {
     await saveChat(chat);
 
     // Augment system prompt with memories for agent chats
-    systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+    let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
     if (chat.type === "agent") {
       systemPrompt = await buildMemoryAugmentedPrompt(
         systemPrompt,
@@ -365,11 +455,12 @@ router.post("/", async (req, res) => {
       setCachedAugmentedPrompt(chat.id, systemPrompt);
     }
 
-    tools = chat.type === "agent" ? getAgentTools() : undefined;
-    piMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
-  }
+    // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
+    const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
+    const userPiMessage = buildUserPiMessage(message, images);
 
-  await handleChatStream(chat, message, piMessages, systemPrompt, tools, req, res);
+    await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
+  }
 });
 
 // Edit message at index and regenerate response via SSE
@@ -420,10 +511,11 @@ router.post("/edit", async (req, res) => {
     setCachedAugmentedPrompt(chat.id, systemPrompt);
   }
 
-  const tools = chat.type === "agent" ? getAgentTools() : undefined;
-  const piMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
+  // Context = all messages EXCEPT the one we just added
+  const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
+  const userPiMessage = buildUserPiMessage(message);
 
-  await handleChatStream(chat, message, piMessages, systemPrompt, tools, req, res);
+  await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
 });
 
 export default router;

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { v4 as uuid } from "uuid";
 import { listChats, getChat, saveChat, deleteChat, getSettings, saveSettings } from "../services/storage.js";
 import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
-import { getAgentTools } from "../services/agent-tools.js";
+import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import type { Chat } from "../types.js";
 
 const router = Router();
@@ -90,7 +90,7 @@ router.get("/:id/rendered-prompt", async (req, res) => {
   }
 
   const tools = chat.type === "agent"
-    ? getAgentTools().map((t) => ({ name: t.name, description: t.description }))
+    ? getAgentToolDefinitions()
     : [];
 
   res.json({ systemPrompt, tools });

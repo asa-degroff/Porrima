@@ -1,12 +1,12 @@
 import { readFile, writeFile, unlink, mkdir } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
-import type { Message } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 const PENDING_DIR = join(homedir(), ".quje-agent", "pending");
 
 export interface PendingAgentState {
-  piMessages: Message[];
+  agentMessages: AgentMessage[];
   systemPrompt: string;
   askToolCallId: string;
 }
