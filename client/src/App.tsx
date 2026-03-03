@@ -17,6 +17,7 @@ import { useOnlineStatus } from "./hooks/useOnlineStatus";
 import { useKeyboardInset } from "./hooks/useKeyboardInset";
 import { updateChat as apiUpdateChat } from "./api/client";
 import { setCachedChat, getCachedChat, clearCachedChat } from "./lib/db";
+import { HapticsProvider } from "./hooks/useHaptics";
 import type { Chat, ChatType } from "./types";
 
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
@@ -315,5 +316,9 @@ export default function App() {
     );
   }
 
-  return <AuthenticatedApp onLogout={logout} />;
+  return (
+    <HapticsProvider>
+      <AuthenticatedApp onLogout={logout} />
+    </HapticsProvider>
+  );
 }
