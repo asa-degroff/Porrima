@@ -3,6 +3,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { SettingsModal } from "./components/SettingsModal";
 import { LoginPage } from "./components/LoginPage";
+import { ImageSandbox } from "./components/ImageSandbox";
 
 const RippleGridBackground = lazy(() =>
   import("./components/RippleGridBackground").then((m) => ({ default: m.RippleGridBackground }))
@@ -31,12 +32,14 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [imageSandboxOpen, setImageSandboxOpen] = useState(false);
   const {
     messages,
     streaming,
     streamingThinking,
     activeTools,
     artifacts,
+    generatedImages,
     waitingForInput,
     totalUsage,
     error,
@@ -210,6 +213,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
   const handleCloseSidebar = useCallback(() => setSidebarOpen(false), []);
   const handleOpenSidebar = useCallback(() => setSidebarOpen(true), []);
+  const handleOpenImageSandbox = useCallback(() => setImageSandboxOpen(true), []);
+  const handleCloseImageSandbox = useCallback(() => setImageSandboxOpen(false), []);
   const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
   const handleSaveSettings = useCallback(
     async (s: import("./types").Settings) => {
@@ -229,16 +234,20 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       <Sidebar
         chats={chats}
         activeChatId={activeChatId}
-        onSelectChat={selectChat}
-        onNewChat={handleNewChat}
+        onSelectChat={(id) => { selectChat(id); setImageSandboxOpen(false); }}
+        onNewChat={(type) => { handleNewChat(type); setImageSandboxOpen(false); }}
         onDeleteChat={handleDeleteChat}
         onOpenSettings={handleOpenSettings}
+        onOpenImageSandbox={handleOpenImageSandbox}
         isOpen={sidebarOpen}
         onClose={handleCloseSidebar}
       />
       {sidebarOpen && (
         <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={handleCloseSidebar} />
       )}
+      {imageSandboxOpen ? (
+        <ImageSandbox onClose={handleCloseImageSandbox} />
+      ) : (
       <ChatView
         chatId={activeChatId}
         chatTitle={activeChat?.title || "New Chat"}
@@ -248,6 +257,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         streamingThinking={streamingThinking}
         activeTools={activeTools}
         artifacts={artifacts}
+        generatedImages={generatedImages}
         totalUsage={totalUsage}
         contextWindow={contextWindow}
         error={error}
@@ -267,6 +277,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         isOnline={isOnline}
         queueProcessing={queueProcessing}
       />
+      )}
       {settingsOpen && (
         <SettingsModal
           settings={settings}

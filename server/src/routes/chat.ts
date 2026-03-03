@@ -13,7 +13,7 @@ import {
   savePendingState,
   hasPendingState,
 } from "../services/agent-state.js";
-import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, ImageAttachment } from "../types.js";
+import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment } from "../types.js";
 
 /** Truncate a string to maxChars graphemes, preserving emoji and multi-byte characters */
 function truncateTitle(text: string, maxChars: number = 50): string {
@@ -60,6 +60,7 @@ async function handleChatStream(
     const allToolCalls: ChatToolCall[] = [];
     const allToolResults: ChatToolResult[] = [];
     const allArtifacts: Artifact[] = [];
+    const allGeneratedImages: GeneratedImage[] = [];
 
     console.log(`[chat] type=${chat.type} tools=${tools ? tools.map(t => t.name).join(",") : "none"}`);
 
@@ -153,6 +154,11 @@ async function handleChatStream(
             res.write(
               `event: artifact\ndata: ${JSON.stringify(event.data)}\n\n`
             );
+          } else if (event.type === "generated_image") {
+            allGeneratedImages.push(event.data as GeneratedImage);
+            res.write(
+              `event: generated_image\ndata: ${JSON.stringify(event.data)}\n\n`
+            );
           }
         });
 
@@ -202,6 +208,7 @@ async function handleChatStream(
       toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
       toolResults: allToolResults.length > 0 ? allToolResults : undefined,
       artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
+      generatedImages: allGeneratedImages.length > 0 ? allGeneratedImages : undefined,
       timestamp: Date.now(),
     };
 

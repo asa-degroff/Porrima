@@ -1,0 +1,322 @@
+import { useState, useEffect } from "react";
+import type { ImageGenerationParams } from "../types";
+
+const MODEL_PRESETS: Record<string, Partial<ImageGenerationParams>> = {
+  "z-image-base": { steps: 30, cfgScale: 4.0, sampler: "euler", scheduler: "normal" },
+  "z-image-turbo": { steps: 9, cfgScale: 0.0, sampler: "euler", scheduler: "sgm_uniform" },
+};
+
+const ASPECT_RATIOS = [
+  { label: "1:1", w: 1024, h: 1024 },
+  { label: "16:9", w: 1344, h: 768 },
+  { label: "9:16", w: 768, h: 1344 },
+  { label: "4:3", w: 1152, h: 896 },
+  { label: "3:4", w: 896, h: 1152 },
+];
+
+interface Props {
+  models: string[];
+  generating: boolean;
+  progress: { step: number; total: number } | null;
+  onGenerate: (params: ImageGenerationParams) => void;
+  onAbort: () => void;
+  initialParams?: Partial<ImageGenerationParams>;
+}
+
+export function ImageControls({ models, generating, progress, onGenerate, onAbort, initialParams }: Props) {
+  const [positivePrompt, setPositivePrompt] = useState(initialParams?.positivePrompt || "");
+  const [negativePrompt, setNegativePrompt] = useState(initialParams?.negativePrompt || "");
+  const [showNegative, setShowNegative] = useState(false);
+  const [model, setModel] = useState(initialParams?.model || models[0] || "");
+  const [steps, setSteps] = useState(initialParams?.steps || 30);
+  const [cfgScale, setCfgScale] = useState(initialParams?.cfgScale || 4.0);
+  const [width, setWidth] = useState(initialParams?.width || 1024);
+  const [height, setHeight] = useState(initialParams?.height || 1024);
+  const [seed, setSeed] = useState<string>(initialParams?.seed?.toString() || "-1");
+  const [sampler, setSampler] = useState(initialParams?.sampler || "euler");
+  const [scheduler, setScheduler] = useState(initialParams?.scheduler || "normal");
+  const [lastSeed, setLastSeed] = useState<number | null>(null);
+
+  // Update model when models list arrives
+  useEffect(() => {
+    if (!model && models.length > 0) {
+      setModel(models[0]);
+    }
+  }, [models, model]);
+
+  // Apply presets when model changes
+  useEffect(() => {
+    let preset: Partial<ImageGenerationParams> | undefined;
+    if (model.includes("turbo")) {
+      preset = MODEL_PRESETS["z-image-turbo"];
+    } else if (model.includes("z_image") || model.includes("z-image")) {
+      preset = MODEL_PRESETS["z-image-base"];
+    }
+    if (preset) {
+      setSteps(preset.steps ?? steps);
+      setCfgScale(preset.cfgScale ?? cfgScale);
+      setSampler(preset.sampler ?? sampler);
+      setScheduler(preset.scheduler ?? scheduler);
+    }
+  }, [model]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Apply initialParams when "Use as starting point" is clicked
+  useEffect(() => {
+    if (initialParams) {
+      if (initialParams.positivePrompt) setPositivePrompt(initialParams.positivePrompt);
+      if (initialParams.negativePrompt) {
+        setNegativePrompt(initialParams.negativePrompt);
+        setShowNegative(true);
+      }
+      if (initialParams.model) setModel(initialParams.model);
+      if (initialParams.steps) setSteps(initialParams.steps);
+      if (initialParams.cfgScale !== undefined) setCfgScale(initialParams.cfgScale);
+      if (initialParams.width) setWidth(initialParams.width);
+      if (initialParams.height) setHeight(initialParams.height);
+      if (initialParams.seed !== undefined) setSeed(initialParams.seed.toString());
+      if (initialParams.sampler) setSampler(initialParams.sampler);
+      if (initialParams.scheduler) setScheduler(initialParams.scheduler);
+    }
+  }, [initialParams]);
+
+  const handleGenerate = () => {
+    if (!positivePrompt.trim()) return;
+    const parsedSeed = parseInt(seed);
+    onGenerate({
+      positivePrompt: positivePrompt.trim(),
+      negativePrompt: negativePrompt.trim() || undefined,
+      model,
+      steps,
+      cfgScale,
+      width,
+      height,
+      seed: isNaN(parsedSeed) || parsedSeed < 0 ? undefined : parsedSeed,
+      sampler,
+      scheduler,
+    });
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      handleGenerate();
+    }
+  };
+
+  const isTurbo = model.includes("turbo");
+  const progressPercent = progress ? Math.round((progress.step / progress.total) * 100) : 0;
+
+  return (
+    <div className="space-y-4">
+      {/* Positive Prompt */}
+      <div className="space-y-1.5">
+        <label className="block text-xs font-medium text-white/50">Prompt</label>
+        <textarea
+          value={positivePrompt}
+          onChange={(e) => setPositivePrompt(e.target.value)}
+          onKeyDown={handleKeyDown}
+          rows={4}
+          className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/90 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/30 transition-all"
+          placeholder="A detailed description of the image..."
+        />
+      </div>
+
+      {/* Negative Prompt (collapsible) */}
+      <div>
+        <button
+          onClick={() => setShowNegative(!showNegative)}
+          className="text-xs text-white/40 hover:text-white/60 transition-colors"
+        >
+          {showNegative ? "- Hide" : "+ Show"} negative prompt
+        </button>
+        {showNegative && (
+          <textarea
+            value={negativePrompt}
+            onChange={(e) => setNegativePrompt(e.target.value)}
+            rows={2}
+            className="w-full mt-1.5 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/70 placeholder-white/25 resize-y outline-none focus:ring-1 focus:ring-amber-400/20 transition-all"
+            placeholder="What to avoid..."
+          />
+        )}
+      </div>
+
+      {/* Model */}
+      <div className="space-y-1.5">
+        <label className="block text-xs font-medium text-white/50">Model</label>
+        <select
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 outline-none hover:bg-white/10 focus:ring-1 focus:ring-amber-400/30 transition-all cursor-pointer appearance-none"
+        >
+          {models.map((m) => (
+            <option key={m} value={m} className="bg-slate-900 text-white">
+              {m}
+            </option>
+          ))}
+          {models.length === 0 && (
+            <option value="" className="bg-slate-900 text-white/50">No models found</option>
+          )}
+        </select>
+      </div>
+
+      {/* Steps */}
+      <div className="space-y-1.5">
+        <div className="flex justify-between">
+          <label className="text-xs font-medium text-white/50">Steps</label>
+          <span className="text-xs text-white/40">{steps}</span>
+        </div>
+        <input
+          type="range"
+          min={1}
+          max={50}
+          value={steps}
+          onChange={(e) => setSteps(parseInt(e.target.value))}
+          className="w-full accent-amber-400"
+        />
+      </div>
+
+      {/* CFG Scale */}
+      <div className="space-y-1.5">
+        <div className="flex justify-between">
+          <label className="text-xs font-medium text-white/50">
+            CFG Scale {isTurbo && <span className="text-amber-400/60">(auto: 0)</span>}
+          </label>
+          <span className="text-xs text-white/40">{cfgScale.toFixed(1)}</span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={20}
+          step={0.5}
+          value={cfgScale}
+          onChange={(e) => setCfgScale(parseFloat(e.target.value))}
+          disabled={isTurbo}
+          className="w-full accent-amber-400 disabled:opacity-40"
+        />
+      </div>
+
+      {/* Dimensions */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-white/50">Size</label>
+        <div className="flex gap-1.5 flex-wrap">
+          {ASPECT_RATIOS.map((ar) => (
+            <button
+              key={ar.label}
+              onClick={() => { setWidth(ar.w); setHeight(ar.h); }}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all ${
+                width === ar.w && height === ar.h
+                  ? "bg-amber-500/20 border-amber-400/30 text-amber-300"
+                  : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10"
+              }`}
+            >
+              {ar.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2 items-center">
+          <input
+            type="number"
+            value={width}
+            onChange={(e) => setWidth(parseInt(e.target.value) || 512)}
+            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all"
+            min={256}
+            max={2048}
+            step={64}
+          />
+          <span className="text-white/30 text-xs">x</span>
+          <input
+            type="number"
+            value={height}
+            onChange={(e) => setHeight(parseInt(e.target.value) || 512)}
+            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all"
+            min={256}
+            max={2048}
+            step={64}
+          />
+        </div>
+      </div>
+
+      {/* Seed */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-white/50">Seed</label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={seed}
+            onChange={(e) => setSeed(e.target.value)}
+            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all font-mono"
+            placeholder="-1 (random)"
+          />
+          {lastSeed !== null && (
+            <button
+              onClick={() => setSeed(lastSeed.toString())}
+              className="px-2 py-1 rounded-md text-[10px] bg-white/5 border border-white/10 text-white/40 hover:text-white/60 hover:bg-white/10 transition-all"
+              title={`Reuse: ${lastSeed}`}
+            >
+              Reuse
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Sampler & Scheduler */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <label className="text-[10px] font-medium text-white/40">Sampler</label>
+          <select
+            value={sampler}
+            onChange={(e) => setSampler(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none cursor-pointer appearance-none"
+          >
+            {["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"].map((s) => (
+              <option key={s} value={s} className="bg-slate-900">{s}</option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-medium text-white/40">Scheduler</label>
+          <select
+            value={scheduler}
+            onChange={(e) => setScheduler(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none cursor-pointer appearance-none"
+          >
+            {["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform", "beta"].map((s) => (
+              <option key={s} value={s} className="bg-slate-900">{s}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Generate / Abort */}
+      {generating ? (
+        <div className="space-y-2">
+          <div className="w-full bg-white/5 rounded-full h-2 overflow-hidden">
+            <div
+              className="h-full bg-amber-400/70 rounded-full transition-all duration-300"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-white/40">
+              {progress ? `Step ${progress.step}/${progress.total}` : "Starting..."}
+            </span>
+            <button
+              onClick={onAbort}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/15 border border-red-400/20 text-red-300 hover:bg-red-500/25 transition-all"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={handleGenerate}
+          disabled={!positivePrompt.trim() || models.length === 0}
+          className="w-full px-4 py-2.5 rounded-xl text-sm font-medium bg-amber-500/20 border border-amber-400/25 text-amber-300 hover:bg-amber-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Generate
+        </button>
+      )}
+    </div>
+  );
+}

@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage } from "../api/client";
 import type { StreamCallbacks, ToolStatus } from "../api/client";
-import type { Artifact, ChatMessage, ImageAttachment, MessageUsage } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, MessageUsage } from "../types";
 import {
   enqueueMessage,
   dequeueMessage,
@@ -16,6 +16,7 @@ export function useChat(chatId: string | null) {
   const [streamingThinking, setStreamingThinking] = useState("");
   const [activeTools, setActiveTools] = useState<ToolStatus[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [waitingForInput, setWaitingForInput] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [queueProcessing, setQueueProcessing] = useState(false);
@@ -31,6 +32,7 @@ export function useChat(chatId: string | null) {
     setStreamingThinking("");
     setActiveTools([]);
     setArtifacts([]);
+    setGeneratedImages([]);
     setWaitingForInput(false);
     setError(null);
   }, [chatId]);
@@ -78,7 +80,10 @@ export function useChat(chatId: string | null) {
     onThinkingDelta: (delta) => {
       setStreamingThinking((prev) => prev + delta);
     },
-    onDone: ({ thinking, usage, artifacts: doneArtifacts, waitingForInput: wfi }) => {
+    onGeneratedImage: (image) => {
+      setGeneratedImages((prev) => [...prev, image]);
+    },
+    onDone: ({ thinking, usage, artifacts: doneArtifacts, generatedImages: doneImages, waitingForInput: wfi }) => {
       if (!doneCalledRef.current) {
         doneCalledRef.current = true;
         // Cancel any pending rAF and do a final flush with metadata
@@ -97,6 +102,7 @@ export function useChat(chatId: string | null) {
               thinking: thinking || undefined,
               usage: usage || undefined,
               artifacts: doneArtifacts || undefined,
+              generatedImages: doneImages || undefined,
             });
           }
           const finalMsgs = updated;
@@ -166,6 +172,7 @@ export function useChat(chatId: string | null) {
     setStreamingThinking("");
     setActiveTools([]);
     setArtifacts([]);
+    setGeneratedImages([]);
     setWaitingForInput(false);
     setError(null);
     doneCalledRef.current = false;
@@ -314,6 +321,7 @@ export function useChat(chatId: string | null) {
     streamingThinking,
     activeTools,
     artifacts,
+    generatedImages,
     waitingForInput,
     totalUsage,
     error,

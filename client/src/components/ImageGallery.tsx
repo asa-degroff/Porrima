@@ -1,0 +1,60 @@
+import type { GeneratedImage } from "../types";
+
+interface Props {
+  images: GeneratedImage[];
+  selectedImage: GeneratedImage | null;
+  onSelect: (image: GeneratedImage) => void;
+}
+
+export function ImageGallery({ images, selectedImage, onSelect }: Props) {
+  if (images.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <div className="text-center space-y-3 px-6">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/10 border border-amber-400/20 flex items-center justify-center">
+            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-amber-400/50">
+              <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+              <circle cx="9" cy="9" r="2" />
+              <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+            </svg>
+          </div>
+          <p className="text-white/30 text-sm">No images generated yet</p>
+          <p className="text-white/20 text-xs">Enter a prompt and click Generate</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto p-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+        {images.map((image) => (
+          <button
+            key={image.id}
+            onClick={() => onSelect(image)}
+            className={`group relative aspect-square rounded-xl overflow-hidden border-2 transition-all hover:scale-[1.02] ${
+              selectedImage?.id === image.id
+                ? "border-amber-400/60 ring-2 ring-amber-400/20"
+                : "border-white/10 hover:border-white/20"
+            }`}
+          >
+            <img
+              src={image.url}
+              alt={image.params.positivePrompt.slice(0, 50)}
+              loading="lazy"
+              decoding="async"
+              className="w-full h-full object-cover"
+            />
+            {/* Hover overlay */}
+            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="absolute bottom-0 left-0 right-0 p-2 space-y-0.5">
+                <p className="text-[10px] text-white/70 font-mono">seed: {image.resolvedSeed}</p>
+                <p className="text-[10px] text-white/50 truncate">{image.params.model}</p>
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}

@@ -31,6 +31,7 @@ export interface ChatMessage {
   toolCalls?: ChatToolCall[];
   toolResults?: ChatToolResult[];
   artifacts?: Artifact[];
+  generatedImages?: GeneratedImage[];
   images?: ImageAttachment[];
   timestamp: number;
 }
@@ -78,6 +79,7 @@ export interface Settings {
   defaultModelId: string;
   defaultSystemPrompt: string;
   braveApiKey: string;
+  comfyuiUrl?: string;
   modelContextWindows?: Record<string, number>;
   theme?: Theme;
   systemPromptPresets?: SystemPromptPreset[];
@@ -108,4 +110,32 @@ export interface Artifact {
   id: string;
   title: string;
   url: string;
+}
+
+export interface ImageGenerationParams {
+  positivePrompt: string;
+  negativePrompt?: string;
+  model: string;
+  steps: number;
+  cfgScale: number;
+  width: number;
+  height: number;
+  seed?: number;
+  sampler?: string;
+  scheduler?: string;
+}
+
+export interface GeneratedImage {
+  id: string;
+  url: string;
+  params: ImageGenerationParams;
+  resolvedSeed: number;
+  createdAt: string;
+  chatId?: string;
+}
+
+export interface ComfyUIStatus {
+  available: boolean;
+  queueSize: number;
+  models: string[];
 }

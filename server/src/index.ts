@@ -9,6 +9,7 @@ import chatRouter from "./routes/chat.js";
 import settingsRouter from "./routes/settings.js";
 import memoryRouter from "./routes/memory.js";
 import artifactsRouter from "./routes/artifacts.js";
+import imagesRouter from "./routes/images.js";
 import authRouter from "./routes/auth.js";
 import { requireAuth } from "./middleware/auth.js";
 import { getSessionSecret } from "./services/auth-storage.js";
@@ -62,6 +63,7 @@ app.use("/api/chat", chatRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/memory", memoryRouter);
 app.use("/api/artifacts", artifactsRouter);
+app.use("/api/images", imagesRouter);
 
 // Production static serving
 if (isProd) {

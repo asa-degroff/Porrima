@@ -9,6 +9,7 @@ interface Props {
   onNewChat: (type: ChatType) => void;
   onDeleteChat: (id: string) => void;
   onOpenSettings: () => void;
+  onOpenImageSandbox: () => void;
   isOpen: boolean;
   onClose: () => void;
 }
@@ -39,6 +40,7 @@ export function Sidebar({
   onNewChat,
   onDeleteChat,
   onOpenSettings,
+  onOpenImageSandbox,
   isOpen,
   onClose,
 }: Props) {
@@ -76,6 +78,21 @@ export function Sidebar({
             </svg>
           </button>
         </div>
+      </div>
+
+      {/* Image Sandbox */}
+      <div className="px-3 pb-1 shrink-0">
+        <button
+          onClick={() => { onOpenImageSandbox(); onClose(); }}
+          className="w-full px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-400/25 text-amber-300 text-sm font-medium hover:bg-amber-500/25 transition-all flex items-center justify-center gap-2"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+            <circle cx="9" cy="9" r="2" />
+            <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+          </svg>
+          Image Sandbox
+        </button>
       </div>
 
       {/* Chat Sections — flex column, each section grows when expanded */}

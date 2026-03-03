@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useCallback, lazy, Suspense, memo } from "react";
 import { createPortal } from "react-dom";
-import type { Artifact, ChatMessage, ImageAttachment } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment } from "../types";
 import type { ToolStatus } from "../api/client";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ArtifactPanel } from "./ArtifactPanel";
+import { GeneratedImagePanel } from "./GeneratedImagePanel";
 import { ToolCallDisplay } from "./ToolCallDisplay";
 
 const MarkdownRenderer = lazy(() =>
@@ -18,6 +19,7 @@ interface Props {
   streamingThinking?: string;
   activeTools?: ToolStatus[];
   artifacts?: Artifact[];
+  generatedImages?: GeneratedImage[];
   onEditMessage?: (index: number, newText: string) => void;
   messageIndex?: number;
   editable?: boolean;
@@ -30,6 +32,7 @@ export const MessageBubble = memo(function MessageBubble({
   streamingThinking,
   activeTools,
   artifacts,
+  generatedImages,
   onEditMessage,
   messageIndex,
   editable,
@@ -221,6 +224,11 @@ export const MessageBubble = memo(function MessageBubble({
             {/* Inline artifacts - streaming (live) or persisted (from message) */}
             {(artifacts || message.artifacts)?.map((artifact) => (
               <ArtifactPanel key={artifact.id} artifact={artifact} />
+            ))}
+
+            {/* Inline generated images - streaming (live) or persisted (from message) */}
+            {(generatedImages || message.generatedImages)?.map((img) => (
+              <GeneratedImagePanel key={img.id} image={img} />
             ))}
           </>
         )}

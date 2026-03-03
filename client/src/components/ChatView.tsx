@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { Artifact, ChatMessage, MessageUsage, OllamaModel, SystemPromptPreset } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, MessageUsage, OllamaModel, SystemPromptPreset } from "../types";
 import type { ToolStatus } from "../api/client";
 import { fetchRenderedPrompt } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
@@ -39,6 +39,7 @@ interface Props {
   streamingThinking: string;
   activeTools: ToolStatus[];
   artifacts: Artifact[];
+  generatedImages: GeneratedImage[];
   totalUsage: MessageUsage;
   contextWindow: number;
   error: string | null;
@@ -68,6 +69,7 @@ export function ChatView({
   streamingThinking,
   activeTools,
   artifacts,
+  generatedImages,
   totalUsage,
   contextWindow,
   error,
@@ -301,6 +303,7 @@ export function ChatView({
                 streamingThinking={isLast ? streamingThinking : undefined}
                 activeTools={isLast ? activeTools : undefined}
                 artifacts={isLast && streaming ? artifacts : undefined}
+                generatedImages={isLast && streaming ? generatedImages : undefined}
                 editable={msg.role === "user" && !streaming && isOnline}
                 onEditMessage={msg.role === "user" ? onEditMessage : undefined}
                 messageIndex={i}

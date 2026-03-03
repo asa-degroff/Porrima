@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, memo } from "react";
 import type { ImageAttachment } from "../types";
+import { useHaptics } from "../hooks/useHaptics";
 
 interface Props {
   onSend: (text: string, images?: ImageAttachment[]) => void;
@@ -38,6 +39,7 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounterRef = useRef(0);
+  const { medium, heavy, success } = useHaptics();
 
   const hasContent = text.trim() || images.length > 0;
   const canSend = hasContent && (!disabled || !isOnline);
@@ -45,13 +47,14 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
   const handleSubmit = useCallback(() => {
     const trimmed = text.trim();
     if ((!trimmed && images.length === 0) || (disabled && isOnline)) return;
+    medium(); // Haptic on send
     onSend(trimmed, images.length > 0 ? images : undefined);
     setText("");
     setImages([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [text, images, disabled, onSend]);
+  }, [text, images, disabled, onSend, medium]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -71,6 +74,7 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
   const addFiles = async (files: FileList | File[]) => {
     const newImages = await processFiles(files);
     if (newImages.length > 0) {
+      success(); // Haptic when images are attached
       setImages((prev) => [...prev, ...newImages]);
     }
   };
@@ -209,7 +213,10 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
 
           {streaming ? (
             <button
-              onClick={onAbort}
+              onClick={() => {
+                heavy(); // Haptic on stop
+                onAbort();
+              }}
               className="px-4 py-1.5 rounded-lg bg-red-500/20 border border-red-400/30 text-red-300 text-sm hover:bg-red-500/30 transition-colors"
             >
               Stop

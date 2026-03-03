@@ -21,8 +21,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
+  const [comfyuiUrl, setComfyuiUrl] = useState(settings.comfyuiUrl || "http://127.0.0.1:8188");
+  const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
   const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
+  const [hapticsEnabled, setHapticsEnabled] = useState(settings.hapticsEnabled ?? true);
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
   const [synthesisRunning, setSynthesisRunning] = useState(false);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
@@ -51,8 +54,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       defaultModelId,
       defaultSystemPrompt: effectivePrompt,
       braveApiKey: braveApiKey.trim(),
+      comfyuiUrl: comfyuiUrl.trim() || undefined,
       theme,
       systemPromptPresets: presets.length > 0 ? presets : undefined,
+      hapticsEnabled,
     });
   };
 
@@ -106,6 +111,21 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setPasskeyMessage({ type: "err", text: err.message || "Failed to add passkey" });
     }
     setPasskeyAdding(false);
+  }, []);
+
+  const handleTestComfyUI = useCallback(async () => {
+    setComfyuiStatus("checking");
+    try {
+      const res = await fetch("/api/images/status", { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setComfyuiStatus(data.available ? "connected" : "unavailable");
+      } else {
+        setComfyuiStatus("unavailable");
+      }
+    } catch {
+      setComfyuiStatus("unavailable");
+    }
   }, []);
 
   const handleRunSynthesis = useCallback(async () => {
@@ -186,6 +206,28 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   {opt.label}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Haptic Feedback */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-sm font-medium text-white/60">Haptic Feedback</label>
+                <p className="text-xs text-white/30 mt-0.5">Vibration feedback for interactions (mobile only)</p>
+              </div>
+              <button
+                onClick={() => setHapticsEnabled(!hapticsEnabled)}
+                className={`relative w-12 h-6 rounded-full transition-colors ${
+                  hapticsEnabled ? "bg-blue-500/30" : "bg-white/10"
+                }`}
+              >
+                <div
+                  className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                    hapticsEnabled ? "left-7" : "left-1"
+                  }`}
+                />
+              </button>
             </div>
           </div>
 
@@ -284,6 +326,41 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <a href="https://brave.com/search/api/" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
                   brave.com/search/api
                 </a>
+              </p>
+            </div>
+          </div>
+
+          {/* Image Generation (ComfyUI) */}
+          <div className="space-y-3 pt-2 border-t border-white/10">
+            <h3 className="text-sm font-medium text-white/70">Image Generation (ComfyUI)</h3>
+            <div className="space-y-2">
+              <label className="block text-sm text-white/50">ComfyUI URL</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={comfyuiUrl}
+                  onChange={(e) => setComfyuiUrl(e.target.value)}
+                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/30 transition-all"
+                  placeholder="http://127.0.0.1:8188"
+                />
+                <button
+                  onClick={handleTestComfyUI}
+                  disabled={comfyuiStatus === "checking"}
+                  className="px-3 py-2 rounded-lg text-sm font-medium bg-amber-500/15 border border-amber-400/20 text-amber-300 hover:bg-amber-500/25 transition-all disabled:opacity-40 shrink-0"
+                >
+                  {comfyuiStatus === "checking" ? "Testing..." : "Test"}
+                </button>
+              </div>
+              {comfyuiStatus && comfyuiStatus !== "checking" && (
+                <div className="flex items-center gap-1.5">
+                  <div className={`w-2 h-2 rounded-full ${comfyuiStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
+                  <span className={`text-xs ${comfyuiStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
+                    {comfyuiStatus === "connected" ? "Connected" : "Not available"}
+                  </span>
+                </div>
+              )}
+              <p className="text-white/30 text-xs">
+                Local ComfyUI instance for image generation. Used by the Image Sandbox and the generate_image agent tool.
               </p>
             </div>
           </div>

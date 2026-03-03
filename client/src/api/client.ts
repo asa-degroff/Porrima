@@ -1,4 +1,4 @@
-import type { Artifact, Chat, ChatListItem, ChatType, ImageAttachment, MessageUsage, OllamaModel, Settings } from "../types";
+import type { Artifact, Chat, ChatListItem, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, MessageUsage, OllamaModel, Settings } from "../types";
 
 const BASE = "/api";
 
@@ -101,10 +101,11 @@ export interface ToolStatus {
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { thinking?: string; usage?: MessageUsage; artifacts?: Artifact[]; waitingForInput?: boolean }) => void;
+  onDone: (message: { thinking?: string; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; waitingForInput?: boolean }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
   onArtifact?: (artifact: Artifact) => void;
+  onGeneratedImage?: (image: GeneratedImage) => void;
   onAskUser?: (question: string) => void;
 }
 
@@ -231,6 +232,7 @@ function processSSEEvent(
         thinking: data.message?.thinking,
         usage: data.message?.usage,
         artifacts: data.message?.artifacts,
+        generatedImages: data.message?.generatedImages,
         waitingForInput: data.waitingForInput,
       });
       break;
@@ -239,6 +241,9 @@ function processSSEEvent(
       break;
     case "artifact":
       callbacks.onArtifact?.(data);
+      break;
+    case "generated_image":
+      callbacks.onGeneratedImage?.(data);
       break;
     case "ask_user":
       callbacks.onAskUser?.(data.question);
@@ -252,4 +257,89 @@ function processSSEEvent(
       else if (data.message) callbacks.onDone({ thinking: data.message?.thinking, usage: data.message?.usage });
       else if (data.error) callbacks.onError(data.error);
   }
+}
+
+// --- Image Generation API ---
+
+export async function fetchComfyUIStatus(): Promise<ComfyUIStatus> {
+  const res = await apiFetch(`${BASE}/images/status`);
+  if (!res.ok) return { available: false, queueSize: 0, models: [] };
+  return res.json();
+}
+
+export async function fetchImageModels(): Promise<string[]> {
+  const res = await apiFetch(`${BASE}/images/models`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export interface ImageGenerateCallbacks {
+  onProgress: (step: number, totalSteps: number) => void;
+  onDone: (image: GeneratedImage) => void;
+  onError: (error: string) => void;
+}
+
+export function generateImage(
+  params: ImageGenerationParams,
+  callbacks: ImageGenerateCallbacks
+): AbortController {
+  const controller = new AbortController();
+
+  fetch(`${BASE}/images/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+    signal: controller.signal,
+    credentials: "include",
+  })
+    .then(async (res) => {
+      if (res.status === 401) {
+        emitUnauthorized();
+        callbacks.onError("Authentication required");
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        callbacks.onError((err as any).error || "Request failed");
+        return;
+      }
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let currentEvent = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (currentEvent === "progress") {
+                callbacks.onProgress(data.step, data.totalSteps);
+              } else if (currentEvent === "done") {
+                callbacks.onDone(data.image);
+              } else if (currentEvent === "error") {
+                callbacks.onError(data.error);
+              }
+            } catch {}
+            currentEvent = "";
+          }
+        }
+      }
+    })
+    .catch((e) => {
+      if (e.name === "AbortError") return;
+      callbacks.onError(e.message);
+    });
+
+  return controller;
 }
