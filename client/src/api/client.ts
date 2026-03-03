@@ -98,15 +98,28 @@ export interface ToolStatus {
   result?: string;
 }
 
+export interface IterationInfo {
+  iteration: number;
+  stopReason: string;
+  toolCount: number;
+}
+
+export interface StreamWarning {
+  type: string;
+  message: string;
+}
+
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { thinking?: string; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; waitingForInput?: boolean }) => void;
+  onDone: (message: { thinking?: string; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; waitingForInput?: boolean; iterations?: number }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
   onArtifact?: (artifact: Artifact) => void;
   onGeneratedImage?: (image: GeneratedImage) => void;
   onAskUser?: (question: string) => void;
+  onIteration?: (info: IterationInfo) => void;
+  onWarning?: (warning: StreamWarning) => void;
 }
 
 function streamSSE(
@@ -234,6 +247,7 @@ function processSSEEvent(
         artifacts: data.message?.artifacts,
         generatedImages: data.message?.generatedImages,
         waitingForInput: data.waitingForInput,
+        iterations: data.iterations,
       });
       break;
     case "tool_status":
@@ -247,6 +261,12 @@ function processSSEEvent(
       break;
     case "ask_user":
       callbacks.onAskUser?.(data.question);
+      break;
+    case "iteration":
+      callbacks.onIteration?.(data);
+      break;
+    case "warning":
+      callbacks.onWarning?.(data);
       break;
     case "error":
       callbacks.onError(data.error || "Unknown error");

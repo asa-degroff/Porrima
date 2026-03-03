@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage } from "../api/client";
-import type { StreamCallbacks, ToolStatus } from "../api/client";
+import type { StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, MessageUsage } from "../types";
 import {
   enqueueMessage,
@@ -19,6 +19,7 @@ export function useChat(chatId: string | null) {
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [waitingForInput, setWaitingForInput] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<StreamWarning | null>(null);
   const [queueProcessing, setQueueProcessing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
@@ -35,6 +36,7 @@ export function useChat(chatId: string | null) {
     setGeneratedImages([]);
     setWaitingForInput(false);
     setError(null);
+    setWarning(null);
   }, [chatId]);
 
   const loadMessages = useCallback((msgs: ChatMessage[]) => {
@@ -138,6 +140,13 @@ export function useChat(chatId: string | null) {
     onArtifact: (artifact) => {
       setArtifacts((prev) => [...prev, artifact]);
     },
+    onIteration: (info) => {
+      console.log(`[chat] iteration ${info.iteration}: stopReason=${info.stopReason} tools=${info.toolCount}`);
+    },
+    onWarning: (w) => {
+      console.warn(`[chat] warning: ${w.type} — ${w.message}`);
+      setWarning(w);
+    },
     onError: (err) => {
       // Detect offline sentinel from streamSSE
       if (err.startsWith("__OFFLINE__:")) {
@@ -175,6 +184,7 @@ export function useChat(chatId: string | null) {
     setGeneratedImages([]);
     setWaitingForInput(false);
     setError(null);
+    setWarning(null);
     doneCalledRef.current = false;
     streamingContentRef.current = "";
     if (rafRef.current !== null) {
@@ -325,6 +335,7 @@ export function useChat(chatId: string | null) {
     waitingForInput,
     totalUsage,
     error,
+    warning,
     send,
     editMessage,
     abort,

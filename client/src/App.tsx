@@ -43,6 +43,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     waitingForInput,
     totalUsage,
     error,
+    warning,
     send,
     editMessage,
     abort,
@@ -261,6 +262,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         totalUsage={totalUsage}
         contextWindow={contextWindow}
         error={error}
+        warning={warning}
         models={models}
         selectedModelId={activeChat?.modelId || models[0]?.id || ""}
         systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}

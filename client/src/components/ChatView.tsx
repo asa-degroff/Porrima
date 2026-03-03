@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { Artifact, ChatMessage, GeneratedImage, MessageUsage, OllamaModel, SystemPromptPreset } from "../types";
-import type { ToolStatus } from "../api/client";
+import type { ToolStatus, StreamWarning } from "../api/client";
 import { fetchRenderedPrompt } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
 import { MessageInput } from "./MessageInput";
@@ -43,6 +43,7 @@ interface Props {
   totalUsage: MessageUsage;
   contextWindow: number;
   error: string | null;
+  warning: StreamWarning | null;
   models: OllamaModel[];
   selectedModelId: string;
   systemPrompt: string;
@@ -73,6 +74,7 @@ export function ChatView({
   totalUsage,
   contextWindow,
   error,
+  warning,
   models,
   selectedModelId,
   systemPrompt,
@@ -311,6 +313,11 @@ export function ChatView({
             </div>
           );
         })}
+        {warning && (
+          <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-400/20 text-amber-300 text-sm">
+            {warning.message}
+          </div>
+        )}
         {error && (
           <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-400/20 text-red-300 text-sm">
             {error}

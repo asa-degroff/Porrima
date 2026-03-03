@@ -99,17 +99,43 @@ async function handleChatStream(
         { signal: abortController.signal, tools }
       );
 
+      // Log iteration details for observability
+      console.log(
+        `[chat] iter=${iterations} stop=${result.stopReason} tools=${result.toolCalls?.length || 0}` +
+        ` content=${result.content?.length || 0}ch thinking=${result.thinking?.length || 0}ch` +
+        ` tokens=${result.usage?.totalTokens || "?"}`,
+      );
+
+      // Send iteration info to client for observability
+      res.write(
+        `event: iteration\ndata: ${JSON.stringify({
+          iteration: iterations,
+          stopReason: result.stopReason,
+          toolCount: result.toolCalls?.length || 0,
+        })}\n\n`
+      );
+
       // Accumulate content
       if (result.content) {
         finalContent += (finalContent ? "\n\n" : "") + result.content;
       }
-      if (!finalThinking && result.thinking) {
-        finalThinking = result.thinking;
+      if (result.thinking) {
+        finalThinking = (finalThinking ? finalThinking + "\n\n" : "") + result.thinking;
       }
       finalUsage = result.usage;
 
       // If no tool use, we're done
       if (result.stopReason !== "toolUse" || !result.toolCalls?.length) {
+        // Warn if stopped due to context window exhaustion
+        if (result.stopReason === "length") {
+          console.warn(`[chat] stopped due to context length at iteration ${iterations}`);
+          res.write(
+            `event: warning\ndata: ${JSON.stringify({
+              type: "context_length",
+              message: "Response stopped — context window full",
+            })}\n\n`
+          );
+        }
         break;
       }
 
@@ -215,13 +241,15 @@ async function handleChatStream(
     chat.messages.push(assistantMsg);
     await saveChat(chat);
 
+    console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput}`);
+
     if (waitingForInput) {
       res.write(
-        `event: done\ndata: ${JSON.stringify({ message: assistantMsg, waitingForInput: true })}\n\n`
+        `event: done\ndata: ${JSON.stringify({ message: assistantMsg, waitingForInput: true, iterations })}\n\n`
       );
     } else {
       res.write(
-        `event: done\ndata: ${JSON.stringify({ message: assistantMsg })}\n\n`
+        `event: done\ndata: ${JSON.stringify({ message: assistantMsg, iterations })}\n\n`
       );
 
       // Fire-and-forget memory extraction for agent chats
