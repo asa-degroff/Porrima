@@ -94,8 +94,8 @@ const ASK_USER_TOOL: Tool = {
 export interface ToolSideEffects {
   onArtifact: (artifact: Artifact) => void;
   onGeneratedImage: (image: GeneratedImage) => void;
-  pendingAskUser: { question: string; toolCallId: string } | null;
-  abortController: AbortController;
+  /** Called when the ask_user tool fires. The route owns the abort/suspend logic. */
+  onAskUser: (question: string, toolCallId: string) => void;
 }
 
 // --- Adapter helpers ---
@@ -222,15 +222,14 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects): AgentTo
     },
   });
 
-  // ask_user — aborts the agent loop so the server can pause and wait for user input
+  // ask_user — notifies the route via callback; the route owns the abort logic
   tools.push({
     ...ASK_USER_TOOL,
     label: "ask_user",
     execute: async (toolCallId, params) => {
       const args = params as Record<string, any>;
       const question = args.question || "What would you like me to do?";
-      effects.pendingAskUser = { question, toolCallId };
-      effects.abortController.abort();
+      effects.onAskUser(question, toolCallId);
       return { content: [{ type: "text", text: "Waiting for user response..." }], details: {} };
     },
   });

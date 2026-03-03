@@ -9,7 +9,7 @@ The agent chat tool loop was migrated from a manual `while` loop calling `stream
 The manual loop had two fragility issues:
 
 1. **Thinking traces from iterations 2+** were lost because the streaming callback only captured the first iteration's thinking. A prior commit patched this by accumulating across iterations, but the fix was brittle.
-2. **No built-in follow-up mechanism** — if the model stopped after tool use without continuing, there was no way to automatically prompt it to continue. pi-agent-core provides `getFollowUpMessages` and `getSteeringMessages` hooks for this (not yet wired up, but now available).
+2. **No built-in follow-up mechanism** — if the model stopped after tool use without continuing, there was no way to automatically prompt it to continue. pi-agent-core provides `getFollowUpMessages` and `getSteeringMessages` hooks for this.
 
 ## Architecture
 
@@ -61,16 +61,18 @@ The adapter pattern wraps each existing executor into an `AgentTool.execute` fun
 - Success: returns `{ content: [{ type: "text", text }], details: {} }`
 - Failure: throws `Error` (pi-agent-core catches it, sets `isError: true` on the tool result)
 
-The `ToolSideEffects` interface provides callbacks for side effects that need to cross the tool→route boundary:
+The `ToolSideEffects` interface provides pure callbacks for side effects that need to cross the tool→route boundary. Tools only call functions — they never read or mutate shared state:
 
 ```typescript
 interface ToolSideEffects {
   onArtifact: (artifact: Artifact) => void;
   onGeneratedImage: (image: GeneratedImage) => void;
-  pendingAskUser: { question: string; toolCallId: string } | null;
-  abortController: AbortController;
+  /** Called when the ask_user tool fires. The route owns the abort/suspend logic. */
+  onAskUser: (question: string, toolCallId: string) => void;
 }
 ```
+
+The route creates the `AbortController` and `askUserRef` internally. The `onAskUser` callback stores the question in the ref and calls `abortController.abort()` — tools don't have direct access to either.
 
 `getAgentToolDefinitions()` returns `{ name, description }[]` for display-only metadata (used by the chats route for the context panel).
 
@@ -93,10 +95,13 @@ The `handleChatStream()` function was rewritten. Key changes:
 
 The `ask_user` tool can't be intercepted before execution (pi-agent-core runs tools internally), so instead:
 
-1. `ask_user.execute()` stores the question in `effects.pendingAskUser` and calls `effects.abortController.abort()`
-2. A custom `safeStreamFn` detects the pre-aborted signal on the next LLM call and returns an event stream with `stopReason: "aborted"` instead of throwing
-3. pi-agent-core's loop sees the aborted response and exits cleanly via `agent_end`
-4. Post-loop code detects `effects.pendingAskUser`, trims `context.messages` back to the assistant message containing the ask_user call, saves pending state, and emits SSE `ask_user` + `done`
+1. `ask_user.execute()` calls `effects.onAskUser(question, toolCallId)`, which stores the question in a route-owned ref (`askUserRef.current`) and calls `abortController.abort()`
+2. `getSteeringMessages` detects `askUserRef.current` and returns a steering message, causing pi-agent-core to skip remaining tools in the batch via `skipToolCall()`
+3. A custom `safeStreamFn` detects the pre-aborted signal on the next LLM call and returns an event stream with `stopReason: "aborted"` instead of throwing
+4. pi-agent-core's loop sees the aborted response and exits cleanly via `agent_end`
+5. Post-loop code detects `askUserRef.current`, trims `context.messages` back to the assistant message containing the ask_user call, saves pending state, and emits SSE `ask_user` + `done`
+
+The ref pattern (`const askUserRef: { current: T | null } = { current: null }`) is used because TypeScript's control flow analysis can't track `let` variable mutations through closures — a `let pendingAskUser` set inside the `onAskUser` callback would be narrowed to `never` in the post-loop check.
 
 **Resume flow:**
 
@@ -139,11 +144,39 @@ When `ask_user` aborts the signal, the next `streamSimple` call would throw an u
 
 The `createSafeStreamFn()` wrapper checks `signal.aborted` before calling `streamSimple` and returns a synthetic event stream with `{ type: "error", reason: "aborted" }` instead. This allows pi-agent-core to handle the abort through its normal `stopReason === "aborted"` path.
 
-## Future Hooks
+## Iteration Guard
 
-The migration enables two hooks that weren't possible with the manual loop:
+pi-agent-core's `runLoop` uses `while(true)` with no built-in iteration limit. The route adds its own guard:
 
-- **`getFollowUpMessages`** — called when the agent would otherwise stop. Can inject a user message like "Continue with the task" to prevent premature stopping.
-- **`getSteeringMessages`** — called after each tool execution. Can inject messages to redirect the agent mid-run (e.g., user types a correction while the agent is working).
+```typescript
+const MAX_ITERATIONS = 20;
+// In the turn_end handler:
+if (iterations >= MAX_ITERATIONS) {
+  res.write(`event: warning\ndata: ${JSON.stringify({
+    type: "iteration_limit",
+    message: `Stopped — reached ${MAX_ITERATIONS} iteration limit`,
+  })}\n\n`);
+  abortController.abort();
+}
+```
 
-Neither is wired up yet — they can be added to the `AgentLoopConfig` in `handleChatStream()` when needed.
+This preserves the same 20-iteration cap the manual loop had. When hit, the client receives a `warning` SSE event before the loop stops.
+
+## Hooks
+
+### `getSteeringMessages` (wired up)
+
+Currently used to cleanly skip remaining tools when `ask_user` fires. When `askUserRef.current` is set, it returns a steering message that causes pi-agent-core to call `skipToolCall()` for any remaining tools in the batch, preventing them from executing with an aborted signal.
+
+```typescript
+getSteeringMessages: async () => {
+  if (askUserRef.current) {
+    return [{ role: "user" as const, content: "[paused for user input]", timestamp: Date.now() }];
+  }
+  return [];
+},
+```
+
+### `getFollowUpMessages` (not yet wired up)
+
+Called when the agent would otherwise stop. Can inject a user message like "Continue with the task" to prevent premature stopping. Can be added to the `AgentLoopConfig` when needed.

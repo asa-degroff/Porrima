@@ -103,11 +103,17 @@ async function handleChatStream(
   const abortController = new AbortController();
   req.on("close", () => abortController.abort());
 
+  const MAX_ITERATIONS = 20;
+
   // Accumulators for the final ChatMessage
   const allToolCalls: ChatToolCall[] = [];
   const allToolResults: ChatToolResult[] = [];
   const allArtifacts: Artifact[] = [];
   const allGeneratedImages: GeneratedImage[] = [];
+
+  // ask_user state — owned by the route, set via callback.
+  // Uses a ref object so TypeScript can track mutations through closures.
+  const askUserRef: { current: { question: string; toolCallId: string } | null } = { current: null };
 
   // Side-effects bridge between tool execution and SSE output
   const effects: ToolSideEffects = {
@@ -119,8 +125,10 @@ async function handleChatStream(
       allGeneratedImages.push(image);
       res.write(`event: generated_image\ndata: ${JSON.stringify(image)}\n\n`);
     },
-    pendingAskUser: null,
-    abortController,
+    onAskUser: (question, toolCallId) => {
+      askUserRef.current = { question, toolCallId };
+      abortController.abort();
+    },
   };
 
   const isAgent = chat.type === "agent";
@@ -153,6 +161,16 @@ async function handleChatStream(
       apiKey: "ollama",
       reasoning: piModel.reasoning ? "medium" : undefined,
       convertToLlm: (msgs) => msgs as Message[],
+      // When ask_user fires, skip remaining tools in the batch cleanly
+      // (instead of letting them execute with an aborted signal).
+      // The message content doesn't reach the LLM — the abort stops
+      // the loop before the next streaming call.
+      getSteeringMessages: async () => {
+        if (askUserRef.current) {
+          return [{ role: "user" as const, content: "[paused for user input]", timestamp: Date.now() }];
+        }
+        return [];
+      },
     };
 
     const safeStreamFn = createSafeStreamFn();
@@ -248,6 +266,16 @@ async function handleChatStream(
               message: "Response stopped — context window full",
             })}\n\n`);
           }
+
+          // Guard against runaway tool loops
+          if (iterations >= MAX_ITERATIONS) {
+            console.warn(`[chat] hit iteration limit (${MAX_ITERATIONS}), aborting`);
+            res.write(`event: warning\ndata: ${JSON.stringify({
+              type: "iteration_limit",
+              message: `Stopped — reached ${MAX_ITERATIONS} iteration limit`,
+            })}\n\n`);
+            abortController.abort();
+          }
           break;
         }
       }
@@ -255,7 +283,7 @@ async function handleChatStream(
 
     // --- Post-loop: handle ask_user, build message, compaction ---
 
-    if (effects.pendingAskUser) {
+    if (askUserRef.current) {
       waitingForInput = true;
 
       // Save pending state for resume. Trim context.messages to keep
@@ -276,10 +304,10 @@ async function handleChatStream(
       await savePendingState(chat.id, {
         agentMessages: savedMessages,
         systemPrompt,
-        askToolCallId: effects.pendingAskUser.toolCallId,
+        askToolCallId: askUserRef.current.toolCallId,
       });
 
-      res.write(`event: ask_user\ndata: ${JSON.stringify({ question: effects.pendingAskUser.question })}\n\n`);
+      res.write(`event: ask_user\ndata: ${JSON.stringify({ question: askUserRef.current.question })}\n\n`);
     }
 
     // Build the final assistant message
@@ -336,7 +364,7 @@ async function handleChatStream(
     }
   } catch (e: any) {
     // ask_user abort is expected — handle it gracefully
-    if (effects.pendingAskUser) {
+    if (askUserRef.current) {
       waitingForInput = true;
 
       // Best-effort save of pending state
@@ -347,13 +375,13 @@ async function handleChatStream(
         await savePendingState(chat.id, {
           agentMessages: savedMessages,
           systemPrompt,
-          askToolCallId: effects.pendingAskUser.toolCallId,
+          askToolCallId: askUserRef.current.toolCallId,
         });
       } catch (saveErr) {
         console.error("[ask_user] failed to save pending state:", saveErr);
       }
 
-      res.write(`event: ask_user\ndata: ${JSON.stringify({ question: effects.pendingAskUser.question })}\n\n`);
+      res.write(`event: ask_user\ndata: ${JSON.stringify({ question: askUserRef.current.question })}\n\n`);
 
       // Build partial assistant message
       const assistantMsg: ChatMessage = {
