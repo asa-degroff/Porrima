@@ -29,7 +29,7 @@ export async function embedBatch(texts: string[]): Promise<number[][]> {
     body: JSON.stringify({
       model: EMBEDDING_MODEL,
       input: texts,
-      keep_alive: 0,
+      keep_alive: "0s",
       options: { num_gpu: 0 },
     }),
   });
