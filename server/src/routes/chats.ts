@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
-import { listChats, getChat, saveChat, deleteChat, getSettings, saveSettings } from "../services/storage.js";
+import { listChats, getChat, saveChat, deleteChat, getSettings } from "../services/storage.js";
 import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import type { Chat } from "../types.js";
@@ -52,19 +52,8 @@ router.patch("/:id", async (req, res) => {
   if (req.body.contextWindow !== undefined) {
     if (req.body.contextWindow === null) {
       delete chat.contextWindow;
-      // Remove per-model override
-      const settings = await getSettings();
-      if (settings.modelContextWindows?.[chat.modelId]) {
-        delete settings.modelContextWindows[chat.modelId];
-        await saveSettings(settings);
-      }
     } else {
       chat.contextWindow = req.body.contextWindow;
-      // Persist per-model for future chats
-      const settings = await getSettings();
-      const mcw = settings.modelContextWindows ?? {};
-      mcw[chat.modelId] = req.body.contextWindow;
-      await saveSettings({ ...settings, modelContextWindows: mcw });
     }
   }
 
