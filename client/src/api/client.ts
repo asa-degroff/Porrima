@@ -120,6 +120,7 @@ export interface StreamCallbacks {
   onAskUser?: (question: string) => void;
   onIteration?: (info: IterationInfo) => void;
   onWarning?: (warning: StreamWarning) => void;
+  onCompaction?: (info: { removedCount: number; remainingCount: number }) => void;
 }
 
 function streamSSE(
@@ -269,6 +270,9 @@ function processSSEEvent(
       break;
     case "warning":
       callbacks.onWarning?.(data);
+      break;
+    case "compaction":
+      callbacks.onCompaction?.(data);
       break;
     case "error":
       callbacks.onError(data.error || "Unknown error");

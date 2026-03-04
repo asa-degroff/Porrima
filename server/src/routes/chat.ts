@@ -351,9 +351,13 @@ async function handleChatStream(
             const usageRatio = lastUsage / effectiveContextWindow;
             if (usageRatio > 0.75) {
               await preCompactionFlush(chat.modelId, chat.id, chat.messages);
-              const truncated = await truncateChatHistory(chat, effectiveContextWindow);
-              if (truncated) {
+              const compaction = await truncateChatHistory(chat, effectiveContextWindow);
+              if (compaction.truncated) {
                 await saveChat(chat);
+                res.write(`event: compaction\ndata: ${JSON.stringify({
+                  removedCount: compaction.removedCount,
+                  remainingCount: chat.messages.length,
+                })}\n\n`);
               }
             }
           }

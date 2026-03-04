@@ -1,8 +1,14 @@
 import type { MessageUsage } from "../types";
 
+interface CompactionInfo {
+  removedCount: number;
+  remainingCount: number;
+}
+
 interface Props {
   usage: MessageUsage;
   contextWindow: number;
+  compaction?: CompactionInfo | null;
 }
 
 function formatNumber(n: number): string {
@@ -10,7 +16,7 @@ function formatNumber(n: number): string {
   return n.toString();
 }
 
-export function TokenIndicator({ usage, contextWindow }: Props) {
+export function TokenIndicator({ usage, contextWindow, compaction }: Props) {
   if (usage.totalTokens === 0) return null;
 
   const pct = Math.min((usage.totalTokens / contextWindow) * 100, 100);
@@ -18,9 +24,9 @@ export function TokenIndicator({ usage, contextWindow }: Props) {
   return (
     <div className="flex items-center gap-2 text-xs text-white/40">
       <div className="flex items-center gap-1.5">
-        <span title="Input tokens">&#8593;{formatNumber(usage.input)}</span>
-        <span title="Output tokens">&#8595;{formatNumber(usage.output)}</span>
-        <span className="text-white/20">·</span>
+        <span title="Context tokens (input)">&#8593;{formatNumber(usage.input)}</span>
+        <span title="Generated tokens (output)">&#8595;{formatNumber(usage.output)}</span>
+        <span className="text-white/20">&middot;</span>
         <span>
           {formatNumber(usage.totalTokens)} / {formatNumber(contextWindow)}
         </span>
@@ -39,6 +45,14 @@ export function TokenIndicator({ usage, contextWindow }: Props) {
           }}
         />
       </div>
+      {compaction && (
+        <span
+          className="text-purple-300/60 cursor-default"
+          title={`${compaction.removedCount} messages compacted, ${compaction.remainingCount} remaining`}
+        >
+          compacted
+        </span>
+      )}
     </div>
   );
 }

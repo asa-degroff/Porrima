@@ -20,6 +20,7 @@ export function useChat(chatId: string | null) {
   const [waitingForInput, setWaitingForInput] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<StreamWarning | null>(null);
+  const [compaction, setCompaction] = useState<{ removedCount: number; remainingCount: number } | null>(null);
   const [queueProcessing, setQueueProcessing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
@@ -37,6 +38,7 @@ export function useChat(chatId: string | null) {
     setWaitingForInput(false);
     setError(null);
     setWarning(null);
+    setCompaction(null);
   }, [chatId]);
 
   const loadMessages = useCallback((msgs: ChatMessage[]) => {
@@ -149,6 +151,10 @@ export function useChat(chatId: string | null) {
       console.warn(`[chat] warning: ${w.type} — ${w.message}`);
       setWarning(w);
     },
+    onCompaction: (info) => {
+      console.log(`[chat] compaction: removed ${info.removedCount} messages, ${info.remainingCount} remaining`);
+      setCompaction(info);
+    },
     onError: (err) => {
       // Detect offline sentinel from streamSSE
       if (err.startsWith("__OFFLINE__:")) {
@@ -187,6 +193,7 @@ export function useChat(chatId: string | null) {
     setWaitingForInput(false);
     setError(null);
     setWarning(null);
+    setCompaction(null);
     doneCalledRef.current = false;
     streamingContentRef.current = "";
     if (rafRef.current !== null) {
@@ -310,22 +317,13 @@ export function useChat(chatId: string | null) {
     setQueueProcessing(false);
   }, [chatId, streaming, queueProcessing, prepareStream, makeStreamCallbacks]);
 
-  // Compute total usage across all messages
-  const totalUsage: MessageUsage = useMemo(
-    () =>
-      messages.reduce(
-        (acc, msg) => {
-          if (msg.usage) {
-            acc.input += msg.usage.input;
-            acc.output += msg.usage.output;
-            acc.totalTokens += msg.usage.totalTokens;
-          }
-          return acc;
-        },
-        { input: 0, output: 0, totalTokens: 0 }
-      ),
-    [messages]
-  );
+  // Use the last assistant message's usage as the actual context fill
+  const totalUsage: MessageUsage = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].usage) return messages[i].usage!;
+    }
+    return { input: 0, output: 0, totalTokens: 0 };
+  }, [messages]);
 
   return {
     messages,
@@ -336,6 +334,7 @@ export function useChat(chatId: string | null) {
     generatedImages,
     waitingForInput,
     totalUsage,
+    compaction,
     error,
     warning,
     send,
