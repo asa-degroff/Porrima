@@ -133,3 +133,23 @@ export interface ComfyUIStatus {
   queueSize: number;
   models: string[];
 }
+
+// TTS Types
+export interface TTSSettings {
+  voice: string;
+  speed: number;
+  pitch: number;
+  autoReadEnabled: boolean;
+}
+
+export interface TTSVoiceInfo {
+  id: string;
+  name: string;
+  gender: "female" | "male";
+  accent: "american" | "british" | "other";
+}
+
+export interface TTSVoiceCategory {
+  label: string;
+  voices: TTSVoiceInfo[];
+}

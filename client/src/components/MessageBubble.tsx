@@ -7,6 +7,7 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { ArtifactPanel } from "./ArtifactPanel";
 import { GeneratedImagePanel } from "./GeneratedImagePanel";
 import { ToolCallDisplay } from "./ToolCallDisplay";
+import { SpeakerButton } from "./SpeakerButton";
 
 const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -23,6 +24,8 @@ interface Props {
   onEditMessage?: (index: number, newText: string) => void;
   messageIndex?: number;
   editable?: boolean;
+  onReadAloud?: (text: string) => void;
+  isPlayingTts?: boolean;
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -36,6 +39,8 @@ export const MessageBubble = memo(function MessageBubble({
   onEditMessage,
   messageIndex,
   editable,
+  onReadAloud,
+  isPlayingTts,
 }: Props) {
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;

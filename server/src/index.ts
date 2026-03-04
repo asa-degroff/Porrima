@@ -12,6 +12,7 @@ import artifactsRouter from "./routes/artifacts.js";
 import imagesRouter from "./routes/images.js";
 import authRouter from "./routes/auth.js";
 import personaRouter from "./routes/persona.js";
+import ttsRouter from "./routes/tts.js";
 import { requireAuth } from "./middleware/auth.js";
 import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
@@ -70,6 +71,7 @@ app.use("/api/memory", memoryRouter);
 app.use("/api/persona", personaRouter);
 app.use("/api/artifacts", artifactsRouter);
 app.use("/api/images", imagesRouter);
+app.use("/api/tts", ttsRouter);
 
 // Production static serving
 if (isProd) {

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme } from "../types";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings } from "../types";
+import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 
 interface MemoryStatus {
   memoryCount: number;
@@ -31,6 +32,14 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [synthesisRunning, setSynthesisRunning] = useState(false);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
   const [passkeyMessage, setPasskeyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [ttsSettings, setTtsSettings] = useState<TTSSettings>({
+    voice: "af_heart",
+    speed: 1.0,
+    pitch: 1.0,
+    autoReadEnabled: false,
+  });
+  const [ttsVoices, setTtsVoices] = useState<Array<{ label: string; voices: Array<{ id: string; name: string }> }}([]);
+  const [ttsLoading, setTtsLoading] = useState(false);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -46,6 +55,18 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       .then((r) => r.json())
       .then(setMemoryStatus)
       .catch(() => {});
+  }, []);
+
+  // Fetch TTS settings and voices
+  useEffect(() => {
+    setTtsLoading(true);
+    Promise.all([getTTSSettings(), getTTSVoices()])
+      .then(([settings, voices]) => {
+        setTtsSettings(settings);
+        setTtsVoices(voices);
+      })
+      .catch(() => {})
+      .finally(() => setTtsLoading(false));
   }, []);
 
   const handleSave = () => {
@@ -457,6 +478,106 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               </div>
             ) : (
               <p className="text-white/30 text-sm">Loading memory status...</p>
+            )}
+          </div>
+
+          {/* TTS Section */}
+          <div className="space-y-3 pt-2 border-t border-white/10">
+            <h3 className="text-sm font-medium text-white/70">Text-to-Speech</h3>
+            
+            {ttsLoading ? (
+              <p className="text-white/30 text-sm">Loading TTS settings...</p>
+            ) : (
+              <div className="space-y-3">
+                {/* Auto-read toggle */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-sm font-medium text-white/60">Auto-read responses</label>
+                    <p className="text-xs text-white/30 mt-0.5">Automatically read new assistant messages aloud</p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      const updated = await updateTTSSettings({ autoReadEnabled: !ttsSettings.autoReadEnabled });
+                      if (updated) setTtsSettings(updated);
+                    }}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      ttsSettings.autoReadEnabled ? "bg-blue-500/30" : "bg-white/10"
+                    }`}
+                  >
+                    <div
+                      className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                        ttsSettings.autoReadEnabled ? "left-7" : "left-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Voice selector */}
+                <div className="space-y-1">
+                  <label className="block text-sm text-white/50">Voice</label>
+                  <select
+                    value={ttsSettings.voice}
+                    onChange={async (e) => {
+                      const updated = await updateTTSSettings({ voice: e.target.value });
+                      if (updated) setTtsSettings(updated);
+                    }}
+                    className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 outline-none focus:ring-2 focus:ring-blue-400/30 transition-all cursor-pointer appearance-none"
+                    style={{ backgroundImage: "none" }}
+                  >
+                    {ttsVoices.map((category) => (
+                      <optgroup key={category.label} label={category.label}>
+                        {category.voices.map((voice) => (
+                          <option key={voice.id} value={voice.id}>
+                            {voice.name} ({voice.id})
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Speed control */}
+                <div className="space-y-1">
+                  <label className="block text-sm text-white/50">Speed: {ttsSettings.speed.toFixed(1)}x</label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="2"
+                    step="0.1"
+                    value={ttsSettings.speed}
+                    onChange={async (e) => {
+                      const updated = await updateTTSSettings({ speed: parseFloat(e.target.value) });
+                      if (updated) setTtsSettings(updated);
+                    }}
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                  />
+                  <div className="flex justify-between text-xs text-white/30">
+                    <span>0.5x</span>
+                    <span>2.0x</span>
+                  </div>
+                </div>
+
+                {/* Pitch control */}
+                <div className="space-y-1">
+                  <label className="block text-sm text-white/50">Pitch: {ttsSettings.pitch.toFixed(1)}x</label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="2"
+                    step="0.1"
+                    value={ttsSettings.pitch}
+                    onChange={async (e) => {
+                      const updated = await updateTTSSettings({ pitch: parseFloat(e.target.value) });
+                      if (updated) setTtsSettings(updated);
+                    }}
+                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                  />
+                  <div className="flex justify-between text-xs text-white/30">
+                    <span>0.5x</span>
+                    <span>2.0x</span>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
 
