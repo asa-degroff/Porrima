@@ -41,14 +41,13 @@ def main():
         pipeline = KPipeline(lang_code=lang_code)
         
         # Generate audio
-        # KPipeline returns an iterable of segments
+        # KPipeline returns an iterable of Result segments
+        # Kokoro uses a fixed 24kHz sample rate
         all_audio = []
-        sample_rate = None
-        
+        sample_rate = 24000
+
         for segment in pipeline(args.text, voice=args.voice, speed=args.speed):
             all_audio.append(segment.audio)
-            if sample_rate is None:
-                sample_rate = segment.sampling_rate
         
         if not all_audio:
             raise ValueError("No audio generated")

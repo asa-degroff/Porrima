@@ -68,9 +68,11 @@ async function runKokoro(
   text: string,
   voice: string,
   speed: number,
-  pitch: number
+  _pitch: number
 ): Promise<{ audio: Buffer; duration: number; sampleRate: number }> {
   return new Promise((resolve, reject) => {
+    // Note: Kokoro doesn't support pitch control natively
+    // Pitch would require ffmpeg post-processing (not yet implemented)
     const args = [
       PYTHON_SCRIPT,
       "--text",
@@ -79,8 +81,6 @@ async function runKokoro(
       voice,
       "--speed",
       speed.toString(),
-      "--pitch",
-      pitch.toString(),
     ];
 
     const proc = spawn(VENV_PYTHON, args, {
@@ -156,6 +156,7 @@ export async function generateTTS(request: TTSGenerateRequest): Promise<TTSGener
     ...DEFAULT_TTS_SETTINGS,
     voice: request.voice ?? DEFAULT_TTS_SETTINGS.voice,
     speed: request.speed ?? DEFAULT_TTS_SETTINGS.speed,
+    // Note: pitch is stored in settings for future use, but not currently sent to Kokoro
     pitch: request.pitch ?? DEFAULT_TTS_SETTINGS.pitch,
   };
 
