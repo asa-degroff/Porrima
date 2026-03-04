@@ -1,5 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { Artifact } from "../types";
+
+const MIN_HEIGHT = 100;
+const MAX_HEIGHT = 1200;
+const DEFAULT_HEIGHT = 400;
 
 interface Props {
   artifact: Artifact;
@@ -11,8 +15,46 @@ export function ArtifactPanel({ artifact }: Props) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [sourceCode, setSourceCode] = useState<string | null>(null);
   const [iframeLoaded, setIframeLoaded] = useState(false);
+  const [height, setHeight] = useState(DEFAULT_HEIGHT);
+  const [dragging, setDragging] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const heightRef = useRef(DEFAULT_HEIGHT);
 
-  const handleIframeLoad = useCallback(() => setIframeLoaded(true), []);
+  const handleIframeLoad = useCallback(() => {
+    setIframeLoaded(true);
+    // Auto-size to content since blob URLs are same-origin
+    try {
+      const doc = iframeRef.current?.contentDocument;
+      if (doc) {
+        const contentHeight = doc.documentElement.scrollHeight;
+        const clamped = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, contentHeight));
+        setHeight(clamped);
+        heightRef.current = clamped;
+      }
+    } catch {
+      // cross-origin fallback — keep default
+    }
+  }, []);
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = heightRef.current;
+    setDragging(true);
+
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.max(MIN_HEIGHT, startHeight + (ev.clientY - startY));
+      heightRef.current = next;
+      setHeight(next);
+    };
+    const onUp = () => {
+      setDragging(false);
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
 
   // Fetch artifact HTML and create a blob URL so the iframe is same-origin,
   // avoiding Chrome's requestAnimationFrame throttling for cross-origin iframes.
@@ -82,26 +124,36 @@ export function ArtifactPanel({ artifact }: Props) {
           </pre>
         </div>
       ) : (
-        <div className={`rounded-b-xl transition-colors duration-150 ${iframeLoaded ? "bg-white" : "bg-black/20"}`}>
-          {iframeError ? (
-            <div className="p-4 text-center text-sm text-gray-500">
-              Failed to load artifact preview
-            </div>
-          ) : blobUrl ? (
-            <iframe
-              src={blobUrl}
-              className={`w-full h-[400px] border-0 transition-opacity duration-150 ${iframeLoaded ? "opacity-100" : "opacity-0"}`}
-              style={{ colorScheme: "normal", background: "transparent" }}
-              title={artifact.title}
-              onLoad={handleIframeLoad}
-              onError={() => setIframeError(true)}
-            />
-          ) : (
-            <div className="flex items-center justify-center h-[400px]">
-              <div className="text-sm text-white/40">Loading preview...</div>
-            </div>
-          )}
-        </div>
+        <>
+          <div className={`transition-colors duration-150 ${iframeLoaded ? "bg-white" : "bg-black/20"}`}>
+            {iframeError ? (
+              <div className="p-4 text-center text-sm text-gray-500">
+                Failed to load artifact preview
+              </div>
+            ) : blobUrl ? (
+              <iframe
+                ref={iframeRef}
+                src={blobUrl}
+                className={`w-full border-0 transition-opacity duration-150 ${iframeLoaded ? "opacity-100" : "opacity-0"}`}
+                style={{ height: `${height}px`, colorScheme: "normal", background: "transparent", pointerEvents: dragging ? "none" : "auto" }}
+                title={artifact.title}
+                onLoad={handleIframeLoad}
+                onError={() => setIframeError(true)}
+              />
+            ) : (
+              <div className="flex items-center justify-center" style={{ height: `${height}px` }}>
+                <div className="text-sm text-white/40">Loading preview...</div>
+              </div>
+            )}
+          </div>
+          {/* Vertical resize handle */}
+          <div
+            onMouseDown={handleDragStart}
+            className="h-2 cursor-row-resize flex items-center justify-center bg-white/[0.03] hover:bg-white/[0.08] border-t border-white/10 rounded-b-xl transition-colors"
+          >
+            <div className="w-8 h-0.5 rounded-full bg-white/20" />
+          </div>
+        </>
       )}
     </div>
   );
