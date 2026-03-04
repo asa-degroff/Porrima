@@ -1,4 +1,4 @@
-import type { Artifact, Chat, ChatListItem, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, MessageUsage, OllamaModel, Settings } from "../types";
+import type { Artifact, Chat, ChatListItem, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, MessageUsage, OllamaModel, Settings } from "../types";
 
 const BASE = "/api";
 
@@ -112,7 +112,7 @@ export interface StreamWarning {
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { thinking?: string; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; waitingForInput?: boolean; iterations?: number }) => void;
+  onDone: (message: { thinking?: string; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; waitingForInput?: boolean; iterations?: number }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
   onArtifact?: (artifact: Artifact) => void;
@@ -246,6 +246,8 @@ function processSSEEvent(
         usage: data.message?.usage,
         artifacts: data.message?.artifacts,
         generatedImages: data.message?.generatedImages,
+        toolCalls: data.message?.toolCalls,
+        toolResults: data.message?.toolResults,
         waitingForInput: data.waitingForInput,
         iterations: data.iterations,
       });

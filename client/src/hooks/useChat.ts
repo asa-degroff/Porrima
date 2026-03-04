@@ -85,7 +85,7 @@ export function useChat(chatId: string | null) {
     onGeneratedImage: (image) => {
       setGeneratedImages((prev) => [...prev, image]);
     },
-    onDone: ({ thinking, usage, artifacts: doneArtifacts, generatedImages: doneImages, waitingForInput: wfi }) => {
+    onDone: ({ thinking, usage, artifacts: doneArtifacts, generatedImages: doneImages, toolCalls, toolResults, waitingForInput: wfi }) => {
       if (!doneCalledRef.current) {
         doneCalledRef.current = true;
         // Cancel any pending rAF and do a final flush with metadata
@@ -105,6 +105,8 @@ export function useChat(chatId: string | null) {
               usage: usage || undefined,
               artifacts: doneArtifacts || undefined,
               generatedImages: doneImages || undefined,
+              toolCalls: toolCalls || undefined,
+              toolResults: toolResults || undefined,
             });
           }
           const finalMsgs = updated;
