@@ -115,7 +115,7 @@ export const MessageBubble = memo(function MessageBubble({
           isUser
             ? "bg-blue-500/20 border border-blue-400/20 text-white/95"
             : "bg-white/5 border border-white/10 text-white/90"
-        } ${message.queued ? "opacity-60" : ""}`}
+        } ${message.queued ? "opacity-60" : ""} ${editing ? "w-full" : ""}`}
       >
         {isUser ? (
           editing ? (
