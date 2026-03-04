@@ -99,14 +99,19 @@ export function ChatView({
   const [editingCtx, setEditingCtx] = useState(false);
   const [ctxInput, setCtxInput] = useState("");
   const [promptModal, setPromptModal] = useState<{ systemPrompt: string; tools: { name: string; description: string }[] } | null>(null);
+  const [promptLoading, setPromptLoading] = useState(false);
 
   const openPromptViewer = useCallback(async () => {
     if (!chatId) return;
+    setPromptLoading(true);
+    setPromptModal(null);
     try {
       const data = await fetchRenderedPrompt(chatId);
       setPromptModal(data);
     } catch {
       setPromptModal({ systemPrompt: "(Failed to load)", tools: [] });
+    } finally {
+      setPromptLoading(false);
     }
   }, [chatId]);
 
@@ -339,10 +344,10 @@ export function ChatView({
       />
 
       {/* Rendered Prompt Viewer Modal */}
-      {promptModal && (
+      {(promptModal || promptLoading) && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-          onClick={() => setPromptModal(null)}
+          onClick={() => { setPromptModal(null); setPromptLoading(false); }}
         >
           <div
             className="bg-[#1a1a2e] border border-white/10 rounded-2xl w-full max-w-[640px] mx-4 max-h-[80vh] flex flex-col shadow-2xl"
@@ -352,32 +357,41 @@ export function ChatView({
               <h3 className="text-sm font-medium text-white/80">Rendered Agent Context</h3>
               <button
                 className="text-white/30 hover:text-white/60 text-lg leading-none"
-                onClick={() => setPromptModal(null)}
+                onClick={() => { setPromptModal(null); setPromptLoading(false); }}
               >
                 &times;
               </button>
             </div>
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-              <div>
-                <h4 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">System Prompt</h4>
-                <pre className="text-xs text-white/70 font-mono whitespace-pre-wrap bg-white/5 rounded-lg p-3 border border-white/5 max-h-[40vh] overflow-y-auto">
-                  {promptModal.systemPrompt}
-                </pre>
-              </div>
-              {promptModal.tools.length > 0 && (
-                <div>
-                  <h4 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">
-                    Tools ({promptModal.tools.length})
-                  </h4>
-                  <div className="space-y-1.5">
-                    {promptModal.tools.map((t) => (
-                      <div key={t.name} className="text-xs bg-white/5 rounded-lg px-3 py-2 border border-white/5">
-                        <span className="text-blue-300/70 font-mono">{t.name}</span>
-                        <span className="text-white/40 ml-2">{t.description}</span>
-                      </div>
-                    ))}
-                  </div>
+              {promptLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="w-5 h-5 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+                  <span className="ml-3 text-sm text-white/40">Loading prompt…</span>
                 </div>
+              ) : promptModal && (
+                <>
+                  <div>
+                    <h4 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">System Prompt</h4>
+                    <pre className="text-xs text-white/70 font-mono whitespace-pre-wrap bg-white/5 rounded-lg p-3 border border-white/5 max-h-[40vh] overflow-y-auto">
+                      {promptModal.systemPrompt}
+                    </pre>
+                  </div>
+                  {promptModal.tools.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">
+                        Tools ({promptModal.tools.length})
+                      </h4>
+                      <div className="space-y-1.5">
+                        {promptModal.tools.map((t) => (
+                          <div key={t.name} className="text-xs bg-white/5 rounded-lg px-3 py-2 border border-white/5">
+                            <span className="text-blue-300/70 font-mono">{t.name}</span>
+                            <span className="text-white/40 ml-2">{t.description}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
