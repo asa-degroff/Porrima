@@ -32,14 +32,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [synthesisRunning, setSynthesisRunning] = useState(false);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
   const [passkeyMessage, setPasskeyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-  const [ttsSettings, setTtsSettings] = useState<TTSSettings>({
-    voice: "af_heart",
-    speed: 1.0,
-    pitch: 1.0,
-    autoReadEnabled: false,
-  });
-  const [ttsVoices, setTtsVoices] = useState<Array<{ label: string; voices: Array<{ id: string; name: string }> }}([]);
+  const [ttsSettings, setTtsSettings] = useState<TTSSettings | null>(null);
+  const [ttsVoices, setTtsVoices] = useState<Array<{ label: string; voices: Array<{ id: string; name: string }> }>>([]);
   const [ttsLoading, setTtsLoading] = useState(false);
+  const [ttsError, setTtsError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -60,12 +56,16 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   // Fetch TTS settings and voices
   useEffect(() => {
     setTtsLoading(true);
+    setTtsError(null);
     Promise.all([getTTSSettings(), getTTSVoices()])
       .then(([settings, voices]) => {
         setTtsSettings(settings);
         setTtsVoices(voices);
       })
-      .catch(() => {})
+      .catch((err) => {
+        console.error("[TTS] Failed to load settings:", err);
+        setTtsError("TTS service unavailable");
+      })
       .finally(() => setTtsLoading(false));
   }, []);
 
@@ -485,7 +485,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           <div className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">Text-to-Speech</h3>
             
-            {ttsLoading ? (
+            {ttsError ? (
+              <div className="p-3 rounded-lg bg-red-500/10 border border-red-400/20">
+                <p className="text-sm text-red-300">{ttsError}</p>
+                <p className="text-xs text-red-400/60 mt-1">Make sure the TTS service is running on the server.</p>
+              </div>
+            ) : ttsLoading || !ttsSettings ? (
               <p className="text-white/30 text-sm">Loading TTS settings...</p>
             ) : (
               <div className="space-y-3">
@@ -509,6 +514,36 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         ttsSettings.autoReadEnabled ? "left-7" : "left-1"
                       }`}
                     />
+                  </button>
+                </div>
+
+                {/* Test button */}
+                <div className="pt-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await fetch("/api/tts/generate", {
+                          method: "POST",
+                          credentials: "include",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            text: "Hello! This is a test of the text-to-speech system.",
+                            voice: ttsSettings.voice,
+                            speed: ttsSettings.speed,
+                          }),
+                        });
+                        if (res.ok) {
+                          const data = await res.json();
+                          const audio = new Audio(data.audioUrl);
+                          audio.play();
+                        }
+                      } catch (err) {
+                        console.error("Test failed:", err);
+                      }
+                    }}
+                    className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-blue-500/15 border border-blue-400/20 text-blue-300 hover:bg-blue-500/25 transition-all"
+                  >
+                    Test Voice
                   </button>
                 </div>
 

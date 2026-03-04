@@ -9,7 +9,7 @@ const RippleGridBackground = lazy(() =>
   import("./components/RippleGridBackground").then((m) => ({ default: m.RippleGridBackground }))
 );
 import { useChats } from "./hooks/useChats";
-import { useChat } from "./hooks/useChat";
+import { useChat, hasBackgroundStream } from "./hooks/useChat";
 import { useModels } from "./hooks/useModels";
 import { useSettings } from "./hooks/useSettings";
 import { useAuth } from "./hooks/useAuth";
@@ -18,6 +18,7 @@ import { useKeyboardInset } from "./hooks/useKeyboardInset";
 import { updateChat as apiUpdateChat } from "./api/client";
 import { setCachedChat, getCachedChat, clearCachedChat } from "./lib/db";
 import { HapticsProvider } from "./hooks/useHaptics";
+import { useTTS } from "./hooks/useTTS";
 import type { Chat, ChatType } from "./types";
 
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
@@ -27,6 +28,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { isOnline } = useOnlineStatus();
   const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
+  const { playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts } = useTTS();
   const [activeChatId, setActiveChatId] = useState<string | null>(() => {
     return sessionStorage.getItem("activeChatId");
   });
@@ -71,6 +73,30 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Load TTS settings on mount
+  useEffect(() => {
+    loadTtsSettings();
+  }, [loadTtsSettings]);
+
+  // Handle auto-read for new assistant messages
+  const lastMessageRef = useRef<string>("");
+  
+  useEffect(() => {
+    if (messages.length === 0) return;
+    
+    const lastMsg = messages[messages.length - 1];
+    const lastMsgKey = `${lastMsg.role}-${lastMsg.content}-${lastMsg.timestamp}`;
+    
+    // Check if this is a new assistant message
+    if (lastMsg.role === "assistant" && lastMsgKey !== lastMessageRef.current) {
+      lastMessageRef.current = lastMsgKey;
+      
+      // Only auto-read if enabled and not currently playing
+      // Note: autoReadEnabled is stored in server TTS settings, not local settings
+      // We'll check a local state for this instead
+    }
+  }, [messages]);
+
   // Process message queue when coming back online
   useEffect(() => {
     if (isOnline && !prevOnlineRef.current) {
@@ -93,12 +119,17 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     async (id: string) => {
       setActiveChatId(id);
 
+      // If this chat has a background stream (active or recently completed),
+      // the useChat effect will restore its state — skip loadMessages to avoid
+      // overwriting with stale data from cache/server.
+      const hasBg = hasBackgroundStream(id);
+
       // Show cached data immediately for instant feel
       const cached = await getCachedChat(id);
       if (cached) {
         setActiveChat(cached);
         setActiveChatData(cached);
-        loadMessages(cached.messages);
+        if (!hasBg) loadMessages(cached.messages);
       }
 
       // Fetch fresh data from server in parallel
@@ -108,7 +139,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           const chat: Chat = await res.json();
           setActiveChat(chat);
           setActiveChatData(chat);
-          loadMessages(chat.messages);
+          if (!hasBg) loadMessages(chat.messages);
           setCachedChat(chat).catch(() => {});
         } else if (!cached) {
           setActiveChatId(null);
@@ -270,6 +301,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         selectedModelId={activeChat?.modelId || models[0]?.id || ""}
         systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}
         systemPromptPresets={settings.systemPromptPresets}
+        ttsAutoReadEnabled={playbackState.isPlaying || playbackState.isPaused}
+        onTtsAutoReadToggle={() => {}}
+        onReadAloud={playTts}
         onSend={handleSend}
         onEditMessage={handleEditMessage}
         onAbort={abort}
@@ -291,6 +325,36 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           onClose={handleCloseSettings}
           onLogout={onLogout}
         />
+      )}
+      
+      {/* TTS Control Bar */}
+      {(playbackState.isPlaying || playbackState.isPaused) && (
+        <div className="fixed bottom-0 left-0 right-0 z-40">
+          <div className="bg-[#1a1a2e]/95 backdrop-blur-md border-t border-white/10 py-2 px-4">
+            <div className="max-w-4xl mx-auto flex items-center gap-3">
+              <button
+                onClick={() => playbackState.isPlaying ? stopTts() : playbackState.isPaused && playTts(lastMessageRef.current ? messages[messages.length-1]?.content || "" : "")}
+                className="w-9 h-9 rounded-full bg-white/10 border border-white/20 text-white/60 flex items-center justify-center hover:bg-white/20 hover:text-white/80 transition-colors shrink-0"
+                title="Stop"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                </svg>
+              </button>
+              <div className="flex-1 min-w-0">
+                <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-400/60 transition-all duration-300 animate-pulse"
+                    style={{ width: playbackState.isPlaying ? "100%" : "30%" }}
+                  />
+                </div>
+                <div className="flex justify-between mt-1 text-[10px] text-white/40">
+                  <span>{playbackState.isPlaying ? "Playing..." : "Paused"}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
