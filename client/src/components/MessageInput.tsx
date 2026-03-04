@@ -138,13 +138,13 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
   };
 
   return (
-    <div className="p-3 md:p-4">
+    <div className="p-3 md:p-4 bg-white/3">
       <div
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className={`backdrop-blur-xl bg-white/5 border rounded-2xl p-2.5 md:p-3 focus-within:ring-2 focus-within:ring-blue-400/30 focus-within:border-blue-400/30 transition-colors ${
+        className={`backdrop-blur-sm bg-white/5 border rounded-2xl p-2 md:p-2.5 focus-within:ring-2 focus-within:ring-blue-400/30 focus-within:border-blue-400/30 transition-colors ${
           dragging
             ? "border-blue-400/50 ring-2 ring-blue-400/30 bg-blue-500/10"
             : waitingForInput
@@ -186,9 +186,9 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
           placeholder={waitingForInput ? "Answer the agent's question..." : "Send a message..."}
           rows={1}
           enterKeyHint="send"
-          className="w-full bg-transparent text-white/90 placeholder-white/30 text-base resize-none outline-none"
+          className="w-full bg-transparent text-white/90 placeholder-white/30 text-sm md:text-base leading-snug resize-none outline-none"
         />
-        <div className="flex justify-end items-center gap-2 mt-2">
+        <div className="flex justify-end items-center gap-2 mt-1">
           {/* Image picker button */}
           <button
             onClick={() => fileInputRef.current?.click()}

@@ -286,43 +286,46 @@ export function ChatView({
       />
 
       {/* Messages */}
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-3 md:px-6 py-3 md:py-4">
-        {messages.length === 0 && (
-          <div className="flex items-center justify-center h-full">
-            <p className="text-white/25 text-sm">
-              Send a message to start the conversation
-            </p>
-          </div>
-        )}
-        {messages.map((msg, i) => {
-          const isLast = i === messages.length - 1;
-          return (
-            <div key={`${msg.timestamp}-${i}`} className={!isLast ? "message-item" : undefined}>
-              <MessageBubble
-                message={msg}
-                isStreaming={streaming}
-                isLast={isLast}
-                streamingThinking={isLast ? streamingThinking : undefined}
-                activeTools={isLast ? activeTools : undefined}
-                artifacts={isLast && streaming ? artifacts : undefined}
-                generatedImages={isLast && streaming ? generatedImages : undefined}
-                editable={msg.role === "user" && !streaming && isOnline}
-                onEditMessage={msg.role === "user" ? onEditMessage : undefined}
-                messageIndex={i}
-              />
+      <div className="flex-1 relative min-h-0">
+        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-3 md:px-6 py-3 md:py-4">
+          {messages.length === 0 && (
+            <div className="flex items-center justify-center h-full">
+              <p className="text-white/25 text-sm">
+                Send a message to start the conversation
+              </p>
             </div>
-          );
-        })}
-        {warning && (
-          <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-400/20 text-amber-300 text-sm">
-            {warning.message}
-          </div>
-        )}
-        {error && (
-          <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-400/20 text-red-300 text-sm">
-            {error}
-          </div>
-        )}
+          )}
+          {messages.map((msg, i) => {
+            const isLast = i === messages.length - 1;
+            return (
+              <div key={`${msg.timestamp}-${i}`} className={!isLast ? "message-item" : undefined}>
+                <MessageBubble
+                  message={msg}
+                  isStreaming={streaming}
+                  isLast={isLast}
+                  streamingThinking={isLast ? streamingThinking : undefined}
+                  activeTools={isLast ? activeTools : undefined}
+                  artifacts={isLast && streaming ? artifacts : undefined}
+                  generatedImages={isLast && streaming ? generatedImages : undefined}
+                  editable={msg.role === "user" && !streaming && isOnline}
+                  onEditMessage={msg.role === "user" ? onEditMessage : undefined}
+                  messageIndex={i}
+                />
+              </div>
+            );
+          })}
+          {warning && (
+            <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-400/20 text-amber-300 text-sm">
+              {warning.message}
+            </div>
+          )}
+          {error && (
+            <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-400/20 text-red-300 text-sm">
+              {error}
+            </div>
+          )}
+        </div>
+        <div className="absolute inset-0 pointer-events-none z-10 shadow-[inset_0_16px_80px_-16px_rgba(0,0,0,0.35),inset_0px_-16px_80px_-16px_rgba(0,0,0,0.35)]" />
       </div>
 
       {/* Input */}

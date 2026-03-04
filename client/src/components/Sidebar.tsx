@@ -57,7 +57,7 @@ export function Sidebar({
   );
 
   return (
-    <div className={`w-72 h-full flex flex-col backdrop-blur-xl bg-white/[0.08] border-r border-white/10 fixed inset-y-0 left-0 z-30 transition-transform duration-300 ease-in-out md:static md:translate-x-0 md:z-auto ${isOpen ? "translate-x-0" : "-translate-x-full"}`}>
+    <div className={`w-72 h-full flex flex-col backdrop-blur-sm bg-white/[0.03] border-r border-white/10 fixed inset-y-0 left-0 z-30 transition-transform duration-300 ease-in-out md:static md:translate-x-0 md:z-auto ${isOpen ? "translate-x-0" : "-translate-x-full"}`}>
       {/* Header */}
       <div className="px-3 pt-3 pb-2 shrink-0">
         <div className="flex items-center justify-between rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]">
