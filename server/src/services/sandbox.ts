@@ -1,10 +1,58 @@
 import { execFile } from "child_process";
-import { writeFile, mkdir, unlink, access } from "fs/promises";
-import { join } from "path";
+import { writeFile, mkdir, unlink, access, rm as rmDir, stat } from "fs/promises";
+import { join, relative } from "path";
 import { tmpdir, homedir } from "os";
 import { v4 as uuid } from "uuid";
 
 const ARTIFACTS_DIR = join(homedir(), ".quje-agent", "artifacts");
+const WORKSPACE_DIR = join(homedir(), ".quje-agent", "workspace");
+
+// Persistent sandbox sessions: sessionId -> { dir, createdAt, lastUsed }
+const persistentSessions = new Map<string, { dir: string; createdAt: number; lastUsed: number }>();
+
+// Session cleanup: remove sessions older than 24 hours
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_SESSIONS = 10;
+
+async function cleanupOldSessions() {
+  const now = Date.now();
+  const toRemove: string[] = [];
+  
+  for (const [sessionId, session] of persistentSessions) {
+    if (now - session.lastUsed > SESSION_TTL_MS) {
+      toRemove.push(sessionId);
+    }
+  }
+  
+  // Also enforce max sessions by removing oldest
+  if (persistentSessions.size - toRemove.length >= MAX_SESSIONS) {
+    const sorted = Array.from(persistentSessions.entries())
+      .filter(([id]) => !toRemove.includes(id))
+      .sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+    
+    const excessCount = sorted.length - MAX_SESSIONS + 1;
+    for (let i = 0; i < excessCount; i++) {
+      toRemove.push(sorted[i][0]);
+    }
+  }
+  
+  for (const sessionId of toRemove) {
+    const session = persistentSessions.get(sessionId);
+    if (session) {
+      try {
+        await rmDir(session.dir, { recursive: true, force: true });
+      } catch (e) {
+        console.error(`[sandbox] Failed to cleanup session ${sessionId}:`, e);
+      }
+      persistentSessions.delete(sessionId);
+      console.log(`[sandbox] Cleaned up stale session: ${sessionId}`);
+    }
+  }
+}
+
+// Run cleanup on module load and every hour
+cleanupOldSessions();
+setInterval(cleanupOldSessions, 60 * 60 * 1000);
 
 export interface ExecutionResult {
   stdout: string;
@@ -92,15 +140,51 @@ function buildBwrapArgs(scriptPath: string, sandboxDir: string): string[] {
   ];
 }
 
+/**
+ * Execute Python code with optional persistent session.
+ * 
+ * @param code - Python code to execute
+ * @param timeout - Timeout in seconds (default 30)
+ * @param sessionId - Optional session ID for persistent workspace. If provided,
+ *   the sandbox directory persists between calls, allowing file I/O across executions.
+ *   If not provided, a temporary sandbox is created and destroyed.
+ */
 export async function executePython(
   code: string,
-  timeout: number = 30
+  timeout: number = 30,
+  sessionId?: string
 ): Promise<ExecutionResult> {
-  const sandboxId = uuid();
-  const sandboxDir = join(tmpdir(), `quje-sandbox-${sandboxId}`);
-  const tempFile = join(sandboxDir, "script.py");
+  let sandboxDir: string;
+  let isPersistent = false;
 
-  await mkdir(sandboxDir, { recursive: true });
+  if (sessionId) {
+    // Use persistent session
+    const existing = persistentSessions.get(sessionId);
+    if (existing) {
+      sandboxDir = existing.dir;
+      existing.lastUsed = Date.now();
+      isPersistent = true;
+      console.log(`[sandbox] Reusing persistent session: ${sessionId}`);
+    } else {
+      // Create new persistent session
+      sandboxDir = join(WORKSPACE_DIR, `session-${sessionId}`);
+      await mkdir(sandboxDir, { recursive: true });
+      persistentSessions.set(sessionId, {
+        dir: sandboxDir,
+        createdAt: Date.now(),
+        lastUsed: Date.now(),
+      });
+      isPersistent = true;
+      console.log(`[sandbox] Created persistent session: ${sessionId} at ${sandboxDir}`);
+    }
+  } else {
+    // Ephemeral session (original behavior)
+    const sandboxId = uuid();
+    sandboxDir = join(tmpdir(), `quje-sandbox-${sandboxId}`);
+    await mkdir(sandboxDir, { recursive: true });
+  }
+
+  const tempFile = join(sandboxDir, "script.py");
 
   try {
     await writeFile(tempFile, code, "utf-8");
@@ -113,7 +197,7 @@ export async function executePython(
       : [tempFile];
     const env = useBwrap ? process.env as Record<string, string> : makeSafeEnv();
 
-    console.log(`[sandbox] Executing Python (${useBwrap ? "bwrap" : "restricted"}): ${sandboxId}`);
+    console.log(`[sandbox] Executing Python (${useBwrap ? "bwrap" : "restricted"})${isPersistent ? ` [session: ${sessionId}]` : ""}`);
 
     return await new Promise<ExecutionResult>((resolve) => {
       execFile(
@@ -151,9 +235,14 @@ export async function executePython(
       );
     });
   } finally {
-    // Clean up the entire sandbox directory
-    const { rm } = await import("fs/promises");
-    rm(sandboxDir, { recursive: true, force: true }).catch(() => {});
+    // Only clean up ephemeral sessions
+    if (!isPersistent) {
+      const { rm } = await import("fs/promises");
+      rm(sandboxDir, { recursive: true, force: true }).catch(() => {});
+    } else {
+      // Clean up just the script file in persistent sessions
+      unlink(tempFile).catch(() => {});
+    }
   }
 }
 
