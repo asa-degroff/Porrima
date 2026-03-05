@@ -304,12 +304,12 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
             onInput={handleInput}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            className="min-h-[1.5em] outline-none text-white/90 text-sm md:text-base leading-snug break-words whitespace-pre-wrap"
+            className="min-h-8 py-1.5 outline-none text-white/90 text-sm md:text-base leading-snug break-words whitespace-pre-wrap"
           />
 
           {/* Placeholder */}
           {!hasContent && images.length === 0 && (
-            <div className="absolute top-0 left-0 pointer-events-none text-white/30 text-sm md:text-base leading-snug select-none">
+            <div className="absolute top-1.5 left-0 pointer-events-none text-white/30 text-sm md:text-base leading-snug select-none">
               {waitingForInput ? "Answer the agent's question..." : "Send a message..."}
             </div>
           )}
