@@ -63,6 +63,7 @@ const FACE_CONFIGS = [
 
 // Memoized faces — geometry and color never change per octahedron
 const OctahedronShape = memo(function OctahedronShape({ colorIndex }: { colorIndex: number }) {
+  // Center hue range around amber baseline
   const hue = 38 + (colorIndex - 2) * 3
   return (
     <>

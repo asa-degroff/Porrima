@@ -162,6 +162,20 @@ export function ChatView({
     }
   }, [messages, streamingThinking]);
 
+  // Keep scroll pinned to bottom when the container resizes
+  // (e.g. input textarea grows/shrinks as user types)
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      if (isNearBottomRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   if (!chatId) {
     return (
       <div className="flex-1 flex flex-col">
