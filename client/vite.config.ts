@@ -13,9 +13,9 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["favicon.ico", "logo.svg"],
       manifest: {
-        name: "qu.je Agent",
+        name: "qu.je agent",
         short_name: "qu.je",
-        description: "Local AI chat agent powered by Ollama",
+        description: "qu.je",
         theme_color: "#0f172a",
         background_color: "#0f172a",
         display: "standalone",
