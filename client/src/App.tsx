@@ -275,6 +275,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onOpenImageSandbox={handleOpenImageSandbox}
         isOpen={sidebarOpen}
         onClose={handleCloseSidebar}
+        isStreaming={streaming}
       />
       {sidebarOpen && (
         <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={handleCloseSidebar} />
@@ -302,7 +303,18 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}
         systemPromptPresets={settings.systemPromptPresets}
         ttsAutoReadEnabled={playbackState.isPlaying || playbackState.isPaused}
-        onTtsAutoReadToggle={() => {}}
+        onTtsAutoReadToggle={(enabled) => {
+          if (enabled) {
+            // Enable: play the last assistant message if available
+            const lastAssistantMsg = [...messages].reverse().find(m => m.role === "assistant" && m.content);
+            if (lastAssistantMsg) {
+              playTts(lastAssistantMsg.content);
+            }
+          } else {
+            // Disable: stop current playback
+            stopTts();
+          }
+        }}
         onReadAloud={playTts}
         onSend={handleSend}
         onEditMessage={handleEditMessage}

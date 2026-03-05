@@ -239,6 +239,31 @@ export const MessageBubble = memo(function MessageBubble({
         )}
       </div>
 
+      {/* Speaker button for assistant messages */}
+      {!isUser && message.content && onReadAloud && (
+        <button
+          onClick={() => onReadAloud(message.content)}
+          disabled={isPlayingTts}
+          className={`opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md hover:bg-white/10 mt-2.5 ml-1.5 shrink-0 ${
+            isPlayingTts ? "text-blue-400" : "text-white/40 hover:text-white/70"
+          }`}
+          title={isPlayingTts ? "Playing..." : "Read aloud"}
+        >
+          {isPlayingTts ? (
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
+              <rect x="6" y="4" width="3" height="16" />
+              <rect x="12" y="4" width="3" height="16" />
+              <rect x="18" y="4" width="3" height="16" />
+            </svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+            </svg>
+          )}
+        </button>
+      )}
+
       {/* Image lightbox */}
       {lightboxImage && createPortal(
         <ImageLightbox image={lightboxImage} onClose={() => setLightboxImage(null)} />,
