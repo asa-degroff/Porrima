@@ -28,6 +28,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
   const [hapticsEnabled, setHapticsEnabled] = useState(settings.hapticsEnabled ?? true);
   const [modelContextWindows, setModelContextWindows] = useState<Record<string, number>>(settings.modelContextWindows || {});
+  const [ctxWindowsExpanded, setCtxWindowsExpanded] = useState(false);
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
   const [synthesisRunning, setSynthesisRunning] = useState(false);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
@@ -212,55 +213,83 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           {/* Model Context Windows */}
           {models.length > 0 && (
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-white/60">Model Context Windows</label>
-              <p className="text-white/30 text-xs">Override the default context window per model. Applies to new chats.</p>
-              <div className="space-y-1.5">
-                {models.map((m) => {
-                  const override = modelContextWindows[m.id];
-                  const hasOverride = override !== undefined;
-                  return (
-                    <div key={m.id} className="flex items-center gap-2">
-                      <span className="text-xs text-white/50 truncate flex-1 min-w-0" title={m.id}>{m.name}</span>
-                      <input
-                        type="number"
-                        value={hasOverride ? override : ""}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          if (val === "") {
-                            setModelContextWindows((prev) => {
-                              const next = { ...prev };
-                              delete next[m.id];
-                              return next;
-                            });
-                          } else {
-                            setModelContextWindows((prev) => ({ ...prev, [m.id]: parseInt(val, 10) }));
-                          }
-                        }}
-                        placeholder={m.contextWindow.toLocaleString()}
-                        className="w-28 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 transition-all text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                      />
-                      {hasOverride && (
-                        <button
-                          onClick={() =>
-                            setModelContextWindows((prev) => {
-                              const next = { ...prev };
-                              delete next[m.id];
-                              return next;
-                            })
-                          }
-                          className="text-white/20 hover:text-white/50 transition-colors p-0.5"
-                          title="Reset to model default"
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M18 6L6 18" />
-                            <path d="M6 6l12 12" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+              <button
+                onClick={() => setCtxWindowsExpanded(!ctxWindowsExpanded)}
+                className="flex items-center gap-1.5 text-sm font-medium text-white/60 hover:text-white/80 transition-colors"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className={`transition-transform ${ctxWindowsExpanded ? "rotate-90" : ""}`}
+                >
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+                Model Context Windows
+                {Object.keys(modelContextWindows).length > 0 && (
+                  <span className="text-xs text-blue-300/60 font-normal">
+                    ({Object.keys(modelContextWindows).length} override{Object.keys(modelContextWindows).length !== 1 ? "s" : ""})
+                  </span>
+                )}
+              </button>
+              {ctxWindowsExpanded && (
+                <>
+                  <p className="text-white/30 text-xs">Override the default context window per model. Applies to new chats.</p>
+                  <div className="space-y-1.5">
+                    {models.map((m) => {
+                      const override = modelContextWindows[m.id];
+                      const hasOverride = override !== undefined;
+                      return (
+                        <div key={m.id} className="flex items-center gap-2">
+                          <span className="text-xs text-white/50 truncate flex-1 min-w-0" title={m.id}>{m.name}</span>
+                          <input
+                            type="number"
+                            value={hasOverride ? override : ""}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === "") {
+                                setModelContextWindows((prev) => {
+                                  const next = { ...prev };
+                                  delete next[m.id];
+                                  return next;
+                                });
+                              } else {
+                                setModelContextWindows((prev) => ({ ...prev, [m.id]: parseInt(val, 10) }));
+                              }
+                            }}
+                            placeholder={m.contextWindow.toLocaleString()}
+                            className="w-28 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 transition-all text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          />
+                          {hasOverride && (
+                            <button
+                              onClick={() =>
+                                setModelContextWindows((prev) => {
+                                  const next = { ...prev };
+                                  delete next[m.id];
+                                  return next;
+                                })
+                              }
+                              className="text-white/20 hover:text-white/50 transition-colors p-0.5"
+                              title="Reset to model default"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M18 6L6 18" />
+                                <path d="M6 6l12 12" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           )}
 
