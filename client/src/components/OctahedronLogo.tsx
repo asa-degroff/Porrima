@@ -3,20 +3,18 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 interface Props {
   isActive: boolean
   className?: string
+  count?: number
+  size?: number
+  gap?: number
+  cols?: number // if set, renders as a grid with this many columns
+  speed?: number // animation speed multiplier (default 1, use 0.5 for half speed)
 }
 
-const COUNT = 5
-const SIZE = 20
-const HALF = SIZE / 2
-const GAP = 3
 const RESTING_X = -20
 const RESTING_Y = 15
 
 // Regular octahedron geometry — tilt angle from CSS +Z axis to face normal
 const FACE_TILT = Math.asin(1 / Math.sqrt(3)) * 180 / Math.PI // ~35.26°
-const FACE_DIST = HALF / Math.sqrt(3)                    // center-to-face distance
-const FACE_W = HALF * Math.SQRT2                         // triangle base
-const FACE_H = HALF * Math.sqrt(6) / 2                   // triangle height
 
 interface Rotation { x: number; y: number }
 type Phase = 'idle' | 'spinning' | 'returning'
@@ -26,15 +24,15 @@ const SNAP_ORIENTATIONS: Rotation[] = [
   { x: 90, y: 0 }, { x: -90, y: 0 },
 ]
 
-function randomRestingOffsets(): Rotation[] {
-  return Array.from({ length: COUNT }, () => ({
+function randomRestingOffsets(count: number): Rotation[] {
+  return Array.from({ length: count }, () => ({
     x: (Math.random() - 0.5) * 16,
     y: (Math.random() - 0.5) * 16,
   }))
 }
 
-function randomTargets(): Rotation[] {
-  return Array.from({ length: COUNT }, () => {
+function randomTargets(count: number): Rotation[] {
+  return Array.from({ length: count }, () => {
     const o = SNAP_ORIENTATIONS[Math.floor(Math.random() * SNAP_ORIENTATIONS.length)]
     const axis = Math.random() > 0.5 ? 'x' : 'y'
     const dir = Math.random() > 0.5 ? 360 : -360
@@ -62,7 +60,10 @@ const FACE_CONFIGS = [
 ]
 
 // Memoized faces — geometry and color never change per octahedron
-const OctahedronShape = memo(function OctahedronShape({ colorIndex }: { colorIndex: number }) {
+const OctahedronShape = memo(function OctahedronShape({ half, colorIndex }: { half: number; colorIndex: number }) {
+  const faceDist = half / Math.sqrt(3)
+  const faceW = half * Math.SQRT2
+  const faceH = half * Math.sqrt(6) / 2
   // Center hue range around amber baseline
   const hue = 38 + (colorIndex - 2) * 3
   return (
@@ -72,17 +73,17 @@ const OctahedronShape = memo(function OctahedronShape({ colorIndex }: { colorInd
           key={i}
           style={{
             position: 'absolute',
-            width: FACE_W,
-            height: FACE_H,
+            width: faceW,
+            height: faceH,
             left: '50%',
             top: '50%',
-            marginLeft: -FACE_W / 2,
+            marginLeft: -faceW / 2,
             // Align triangle centroid (not bbox center) with octahedron center
-            marginTop: f.up ? -FACE_H * 2 / 3 : -FACE_H / 3,
+            marginTop: f.up ? -faceH * 2 / 3 : -faceH / 3,
             // Pivot around the triangle centroid
             transformOrigin: f.up ? '50% 66.67%' : '50% 33.33%',
             backfaceVisibility: 'hidden',
-            transform: `rotateY(${f.ry}deg) rotateX(${f.rx}deg) translateZ(${FACE_DIST}px)`,
+            transform: `rotateY(${f.ry}deg) rotateX(${f.rx}deg) translateZ(${faceDist}px)`,
             clipPath: f.up
               ? 'polygon(50% 0%, 0% 100%, 100% 100%)'
               : 'polygon(0% 0%, 100% 0%, 50% 100%)',
@@ -94,7 +95,16 @@ const OctahedronShape = memo(function OctahedronShape({ colorIndex }: { colorInd
   )
 })
 
-export const OctahedronLogo = memo(function OctahedronLogo({ isActive, className = '' }: Props) {
+export const OctahedronLogo = memo(function OctahedronLogo({
+  isActive,
+  className = '',
+  count = 5,
+  size = 20,
+  gap = 3,
+  cols,
+  speed = 1,
+}: Props) {
+  const half = size / 2
   const [rotations, setRotations] = useState<Rotation[] | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
   const fallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -102,8 +112,8 @@ export const OctahedronLogo = memo(function OctahedronLogo({ isActive, className
   const activeRef = useRef(isActive)
 
   const resting = useMemo(
-    () => randomRestingOffsets().map(o => ({ x: RESTING_X + o.x, y: RESTING_Y + o.y })),
-    [],
+    () => randomRestingOffsets(count).map(o => ({ x: RESTING_X + o.x, y: RESTING_Y + o.y })),
+    [count],
   )
 
   useEffect(() => { activeRef.current = isActive }, [isActive])
@@ -112,9 +122,9 @@ export const OctahedronLogo = memo(function OctahedronLogo({ isActive, className
   useEffect(() => {
     if (isActive && phase === 'idle') {
       setPhase('spinning')
-      setRotations(randomTargets())
+      setRotations(randomTargets(count))
     }
-  }, [isActive, phase])
+  }, [isActive, phase, count])
 
   // Cleanup timers on unmount
   useEffect(() => () => {
@@ -125,26 +135,26 @@ export const OctahedronLogo = memo(function OctahedronLogo({ isActive, className
   // Fallback timer in case transitionend doesn't fire
   useEffect(() => {
     if (phase === 'idle') return
-    const ms = phase === 'returning' ? 1000 : 950
+    const ms = (phase === 'returning' ? 1000 : 950) / speed
     fallbackRef.current = setTimeout(() => {
       if (phase === 'spinning') {
         pauseRef.current = setTimeout(() => {
           setPhase('returning')
           setRotations(null)
-        }, 80)
+        }, 80 / speed)
       } else if (phase === 'returning') {
         if (activeRef.current) {
           pauseRef.current = setTimeout(() => {
             setPhase('spinning')
-            setRotations(randomTargets())
-          }, 120)
+            setRotations(randomTargets(count))
+          }, 120 / speed)
         } else {
           setPhase('idle')
         }
       }
     }, ms)
     return () => { if (fallbackRef.current) clearTimeout(fallbackRef.current) }
-  }, [phase])
+  }, [phase, count, speed])
 
   const handleTransitionEnd = useCallback((e: React.TransitionEvent) => {
     if (e.propertyName !== 'transform') return
@@ -153,43 +163,57 @@ export const OctahedronLogo = memo(function OctahedronLogo({ isActive, className
       pauseRef.current = setTimeout(() => {
         setPhase('returning')
         setRotations(null)
-      }, 80)
+      }, 80 / speed)
     } else if (phase === 'returning') {
       if (activeRef.current) {
         pauseRef.current = setTimeout(() => {
           setPhase('spinning')
-          setRotations(randomTargets())
-        }, 120)
+          setRotations(randomTargets(count))
+        }, 120 / speed)
       } else {
         setPhase('idle')
       }
     }
-  }, [phase])
+  }, [phase, count, speed])
+
+  const containerStyle: React.CSSProperties = cols
+    ? {
+      display: 'inline-grid',
+      gridTemplateColumns: `repeat(${cols}, ${size}px)`,
+      gap: `${gap}px`,
+      perspective: size * 10,
+    }
+    : {
+      display: 'inline-flex',
+      alignItems: 'center',
+      perspective: size * 10,
+      gap: `${gap}px`,
+    }
 
   return (
     <div
-      className={`inline-flex items-center select-none ${className}`}
-      style={{ perspective: SIZE * 10, gap: `${GAP}px` }}
+      className={`select-none ${className}`}
+      style={containerStyle}
     >
-      {Array.from({ length: COUNT }, (_, i) => {
+      {Array.from({ length: count }, (_, i) => {
         const r = rotations?.[i] ?? resting[i]
-        const dur = phase === 'spinning' ? 0.6 : phase === 'returning' ? 0.7 : 0.5
-        const del = phase === 'spinning' ? i * 50 : phase === 'returning' ? i * 35 : 0
+        const dur = (phase === 'spinning' ? 0.6 : phase === 'returning' ? 0.7 : 0.5) / speed
+        const del = (phase === 'spinning' ? i * 50 : phase === 'returning' ? i * 35 : 0) / speed
         return (
-          <div key={i} style={{ width: SIZE, height: SIZE, perspective: SIZE * 5 }}>
+          <div key={i} style={{ width: size, height: size, perspective: size * 5 }}>
             <div
               style={{
-                width: SIZE,
-                height: SIZE,
+                width: size,
+                height: size,
                 position: 'relative',
                 transformStyle: 'preserve-3d',
                 transform: `rotateX(${r.x}deg) rotateY(${r.y}deg)`,
                 transition: `transform ${dur}s cubic-bezier(0.25, 0.46, 0.45, 0.94)`,
                 transitionDelay: `${del}ms`,
               }}
-              onTransitionEnd={i === COUNT - 1 ? handleTransitionEnd : undefined}
+              onTransitionEnd={i === count - 1 ? handleTransitionEnd : undefined}
             >
-              <OctahedronShape colorIndex={i} />
+              <OctahedronShape half={half} colorIndex={i} />
             </div>
           </div>
         )
