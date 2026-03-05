@@ -74,6 +74,7 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
     onSend(trimmed, images.length > 0 ? images : undefined);
     textRef.current = "";
     setHasContent(false);
+    setImages([]);
     if (editorRef.current) {
       editorRef.current.textContent = "";
       editorRef.current.focus();
