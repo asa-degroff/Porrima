@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ChatListItem as ChatListItemType, ChatType } from "../types";
 import { ChatListItem } from "./ChatListItem";
+import { OctahedronLogo } from "./OctahedronLogo";
 
 interface Props {
   chats: ChatListItemType[];
@@ -12,6 +13,7 @@ interface Props {
   onOpenImageSandbox: () => void;
   isOpen: boolean;
   onClose: () => void;
+  isStreaming?: boolean;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -43,6 +45,7 @@ export function Sidebar({
   onOpenImageSandbox,
   isOpen,
   onClose,
+  isStreaming = false,
 }: Props) {
   const [agentExpanded, setAgentExpanded] = useState(true);
   const [quickExpanded, setQuickExpanded] = useState(true);
@@ -61,11 +64,18 @@ export function Sidebar({
       {/* Header */}
       <div className="px-3 pt-3 pb-2 shrink-0">
         <div className="flex items-center justify-between rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]">
-          <div className="flex items-center gap-2">
-            <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
-            <h1 className="text-lg font-semibold text-white/90 tracking-tight">
-              qu.je
-            </h1>
+          <div className="relative flex items-center">
+            {/* Static logo + title */}
+            <div className={`flex items-center gap-2 transition-opacity duration-300 ${isStreaming ? 'opacity-0' : 'opacity-100'}`}>
+              <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
+              <h1 className="text-lg font-semibold text-white/90 tracking-tight">
+                qu.je
+              </h1>
+            </div>
+            {/* Animated octahedrons — shown during streaming */}
+            <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${isStreaming ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+              <OctahedronLogo isActive={isStreaming} />
+            </div>
           </div>
           <button
             onClick={onOpenSettings}
