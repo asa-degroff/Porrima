@@ -101,6 +101,7 @@ export function ChatView({
   queueProcessing = false,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const prevChatIdRef = useRef<string | null>(null);
   const prevMessageCountRef = useRef(0);
@@ -146,33 +147,27 @@ export function ChatView({
     }
   }, [chatId, messages]);
 
-  // Auto-scroll on new messages / streaming, but only if user is near bottom
+  // Force near-bottom when new messages are added (user sent or assistant placeholder)
   useEffect(() => {
-    // Always scroll when new messages are added (user sent or assistant placeholder)
     if (messages.length > prevMessageCountRef.current) {
       isNearBottomRef.current = true;
     }
     prevMessageCountRef.current = messages.length;
+  }, [messages]);
 
-    if (isNearBottomRef.current && scrollRef.current) {
-      const el = scrollRef.current;
-      requestAnimationFrame(() => {
-        el.scrollTop = el.scrollHeight;
-      });
-    }
-  }, [messages, streamingThinking]);
-
-  // Keep scroll pinned to bottom when the container resizes
-  // (e.g. input textarea grows/shrinks as user types)
+  // Auto-scroll via ResizeObserver on the content div (fires before paint).
+  // Also observes the scroll container for when the input textarea resizes.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
+    const scroll = scrollRef.current;
+    const content = contentRef.current;
+    if (!scroll) return;
     const observer = new ResizeObserver(() => {
       if (isNearBottomRef.current) {
-        el.scrollTop = el.scrollHeight;
+        scroll.scrollTop = scroll.scrollHeight;
       }
     });
-    observer.observe(el);
+    if (content) observer.observe(content);
+    observer.observe(scroll);
     return () => observer.disconnect();
   }, []);
 
@@ -334,42 +329,44 @@ export function ChatView({
       {/* Messages */}
       <div className="flex-1 relative min-h-0">
         <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-3 md:px-6 py-3 md:py-4">
-          {messages.length === 0 && (
-            <div className="flex items-center justify-center h-full">
-              <p className="text-white/25 text-sm">
-                Send a message to start the conversation
-              </p>
-            </div>
-          )}
-          {messages.map((msg, i) => {
-            const isLast = i === messages.length - 1;
-            return (
-              <div key={`${msg.timestamp}-${i}`} className={!isLast ? "message-item" : undefined}>
-                <MessageBubble
-                  message={msg}
-                  isStreaming={streaming}
-                  isLast={isLast}
-                  streamingThinking={isLast ? streamingThinking : undefined}
-                  activeTools={isLast ? activeTools : undefined}
-                  artifacts={isLast && streaming ? artifacts : undefined}
-                  generatedImages={isLast && streaming ? generatedImages : undefined}
-                  editable={msg.role === "user" && !streaming && isOnline}
-                  onEditMessage={msg.role === "user" ? onEditMessage : undefined}
-                  messageIndex={i}
-                />
+          <div ref={contentRef}>
+            {messages.length === 0 && (
+              <div className="flex items-center justify-center h-full">
+                <p className="text-white/25 text-sm">
+                  Send a message to start the conversation
+                </p>
               </div>
-            );
-          })}
-          {warning && (
-            <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-400/20 text-amber-300 text-sm">
-              {warning.message}
-            </div>
-          )}
-          {error && (
-            <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-400/20 text-red-300 text-sm">
-              {error}
-            </div>
-          )}
+            )}
+            {messages.map((msg, i) => {
+              const isLast = i === messages.length - 1;
+              return (
+                <div key={`${msg.timestamp}-${i}`} className={!isLast ? "message-item" : undefined}>
+                  <MessageBubble
+                    message={msg}
+                    isStreaming={streaming}
+                    isLast={isLast}
+                    streamingThinking={isLast ? streamingThinking : undefined}
+                    activeTools={isLast ? activeTools : undefined}
+                    artifacts={isLast && streaming ? artifacts : undefined}
+                    generatedImages={isLast && streaming ? generatedImages : undefined}
+                    editable={msg.role === "user" && !streaming && isOnline}
+                    onEditMessage={msg.role === "user" ? onEditMessage : undefined}
+                    messageIndex={i}
+                  />
+                </div>
+              );
+            })}
+            {warning && (
+              <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-400/20 text-amber-300 text-sm">
+                {warning.message}
+              </div>
+            )}
+            {error && (
+              <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-400/20 text-red-300 text-sm">
+                {error}
+              </div>
+            )}
+          </div>
         </div>
         <div className="absolute inset-0 pointer-events-none z-10 shadow-[inset_0_16px_80px_-16px_rgba(0,0,0,0.35),inset_0px_-16px_80px_-16px_rgba(0,0,0,0.35)]" />
       </div>
