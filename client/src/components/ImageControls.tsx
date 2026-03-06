@@ -115,8 +115,8 @@ export function ImageControls({ models, generating, progress, onGenerate, onAbor
           value={positivePrompt}
           onChange={(e) => setPositivePrompt(e.target.value)}
           onKeyDown={handleKeyDown}
-          rows={4}
-          className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/90 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/30 transition-all"
+          rows={16}
+          className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/90 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/30 transition-colors"
           placeholder="A detailed description of the image..."
         />
       </div>
@@ -134,7 +134,7 @@ export function ImageControls({ models, generating, progress, onGenerate, onAbor
             value={negativePrompt}
             onChange={(e) => setNegativePrompt(e.target.value)}
             rows={2}
-            className="w-full mt-1.5 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/70 placeholder-white/25 resize-y outline-none focus:ring-1 focus:ring-amber-400/20 transition-all"
+            className="w-full mt-1.5 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/70 placeholder-white/25 resize-y outline-none focus:ring-1 focus:ring-amber-400/20 transition-colors"
             placeholder="What to avoid..."
           />
         )}

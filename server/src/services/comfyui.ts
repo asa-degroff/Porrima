@@ -96,7 +96,7 @@ function buildWorkflow(params: ImageGenerationParams, clientId: string): Record<
     "2": {
       class_type: "DualCLIPLoader",
       inputs: {
-        clip_name1: "t5xxl_fp16.safetensors",
+        clip_name1: "qwen_3_4b.safetensors",
         clip_name2: "qwen_3_4b.safetensors",
         type: "flux",
       },
@@ -215,13 +215,20 @@ export async function generateImage(
         });
 
         if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
+          const err = await res.json().catch(() => ({})) as any;
           cleanup();
-          reject(
-            new Error(
-              `ComfyUI prompt error: ${(err as any).error?.message || res.statusText}`
-            )
-          );
+          // Extract node-level errors for a useful message
+          let detail = err.error?.message || res.statusText;
+          if (err.node_errors) {
+            const nodeDetails = Object.entries(err.node_errors)
+              .map(([id, info]: [string, any]) => {
+                const errs = info.errors?.map((e: any) => e.message || e.details).join("; ") || "unknown";
+                return `${info.class_type || id}: ${errs}`;
+              })
+              .join(", ");
+            if (nodeDetails) detail += ` [${nodeDetails}]`;
+          }
+          reject(new Error(`ComfyUI prompt error: ${detail}`));
           return;
         }
 
