@@ -5,10 +5,8 @@ import { ImageControls } from "./ImageControls";
 import { ImageGallery } from "./ImageGallery";
 import { ImageDetails } from "./ImageDetails";
 import { VisionControls } from "./VisionControls";
-import { VisionGallery } from "./VisionGallery";
 import { VisionChat } from "./VisionChat";
 import type { ImageGenerationParams, OllamaModel } from "../types";
-import type { AnalyzedImage } from "../api/client";
 
 interface Props {
   models: OllamaModel[];
@@ -17,7 +15,6 @@ interface Props {
 }
 
 type SandboxMode = "generate" | "analyze";
-type ViewMode = "gallery" | "chat";
 
 export function ImageSandbox({ models: ollamaModels, defaultModelId, onClose }: Props) {
   const {
@@ -49,10 +46,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, onClose }: 
   } = useVisionSandbox();
 
   const [mode, setMode] = useState<SandboxMode>("analyze");
-  const [viewMode, setViewMode] = useState<ViewMode>("gallery");
   const [controlParams, setControlParams] = useState<Partial<ImageGenerationParams> | undefined>();
   const [visionModel, setVisionModel] = useState<string>(() => {
-    // Prefer the default model if it's vision-capable, otherwise find a vision model
     const defaultModel = ollamaModels.find((m) => m.id === defaultModelId);
     if (defaultModel && defaultModel.family.includes("vl")) return defaultModelId;
     const visionDefault = ollamaModels.find((m) => m.family.includes("vl"));
@@ -61,9 +56,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, onClose }: 
 
   const error = mode === "generate" ? imageError : visionError;
 
-  const isAvailable = mode === "generate" 
+  const isAvailable = mode === "generate"
     ? (comfyuiStatus?.available ?? false)
-    : true; // Vision is always "available" if Ollama is running
+    : true;
 
   const handleUseParams = useCallback((params: Partial<ImageGenerationParams>) => {
     setControlParams({ ...params });
@@ -71,7 +66,6 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, onClose }: 
 
   const handleAnalyze = useCallback(async (imageData: string, preset: string) => {
     await analyzeImage(imageData, preset, visionModel);
-    setViewMode("chat");
   }, [analyzeImage, visionModel]);
 
   const handleChat = useCallback(async (message: string) => {
@@ -86,13 +80,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, onClose }: 
 
   const handleSelectAnalyzedImage = useCallback(async (id: string) => {
     await selectImage(id);
-    setViewMode("chat");
   }, [selectImage]);
-
-  const handleCloseChat = useCallback(() => {
-    setViewMode("gallery");
-    setSelectedAnalyzedImage(null);
-  }, [setSelectedAnalyzedImage]);
 
   return (
     <div className="flex-1 flex flex-col h-full min-w-0">
@@ -100,7 +88,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, onClose }: 
       <div className="shrink-0 px-4 py-3 border-b border-white/10 flex items-center justify-between backdrop-blur-xl bg-white/[0.03]">
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold text-white/90">Image Sandbox</h2>
-          
+
           {/* Mode switcher */}
           <div className="flex items-center gap-1 bg-white/5 rounded-lg p-1">
             <button
@@ -145,42 +133,15 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, onClose }: 
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {mode === "analyze" && selectedAnalyzedImage && (
-            <div className="flex items-center gap-1 bg-white/5 rounded-lg p-1">
-              <button
-                onClick={() => setViewMode("gallery")}
-                className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                  viewMode === "gallery"
-                    ? "bg-white/10 text-white/90"
-                    : "text-white/50 hover:text-white/70"
-                }`}
-              >
-                Gallery
-              </button>
-              <button
-                onClick={() => setViewMode("chat")}
-                className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                  viewMode === "chat"
-                    ? "bg-white/10 text-white/90"
-                    : "text-white/50 hover:text-white/70"
-                }`}
-              >
-                Chat
-              </button>
-            </div>
-          )}
-          
-          <button
-            onClick={onClose}
-            className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 6L6 18" />
-              <path d="M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+        <button
+          onClick={onClose}
+          className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 6L6 18" />
+            <path d="M6 6l12 12" />
+          </svg>
+        </button>
       </div>
 
       {/* Error banner */}
@@ -227,49 +188,55 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, onClose }: 
           </>
         ) : (
           <>
-            {/* Vision mode */}
-            {viewMode === "gallery" ? (
-              <>
-                {/* Vision Controls panel */}
-                <div className="w-80 shrink-0 border-r border-white/10 overflow-y-auto p-4 backdrop-blur-xl bg-white/[0.03]">
-                  <VisionControls
-                    presets={presets}
-                    models={ollamaModels}
-                    selectedModel={visionModel}
-                    onModelChange={setVisionModel}
-                    analyzing={analyzing}
-                    onAnalyze={handleAnalyze}
-                  />
-                </div>
+            {/* Left panel: controls + conversation list */}
+            <div className="w-80 shrink-0 border-r border-white/10 backdrop-blur-xl bg-white/[0.03]">
+              <VisionControls
+                presets={presets}
+                models={ollamaModels}
+                selectedModel={visionModel}
+                onModelChange={setVisionModel}
+                analyzing={analyzing}
+                onAnalyze={handleAnalyze}
+                analyzedImages={analyzedImages}
+                selectedImage={selectedAnalyzedImage}
+                onSelectImage={handleSelectAnalyzedImage}
+                onDeleteImage={deleteImage}
+              />
+            </div>
 
-                {/* Gallery */}
-                <div className="flex-1 flex flex-col min-w-0">
-                  <VisionGallery
-                    images={analyzedImages}
-                    selectedImage={selectedAnalyzedImage}
-                    onSelect={handleSelectAnalyzedImage}
-                    onDelete={deleteImage}
-                  />
-                </div>
-              </>
-            ) : (
-              /* Chat view */
-              selectedAnalyzedImage ? (
-                <div className="flex-1 flex flex-col min-w-0">
-                  <VisionChat
-                    image={selectedAnalyzedImage}
-                    chatting={chatting}
-                    onChat={handleChat}
-                    onReanalyze={handleReanalyze}
-                    onClose={handleCloseChat}
-                  />
-                </div>
+            {/* Right panel: image + description/chat */}
+            <div className="flex-1 flex flex-col min-w-0">
+              {selectedAnalyzedImage ? (
+                <VisionChat
+                  image={selectedAnalyzedImage}
+                  chatting={chatting}
+                  onChat={handleChat}
+                  onReanalyze={handleReanalyze}
+                />
               ) : (
-                <div className="flex-1 flex items-center justify-center text-white/40">
-                  Select an image to chat
+                <div className="flex-1 flex items-center justify-center text-white/30">
+                  <div className="text-center space-y-2">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="48"
+                      height="48"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="mx-auto opacity-50"
+                    >
+                      <rect width="18" height="18" x="3" y="3" rx="2" />
+                      <circle cx="9" cy="9" r="2" />
+                      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+                    </svg>
+                    <p className="text-sm">Upload an image to get started</p>
+                  </div>
                 </div>
-              )
-            )}
+              )}
+            </div>
           </>
         )}
       </div>

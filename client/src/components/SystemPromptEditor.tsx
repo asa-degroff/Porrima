@@ -108,7 +108,7 @@ export function SystemPromptEditor({ value, onChange, disabled, presets }: Props
               </svg>
             </button>
             {dropdownOpen && (
-              <div className="absolute right-0 top-full mt-1 z-30 min-w-[180px] backdrop-blur-xl bg-white/[0.08] border border-white/15 rounded-xl shadow-2xl py-1 overflow-hidden">
+              <div className="absolute right-0 top-full mt-1 z-30 min-w-[180px] backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1 overflow-hidden">
                 {presets.map((p) => (
                   <button
                     key={p.id}

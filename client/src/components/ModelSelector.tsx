@@ -49,7 +49,7 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
         </svg>
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-30 min-w-[200px] max-h-[320px] overflow-y-auto backdrop-blur-xl bg-white/[0.08] border border-white/15 rounded-xl shadow-2xl py-1">
+        <div className="absolute right-0 top-full mt-1 z-30 min-w-[200px] max-h-[320px] overflow-y-auto backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
           {models.map((m) => (
             <button
               key={m.id}

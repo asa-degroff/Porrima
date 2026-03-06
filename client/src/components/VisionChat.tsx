@@ -7,14 +7,14 @@ interface Props {
   chatting: boolean;
   onChat: (message: string) => Promise<string>;
   onReanalyze: (preset: string) => Promise<void>;
-  onClose: () => void;
 }
 
-export function VisionChat({ image, chatting, onChat, onReanalyze, onClose }: Props) {
+export function VisionChat({ image, chatting, onChat, onReanalyze }: Props) {
   const [messages, setMessages] = useState<VisionMessage[]>(image.conversation);
   const [input, setInput] = useState("");
   const [presetSelectOpen, setPresetSelectOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const presetRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setMessages(image.conversation);
@@ -24,13 +24,23 @@ export function VisionChat({ image, chatting, onChat, onReanalyze, onClose }: Pr
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Close preset menu on outside click
+  useEffect(() => {
+    if (!presetSelectOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (presetRef.current && !presetRef.current.contains(e.target as Node)) {
+        setPresetSelectOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [presetSelectOpen]);
+
   const handleSend = useCallback(async () => {
     if (!input.trim() || chatting) return;
-
     const userMessage = input.trim();
     setInput("");
-    
-    // Optimistically add user message
+
     const userMsg: VisionMessage = {
       role: "user",
       content: userMessage,
@@ -48,7 +58,6 @@ export function VisionChat({ image, chatting, onChat, onReanalyze, onClose }: Pr
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (error) {
       console.error("Chat failed:", error);
-      // Remove the optimistic message on error
       setMessages((prev) => prev.slice(0, -1));
     }
   }, [input, chatting, onChat]);
@@ -64,7 +73,7 @@ export function VisionChat({ image, chatting, onChat, onReanalyze, onClose }: Pr
     setPresetSelectOpen(false);
     try {
       await onReanalyze(preset);
-      setMessages([]); // Reset conversation on re-analyze
+      setMessages([]);
     } catch (error) {
       console.error("Re-analyze failed:", error);
     }
@@ -82,79 +91,76 @@ export function VisionChat({ image, chatting, onChat, onReanalyze, onClose }: Pr
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="shrink-0 px-4 py-3 border-b border-white/10 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h3 className="text-sm font-medium text-white/90">Chat about this image</h3>
-          <span className="text-xs text-white/40">({image.preset} · {image.model})</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <button
-              onClick={() => setPresetSelectOpen(!presetSelectOpen)}
-              className="text-xs px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-white/60 hover:text-white/80 transition-colors"
-              title="Re-analyze with different style"
-            >
-              Re-analyze
-            </button>
-            {presetSelectOpen && (
-              <div className="absolute right-0 top-full mt-1 bg-[#1a1a2e] border border-white/10 rounded-lg shadow-xl z-50 min-w-[160px]">
-                {presets.map((preset) => (
-                  <button
-                    key={preset.key}
-                    onClick={() => handlePresetSelect(preset.key)}
-                    className={`
-                      w-full text-left px-3 py-2 text-xs hover:bg-white/5 transition-colors
-                      ${preset.key === image.preset ? "text-white/80" : "text-white/60"}
-                    `}
-                  >
-                    {preset.name}
-                  </button>
-                ))}
-              </div>
-            )}
+      {/* Scrollable content area */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Image + metadata */}
+        <div className="flex flex-col items-start gap-3">
+          <img
+            src={image.url}
+            alt={image.filename}
+            className="max-w-sm max-h-80 rounded-lg object-contain shadow-lg shadow-black/30"
+          />
+          <div className="flex items-center gap-2 text-xs text-white/40">
+            <span>{image.preset}</span>
+            <span className="text-white/15">·</span>
+            <span>{image.model}</span>
+            <span className="text-white/15">·</span>
+            <div className="relative" ref={presetRef}>
+              <button
+                onClick={() => setPresetSelectOpen(!presetSelectOpen)}
+                className="text-white/50 hover:text-white/80 transition-colors underline underline-offset-2 decoration-white/20"
+              >
+                Re-analyze
+              </button>
+              {presetSelectOpen && (
+                <div className="absolute left-0 top-full mt-1 z-30 min-w-[160px] backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
+                  {presets.map((preset) => (
+                    <button
+                      key={preset.key}
+                      onClick={() => handlePresetSelect(preset.key)}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                        preset.key === image.preset
+                          ? "bg-blue-500/15 text-blue-200"
+                          : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                    >
+                      {preset.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-          <button
-            onClick={onClose}
-            className="text-white/40 hover:text-white/70 transition-colors p-1"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 6L6 18" />
-              <path d="M6 6l12 12" />
-            </svg>
-          </button>
         </div>
-      </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {/* Initial description */}
-        <div className="bg-white/5 rounded-lg p-3">
-          <div className="text-xs text-white/50 mb-2">Initial Description</div>
-          <div className="text-sm text-white/80">
-            <MarkdownRenderer content={image.description} />
-          </div>
+        {/* Description */}
+        <div className="text-sm text-white/80 leading-relaxed">
+          <MarkdownRenderer content={image.description} />
         </div>
 
         {/* Conversation */}
-        {messages.map((msg, idx) => (
-          <div
-            key={idx}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`
-                max-w-[85%] rounded-lg p-3 text-sm
-                ${msg.role === "user"
-                  ? "bg-white/10 text-white/90"
-                  : "bg-white/5 text-white/80"
-                }
-              `}
-            >
-              <MarkdownRenderer content={msg.content} />
-            </div>
+        {messages.length > 0 && (
+          <div className="space-y-3 pt-2 border-t border-white/5">
+            {messages.map((msg, idx) => (
+              <div
+                key={idx}
+                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  className={`
+                    max-w-[85%] rounded-lg p-3 text-sm
+                    ${msg.role === "user"
+                      ? "bg-white/10 text-white/90"
+                      : "bg-white/5 text-white/80"
+                    }
+                  `}
+                >
+                  <MarkdownRenderer content={msg.content} />
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
 
         {chatting && (
           <div className="flex justify-start">
@@ -180,12 +186,12 @@ export function VisionChat({ image, chatting, onChat, onReanalyze, onClose }: Pr
             placeholder="Ask about this image..."
             disabled={chatting}
             rows={2}
-            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/90 placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-white/20 resize-none disabled:opacity-50"
+            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/90 placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-white/20 resize-none disabled:opacity-50"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || chatting}
-            className="px-4 py-2 bg-white/10 hover:bg-white/20 disabled:bg-white/5 disabled:text-white/20 text-white/80 rounded-lg text-sm font-medium transition-colors disabled:cursor-not-allowed"
+            className="px-4 py-2 bg-white/10 hover:bg-white/20 disabled:bg-white/5 disabled:text-white/20 text-white/80 rounded-lg text-sm font-medium transition-colors disabled:cursor-not-allowed self-end"
           >
             Send
           </button>
