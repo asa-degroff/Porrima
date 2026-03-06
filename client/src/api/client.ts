@@ -369,3 +369,103 @@ export function generateImage(
 
   return controller;
 }
+
+// --- Vision Analysis API ---
+
+export interface VisionPreset {
+  key: string;
+  name: string;
+  prompt: string;
+  markdown: boolean;
+}
+
+export interface VisionMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: number;
+}
+
+export interface AnalyzedImage {
+  id: string;
+  filename: string;
+  url: string;
+  description: string;
+  preset: string;
+  model: string;
+  conversation: VisionMessage[];
+  createdAt: string;
+}
+
+export async function fetchVisionPresets(): Promise<VisionPreset[]> {
+  const res = await apiFetch(`${BASE}/vision/presets`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function fetchAnalyzedImages(): Promise<AnalyzedImage[]> {
+  const res = await apiFetch(`${BASE}/vision/images`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function fetchAnalyzedImage(id: string): Promise<AnalyzedImage> {
+  const res = await apiFetch(`${BASE}/vision/images/${id}`);
+  if (!res.ok) throw new Error("Failed to fetch analyzed image");
+  return res.json();
+}
+
+export async function analyzeImage(
+  imageData: string,
+  preset: string,
+  model?: string
+): Promise<AnalyzedImage> {
+  const res = await apiFetch(`${BASE}/vision/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageData, preset, model }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to analyze image");
+  }
+  return res.json();
+}
+
+export async function chatAboutImage(
+  id: string,
+  message: string
+): Promise<{ response: string }> {
+  const res = await apiFetch(`${BASE}/vision/images/${id}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to chat about image");
+  }
+  return res.json();
+}
+
+export async function reanalyzeImage(
+  id: string,
+  preset: string
+): Promise<AnalyzedImage> {
+  const res = await apiFetch(`${BASE}/vision/images/${id}/reanalyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ preset }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to re-analyze image");
+  }
+  return res.json();
+}
+
+export async function deleteAnalyzedImage(id: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/vision/images/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to delete analyzed image");
+}

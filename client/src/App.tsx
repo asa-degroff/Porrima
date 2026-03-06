@@ -281,7 +281,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={handleCloseSidebar} />
       )}
       {imageSandboxOpen ? (
-        <ImageSandbox onClose={handleCloseImageSandbox} />
+        <ImageSandbox
+          models={models}
+          defaultModelId={activeChat?.modelId || settings.defaultModelId || models[0]?.id || ""}
+          onClose={handleCloseImageSandbox}
+        />
       ) : (
       <ChatView
         chatId={activeChatId}

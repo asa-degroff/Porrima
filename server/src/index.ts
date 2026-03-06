@@ -10,6 +10,7 @@ import settingsRouter from "./routes/settings.js";
 import memoryRouter from "./routes/memory.js";
 import artifactsRouter from "./routes/artifacts.js";
 import imagesRouter from "./routes/images.js";
+import visionRouter from "./routes/vision.js";
 import authRouter from "./routes/auth.js";
 import personaRouter from "./routes/persona.js";
 import ttsRouter from "./routes/tts.js";
@@ -71,6 +72,7 @@ app.use("/api/memory", memoryRouter);
 app.use("/api/persona", personaRouter);
 app.use("/api/artifacts", artifactsRouter);
 app.use("/api/images", imagesRouter);
+app.use("/api/vision", visionRouter);
 app.use("/api/tts", ttsRouter);
 
 // Production static serving
