@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ChatToolCall, ChatToolResult } from "../types";
 import type { ToolStatus } from "../api/client";
+import { DiffView } from "./DiffView";
 
 const statusColors = {
   running: "border-yellow-400/20 bg-yellow-500/5",
@@ -81,7 +82,15 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
       </button>
 
       {/* Expandable output */}
-      {expanded && result && (
+      {expanded && name === "edit_file" && toolCall?.arguments?.old_string != null && (
+        <div className="border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto">
+          <DiffView
+            oldString={toolCall.arguments.old_string}
+            newString={toolCall.arguments.new_string ?? ""}
+          />
+        </div>
+      )}
+      {expanded && result && !(name === "edit_file" && toolCall?.arguments?.old_string != null) && (
         <div className={`border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto ${isMonospaceOutput(name) ? "font-mono" : ""}`}>
           <pre className="text-xs text-white/50 whitespace-pre-wrap break-all leading-relaxed">
             {result}
