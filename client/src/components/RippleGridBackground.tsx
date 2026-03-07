@@ -71,15 +71,20 @@ export function RippleGridBackground() {
       ctx!.strokeStyle = "rgba(139, 92, 246, 0.12)";
       ctx!.lineWidth = 0.8;
 
+      // Overdraw margin so distorted lines still cover the canvas edges
+      const margin = spacing;
+
       // Vertical lines
-      for (let x = 0; x <= w + spacing; x += spacing) {
+      for (let x = -margin; x <= w + margin; x += spacing) {
         ctx!.beginPath();
-        for (let y = 0; y <= h; y += step) {
+        let first = true;
+        for (let y = -margin; y <= h + margin; y += step) {
           const n = layeredNoise(x, y, time * speed, 3);
           const ox = n * distortion * 8;
           const oy = layeredNoise(x * 0.7, y, time * speed * 0.8, 2) * distortion * 3;
-          if (y === 0) {
+          if (first) {
             ctx!.moveTo(x + ox, y + oy);
+            first = false;
           } else {
             ctx!.lineTo(x + ox, y + oy);
           }
@@ -88,14 +93,16 @@ export function RippleGridBackground() {
       }
 
       // Horizontal lines
-      for (let y = 0; y <= h + spacing; y += spacing) {
+      for (let y = -margin; y <= h + margin; y += spacing) {
         ctx!.beginPath();
-        for (let x = 0; x <= w; x += step) {
+        let first = true;
+        for (let x = -margin; x <= w + margin; x += step) {
           const n = layeredNoise(x, y, time * speed, 3);
           const ox = n * distortion * 8;
           const oy = layeredNoise(x * 0.7, y, time * speed * 0.8, 2) * distortion * 3;
-          if (x === 0) {
+          if (first) {
             ctx!.moveTo(x + ox, y + oy);
+            first = false;
           } else {
             ctx!.lineTo(x + ox, y + oy);
           }
