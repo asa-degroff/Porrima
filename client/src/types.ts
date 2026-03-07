@@ -78,6 +78,7 @@ export interface SystemPromptPreset {
 
 export interface Settings {
   defaultModelId: string;
+  defaultVisionModelId?: string;
   defaultSystemPrompt: string;
   braveApiKey: string;
   comfyuiUrl?: string;

@@ -284,6 +284,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <ImageSandbox
           models={models}
           defaultModelId={activeChat?.modelId || settings.defaultModelId || models[0]?.id || ""}
+          defaultVisionModelId={settings.defaultVisionModelId}
           onClose={handleCloseImageSandbox}
         />
       ) : (

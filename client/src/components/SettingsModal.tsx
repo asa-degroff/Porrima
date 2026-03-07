@@ -1,8 +1,36 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
+
+function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [active, ref, onClose]);
+}
+
+const chevronSvg = (open: boolean) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="10"
+    height="10"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+  >
+    <path d="M6 9l6 6 6-6" />
+  </svg>
+);
 
 interface MemoryStatus {
   memoryCount: number;
@@ -20,6 +48,7 @@ interface Props {
 
 export function SettingsModal({ settings, models, onSave, onClose, onLogout }: Props) {
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
+  const [defaultVisionModelId, setDefaultVisionModelId] = useState(settings.defaultVisionModelId || "");
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [comfyuiUrl, setComfyuiUrl] = useState(settings.comfyuiUrl || "http://127.0.0.1:8188");
@@ -37,6 +66,16 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [ttsVoices, setTtsVoices] = useState<Array<{ label: string; voices: Array<{ id: string; name: string }> }>>([]);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsError, setTtsError] = useState<string | null>(null);
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [visionModelDropdownOpen, setVisionModelDropdownOpen] = useState(false);
+  const [voiceDropdownOpen, setVoiceDropdownOpen] = useState(false);
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
+  const visionModelDropdownRef = useRef<HTMLDivElement>(null);
+  const voiceDropdownRef = useRef<HTMLDivElement>(null);
+
+  useClickOutside(modelDropdownRef, () => setModelDropdownOpen(false), modelDropdownOpen);
+  useClickOutside(visionModelDropdownRef, () => setVisionModelDropdownOpen(false), visionModelDropdownOpen);
+  useClickOutside(voiceDropdownRef, () => setVoiceDropdownOpen(false), voiceDropdownOpen);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -75,6 +114,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     const effectivePrompt = defaultPreset ? defaultPreset.content.trim() : defaultSystemPrompt.trim();
     onSave({
       defaultModelId,
+      defaultVisionModelId: defaultVisionModelId || undefined,
       defaultSystemPrompt: effectivePrompt,
       braveApiKey: braveApiKey.trim(),
       comfyuiUrl: comfyuiUrl.trim() || undefined,
@@ -193,21 +233,84 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           {/* Default Model */}
           <div className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Default Model</label>
-            <select
-              value={defaultModelId}
-              onChange={(e) => setDefaultModelId(e.target.value)}
-              className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 outline-none hover:bg-white/10 focus:ring-2 focus:ring-blue-400/30 transition-all cursor-pointer appearance-none"
-              style={{ backgroundImage: "none" }}
-            >
-              <option value="" className="bg-slate-900 text-white">
-                Auto (first available)
-              </option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id} className="bg-slate-900 text-white">
-                  {m.name}
-                </option>
-              ))}
-            </select>
+            <div className="relative" ref={modelDropdownRef}>
+              <button
+                onClick={() => setModelDropdownOpen((o) => !o)}
+                className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+              >
+                <span className="truncate flex-1 text-left">
+                  {defaultModelId ? (models.find((m) => m.id === defaultModelId)?.name || defaultModelId) : "Auto (first available)"}
+                </span>
+                {chevronSvg(modelDropdownOpen)}
+              </button>
+              {modelDropdownOpen && (
+                <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
+                  <button
+                    onClick={() => { setDefaultModelId(""); setModelDropdownOpen(false); }}
+                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      !defaultModelId ? "bg-blue-500/15 text-blue-200" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    }`}
+                  >
+                    Auto (first available)
+                  </button>
+                  {models.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => { setDefaultModelId(m.id); setModelDropdownOpen(false); }}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                        m.id === defaultModelId ? "bg-blue-500/15 text-blue-200" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                    >
+                      <span className="truncate flex-1">{m.name}</span>
+                      <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Default Vision Model */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-white/60">Default Vision Model</label>
+            <div className="relative" ref={visionModelDropdownRef}>
+              <button
+                onClick={() => setVisionModelDropdownOpen((o) => !o)}
+                className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+              >
+                <span className="truncate flex-1 text-left">
+                  {defaultVisionModelId ? (models.find((m) => m.id === defaultVisionModelId)?.name || defaultVisionModelId) : "Auto (first vision model)"}
+                </span>
+                {chevronSvg(visionModelDropdownOpen)}
+              </button>
+              {visionModelDropdownOpen && (
+                <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
+                  <button
+                    onClick={() => { setDefaultVisionModelId(""); setVisionModelDropdownOpen(false); }}
+                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      !defaultVisionModelId ? "bg-blue-500/15 text-blue-200" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    }`}
+                  >
+                    Auto (first vision model)
+                  </button>
+                  {models.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => { setDefaultVisionModelId(m.id); setVisionModelDropdownOpen(false); }}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                        m.id === defaultVisionModelId ? "bg-blue-500/15 text-blue-200" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                    >
+                      <span className="truncate flex-1">{m.name}</span>
+                      <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <p className="text-white/30 text-xs">
+              Model used for image analysis in the Vision sandbox.
+            </p>
           </div>
 
           {/* Model Context Windows */}
@@ -579,25 +682,51 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 {/* Voice selector */}
                 <div className="space-y-1">
                   <label className="block text-sm text-white/50">Voice</label>
-                  <select
-                    value={ttsSettings.voice}
-                    onChange={async (e) => {
-                      const updated = await updateTTSSettings({ voice: e.target.value });
-                      if (updated) setTtsSettings(updated);
-                    }}
-                    className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 outline-none focus:ring-2 focus:ring-blue-400/30 transition-all cursor-pointer appearance-none"
-                    style={{ backgroundImage: "none" }}
-                  >
-                    {ttsVoices.map((category) => (
-                      <optgroup key={category.label} label={category.label}>
-                        {category.voices.map((voice) => (
-                          <option key={voice.id} value={voice.id}>
-                            {voice.name} ({voice.id})
-                          </option>
+                  <div className="relative" ref={voiceDropdownRef}>
+                    <button
+                      onClick={() => setVoiceDropdownOpen((o) => !o)}
+                      className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+                    >
+                      <span className="truncate flex-1 text-left">
+                        {(() => {
+                          for (const cat of ttsVoices) {
+                            const v = cat.voices.find((v) => v.id === ttsSettings.voice);
+                            if (v) return `${v.name} (${v.id})`;
+                          }
+                          return ttsSettings.voice;
+                        })()}
+                      </span>
+                      {chevronSvg(voiceDropdownOpen)}
+                    </button>
+                    {voiceDropdownOpen && (
+                      <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
+                        {ttsVoices.map((category) => (
+                          <div key={category.label}>
+                            <div className="px-3 py-1.5 text-[10px] font-medium text-white/30 uppercase tracking-wider">
+                              {category.label}
+                            </div>
+                            {category.voices.map((voice) => (
+                              <button
+                                key={voice.id}
+                                onClick={async () => {
+                                  const updated = await updateTTSSettings({ voice: voice.id });
+                                  if (updated) setTtsSettings(updated);
+                                  setVoiceDropdownOpen(false);
+                                }}
+                                className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                                  voice.id === ttsSettings.voice
+                                    ? "bg-blue-500/15 text-blue-200"
+                                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                                }`}
+                              >
+                                {voice.name} ({voice.id})
+                              </button>
+                            ))}
+                          </div>
                         ))}
-                      </optgroup>
-                    ))}
-                  </select>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Speed control */}

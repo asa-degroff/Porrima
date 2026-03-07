@@ -11,12 +11,17 @@ import type { ImageGenerationParams, OllamaModel } from "../types";
 interface Props {
   models: OllamaModel[];
   defaultModelId: string;
+  defaultVisionModelId?: string;
   onClose: () => void;
 }
 
 type SandboxMode = "generate" | "analyze";
 
-export function ImageSandbox({ models: ollamaModels, defaultModelId, onClose }: Props) {
+function isVisionCapable(family: string): boolean {
+  return family.includes("vl") || family.startsWith("qwen35");
+}
+
+export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisionModelId, onClose }: Props) {
   const {
     images,
     selectedImage,
@@ -48,9 +53,16 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, onClose }: 
   const [mode, setMode] = useState<SandboxMode>("analyze");
   const [controlParams, setControlParams] = useState<Partial<ImageGenerationParams> | undefined>();
   const [visionModel, setVisionModel] = useState<string>(() => {
-    const defaultModel = ollamaModels.find((m) => m.id === defaultModelId);
-    if (defaultModel && defaultModel.family.includes("vl")) return defaultModelId;
-    const visionDefault = ollamaModels.find((m) => m.family.includes("vl"));
+    // 1. Use explicit vision model setting if set
+    if (defaultVisionModelId) {
+      const configured = ollamaModels.find((m) => m.id === defaultVisionModelId);
+      if (configured) return defaultVisionModelId;
+    }
+    // 2. Use chat default if it's vision-capable
+    const chatDefault = ollamaModels.find((m) => m.id === defaultModelId);
+    if (chatDefault && isVisionCapable(chatDefault.family)) return defaultModelId;
+    // 3. Fall back to first vision model
+    const visionDefault = ollamaModels.find((m) => isVisionCapable(m.family));
     return visionDefault?.id || defaultModelId;
   });
 
