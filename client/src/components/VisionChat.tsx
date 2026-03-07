@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { AnalyzedImage, VisionMessage } from "../api/client";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { MessageInput } from "./MessageInput";
 
 interface Props {
   image: AnalyzedImage;
@@ -11,7 +12,6 @@ interface Props {
 
 export function VisionChat({ image, chatting, onChat, onReanalyze }: Props) {
   const [messages, setMessages] = useState<VisionMessage[]>(image.conversation);
-  const [input, setInput] = useState("");
   const [presetSelectOpen, setPresetSelectOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const presetRef = useRef<HTMLDivElement>(null);
@@ -36,38 +36,28 @@ export function VisionChat({ image, chatting, onChat, onReanalyze }: Props) {
     return () => document.removeEventListener("mousedown", handler);
   }, [presetSelectOpen]);
 
-  const handleSend = useCallback(async () => {
-    if (!input.trim() || chatting) return;
-    const userMessage = input.trim();
-    setInput("");
+  const handleSend = useCallback((text: string) => {
+    if (!text.trim() || chatting) return;
 
     const userMsg: VisionMessage = {
       role: "user",
-      content: userMessage,
+      content: text,
       timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, userMsg]);
 
-    try {
-      const response = await onChat(userMessage);
+    onChat(text).then((response) => {
       const assistantMsg: VisionMessage = {
         role: "assistant",
         content: response,
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
-    } catch (error) {
+    }).catch((error) => {
       console.error("Chat failed:", error);
       setMessages((prev) => prev.slice(0, -1));
-    }
-  }, [input, chatting, onChat]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  }, [handleSend]);
+    });
+  }, [chatting, onChat]);
 
   const handlePresetSelect = useCallback(async (preset: string) => {
     setPresetSelectOpen(false);
@@ -177,25 +167,12 @@ export function VisionChat({ image, chatting, onChat, onReanalyze }: Props) {
       </div>
 
       {/* Input */}
-      <div className="shrink-0 p-4 border-t border-white/10">
-        <div className="flex gap-2">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask about this image..."
-            disabled={chatting}
-            rows={2}
-            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/90 placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-white/20 resize-none disabled:opacity-50"
-          />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || chatting}
-            className="px-4 py-2 bg-white/10 hover:bg-white/20 disabled:bg-white/5 disabled:text-white/20 text-white/80 rounded-lg text-sm font-medium transition-colors disabled:cursor-not-allowed self-end"
-          >
-            Send
-          </button>
-        </div>
+      <div className="shrink-0">
+        <MessageInput
+          onSend={handleSend}
+          disabled={chatting}
+          placeholder="Ask about this image..."
+        />
       </div>
     </div>
   );

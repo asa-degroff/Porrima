@@ -9,6 +9,7 @@ interface Props {
   streaming?: boolean;
   waitingForInput?: boolean;
   isOnline?: boolean;
+  placeholder?: string;
 }
 
 function processFiles(files: FileList | File[]): Promise<ImageAttachment[]> {
@@ -32,7 +33,7 @@ function processFiles(files: FileList | File[]): Promise<ImageAttachment[]> {
   );
 }
 
-export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true }: Props) {
+export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder }: Props) {
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [hasContent, setHasContent] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -311,7 +312,7 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
           {/* Placeholder */}
           {!hasContent && images.length === 0 && (
             <div className="absolute top-1.5 left-0 pointer-events-none text-white/30 text-sm md:text-base leading-snug select-none">
-              {waitingForInput ? "Answer the agent's question..." : "Send a message..."}
+              {placeholder || (waitingForInput ? "Answer the agent's question..." : "Send a message...")}
             </div>
           )}
         </div>
