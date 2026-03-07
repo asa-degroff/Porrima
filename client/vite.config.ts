@@ -57,6 +57,15 @@ export default defineConfig({
       "/api": {
         target: `http://localhost:${apiPort}`,
         changeOrigin: true,
+        configure: (proxy) => {
+          // Disable buffering for SSE streams so tokens arrive immediately
+          proxy.on("proxyRes", (proxyRes) => {
+            if (proxyRes.headers["content-type"] === "text/event-stream") {
+              proxyRes.headers["cache-control"] = "no-cache";
+              proxyRes.headers["x-accel-buffering"] = "no";
+            }
+          });
+        },
       },
     },
   },

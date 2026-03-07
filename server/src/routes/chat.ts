@@ -100,6 +100,10 @@ async function handleChatStream(
     "X-Accel-Buffering": "no",
   });
 
+  // Disable Nagle's algorithm so each res.write() sends immediately
+  // instead of batching small SSE events into fewer TCP packets
+  res.socket?.setNoDelay(true);
+
   const abortController = new AbortController();
   req.on("close", () => abortController.abort());
 

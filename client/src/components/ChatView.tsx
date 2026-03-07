@@ -157,6 +157,7 @@ export function ChatView({
 
   // Auto-scroll via ResizeObserver on the content div (fires before paint).
   // Also observes the scroll container for when the input textarea resizes.
+  // Depends on chatId so the observer re-attaches when switching from no-chat to a chat.
   useEffect(() => {
     const scroll = scrollRef.current;
     const content = contentRef.current;
@@ -169,7 +170,7 @@ export function ChatView({
     if (content) observer.observe(content);
     observer.observe(scroll);
     return () => observer.disconnect();
-  }, []);
+  }, [chatId]);
 
   if (!chatId) {
     return (
