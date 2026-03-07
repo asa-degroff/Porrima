@@ -24,14 +24,15 @@ router.get("/images", async (_req, res) => {
   }
 });
 
-// Get single analyzed image (with imageData for chat)
+// Get single analyzed image (strip imageData — client uses the URL, chat reads from disk)
 router.get("/images/:id", async (req, res) => {
   try {
     const image = await getAnalyzedImage(req.params.id);
     if (!image) {
       return res.status(404).json({ error: "Image not found" });
     }
-    res.json(image);
+    const { imageData: _, ...sanitized } = image;
+    res.json(sanitized);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

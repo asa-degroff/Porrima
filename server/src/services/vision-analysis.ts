@@ -386,19 +386,18 @@ export async function getAnalyzedImages(): Promise<AnalyzedImage[]> {
   }
 
   const entries = await readdir(imagesDir, { withFileTypes: true });
-  const analyzedImages: AnalyzedImage[] = [];
+  const dirs = entries.filter((e) => e.isDirectory());
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+  const results = await Promise.allSettled(
+    dirs.map(async (entry) => {
+      const metadataPath = join(imagesDir, entry.name, "metadata.json");
+      return JSON.parse(await readFile(metadataPath, "utf-8")) as AnalyzedImage;
+    })
+  );
 
-    const metadataPath = join(imagesDir, entry.name, "metadata.json");
-    try {
-      const metadata = JSON.parse(await readFile(metadataPath, "utf-8"));
-      analyzedImages.push(metadata);
-    } catch {
-      // Skip invalid entries
-    }
-  }
+  const analyzedImages = results
+    .filter((r): r is PromiseFulfilledResult<AnalyzedImage> => r.status === "fulfilled")
+    .map((r) => r.value);
 
   // Sort by creation date, newest first
   analyzedImages.sort(

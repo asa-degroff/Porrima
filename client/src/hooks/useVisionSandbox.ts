@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   fetchVisionPresets,
   fetchAnalyzedImages,
@@ -19,6 +19,9 @@ export function useVisionSandbox() {
   const [analyzing, setAnalyzing] = useState(false);
   const [chatting, setChatting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Cache fetched images so switching back is instant
+  const imageCacheRef = useRef(new Map<string, AnalyzedImage>());
 
   // Load presets and images on mount
   useEffect(() => {
@@ -74,7 +77,7 @@ export function useVisionSandbox() {
         })
       );
 
-      // Update selected image if it's the current one
+      // Update selected image and cache if it's the current one
       setSelectedImage((prev) => {
         if (!prev || prev.id !== id) return prev;
         const newConversation: VisionMessage[] = [
@@ -82,7 +85,9 @@ export function useVisionSandbox() {
           { role: "user", content: message, timestamp: Date.now() },
           { role: "assistant", content: result.response, timestamp: Date.now() },
         ];
-        return { ...prev, conversation: newConversation };
+        const updated = { ...prev, conversation: newConversation };
+        imageCacheRef.current.set(id, updated);
+        return updated;
       });
 
       return result.response;
@@ -104,10 +109,13 @@ export function useVisionSandbox() {
         prev.map((img) => (img.id === id ? result : img))
       );
       
+      // Invalidate cache — re-analyze changes description and resets conversation
+      imageCacheRef.current.delete(id);
+
       if (selectedImage?.id === id) {
         setSelectedImage(result);
       }
-      
+
       return result;
     } catch (e: any) {
       setError(e.message);
@@ -121,6 +129,7 @@ export function useVisionSandbox() {
     setError(null);
     try {
       await apiDeleteAnalyzedImage(id);
+      imageCacheRef.current.delete(id);
       setAnalyzedImages((prev) => prev.filter((img) => img.id !== id));
       if (selectedImage?.id === id) {
         setSelectedImage(null);
@@ -132,8 +141,14 @@ export function useVisionSandbox() {
   }, [selectedImage]);
 
   const selectImage = useCallback(async (id: string) => {
+    const cached = imageCacheRef.current.get(id);
+    if (cached) {
+      setSelectedImage(cached);
+      return;
+    }
     try {
       const image = await fetchAnalyzedImage(id);
+      imageCacheRef.current.set(id, image);
       setSelectedImage(image);
     } catch (e: any) {
       setError(e.message);
