@@ -43,6 +43,12 @@ router.post("/generate", async (req, res) => {
     "X-Accel-Buffering": "no",
   });
 
+  // Send keepalive comments every 15s to prevent Cloudflare Tunnel
+  // from dropping the connection during model loading (100s idle timeout)
+  const keepalive = setInterval(() => {
+    res.write(": keepalive\n\n");
+  }, 15_000);
+
   try {
     const result = await generateImage(params, (progress) => {
       res.write(
@@ -71,6 +77,7 @@ router.post("/generate", async (req, res) => {
       `event: error\ndata: ${JSON.stringify({ error: e.message })}\n\n`
     );
   } finally {
+    clearInterval(keepalive);
     res.end();
   }
 });
