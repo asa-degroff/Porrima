@@ -250,6 +250,13 @@ export async function generateImage(
           });
         }
 
+        if (msg.type === "execution_error" && msg.data?.prompt_id === promptId) {
+          cleanup();
+          const d = msg.data;
+          reject(new Error(`ComfyUI error in ${d.node_type || d.node_id}: ${d.exception_message || "unknown error"}`));
+          return;
+        }
+
         if (msg.type === "executing" && msg.data?.prompt_id === promptId && msg.data.node === null) {
           // Generation complete — fetch result
           try {

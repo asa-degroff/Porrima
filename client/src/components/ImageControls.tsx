@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import type { ImageGenerationParams } from "../types";
+import type { QueueItem } from "../hooks/useImageSandbox";
 
 const MODEL_PRESETS: Record<string, Partial<ImageGenerationParams>> = {
   "z-image-base": { steps: 30, cfgScale: 4.0, sampler: "euler", scheduler: "normal" },
@@ -18,12 +19,16 @@ interface Props {
   models: string[];
   generating: boolean;
   progress: { step: number; total: number } | null;
-  onGenerate: (params: ImageGenerationParams) => void;
+  onEnqueue: (params: ImageGenerationParams, batchCount: number) => void;
   onAbort: () => void;
+  onAbortAll: () => void;
+  onClearQueue: () => void;
+  queue: QueueItem[];
+  currentItem: QueueItem | null;
   initialParams?: Partial<ImageGenerationParams>;
 }
 
-export function ImageControls({ models, generating, progress, onGenerate, onAbort, initialParams }: Props) {
+export function ImageControls({ models, generating, progress, onEnqueue, onAbort, onAbortAll, onClearQueue, queue, currentItem, initialParams }: Props) {
   const [positivePrompt, setPositivePrompt] = useState(initialParams?.positivePrompt || "");
   const [negativePrompt, setNegativePrompt] = useState(initialParams?.negativePrompt || "");
   const [showNegative, setShowNegative] = useState(false);
@@ -36,6 +41,7 @@ export function ImageControls({ models, generating, progress, onGenerate, onAbor
   const [sampler, setSampler] = useState(initialParams?.sampler || "euler");
   const [scheduler, setScheduler] = useState(initialParams?.scheduler || "normal");
   const [lastSeed, setLastSeed] = useState<number | null>(null);
+  const [batchCount, setBatchCount] = useState(1);
 
   // Update model when models list arrives
   useEffect(() => {
@@ -82,7 +88,7 @@ export function ImageControls({ models, generating, progress, onGenerate, onAbor
   const handleGenerate = () => {
     if (!positivePrompt.trim()) return;
     const parsedSeed = parseInt(seed);
-    onGenerate({
+    onEnqueue({
       positivePrompt: positivePrompt.trim(),
       negativePrompt: negativePrompt.trim() || undefined,
       model,
@@ -93,7 +99,7 @@ export function ImageControls({ models, generating, progress, onGenerate, onAbor
       seed: isNaN(parsedSeed) || parsedSeed < 0 ? undefined : parsedSeed,
       sampler,
       scheduler,
-    });
+    }, batchCount);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -105,6 +111,7 @@ export function ImageControls({ models, generating, progress, onGenerate, onAbor
 
   const isTurbo = model.includes("turbo");
   const progressPercent = progress ? Math.round((progress.step / progress.total) * 100) : 0;
+  const totalPending = queue.length + (generating ? 1 : 0);
 
   return (
     <div className="space-y-4">
@@ -287,8 +294,35 @@ export function ImageControls({ models, generating, progress, onGenerate, onAbor
         </div>
       </div>
 
-      {/* Generate / Abort */}
-      {generating ? (
+      {/* Batch Count & Generate */}
+      <div className="space-y-2">
+        <div className="flex gap-2 items-end">
+          <div className="space-y-1 w-20">
+            <label className="text-[10px] font-medium text-white/40">Batch</label>
+            <input
+              type="number"
+              min={1}
+              max={32}
+              value={batchCount}
+              onChange={(e) => setBatchCount(Math.max(1, Math.min(32, parseInt(e.target.value) || 1)))}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all text-center"
+            />
+          </div>
+          <button
+            onClick={handleGenerate}
+            disabled={!positivePrompt.trim() || models.length === 0}
+            className="flex-1 px-4 py-[7px] rounded-xl text-sm font-medium bg-amber-500/20 border border-amber-400/25 text-amber-300 hover:bg-amber-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {totalPending > 0
+              ? `Enqueue${batchCount > 1 ? ` ${batchCount}` : ""}`
+              : `Generate${batchCount > 1 ? ` ${batchCount}` : ""}`
+            }
+          </button>
+        </div>
+      </div>
+
+      {/* Current generation progress */}
+      {generating && (
         <div className="space-y-2">
           <div className="w-full bg-white/5 rounded-full h-2 overflow-hidden">
             <div
@@ -299,23 +333,49 @@ export function ImageControls({ models, generating, progress, onGenerate, onAbor
           <div className="flex items-center justify-between">
             <span className="text-xs text-white/40">
               {progress ? `Step ${progress.step}/${progress.total}` : "Starting..."}
+              {currentItem && currentItem.batchTotal > 1 && (
+                <span className="text-white/30"> ({currentItem.batchIndex}/{currentItem.batchTotal})</span>
+              )}
             </span>
             <button
-              onClick={onAbort}
+              onClick={queue.length > 0 ? onAbortAll : onAbort}
               className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/15 border border-red-400/20 text-red-300 hover:bg-red-500/25 transition-all"
             >
-              Cancel
+              {queue.length > 0 ? "Cancel All" : "Cancel"}
             </button>
           </div>
         </div>
-      ) : (
-        <button
-          onClick={handleGenerate}
-          disabled={!positivePrompt.trim() || models.length === 0}
-          className="w-full px-4 py-2.5 rounded-xl text-sm font-medium bg-amber-500/20 border border-amber-400/25 text-amber-300 hover:bg-amber-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          Generate
-        </button>
+      )}
+
+      {/* Queue display */}
+      {queue.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-medium text-white/40">
+              Queue ({queue.length} pending)
+            </span>
+            <button
+              onClick={onClearQueue}
+              className="text-[10px] text-red-400/60 hover:text-red-400 transition-colors"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="space-y-1 max-h-32 overflow-y-auto">
+            {queue.map((item) => (
+              <div
+                key={item.id}
+                className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.03] border border-white/5"
+              >
+                <div className="w-1.5 h-1.5 rounded-full bg-amber-400/40 shrink-0" />
+                <span className="text-[10px] text-white/40 truncate flex-1">{item.promptPreview}</span>
+                {item.batchTotal > 1 && (
+                  <span className="text-[10px] text-white/25 shrink-0">{item.batchIndex}/{item.batchTotal}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

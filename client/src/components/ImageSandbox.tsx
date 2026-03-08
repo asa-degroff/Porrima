@@ -31,8 +31,12 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     comfyuiStatus,
     models,
     error: imageError,
-    generate,
+    enqueue,
     abort,
+    abortAll,
+    clearQueue,
+    queue,
+    currentItem,
   } = useImageSandbox();
 
   const {
@@ -173,8 +177,12 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                 models={models}
                 generating={generating}
                 progress={progress}
-                onGenerate={generate}
+                onEnqueue={enqueue}
                 onAbort={abort}
+                onAbortAll={abortAll}
+                onClearQueue={clearQueue}
+                queue={queue}
+                currentItem={currentItem}
                 initialParams={controlParams}
               />
             </div>
