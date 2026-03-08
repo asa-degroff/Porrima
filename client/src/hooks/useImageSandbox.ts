@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { fetchComfyUIStatus, fetchImageModels, generateImage as apiGenerateImage } from "../api/client";
+import { fetchComfyUIStatus, fetchImageModels, fetchGeneratedImages, generateImage as apiGenerateImage } from "../api/client";
 import type { ComfyUIStatus, GeneratedImage, ImageGenerationParams } from "../types";
 
 export function useImageSandbox() {
@@ -24,9 +24,12 @@ export function useImageSandbox() {
     }
   }, []);
 
-  // Check status on mount
+  // Check status and load existing images on mount
   useEffect(() => {
     checkStatus();
+    fetchGeneratedImages().then((existing) => {
+      if (existing.length > 0) setImages(existing);
+    }).catch(() => {});
   }, [checkStatus]);
 
   const generate = useCallback((params: ImageGenerationParams) => {

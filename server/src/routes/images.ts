@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { getComfyUIStatus, getComfyUIModels, generateImage } from "../services/comfyui.js";
-import { saveGeneratedImage, getImagePath, getImageMetadata } from "../services/image-storage.js";
+import { saveGeneratedImage, getImagePath, getImageMetadata, listImages } from "../services/image-storage.js";
 import { v4 as uuid } from "uuid";
 import { access } from "fs/promises";
 import { createReadStream } from "fs";
@@ -16,6 +16,15 @@ router.get("/status", async (_req, res) => {
     res.json(status);
   } catch (e: any) {
     res.json({ available: false, queueSize: 0, models: [] });
+  }
+});
+
+router.get("/list", async (_req, res) => {
+  try {
+    const images = await listImages();
+    res.json(images);
+  } catch {
+    res.json([]);
   }
 });
 

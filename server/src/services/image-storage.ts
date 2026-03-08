@@ -1,4 +1,4 @@
-import { writeFile, mkdir, readFile } from "fs/promises";
+import { writeFile, mkdir, readFile, readdir } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import type { ImageGenerationParams } from "../types.js";
@@ -39,4 +39,39 @@ export async function getImageMetadata(id: string): Promise<ImageMetadata | null
   } catch {
     return null;
   }
+}
+
+export interface StoredImage {
+  id: string;
+  url: string;
+  params: ImageGenerationParams;
+  resolvedSeed: number;
+  createdAt: string;
+}
+
+export async function listImages(): Promise<StoredImage[]> {
+  let entries: string[];
+  try {
+    entries = await readdir(IMAGES_DIR);
+  } catch {
+    return [];
+  }
+
+  const results = await Promise.all(
+    entries.map(async (id): Promise<StoredImage | null> => {
+      const metadata = await getImageMetadata(id);
+      if (!metadata) return null;
+      return {
+        id,
+        url: `/api/images/${id}`,
+        params: metadata.params,
+        resolvedSeed: metadata.resolvedSeed,
+        createdAt: metadata.createdAt,
+      };
+    })
+  );
+
+  return results
+    .filter((r): r is StoredImage => r !== null)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }

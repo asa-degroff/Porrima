@@ -299,6 +299,12 @@ export async function fetchImageModels(): Promise<string[]> {
   return res.json();
 }
 
+export async function fetchGeneratedImages(): Promise<GeneratedImage[]> {
+  const res = await apiFetch(`${BASE}/images/list`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
 export interface ImageGenerateCallbacks {
   onProgress: (step: number, totalSteps: number) => void;
   onDone: (image: GeneratedImage) => void;
