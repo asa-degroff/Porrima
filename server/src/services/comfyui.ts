@@ -94,11 +94,10 @@ function buildWorkflow(params: ImageGenerationParams, clientId: string): Record<
           },
         },
     "2": {
-      class_type: "DualCLIPLoader",
+      class_type: "CLIPLoaderGGUF",
       inputs: {
-        clip_name1: "qwen_3_4b.safetensors",
-        clip_name2: "qwen_3_4b.safetensors",
-        type: "flux",
+        clip_name: "qwen_3_4b.safetensors",
+        type: "stable_diffusion",
       },
     },
     "3": {
@@ -191,11 +190,11 @@ export async function generateImage(
       } catch {}
     };
 
-    // Timeout after 5 minutes
+    // Timeout after 15 minutes
     wsTimeout = setTimeout(() => {
       cleanup();
-      reject(new Error("Image generation timed out after 5 minutes"));
-    }, 5 * 60 * 1000);
+      reject(new Error("Image generation timed out after 15 minutes"));
+    }, 15 * 60 * 1000);
 
     ws.on("error", (err) => {
       cleanup();
