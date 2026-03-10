@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { ImageGenerationParams } from "../types";
 import type { QueueItem } from "../hooks/useImageSandbox";
 
@@ -8,12 +8,15 @@ const MODEL_PRESETS: Record<string, Partial<ImageGenerationParams>> = {
 };
 
 const ASPECT_RATIOS = [
-  { label: "1:1", w: 1024, h: 1024 },
-  { label: "16:9", w: 1344, h: 768 },
-  { label: "9:16", w: 768, h: 1344 },
-  { label: "4:3", w: 1152, h: 896 },
-  { label: "3:4", w: 896, h: 1152 },
+  { label: "1:1", ratio: 1, w: 1024, h: 1024 },
+  { label: "16:9", ratio: 16 / 9, w: 1344, h: 768 },
+  { label: "9:16", ratio: 9 / 16, w: 768, h: 1344 },
+  { label: "4:3", ratio: 4 / 3, w: 1152, h: 896 },
+  { label: "3:4", ratio: 3 / 4, w: 896, h: 1152 },
+  { label: "Free", ratio: null, w: 1024, h: 1024 },
 ];
+
+const STORAGE_KEY = "quje-image-settings";
 
 interface Props {
   models: string[];
@@ -35,13 +38,104 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
   const [model, setModel] = useState(initialParams?.model || models[0] || "");
   const [steps, setSteps] = useState(initialParams?.steps || 30);
   const [cfgScale, setCfgScale] = useState(initialParams?.cfgScale || 4.0);
-  const [width, setWidth] = useState(initialParams?.width || 1024);
-  const [height, setHeight] = useState(initialParams?.height || 1024);
+  const [aspectRatio, setAspectRatio] = useState<string>("1:1");
+  const [width, setWidth] = useState<string | number>(initialParams?.width || 1024);
+  const [height, setHeight] = useState<string | number>(initialParams?.height || 1024);
   const [seed, setSeed] = useState<string>(initialParams?.seed?.toString() || "-1");
   const [sampler, setSampler] = useState(initialParams?.sampler || "euler");
   const [scheduler, setScheduler] = useState(initialParams?.scheduler || "normal");
   const [lastSeed, setLastSeed] = useState<number | null>(null);
   const [batchCount, setBatchCount] = useState(1);
+
+  // Track if user is manually editing width/height (for Free mode)
+  const editingWidthRef = useRef(false);
+  const editingHeightRef = useRef(false);
+
+  // Load saved settings on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const settings = JSON.parse(saved);
+        if (settings.width) setWidth(settings.width);
+        if (settings.height) setHeight(settings.height);
+        if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
+      }
+    } catch {}
+  }, []);
+
+  // Save settings when dimensions or aspect ratio change
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      const settings = saved ? JSON.parse(saved) : {};
+      settings.width = width;
+      settings.height = height;
+      settings.aspectRatio = aspectRatio;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    } catch {}
+  }, [width, height, aspectRatio]);
+
+  // Handle aspect ratio button click
+  const handleAspectRatioClick = (label: string, w: number, h: number, ratio: number | null) => {
+    setAspectRatio(label);
+    if (label === "Free") return;
+    setWidth(w);
+    setHeight(h);
+  };
+
+  const [selectedRatio, setSelectedRatio] = useState<string>("1:1");
+  const widthInputRef = useRef<HTMLInputElement>(null);
+
+  // Load persisted settings on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const settings = JSON.parse(stored);
+        if (settings.width) setWidth(settings.width);
+        if (settings.height) setHeight(settings.height);
+        if (settings.selectedRatio) setSelectedRatio(settings.selectedRatio);
+      }
+    } catch {}
+  }, []);
+
+  // Persist settings when dimensions or ratio change
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        width,
+        height,
+        selectedRatio,
+      }));
+    } catch {}
+  }, [width, height, selectedRatio]);
+
+  // Load persisted settings on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const settings = JSON.parse(saved);
+        if (settings.width) setWidth(settings.width);
+        if (settings.height) setHeight(settings.height);
+        if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
+      }
+    } catch {}
+  }, []);
+
+  // Persist settings when dimensions or aspect ratio change
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        ...saved,
+        width,
+        height,
+        aspectRatio,
+      }));
+    } catch {}
+  }, [width, height, aspectRatio]);
 
   // Update model when models list arrives
   useEffect(() => {
@@ -85,8 +179,64 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
     }
   }, [initialParams]);
 
+  // Aspect ratio-aware dimension adjustment
+  useEffect(() => {
+    if (aspectRatio === "Free") return;
+
+    const ar = ASPECT_RATIOS.find((a) => a.label === aspectRatio);
+    if (!ar || ar.ratio === null) return;
+
+    // Skip calculation if width is empty string (user is editing)
+    if (typeof width === "string" && width.trim() === "") return;
+
+    const numWidth = typeof width === "number" ? width : parseInt(width);
+    if (isNaN(numWidth)) return;
+
+    // Calculate height based on width and aspect ratio
+    const calculatedHeight = numWidth / ar.ratio;
+
+    const numHeight = typeof height === "number" ? height : (height ? parseInt(height) : 0);
+    if (Math.abs(Math.round(calculatedHeight) - numHeight) > 1 && !editingHeightRef.current) {
+      setHeight(Math.round(calculatedHeight));
+    }
+  }, [width, aspectRatio]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Handle width change - adjust height to maintain aspect ratio
+  const handleWidthChange = (value: number) => {
+    editingWidthRef.current = true;
+    setWidth(value);
+
+    if (aspectRatio !== "Free") {
+      const ar = ASPECT_RATIOS.find((a) => a.label === aspectRatio);
+      if (ar && ar.ratio !== null) {
+        // Calculate exact height from ratio
+        setHeight(Math.round(value / ar.ratio));
+      }
+    }
+    setTimeout(() => { editingWidthRef.current = false; }, 100);
+  };
+
+  // Handle height change - adjust width to maintain aspect ratio
+  const handleHeightChange = (value: number) => {
+    editingHeightRef.current = true;
+    setHeight(value);
+
+    if (aspectRatio !== "Free") {
+      const ar = ASPECT_RATIOS.find((a) => a.label === aspectRatio);
+      if (ar && ar.ratio !== null) {
+        setWidth(Math.round(value * ar.ratio));
+      }
+    }
+    setTimeout(() => { editingHeightRef.current = false; }, 100);
+  };
+
   const handleGenerate = () => {
     if (!positivePrompt.trim()) return;
+
+    // Apply defaults for empty/invalid dimensions
+    const finalWidth = typeof width === 'number' ? width : parseInt(width) || 1024;
+    const finalHeight = typeof height === 'number' ? height : parseInt(height) || 1024;
+
     const parsedSeed = parseInt(seed);
     onEnqueue({
       positivePrompt: positivePrompt.trim(),
@@ -94,8 +244,8 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
       model,
       steps,
       cfgScale,
-      width,
-      height,
+      width: finalWidth,
+      height: finalHeight,
       seed: isNaN(parsedSeed) || parsedSeed < 0 ? undefined : parsedSeed,
       sampler,
       scheduler,
@@ -209,9 +359,9 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           {ASPECT_RATIOS.map((ar) => (
             <button
               key={ar.label}
-              onClick={() => { setWidth(ar.w); setHeight(ar.h); }}
+              onClick={() => handleAspectRatioClick(ar.label, ar.w, ar.h, ar.ratio)}
               className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all ${
-                width === ar.w && height === ar.h
+                aspectRatio === ar.label
                   ? "bg-amber-500/20 border-amber-400/30 text-amber-300"
                   : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10"
               }`}
@@ -224,7 +374,11 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           <input
             type="number"
             value={width}
-            onChange={(e) => setWidth(parseInt(e.target.value) || 512)}
+            onChange={(e) => {
+              editingWidthRef.current = true;
+              setWidth(e.target.value);
+              setTimeout(() => { editingWidthRef.current = false; }, 100);
+            }}
             className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all"
             min={256}
             max={2048}
@@ -234,13 +388,26 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           <input
             type="number"
             value={height}
-            onChange={(e) => setHeight(parseInt(e.target.value) || 512)}
+            onChange={(e) => {
+              editingHeightRef.current = true;
+              setHeight(e.target.value);
+              setTimeout(() => { editingHeightRef.current = false; }, 100);
+            }}
             className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all"
             min={256}
             max={2048}
             step={64}
           />
         </div>
+        {aspectRatio === "Free" ? (
+          <div className="text-[10px] text-white/30">
+            Free mode: width and height can be adjusted independently
+          </div>
+        ) : (
+          <div className="text-[10px] text-white/30">
+            Adjusting one dimension auto-calculates the other to maintain {aspectRatio} ratio
+          </div>
+        )}
       </div>
 
       {/* Seed */}

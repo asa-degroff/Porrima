@@ -66,8 +66,21 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     setSelectedImage: setSelectedAnalyzedImage,
   } = useVisionSandbox();
 
-  const [mode, setMode] = useState<SandboxMode>("analyze");
+  const [mode, setMode] = useState<SandboxMode>(() => {
+    try {
+      const saved = localStorage.getItem("quje-sandbox-mode");
+      if (saved === "generate" || saved === "analyze") return saved;
+    } catch {}
+    return "analyze";
+  });
   const [controlParams, setControlParams] = useState<Partial<ImageGenerationParams> | undefined>();
+
+  // Persist mode to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem("quje-sandbox-mode", mode);
+    } catch {}
+  }, [mode]);
   const [visionModel, setVisionModel] = useState<string>(() => {
     // 1. Use explicit vision model setting if set
     if (defaultVisionModelId) {
@@ -95,7 +108,17 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   const handleSendToGenerate = useCallback((description: string) => {
     setControlParams({ positivePrompt: description });
     setMode("generate");
+    try {
+      localStorage.setItem("quje-sandbox-mode", "generate");
+    } catch {}
   }, []);
+
+  // Persist mode on change
+  useEffect(() => {
+    try {
+      localStorage.setItem("quje-sandbox-mode", mode);
+    } catch {}
+  }, [mode]);
 
   const handleAnalyze = useCallback(async (imageData: string, preset: string) => {
     await analyzeImage(imageData, preset, visionModel);
