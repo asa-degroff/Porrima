@@ -47,13 +47,26 @@ export async function loadGenerations(): Promise<void> {
   try {
     const raw = await readFile(GENERATIONS_FILE, "utf-8");
     const data: GenerationState[] = JSON.parse(raw);
+    let staleCount = 0;
     for (const gen of data) {
-      // Only restore incomplete or recent (last 24h) generations
+      // Generations that were in-flight can't survive a server restart —
+      // ComfyUI WebSocket connections are lost, so mark them as failed.
+      if (gen.status === "processing" || gen.status === "queued") {
+        gen.status = "error";
+        gen.error = "Server restarted while generation was in progress";
+        gen.progress = null;
+        gen.updatedAt = Date.now();
+        staleCount++;
+      }
       const age = Date.now() - gen.updatedAt;
       const oneDay = 24 * 60 * 60 * 1000;
-      if (gen.status === "processing" || gen.status === "queued" || age < oneDay) {
+      if (age < oneDay) {
         generations.set(gen.id, gen);
       }
+    }
+    if (staleCount > 0) {
+      console.log(`[image-generation] marked ${staleCount} stale generation(s) as error`);
+      persistGenerations();
     }
     console.log(`[image-generation] loaded ${generations.size} generations from disk`);
   } catch {
