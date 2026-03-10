@@ -193,14 +193,44 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
               >
                 <div
                   className={`
-                    max-w-[85%] rounded-lg p-3 text-sm
+                    max-w-[85%] rounded-lg text-sm
                     ${msg.role === "user"
-                      ? "bg-white/10 text-white/90"
+                      ? "bg-white/10 text-white/90 p-3"
                       : "bg-white/5 text-white/80"
                     }
                   `}
                 >
-                  <MarkdownRenderer content={msg.content} />
+                  <div className={msg.role === "assistant" ? "p-3" : ""}>
+                    <MarkdownRenderer content={msg.content} />
+                  </div>
+                  {msg.role === "assistant" && (
+                    <div className="flex items-center gap-1.5 px-3 pb-2 pt-1 border-t border-white/5">
+                      <button
+                        onClick={() => navigator.clipboard.writeText(msg.content)}
+                        className="text-[10px] text-white/50 hover:text-white/80 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/10"
+                        title="Copy"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+                          <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                        </svg>
+                        Copy
+                      </button>
+                      <button
+                        onClick={() => onSendToGenerate?.(msg.content)}
+                        className="text-[10px] text-amber-300 hover:text-amber-200 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/20"
+                        title="Send to generate"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M8 3 4 8.6725 8 10.344 12 8.6725 8 3Z" />
+                          <path d="M12 13.3275 16 15 20 13.3275 12 3v10.3275Z" />
+                          <path d="M8 14 4 19.553 8 21.224 12 19.553 8 14Z" />
+                          <path d="M12 24.224 16 22.553 20 24.224 12 14v10.224Z" />
+                        </svg>
+                        Send to Generate
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

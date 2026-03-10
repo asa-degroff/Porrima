@@ -149,6 +149,8 @@ router.post("/images/:id/chat", async (req, res) => {
       image.imageData,
       image.conversation,
       message,
+      image.preset,
+      image.description,
       image.model
     );
 

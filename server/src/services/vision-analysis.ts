@@ -169,13 +169,27 @@ If there is no text to be generated in the image, you will dedicate all your ene
   },
 };
 
-const CHAT_SYSTEM_PROMPT = `You are a helpful, creative assistant discussing images with users. You can:
-- Answer questions about the image
-- Generate creative content (story prompts, variations, etc.)
-- Provide analysis and insights
-- Suggest related ideas or elements
+function buildChatSystemPrompt(presetKey: string, currentDescription: string): string {
+  const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
 
-Be conversational and helpful. You can be more flexible and creative than when generating strict image descriptions.`;
+  return `You are a helpful, creative assistant discussing an image with the user.
+
+The image was described using the "${preset.name}" format. Here are the format instructions that were used:
+
+<format_instructions>
+${preset.prompt}
+</format_instructions>
+
+Here is the current description of the image:
+
+<current_description>
+${currentDescription}
+</current_description>
+
+When the user asks you to modify, rewrite, or change aspects of the description (e.g., changing outfits, settings, subjects, or style details), produce a complete rewritten description following the same format instructions above. Output ONLY the new description with no preamble or explanation.
+
+When the user asks a question about the image or wants general discussion, respond conversationally without rewriting the description.`;
+}
 
 async function ensureVisionDir() {
   if (!existsSync(VISION_DIR)) {
@@ -371,6 +385,8 @@ export async function chatAboutImage(
   imageData: string,
   conversation: VisionMessage[],
   userMessage: string,
+  presetKey: string,
+  currentDescription: string,
   model?: string,
   maxHistoryTurns = 10
 ): Promise<string> {
@@ -378,7 +394,7 @@ export async function chatAboutImage(
   const imageBuffer = base64ToBuffer(imageData).toString("base64");
 
   const messages: any[] = [
-    { role: "system", content: CHAT_SYSTEM_PROMPT },
+    { role: "system", content: buildChatSystemPrompt(presetKey, currentDescription) },
     {
       role: "user",
       content: "Analyze this image.",
