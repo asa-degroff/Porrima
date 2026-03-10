@@ -69,4 +69,15 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ["react", "react-dom"],
+          markdown: ["react-markdown", "remark-gfm"],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 400,
+  },
 });

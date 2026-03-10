@@ -3,7 +3,8 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { SettingsModal } from "./components/SettingsModal";
 import { LoginPage } from "./components/LoginPage";
-import { ImageSandbox } from "./components/ImageSandbox";
+
+const ImageSandbox = lazy(() => import("./components/ImageSandbox").then((m) => ({ default: m.ImageSandbox })));
 
 const RippleGridBackground = lazy(() =>
   import("./components/RippleGridBackground").then((m) => ({ default: m.RippleGridBackground }))
