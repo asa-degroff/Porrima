@@ -310,6 +310,28 @@ export async function generateImageWithState(
             }
 
             const imageData = Buffer.from(await imgRes.arrayBuffer());
+
+            // Check queue status before freeing memory
+            // Only free memory if no other tasks are queued
+            try {
+              const queueRes = await fetch(`${baseUrl}/queue`, { signal: AbortSignal.timeout(3000) });
+              if (queueRes.ok) {
+                const queue = await queueRes.json();
+                const queueSize =
+                  (queue.queue_running?.length || 0) + (queue.queue_pending?.length || 0);
+                if (queueSize === 0) {
+                  // No more tasks queued — free memory to prevent leaks
+                  await fetch(`${baseUrl}/queue`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ free_memory: true }),
+                  });
+                }
+              }
+            } catch {
+              // Ignore cleanup errors — image was already retrieved successfully
+            }
+
             cleanup();
             resolve({ imageData, resolvedSeed });
           } catch (err: any) {
