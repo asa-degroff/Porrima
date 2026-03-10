@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import type { GeneratedImage } from "../types";
+import { useCachedImage } from "../utils/imageCache";
 
 interface Props {
   images: GeneratedImage[];
@@ -20,6 +21,31 @@ export function ImageGallery({ images, selectedImage, onSelect }: Props) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [lightboxImage, closeLightbox]);
+
+  // Pre-cache all images on mount
+  useEffect(() => {
+    const imageUrls = images.map((img) => img.url);
+    import("../utils/imageCache").then(({ precacheImages }) => {
+      precacheImages(imageUrls);
+    });
+  }, [images]);
+
+  // Create a map of cached URLs
+  const [cachedUrls, setCachedUrls] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const loadCachedUrls = async () => {
+      const { getCachedImage } = await import("../utils/imageCache");
+      const entries = await Promise.all(
+        images.map(async (img) => {
+          const cachedUrl = await getCachedImage(img.id, img.url);
+          return [img.id, cachedUrl] as const;
+        })
+      );
+      setCachedUrls(Object.fromEntries(entries));
+    };
+    loadCachedUrls();
+  }, [images]);
 
   if (images.length === 0) {
     return (
@@ -55,7 +81,7 @@ export function ImageGallery({ images, selectedImage, onSelect }: Props) {
               }`}
             >
               <img
-                src={image.url}
+                src={cachedUrls[image.id] || image.url}
                 alt={image.params.positivePrompt.slice(0, 50)}
                 loading="lazy"
                 decoding="async"
@@ -106,7 +132,7 @@ export function ImageGallery({ images, selectedImage, onSelect }: Props) {
             </svg>
           </button>
           <img
-            src={lightboxImage.url}
+            src={cachedUrls[lightboxImage.id] || lightboxImage.url}
             alt={lightboxImage.params.positivePrompt.slice(0, 50)}
             className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
             onClick={(e) => e.stopPropagation()}

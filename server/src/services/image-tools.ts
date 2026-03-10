@@ -1,7 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import type { Tool, ToolCall } from "@mariozechner/pi-ai";
-import { generateImage, MODEL_PRESETS } from "./comfyui.js";
+import { generateImageWithState, MODEL_PRESETS } from "./comfyui.js";
 import { saveGeneratedImage } from "./image-storage.js";
+import { createGeneration, linkComfyUIIds, updateProgress, completeGeneration } from "./image-generation.js";
 import { v4 as uuid } from "uuid";
 import type { ImageGenerationParams, GeneratedImage } from "../types.js";
 
@@ -84,7 +85,16 @@ export async function executeImageTool(
   try {
     console.log(`[image-tool] Generating image: "${args.prompt.slice(0, 80)}..."`);
 
-    const result = await generateImage(params);
+    // Create generation state for tracking
+    const generation = createGeneration(params, chatId);
+
+    const result = await generateImageWithState(
+      generation.id,
+      generation.clientId,
+      params,
+      (promptId) => linkComfyUIIds(generation.id, promptId),
+      (progress) => updateProgress(generation.id, progress.step, progress.totalSteps)
+    );
 
     const id = uuid();
     const url = await saveGeneratedImage(id, result.imageData, {
@@ -93,6 +103,9 @@ export async function executeImageTool(
       createdAt: new Date().toISOString(),
       chatId,
     });
+
+    // Mark generation as complete
+    completeGeneration(generation.id, url);
 
     const generatedImage: GeneratedImage = {
       id,

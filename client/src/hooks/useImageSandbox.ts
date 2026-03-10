@@ -1,6 +1,12 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { fetchComfyUIStatus, fetchGeneratedImages, generateImage as apiGenerateImage } from "../api/client";
-import type { ComfyUIStatus, GeneratedImage, ImageGenerationParams } from "../types";
+import {
+  fetchComfyUIStatus,
+  fetchGeneratedImages,
+  generateImage as apiGenerateImage,
+  fetchGenerations,
+  subscribeToGeneration,
+} from "../api/client";
+import type { ComfyUIStatus, GeneratedImage, ImageGenerationParams, GenerationState } from "../types";
 
 export interface QueueItem {
   id: string;
@@ -8,6 +14,11 @@ export interface QueueItem {
   batchIndex: number;
   batchTotal: number;
   promptPreview: string;
+}
+
+// Check if a generation is actively running
+function isActiveGeneration(gen: GenerationState): boolean {
+  return gen.status === "queued" || gen.status === "processing";
 }
 
 export function useImageSandbox() {
@@ -20,8 +31,10 @@ export function useImageSandbox() {
   const [error, setError] = useState<string | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [currentItem, setCurrentItem] = useState<QueueItem | null>(null);
+  const [activeGenerationId, setActiveGenerationId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const processingRef = useRef(false);
+  const subscribedGenerationId = useRef<string | null>(null);
 
   const checkStatus = useCallback(async () => {
     try {
@@ -35,13 +48,62 @@ export function useImageSandbox() {
     }
   }, []);
 
-  // Check status and load existing images on mount
+  // Subscribe to a generation's SSE stream
+  const subscribeToGenerationEvents = useCallback((generationId: string) => {
+    if (subscribedGenerationId.current === generationId) return;
+
+    subscribedGenerationId.current = generationId;
+    const abortController = subscribeToGeneration(generationId, {
+      onState: (state) => {
+        if (state.status === "processing" && state.progress) {
+          setGenerating(true);
+          setProgress({ step: state.progress.step, total: state.progress.total });
+          setActiveGenerationId(generationId);
+          setError(null);
+        } else if (state.status === "completed" && state.imageUrl) {
+          setGenerating(false);
+          setProgress(null);
+          setActiveGenerationId(null);
+          subscribedGenerationId.current = null;
+          processingRef.current = false;
+          // The image will appear in the list after refresh
+        } else if (state.status === "error") {
+          setGenerating(false);
+          setProgress(null);
+          setActiveGenerationId(null);
+          subscribedGenerationId.current = null;
+          processingRef.current = false;
+          setError(state.error || "Generation failed");
+        }
+      },
+      onError: (err) => {
+        setError(err);
+        setGenerating(false);
+        setProgress(null);
+        setActiveGenerationId(null);
+        subscribedGenerationId.current = null;
+        processingRef.current = false;
+      },
+    });
+    abortRef.current = abortController;
+  }, []);
+
+  // Check status, load images, and recover active generations on mount
   useEffect(() => {
     checkStatus();
     fetchGeneratedImages().then((existing) => {
       if (existing.length > 0) setImages(existing);
     }).catch(() => {});
-  }, [checkStatus]);
+
+    // Check for any active generations to recover
+    fetchGenerations().then((generations) => {
+      const active = generations.find(isActiveGeneration);
+      if (active) {
+        console.log("[image-sandbox] recovering active generation:", active.id);
+        subscribeToGenerationEvents(active.id);
+      }
+    }).catch(() => {});
+  }, [checkStatus, subscribeToGenerationEvents]);
 
   // Process queue: pick next item when not generating
   useEffect(() => {
@@ -56,6 +118,10 @@ export function useImageSandbox() {
     setError(null);
 
     abortRef.current = apiGenerateImage(next.params, {
+      onStarted: (generationId) => {
+        setActiveGenerationId(generationId);
+        subscribeToGenerationEvents(generationId);
+      },
       onProgress: (step, totalSteps) => {
         setProgress({ step, total: totalSteps });
       },
@@ -65,6 +131,8 @@ export function useImageSandbox() {
         setGenerating(false);
         setProgress(null);
         setCurrentItem(null);
+        setActiveGenerationId(null);
+        subscribedGenerationId.current = null;
         processingRef.current = false;
       },
       onError: (err) => {
@@ -72,10 +140,12 @@ export function useImageSandbox() {
         setGenerating(false);
         setProgress(null);
         setCurrentItem(null);
+        setActiveGenerationId(null);
+        subscribedGenerationId.current = null;
         processingRef.current = false;
       },
     });
-  }, [queue, generating]);
+  }, [queue, generating, subscribeToGenerationEvents]);
 
   const enqueue = useCallback((params: ImageGenerationParams, batchCount: number = 1) => {
     const batchId = crypto.randomUUID().slice(0, 8);

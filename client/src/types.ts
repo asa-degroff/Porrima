@@ -135,6 +135,20 @@ export interface ComfyUIStatus {
   models: string[];
 }
 
+export interface GenerationState {
+  id: string;
+  chatId?: string;
+  promptId?: string;
+  clientId: string;
+  params: ImageGenerationParams;
+  status: "queued" | "processing" | "completed" | "error";
+  progress: { step: number; total: number } | null;
+  imageUrl?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 // TTS Types
 export interface TTSSettings {
   voice: string;

@@ -140,3 +140,19 @@ export interface ComfyUIStatus {
   queueSize: number;
   models: string[];
 }
+
+export type GenerationStatus = "queued" | "processing" | "completed" | "error";
+
+export interface GenerationState {
+  id: string;
+  chatId?: string;
+  promptId?: string;
+  clientId: string;
+  params: ImageGenerationParams;
+  status: GenerationStatus;
+  progress: { step: number; total: number } | null;
+  imageUrl?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}

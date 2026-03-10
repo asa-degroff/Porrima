@@ -165,12 +165,18 @@ export interface GenerateProgress {
   totalSteps: number;
 }
 
-export async function generateImage(
+/**
+ * Generate image with state tracking.
+ * Calls onLinkComfyUI with the promptId so the route can link it to our generation ID.
+ */
+export async function generateImageWithState(
+  generationId: string,
+  clientId: string,
   params: ImageGenerationParams,
+  onLinkComfyUI: (promptId: string) => void,
   onProgress?: (progress: GenerateProgress) => void
 ): Promise<{ imageData: Buffer; resolvedSeed: number }> {
   const baseUrl = await getBaseUrl();
-  const clientId = crypto.randomUUID();
   const workflow = buildWorkflow(params, clientId);
   const resolvedSeed = (workflow["7"].inputs as any).seed as number;
 
@@ -233,6 +239,7 @@ export async function generateImage(
 
         const data = await res.json();
         promptId = data.prompt_id;
+        if (promptId) onLinkComfyUI(promptId);
       } catch (err: any) {
         cleanup();
         reject(new Error(`Failed to queue prompt: ${err.message}`));

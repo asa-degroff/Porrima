@@ -287,6 +287,20 @@ function processSSEEvent(
 
 // --- Image Generation API ---
 
+export interface GenerationState {
+  id: string;
+  chatId?: string;
+  promptId?: string;
+  clientId: string;
+  params: ImageGenerationParams;
+  status: "queued" | "processing" | "completed" | "error";
+  progress: { step: number; total: number } | null;
+  imageUrl?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export async function fetchComfyUIStatus(): Promise<ComfyUIStatus> {
   const res = await apiFetch(`${BASE}/images/status`);
   if (!res.ok) return { available: false, queueSize: 0, models: [] };
@@ -305,7 +319,77 @@ export async function fetchGeneratedImages(): Promise<GeneratedImage[]> {
   return res.json();
 }
 
+export async function fetchGenerations(): Promise<GenerationState[]> {
+  const res = await apiFetch(`${BASE}/images/generations`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export interface GenerationCallbacks {
+  onState: (state: GenerationState) => void;
+  onError: (error: string) => void;
+}
+
+export function subscribeToGeneration(
+  generationId: string,
+  callbacks: GenerationCallbacks
+): AbortController {
+  const controller = new AbortController();
+
+  fetch(`${BASE}/images/generation/${generationId}/events`, {
+    signal: controller.signal,
+    credentials: "include",
+  })
+    .then(async (res) => {
+      if (res.status === 401) {
+        emitUnauthorized();
+        callbacks.onError("Authentication required");
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        callbacks.onError((err as any).error || "Request failed");
+        return;
+      }
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let currentEvent = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (currentEvent === "state") {
+                callbacks.onState(data);
+              }
+            } catch {}
+            currentEvent = "";
+          }
+        }
+      }
+    })
+    .catch((e) => {
+      if (e.name === "AbortError") return;
+      callbacks.onError(e.message);
+    });
+
+  return controller;
+}
+
 export interface ImageGenerateCallbacks {
+  onStarted: (generationId: string) => void;
   onProgress: (step: number, totalSteps: number) => void;
   onDone: (image: GeneratedImage) => void;
   onError: (error: string) => void;
@@ -355,7 +439,9 @@ export function generateImage(
           } else if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-              if (currentEvent === "progress") {
+              if (currentEvent === "started") {
+                callbacks.onStarted(data.id);
+              } else if (currentEvent === "progress") {
                 callbacks.onProgress(data.step, data.totalSteps);
               } else if (currentEvent === "done") {
                 callbacks.onDone(data.image);
