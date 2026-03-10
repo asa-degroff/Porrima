@@ -50,6 +50,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
   // Track if user is manually editing width/height (for Free mode)
   const editingWidthRef = useRef(false);
   const editingHeightRef = useRef(false);
+  const initialMountRef = useRef(true);
 
   // Load saved settings on mount
   useEffect(() => {
@@ -106,8 +107,12 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
     }
   }, [models, model]);
 
-  // Apply presets when model changes
+  // Apply presets when model changes (skip initial mount — localStorage already loaded)
   useEffect(() => {
+    if (initialMountRef.current) {
+      initialMountRef.current = false;
+      return;
+    }
     let preset: Partial<ImageGenerationParams> | undefined;
     if (model.includes("turbo")) {
       preset = MODEL_PRESETS["z-image-turbo"];
