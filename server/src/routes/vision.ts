@@ -183,30 +183,59 @@ router.delete("/images/:id", async (req, res) => {
   }
 });
 
-// Re-analyze with different preset
+// Re-analyze with different preset (streaming)
 router.post("/images/:id/reanalyze", async (req, res) => {
   try {
-    const { preset } = req.body as { preset: string };
+    const { preset, stream } = req.body as { preset: string; stream?: boolean };
     const image = await getAnalyzedImage(req.params.id);
 
     if (!image) {
       return res.status(404).json({ error: "Image not found" });
     }
 
-    const result = await analyzeImage(image.imageData, preset || "detailed", image.model);
+    if (stream) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
 
-    const updated = await updateAnalyzedImage(req.params.id, {
-      description: result.description,
-      preset: result.preset,
-      model: result.model,
-      conversation: [], // Reset conversation on re-analyze
-    });
+      const result = await analyzeImageStream(
+        image.imageData,
+        preset || "detailed",
+        image.model,
+        (event) => {
+          res.write(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
+        }
+      );
 
-    const { imageData: _, ...sanitized } = updated!;
-    res.json(sanitized);
+      const updated = await updateAnalyzedImage(req.params.id, {
+        description: result.description,
+        preset: result.preset,
+        model: result.model,
+        conversation: [],
+      });
+
+      const { imageData: _, ...sanitized } = updated!;
+      res.write(`event: done\ndata: ${JSON.stringify({ image: sanitized })}\n\n`);
+      res.end();
+    } else {
+      const result = await analyzeImage(image.imageData, preset || "detailed", image.model);
+
+      const updated = await updateAnalyzedImage(req.params.id, {
+        description: result.description,
+        preset: result.preset,
+        model: result.model,
+        conversation: [],
+      });
+
+      const { imageData: _, ...sanitized } = updated!;
+      res.json(sanitized);
+    }
   } catch (e: any) {
     console.error("Vision re-analyze error:", e);
-    res.status(500).json({ error: e.message });
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message });
+    }
   }
 });
 

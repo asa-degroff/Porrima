@@ -326,6 +326,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                 <VisionChat
                   image={selectedAnalyzedImage}
                   analyzing={analyzing}
+                  streamingDescription={streamingDescription}
                   chatting={chatting}
                   onChat={handleChat}
                   onReanalyze={handleReanalyze}

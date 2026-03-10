@@ -602,6 +602,30 @@ export async function reanalyzeImage(
   return res.json();
 }
 
+export interface ReanalyzeCallbacks {
+  onDelta: (delta: string) => void;
+  onDone: (image: AnalyzedImage) => void;
+  onError: (error: string) => void;
+}
+
+export function streamReanalyzeImage(
+  id: string,
+  preset: string,
+  callbacks: ReanalyzeCallbacks
+): AbortController {
+  return streamSSE(`${BASE}/vision/images/${id}/reanalyze`, { preset, stream: true }, {
+    onDelta: callbacks.onDelta,
+    onThinkingDelta: () => {},
+    onDone: (msg) => {
+      const m = msg as any;
+      if (m?.image) {
+        callbacks.onDone(m.image);
+      }
+    },
+    onError: callbacks.onError,
+  });
+}
+
 export async function deleteAnalyzedImage(id: string): Promise<void> {
   const res = await apiFetch(`${BASE}/vision/images/${id}`, {
     method: "DELETE",

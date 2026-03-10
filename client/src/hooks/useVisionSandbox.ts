@@ -8,6 +8,7 @@ import {
   streamAnalyzeImage,
   chatAboutImage as apiChatAboutImage,
   reanalyzeImage as apiReanalyzeImage,
+  streamReanalyzeImage,
   deleteAnalyzedImage as apiDeleteAnalyzedImage,
   type VisionPreset,
   type AnalyzedImage,
@@ -127,29 +128,38 @@ export function useVisionSandbox() {
 
   const reanalyzeImage = useCallback(async (id: string, preset: string) => {
     setAnalyzing(true);
+    setStreamingDescription("");
     setError(null);
     try {
-      const result = await apiReanalyzeImage(id, preset);
-      
-      setAnalyzedImages((prev) =>
-        prev.map((img) => (img.id === id ? result : img))
-      );
-      
-      // Invalidate cache — re-analyze changes description and resets conversation
-      imageCacheRef.current.delete(id);
-
-      if (selectedImage?.id === id) {
-        setSelectedImage(result);
-      }
-
-      return result;
+      return await new Promise<AnalyzedImage>((resolve, reject) => {
+        streamReanalyzeImage(id, preset, {
+          onDelta: (delta) => {
+            setStreamingDescription((prev) => (prev ?? "") + delta);
+          },
+          onDone: (result) => {
+            setAnalyzedImages((prev) =>
+              prev.map((img) => (img.id === id ? result : img))
+            );
+            imageCacheRef.current.delete(id);
+            setSelectedImage(result);
+            setStreamingDescription(null);
+            setAnalyzing(false);
+            resolve(result);
+          },
+          onError: (err) => {
+            setError(err);
+            setStreamingDescription(null);
+            setAnalyzing(false);
+            reject(new Error(err));
+          },
+        });
+      });
     } catch (e: any) {
       setError(e.message);
-      throw e;
-    } finally {
       setAnalyzing(false);
+      throw e;
     }
-  }, [selectedImage]);
+  }, []);
 
   const deleteImage = useCallback(async (id: string) => {
     setError(null);

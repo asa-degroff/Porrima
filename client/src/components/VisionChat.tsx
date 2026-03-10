@@ -7,6 +7,7 @@ import { OctahedronLogo } from "./OctahedronLogo";
 interface Props {
   image: AnalyzedImage;
   analyzing?: boolean;
+  streamingDescription?: string | null;
   chatting: boolean;
   onChat: (message: string) => Promise<string>;
   onReanalyze: (preset: string) => Promise<void>;
@@ -14,7 +15,7 @@ interface Props {
   onSendToGenerate?: (description: string) => void;
 }
 
-export function VisionChat({ image, analyzing, chatting, onChat, onReanalyze, onCopyDescription, onSendToGenerate }: Props) {
+export function VisionChat({ image, analyzing, streamingDescription, chatting, onChat, onReanalyze, onCopyDescription, onSendToGenerate }: Props) {
   const [messages, setMessages] = useState<VisionMessage[]>(image.conversation);
   const [presetSelectOpen, setPresetSelectOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -164,9 +165,16 @@ export function VisionChat({ image, analyzing, chatting, onChat, onReanalyze, on
             )}
           </div>
           {analyzing ? (
-            <div className="flex items-center gap-2.5 py-2">
-              <OctahedronLogo isActive={true} count={3} size={20} gap={2} speed={0.8} />
-              <span className="text-xs text-white/40">Re-analyzing...</span>
+            <div className="space-y-3">
+              <div className="flex items-center gap-2.5">
+                <OctahedronLogo isActive={true} count={3} size={20} gap={2} speed={0.8} />
+                <span className="text-xs text-white/40">Re-analyzing...</span>
+              </div>
+              {streamingDescription && (
+                <div className="text-sm text-white/80 leading-relaxed markdown-body">
+                  <MarkdownRenderer content={streamingDescription} />
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-sm text-white/80 leading-relaxed markdown-body">
