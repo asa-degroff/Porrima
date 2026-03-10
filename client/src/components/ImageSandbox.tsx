@@ -7,6 +7,7 @@ import { ImageDetails } from "./ImageDetails";
 import { VisionControls } from "./VisionControls";
 import { VisionChat } from "./VisionChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { OctahedronLogo } from "./OctahedronLogo";
 import type { GeneratedImage, ImageGenerationParams, OllamaModel } from "../types";
 
 interface Props {
@@ -307,9 +308,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                       alt="Analyzing..."
                       className="max-w-sm max-h-80 rounded-lg object-contain shadow-lg shadow-black/30"
                     />
-                    <div className="flex items-center gap-2 text-xs text-white/40">
-                      <div className="w-3 h-3 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
-                      <span>Analyzing...</span>
+                    <div className="flex items-center gap-2.5">
+                      <OctahedronLogo isActive={true} count={3} size={20} gap={2} speed={0.8} />
+                      <span className="text-xs text-white/40">Analyzing...</span>
                     </div>
                   </div>
                   {streamingDescription && (
@@ -324,6 +325,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               ) : selectedAnalyzedImage ? (
                 <VisionChat
                   image={selectedAnalyzedImage}
+                  analyzing={analyzing}
                   chatting={chatting}
                   onChat={handleChat}
                   onReanalyze={handleReanalyze}
