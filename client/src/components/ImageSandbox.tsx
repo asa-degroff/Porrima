@@ -6,6 +6,7 @@ import { ImageGallery } from "./ImageGallery";
 import { ImageDetails } from "./ImageDetails";
 import { VisionControls } from "./VisionControls";
 import { VisionChat } from "./VisionChat";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import type { GeneratedImage, ImageGenerationParams, OllamaModel } from "../types";
 
 interface Props {
@@ -57,6 +58,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     selectedImage: selectedAnalyzedImage,
     analyzing,
     chatting,
+    streamingDescription,
+    pendingImageData,
     error: visionError,
     analyzeImage,
     chatAboutImage,
@@ -284,6 +287,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                 selectedModel={visionModel}
                 onModelChange={setVisionModel}
                 analyzing={analyzing}
+                streamingDescription={streamingDescription}
                 onAnalyze={handleAnalyze}
                 analyzedImages={analyzedImages}
                 selectedImage={selectedAnalyzedImage}
@@ -294,7 +298,30 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
 
             {/* Right panel: image + description/chat */}
             <div className="flex-1 flex flex-col min-w-0">
-              {selectedAnalyzedImage ? (
+              {analyzing && pendingImageData ? (
+                /* Streaming preview while analyzing */
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  <div className="flex flex-col items-start gap-3">
+                    <img
+                      src={pendingImageData}
+                      alt="Analyzing..."
+                      className="max-w-sm max-h-80 rounded-lg object-contain shadow-lg shadow-black/30"
+                    />
+                    <div className="flex items-center gap-2 text-xs text-white/40">
+                      <div className="w-3 h-3 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+                      <span>Analyzing...</span>
+                    </div>
+                  </div>
+                  {streamingDescription && (
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-medium text-white/40 uppercase tracking-wider">Description</label>
+                      <div className="text-sm text-white/80 leading-relaxed markdown-body">
+                        <MarkdownRenderer content={streamingDescription} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : selectedAnalyzedImage ? (
                 <VisionChat
                   image={selectedAnalyzedImage}
                   chatting={chatting}

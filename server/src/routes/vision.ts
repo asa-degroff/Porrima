@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   analyzeImage,
+  analyzeImageStream,
   chatAboutImage,
   saveAnalyzedImage,
   getAnalyzedImages,
@@ -38,7 +39,7 @@ router.get("/images/:id", async (req, res) => {
   }
 });
 
-// Analyze and save an image
+// Analyze and save an image (non-streaming, returns complete result)
 router.post("/analyze", async (req, res) => {
   try {
     const { imageData, preset, model } = req.body as {
@@ -66,6 +67,66 @@ router.post("/analyze", async (req, res) => {
     res.json(sanitized);
   } catch (e: any) {
     console.error("Vision analysis error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Analyze image with SSE streaming
+router.post("/analyze-stream", async (req, res) => {
+  try {
+    const { imageData, preset, model } = req.body as {
+      imageData: string;
+      preset: string;
+      model?: string;
+    };
+
+    if (!imageData) {
+      return res.status(400).json({ error: "imageData is required" });
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+
+    await analyzeImageStream(
+      imageData,
+      preset || "detailed",
+      model,
+      (event) => {
+        res.write(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
+      }
+    );
+
+    res.end();
+  } catch (e: any) {
+    console.error("Vision stream error:", e);
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message });
+    }
+  }
+});
+
+// Save an already-analyzed image (used after streaming analysis completes)
+router.post("/save", async (req, res) => {
+  try {
+    const { imageData, description, preset, model } = req.body as {
+      imageData: string;
+      description: string;
+      preset: string;
+      model: string;
+    };
+
+    if (!imageData || !description) {
+      return res.status(400).json({ error: "imageData and description are required" });
+    }
+
+    const filename = `image-${Date.now()}.png`;
+    const saved = await saveAnalyzedImage(filename, imageData, description, preset, model);
+    const { imageData: _, ...sanitized } = saved;
+    res.json(sanitized);
+  } catch (e: any) {
+    console.error("Vision save error:", e);
     res.status(500).json({ error: e.message });
   }
 });

@@ -275,6 +275,98 @@ export async function analyzeImage(
   return { description, preset: presetKey, model: modelName };
 }
 
+export async function analyzeImageStream(
+  imageData: string,
+  presetKey: string,
+  model: string | undefined,
+  onEvent: (event: { event: string; data: unknown }) => void
+): Promise<{ description: string; preset: string; model: string }> {
+  await ensureVisionDir();
+
+  const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
+  const modelName = model || getVLMModel();
+
+  const hasSlot = await waitforModelSlot(modelName);
+  if (!hasSlot) {
+    onEvent({ event: "error", data: { message: "Timed out waiting for vision model slot" } });
+    throw new Error("Timed out waiting for vision model slot");
+  }
+
+  const imageBuffer = base64ToBuffer(imageData).toString("base64");
+
+  const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: modelName,
+      stream: true,
+      messages: [
+        { role: "system", content: preset.prompt },
+        {
+          role: "user",
+          content: "Describe this image.",
+          images: [imageBuffer],
+        },
+      ],
+      keep_alive: 0,
+      options: { temperature: 0.7, num_ctx: 4096 },
+    }),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => res.statusText);
+    onEvent({ event: "error", data: { message: `Vision analysis failed (${res.status}): ${errorText}` } });
+    throw new Error(`Vision analysis failed (${res.status}): ${errorText}`);
+  }
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let fullContent = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (line.trim()) {
+        try {
+          const json = JSON.parse(line);
+          if (json.message?.content) {
+            const delta = json.message.content;
+            fullContent += delta;
+            onEvent({ event: "text_delta", data: { delta } });
+          }
+        } catch {
+          // skip malformed
+        }
+      }
+    }
+  }
+
+  // Process remaining buffer
+  if (buffer.trim()) {
+    try {
+      const json = JSON.parse(buffer);
+      if (json.message?.content) {
+        fullContent += json.message.content;
+        onEvent({ event: "text_delta", data: { delta: json.message.content } });
+      }
+    } catch {
+      // skip malformed
+    }
+  }
+
+  const description = cleanOutput(fullContent);
+  onEvent({ event: "description_complete", data: { description, preset: presetKey, model: modelName } });
+
+  return { description, preset: presetKey, model: modelName };
+}
+
 export async function chatAboutImage(
   imageData: string,
   conversation: VisionMessage[],

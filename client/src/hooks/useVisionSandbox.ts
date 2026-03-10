@@ -4,6 +4,8 @@ import {
   fetchAnalyzedImages,
   fetchAnalyzedImage,
   analyzeImage as apiAnalyzeImage,
+  saveAnalyzedImage as apiSaveAnalyzedImage,
+  streamAnalyzeImage,
   chatAboutImage as apiChatAboutImage,
   reanalyzeImage as apiReanalyzeImage,
   deleteAnalyzedImage as apiDeleteAnalyzedImage,
@@ -18,6 +20,8 @@ export function useVisionSandbox() {
   const [selectedImage, setSelectedImage] = useState<AnalyzedImage | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [chatting, setChatting] = useState(false);
+  const [streamingDescription, setStreamingDescription] = useState<string | null>(null);
+  const [pendingImageData, setPendingImageData] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Cache fetched images so switching back is instant
@@ -42,17 +46,39 @@ export function useVisionSandbox() {
 
   const analyzeImage = useCallback(async (imageData: string, preset: string, model?: string) => {
     setAnalyzing(true);
+    setStreamingDescription("");
+    setPendingImageData(imageData);
     setError(null);
     try {
-      const result = await apiAnalyzeImage(imageData, preset, model);
-      setAnalyzedImages((prev) => [result, ...prev]);
-      setSelectedImage(result);
-      return result;
+      return await new Promise<AnalyzedImage>((resolve, reject) => {
+        const controller = streamAnalyzeImage(imageData, preset, model, {
+          onDelta: (delta) => {
+            setStreamingDescription((prev) => (prev ?? "") + delta);
+          },
+          onDone: async (result) => {
+            // Save the image with the already-completed description (no re-analysis)
+            const saved = await apiSaveAnalyzedImage(imageData, result.description, result.preset, result.model);
+            setAnalyzedImages((prev) => [saved, ...prev]);
+            const updated = saved;
+            setSelectedImage(updated);
+            setStreamingDescription(null);
+            setPendingImageData(null);
+            setAnalyzing(false);
+            resolve(updated);
+          },
+          onError: (err) => {
+            setError(err);
+            setStreamingDescription(null);
+            setPendingImageData(null);
+            setAnalyzing(false);
+            reject(new Error(err));
+          },
+        });
+      });
     } catch (e: any) {
       setError(e.message);
-      throw e;
-    } finally {
       setAnalyzing(false);
+      throw e;
     }
   }, []);
 
@@ -170,6 +196,8 @@ export function useVisionSandbox() {
     selectedImage,
     analyzing,
     chatting,
+    streamingDescription,
+    pendingImageData,
     error,
     analyzeImage,
     chatAboutImage,

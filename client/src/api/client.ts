@@ -265,6 +265,10 @@ function processSSEEvent(
     case "ask_user":
       callbacks.onAskUser?.(data.question);
       break;
+    case "description_complete":
+      // Vision analysis stream completion — forward the raw data as the done payload
+      callbacks.onDone(data);
+      break;
     case "iteration":
       callbacks.onIteration?.(data);
       break;
@@ -521,6 +525,49 @@ export async function analyzeImage(
     throw new Error((err as any).error || "Failed to analyze image");
   }
   return res.json();
+}
+
+export async function saveAnalyzedImage(
+  imageData: string,
+  description: string,
+  preset: string,
+  model: string
+): Promise<AnalyzedImage> {
+  const res = await apiFetch(`${BASE}/vision/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageData, description, preset, model }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to save analyzed image");
+  }
+  return res.json();
+}
+
+export interface VisionAnalyzeCallbacks {
+  onDelta: (delta: string) => void;
+  onDone: (result: { description: string; preset: string; model: string }) => void;
+  onError: (error: string) => void;
+}
+
+export function streamAnalyzeImage(
+  imageData: string,
+  preset: string,
+  model: string | undefined,
+  callbacks: VisionAnalyzeCallbacks
+): AbortController {
+  return streamSSE(`${BASE}/vision/analyze-stream`, { imageData, preset, model }, {
+    onDelta: callbacks.onDelta,
+    onThinkingDelta: () => {},
+    onDone: (msg) => {
+      const m = msg as any;
+      if (m?.description) {
+        callbacks.onDone({ description: m.description, preset: m.preset, model: m.model });
+      }
+    },
+    onError: callbacks.onError,
+  });
 }
 
 export async function chatAboutImage(

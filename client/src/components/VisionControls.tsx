@@ -36,6 +36,7 @@ interface Props {
   selectedModel: string;
   onModelChange: (modelId: string) => void;
   analyzing: boolean;
+  streamingDescription: string | null;
   onAnalyze: (imageData: string, preset: string) => Promise<void>;
   analyzedImages: AnalyzedImage[];
   selectedImage: AnalyzedImage | null;
@@ -49,6 +50,7 @@ export function VisionControls({
   selectedModel,
   onModelChange,
   analyzing,
+  streamingDescription,
   onAnalyze,
   analyzedImages,
   selectedImage,
@@ -223,7 +225,7 @@ export function VisionControls({
             {analyzing ? (
               <div className="flex items-center justify-center gap-2 text-sm text-white/60">
                 <div className="w-3.5 h-3.5 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
-                <span>Analyzing...</span>
+                <span>{streamingDescription !== null ? "Analyzing..." : "Saving..."}</span>
               </div>
             ) : (
               <>
