@@ -8,9 +8,11 @@ interface Props {
   chatting: boolean;
   onChat: (message: string) => Promise<string>;
   onReanalyze: (preset: string) => Promise<void>;
+  onCopyDescription?: () => void;
+  onSendToGenerate?: (description: string) => void;
 }
 
-export function VisionChat({ image, chatting, onChat, onReanalyze }: Props) {
+export function VisionChat({ image, chatting, onChat, onReanalyze, onCopyDescription, onSendToGenerate }: Props) {
   const [messages, setMessages] = useState<VisionMessage[]>(image.conversation);
   const [presetSelectOpen, setPresetSelectOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -123,9 +125,43 @@ export function VisionChat({ image, chatting, onChat, onReanalyze }: Props) {
           </div>
         </div>
 
-        {/* Description */}
-        <div className="text-sm text-white/80 leading-relaxed">
-          <MarkdownRenderer content={image.description} />
+        {/* Description with actions */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] font-medium text-white/40 uppercase tracking-wider">Description</label>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(image.description);
+                  onCopyDescription?.();
+                }}
+                className="text-[10px] text-white/50 hover:text-white/80 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/10"
+                title="Copy markdown"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                </svg>
+                Copy
+              </button>
+              <button
+                onClick={() => onSendToGenerate?.(image.description)}
+                className="text-[10px] text-amber-300 hover:text-amber-200 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/20"
+                title="Send to generate"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 3 4 8.6725 8 10.344 12 8.6725 8 3Z" />
+                  <path d="M12 13.3275 16 15 20 13.3275 12 3v10.3275Z" />
+                  <path d="M8 14 4 19.553 8 21.224 12 19.553 8 14Z" />
+                  <path d="M12 24.224 16 22.553 20 24.224 12 14v10.224Z" />
+                </svg>
+                Send to Generate
+              </button>
+            </div>
+          </div>
+          <div className="text-sm text-white/80 leading-relaxed markdown-body">
+            <MarkdownRenderer content={image.description} />
+          </div>
         </div>
 
         {/* Conversation */}

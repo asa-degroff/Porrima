@@ -92,6 +92,11 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     setControlParams({ ...params });
   }, []);
 
+  const handleSendToGenerate = useCallback((description: string) => {
+    setControlParams({ positivePrompt: description });
+    setMode("generate");
+  }, []);
+
   const handleAnalyze = useCallback(async (imageData: string, preset: string) => {
     await analyzeImage(imageData, preset, visionModel);
   }, [analyzeImage, visionModel]);
@@ -272,6 +277,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   chatting={chatting}
                   onChat={handleChat}
                   onReanalyze={handleReanalyze}
+                  onSendToGenerate={handleSendToGenerate}
                 />
               ) : (
                 <div className="flex-1 flex items-center justify-center text-white/30">
