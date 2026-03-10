@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useImageSandbox } from "../hooks/useImageSandbox";
 import { useVisionSandbox } from "../hooks/useVisionSandbox";
 import { ImageControls } from "./ImageControls";
@@ -44,14 +44,35 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   const [lightboxImage, setLightboxImage] = useState<GeneratedImage | null>(null);
   const closeLightbox = useCallback(() => setLightboxImage(null), []);
 
+  // Navigation index for selected image in the detail pane
+  const selectedIndex = useMemo(
+    () => (selectedImage ? images.findIndex((img) => img.url === selectedImage.url) : -1),
+    [images, selectedImage]
+  );
+  const hasPrevImage = selectedIndex > 0;
+  const hasNextImage = selectedIndex >= 0 && selectedIndex < images.length - 1;
+
+  const navigateImage = useCallback((dir: -1 | 1) => {
+    const idx = selectedImage ? images.findIndex((img) => img.url === selectedImage.url) : -1;
+    const next = idx + dir;
+    if (next >= 0 && next < images.length) {
+      const target = images[next];
+      setSelectedImage(target);
+      if (lightboxImage) setLightboxImage(target);
+    }
+  }, [images, selectedImage, lightboxImage, setSelectedImage]);
+
+  // Keyboard: Escape closes lightbox, arrows navigate (detail pane or lightbox)
   useEffect(() => {
-    if (!lightboxImage) return;
+    if (!selectedImage && !lightboxImage) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeLightbox();
+      if (e.key === "Escape" && lightboxImage) { closeLightbox(); return; }
+      if (e.key === "ArrowLeft") { e.preventDefault(); navigateImage(-1); }
+      if (e.key === "ArrowRight") { e.preventDefault(); navigateImage(1); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [lightboxImage, closeLightbox]);
+  }, [selectedImage, lightboxImage, closeLightbox, navigateImage]);
 
   const {
     presets,
@@ -242,11 +263,15 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
 
             {/* Details panel (conditional) */}
             {selectedImage && (
-              <div className="w-80 shrink-0 border-l border-white/10 overflow-y-auto p-4 backdrop-blur-xl bg-white/[0.03]">
+              <div className="w-80 shrink-0 border-l border-white/10 p-4 backdrop-blur-xl bg-white/[0.03] flex flex-col">
                 <ImageDetails
                   image={selectedImage}
                   onUseParams={handleUseParams}
                   onOpenLightbox={setLightboxImage}
+                  onPrev={() => navigateImage(-1)}
+                  onNext={() => navigateImage(1)}
+                  hasPrev={hasPrevImage}
+                  hasNext={hasNextImage}
                 />
               </div>
             )}
@@ -259,11 +284,31 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               >
                 <button
                   onClick={closeLightbox}
-                  className="absolute top-4 right-4 p-2 rounded-lg text-white/50 hover:text-white/90 hover:bg-white/10 transition-colors"
+                  className="absolute top-4 right-4 p-2 rounded-lg text-white/50 hover:text-white/90 hover:bg-white/10 transition-colors z-10"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M18 6L6 18" />
                     <path d="M6 6l12 12" />
+                  </svg>
+                </button>
+                {/* Prev button */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); navigateImage(-1); }}
+                  disabled={!hasPrevImage}
+                  className="absolute left-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/40 text-white/60 hover:text-white/90 hover:bg-black/60 transition-all disabled:opacity-20 disabled:pointer-events-none z-10"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                </button>
+                {/* Next button */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); navigateImage(1); }}
+                  disabled={!hasNextImage}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/40 text-white/60 hover:text-white/90 hover:bg-black/60 transition-all disabled:opacity-20 disabled:pointer-events-none z-10"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 18l6-6-6-6" />
                   </svg>
                 </button>
                 <img
