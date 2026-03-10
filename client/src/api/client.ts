@@ -266,7 +266,8 @@ function processSSEEvent(
       callbacks.onAskUser?.(data.question);
       break;
     case "description_complete":
-      // Vision analysis stream completion — forward the raw data as the done payload
+    case "reanalyze_complete":
+      // Vision stream completion — forward the raw data as the done payload
       callbacks.onDone(data);
       break;
     case "iteration":
@@ -618,8 +619,8 @@ export function streamReanalyzeImage(
     onThinkingDelta: () => {},
     onDone: (msg) => {
       const m = msg as any;
-      if (m?.image) {
-        callbacks.onDone(m.image);
+      if (m?.id) {
+        callbacks.onDone(m);
       }
     },
     onError: callbacks.onError,

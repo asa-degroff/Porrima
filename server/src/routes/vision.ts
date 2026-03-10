@@ -216,7 +216,7 @@ router.post("/images/:id/reanalyze", async (req, res) => {
       });
 
       const { imageData: _, ...sanitized } = updated!;
-      res.write(`event: done\ndata: ${JSON.stringify({ image: sanitized })}\n\n`);
+      res.write(`event: reanalyze_complete\ndata: ${JSON.stringify(sanitized)}\n\n`);
       res.end();
     } else {
       const result = await analyzeImage(image.imageData, preset || "detailed", image.model);
