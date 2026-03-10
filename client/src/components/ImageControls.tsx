@@ -57,24 +57,39 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const settings = JSON.parse(saved);
-        if (settings.width) setWidth(settings.width);
-        if (settings.height) setHeight(settings.height);
+        if (settings.width !== undefined) setWidth(settings.width);
+        if (settings.height !== undefined) setHeight(settings.height);
         if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
+        if (settings.steps) setSteps(settings.steps);
+        if (settings.cfgScale !== undefined) setCfgScale(settings.cfgScale);
+        if (settings.sampler) setSampler(settings.sampler);
+        if (settings.scheduler) setScheduler(settings.scheduler);
+        if (settings.model) setModel(settings.model);
+        if (settings.showNegative !== undefined) setShowNegative(settings.showNegative);
+        if (settings.negativePrompt) setNegativePrompt(settings.negativePrompt);
+        if (settings.seed !== undefined) setSeed(settings.seed.toString());
       }
     } catch {}
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Save settings when dimensions or aspect ratio change
+  // Persist all settings when they change
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      const settings = saved ? JSON.parse(saved) : {};
-      settings.width = width;
-      settings.height = height;
-      settings.aspectRatio = aspectRatio;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        width,
+        height,
+        aspectRatio,
+        steps,
+        cfgScale,
+        sampler,
+        scheduler,
+        model,
+        showNegative,
+        negativePrompt,
+        seed,
+      }));
     } catch {}
-  }, [width, height, aspectRatio]);
+  }, [width, height, aspectRatio, steps, cfgScale, sampler, scheduler, model, showNegative, negativePrompt, seed]);
 
   // Handle aspect ratio button click
   const handleAspectRatioClick = (label: string, w: number, h: number, ratio: number | null) => {
@@ -83,59 +98,6 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
     setWidth(w);
     setHeight(h);
   };
-
-  const [selectedRatio, setSelectedRatio] = useState<string>("1:1");
-  const widthInputRef = useRef<HTMLInputElement>(null);
-
-  // Load persisted settings on mount
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const settings = JSON.parse(stored);
-        if (settings.width) setWidth(settings.width);
-        if (settings.height) setHeight(settings.height);
-        if (settings.selectedRatio) setSelectedRatio(settings.selectedRatio);
-      }
-    } catch {}
-  }, []);
-
-  // Persist settings when dimensions or ratio change
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        width,
-        height,
-        selectedRatio,
-      }));
-    } catch {}
-  }, [width, height, selectedRatio]);
-
-  // Load persisted settings on mount
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const settings = JSON.parse(saved);
-        if (settings.width) setWidth(settings.width);
-        if (settings.height) setHeight(settings.height);
-        if (settings.aspectRatio) setAspectRatio(settings.aspectRatio);
-      }
-    } catch {}
-  }, []);
-
-  // Persist settings when dimensions or aspect ratio change
-  useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        ...saved,
-        width,
-        height,
-        aspectRatio,
-      }));
-    } catch {}
-  }, [width, height, aspectRatio]);
 
   // Update model when models list arrives
   useEffect(() => {
