@@ -1,12 +1,16 @@
+import { useState } from "react";
 import type { GeneratedImage, ImageGenerationParams } from "../types";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 interface Props {
   image: GeneratedImage;
   onUseParams: (params: Partial<ImageGenerationParams>) => void;
+  onOpenLightbox?: (image: GeneratedImage) => void;
 }
 
-export function ImageDetails({ image, onUseParams }: Props) {
+export function ImageDetails({ image, onUseParams, onOpenLightbox }: Props) {
   const p = image.params;
+  const [imageLoaded, setImageLoaded] = useState(false);
 
   const handleUseParams = () => {
     onUseParams({
@@ -30,25 +34,42 @@ export function ImageDetails({ image, onUseParams }: Props) {
     a.click();
   };
 
+  const handleImageClick = () => {
+    onOpenLightbox?.(image);
+  };
+
   return (
     <div className="space-y-4">
       {/* Preview */}
-      <div className="rounded-xl overflow-hidden border border-white/10 bg-black/30">
+      <div
+        className="rounded-xl overflow-hidden border border-white/10 bg-black/30 cursor-pointer"
+        onClick={handleImageClick}
+      >
         <img
           src={image.url}
           alt={p.positivePrompt.slice(0, 80)}
           className="w-full object-contain max-h-[400px]"
+          onLoad={() => setImageLoaded(true)}
         />
+        {!imageLoaded && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+            <div className="w-6 h-6 border-2 border-white/30 border-t-white/80 rounded-full animate-spin" />
+          </div>
+        )}
       </div>
 
       {/* Prompt */}
-      <div className="space-y-1">
+      <div className="space-y-2">
         <label className="text-[10px] font-medium text-white/40 uppercase tracking-wider">Prompt</label>
-        <p className="text-xs text-white/70 leading-relaxed">{p.positivePrompt}</p>
+        <div className="text-xs text-white/70 leading-relaxed markdown-body">
+          <MarkdownRenderer content={p.positivePrompt} />
+        </div>
         {p.negativePrompt && (
           <>
             <label className="text-[10px] font-medium text-white/40 uppercase tracking-wider mt-2 block">Negative</label>
-            <p className="text-xs text-white/50 leading-relaxed">{p.negativePrompt}</p>
+            <div className="text-xs text-white/50 leading-relaxed markdown-body">
+              <MarkdownRenderer content={p.negativePrompt} />
+            </div>
           </>
         )}
       </div>
