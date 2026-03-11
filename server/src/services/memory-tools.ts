@@ -109,7 +109,7 @@ export async function executeMemoryTool(
         return { content: `Embedding failed: ${e.message}`, isError: true };
       }
 
-      const results = await searchMemories(queryEmbedding, 5);
+      const results = await searchMemories(queryEmbedding, 5, new Date(), query);
       if (results.length === 0) {
         return { content: "No relevant memories found.", isError: false };
       }
@@ -134,8 +134,9 @@ export async function executeMemoryTool(
           } catch (e: any) {
             return { content: `Embedding failed: ${e.message}`, isError: true };
           }
-          const results = await searchMemories(queryEmbedding, 1);
-          if (results.length > 0 && results[0].score > 0.5) {
+          const results = await searchMemories(queryEmbedding, 1, new Date(), query);
+          // RRF scores are small — ~0.005 indicates a strong match in at least one ranking
+          if (results.length > 0 && results[0].score > 0.005) {
             const deleted = await deleteMemory(results[0].memory.id);
             if (deleted) {
               return {

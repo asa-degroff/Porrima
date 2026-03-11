@@ -60,6 +60,38 @@ function getDb(): Database.Database {
     );
   `);
 
+  // FTS5 full-text index (content-sync'd with memories table)
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS fts_memories
+      USING fts5(id UNINDEXED, text, content=memories, content_rowid=rowid);
+  `);
+
+  // Triggers to keep FTS in sync with memories table
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+      INSERT INTO fts_memories(rowid, id, text) VALUES (new.rowid, new.id, new.text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+      INSERT INTO fts_memories(fts_memories, rowid, id, text) VALUES('delete', old.rowid, old.id, old.text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+      INSERT INTO fts_memories(fts_memories, rowid, id, text) VALUES('delete', old.rowid, old.id, old.text);
+      INSERT INTO fts_memories(rowid, id, text) VALUES (new.rowid, new.id, new.text);
+    END;
+  `);
+
+  // One-time FTS rebuild for existing data
+  const ftsInit = db
+    .prepare("SELECT value FROM metadata WHERE key = 'fts_initialized'")
+    .get() as { value: string } | undefined;
+  if (!ftsInit) {
+    db.exec(`INSERT INTO fts_memories(fts_memories) VALUES('rebuild')`);
+    db.prepare(
+      "INSERT OR REPLACE INTO metadata (key, value) VALUES ('fts_initialized', '1')"
+    ).run();
+    console.log("[memory] Built FTS5 index for existing memories");
+  }
+
   // Auto-migrate from JSON if needed
   if (needsMigration) {
     migrateFromJson(db);
@@ -325,13 +357,54 @@ export interface ScoredMemory {
   score: number;
 }
 
+/**
+ * FTS5 full-text search. Returns ranked IDs.
+ * Tries quoted phrase match first; falls back to individual terms on no results.
+ */
+function ftsSearch(query: string, limit: number): string[] {
+  const db = getDb();
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  // Escape double quotes for FTS5 syntax
+  const escaped = trimmed.replace(/"/g, '""');
+
+  // Try phrase match first (exact sequence)
+  let rows = db
+    .prepare(
+      `SELECT id FROM fts_memories WHERE text MATCH ? ORDER BY rank LIMIT ?`
+    )
+    .all(`"${escaped}"`, limit) as Array<{ id: string }>;
+
+  // Fall back to individual terms (implicit OR) if phrase match yields nothing
+  if (rows.length === 0) {
+    // Tokenize into words and join with OR for FTS5
+    const terms = trimmed
+      .split(/\s+/)
+      .filter((t) => t.length > 0)
+      .map((t) => `"${t.replace(/"/g, '""')}"`)
+      .join(" OR ");
+    if (terms) {
+      rows = db
+        .prepare(
+          `SELECT id FROM fts_memories WHERE text MATCH ? ORDER BY rank LIMIT ?`
+        )
+        .all(terms, limit) as Array<{ id: string }>;
+    }
+  }
+
+  return rows.map((r) => r.id);
+}
+
 export async function searchMemories(
   queryEmbedding: number[],
   topK: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  queryText?: string
 ): Promise<ScoredMemory[]> {
   const db = getDb();
   const HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+  const RRF_K = 60; // standard RRF constant
 
   // Oversample from vec_memories to allow recency/importance re-ranking
   const oversample = Math.max(20, topK * 3);
@@ -345,17 +418,37 @@ export async function searchMemories(
     distance: number;
   }>;
 
-  if (vecRows.length === 0) return [];
+  // FTS search (if query text provided)
+  const ftsIds = queryText ? ftsSearch(queryText, oversample) : [];
 
-  // Build a map of cosine similarity (1 - distance) by id
-  const simMap = new Map<string, number>();
-  for (const r of vecRows) {
-    simMap.set(r.id, 1 - r.distance);
+  // Collect all candidate IDs from both sources
+  const allIds = new Set<string>();
+  for (const r of vecRows) allIds.add(r.id);
+  for (const id of ftsIds) allIds.add(id);
+
+  if (allIds.size === 0) return [];
+
+  // Build rank maps (1-based ranks)
+  const vecRank = new Map<string, number>();
+  vecRows.forEach((r, i) => vecRank.set(r.id, i + 1));
+
+  const ftsRank = new Map<string, number>();
+  ftsIds.forEach((id, i) => ftsRank.set(id, i + 1));
+
+  // Compute RRF score for each candidate
+  const rrfScores = new Map<string, number>();
+  for (const id of allIds) {
+    let score = 0;
+    const vr = vecRank.get(id);
+    if (vr !== undefined) score += 1 / (RRF_K + vr);
+    const fr = ftsRank.get(id);
+    if (fr !== undefined) score += 1 / (RRF_K + fr);
+    rrfScores.set(id, score);
   }
 
-  // Fetch metadata for matching IDs
-  const placeholders = vecRows.map(() => "?").join(",");
-  const ids = vecRows.map((r) => r.id);
+  // Fetch metadata for all candidate IDs
+  const ids = Array.from(allIds);
+  const placeholders = ids.map(() => "?").join(",");
   const metaRows = db
     .prepare(
       `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id FROM memories WHERE id IN (${placeholders})`
@@ -373,11 +466,11 @@ export async function searchMemories(
 
   const nowMs = now.getTime();
   const scored: ScoredMemory[] = metaRows.map((r) => {
-    const sim = simMap.get(r.id) ?? 0;
+    const rrf = rrfScores.get(r.id) ?? 0;
     const ageMs = nowMs - new Date(r.last_accessed).getTime();
     const recencyDecay = Math.pow(0.5, ageMs / HALF_LIFE_MS);
     const importanceWeight = r.importance / 10;
-    const score = sim * recencyDecay * importanceWeight;
+    const score = rrf * recencyDecay * importanceWeight;
 
     return {
       memory: {

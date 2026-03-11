@@ -40,8 +40,9 @@ export async function buildMemoryAugmentedPrompt(
 
     if (userMessages) {
       const queryEmbedding = await embed(userMessages);
-      const results = await searchMemories(queryEmbedding, 5);
-      const relevant = results.filter((r) => r.score > 0.01);
+      const results = await searchMemories(queryEmbedding, 5, new Date(), userMessages);
+      // RRF scores are much smaller than raw cosine — max ~0.033 before decay/importance
+      const relevant = results.filter((r) => r.score > 0.0003);
 
       if (relevant.length > 0) {
         const memoriesBlock = relevant
