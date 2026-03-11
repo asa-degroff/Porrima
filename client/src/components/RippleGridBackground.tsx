@@ -111,6 +111,10 @@ export function RippleGridBackground() {
       for (let y = yStart; y <= yEnd; y += scaledSpacing) {
         hLineYs[numHLines++] = y;
       }
+
+      // Canvas dimension changes reset context state, so re-apply
+      ctx!.strokeStyle = "rgba(139, 92, 246, 0.12)";
+      ctx!.lineWidth = 0.8;
     }
 
     resize();
@@ -137,10 +141,6 @@ export function RippleGridBackground() {
       }
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
-
-    // Set constant stroke style once
-    ctx.strokeStyle = "rgba(139, 92, 246, 0.12)";
-    ctx.lineWidth = 0.8;
 
     function draw(now: number) {
       animId = requestAnimationFrame(draw);
