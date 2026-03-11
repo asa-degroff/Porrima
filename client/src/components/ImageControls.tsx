@@ -146,28 +146,6 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
     }
   }, [initialParams]);
 
-  // Aspect ratio-aware dimension adjustment
-  useEffect(() => {
-    if (aspectRatio === "Free") return;
-
-    const ar = ASPECT_RATIOS.find((a) => a.label === aspectRatio);
-    if (!ar || ar.ratio === null) return;
-
-    // Skip calculation if width is empty string (user is editing)
-    if (typeof width === "string" && width.trim() === "") return;
-
-    const numWidth = typeof width === "number" ? width : parseInt(width);
-    if (isNaN(numWidth)) return;
-
-    // Calculate height based on width and aspect ratio
-    const calculatedHeight = numWidth / ar.ratio;
-
-    const numHeight = typeof height === "number" ? height : (height ? parseInt(height) : 0);
-    if (Math.abs(Math.round(calculatedHeight) - numHeight) > 1 && !editingHeightRef.current) {
-      setHeight(Math.round(calculatedHeight));
-    }
-  }, [width, aspectRatio]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Handle width change - adjust height to maintain aspect ratio
   const handleWidthChange = (value: number) => {
     editingWidthRef.current = true;
@@ -341,11 +319,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           <input
             type="number"
             value={width}
-            onChange={(e) => {
-              editingWidthRef.current = true;
-              setWidth(e.target.value);
-              setTimeout(() => { editingWidthRef.current = false; }, 100);
-            }}
+            onChange={(e) => handleWidthChange(parseInt(e.target.value) || 1024)}
             className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all"
             min={256}
             max={2048}
@@ -355,11 +329,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           <input
             type="number"
             value={height}
-            onChange={(e) => {
-              editingHeightRef.current = true;
-              setHeight(e.target.value);
-              setTimeout(() => { editingHeightRef.current = false; }, 100);
-            }}
+            onChange={(e) => handleHeightChange(parseInt(e.target.value) || 1024)}
             className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all"
             min={256}
             max={2048}
