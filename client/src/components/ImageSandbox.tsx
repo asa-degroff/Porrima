@@ -8,6 +8,7 @@ import { VisionControls } from "./VisionControls";
 import { VisionChat } from "./VisionChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { OctahedronLogo } from "./OctahedronLogo";
+import { useCachedImage } from "../utils/imageCache";
 import type { GeneratedImage, ImageGenerationParams, OllamaModel } from "../types";
 
 interface Props {
@@ -43,6 +44,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
 
   const [lightboxImage, setLightboxImage] = useState<GeneratedImage | null>(null);
   const closeLightbox = useCallback(() => setLightboxImage(null), []);
+  const lightboxCachedUrl = useCachedImage(lightboxImage?.id ?? "", lightboxImage?.url ?? "");
 
   // Navigation index for selected image in the detail pane
   const selectedIndex = useMemo(
@@ -312,7 +314,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   </svg>
                 </button>
                 <img
-                  src={lightboxImage.url}
+                  src={lightboxCachedUrl}
                   alt={lightboxImage.params.positivePrompt.slice(0, 50)}
                   className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
                   onClick={(e) => e.stopPropagation()}

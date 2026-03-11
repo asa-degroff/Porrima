@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import type { GeneratedImage } from "../types";
-import { useCachedImage } from "../utils/imageCache";
+import { precacheImages } from "../utils/imageCache";
 
 interface Props {
   images: GeneratedImage[];
@@ -10,29 +10,9 @@ interface Props {
 
 export function ImageGallery({ images, selectedImage, onSelect }: Props) {
 
-  // Pre-cache all images on mount
+  // Pre-cache full images in background so detail view is instant
   useEffect(() => {
-    const imageUrls = images.map((img) => img.url);
-    import("../utils/imageCache").then(({ precacheImages }) => {
-      precacheImages(imageUrls);
-    });
-  }, [images]);
-
-  // Create a map of cached URLs
-  const [cachedUrls, setCachedUrls] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    const loadCachedUrls = async () => {
-      const { getCachedImage } = await import("../utils/imageCache");
-      const entries = await Promise.all(
-        images.map(async (img) => {
-          const cachedUrl = await getCachedImage(img.id, img.url);
-          return [img.id, cachedUrl] as const;
-        })
-      );
-      setCachedUrls(Object.fromEntries(entries));
-    };
-    loadCachedUrls();
+    precacheImages(images.map((img) => img.url));
   }, [images]);
 
   if (images.length === 0) {
@@ -67,7 +47,7 @@ export function ImageGallery({ images, selectedImage, onSelect }: Props) {
             }`}
           >
             <img
-              src={cachedUrls[image.id] || image.url}
+              src={`${image.url}/thumb`}
               alt={image.params.positivePrompt.slice(0, 50)}
               loading="lazy"
               decoding="async"

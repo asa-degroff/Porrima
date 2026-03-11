@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { getComfyUIStatus, getComfyUIModels, generateImageWithState } from "../services/comfyui.js";
-import { saveGeneratedImage, getImagePath, getImageMetadata, listImages } from "../services/image-storage.js";
+import { saveGeneratedImage, getImagePath, getThumbPath, ensureThumbnail, getImageMetadata, listImages } from "../services/image-storage.js";
 import {
   loadGenerations,
   createGeneration,
@@ -170,6 +170,32 @@ router.post("/generate", async (req, res) => {
 });
 
 // Param routes
+
+router.get("/:id/thumb", async (req, res) => {
+  const thumbPath = getThumbPath(req.params.id);
+  try {
+    await access(thumbPath);
+  } catch {
+    // Generate thumbnail on-the-fly for older images
+    const created = await ensureThumbnail(req.params.id);
+    if (!created) {
+      // Fall back to full image
+      const imagePath = getImagePath(req.params.id);
+      try {
+        await access(imagePath);
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        createReadStream(imagePath).pipe(res);
+        return;
+      } catch {
+        return res.status(404).json({ error: "Image not found" });
+      }
+    }
+  }
+  res.setHeader("Content-Type", "image/webp");
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  createReadStream(thumbPath).pipe(res);
+});
 
 router.get("/:id", async (req, res) => {
   const imagePath = getImagePath(req.params.id);

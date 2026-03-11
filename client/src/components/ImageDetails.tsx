@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { GeneratedImage, ImageGenerationParams } from "../types";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { useCachedImage } from "../utils/imageCache";
 
 interface Props {
   image: GeneratedImage;
@@ -15,6 +16,7 @@ interface Props {
 export function ImageDetails({ image, onUseParams, onOpenLightbox, onPrev, onNext, hasPrev, hasNext }: Props) {
   const p = image.params;
   const [imageLoaded, setImageLoaded] = useState(false);
+  const cachedUrl = useCachedImage(image.id, image.url);
 
   const handleUseParams = () => {
     onUseParams({
@@ -77,7 +79,7 @@ export function ImageDetails({ image, onUseParams, onOpenLightbox, onPrev, onNex
             onClick={handleImageClick}
           >
             <img
-              src={image.url}
+              src={cachedUrl}
               alt={p.positivePrompt.slice(0, 80)}
               className="w-full object-contain max-h-[400px]"
               onLoad={() => setImageLoaded(true)}
