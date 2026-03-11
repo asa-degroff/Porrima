@@ -1,4 +1,4 @@
-import { writeFile, mkdir, readFile, readdir, access } from "fs/promises";
+import { writeFile, mkdir, readFile, readdir, access, rm } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import sharp from "sharp";
@@ -112,4 +112,15 @@ export async function listImages(): Promise<StoredImage[]> {
   return results
     .filter((r): r is StoredImage => r !== null)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+export async function deleteImage(id: string): Promise<boolean> {
+  const imageDir = join(IMAGES_DIR, id);
+  try {
+    await access(imageDir);
+    await rm(imageDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
 }

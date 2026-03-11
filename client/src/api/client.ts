@@ -324,6 +324,14 @@ export async function fetchGeneratedImages(): Promise<GeneratedImage[]> {
   return res.json();
 }
 
+export async function deleteGeneratedImage(id: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/images/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to delete image");
+  }
+}
+
 export async function fetchGenerations(): Promise<GenerationState[]> {
   const res = await apiFetch(`${BASE}/images/generations`);
   if (!res.ok) return [];

@@ -38,6 +38,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     abort,
     abortAll,
     clearQueue,
+    deleteImage: deleteGeneratedImage,
     queue,
     currentItem,
   } = useImageSandbox();
@@ -65,10 +66,13 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   }, [images, selectedImage, lightboxImage, setSelectedImage]);
 
   // Keyboard: Escape closes lightbox, arrows navigate (detail pane or lightbox)
+  // Skip when focus is in a text input to avoid breaking cursor movement
   useEffect(() => {
     if (!selectedImage && !lightboxImage) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape" && lightboxImage) { closeLightbox(); return; }
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target as HTMLElement)?.isContentEditable) return;
       if (e.key === "ArrowLeft") { e.preventDefault(); navigateImage(-1); }
       if (e.key === "ArrowRight") { e.preventDefault(); navigateImage(1); }
     };
@@ -260,6 +264,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                 images={images}
                 selectedImage={selectedImage}
                 onSelect={setSelectedImage}
+                onDelete={deleteGeneratedImage}
               />
             </div>
 

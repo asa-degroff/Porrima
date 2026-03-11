@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type { GeneratedImage } from "../types";
 import { precacheImages } from "../utils/imageCache";
 
@@ -6,14 +6,44 @@ interface Props {
   images: GeneratedImage[];
   selectedImage: GeneratedImage | null;
   onSelect: (image: GeneratedImage) => void;
+  onDelete?: (id: string) => void;
 }
 
-export function ImageGallery({ images, selectedImage, onSelect }: Props) {
+export function ImageGallery({ images, selectedImage, onSelect, onDelete }: Props) {
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Pre-cache full images in background so detail view is instant
   useEffect(() => {
     precacheImages(images.map((img) => img.url));
   }, [images]);
+
+  // Close confirmation on Escape
+  useEffect(() => {
+    if (!confirmDeleteId) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmDeleteId(null);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [confirmDeleteId]);
+
+  const handleDeleteClick = useCallback((e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setConfirmDeleteId(id);
+  }, []);
+
+  const handleConfirmDelete = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirmDeleteId && onDelete) {
+      onDelete(confirmDeleteId);
+      setConfirmDeleteId(null);
+    }
+  }, [confirmDeleteId, onDelete]);
+
+  const handleCancelDelete = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmDeleteId(null);
+  }, []);
 
   if (images.length === 0) {
     return (
@@ -60,6 +90,42 @@ export function ImageGallery({ images, selectedImage, onSelect }: Props) {
                 <p className="text-[10px] text-white/50 truncate">{image.params.model}</p>
               </div>
             </div>
+            {/* Delete button */}
+            {onDelete && (
+              <div
+                onClick={(e) => handleDeleteClick(e, image.id)}
+                className="absolute top-1.5 right-1.5 p-1 rounded-md bg-black/50 text-white/40 hover:text-red-400 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
+                title="Delete"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 6L6 18" />
+                  <path d="M6 6l12 12" />
+                </svg>
+              </div>
+            )}
+            {/* Delete confirmation overlay */}
+            {confirmDeleteId === image.id && (
+              <div
+                className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-2 z-10"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <p className="text-xs text-white/80">Delete this image?</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleConfirmDelete}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40 transition-all"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    onClick={handleCancelDelete}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/15 transition-all"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </button>
         ))}
       </div>

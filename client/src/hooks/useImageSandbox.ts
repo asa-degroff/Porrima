@@ -3,6 +3,7 @@ import {
   fetchComfyUIStatus,
   fetchGeneratedImages,
   generateImage as apiGenerateImage,
+  deleteGeneratedImage as apiDeleteImage,
   fetchGenerations,
   subscribeToGeneration,
 } from "../api/client";
@@ -177,6 +178,18 @@ export function useImageSandbox() {
     clearQueue();
   }, [abort, clearQueue]);
 
+  const deleteImage = useCallback(async (id: string) => {
+    try {
+      await apiDeleteImage(id);
+      setImages((prev) => prev.filter((img) => img.id !== id));
+      if (selectedImage?.id === id) {
+        setSelectedImage(null);
+      }
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }, [selectedImage]);
+
   return {
     images,
     selectedImage,
@@ -190,6 +203,7 @@ export function useImageSandbox() {
     abort,
     abortAll,
     clearQueue,
+    deleteImage,
     queue,
     currentItem,
     checkStatus,
