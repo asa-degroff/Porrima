@@ -115,7 +115,7 @@ export function SystemPromptEditor({ value, onChange, disabled, presets }: Props
             {dropdownOpen && (
               <div className="absolute right-0 top-full mt-1 z-30 min-w-[180px] backdrop-blur-xl border rounded-xl shadow-2xl py-1 overflow-hidden"
                 style={{
-                  backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+                  backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
                   borderColor: `rgba(var(--theme-primary-border))`,
                 }}>
                 {presets.map((p) => (

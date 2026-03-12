@@ -248,7 +248,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               {modelDropdownOpen && (
                 <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
                   style={{
-                    backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+                    backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
                     borderColor: `rgba(var(--theme-primary-border))`,
                   }}>
                   <button
@@ -300,7 +300,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               {visionModelDropdownOpen && (
                 <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
                   style={{
-                    backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+                    backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
                     borderColor: `rgba(var(--theme-primary-border))`,
                   }}>
                   <button
@@ -771,7 +771,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     {voiceDropdownOpen && (
                       <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
                         style={{
-                          backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+                          backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
                           borderColor: `rgba(var(--theme-primary-border))`,
                         }}>
                         {ttsVoices.map((category) => (

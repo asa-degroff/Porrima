@@ -51,7 +51,7 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
       {open && (
         <div className="absolute right-0 top-full mt-1 z-30 min-w-[200px] max-h-[320px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
           style={{
-            backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+            backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
             borderColor: `rgba(var(--theme-primary-border))`,
           }}>
           {models.map((m) => (

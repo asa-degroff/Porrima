@@ -129,16 +129,24 @@ export function VisionControls({
               {chevronSvg(modelOpen)}
             </button>
             {modelOpen && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[320px] overflow-y-auto backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
+              <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[320px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                style={{
+                  backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                  borderColor: `rgba(var(--theme-primary-border))`,
+                }}>
                 {models.map((m) => (
                   <button
                     key={m.id}
                     onClick={() => { onModelChange(m.id); setModelOpen(false); }}
                     className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
                       m.id === selectedModel
-                        ? "bg-blue-500/15 text-blue-200"
+                        ? "text-white"
                         : "text-white/60 hover:bg-white/10 hover:text-white/80"
                     }`}
+                    style={{
+                      backgroundColor: m.id === selectedModel ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                      color: m.id === selectedModel ? `rgba(var(--theme-secondary-text))` : '',
+                    }}
                   >
                     <span className="truncate flex-1">{m.name}</span>
                     <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
@@ -162,16 +170,24 @@ export function VisionControls({
               {chevronSvg(presetOpen)}
             </button>
             {presetOpen && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[320px] overflow-y-auto backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
+              <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[320px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                style={{
+                  backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                  borderColor: `rgba(var(--theme-primary-border))`,
+                }}>
                 {presets.map((p) => (
                   <button
                     key={p.key}
                     onClick={() => { setSelectedPreset(p.key); setPresetOpen(false); }}
                     className={`w-full text-left px-3 py-2 text-xs transition-all ${
                       p.key === selectedPreset
-                        ? "bg-blue-500/15 text-blue-200"
+                        ? "text-white"
                         : "text-white/60 hover:bg-white/10 hover:text-white/80"
                     }`}
+                    style={{
+                      backgroundColor: p.key === selectedPreset ? `rgba(var(--theme-primary), 0.15)` : 'transparent',
+                      color: p.key === selectedPreset ? `rgba(var(--theme-primary-text))` : '',
+                    }}
                   >
                     {p.name}
                   </button>
@@ -251,11 +267,16 @@ export function VisionControls({
                 onClick={() => onSelectImage(image.id)}
                 className={`
                   w-full text-left flex items-center gap-3 px-4 py-2.5 transition-all group
+                  border-l-2
                   ${selectedImage?.id === image.id
-                    ? "bg-blue-500/15 border-l-2 border-blue-400"
-                    : "hover:bg-white/5 border-l-2 border-transparent"
+                    ? "border"
+                    : "border-transparent hover:bg-white/5"
                   }
                 `}
+                style={{
+                  borderLeftColor: selectedImage?.id === image.id ? `rgba(var(--theme-secondary))` : '',
+                  backgroundColor: selectedImage?.id === image.id ? `rgba(var(--theme-secondary), 0.15)` : '',
+                }}
               >
                 {/* Thumbnail */}
                 <img
@@ -267,8 +288,12 @@ export function VisionControls({
                 {/* Preview */}
                 <div className="flex-1 min-w-0">
                   <p className={`text-xs truncate ${
-                    selectedImage?.id === image.id ? "text-blue-200" : "text-white/70"
-                  }`}>
+                    selectedImage?.id === image.id ? "text-white" : "text-white/70"
+                  }`}
+                    style={{
+                      color: selectedImage?.id === image.id ? `rgba(var(--theme-secondary-text))` : '',
+                    }}
+                  >
                     {image.description.slice(0, 80).replace(/\n/g, " ")}
                   </p>
                   <div className="flex items-center gap-2 mt-0.5">

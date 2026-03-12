@@ -1,6 +1,34 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import type { ImageGenerationParams } from "../types";
 import type { QueueItem } from "../hooks/useImageSandbox";
+
+const chevronSvg = (open: boolean) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="10"
+    height="10"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+  >
+    <path d="M6 9l6 6 6-6" />
+  </svg>
+);
+
+function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [active, ref, onClose]);
+}
 
 const MODEL_PRESETS: Record<string, Partial<ImageGenerationParams>> = {
   "z-image-base": { steps: 30, cfgScale: 4.0, sampler: "euler", scheduler: "normal" },
@@ -46,6 +74,21 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
   const [scheduler, setScheduler] = useState(initialParams?.scheduler || "normal");
   const [lastSeed, setLastSeed] = useState<number | null>(null);
   const [batchCount, setBatchCount] = useState(1);
+  const [modelOpen, setModelOpen] = useState(false);
+  const [samplerOpen, setSamplerOpen] = useState(false);
+  const [schedulerOpen, setSchedulerOpen] = useState(false);
+
+  const modelRef = useRef<HTMLDivElement>(null);
+  const samplerRef = useRef<HTMLDivElement>(null);
+  const schedulerRef = useRef<HTMLDivElement>(null);
+
+  const closeModel = useCallback(() => setModelOpen(false), []);
+  const closeSampler = useCallback(() => setSamplerOpen(false), []);
+  const closeScheduler = useCallback(() => setSchedulerOpen(false), []);
+
+  useClickOutside(modelRef, closeModel, modelOpen);
+  useClickOutside(samplerRef, closeSampler, samplerOpen);
+  useClickOutside(schedulerRef, closeScheduler, schedulerOpen);
 
   // Track if user is manually editing width/height (for Free mode)
   const editingWidthRef = useRef(false);
@@ -245,20 +288,43 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
       {/* Model */}
       <div className="space-y-1.5">
         <label className="block text-xs font-medium text-white/50">Model</label>
-        <select
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 outline-none hover:bg-white/10 focus:ring-1 focus:ring-amber-400/30 transition-all cursor-pointer appearance-none"
-        >
-          {models.map((m) => (
-            <option key={m} value={m} className="bg-slate-900 text-white">
-              {m}
-            </option>
-          ))}
-          {models.length === 0 && (
-            <option value="" className="bg-slate-900 text-white/50">No models found</option>
+        <div className="relative" ref={modelRef}>
+          <button
+            onClick={() => setModelOpen((o) => !o)}
+            className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+          >
+            <span className="truncate flex-1 text-left">{model || "No models found"}</span>
+            {chevronSvg(modelOpen)}
+          </button>
+          {modelOpen && (
+            <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[320px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+              style={{
+                backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                borderColor: `rgba(var(--theme-primary-border))`,
+              }}>
+              {models.map((m) => (
+                <button
+                  key={m}
+                  onClick={() => { setModel(m); setModelOpen(false); }}
+                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                    m === model
+                      ? "text-white"
+                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  }`}
+                  style={{
+                    backgroundColor: m === model ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
+                    color: m === model ? `rgba(var(--theme-accent-text))` : '',
+                  }}
+                >
+                  {m}
+                </button>
+              ))}
+              {models.length === 0 && (
+                <div className="px-3 py-2 text-xs text-white/40">No models found</div>
+              )}
+            </div>
           )}
-        </select>
+        </div>
       </div>
 
       {/* Steps */}
@@ -273,7 +339,8 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           max={50}
           value={steps}
           onChange={(e) => setSteps(parseInt(e.target.value))}
-          className="w-full accent-amber-400"
+          className="w-full"
+          style={{ accentColor: `rgba(var(--theme-accent), 0.8)` }}
         />
       </div>
 
@@ -281,7 +348,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
       <div className="space-y-1.5">
         <div className="flex justify-between">
           <label className="text-xs font-medium text-white/50">
-            CFG Scale {isTurbo && <span className="text-amber-400/60">(auto: 0)</span>}
+            CFG Scale {isTurbo && <span style={{ color: `rgba(var(--theme-accent), 0.6)` }}>(auto: 0)</span>}
           </label>
           <span className="text-xs text-white/40">{cfgScale.toFixed(1)}</span>
         </div>
@@ -293,7 +360,8 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           value={cfgScale}
           onChange={(e) => setCfgScale(parseFloat(e.target.value))}
           disabled={isTurbo}
-          className="w-full accent-amber-400 disabled:opacity-40"
+          className="w-full disabled:opacity-40"
+          style={{ accentColor: `rgba(var(--theme-accent), 0.8)` }}
         />
       </div>
 
@@ -307,9 +375,14 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
               onClick={() => handleAspectRatioClick(ar.label, ar.w, ar.h, ar.ratio)}
               className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all ${
                 aspectRatio === ar.label
-                  ? "bg-amber-500/20 border-amber-400/30 text-amber-300"
+                  ? "border"
                   : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10"
               }`}
+              style={{
+                backgroundColor: aspectRatio === ar.label ? `rgba(var(--theme-accent), 0.2)` : '',
+                borderColor: aspectRatio === ar.label ? `rgba(var(--theme-accent-border))` : '',
+                color: aspectRatio === ar.label ? `rgba(var(--theme-accent-text))` : '',
+              }}
             >
               {ar.label}
             </button>
@@ -320,7 +393,10 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
             type="number"
             value={width}
             onChange={(e) => handleWidthChange(parseInt(e.target.value) || 1024)}
-            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all"
+            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 transition-all"
+            style={{
+              '--tw-ring-color': `rgba(var(--theme-accent), 0.2)`,
+            } as React.CSSProperties}
             min={256}
             max={2048}
             step={64}
@@ -330,7 +406,10 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
             type="number"
             value={height}
             onChange={(e) => handleHeightChange(parseInt(e.target.value) || 1024)}
-            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all"
+            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 transition-all"
+            style={{
+              '--tw-ring-color': `rgba(var(--theme-accent), 0.2)`,
+            } as React.CSSProperties}
             min={256}
             max={2048}
             step={64}
@@ -355,7 +434,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
             type="text"
             value={seed}
             onChange={(e) => setSeed(e.target.value)}
-            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all font-mono"
+            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 transition-all font-mono"
             placeholder="-1 (random)"
           />
           {lastSeed !== null && (
@@ -374,27 +453,77 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
           <label className="text-[10px] font-medium text-white/40">Sampler</label>
-          <select
-            value={sampler}
-            onChange={(e) => setSampler(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none cursor-pointer appearance-none"
-          >
-            {["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"].map((s) => (
-              <option key={s} value={s} className="bg-slate-900">{s}</option>
-            ))}
-          </select>
+          <div className="relative" ref={samplerRef}>
+            <button
+              onClick={() => setSamplerOpen((o) => !o)}
+              className="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none hover:bg-white/10 transition-all cursor-pointer"
+            >
+              <span className="truncate flex-1 text-left">{sampler}</span>
+              {chevronSvg(samplerOpen)}
+            </button>
+            {samplerOpen && (
+              <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[240px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                style={{
+                  backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                  borderColor: `rgba(var(--theme-primary-border))`,
+                }}>
+                {["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"].map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => { setSampler(s); setSamplerOpen(false); }}
+                    className={`w-full text-left px-3 py-1.5 text-xs transition-all ${
+                      s === sampler
+                        ? "text-white"
+                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    }`}
+                    style={{
+                      backgroundColor: s === sampler ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
+                      color: s === sampler ? `rgba(var(--theme-accent-text))` : '',
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <div className="space-y-1">
           <label className="text-[10px] font-medium text-white/40">Scheduler</label>
-          <select
-            value={scheduler}
-            onChange={(e) => setScheduler(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none cursor-pointer appearance-none"
-          >
-            {["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform", "beta"].map((s) => (
-              <option key={s} value={s} className="bg-slate-900">{s}</option>
-            ))}
-          </select>
+          <div className="relative" ref={schedulerRef}>
+            <button
+              onClick={() => setSchedulerOpen((o) => !o)}
+              className="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none hover:bg-white/10 transition-all cursor-pointer"
+            >
+              <span className="truncate flex-1 text-left">{scheduler}</span>
+              {chevronSvg(schedulerOpen)}
+            </button>
+            {schedulerOpen && (
+              <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[240px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                style={{
+                  backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                  borderColor: `rgba(var(--theme-primary-border))`,
+                }}>
+                {["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform", "beta"].map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => { setScheduler(s); setSchedulerOpen(false); }}
+                    className={`w-full text-left px-3 py-1.5 text-xs transition-all ${
+                      s === scheduler
+                        ? "text-white"
+                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    }`}
+                    style={{
+                      backgroundColor: s === scheduler ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
+                      color: s === scheduler ? `rgba(var(--theme-accent-text))` : '',
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -409,13 +538,21 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
               max={32}
               value={batchCount}
               onChange={(e) => setBatchCount(Math.max(1, Math.min(32, parseInt(e.target.value) || 1)))}
-              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 focus:ring-amber-400/20 transition-all text-center"
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 transition-all text-center"
+              style={{
+                '--tw-ring-color': `rgba(var(--theme-accent), 0.2)`,
+              } as React.CSSProperties}
             />
           </div>
           <button
             onClick={handleGenerate}
             disabled={!positivePrompt.trim() || models.length === 0}
-            className="flex-1 px-4 py-[7px] rounded-xl text-sm font-medium bg-amber-500/20 border border-amber-400/25 text-amber-300 hover:bg-amber-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex-1 px-4 py-[7px] rounded-xl text-sm font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{
+              backgroundColor: `rgba(var(--theme-accent), 0.2)`,
+              borderColor: `rgba(var(--theme-accent-border))`,
+              color: `rgba(var(--theme-accent-text))`,
+            }}
           >
             {totalPending > 0
               ? `Enqueue${batchCount > 1 ? ` ${batchCount}` : ""}`
@@ -430,8 +567,11 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
         <div className="space-y-2">
           <div className="w-full bg-white/5 rounded-full h-2 overflow-hidden">
             <div
-              className="h-full bg-amber-400/70 rounded-full transition-all duration-300"
-              style={{ width: `${progressPercent}%` }}
+              className="h-full rounded-full transition-all duration-300"
+              style={{ 
+                width: `${progressPercent}%`,
+                backgroundColor: `rgba(var(--theme-accent), 0.7)`
+              }}
             />
           </div>
           <div className="flex items-center justify-between">
@@ -443,7 +583,12 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
             </span>
             <button
               onClick={queue.length > 0 ? onAbortAll : onAbort}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/15 border border-red-400/20 text-red-300 hover:bg-red-500/25 transition-all"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-all"
+              style={{
+                backgroundColor: `rgba(var(--theme-accent), 0.1)`,
+                borderColor: `rgba(var(--theme-accent-border))`,
+                color: `rgba(var(--theme-accent-text))`,
+              }}
             >
               {queue.length > 0 ? "Cancel All" : "Cancel"}
             </button>
@@ -460,7 +605,8 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
             </span>
             <button
               onClick={onClearQueue}
-              className="text-[10px] text-red-400/60 hover:text-red-400 transition-colors"
+              className="text-[10px] hover:transition-colors"
+              style={{ color: `rgba(var(--theme-accent-text), 0.6)` }}
             >
               Clear
             </button>
@@ -471,7 +617,9 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
                 key={item.id}
                 className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.03] border border-white/5"
               >
-                <div className="w-1.5 h-1.5 rounded-full bg-amber-400/40 shrink-0" />
+                <div className="w-1.5 h-1.5 rounded-full shrink-0"
+                  style={{ backgroundColor: `rgba(var(--theme-accent), 0.4)` }}
+                />
                 <span className="text-[10px] text-white/40 truncate flex-1">{item.promptPreview}</span>
                 {item.batchTotal > 1 && (
                   <span className="text-[10px] text-white/25 shrink-0">{item.batchIndex}/{item.batchTotal}</span>
