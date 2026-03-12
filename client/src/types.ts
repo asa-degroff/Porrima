@@ -67,7 +67,8 @@ export interface OllamaModel {
   contextWindow: number;
 }
 
-export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "ripple-grid";
+export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono";
+export type BackgroundEffect = "static" | "ripple-grid";
 
 export interface SystemPromptPreset {
   id: string;
@@ -84,6 +85,7 @@ export interface Settings {
   comfyuiUrl?: string;
   modelContextWindows?: Record<string, number>;
   theme?: Theme;
+  backgroundEffect?: BackgroundEffect;
   systemPromptPresets?: SystemPromptPreset[];
   hapticsEnabled?: boolean;
 }

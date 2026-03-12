@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings } from "../types";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 
 function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
@@ -54,6 +54,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [comfyuiUrl, setComfyuiUrl] = useState(settings.comfyuiUrl || "http://127.0.0.1:8188");
   const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
+  const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
   const [hapticsEnabled, setHapticsEnabled] = useState(settings.hapticsEnabled ?? true);
   const [modelContextWindows, setModelContextWindows] = useState<Record<string, number>>(settings.modelContextWindows || {});
@@ -119,6 +120,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       braveApiKey: braveApiKey.trim(),
       comfyuiUrl: comfyuiUrl.trim() || undefined,
       theme,
+      backgroundEffect,
       systemPromptPresets: presets.length > 0 ? presets : undefined,
       hapticsEnabled,
       modelContextWindows: Object.keys(modelContextWindows).length > 0 ? modelContextWindows : undefined,
@@ -396,9 +398,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             </div>
           )}
 
-          {/* Theme */}
+          {/* Color Theme */}
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-white/60">Theme</label>
+            <label className="block text-sm font-medium text-white/60">Color Theme</label>
             <div className="grid grid-cols-3 gap-2">
               {[
                 { value: "default" as Theme, label: "Default", preview: "from-purple-900" },
@@ -406,7 +408,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 { value: "forest" as Theme, label: "Forest", preview: "from-green-900" },
                 { value: "crimson" as Theme, label: "Crimson", preview: "from-rose-900" },
                 { value: "mono" as Theme, label: "Mono", preview: "from-gray-900" },
-                { value: "ripple-grid" as Theme, label: "Ripple Grid", preview: "from-indigo-900" },
               ].map((opt) => (
                 <button
                   key={opt.value}
@@ -422,6 +423,33 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Background Effect */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-white/60">Background Effect</label>
+            <div className="flex gap-2">
+              {[
+                { value: "static" as BackgroundEffect, label: "Static", icon: "□" },
+                { value: "ripple-grid" as BackgroundEffect, label: "Ripple Grid", icon: "〃" },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setBackgroundEffect(opt.value)}
+                  className={`flex-1 px-3 py-3 rounded-lg text-sm font-medium border transition-all ${
+                    backgroundEffect === opt.value
+                      ? "border-white/30 bg-white/5"
+                      : "border-white/10 hover:border-white/20"
+                  }`}
+                >
+                  <span className="mr-2 opacity-50">{opt.icon}</span>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-white/30 text-xs">
+              Ripple Grid adds an animated reactive background pattern.
+            </p>
           </div>
 
           {/* Haptic Feedback */}

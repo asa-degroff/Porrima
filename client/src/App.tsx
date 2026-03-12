@@ -65,6 +65,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     document.documentElement.setAttribute('data-theme', settings.theme || 'default');
   }, [settings.theme]);
 
+  // Apply background effect
+  useEffect(() => {
+    if (settings.backgroundEffect === 'ripple-grid' && !imageSandboxOpen) {
+      // Ripple grid is rendered conditionally below
+    }
+  }, [settings.backgroundEffect, imageSandboxOpen]);
+
   // Persist active view across reloads
   useEffect(() => {
     if (activeChatId) {
@@ -272,7 +279,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   return (
     <div className="flex h-full overflow-hidden relative" style={keyboardInset ? { paddingBottom: keyboardInset } : undefined}>
-      {settings.theme === "ripple-grid" && (
+      {settings.backgroundEffect === "ripple-grid" && !imageSandboxOpen && (
         <Suspense fallback={null}>
           <RippleGridBackground />
         </Suspense>

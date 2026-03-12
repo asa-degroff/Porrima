@@ -17,6 +17,9 @@
   --theme-secondary-border: 59, 132, 250, 0.25;
   --theme-secondary-text: 147, 197, 253; /* blue-300 */
   
+  --theme-grid: 139, 92, 246;         /* purple-500 for grid lines */
+  --theme-grid-opacity: 0.12;
+  
   --theme-bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
   --theme-glow: rgba(162, 74, 255, 0.15);
 }
@@ -37,6 +40,9 @@
   --theme-secondary-muted: 129, 140, 248, 0.2;
   --theme-secondary-border: 129, 140, 248, 0.25;
   --theme-secondary-text: 167, 139, 250; /* indigo-300 */
+  
+  --theme-grid: 56, 189, 248;         /* sky-400 for grid lines */
+  --theme-grid-opacity: 0.12;
   
   --theme-bg-gradient: linear-gradient(135deg, #0c1929 0%, #1e3a5f 50%, #0c1929 100%);
   --theme-glow: rgba(56, 189, 248, 0.15);
@@ -59,6 +65,9 @@
   --theme-secondary-border: 167, 139, 250, 0.25;
   --theme-secondary-text: 192, 132, 252; /* purple-300 */
   
+  --theme-grid: 134, 239, 172;        /* green-300 for grid lines */
+  --theme-grid-opacity: 0.12;
+  
   --theme-bg-gradient: linear-gradient(135deg, #0a1a0f 0%, #1a3a2a 50%, #0a1a0f 100%);
   --theme-glow: rgba(134, 239, 172, 0.15);
 }
@@ -80,6 +89,9 @@
   --theme-secondary-border: 253, 121, 168, 0.25;
   --theme-secondary-text: 253, 121, 168, 0.9;
   
+  --theme-grid: 244, 63, 94;          /* rose-500 for grid lines */
+  --theme-grid-opacity: 0.12;
+  
   --theme-bg-gradient: linear-gradient(135deg, #1a0a0f 0%, #3a1a2a 50%, #1a0a0f 100%);
   --theme-glow: rgba(244, 63, 94, 0.15);
 }
@@ -100,6 +112,9 @@
   --theme-secondary-muted: 100, 116, 139, 0.2;
   --theme-secondary-border: 100, 116, 139, 0.25;
   --theme-secondary-text: 148, 163, 184, 0.8;
+  
+  --theme-grid: 148, 163, 184;        /* slate-400 for grid lines */
+  --theme-grid-opacity: 0.1;
   
   --theme-bg-gradient: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 50%, #0a0a0a 100%);
   --theme-glow: rgba(148, 163, 184, 0.1);

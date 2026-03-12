@@ -113,7 +113,6 @@ export function RippleGridBackground() {
       }
 
       // Canvas dimension changes reset context state, so re-apply
-      ctx!.strokeStyle = "rgba(139, 92, 246, 0.12)";
       ctx!.lineWidth = 0.8;
     }
 
@@ -148,6 +147,12 @@ export function RippleGridBackground() {
       const delta = now - lastFrameTime;
       if (delta < FRAME_INTERVAL) return;
       lastFrameTime = now;
+
+      // Read grid color from CSS custom property every frame to support theme switching
+      const computedStyle = getComputedStyle(document.documentElement);
+      const gridRgb = computedStyle.getPropertyValue('--theme-grid').trim();
+      const gridOpacity = computedStyle.getPropertyValue('--theme-grid-opacity').trim() || '0.12';
+      ctx!.strokeStyle = `rgba(${gridRgb}, ${gridOpacity})`;
 
       const t = time * speed;
       const t07 = t * 0.7;
