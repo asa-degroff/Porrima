@@ -107,7 +107,7 @@ async function handleChatStream(
   const abortController = new AbortController();
   req.on("close", () => abortController.abort());
 
-  const MAX_ITERATIONS = 100;
+  const MAX_ITERATIONS = 500;
 
   // Accumulators for the final ChatMessage
   const allToolCalls: ChatToolCall[] = [];
