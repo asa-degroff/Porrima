@@ -37,7 +37,7 @@ export function ThinkingBlock({ thinking, isStreaming }: Props) {
     <div className="mb-2 rounded-xl border overflow-hidden"
       style={{
         backgroundColor: `rgba(var(--theme-primary), 0.1)`,
-        borderColor: `rgba(var(--theme-primary-border), 0.15)`,
+        borderColor: `rgba(var(--theme-primary-border))`,
       }}>
       <button
         onClick={handleToggle}
