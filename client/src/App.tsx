@@ -31,12 +31,14 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const prevOnlineRef = useRef(isOnline);
   const { playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts } = useTTS();
   const [activeChatId, setActiveChatId] = useState<string | null>(() => {
-    return sessionStorage.getItem("activeChatId");
+    return localStorage.getItem("quje-active-chat-id");
   });
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [imageSandboxOpen, setImageSandboxOpen] = useState(false);
+  const [imageSandboxOpen, setImageSandboxOpen] = useState(() => {
+    return localStorage.getItem("quje-active-view") === "image-sandbox";
+  });
   const {
     messages,
     streaming,
@@ -58,14 +60,18 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     queueProcessing,
   } = useChat(activeChatId);
 
-  // Persist active chat ID across reloads
+  // Persist active view across reloads
   useEffect(() => {
     if (activeChatId) {
-      sessionStorage.setItem("activeChatId", activeChatId);
+      localStorage.setItem("quje-active-chat-id", activeChatId);
     } else {
-      sessionStorage.removeItem("activeChatId");
+      localStorage.removeItem("quje-active-chat-id");
     }
   }, [activeChatId]);
+
+  useEffect(() => {
+    localStorage.setItem("quje-active-view", imageSandboxOpen ? "image-sandbox" : "chat");
+  }, [imageSandboxOpen]);
 
   // Restore active chat on mount
   useEffect(() => {
