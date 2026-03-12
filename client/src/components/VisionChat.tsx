@@ -272,7 +272,6 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
         )}
 
         <div ref={messagesEndRef} />
-      </div>
         </div>
       </div>
 
