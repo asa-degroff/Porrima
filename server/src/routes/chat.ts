@@ -107,13 +107,35 @@ async function handleChatStream(
   const abortController = new AbortController();
   req.on("close", () => abortController.abort());
 
-  const MAX_ITERATIONS = 50;
+  const MAX_ITERATIONS = 100;
 
   // Accumulators for the final ChatMessage
   const allToolCalls: ChatToolCall[] = [];
   const allToolResults: ChatToolResult[] = [];
   const allArtifacts: Artifact[] = [];
   const allGeneratedImages: GeneratedImage[] = [];
+  
+  // Track ordering for interleaved display
+  interface OutputSegment {
+    seq: number;
+    type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image";
+    content?: string;
+    toolCall?: ChatToolCall;
+    toolResult?: ChatToolResult;
+    artifact?: Artifact;
+    generatedImage?: GeneratedImage;
+  }
+  const segments: OutputSegment[] = [];
+  let seqCounter = 0;
+  let pendingText = ""; // text accumulated since the last segment flush
+
+  /** Flush any accumulated text into a text segment */
+  function flushTextSegment() {
+    if (pendingText.trim()) {
+      segments.push({ seq: ++seqCounter, type: "text", content: pendingText });
+    }
+    pendingText = "";
+  }
 
   // ask_user state — owned by the route, set via callback.
   // Uses a ref object so TypeScript can track mutations through closures.
@@ -123,10 +145,12 @@ async function handleChatStream(
   const effects: ToolSideEffects = {
     onArtifact: (artifact) => {
       allArtifacts.push(artifact);
+      segments.push({ seq: ++seqCounter, type: "artifact", artifact });
       res.write(`event: artifact\ndata: ${JSON.stringify(artifact)}\n\n`);
     },
     onGeneratedImage: (image) => {
       allGeneratedImages.push(image);
+      segments.push({ seq: ++seqCounter, type: "generated_image", generatedImage: image });
       res.write(`event: generated_image\ndata: ${JSON.stringify(image)}\n\n`);
     },
     onAskUser: (question, toolCallId) => {
@@ -191,6 +215,7 @@ async function handleChatStream(
           const ame = event.assistantMessageEvent;
           if (ame.type === "text_delta") {
             fullText += ame.delta;
+            pendingText += ame.delta;
             res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
           } else if (ame.type === "thinking_delta") {
             thinkingText += ame.delta;
@@ -205,13 +230,17 @@ async function handleChatStream(
         }
 
         case "tool_execution_start": {
-          allToolCalls.push({
+          flushTextSegment();
+          const toolCall: ChatToolCall = {
             id: event.toolCallId,
             name: event.toolName,
             arguments: event.args,
-          });
+          };
+          allToolCalls.push(toolCall);
           if (event.toolName !== "ask_user") {
             console.log(`[tool] Executing ${event.toolName}:`, event.args);
+            segments.push({ seq: ++seqCounter, type: "tool_call", toolCall });
+            res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
           }
           break;
         }
@@ -220,17 +249,19 @@ async function handleChatStream(
           // ask_user gets a dedicated SSE event, not tool_status
           if (event.toolName !== "ask_user") {
             const resultText = event.result?.content?.[0]?.text || "";
+            const toolResult: ChatToolResult = {
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              content: resultText,
+              isError: event.isError,
+            };
+            allToolResults.push(toolResult);
+            segments.push({ seq: ++seqCounter, type: "tool_result", toolResult });
             res.write(`event: tool_status\ndata: ${JSON.stringify({
               name: event.toolName,
               status: event.isError ? "error" : "done",
               result: resultText,
             })}\n\n`);
-            allToolResults.push({
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-              content: resultText,
-              isError: event.isError,
-            });
           }
           break;
         }
@@ -314,6 +345,9 @@ async function handleChatStream(
       res.write(`event: ask_user\ndata: ${JSON.stringify({ question: askUserRef.current.question })}\n\n`);
     }
 
+    // Flush any remaining text into segments
+    flushTextSegment();
+
     // Build the final assistant message
     const assistantMsg: ChatMessage = {
       role: "assistant",
@@ -324,6 +358,7 @@ async function handleChatStream(
       toolResults: allToolResults.length > 0 ? allToolResults : undefined,
       artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
       generatedImages: allGeneratedImages.length > 0 ? allGeneratedImages : undefined,
+      segments: segments.length > 0 ? segments : undefined,
       timestamp: Date.now(),
     };
 

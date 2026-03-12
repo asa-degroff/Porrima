@@ -112,7 +112,7 @@ export interface StreamWarning {
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { thinking?: string; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; waitingForInput?: boolean; iterations?: number }) => void;
+  onDone: (message: { thinking?: string; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
   onArtifact?: (artifact: Artifact) => void;
@@ -249,6 +249,7 @@ function processSSEEvent(
         generatedImages: data.message?.generatedImages,
         toolCalls: data.message?.toolCalls,
         toolResults: data.message?.toolResults,
+        segments: data.message?.segments,
         waitingForInput: data.waitingForInput,
         iterations: data.iterations,
       });

@@ -17,6 +17,17 @@ export interface ChatToolResult {
   isError: boolean;
 }
 
+/** A segment represents one unit of agent output in chronological order */
+export interface MessageSegment {
+  seq: number;
+  type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image";
+  content?: string;
+  toolCall?: ChatToolCall;
+  toolResult?: ChatToolResult;
+  artifact?: Artifact;
+  generatedImage?: GeneratedImage;
+}
+
 export interface ImageAttachment {
   data: string;      // base64-encoded (no data: prefix)
   mimeType: string;  // e.g. "image/png"
@@ -35,6 +46,8 @@ export interface ChatMessage {
   images?: ImageAttachment[];
   queued?: boolean;
   timestamp: number;
+  /** Ordered segments for interleaved display - replaces toolCalls/toolResults/artifacts order */
+  segments?: MessageSegment[];
 }
 
 export type ChatType = "agent" | "quick";

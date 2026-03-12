@@ -90,11 +90,8 @@ export const MessageBubble = memo(function MessageBubble({
   const thinkingText = showStreaming ? streamingThinking : message.thinking;
   const isThinkingStreaming = showStreaming && !message.content;
 
-  // Build tool call displays
-  const hasToolCalls = !isUser && (
-    (showStreaming && activeTools && activeTools.length > 0) ||
-    (message.toolCalls && message.toolCalls.length > 0)
-  );
+  // Build output segments - use ordered segments if available, otherwise separate arrays
+  const renderSegments = !isUser && message.segments && message.segments.length > 0;
 
   return (
     <div className={`group flex items-start ${isUser ? "justify-end" : "justify-start"} mb-4`}>
@@ -210,52 +207,97 @@ export const MessageBubble = memo(function MessageBubble({
               />
             )}
 
-            {/* Tool calls - streaming (live status) */}
-            {showStreaming && activeTools && activeTools.map((tool, i) => (
-              <ToolCallDisplay
-                key={`live-${i}`}
-                liveStatus={tool}
-              />
-            ))}
-
-            {/* Tool calls - persisted (from chat history) */}
-            {!showStreaming && message.toolCalls && message.toolCalls.map((tc, i) => {
-              const tr = message.toolResults?.find((r) => r.toolCallId === tc.id);
-              return (
-                <ToolCallDisplay
-                  key={tc.id}
-                  toolCall={tc}
-                  toolResult={tr}
-                />
-              );
-            })}
-
-            {showStreaming ? (
-              <div className="text-sm leading-relaxed">
-                <StreamingText
-                  content={message.content}
-                  isStreaming={!isThinkingStreaming}
-                />
-              </div>
+            {renderSegments && !showStreaming ? (
+              // Interleaved segments in chronological order (persisted messages only)
+              message.segments?.map((segment, i) => {
+                switch (segment.type) {
+                  case "text":
+                    return segment.content ? (
+                      <div key={`${segment.seq}-${i}`} className="text-sm leading-relaxed">
+                        <Suspense fallback={<span className="whitespace-pre-wrap">{segment.content}</span>}>
+                          <MarkdownRenderer content={segment.content} />
+                        </Suspense>
+                      </div>
+                    ) : null;
+                  case "tool_call": {
+                    // Find matching tool_result segment
+                    const matchingResult = message.segments?.find(
+                      (s) => s.type === "tool_result" && s.toolResult?.toolCallId === segment.toolCall?.id
+                    );
+                    return segment.toolCall ? (
+                      <ToolCallDisplay
+                        key={`${segment.seq}-${i}`}
+                        toolCall={segment.toolCall}
+                        toolResult={matchingResult?.toolResult}
+                      />
+                    ) : null;
+                  }
+                  case "tool_result":
+                    // Tool results are shown inside the matching tool_call above
+                    return null;
+                  case "artifact":
+                    return segment.artifact ? (
+                      <ArtifactPanel key={`${segment.seq}-${i}`} artifact={segment.artifact} />
+                    ) : null;
+                  case "generated_image":
+                    return segment.generatedImage ? (
+                      <GeneratedImagePanel key={`${segment.seq}-${i}`} image={segment.generatedImage} />
+                    ) : null;
+                  default:
+                    return null;
+                }
+              })
             ) : (
-              message.content && (
-                <div className="text-sm leading-relaxed">
-                  <Suspense fallback={<span className="whitespace-pre-wrap">{message.content}</span>}>
-                    <MarkdownRenderer content={message.content} />
-                  </Suspense>
-                </div>
-              )
+              // Streaming or legacy fallback
+              <>
+                {/* Tool calls - streaming (live status) */}
+                {showStreaming && activeTools && activeTools.map((tool, i) => (
+                  <ToolCallDisplay
+                    key={`live-${i}`}
+                    liveStatus={tool}
+                  />
+                ))}
+
+                {/* Tool calls - persisted (from chat history, no segments) */}
+                {!showStreaming && message.toolCalls && message.toolCalls.map((tc, i) => {
+                  const tr = message.toolResults?.find((r) => r.toolCallId === tc.id);
+                  return (
+                    <ToolCallDisplay
+                      key={tc.id}
+                      toolCall={tc}
+                      toolResult={tr}
+                    />
+                  );
+                })}
+
+                {showStreaming ? (
+                  <div className="text-sm leading-relaxed">
+                    <StreamingText
+                      content={message.content}
+                      isStreaming={!isThinkingStreaming}
+                    />
+                  </div>
+                ) : (
+                  message.content && (
+                    <div className="text-sm leading-relaxed">
+                      <Suspense fallback={<span className="whitespace-pre-wrap">{message.content}</span>}>
+                        <MarkdownRenderer content={message.content} />
+                      </Suspense>
+                    </div>
+                  )
+                )}
+
+                {/* Inline artifacts - legacy fallback */}
+                {(artifacts || message.artifacts)?.map((artifact) => (
+                  <ArtifactPanel key={artifact.id} artifact={artifact} />
+                ))}
+
+                {/* Inline generated images - legacy fallback */}
+                {(generatedImages || message.generatedImages)?.map((img) => (
+                  <GeneratedImagePanel key={img.id} image={img} />
+                ))}
+              </>
             )}
-
-            {/* Inline artifacts - streaming (live) or persisted (from message) */}
-            {(artifacts || message.artifacts)?.map((artifact) => (
-              <ArtifactPanel key={artifact.id} artifact={artifact} />
-            ))}
-
-            {/* Inline generated images - streaming (live) or persisted (from message) */}
-            {(generatedImages || message.generatedImages)?.map((img) => (
-              <GeneratedImagePanel key={img.id} image={img} />
-            ))}
           </>
         )}
       </div>

@@ -23,6 +23,16 @@ export interface ImageAttachment {
   name: string;      // original filename
 }
 
+export interface MessageSegment {
+  seq: number;
+  type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image";
+  content?: string;
+  toolCall?: ChatToolCall;
+  toolResult?: ChatToolResult;
+  artifact?: Artifact;
+  generatedImage?: GeneratedImage;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -33,6 +43,7 @@ export interface ChatMessage {
   artifacts?: Artifact[];
   generatedImages?: GeneratedImage[];
   images?: ImageAttachment[];
+  segments?: MessageSegment[];
   timestamp: number;
 }
 

@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage } from "../api/client";
 import type { StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
-import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, MessageUsage } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, MessageUsage, MessageSegment } from "../types";
 import {
   enqueueMessage,
   dequeueMessage,
@@ -195,7 +195,7 @@ export function useChat(chatId: string | null) {
           setGeneratedImages([...bg.generatedImages]);
         }
       },
-      onDone: ({ thinking, usage, artifacts: doneArtifacts, generatedImages: doneImages, toolCalls, toolResults, waitingForInput: wfi }) => {
+      onDone: ({ thinking, usage, artifacts: doneArtifacts, generatedImages: doneImages, toolCalls, toolResults, segments, waitingForInput: wfi }) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg || bg.doneCalled) return;
         bg.doneCalled = true;
@@ -213,6 +213,7 @@ export function useChat(chatId: string | null) {
             generatedImages: doneImages || undefined,
             toolCalls: toolCalls || undefined,
             toolResults: toolResults || undefined,
+            segments: segments || undefined,
           };
         }
 
