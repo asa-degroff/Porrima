@@ -246,12 +246,20 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 {chevronSvg(modelDropdownOpen)}
               </button>
               {modelDropdownOpen && (
-                <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
+                <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                  style={{
+                    backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+                    borderColor: `rgba(var(--theme-primary-border))`,
+                  }}>
                   <button
                     onClick={() => { setDefaultModelId(""); setModelDropdownOpen(false); }}
                     className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                      !defaultModelId ? "bg-blue-500/15 text-blue-200" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      !defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                     }`}
+                    style={{
+                      backgroundColor: !defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                      color: !defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
+                    }}
                   >
                     Auto (first available)
                   </button>
@@ -260,8 +268,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       key={m.id}
                       onClick={() => { setDefaultModelId(m.id); setModelDropdownOpen(false); }}
                       className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                        m.id === defaultModelId ? "bg-blue-500/15 text-blue-200" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                        m.id === defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                       }`}
+                      style={{
+                        backgroundColor: m.id === defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: m.id === defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
                     >
                       <span className="truncate flex-1">{m.name}</span>
                       <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
@@ -286,12 +298,20 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 {chevronSvg(visionModelDropdownOpen)}
               </button>
               {visionModelDropdownOpen && (
-                <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
+                <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                  style={{
+                    backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+                    borderColor: `rgba(var(--theme-primary-border))`,
+                  }}>
                   <button
                     onClick={() => { setDefaultVisionModelId(""); setVisionModelDropdownOpen(false); }}
                     className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                      !defaultVisionModelId ? "bg-blue-500/15 text-blue-200" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      !defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                     }`}
+                    style={{
+                      backgroundColor: !defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                      color: !defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
+                    }}
                   >
                     Auto (first vision model)
                   </button>
@@ -300,8 +320,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       key={m.id}
                       onClick={() => { setDefaultVisionModelId(m.id); setVisionModelDropdownOpen(false); }}
                       className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                        m.id === defaultVisionModelId ? "bg-blue-500/15 text-blue-200" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                        m.id === defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                       }`}
+                      style={{
+                        backgroundColor: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
                     >
                       <span className="truncate flex-1">{m.name}</span>
                       <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
@@ -504,9 +528,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     key={preset.id}
                     className={`rounded-lg border p-3 space-y-2 transition-all ${
                       preset.isDefault
-                        ? "border-purple-400/30 bg-purple-500/5"
+                        ? "border-white/15"
                         : "border-white/10 bg-white/[0.02]"
                     }`}
+                    style={{
+                      backgroundColor: preset.isDefault ? `rgba(var(--theme-primary-muted), 0.05)` : '',
+                    }}
                   >
                     <div className="flex items-center gap-2">
                       <input
@@ -520,9 +547,14 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         onClick={() => handleUpdatePreset(preset.id, { isDefault: true })}
                         className={`text-xs px-2 py-1 rounded transition-all shrink-0 ${
                           preset.isDefault
-                            ? "bg-purple-500/20 text-purple-300 border border-purple-400/30"
+                            ? "border"
                             : "text-white/30 hover:text-white/50 border border-transparent hover:border-white/10"
                         }`}
+                        style={{
+                          backgroundColor: preset.isDefault ? `rgba(var(--theme-primary-muted))` : '',
+                          color: preset.isDefault ? `rgba(var(--theme-primary-text))` : '',
+                          borderColor: preset.isDefault ? `rgba(var(--theme-primary-border))` : '',
+                        }}
                         title={preset.isDefault ? "Default for new chats" : "Set as default"}
                       >
                         {preset.isDefault ? "Default" : "Set default"}
@@ -636,7 +668,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <button
                   onClick={handleRunSynthesis}
                   disabled={synthesisRunning || memoryStatus.memoryCount === 0}
-                  className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="w-full px-3 py-2 rounded-lg text-sm font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{
+                    backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
+                    borderColor: `rgba(var(--theme-primary-border))`,
+                    color: `rgba(var(--theme-primary-text))`,
+                  }}
                 >
                   {synthesisRunning ? "Running Synthesis..." : "Run Synthesis"}
                 </button>
@@ -732,7 +769,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       {chevronSvg(voiceDropdownOpen)}
                     </button>
                     {voiceDropdownOpen && (
-                      <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
+                      <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                        style={{
+                          backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+                          borderColor: `rgba(var(--theme-primary-border))`,
+                        }}>
                         {ttsVoices.map((category) => (
                           <div key={category.label}>
                             <div className="px-3 py-1.5 text-[10px] font-medium text-white/30 uppercase tracking-wider">
@@ -748,9 +789,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                                 }}
                                 className={`w-full text-left px-3 py-2 text-xs transition-all ${
                                   voice.id === ttsSettings.voice
-                                    ? "bg-blue-500/15 text-blue-200"
+                                    ? "text-white"
                                     : "text-white/60 hover:bg-white/10 hover:text-white/80"
                                 }`}
+                                style={{
+                                  backgroundColor: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                  color: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary-text))` : '',
+                                }}
                               >
                                 {voice.name} ({voice.id})
                               </button>
@@ -818,7 +863,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             <button
               onClick={handleAddPasskey}
               disabled={passkeyAdding}
-              className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="w-full px-3 py-2 rounded-lg text-sm font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              style={{
+                backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
+                borderColor: `rgba(var(--theme-primary-border))`,
+                color: `rgba(var(--theme-primary-text))`,
+              }}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z" />

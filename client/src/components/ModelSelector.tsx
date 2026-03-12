@@ -49,7 +49,11 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
         </svg>
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-30 min-w-[200px] max-h-[320px] overflow-y-auto backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
+        <div className="absolute right-0 top-full mt-1 z-30 min-w-[200px] max-h-[320px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+          style={{
+            backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+            borderColor: `rgba(var(--theme-primary-border))`,
+          }}>
           {models.map((m) => (
             <button
               key={m.id}
@@ -59,9 +63,13 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
               }}
               className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
                 m.id === selectedId
-                  ? "bg-blue-500/15 text-blue-200"
+                  ? "text-white"
                   : "text-white/60 hover:bg-white/10 hover:text-white/80"
               }`}
+              style={{
+                backgroundColor: m.id === selectedId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                color: m.id === selectedId ? `rgba(var(--theme-secondary-text))` : '',
+              }}
             >
               <span className="truncate flex-1">{m.name}</span>
               <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>

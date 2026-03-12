@@ -34,10 +34,17 @@ export function ThinkingBlock({ thinking, isStreaming }: Props) {
   if (!thinking) return null;
 
   return (
-    <div className="mb-2 rounded-xl bg-purple-500/10 border border-purple-400/15 overflow-hidden">
+    <div className="mb-2 rounded-xl border overflow-hidden"
+      style={{
+        backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+        borderColor: `rgba(var(--theme-primary-border), 0.15)`,
+      }}>
       <button
         onClick={handleToggle}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-purple-300/80 hover:text-purple-200 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors"
+        style={{
+          color: `rgba(var(--theme-primary-text), 0.8)`,
+        }}
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -55,7 +62,10 @@ export function ThinkingBlock({ thinking, isStreaming }: Props) {
         </svg>
         {isStreaming ? (
           <span className="flex items-center gap-1.5">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+            <span className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
+              style={{
+                backgroundColor: `rgba(var(--theme-primary-text))`,
+              }} />
             Thinking...
           </span>
         ) : (

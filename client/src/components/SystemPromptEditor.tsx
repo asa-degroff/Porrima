@@ -87,9 +87,14 @@ export function SystemPromptEditor({ value, onChange, disabled, presets }: Props
               disabled={disabled}
               className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border transition-all disabled:opacity-40 ${
                 matchingPreset
-                  ? "bg-purple-500/10 border-purple-400/20 text-purple-300/80 hover:bg-purple-500/20"
+                  ? "hover:opacity-90"
                   : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:text-white/70"
               }`}
+              style={{
+                backgroundColor: matchingPreset ? `rgba(var(--theme-primary), 0.1)` : '',
+                borderColor: matchingPreset ? `rgba(var(--theme-primary-border))` : '',
+                color: matchingPreset ? `rgba(var(--theme-primary-text))` : '',
+              }}
             >
               {matchingPreset ? matchingPreset.name || "Untitled" : "Custom"}
               <svg
@@ -108,20 +113,33 @@ export function SystemPromptEditor({ value, onChange, disabled, presets }: Props
               </svg>
             </button>
             {dropdownOpen && (
-              <div className="absolute right-0 top-full mt-1 z-30 min-w-[180px] backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1 overflow-hidden">
+              <div className="absolute right-0 top-full mt-1 z-30 min-w-[180px] backdrop-blur-xl border rounded-xl shadow-2xl py-1 overflow-hidden"
+                style={{
+                  backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+                  borderColor: `rgba(var(--theme-primary-border))`,
+                }}>
                 {presets.map((p) => (
                   <button
                     key={p.id}
                     onClick={() => handlePresetSelect(p.id)}
                     className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
                       matchingPreset?.id === p.id
-                        ? "bg-purple-500/15 text-purple-200"
+                        ? "text-white"
                         : "text-white/60 hover:bg-white/10 hover:text-white/80"
                     }`}
+                    style={{
+                      backgroundColor: matchingPreset?.id === p.id ? `rgba(var(--theme-primary), 0.15)` : 'transparent',
+                      color: matchingPreset?.id === p.id ? `rgba(var(--theme-primary-text))` : '',
+                    }}
                   >
                     <span className="truncate flex-1">{p.name || "Untitled"}</span>
                     {p.isDefault && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-500/15 text-purple-300/60 border border-purple-400/15 shrink-0">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
+                        style={{
+                          backgroundColor: `rgba(var(--theme-primary), 0.15)`,
+                          color: `rgba(var(--theme-primary-text))`,
+                          borderColor: `rgba(var(--theme-primary-border))`,
+                        }}>
                         default
                       </span>
                     )}
