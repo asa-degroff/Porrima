@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./themes.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -35,7 +36,7 @@ body::before {
   left: 0;
   right: 0;
   height: 100lvh;
-  background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+  background: var(--theme-bg-gradient);
   z-index: -1;
   transform: translateZ(0);
   -webkit-backface-visibility: hidden;
@@ -173,5 +174,5 @@ body::before {
 .streaming-cursor::after {
   content: "▋";
   animation: blink 1s infinite;
-  color: rgba(96, 165, 250, 0.8);
+  color: rgba(var(--theme-secondary-text), 0.8);
 }

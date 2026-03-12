@@ -60,6 +60,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     queueProcessing,
   } = useChat(activeChatId);
 
+  // Apply theme to document
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', settings.theme || 'default');
+  }, [settings.theme]);
+
   // Persist active view across reloads
   useEffect(() => {
     if (activeChatId) {

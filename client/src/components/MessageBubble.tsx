@@ -113,16 +113,27 @@ export const MessageBubble = memo(function MessageBubble({
       <div
         className={`max-w-[92%] md:max-w-[80%] rounded-2xl px-3 md:px-4 py-3 ${
           isUser
-            ? "bg-blue-500/20 border border-blue-400/20 text-white/95"
-            : "bg-white/5 border border-white/10 text-white/90"
+            ? "text-white/95"
+            : "text-white/90"
         } ${message.queued ? "opacity-60" : ""} ${editing ? "w-full" : ""}`}
+        style={isUser ? {
+          backgroundColor: `rgba(var(--theme-secondary), 0.1)`,
+          border: `1px solid rgba(var(--theme-secondary), 0.15)`,
+        } : {
+          backgroundColor: 'rgba(255, 255, 255, 0.05)',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+        }}
       >
         {isUser ? (
           editing ? (
             <div className="space-y-2">
               <textarea
                 ref={textareaRef}
-                className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-sm text-white/95 outline-none focus:border-blue-400/40 resize-none leading-relaxed"
+                className="w-full rounded-lg px-3 py-2 text-sm text-white/95 outline-none resize-none leading-relaxed"
+                style={{
+                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                }}
                 value={editText}
                 onChange={(e) => {
                   setEditText(e.target.value);
@@ -135,13 +146,23 @@ export const MessageBubble = memo(function MessageBubble({
               <div className="flex gap-2 justify-end">
                 <button
                   onClick={handleCancel}
-                  className="px-3 py-1 text-xs rounded-lg bg-white/5 border border-white/10 text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
+                  className="px-3 py-1 text-xs rounded-lg transition-colors"
+                  style={{
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: 'rgba(255, 255, 255, 0.5)',
+                  }}
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleSave}
-                  className="px-3 py-1 text-xs rounded-lg bg-blue-500/20 border border-blue-400/20 text-blue-300 hover:bg-blue-500/30 transition-colors"
+                  className="px-3 py-1 text-xs rounded-lg transition-colors"
+                  style={{
+                    backgroundColor: `rgba(var(--theme-secondary), 0.15)`,
+                    border: `1px solid rgba(var(--theme-secondary), 0.2)`,
+                    color: `rgba(var(--theme-secondary-text), 0.9)`,
+                  }}
                 >
                   Save
                 </button>
@@ -170,7 +191,7 @@ export const MessageBubble = memo(function MessageBubble({
                 </p>
               )}
               {message.queued && (
-                <div className="flex items-center gap-1 mt-1.5 text-[11px] text-amber-300/70">
+                <div className="flex items-center gap-1 mt-1.5 text-[11px]" style={{ color: `rgba(var(--theme-accent-text), 0.7)` }}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="10" />
                     <polyline points="12 6 12 12 16 14" />
@@ -244,9 +265,19 @@ export const MessageBubble = memo(function MessageBubble({
         <button
           onClick={() => onReadAloud(message.content)}
           disabled={isPlayingTts}
-          className={`opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md hover:bg-white/10 mt-2.5 ml-1.5 shrink-0 ${
-            isPlayingTts ? "text-blue-400" : "text-white/40 hover:text-white/70"
-          }`}
+          className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md mt-2.5 ml-1.5 shrink-0"
+          style={{
+            backgroundColor: isPlayingTts ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+            color: isPlayingTts ? `rgba(var(--theme-secondary-text), 0.9)` : 'rgba(255, 255, 255, 0.4)',
+          }}
+          onMouseEnter={(e) => {
+            if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)';
+            if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+          }}
+          onMouseLeave={(e) => {
+            if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)';
+            if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'transparent';
+          }}
           title={isPlayingTts ? "Playing..." : "Read aloud"}
         >
           {isPlayingTts ? (

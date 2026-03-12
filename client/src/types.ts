@@ -67,7 +67,7 @@ export interface OllamaModel {
   contextWindow: number;
 }
 
-export type Theme = "default" | "ripple-grid";
+export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "ripple-grid";
 
 export interface SystemPromptPreset {
   id: string;
