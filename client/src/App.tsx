@@ -279,7 +279,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   return (
     <div className="flex h-full overflow-hidden relative" style={keyboardInset ? { paddingBottom: keyboardInset } : undefined}>
-      {settings.backgroundEffect === "ripple-grid" && !imageSandboxOpen && (
+      {settings.backgroundEffect === "ripple-grid" && (
         <Suspense fallback={null}>
           <RippleGridBackground />
         </Suspense>
