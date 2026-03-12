@@ -20,6 +20,9 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
   const [presetSelectOpen, setPresetSelectOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const presetRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
 
   useEffect(() => {
     setMessages(image.conversation);
@@ -28,6 +31,22 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Auto-scroll during streaming description (same pattern as ChatView)
+  useEffect(() => {
+    const scroll = scrollRef.current;
+    const content = contentRef.current;
+    if (!scroll || !streamingDescription) return;
+    
+    const observer = new ResizeObserver(() => {
+      if (isNearBottomRef.current) {
+        scroll.scrollTop = scroll.scrollHeight;
+      }
+    });
+    if (content) observer.observe(content);
+    observer.observe(scroll);
+    return () => observer.disconnect();
+  }, [streamingDescription]);
 
   // Close preset menu on outside click
   useEffect(() => {
@@ -87,7 +106,11 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
   return (
     <div className="flex flex-col h-full">
       {/* Scrollable content area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div 
+        ref={scrollRef} 
+        className="flex-1 overflow-y-auto p-4 space-y-4"
+      >
+        <div ref={contentRef}>
         {/* Image + metadata */}
         <div className="flex flex-col items-start gap-3">
           <img
@@ -249,6 +272,8 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
         )}
 
         <div ref={messagesEndRef} />
+      </div>
+        </div>
       </div>
 
       {/* Input */}
