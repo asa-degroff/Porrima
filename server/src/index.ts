@@ -3,6 +3,7 @@ import cors from "cors";
 import session from "express-session";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import type { Request, Response, NextFunction } from "express";
 import modelsRouter from "./routes/models.js";
 import chatsRouter from "./routes/chats.js";
 import chatRouter from "./routes/chat.js";
@@ -85,6 +86,12 @@ if (isProd) {
     res.sendFile(join(clientDist, "index.html"));
   });
 }
+
+// Global error handler - must be after all routes
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  console.error("Unhandled error:", err);
+  res.status(err.status || 500).json({ error: err.message || "Internal server error" });
+});
 
 app.listen(PORT, () => {
   console.log(`qu.je agent server running on http://localhost:${PORT}`);

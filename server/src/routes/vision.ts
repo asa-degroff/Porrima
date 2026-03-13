@@ -85,9 +85,13 @@ router.post("/analyze-stream", async (req, res) => {
     }
 
     res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+
+    // Flush headers immediately to keep connection alive
+    res.flushHeaders();
 
     await analyzeImageStream(
       imageData,
@@ -95,6 +99,8 @@ router.post("/analyze-stream", async (req, res) => {
       model,
       (event) => {
         res.write(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
+        // Flush chunk if available (requires compression middleware)
+        (res as any).flush?.();
       }
     );
 

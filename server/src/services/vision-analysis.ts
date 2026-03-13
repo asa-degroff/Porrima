@@ -210,32 +210,16 @@ function base64ToBuffer(base64: string): Buffer {
   return Buffer.from(base64Data, "base64");
 }
 
-async function waitforModelSlot(modelName: string, timeout = 300000): Promise<boolean> {
-  if (modelName.includes("cloud")) {
-    return true;
-  }
-
+async function waitForOllama(timeout = 30000): Promise<boolean> {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     try {
       const res = await fetch(`${OLLAMA_BASE}/api/ps`);
-      if (!res.ok) {
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-        continue;
-      }
-      const response = await res.json();
-      const models = response.models || [];
-      if (models.length === 0) {
-        return true;
-      }
-      const loadedNames = models.map((m: any) => m.name);
-      if (loadedNames.includes(modelName)) {
-        return true;
-      }
+      if (res.ok) return true;
     } catch {
-      // Continue waiting
+      // Ollama not reachable yet
     }
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   return false;
 }
@@ -250,11 +234,9 @@ export async function analyzeImage(
   const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
   const modelName = model || getVLMModel();
 
-  const hasSlot = await waitforModelSlot(modelName);
-  if (!hasSlot) {
-    throw new Error(
-      "Timed out waiting for vision model slot. Another model is still loaded."
-    );
+  const ollamaReady = await waitForOllama();
+  if (!ollamaReady) {
+    throw new Error("Cannot reach Ollama. Is it running?");
   }
 
   const imageBuffer = base64ToBuffer(imageData).toString("base64");
@@ -274,7 +256,7 @@ export async function analyzeImage(
         },
       ],
       keep_alive: 0,
-      options: { temperature: 0.7, num_ctx: 4096 },
+      options: { temperature: 0.7 },
     }),
   });
 
@@ -300,11 +282,14 @@ export async function analyzeImageStream(
   const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
   const modelName = model || getVLMModel();
 
-  const hasSlot = await waitforModelSlot(modelName);
-  if (!hasSlot) {
-    onEvent({ event: "error", data: { message: "Timed out waiting for vision model slot" } });
-    throw new Error("Timed out waiting for vision model slot");
+  const ollamaReady = await waitForOllama();
+  if (!ollamaReady) {
+    onEvent({ event: "error", data: { message: "Cannot reach Ollama. Is it running?" } });
+    throw new Error("Cannot reach Ollama. Is it running?");
   }
+
+  // Send initial keepalive to show we're starting
+  onEvent({ event: "keepalive", data: { status: "starting", timestamp: Date.now() } });
 
   const imageBuffer = base64ToBuffer(imageData).toString("base64");
 
@@ -323,7 +308,7 @@ export async function analyzeImageStream(
         },
       ],
       keep_alive: 0,
-      options: { temperature: 0.7, num_ctx: 4096 },
+      options: { temperature: 0.7 },
     }),
   });
 
@@ -415,7 +400,7 @@ export async function chatAboutImage(
       stream: false,
       messages,
       keep_alive: "5m",
-      options: { temperature: 0.7, num_ctx: 4096 },
+      options: { temperature: 0.7 },
     }),
   });
 

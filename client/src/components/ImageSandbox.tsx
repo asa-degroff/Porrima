@@ -112,19 +112,47 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
       localStorage.setItem("quje-sandbox-mode", mode);
     } catch {}
   }, [mode]);
-  const [visionModel, setVisionModel] = useState<string>(() => {
-    // 1. Use explicit vision model setting if set
+  const [visionModel, setVisionModelRaw] = useState<string>(() => {
+    // 1. Check localStorage for a previously selected vision model
+    try {
+      const saved = localStorage.getItem("quje-vision-model");
+      if (saved && ollamaModels.some((m) => m.id === saved)) return saved;
+    } catch {}
+    // 2. Use explicit vision model setting if set
     if (defaultVisionModelId) {
       const configured = ollamaModels.find((m) => m.id === defaultVisionModelId);
       if (configured) return defaultVisionModelId;
     }
-    // 2. Use chat default if it's vision-capable
+    // 3. Use chat default if it's vision-capable
     const chatDefault = ollamaModels.find((m) => m.id === defaultModelId);
     if (chatDefault && isVisionCapable(chatDefault.family)) return defaultModelId;
-    // 3. Fall back to first vision model
+    // 4. Fall back to first vision model
     const visionDefault = ollamaModels.find((m) => isVisionCapable(m.family));
     return visionDefault?.id || defaultModelId;
   });
+
+  const setVisionModel = useCallback((id: string) => {
+    setVisionModelRaw(id);
+    try { localStorage.setItem("quje-vision-model", id); } catch {}
+  }, []);
+
+  // Re-validate selection when models list arrives/changes
+  useEffect(() => {
+    if (ollamaModels.length === 0) return;
+    // Current selection is valid — keep it
+    if (ollamaModels.some((m) => m.id === visionModel)) return;
+    // Try localStorage
+    try {
+      const saved = localStorage.getItem("quje-vision-model");
+      if (saved && ollamaModels.some((m) => m.id === saved)) {
+        setVisionModelRaw(saved);
+        return;
+      }
+    } catch {}
+    // Fall back to best vision model
+    const visionDefault = ollamaModels.find((m) => isVisionCapable(m.family));
+    setVisionModelRaw(visionDefault?.id || ollamaModels[0].id);
+  }, [ollamaModels]);
 
   const error = mode === "generate" ? imageError : visionError;
 

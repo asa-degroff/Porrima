@@ -144,7 +144,14 @@ function streamSSE(
         return;
       }
       if (!res.ok) {
-        const err = await res.json();
+        const errText = await res.text();
+        let err: any = {};
+        try {
+          err = JSON.parse(errText);
+        } catch {
+          // Response wasn't JSON (e.g., HTML error page)
+          err = { error: errText || res.statusText };
+        }
         callbacks.onError(err.error || "Request failed");
         return;
       }
@@ -531,7 +538,13 @@ export async function analyzeImage(
     body: JSON.stringify({ imageData, preset, model }),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
+    const errText = await res.text();
+    let err: any = {};
+    try {
+      err = JSON.parse(errText);
+    } catch {
+      err = { error: errText || res.statusText };
+    }
     throw new Error((err as any).error || "Failed to analyze image");
   }
   return res.json();
@@ -549,7 +562,13 @@ export async function saveAnalyzedImage(
     body: JSON.stringify({ imageData, description, preset, model }),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
+    const errText = await res.text();
+    let err: any = {};
+    try {
+      err = JSON.parse(errText);
+    } catch {
+      err = { error: errText || res.statusText };
+    }
     throw new Error((err as any).error || "Failed to save analyzed image");
   }
   return res.json();
