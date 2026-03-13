@@ -64,6 +64,9 @@ const OctahedronShape = memo(function OctahedronShape({ half, colorIndex }: { ha
   const faceDist = half / Math.sqrt(3)
   const faceW = half * Math.SQRT2
   const faceH = half * Math.sqrt(6) / 2
+  // Slight overlap to prevent sub-pixel gaps on high-DPI displays
+  const overlap = 0.5
+  const adjustedFaceH = faceH + overlap
   // Center hue range around amber baseline
   const hue = 38 + (colorIndex - 2) * 3
   return (
@@ -74,12 +77,12 @@ const OctahedronShape = memo(function OctahedronShape({ half, colorIndex }: { ha
           style={{
             position: 'absolute',
             width: faceW,
-            height: faceH,
+            height: adjustedFaceH,
             left: '50%',
             top: '50%',
             marginLeft: -faceW / 2,
-            // Align triangle centroid (not bbox center) with octahedron center
-            marginTop: f.up ? -faceH * 2 / 3 : -faceH / 3,
+            // Align triangle centroid with octahedron center, extended for overlap
+            marginTop: f.up ? -adjustedFaceH * 2 / 3 + overlap / 2 : -adjustedFaceH / 3 - overlap / 2,
             // Pivot around the triangle centroid
             transformOrigin: f.up ? '50% 66.67%' : '50% 33.33%',
             backfaceVisibility: 'hidden',
