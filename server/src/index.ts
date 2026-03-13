@@ -15,6 +15,7 @@ import visionRouter from "./routes/vision.js";
 import authRouter from "./routes/auth.js";
 import personaRouter from "./routes/persona.js";
 import ttsRouter from "./routes/tts.js";
+import skillsRouter from "./routes/skills.js";
 import { requireAuth } from "./middleware/auth.js";
 import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
@@ -75,6 +76,7 @@ app.use("/api/artifacts", artifactsRouter);
 app.use("/api/images", imagesRouter);
 app.use("/api/vision", visionRouter);
 app.use("/api/tts", ttsRouter);
+app.use("/api/skills", skillsRouter);
 
 // Production static serving
 if (isProd) {

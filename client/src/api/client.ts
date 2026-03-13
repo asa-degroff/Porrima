@@ -661,3 +661,16 @@ export async function deleteAnalyzedImage(id: string): Promise<void> {
   });
   if (!res.ok) throw new Error("Failed to delete analyzed image");
 }
+
+// --- Skills API ---
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+}
+
+export async function fetchSkills(): Promise<SkillInfo[]> {
+  const res = await apiFetch(`${BASE}/skills`);
+  if (!res.ok) throw new Error("Failed to fetch skills");
+  return res.json();
+}

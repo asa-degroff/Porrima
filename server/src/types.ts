@@ -59,6 +59,7 @@ export interface Chat {
   messages: ChatMessage[];
   createdAt: string;
   lastModified: string;
+  activeSkills?: string[]; // List of active skill names
 }
 
 export interface ChatListItem {

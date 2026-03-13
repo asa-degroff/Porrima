@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { Artifact, ChatMessage, GeneratedImage, MessageUsage, OllamaModel, SystemPromptPreset } from "../types";
-import type { ToolStatus, StreamWarning } from "../api/client";
-import { fetchRenderedPrompt } from "../api/client";
+import type { ToolStatus, StreamWarning, SkillInfo } from "../api/client";
+import { fetchRenderedPrompt, fetchSkills } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
 import { MessageInput } from "./MessageInput";
 import { ModelSelector } from "./ModelSelector";
 import { TokenIndicator } from "./TokenIndicator";
 import { SystemPromptEditor } from "./SystemPromptEditor";
 import { OfflineIndicator } from "./OfflineIndicator";
+import { SkillSelector } from "./SkillSelector";
 
 const hamburgerIconLg = (
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -64,6 +65,7 @@ interface Props {
   onOpenSidebar: () => void;
   isOnline?: boolean;
   queueProcessing?: boolean;
+  activeSkills?: string[];
 }
 
 export function ChatView({
@@ -99,6 +101,7 @@ export function ChatView({
   onOpenSidebar,
   isOnline = true,
   queueProcessing = false,
+  activeSkills,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -109,6 +112,43 @@ export function ChatView({
   const [ctxInput, setCtxInput] = useState("");
   const [promptModal, setPromptModal] = useState<{ systemPrompt: string; tools: { name: string; description: string }[] } | null>(null);
   const [promptLoading, setPromptLoading] = useState(false);
+  const inputRef = useRef<HTMLDivElement | null>(null);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [skillSelectorOpen, setSkillSelectorOpen] = useState(false);
+  const [skillFilter, setSkillFilter] = useState("");
+  const [inputRect, setInputRect] = useState<DOMRect | null>(null);
+  
+  useEffect(() => {
+    fetchSkills().then(setSkills).catch(() => setSkills([]));
+  }, []);
+  
+  const handleSlashTyping = useCallback(() => {
+    if (!inputRef.current) return;
+    const rect = inputRef.current.getBoundingClientRect();
+    setInputRect(rect);
+    setSkillFilter("");
+    setSkillSelectorOpen(true);
+  }, []);
+  
+  // Get the text content after the last "/" in the editor
+  const getPartialSkillText = useCallback(() => {
+    if (!inputRef.current) return "";
+    const text = inputRef.current.innerText;
+    const lastSlashIndex = text.lastIndexOf("/");
+    if (lastSlashIndex === -1) return "";
+    return text.slice(lastSlashIndex + 1);
+  }, []);
+  
+  const handleSkillSelect = useCallback((skillName: string) => {
+    // Use the MessageInput's insertSkillChip method via callback
+    // We'll pass this down through MessageInput props
+    setSkillSelectorOpen(false);
+    inputRef.current?.focus();
+  }, []);
+  
+  const closeSkillSelector = useCallback(() => {
+    setSkillSelectorOpen(false);
+  }, []);
 
   const openPromptViewer = useCallback(async () => {
     if (!chatId) return;
@@ -224,6 +264,15 @@ export function ChatView({
           <h2 className="text-sm font-medium text-white/80 truncate">
             {chatTitle}
           </h2>
+          {activeSkills?.length ? (
+            <div className="hidden md:flex items-center gap-1">
+              {activeSkills.map(skill => (
+                <span key={skill} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 border border-blue-400/30 text-blue-300">
+                  {skill}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <OfflineIndicator isOnline={isOnline} queueProcessing={queueProcessing} />
@@ -380,7 +429,94 @@ export function ChatView({
         streaming={streaming}
         waitingForInput={waitingForInput}
         isOnline={isOnline}
+        onSlashTyping={handleSlashTyping}
+        inputRef={inputRef}
       />
+
+      {/* Skill Selector Popup */}
+      {skillSelectorOpen && (
+        <SkillSelector
+          skills={skills}
+          filterText={skillFilter}
+          onSelect={(skillName: string) => {
+            const editor = inputRef.current;
+            if (!editor) return;
+            
+            const sel = window.getSelection();
+            if (!sel || sel.rangeCount === 0) return;
+            
+            // Get the full text to find the last "/"
+            const fullText = editor.innerText;
+            const lastSlashIndex = fullText.lastIndexOf("/");
+            if (lastSlashIndex === -1) {
+              setSkillSelectorOpen(false);
+              editor.focus();
+              return;
+            }
+            
+            // Get text before the slash
+            const textBeforeSlash = fullText.slice(0, lastSlashIndex);
+            
+            // Save scroll position
+            const scrollTop = editor.scrollTop;
+            
+            // Save non-text children (image previews, etc.)
+            const preservedNodes: Node[] = [];
+            for (let i = 0; i < editor.childNodes.length; i++) {
+              const child = editor.childNodes[i];
+              if (child.nodeType !== Node.TEXT_NODE) {
+                preservedNodes.push(child);
+              }
+            }
+            
+            // Create the skill chip
+            const chip = document.createElement('span');
+            chip.className = 'skill-chip';
+            chip.style.cssText = 'display:inline-block;padding:2px 8px;margin:0 4px;background:rgba(59,130,246,0.25);border:1px solid rgba(59,130,246,0.4);border-radius:12px;font-size:12px;color:rgb(147,197,253);font-weight:500;vertical-align:middle;';
+            chip.textContent = `/${skillName}`;
+            chip.setAttribute('data-skill', skillName);
+            chip.setAttribute('contenteditable', 'false');
+            
+            // Clear and rebuild
+            editor.textContent = "";
+            
+            // Restore preserved nodes first
+            for (const node of preservedNodes) {
+              editor.appendChild(node);
+            }
+            
+            // Add text before slash
+            if (textBeforeSlash) {
+              editor.appendChild(document.createTextNode(textBeforeSlash));
+            }
+            
+            // Add the chip
+            editor.appendChild(chip);
+            
+            // Add trailing space
+            editor.appendChild(document.createTextNode(" "));
+            
+            // Position cursor after the chip
+            const newRange = document.createRange();
+            newRange.setStartAfter(chip.nextSibling!);
+            newRange.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+            
+            // Restore scroll
+            editor.scrollTop = scrollTop;
+            
+            // Trigger input event
+            const event = new Event("input", { bubbles: true });
+            editor.dispatchEvent(event);
+            
+            setSkillSelectorOpen(false);
+            editor.focus();
+          }}
+          onClose={closeSkillSelector}
+          inputRect={inputRect}
+        />
+      )}
 
       {/* Rendered Prompt Viewer Modal */}
       {(promptModal || promptLoading) && (

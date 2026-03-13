@@ -12,6 +12,8 @@ import { truncateChatHistory } from "../services/compaction.js";
 import { buildMemoryAugmentedPrompt, setCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
+import { parseSkillInvocations, stripSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
+import type { Skill } from "../services/skills.js";
 import {
   loadPendingState,
   savePendingState,
@@ -456,25 +458,87 @@ async function handleChatStream(
 
 // Send message and stream response via SSE
 router.post("/", async (req, res) => {
-  const { chatId, message, images } = req.body as {
+  const { chatId, message: messageText, images } = req.body as {
     chatId: string;
     message: string;
     images?: ImageAttachment[];
   };
 
-  if (!chatId || (!message && (!images || images.length === 0))) {
+  if (!chatId || (!messageText && (!images || images.length === 0))) {
     return res.status(400).json({ error: "chatId and message (or images) are required" });
   }
 
   const chat = await getChat(chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
+  let message = messageText;
+  
+  // Check for skill invocations anywhere in the message
+  const invokedSkills = parseSkillInvocations(message);
+  const activatedSkillNames: string[] = [];
+  
+  if (invokedSkills.length > 0) {
+    const allSkills = await discoverSkills();
+    
+    for (const invokedSkill of invokedSkills) {
+      const skill = allSkills.find(s => s.name.toLowerCase() === invokedSkill.toLowerCase());
+      
+      if (skill) {
+        // Add skill to active skills if not already present
+        if (!chat.activeSkills) {
+          chat.activeSkills = [];
+        }
+        if (!chat.activeSkills.includes(skill.name)) {
+          chat.activeSkills.push(skill.name);
+          activatedSkillNames.push(skill.name);
+          console.log(`[skills] Activated skill "${skill.name}" for chat ${chatId}`);
+        }
+      }
+    }
+    
+    // Strip skill invocations from the message
+    const strippedMessage = stripSkillInvocations(message);
+    if (strippedMessage) {
+      message = strippedMessage;
+    } else if (activatedSkillNames.length > 0) {
+      // Message contained only skill activations
+      message = activatedSkillNames.length === 1
+        ? `I've activated the ${activatedSkillNames[0]} skill.`
+        : `I've activated ${activatedSkillNames.length} skills: ${activatedSkillNames.join(', ')}.`;
+    }
+  }
+  
   // Check for pending agent state (ask_user resume flow)
   const pendingState = await loadPendingState(chatId);
 
   if (pendingState) {
     // RESUME: the user's message is the answer to ask_user
-    const systemPrompt = pendingState.systemPrompt;
+    let systemPrompt = pendingState.systemPrompt;
+    
+    // Check for new skill invocations in resume message
+    const invokedSkills = parseSkillInvocations(message);
+    if (invokedSkills.length > 0) {
+      const allSkills = await discoverSkills();
+      for (const invokedSkill of invokedSkills) {
+        const skill = allSkills.find(s => s.name.toLowerCase() === invokedSkill.toLowerCase());
+        if (skill && chat.activeSkills && !chat.activeSkills.includes(skill.name)) {
+          chat.activeSkills.push(skill.name);
+          console.log(`[skills] Activated skill "${skill.name}" for chat ${chatId} (resume)`);
+        }
+      }
+      message = stripSkillInvocations(message);
+    }
+    
+    // Inject active skills into the resumed system prompt
+    if (chat.activeSkills?.length) {
+      const skillsCache = new Map<string, Skill>();
+      const allSkills = await discoverSkills();
+      for (const s of allSkills) {
+        skillsCache.set(s.name, s);
+      }
+      systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+    }
+    
     const contextMessages = pendingState.agentMessages as Message[];
 
     // Inject the user's answer as a ToolResultMessage for the pending ask_user call
@@ -516,15 +580,28 @@ router.post("/", async (req, res) => {
 
     await saveChat(chat);
 
-    // Augment system prompt with memories for agent chats
+    // Build system prompt with memories and active skills
     let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
     if (chat.type === "agent") {
       systemPrompt = await buildMemoryAugmentedPrompt(
         systemPrompt,
         chat.messages
       );
-      setCachedAugmentedPrompt(chat.id, systemPrompt);
     }
+    
+    // Inject active skills into system prompt
+    if (chat.activeSkills?.length) {
+      const skillsCache = new Map<string, Skill>();
+      const allSkills = await discoverSkills();
+      for (const s of allSkills) {
+        skillsCache.set(s.name, s);
+      }
+      systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+    }
+    
+    setCachedAugmentedPrompt(chat.id, systemPrompt);
+    
+    setCachedAugmentedPrompt(chat.id, systemPrompt);
 
     // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
     const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
@@ -575,12 +652,23 @@ router.post("/edit", async (req, res) => {
 
   await saveChat(chat);
 
-  // Build context
+  // Build context with skills
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
   if (chat.type === "agent") {
     systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages);
-    setCachedAugmentedPrompt(chat.id, systemPrompt);
   }
+  
+  // Inject active skills into system prompt
+  if (chat.activeSkills?.length) {
+    const skillsCache = new Map<string, Skill>();
+    const allSkills = await discoverSkills();
+    for (const s of allSkills) {
+      skillsCache.set(s.name, s);
+    }
+    systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+  }
+  
+  setCachedAugmentedPrompt(chat.id, systemPrompt);
 
   // Context = all messages EXCEPT the one we just added
   const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);

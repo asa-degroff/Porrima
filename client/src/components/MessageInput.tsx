@@ -10,6 +10,8 @@ interface Props {
   waitingForInput?: boolean;
   isOnline?: boolean;
   placeholder?: string;
+  onSlashTyping?: () => void;
+  inputRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 function processFiles(files: FileList | File[]): Promise<ImageAttachment[]> {
@@ -21,7 +23,6 @@ function processFiles(files: FileList | File[]): Promise<ImageAttachment[]> {
           const reader = new FileReader();
           reader.onload = () => {
             const dataUrl = reader.result as string;
-            // "data:image/png;base64,AAAA..." -> split out base64 and mimeType
             const [header, data] = dataUrl.split(",");
             const mimeType = header.match(/data:(.*?);/)?.[1] || file.type;
             resolve({ data, mimeType, name: file.name });
@@ -33,7 +34,7 @@ function processFiles(files: FileList | File[]): Promise<ImageAttachment[]> {
   );
 }
 
-export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder }: Props) {
+export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, inputRef }: Props) {
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [hasContent, setHasContent] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -46,23 +47,25 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
   const dragCounterRef = useRef(0);
   const { medium, heavy, success } = useHaptics();
 
+  // Expose editor ref to parent if provided
+  useEffect(() => {
+    if (inputRef && inputRef.current !== editorRef.current) {
+      (inputRef as React.RefObject<HTMLDivElement | null>).current = editorRef.current;
+    }
+  }, [inputRef]);
+
   const canSend = (hasContent || images.length > 0) && (!disabled || !isOnline);
 
-  // Positions buttons at the bottom-right by adjusting the spacer height.
-  // A zero-width spacer floated right pushes the buttons (also float-right, clear-right)
-  // down so text wraps around buttons only at the bottom of the input.
   const updateLayout = useCallback(() => {
     const container = containerRef.current;
     const spacer = spacerRef.current;
     const buttons = buttonsRef.current;
     if (!container || !spacer || !buttons) return;
 
-    // Pass 1: reset spacer, measure natural content height
     spacer.style.height = "0px";
     const h1 = container.scrollHeight;
     const bh = buttons.offsetHeight;
 
-    // Pass 2: set spacer, re-measure after text reflow
     spacer.style.height = Math.max(0, h1 - bh) + "px";
     const h2 = container.scrollHeight;
     spacer.style.height = Math.max(0, h2 - bh) + "px";
@@ -88,6 +91,22 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
+    } else if (e.key === "/" && textRef.current.trim() === "") {
+      // Only trigger at start of message
+      onSlashTyping?.();
+    } else if (e.key === "Backspace") {
+      // Allow deleting skill chips with backspace
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const node = range.startContainer;
+        if (node instanceof Element && node.hasAttribute?.('data-skill')) {
+          // Remove the skill chip
+          node.remove();
+          textRef.current = editorRef.current?.innerText || "";
+          setHasContent(!!textRef.current.trim());
+        }
+      }
     }
   };
 
@@ -99,12 +118,10 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
     updateLayout();
   }, [updateLayout]);
 
-  // Update layout on mount and when hasContent/images change
   useLayoutEffect(() => {
     updateLayout();
   }, [hasContent, images.length, updateLayout]);
 
-  // Re-layout on container resize (e.g. window resize)
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -179,7 +196,6 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
       await addFiles(imageFiles);
       return;
     }
-    // Strip formatting: only paste plain text
     e.preventDefault();
     const text = e.clipboardData.getData("text/plain");
     if (text) {
@@ -202,7 +218,6 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
               : "border-white/15"
         }`}
       >
-        {/* Image preview strip */}
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
             {images.map((img, i) => (
@@ -226,7 +241,6 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
           </div>
         )}
 
-        {/* Input area — buttons float to bottom-right, text wraps around them */}
         <div
           ref={containerRef}
           className="relative max-h-[200px] overflow-y-auto overflow-x-hidden"
@@ -234,12 +248,9 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
             if (e.target === e.currentTarget) editorRef.current?.focus();
           }}
         >
-          {/* Zero-width spacer pushes buttons to bottom via float */}
           <div ref={spacerRef} className="float-right w-0" />
 
-          {/* Buttons float right, clearing the spacer so they sit below it */}
           <div ref={buttonsRef} className="float-right clear-right flex items-center gap-2 ml-2">
-            {/* Image picker button */}
             <button
               onClick={() => fileInputRef.current?.click()}
               className="p-1.5 rounded-lg text-white/40 hover:text-white/70 hover:bg-white/10 transition-colors"
@@ -295,7 +306,6 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
             )}
           </div>
 
-          {/* Editable text area */}
           <div
             ref={editorRef}
             contentEditable
@@ -307,9 +317,11 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             className="min-h-8 py-1.5 outline-none text-white/90 text-sm md:text-base leading-snug break-words whitespace-pre-wrap"
-          />
+            style={{ wordBreak: 'break-word' }}
+          >
+            {/* Skill chips are inserted dynamically */}
+          </div>
 
-          {/* Placeholder */}
           {!hasContent && images.length === 0 && (
             <div className="absolute top-1.5 left-0 pointer-events-none text-white/30 text-sm md:text-base leading-snug select-none">
               {placeholder || (waitingForInput ? "Answer the agent's question..." : "Send a message...")}

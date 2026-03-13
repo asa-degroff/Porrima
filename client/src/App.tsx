@@ -329,13 +329,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         ttsAutoReadEnabled={playbackState.isPlaying || playbackState.isPaused}
         onTtsAutoReadToggle={(enabled) => {
           if (enabled) {
-            // Enable: play the last assistant message if available
             const lastAssistantMsg = [...messages].reverse().find(m => m.role === "assistant" && m.content);
             if (lastAssistantMsg) {
               playTts(lastAssistantMsg.content);
             }
           } else {
-            // Disable: stop current playback
             stopTts();
           }
         }}
@@ -351,6 +349,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         waitingForInput={waitingForInput}
         isOnline={isOnline}
         queueProcessing={queueProcessing}
+        activeSkills={activeChat?.activeSkills}
       />
       )}
       {settingsOpen && (
