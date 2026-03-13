@@ -300,21 +300,20 @@ export function VisionControls({
                 key={image.id}
                 onClick={() => onSelectImage(image.id)}
                 className={`
-                  w-full text-left flex items-center gap-3 px-4 py-2.5 transition-all group
-                  border-l-2
+                  w-full text-left flex items-center gap-3 px-3 py-2.5 ml-1 mr-2 rounded-xl transition-all group border
                   ${selectedImage?.id === image.id
-                    ? "border"
+                    ? ""
                     : "border-transparent hover:bg-white/5"
                   }
                 `}
                 style={{
-                  borderLeftColor: selectedImage?.id === image.id ? `rgba(var(--theme-secondary))` : '',
+                  borderColor: selectedImage?.id === image.id ? `rgba(var(--theme-secondary-border))` : '',
                   backgroundColor: selectedImage?.id === image.id ? `rgba(var(--theme-secondary), 0.15)` : '',
                 }}
               >
                 {/* Thumbnail */}
                 <img
-                  src={image.url}
+                  src={`/api/vision/images/${image.id}/thumb`}
                   alt=""
                   className="w-10 h-10 rounded object-cover shrink-0"
                   loading="lazy"

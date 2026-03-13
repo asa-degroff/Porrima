@@ -9,6 +9,8 @@ import {
   updateAnalyzedImage,
   deleteAnalyzedImage,
   getPresets,
+  getVisionThumbPath,
+  ensureVisionThumbnail,
 } from "../services/vision-analysis.js";
 
 const router = Router();
@@ -255,6 +257,25 @@ router.get("/presets", async (_req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Serve thumbnail
+router.get("/images/:id/thumb", async (req, res) => {
+  const { createReadStream } = await import("fs");
+  const { access } = await import("fs/promises");
+
+  const thumbPath = getVisionThumbPath(req.params.id);
+  try {
+    await access(thumbPath);
+  } catch {
+    const created = await ensureVisionThumbnail(req.params.id);
+    if (!created) {
+      return res.status(404).json({ error: "Thumbnail not available" });
+    }
+  }
+  res.setHeader("Content-Type", "image/webp");
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  createReadStream(thumbPath).pipe(res);
 });
 
 // Serve image files

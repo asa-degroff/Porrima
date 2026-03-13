@@ -2,6 +2,7 @@ import { v4 as uuid } from "uuid";
 import { mkdir, writeFile, readFile, readdir, access } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
+import sharp from "sharp";
 
 const VISION_DIR = join(process.env.HOME || process.env.USERPROFILE || ".", ".quje-agent", "vision");
 const OLLAMA_BASE = process.env.OLLAMA_URL || "http://localhost:11434";
@@ -191,6 +192,8 @@ When the user asks you to modify, rewrite, or change aspects of the description 
 When the user asks a question about the image or wants general discussion, respond conversationally without rewriting the description.`;
 }
 
+const THUMB_WIDTH = 384;
+
 async function ensureVisionDir() {
   if (!existsSync(VISION_DIR)) {
     await mkdir(VISION_DIR, { recursive: true });
@@ -198,6 +201,38 @@ async function ensureVisionDir() {
   const imagesDir = join(VISION_DIR, "images");
   if (!existsSync(imagesDir)) {
     await mkdir(imagesDir, { recursive: true });
+  }
+}
+
+export function getVisionImageDir(id: string): string {
+  return join(VISION_DIR, "images", id);
+}
+
+export function getVisionThumbPath(id: string): string {
+  return join(VISION_DIR, "images", id, "thumb.webp");
+}
+
+export async function ensureVisionThumbnail(id: string): Promise<boolean> {
+  const thumbPath = getVisionThumbPath(id);
+  try {
+    await access(thumbPath);
+    return false; // already exists
+  } catch {
+    // generate it
+  }
+  try {
+    const metadataPath = join(VISION_DIR, "images", id, "metadata.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf-8"));
+    const imagePath = join(VISION_DIR, "images", id, metadata.filename);
+    const imageBuffer = await readFile(imagePath);
+    const thumbBuffer = await sharp(imageBuffer)
+      .resize(THUMB_WIDTH, undefined, { fit: "inside", withoutEnlargement: true })
+      .webp({ quality: 80 })
+      .toBuffer();
+    await writeFile(thumbPath, thumbBuffer);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -446,10 +481,17 @@ export async function saveAnalyzedImage(
   const imageDir = join(VISION_DIR, "images", id);
   await mkdir(imageDir, { recursive: true });
 
-  // Save image
+  // Save image + thumbnail
   const imageBuffer = base64ToBuffer(imageData);
   const imagePath = join(imageDir, filename);
-  await writeFile(imagePath, imageBuffer);
+  const thumbBuffer = await sharp(imageBuffer)
+    .resize(THUMB_WIDTH, undefined, { fit: "inside", withoutEnlargement: true })
+    .webp({ quality: 80 })
+    .toBuffer();
+  await Promise.all([
+    writeFile(imagePath, imageBuffer),
+    writeFile(join(imageDir, "thumb.webp"), thumbBuffer),
+  ]);
 
   // Save metadata
   const analyzedImage: AnalyzedImage = {
