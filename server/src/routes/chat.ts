@@ -20,6 +20,7 @@ import {
   savePendingState,
 } from "../services/agent-state.js";
 import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment } from "../types.js";
+import { saveUserImage } from "../services/user-image-storage.js";
 
 /** Truncate a string to maxChars graphemes, preserving emoji and multi-byte characters */
 function truncateTitle(text: string, maxChars: number = 50): string {
@@ -46,6 +47,24 @@ function buildUserPiMessage(message: string, images?: ImageAttachment[]): Messag
     return { role: "user", content, timestamp: Date.now() };
   }
   return { role: "user", content: message, timestamp: Date.now() };
+}
+
+/** Persist images to disk and enrich attachments with id/url/thumbUrl (fire-and-forget safe) */
+async function persistImages(images: ImageAttachment[]): Promise<ImageAttachment[]> {
+  return Promise.all(
+    images.map(async (img) => {
+      if (img.id && img.url && img.thumbUrl) return img; // already persisted
+      try {
+        const buffer = Buffer.from(img.data, "base64");
+        const id = crypto.randomUUID();
+        const record = await saveUserImage(id, buffer, img.mimeType, img.name);
+        return { ...img, id: record.id, url: record.url, thumbUrl: record.thumbUrl };
+      } catch (e) {
+        console.error("[user-images] Failed to persist image:", e);
+        return img; // keep original base64-only attachment on failure
+      }
+    })
+  );
 }
 
 /**
@@ -486,8 +505,11 @@ router.post("/", async (req, res) => {
   const chat = await getChat(chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
+  // Persist images to disk and enrich with thumbnail URLs
+  const persistedImages = images?.length ? await persistImages(images) : undefined;
+
   let message = messageText;
-  
+
   // Check for skill invocations anywhere in the message
   const invokedSkills = parseSkillInvocations(message);
   const activatedSkillNames: string[] = [];
@@ -571,7 +593,7 @@ router.post("/", async (req, res) => {
     chat.messages.push({
       role: "user",
       content: message,
-      images: images?.length ? images : undefined,
+      images: persistedImages,
       timestamp: Date.now(),
     });
     await saveChat(chat);
@@ -583,7 +605,7 @@ router.post("/", async (req, res) => {
     const userMsg: ChatMessage = {
       role: "user",
       content: message,
-      images: images?.length ? images : undefined,
+      images: persistedImages,
       timestamp: Date.now(),
     };
     chat.messages.push(userMsg);

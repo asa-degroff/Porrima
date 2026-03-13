@@ -34,6 +34,9 @@ export interface ImageAttachment {
   data: string;      // base64-encoded (no data: prefix)
   mimeType: string;  // e.g. "image/png"
   name: string;      // original filename
+  id?: string;       // server-stored image ID
+  url?: string;      // full-resolution URL (e.g. /api/user-images/:id/image.jpg)
+  thumbUrl?: string;  // thumbnail URL (e.g. /api/user-images/:id/thumb)
 }
 
 export interface ChatMessage {

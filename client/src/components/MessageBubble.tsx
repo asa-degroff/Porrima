@@ -8,6 +8,7 @@ import { ArtifactPanel } from "./ArtifactPanel";
 import { GeneratedImagePanel } from "./GeneratedImagePanel";
 import { ToolCallDisplay } from "./ToolCallDisplay";
 import { SpeakerButton } from "./SpeakerButton";
+import { UserImage } from "./UserImage";
 
 const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -170,14 +171,10 @@ export const MessageBubble = memo(function MessageBubble({
               {message.images && message.images.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-2">
                   {message.images.map((img, i) => (
-                    <img
+                    <UserImage
                       key={i}
-                      src={`data:${img.mimeType};base64,${img.data}`}
-                      alt={img.name}
-                      loading="lazy"
-                      decoding="async"
+                      image={img}
                       onClick={() => setLightboxImage(img)}
-                      className="rounded-lg max-h-64 cursor-pointer hover:opacity-90 transition-opacity"
                     />
                   ))}
                 </div>
@@ -362,6 +359,8 @@ export const MessageBubble = memo(function MessageBubble({
 });
 
 function ImageLightbox({ image, onClose }: { image: ImageAttachment; onClose: () => void }) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -369,6 +368,39 @@ function ImageLightbox({ image, onClose }: { image: ImageAttachment; onClose: ()
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
   }, [onClose]);
+
+  useEffect(() => {
+    // Use server URL for full image if available
+    if (image.url) {
+      setObjectUrl(image.url);
+      return;
+    }
+
+    // Fall back to object URL from base64
+    const binaryString = atob(image.data);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: image.mimeType });
+    const url = URL.createObjectURL(blob);
+    setObjectUrl(url);
+
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [image.url, image.data, image.mimeType]);
+
+  if (!objectUrl) {
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+        onClick={onClose}
+      >
+        <div className="w-8 h-8 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -382,7 +414,7 @@ function ImageLightbox({ image, onClose }: { image: ImageAttachment; onClose: ()
         ×
       </button>
       <img
-        src={`data:${image.mimeType};base64,${image.data}`}
+        src={objectUrl}
         alt={image.name}
         onClick={(e) => e.stopPropagation()}
         className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
