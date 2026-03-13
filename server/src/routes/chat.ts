@@ -399,6 +399,7 @@ async function handleChatStream(
       );
 
       // Generate LLM title after the first exchange (2 messages = 1 user + 1 assistant)
+      console.log(`[title] chat.messages.length=${chat.messages.length}`);
       if (chat.messages.length === 2) {
         try {
           const title = await generateTitle(userMessage, assistantMsg.content);
@@ -593,7 +594,7 @@ router.post("/", async (req, res) => {
     chat.messages.push({
       role: "user",
       content: message,
-      images: persistedImages,
+      images: images?.length ? images : undefined,
       timestamp: Date.now(),
     });
     await saveChat(chat);
@@ -605,7 +606,7 @@ router.post("/", async (req, res) => {
     const userMsg: ChatMessage = {
       role: "user",
       content: message,
-      images: persistedImages,
+      images: images?.length ? images : undefined,
       timestamp: Date.now(),
     };
     chat.messages.push(userMsg);
