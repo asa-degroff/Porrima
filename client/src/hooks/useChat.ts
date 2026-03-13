@@ -79,6 +79,7 @@ export function useChat(chatId: string | null) {
   const [warning, setWarning] = useState<StreamWarning | null>(null);
   const [compaction, setCompaction] = useState<{ removedCount: number; remainingCount: number } | null>(null);
   const [queueProcessing, setQueueProcessing] = useState(false);
+  const [titleUpdate, setTitleUpdate] = useState<{ chatId: string; title: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
   const streamingContentRef = useRef("");
@@ -348,6 +349,9 @@ export function useChat(chatId: string | null) {
           setCompaction(info);
         }
       },
+      onTitleUpdate: (chatId, title) => {
+        setTitleUpdate({ chatId, title });
+      },
       onError: (err) => {
         const bg = bgStreams.get(streamChatId);
 
@@ -596,5 +600,6 @@ export function useChat(chatId: string | null) {
     setActiveChatData,
     processQueue,
     queueProcessing,
+    titleUpdate,
   };
 }

@@ -121,6 +121,7 @@ export interface StreamCallbacks {
   onIteration?: (info: IterationInfo) => void;
   onWarning?: (warning: StreamWarning) => void;
   onCompaction?: (info: { removedCount: number; remainingCount: number }) => void;
+  onTitleUpdate?: (chatId: string, title: string) => void;
 }
 
 function streamSSE(
@@ -286,6 +287,9 @@ function processSSEEvent(
       break;
     case "compaction":
       callbacks.onCompaction?.(data);
+      break;
+    case "title_update":
+      callbacks.onTitleUpdate?.(data.chatId, data.title);
       break;
     case "error":
       callbacks.onError(data.error || "Unknown error");

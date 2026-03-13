@@ -58,6 +58,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     setActiveChatData,
     processQueue,
     queueProcessing,
+    titleUpdate,
   } = useChat(activeChatId);
 
   // Apply theme to document
@@ -124,6 +125,15 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
     prevOnlineRef.current = isOnline;
   }, [isOnline, refresh, processQueue]);
+
+  // Update chat title when LLM-generated title arrives
+  useEffect(() => {
+    if (!titleUpdate) return;
+    if (titleUpdate.chatId === activeChatId) {
+      setActiveChat((prev) => prev ? { ...prev, title: titleUpdate.title } : prev);
+    }
+    refresh();
+  }, [titleUpdate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Find context window for active model (chat override takes precedence)
   const contextWindow = useMemo(() => {

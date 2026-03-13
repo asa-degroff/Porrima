@@ -8,6 +8,7 @@ import { getChat, saveChat } from "../services/storage.js";
 import { chatMessagesToPiMessages } from "../services/agent.js";
 import { createPiModel, discoverOllamaModels } from "../services/models.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
+import { generateTitle } from "../services/title-generation.js";
 import { truncateChatHistory } from "../services/compaction.js";
 import { buildMemoryAugmentedPrompt, setCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
@@ -377,6 +378,20 @@ async function handleChatStream(
       res.write(
         `event: done\ndata: ${JSON.stringify({ message: assistantMsg, iterations })}\n\n`
       );
+
+      // Generate LLM title after the first exchange (2 messages = 1 user + 1 assistant)
+      if (chat.messages.length === 2) {
+        try {
+          const title = await generateTitle(userMessage, assistantMsg.content);
+          if (title) {
+            chat.title = title;
+            await saveChat(chat);
+            res.write(`event: title_update\ndata: ${JSON.stringify({ chatId: chat.id, title })}\n\n`);
+          }
+        } catch (err) {
+          console.warn("[title] post-stream generation failed:", err);
+        }
+      }
 
       // Fire-and-forget memory extraction for agent chats
       if (chat.type === "agent") {
