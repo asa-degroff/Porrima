@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage } from "../api/client";
 import type { StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
-import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, MessageUsage, MessageSegment } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, MessageSegment, MessageUsage } from "../types";
 import {
   enqueueMessage,
   dequeueMessage,
@@ -26,6 +26,9 @@ interface BackgroundStream {
   doneCalled: boolean;
   abortController: AbortController | null;
   chatRef: Chat | null;
+  /** Client-side segments built during streaming for interleaved rendering */
+  segments: MessageSegment[];
+  seqCounter: number;
 }
 
 /** Module-level store — survives hook re-renders and chat switches */
@@ -59,6 +62,8 @@ function createBgStream(chatRef: Chat | null): BackgroundStream {
     doneCalled: false,
     abortController: null,
     chatRef,
+    segments: [],
+    seqCounter: 0,
   };
 }
 
@@ -140,14 +145,17 @@ export function useChat(chatId: string | null) {
     }
   }, []);
 
-  // Flush accumulated streaming content to React state (batched per frame)
+  // Flush accumulated streaming content + segments to React state (batched per frame)
   const flushStreamingContent = useCallback(() => {
     const content = streamingContentRef.current;
+    const chatId = activeChatIdRef.current;
+    const bg = chatId ? bgStreams.get(chatId) : undefined;
     setMessages((prev) => {
       const last = prev[prev.length - 1];
-      if (last?.role === "assistant" && last.content !== content) {
+      if (last?.role === "assistant") {
+        const segments = bg && bg.segments.length > 0 ? bg.segments.map(s => ({ ...s })) : undefined;
         const updated = prev.slice(0, -1);
-        updated.push({ ...last, content });
+        updated.push({ ...last, content, segments });
         return updated;
       }
       return prev;
@@ -162,6 +170,14 @@ export function useChat(chatId: string | null) {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
         bg.content += delta;
+
+        // Build streaming segments: append to current text segment or start a new one
+        const lastSeg = bg.segments[bg.segments.length - 1];
+        if (lastSeg?.type === "text") {
+          lastSeg.content = (lastSeg.content || "") + delta;
+        } else {
+          bg.segments.push({ seq: bg.seqCounter++, type: "text", content: delta });
+        }
 
         // Update last message in bgStream
         const last = bg.messages[bg.messages.length - 1];
@@ -191,8 +207,16 @@ export function useChat(chatId: string | null) {
         if (!bg) return;
         bg.generatedImages.push(image);
 
+        // Add generated image segment
+        bg.segments.push({ seq: bg.seqCounter++, type: "generated_image", generatedImage: image });
+
         if (activeChatIdRef.current === streamChatId) {
           setGeneratedImages([...bg.generatedImages]);
+          // Schedule segment flush
+          if (rafRef.current === null) {
+            streamingContentRef.current = bg.content;
+            rafRef.current = requestAnimationFrame(flushStreamingContent);
+          }
         }
       },
       onDone: ({ thinking, usage, artifacts: doneArtifacts, generatedImages: doneImages, toolCalls, toolResults, segments, waitingForInput: wfi }) => {
@@ -255,8 +279,27 @@ export function useChat(chatId: string | null) {
           bg.tools.push(status);
         }
 
+        // Build streaming segments for tools
+        if (status.status === "running") {
+          bg.segments.push({ seq: bg.seqCounter++, type: "tool_call", liveStatus: { ...status } });
+        } else {
+          // Update the matching running tool segment
+          for (let j = bg.segments.length - 1; j >= 0; j--) {
+            const s = bg.segments[j];
+            if (s.type === "tool_call" && s.liveStatus?.name === status.name && s.liveStatus?.status === "running") {
+              s.liveStatus = { ...status };
+              break;
+            }
+          }
+        }
+
         if (activeChatIdRef.current === streamChatId) {
           setActiveTools([...bg.tools]);
+          // Schedule segment flush
+          if (rafRef.current === null) {
+            streamingContentRef.current = bg.content;
+            rafRef.current = requestAnimationFrame(flushStreamingContent);
+          }
         }
       },
       onAskUser: (_question) => {
@@ -272,8 +315,16 @@ export function useChat(chatId: string | null) {
         if (!bg) return;
         bg.artifacts.push(artifact);
 
+        // Add artifact segment
+        bg.segments.push({ seq: bg.seqCounter++, type: "artifact", artifact });
+
         if (activeChatIdRef.current === streamChatId) {
           setArtifacts([...bg.artifacts]);
+          // Schedule segment flush
+          if (rafRef.current === null) {
+            streamingContentRef.current = bg.content;
+            rafRef.current = requestAnimationFrame(flushStreamingContent);
+          }
         }
       },
       onIteration: (info) => {

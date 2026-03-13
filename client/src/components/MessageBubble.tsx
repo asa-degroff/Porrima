@@ -207,20 +207,35 @@ export const MessageBubble = memo(function MessageBubble({
               />
             )}
 
-            {renderSegments && !showStreaming ? (
-              // Interleaved segments in chronological order (persisted messages only)
+            {renderSegments ? (
+              // Interleaved segments in chronological order (streaming + persisted)
               message.segments?.map((segment, i) => {
                 switch (segment.type) {
-                  case "text":
+                  case "text": {
+                    // During streaming, show cursor only on the last segment if it's text
+                    const isActivelyStreaming = showStreaming && i === message.segments!.length - 1;
                     return segment.content ? (
                       <div key={`${segment.seq}-${i}`} className="text-sm leading-relaxed">
-                        <Suspense fallback={<span className="whitespace-pre-wrap">{segment.content}</span>}>
-                          <MarkdownRenderer content={segment.content} />
-                        </Suspense>
+                        {isActivelyStreaming ? (
+                          <StreamingText content={segment.content} isStreaming={!isThinkingStreaming} />
+                        ) : (
+                          <Suspense fallback={<span className="whitespace-pre-wrap">{segment.content}</span>}>
+                            <MarkdownRenderer content={segment.content} />
+                          </Suspense>
+                        )}
                       </div>
                     ) : null;
+                  }
                   case "tool_call": {
-                    // Find matching tool_result segment
+                    // During streaming: use liveStatus; after done: use toolCall + toolResult
+                    if (segment.liveStatus) {
+                      return (
+                        <ToolCallDisplay
+                          key={`${segment.seq}-${i}`}
+                          liveStatus={segment.liveStatus}
+                        />
+                      );
+                    }
                     const matchingResult = message.segments?.find(
                       (s) => s.type === "tool_result" && s.toolResult?.toolCallId === segment.toolCall?.id
                     );
@@ -248,7 +263,7 @@ export const MessageBubble = memo(function MessageBubble({
                 }
               })
             ) : (
-              // Streaming or legacy fallback
+              // Legacy fallback (no segments — old messages or non-agent chats)
               <>
                 {/* Tool calls - streaming (live status) */}
                 {showStreaming && activeTools && activeTools.map((tool, i) => (

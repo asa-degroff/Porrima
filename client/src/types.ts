@@ -26,6 +26,8 @@ export interface MessageSegment {
   toolResult?: ChatToolResult;
   artifact?: Artifact;
   generatedImage?: GeneratedImage;
+  /** Client-only: live tool status during streaming (not persisted) */
+  liveStatus?: { name: string; status: "running" | "done" | "error"; result?: string };
 }
 
 export interface ImageAttachment {
