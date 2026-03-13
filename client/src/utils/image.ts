@@ -4,14 +4,15 @@
 
 /**
  * Resizes and compresses a base64 image to a maximum dimension and quality.
- * Returns a compressed base64 string.
+ * Always converts to WebP for better compression (supported in all modern browsers).
+ * Returns a compressed base64 string with WebP mimeType.
  */
 export async function compressImage(
   base64Data: string,
   mimeType: string,
   maxDimension: number = 800,
   quality: number = 0.7
-): Promise<string> {
+): Promise<{ data: string; mimeType: string }> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -38,7 +39,7 @@ export async function compressImage(
       
       ctx.drawImage(img, 0, 0, width, height);
       
-      // Compress and convert back to base64
+      // Always convert to WebP for better compression
       canvas.toBlob(
         (blob) => {
           if (!blob) {
@@ -48,15 +49,16 @@ export async function compressImage(
           
           const reader = new FileReader();
           reader.onloadend = () => {
-            const base64 = reader.result as string;
-            // Remove data:image/...;base64, prefix
-            const commaIndex = base64.indexOf(",");
-            resolve(base64.slice(commaIndex + 1));
+            const dataUrl = reader.result as string;
+            // Extract base64 data (remove prefix)
+            const commaIndex = dataUrl.indexOf(",");
+            const base64 = dataUrl.slice(commaIndex + 1);
+            resolve({ data: base64, mimeType: "image/webp" });
           };
           reader.onerror = reject;
           reader.readAsDataURL(blob);
         },
-        mimeType,
+        "image/webp",
         quality
       );
     };
@@ -101,6 +103,7 @@ export function revokeObjectUrl(url: string) {
 /**
  * Converts base64 image data to a blob URL in one step.
  * Helper for components that need to render images without blocking the DOM.
+ * Compresses large images to WebP format.
  */
 export async function base64ToRenderableUrl(
   base64Data: string,
@@ -114,9 +117,10 @@ export async function base64ToRenderableUrl(
   
   const needsCompression = maxDimension && estimatedSizeKB > 500;
   
-  const finalBase64 = needsCompression
-    ? await compressImage(base64Data, mimeType, maxDimension, quality || 0.7)
-    : base64Data;
+  if (needsCompression) {
+    const compressed = await compressImage(base64Data, mimeType, maxDimension, quality || 0.7);
+    return base64ToObjectUrl(compressed.data, compressed.mimeType);
+  }
   
-  return base64ToObjectUrl(finalBase64, mimeType);
+  return base64ToObjectUrl(base64Data, mimeType);
 }

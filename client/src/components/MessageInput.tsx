@@ -14,23 +14,44 @@ interface Props {
   inputRef?: React.RefObject<HTMLDivElement | null>;
 }
 
-function processFiles(files: FileList | File[]): Promise<ImageAttachment[]> {
+/**
+ * Converts a File to base64 string.
+ */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Processes and optionally compresses image files before upload.
+ * Compresses images larger than 2MB to reduce upload bandwidth.
+ */
+async function processFiles(files: FileList | File[]): Promise<ImageAttachment[]> {
   const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
+  
   return Promise.all(
-    imageFiles.map(
-      (file) =>
-        new Promise<ImageAttachment>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const dataUrl = reader.result as string;
-            const [header, data] = dataUrl.split(",");
-            const mimeType = header.match(/data:(.*?);/)?.[1] || file.type;
-            resolve({ data, mimeType, name: file.name });
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        })
-    )
+    imageFiles.map(async (file) => {
+      const base64 = await fileToBase64(file);
+      const mimeType = file.type;
+      
+      // Compress if larger than 2MB to reduce upload bandwidth
+      if (file.size > 2 * 1024 * 1024) {
+        try {
+          const { compressImage } = await import("../utils/image");
+          const compressed = await compressImage(base64, mimeType, 1200, 0.8);
+          return { ...compressed, name: file.name };
+        } catch (err) {
+          console.warn("[MessageInput] Compression failed, using original:", err);
+          // Fall through to return original
+        }
+      }
+      
+      return { data: base64, mimeType, name: file.name };
+    })
   );
 }
 
