@@ -2,6 +2,44 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import type { VisionPreset, AnalyzedImage } from "../api/client";
 import type { OllamaModel } from "../types";
 
+const MAX_DIMENSION = 2048;
+const TARGET_BYTES = 2 * 1024 * 1024; // 2 MB
+
+function compressImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+
+      // Downscale if either dimension exceeds the cap
+      if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+        const scale = MAX_DIMENSION / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // Try WebP at decreasing quality until under target size
+      let quality = 0.85;
+      let dataUrl = canvas.toDataURL("image/webp", quality);
+
+      while (dataUrl.length * 0.75 > TARGET_BYTES && quality > 0.3) {
+        quality -= 0.1;
+        dataUrl = canvas.toDataURL("image/webp", quality);
+      }
+
+      resolve(dataUrl);
+    };
+    img.onerror = () => reject(new Error("Failed to load image"));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 const chevronSvg = (open: boolean) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
@@ -73,16 +111,12 @@ export function VisionControls({
 
   const handleFileSelect = useCallback(async (file: File) => {
     if (!file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const imageData = e.target?.result as string;
-      try {
-        await onAnalyze(imageData, selectedPreset);
-      } catch (error) {
-        console.error("Analysis failed:", error);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      const imageData = await compressImage(file);
+      await onAnalyze(imageData, selectedPreset);
+    } catch (error) {
+      console.error("Analysis failed:", error);
+    }
   }, [onAnalyze, selectedPreset]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
