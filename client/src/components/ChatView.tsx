@@ -525,13 +525,13 @@ export function ChatView({
           onClick={() => { setPromptModal(null); setPromptLoading(false); }}
         >
           <div
-            className="bg-[#1a1a2e] border border-white/10 rounded-2xl w-full max-w-[640px] mx-4 max-h-[80vh] flex flex-col shadow-2xl"
+            className="theme-primary-bg border theme-primary-border rounded-2xl w-full max-w-[640px] mx-4 max-h-[80vh] flex flex-col shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
-              <h3 className="text-sm font-medium text-white/80">Rendered Agent Context</h3>
+            <div className="flex items-center justify-between px-5 py-3 border-b theme-primary-border">
+              <h3 className="text-sm font-medium theme-primary-text">Rendered Agent Context</h3>
               <button
-                className="text-white/30 hover:text-white/60 text-lg leading-none"
+                className="theme-primary-text hover:opacity-80 text-lg leading-none"
                 onClick={() => { setPromptModal(null); setPromptLoading(false); }}
               >
                 &times;
@@ -540,27 +540,27 @@ export function ChatView({
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
               {promptLoading ? (
                 <div className="flex items-center justify-center py-12">
-                  <div className="w-5 h-5 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
-                  <span className="ml-3 text-sm text-white/40">Loading prompt…</span>
+                  <div className="w-5 h-5 border-2 theme-primary-border border-t-theme-primary-text rounded-full animate-spin" />
+                  <span className="ml-3 text-sm theme-primary-text opacity-60">Loading prompt…</span>
                 </div>
               ) : promptModal && (
                 <>
                   <div>
-                    <h4 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">System Prompt</h4>
-                    <pre className="text-xs text-white/70 font-mono whitespace-pre-wrap bg-white/5 rounded-lg p-3 border border-white/5 max-h-[40vh] overflow-y-auto">
+                    <h4 className="text-xs font-medium theme-accent-text opacity-70 uppercase tracking-wider mb-2">System Prompt</h4>
+                    <pre className="text-xs theme-primary-text opacity-90 font-mono whitespace-pre-wrap theme-accent-bg rounded-lg p-3 theme-accent-border max-h-[40vh] overflow-y-auto">
                       {promptModal.systemPrompt}
                     </pre>
                   </div>
                   {promptModal.tools.length > 0 && (
                     <div>
-                      <h4 className="text-xs font-medium text-white/50 uppercase tracking-wider mb-2">
+                      <h4 className="text-xs font-medium theme-accent-text opacity-70 uppercase tracking-wider mb-2">
                         Tools ({promptModal.tools.length})
                       </h4>
                       <div className="space-y-1.5">
                         {promptModal.tools.map((t) => (
-                          <div key={t.name} className="text-xs bg-white/5 rounded-lg px-3 py-2 border border-white/5">
-                            <span className="text-blue-300/70 font-mono">{t.name}</span>
-                            <span className="text-white/40 ml-2">{t.description}</span>
+                          <div key={t.name} className="text-xs theme-accent-bg rounded-lg px-3 py-2 theme-accent-border">
+                            <span className="theme-secondary-text font-mono">{t.name}</span>
+                            <span className="theme-primary-text opacity-60 ml-2">{t.description}</span>
                           </div>
                         ))}
                       </div>
