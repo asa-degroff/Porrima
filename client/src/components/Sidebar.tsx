@@ -245,8 +245,8 @@ export function Sidebar({
               </div>
             </div>
             {projectsExpanded && (
-              <div className="flex-1 overflow-y-auto px-3 pb-1">
-                <div className="space-y-1">
+              <div className="flex-1 overflow-y-auto pb-1">
+                <div className="space-y-1 pl-3 pr-2">
                   {projects.map((project) => (
                     <ProjectSection
                       key={project.id}
@@ -314,8 +314,8 @@ export function Sidebar({
           </div>
           {/* Scrollable chat list */}
           {agentExpanded && (
-            <div className="flex-1 overflow-y-auto px-3 pb-1">
-              <div className="space-y-0.5">
+            <div className="flex-1 overflow-y-auto pb-1">
+              <div className="space-y-0.5 pl-3 pr-2">
                 {agentChats.map((chat) => (
                   <ChatListItem
                     key={chat.id}
@@ -368,8 +368,8 @@ export function Sidebar({
           </div>
           {/* Scrollable chat list */}
           {quickExpanded && (
-            <div className="flex-1 overflow-y-auto px-3 pb-2">
-              <div className="space-y-0.5">
+            <div className="flex-1 overflow-y-auto pb-2">
+              <div className="space-y-0.5 pl-3 pr-2">
                 {quickChats.map((chat) => (
                   <ChatListItem
                     key={chat.id}
