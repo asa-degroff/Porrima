@@ -81,7 +81,7 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
         </svg>
       </button>
 
-      {/* Expandable output */}
+      {/* Expandable content */}
       {expanded && name === "edit_file" && toolCall?.arguments?.old_string != null && (
         <div className="border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto">
           <DiffView
@@ -90,9 +90,25 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
           />
         </div>
       )}
-      {expanded && result && !(name === "edit_file" && toolCall?.arguments?.old_string != null) && (
+      {expanded && name === "bash" && toolCall?.arguments?.command && (
+        <div className="border-t border-white/5 px-3 py-2">
+          <div className="text-xs text-white/40 mb-1.5 font-medium">Command</div>
+          <pre className="text-xs text-white/60 whitespace-pre-wrap break-all font-mono leading-relaxed">
+            {toolCall.arguments.command}
+          </pre>
+        </div>
+      )}
+      {expanded && result && !(name === "edit_file" && toolCall?.arguments?.old_string != null) && !(name === "bash") && (
         <div className={`border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto ${isMonospaceOutput(name) ? "font-mono" : ""}`}>
           <pre className="text-xs text-white/50 whitespace-pre-wrap break-all leading-relaxed">
+            {result}
+          </pre>
+        </div>
+      )}
+      {expanded && name === "bash" && result && (
+        <div className="border-t border-white/5 px-3 py-2">
+          <div className="text-xs text-white/40 mb-1.5 font-medium">Output</div>
+          <pre className="text-xs text-white/50 whitespace-pre-wrap break-all font-mono leading-relaxed">
             {result}
           </pre>
         </div>
@@ -112,7 +128,7 @@ function formatArgs(toolName: string, args: Record<string, any>): string {
     case "edit_file":
       return args.path || "";
     case "bash":
-      return args.command?.slice(0, 60) || "";
+      return args.command?.slice(0, 100) || "";
     case "run_python":
       return args.code?.split("\n")[0]?.slice(0, 50) || "";
     case "list_files":
