@@ -75,7 +75,7 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
     }
   }, [inputRef]);
 
-  const canSend = (hasContent || images.length > 0) && (!disabled || !isOnline);
+  const canSend = (hasContent || images.length > 0) && (!disabled || streaming || !isOnline);
 
   const updateLayout = useCallback(() => {
     const container = containerRef.current;
@@ -94,7 +94,7 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
 
   const handleSubmit = useCallback(() => {
     const trimmed = textRef.current.trim();
-    if ((!trimmed && images.length === 0) || (disabled && isOnline)) return;
+    if ((!trimmed && images.length === 0) || (disabled && !streaming && isOnline)) return;
     medium();
     onSend(trimmed, images.length > 0 ? images : undefined);
     textRef.current = "";
@@ -293,7 +293,14 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
               tabIndex={-1}
             />
 
-            {streaming ? (
+            {streaming && canSend ? (
+              <button
+                onClick={handleSubmit}
+                className="px-4 py-1.5 rounded-lg bg-blue-500/20 border border-blue-400/30 text-blue-300 text-sm hover:bg-blue-500/30 transition-colors"
+              >
+                Send
+              </button>
+            ) : streaming ? (
               <button
                 onClick={() => {
                   heavy();

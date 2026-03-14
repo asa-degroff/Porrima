@@ -122,6 +122,8 @@ export interface StreamCallbacks {
   onWarning?: (warning: StreamWarning) => void;
   onCompaction?: (info: { removedCount: number; remainingCount: number }) => void;
   onTitleUpdate?: (chatId: string, title: string) => void;
+  onMessageComplete?: (message: any) => void;
+  onFollowUpStart?: (data: any) => void;
 }
 
 function streamSSE(
@@ -228,6 +230,20 @@ export function sendMessage(
   return streamSSE(`${BASE}/chat`, { chatId, message, images: images?.length ? images : undefined }, callbacks);
 }
 
+export async function enqueueMessage(
+  chatId: string,
+  message: string,
+  images?: ImageAttachment[]
+): Promise<{ queued: boolean }> {
+  const res = await apiFetch(`${BASE}/chat/enqueue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId, message, images: images?.length ? images : undefined }),
+  });
+  if (!res.ok) throw new Error("Failed to enqueue message");
+  return res.json();
+}
+
 export function editMessage(
   chatId: string,
   messageIndex: number,
@@ -290,6 +306,12 @@ function processSSEEvent(
       break;
     case "title_update":
       callbacks.onTitleUpdate?.(data.chatId, data.title);
+      break;
+    case "message_complete":
+      callbacks.onMessageComplete?.(data.message);
+      break;
+    case "follow_up_start":
+      callbacks.onFollowUpStart?.(data);
       break;
     case "error":
       callbacks.onError(data.error || "Unknown error");

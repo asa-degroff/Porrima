@@ -19,6 +19,7 @@ import {
   loadPendingState,
   savePendingState,
 } from "../services/agent-state.js";
+import * as messageQueue from "../services/message-queue.js";
 import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment } from "../types.js";
 import { saveUserImage } from "../services/user-image-storage.js";
 
@@ -131,12 +132,6 @@ async function handleChatStream(
 
   const MAX_ITERATIONS = 500;
 
-  // Accumulators for the final ChatMessage
-  const allToolCalls: ChatToolCall[] = [];
-  const allToolResults: ChatToolResult[] = [];
-  const allArtifacts: Artifact[] = [];
-  const allGeneratedImages: GeneratedImage[] = [];
-  
   // Track ordering for interleaved display
   interface OutputSegment {
     seq: number;
@@ -147,16 +142,61 @@ async function handleChatStream(
     artifact?: Artifact;
     generatedImage?: GeneratedImage;
   }
-  const segments: OutputSegment[] = [];
-  let seqCounter = 0;
-  let pendingText = ""; // text accumulated since the last segment flush
+
+  // Mutable accumulator state — reset between follow-up turns
+  const state = {
+    fullText: "",
+    thinkingText: "",
+    allToolCalls: [] as ChatToolCall[],
+    allToolResults: [] as ChatToolResult[],
+    allArtifacts: [] as Artifact[],
+    allGeneratedImages: [] as GeneratedImage[],
+    segments: [] as OutputSegment[],
+    seqCounter: 0,
+    pendingText: "",
+    finalUsage: undefined as ChatMessage["usage"],
+  };
+
+  function resetAccumulators() {
+    state.fullText = "";
+    state.thinkingText = "";
+    state.allToolCalls = [];
+    state.allToolResults = [];
+    state.allArtifacts = [];
+    state.allGeneratedImages = [];
+    state.segments = [];
+    state.seqCounter = 0;
+    state.pendingText = "";
+    state.finalUsage = undefined;
+  }
+
+  function buildCurrentAssistantMessage(): ChatMessage {
+    // Flush any remaining text
+    if (state.pendingText.trim()) {
+      state.segments.push({ seq: ++state.seqCounter, type: "text", content: state.pendingText });
+    }
+    state.pendingText = "";
+
+    return {
+      role: "assistant",
+      content: state.fullText,
+      thinking: state.thinkingText || undefined,
+      usage: state.finalUsage,
+      toolCalls: state.allToolCalls.length > 0 ? state.allToolCalls : undefined,
+      toolResults: state.allToolResults.length > 0 ? state.allToolResults : undefined,
+      artifacts: state.allArtifacts.length > 0 ? state.allArtifacts : undefined,
+      generatedImages: state.allGeneratedImages.length > 0 ? state.allGeneratedImages : undefined,
+      segments: state.segments.length > 0 ? state.segments : undefined,
+      timestamp: Date.now(),
+    };
+  }
 
   /** Flush any accumulated text into a text segment */
   function flushTextSegment() {
-    if (pendingText.trim()) {
-      segments.push({ seq: ++seqCounter, type: "text", content: pendingText });
+    if (state.pendingText.trim()) {
+      state.segments.push({ seq: ++state.seqCounter, type: "text", content: state.pendingText });
     }
-    pendingText = "";
+    state.pendingText = "";
   }
 
   // ask_user state — owned by the route, set via callback.
@@ -166,13 +206,13 @@ async function handleChatStream(
   // Side-effects bridge between tool execution and SSE output
   const effects: ToolSideEffects = {
     onArtifact: (artifact) => {
-      allArtifacts.push(artifact);
-      segments.push({ seq: ++seqCounter, type: "artifact", artifact });
+      state.allArtifacts.push(artifact);
+      state.segments.push({ seq: ++state.seqCounter, type: "artifact", artifact });
       res.write(`event: artifact\ndata: ${JSON.stringify(artifact)}\n\n`);
     },
     onGeneratedImage: (image) => {
-      allGeneratedImages.push(image);
-      segments.push({ seq: ++seqCounter, type: "generated_image", generatedImage: image });
+      state.allGeneratedImages.push(image);
+      state.segments.push({ seq: ++state.seqCounter, type: "generated_image", generatedImage: image });
       res.write(`event: generated_image\ndata: ${JSON.stringify(image)}\n\n`);
     },
     onAskUser: (question, toolCallId) => {
@@ -184,11 +224,9 @@ async function handleChatStream(
   const isAgent = chat.type === "agent";
   const agentTools = isAgent ? getAgentTools(chat.id, effects) : undefined;
 
-  let fullText = "";
-  let thinkingText = "";
-  let finalUsage: ChatMessage["usage"];
   let iterations = 0;
   let waitingForInput = false;
+  let lastUserMessage = userMessage; // tracks the current user message text for title gen / memory
 
   console.log(`[chat] type=${chat.type} tools=${agentTools ? agentTools.map(t => t.name).join(",") : "none"}`);
 
@@ -221,6 +259,53 @@ async function handleChatStream(
         }
         return [];
       },
+      getFollowUpMessages: async () => {
+        const queued = await messageQueue.drainOne(chat.id);
+        if (!queued) return [];
+
+        // Save the completed assistant message and the queued user message
+        const assistantMsg = buildCurrentAssistantMessage();
+        chat.messages.push(assistantMsg);
+        const queuedUserMsg: ChatMessage = {
+          role: "user",
+          content: queued.message,
+          images: queued.images?.length ? queued.images : undefined,
+          timestamp: queued.timestamp,
+        };
+        chat.messages.push(queuedUserMsg);
+        await saveChat(chat);
+
+        // Emit events so client can finalize current response and start next
+        res.write(`event: message_complete\ndata: ${JSON.stringify({ message: assistantMsg })}\n\n`);
+        res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queued.id })}\n\n`);
+
+        // Fire-and-forget memory extraction for the just-completed response
+        if (chat.type === "agent") {
+          extractMemories(chat.modelId, chat.id, lastUserMessage, assistantMsg.content)
+            .catch(err => console.error("[memory] extraction failed:", err));
+        }
+
+        // Title generation for first exchange
+        if (chat.messages.length === 2) {
+          generateTitle(lastUserMessage, assistantMsg.content)
+            .then(title => {
+              if (title) {
+                chat.title = title;
+                saveChat(chat).catch(() => {});
+                res.write(`event: title_update\ndata: ${JSON.stringify({ chatId: chat.id, title })}\n\n`);
+              }
+            })
+            .catch(err => console.warn("[title] generation failed:", err));
+        }
+
+        // Reset accumulators for the new response
+        resetAccumulators();
+        lastUserMessage = queued.message;
+
+        console.log(`[chat] follow-up: draining queued message ${queued.id}`);
+
+        return [{ role: "user" as const, content: queued.message, timestamp: queued.timestamp }];
+      },
     };
 
     const safeStreamFn = createSafeStreamFn();
@@ -236,11 +321,11 @@ async function handleChatStream(
         case "message_update": {
           const ame = event.assistantMessageEvent;
           if (ame.type === "text_delta") {
-            fullText += ame.delta;
-            pendingText += ame.delta;
+            state.fullText += ame.delta;
+            state.pendingText += ame.delta;
             res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
           } else if (ame.type === "thinking_delta") {
-            thinkingText += ame.delta;
+            state.thinkingText += ame.delta;
             res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
           } else if (ame.type === "toolcall_start") {
             const partial = ame.partial.content[ame.contentIndex] as ToolCall | undefined;
@@ -258,10 +343,10 @@ async function handleChatStream(
             name: event.toolName,
             arguments: event.args,
           };
-          allToolCalls.push(toolCall);
+          state.allToolCalls.push(toolCall);
           if (event.toolName !== "ask_user") {
             console.log(`[tool] Executing ${event.toolName}:`, event.args);
-            segments.push({ seq: ++seqCounter, type: "tool_call", toolCall });
+            state.segments.push({ seq: ++state.seqCounter, type: "tool_call", toolCall });
             res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
           }
           break;
@@ -277,8 +362,8 @@ async function handleChatStream(
               content: resultText,
               isError: event.isError,
             };
-            allToolResults.push(toolResult);
-            segments.push({ seq: ++seqCounter, type: "tool_result", toolResult });
+            state.allToolResults.push(toolResult);
+            state.segments.push({ seq: ++state.seqCounter, type: "tool_result", toolResult });
             res.write(`event: tool_status\ndata: ${JSON.stringify({
               name: event.toolName,
               status: event.isError ? "error" : "done",
@@ -298,7 +383,7 @@ async function handleChatStream(
           iterations++;
           console.log(
             `[chat] iter=${iterations} stop=${stopReason} tools=${event.toolResults?.length || 0}` +
-            ` content=${fullText.length}ch thinking=${thinkingText.length}ch` +
+            ` content=${state.fullText.length}ch thinking=${state.thinkingText.length}ch` +
             ` tokens=${msg.usage?.totalTokens || "?"}`,
           );
 
@@ -309,7 +394,7 @@ async function handleChatStream(
           })}\n\n`);
 
           if (msg.usage) {
-            finalUsage = {
+            state.finalUsage = {
               input: msg.usage.input,
               output: msg.usage.output,
               totalTokens: msg.usage.totalTokens,
@@ -367,22 +452,8 @@ async function handleChatStream(
       res.write(`event: ask_user\ndata: ${JSON.stringify({ question: askUserRef.current.question })}\n\n`);
     }
 
-    // Flush any remaining text into segments
-    flushTextSegment();
-
     // Build the final assistant message
-    const assistantMsg: ChatMessage = {
-      role: "assistant",
-      content: fullText,
-      thinking: thinkingText || undefined,
-      usage: finalUsage,
-      toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-      toolResults: allToolResults.length > 0 ? allToolResults : undefined,
-      artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
-      generatedImages: allGeneratedImages.length > 0 ? allGeneratedImages : undefined,
-      segments: segments.length > 0 ? segments : undefined,
-      timestamp: Date.now(),
-    };
+    const assistantMsg = buildCurrentAssistantMessage();
 
     chat.messages.push(assistantMsg);
     await saveChat(chat);
@@ -399,10 +470,9 @@ async function handleChatStream(
       );
 
       // Generate LLM title after the first exchange (2 messages = 1 user + 1 assistant)
-      console.log(`[title] chat.messages.length=${chat.messages.length}`);
       if (chat.messages.length === 2) {
         try {
-          const title = await generateTitle(userMessage, assistantMsg.content);
+          const title = await generateTitle(lastUserMessage, assistantMsg.content);
           if (title) {
             chat.title = title;
             await saveChat(chat);
@@ -415,7 +485,7 @@ async function handleChatStream(
 
       // Fire-and-forget memory extraction for agent chats
       if (chat.type === "agent") {
-        extractMemories(chat.modelId, chat.id, userMessage, assistantMsg.content)
+        extractMemories(chat.modelId, chat.id, lastUserMessage, assistantMsg.content)
           .catch((err) => console.error("[memory] extraction failed:", err));
 
         // Check for compaction: extract memories then truncate when nearing context limit
@@ -464,17 +534,7 @@ async function handleChatStream(
       res.write(`event: ask_user\ndata: ${JSON.stringify({ question: askUserRef.current.question })}\n\n`);
 
       // Build partial assistant message
-      const assistantMsg: ChatMessage = {
-        role: "assistant",
-        content: fullText,
-        thinking: thinkingText || undefined,
-        usage: finalUsage,
-        toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
-        toolResults: allToolResults.length > 0 ? allToolResults : undefined,
-        artifacts: allArtifacts.length > 0 ? allArtifacts : undefined,
-        generatedImages: allGeneratedImages.length > 0 ? allGeneratedImages : undefined,
-        timestamp: Date.now(),
-      };
+      const assistantMsg = buildCurrentAssistantMessage();
       chat.messages.push(assistantMsg);
       await saveChat(chat);
 
@@ -505,6 +565,9 @@ router.post("/", async (req, res) => {
 
   const chat = await getChat(chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
+
+  // Restore any queued messages from a previous SSE drop
+  await messageQueue.loadFromDisk(chatId);
 
   // Persist images to disk and enrich with thumbnail URLs
   const persistedImages = images?.length ? await persistImages(images) : undefined;
@@ -638,8 +701,6 @@ router.post("/", async (req, res) => {
     }
     
     setCachedAugmentedPrompt(chat.id, systemPrompt);
-    
-    setCachedAugmentedPrompt(chat.id, systemPrompt);
 
     // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
     const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
@@ -647,6 +708,37 @@ router.post("/", async (req, res) => {
 
     await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
   }
+});
+
+// Enqueue a message while the agent is streaming
+router.post("/enqueue", async (req, res) => {
+  const { chatId, message, images } = req.body as {
+    chatId: string;
+    message: string;
+    images?: ImageAttachment[];
+  };
+
+  if (!chatId || !message) {
+    return res.status(400).json({ error: "chatId and message are required" });
+  }
+
+  const chat = await getChat(chatId);
+  if (!chat) return res.status(404).json({ error: "Chat not found" });
+
+  // Persist images to disk
+  const persistedImages = images?.length ? await persistImages(images) : undefined;
+
+  // Enqueue for the streaming handler to pick up.
+  // Don't add to chat.messages here — getFollowUpMessages does that
+  // when it drains the queue, avoiding duplication on SSE reconnect.
+  try {
+    await messageQueue.enqueue(chatId, message, persistedImages);
+  } catch (e: any) {
+    return res.status(429).json({ error: e.message });
+  }
+
+  console.log(`[chat] enqueued message for chat ${chatId}`);
+  res.json({ queued: true });
 });
 
 // Edit message at index and regenerate response via SSE

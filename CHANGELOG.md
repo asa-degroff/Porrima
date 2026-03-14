@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Improve Python sandbox isolation (#18)
 
 ### Added
+- No queue size limits - risk of rapid message flooding (#39)
 - Add garbage collection for stale memories (#32)
 - Add chat history truncation after memory extraction (#28)
 - Add memory extraction failure metrics and monitoring (#20)
@@ -17,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Batch embeddings during memory extraction (#22)
 
 ### Fixed
+- onMessageComplete does not clear bg.artifacts and bg.generatedImages - verify if intentional (#42)
+- Title generation timing may not work correctly with queued first messages (#41)
+- Message duplication risk in /enqueue endpoint (#37)
+- Duplicate setCachedAugmentedPrompt call in chat.ts (#36)
 - Add deduplication to save_memory tool (#31)
 - Fix race condition in memory storage write lock (#29)
 - Fix chat title truncation for multi-byte characters (#25)
@@ -28,6 +33,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Hoist remarkPlugins array to module scope in MarkdownRenderer (#1)
 
 ### Changed
+- Memory extraction fires on every follow-up - consider batching (#40)
+- Empty assistant placeholder shows blank message during queue (#38)
 - Simplify token usage estimation in compaction trigger (#30)
 - Add integration tests for tool loop and message conversion (#24)
 - Start session for code review improvements (#21)

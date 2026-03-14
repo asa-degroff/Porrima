@@ -424,7 +424,7 @@ export function ChatView({
       {/* Input */}
       <MessageInput
         onSend={onSend}
-        disabled={!chatId || streaming}
+        disabled={!chatId}
         onAbort={onAbort}
         streaming={streaming}
         waitingForInput={waitingForInput}

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { sendMessage, editMessage as apiEditMessage } from "../api/client";
+import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage } from "../api/client";
 import type { StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, MessageSegment, MessageUsage } from "../types";
 import {
@@ -349,6 +349,56 @@ export function useChat(chatId: string | null) {
           setCompaction(info);
         }
       },
+      onMessageComplete: (message) => {
+        const bg = bgStreams.get(streamChatId);
+        if (!bg) return;
+
+        // Finalize the second-to-last assistant message with complete data from server
+        const msgs = bg.messages;
+        // Find the assistant message that just completed (second-to-last assistant)
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === "assistant" && msgs[i].content === bg.content) {
+            msgs[i] = { ...msgs[i], ...message };
+            break;
+          }
+        }
+
+        // Reset streaming accumulators for the next response
+        bg.content = "";
+        bg.thinking = "";
+        bg.tools = [];
+        bg.artifacts = [];
+        bg.generatedImages = [];
+        bg.segments = [];
+        bg.seqCounter = 0;
+
+        if (activeChatIdRef.current === streamChatId) {
+          streamingContentRef.current = "";
+          setStreamingThinking("");
+          setActiveTools([]);
+          setArtifacts([]);
+          setGeneratedImages([]);
+          setMessages([...bg.messages]);
+        }
+      },
+      onFollowUpStart: (_data) => {
+        // The server has picked up a queued message — add assistant placeholder now
+        const bg = bgStreams.get(streamChatId);
+        if (!bg) return;
+
+        const placeholder: ChatMessage = {
+          role: "assistant",
+          content: "",
+          timestamp: Date.now(),
+        };
+        bg.messages = [...bg.messages, placeholder];
+
+        if (activeChatIdRef.current === streamChatId) {
+          setMessages([...bg.messages]);
+        }
+
+        console.log(`[chat] follow-up started for ${streamChatId}`);
+      },
       onTitleUpdate: (chatId, title) => {
         setTitleUpdate({ chatId, title });
       },
@@ -419,7 +469,7 @@ export function useChat(chatId: string | null) {
 
   const send = useCallback(
     (text: string, images?: ImageAttachment[]) => {
-      if (!chatId || streaming) return;
+      if (!chatId) return;
       const targetChatId = chatId;
 
       const userMsg: ChatMessage = {
@@ -434,6 +484,19 @@ export function useChat(chatId: string | null) {
         const queuedMsg: ChatMessage = { ...userMsg, queued: true };
         setMessages((prev) => [...prev, queuedMsg]);
         enqueueMessage(targetChatId, text, images).catch(() => {});
+        return;
+      }
+
+      // If streaming, enqueue the message for follow-up
+      if (streaming) {
+        const bg = bgStreams.get(targetChatId);
+        if (bg) {
+          bg.messages = [...bg.messages, userMsg];
+        }
+        setMessages((prev) => [...prev, userMsg]);
+        apiEnqueueMessage(targetChatId, text, images).catch((err) =>
+          console.error("[chat] enqueue failed:", err)
+        );
         return;
       }
 
