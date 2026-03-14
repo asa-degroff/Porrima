@@ -327,11 +327,6 @@ async function handleChatStream(
           } else if (ame.type === "thinking_delta") {
             state.thinkingText += ame.delta;
             res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
-          } else if (ame.type === "toolcall_start") {
-            const partial = ame.partial.content[ame.contentIndex] as ToolCall | undefined;
-            if (partial) {
-              res.write(`event: tool_status\ndata: ${JSON.stringify({ name: partial.name || "...", status: "running" })}\n\n`);
-            }
           }
           break;
         }

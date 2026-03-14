@@ -224,28 +224,21 @@ export const MessageBubble = memo(function MessageBubble({
                     ) : null;
                   }
                   case "tool_call": {
-                    // During streaming: use liveStatus; after done: use toolCall + toolResult
-                    if (segment.liveStatus) {
-                      return (
-                        <ToolCallDisplay
-                          key={`${segment.seq}-${i}`}
-                          liveStatus={segment.liveStatus}
-                        />
-                      );
-                    }
-                    const matchingResult = message.segments?.find(
-                      (s) => s.type === "tool_result" && s.toolResult?.toolCallId === segment.toolCall?.id
-                    );
+                    // Look ahead for immediate tool_result and pair them
+                    const nextSegment = message.segments?.[i + 1];
+                    const hasResult = nextSegment?.type === "tool_result" && 
+                                     nextSegment.toolResult?.toolName === segment.toolCall?.name;
+                    
                     return segment.toolCall ? (
                       <ToolCallDisplay
                         key={`${segment.seq}-${i}`}
                         toolCall={segment.toolCall}
-                        toolResult={matchingResult?.toolResult}
+                        toolResult={hasResult ? nextSegment.toolResult : undefined}
                       />
                     ) : null;
                   }
                   case "tool_result":
-                    // Tool results are shown inside the matching tool_call above
+                    // Skipped - rendered inline with its tool_call above
                     return null;
                   case "artifact":
                     return segment.artifact ? (
@@ -262,16 +255,8 @@ export const MessageBubble = memo(function MessageBubble({
             ) : (
               // Legacy fallback (no segments — old messages or non-agent chats)
               <>
-                {/* Tool calls - streaming (live status) */}
-                {showStreaming && activeTools && activeTools.map((tool, i) => (
-                  <ToolCallDisplay
-                    key={`live-${i}`}
-                    liveStatus={tool}
-                  />
-                ))}
-
-                {/* Tool calls - persisted (from chat history, no segments) */}
-                {!showStreaming && message.toolCalls && message.toolCalls.map((tc, i) => {
+                {/* Tool calls - only show if we don't have segments (prevent duplicates) */}
+                {message.toolCalls && message.toolCalls.map((tc, i) => {
                   const tr = message.toolResults?.find((r) => r.toolCallId === tc.id);
                   return (
                     <ToolCallDisplay
@@ -282,21 +267,12 @@ export const MessageBubble = memo(function MessageBubble({
                   );
                 })}
 
-                {showStreaming ? (
+                {message.content && (
                   <div className="text-sm leading-relaxed">
-                    <StreamingText
-                      content={message.content}
-                      isStreaming={!isThinkingStreaming}
-                    />
+                    <Suspense fallback={<span className="whitespace-pre-wrap">{message.content}</span>}>
+                      <MarkdownRenderer content={message.content} />
+                    </Suspense>
                   </div>
-                ) : (
-                  message.content && (
-                    <div className="text-sm leading-relaxed">
-                      <Suspense fallback={<span className="whitespace-pre-wrap">{message.content}</span>}>
-                        <MarkdownRenderer content={message.content} />
-                      </Suspense>
-                    </div>
-                  )
                 )}
 
                 {/* Inline artifacts - legacy fallback */}

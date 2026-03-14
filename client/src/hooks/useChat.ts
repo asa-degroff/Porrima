@@ -294,32 +294,65 @@ export function useChat(chatId: string | null) {
       onToolStatus: (status) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
-        const existing = bg.tools.findIndex(
+        const existingIdx = bg.tools.findIndex(
           (t) => t.name === status.name && t.status === "running"
         );
-        if (existing >= 0 && status.status !== "running") {
-          bg.tools[existing] = status;
-        } else {
+        
+        if (existingIdx >= 0 && status.status !== "running") {
+          bg.tools[existingIdx] = status;
+        } else if (status.status === "running") {
           bg.tools.push(status);
         }
 
-        // Build streaming segments for tools
+        // Build proper segments from tool_status events (not using liveStatus)
         if (status.status === "running") {
-          bg.segments.push({ seq: bg.seqCounter++, type: "tool_call", liveStatus: { ...status } });
+          // Create tool_call segment with unique ID
+          const toolCallId = `tool-${status.name}-${Date.now()}`;
+          const index = bg.segments.length;
+          bg.segments.push({ 
+            seq: bg.seqCounter++, 
+            type: "tool_call", 
+            toolCall: { id: toolCallId, name: status.name, arguments: {} } 
+          });
+          // Store mapping: callId → segment index for later pairing
+          const mapKey = `__callIndex_${toolCallId}`;
+          (bg as any)[mapKey] = index;
         } else {
-          // Update the matching running tool segment
-          for (let j = bg.segments.length - 1; j >= 0; j--) {
-            const s = bg.segments[j];
-            if (s.type === "tool_call" && s.liveStatus?.name === status.name && s.liveStatus?.status === "running") {
-              s.liveStatus = { ...status };
-              break;
+          // Find matching call by name using FIFO order
+          // Search for the first tool_call with matching name that doesn't have an adjacent result
+          let targetIndex = -1;
+          for (let i = 0; i < bg.segments.length; i++) {
+            const s = bg.segments[i];
+            if (s.type === "tool_call" && s.toolCall?.name === status.name) {
+              // Check if next segment is already a result for this call
+              const next = bg.segments[i + 1];
+              if (!(next?.type === "tool_result" && next.toolResult?.toolCallId === s.toolCall.id)) {
+                // Found unmatched call
+                targetIndex = i;
+                break;
+              }
             }
+          }
+          
+          if (targetIndex >= 0) {
+            const callSegment = bg.segments[targetIndex] as any;
+            // Insert result immediately after the call
+            bg.segments.splice(targetIndex + 1, 0, {
+              seq: bg.seqCounter++,
+              type: "tool_result",
+              toolResult: {
+                toolCallId: callSegment.toolCall.id,
+                toolName: status.name,
+                content: status.result || "",
+                isError: status.status === "error",
+              },
+            });
           }
         }
 
         if (activeChatIdRef.current === streamChatId) {
           setActiveTools([...bg.tools]);
-          // Schedule segment flush
+          // Schedule segment flush to update rendering
           if (rafRef.current === null) {
             streamingContentRef.current = bg.content;
             rafRef.current = requestAnimationFrame(flushStreamingContent);
