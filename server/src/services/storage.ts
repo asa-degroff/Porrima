@@ -34,6 +34,7 @@ export async function listChats(): Promise<ChatListItem[]> {
         preview: lastMsg
           ? lastMsg.content.slice(0, 100)
           : "",
+        ...(chat.projectId ? { projectId: chat.projectId } : {}),
       });
     } catch {
       // skip corrupt files

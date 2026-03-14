@@ -68,6 +68,7 @@ export interface Chat {
   createdAt: string;
   lastModified: string;
   activeSkills?: string[]; // List of active skill names
+  projectId?: string; // Optional project association
 }
 
 export interface ChatListItem {
@@ -76,6 +77,15 @@ export interface ChatListItem {
   type: ChatType;
   lastModified: string;
   preview: string;
+  projectId?: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  createdAt: string;
+  lastModified: string;
 }
 
 export interface OllamaModel {

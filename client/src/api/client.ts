@@ -42,16 +42,6 @@ export async function fetchChats(): Promise<ChatListItem[]> {
   return res.json();
 }
 
-export async function createChat(modelId: string, type: ChatType = "quick"): Promise<Chat> {
-  const res = await apiFetch(`${BASE}/chats`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ modelId, type }),
-  });
-  if (!res.ok) throw new Error("Failed to create chat");
-  return res.json();
-}
-
 export async function updateChat(
   id: string,
   data: { title?: string; modelId?: string; systemPrompt?: string; contextWindow?: number | null }
@@ -698,5 +688,74 @@ export interface SkillInfo {
 export async function fetchSkills(): Promise<SkillInfo[]> {
   const res = await apiFetch(`${BASE}/skills`);
   if (!res.ok) throw new Error("Failed to fetch skills");
+  return res.json();
+}
+
+// --- Projects API ---
+
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  createdAt: string;
+  lastModified: string;
+}
+
+export async function fetchProjects(): Promise<Project[]> {
+  const res = await apiFetch(`${BASE}/projects`);
+  if (!res.ok) throw new Error("Failed to fetch projects");
+  return res.json();
+}
+
+export async function createProject(name: string, path: string): Promise<Project> {
+  const res = await apiFetch(`${BASE}/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, path }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to create project");
+  }
+  return res.json();
+}
+
+export async function updateProject(id: string, updates: { name?: string; path?: string }): Promise<Project> {
+  const res = await apiFetch(`${BASE}/projects/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to update project");
+  }
+  return res.json();
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/projects/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete project");
+}
+
+export async function getProjectAgentsMd(id: string): Promise<{ content: string | null; path: string }> {
+  const res = await apiFetch(`${BASE}/projects/${id}/agents-md`);
+  if (!res.ok) throw new Error("Failed to fetch AGENTS.md");
+  return res.json();
+}
+
+export async function createChat(modelId: string, type: ChatType = "quick", projectId?: string): Promise<Chat> {
+  const res = await apiFetch(`${BASE}/chats`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ modelId, type, projectId }),
+  });
+  if (!res.ok) throw new Error("Failed to create chat");
+  return res.json();
+}
+
+export async function fetchChat(id: string): Promise<Chat> {
+  const res = await apiFetch(`${BASE}/chats/${id}`);
+  if (!res.ok) throw new Error("Failed to fetch chat");
   return res.json();
 }

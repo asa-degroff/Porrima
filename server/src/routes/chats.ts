@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
 import { listChats, getChat, saveChat, deleteChat, getSettings } from "../services/storage.js";
+import { getProject, readAgentsMd } from "../services/project-storage.js";
 import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import type { Chat } from "../types.js";
@@ -22,20 +23,40 @@ router.get("/:id", async (req, res) => {
 
 // Create a new chat
 router.post("/", async (req, res) => {
-  const { modelId, type, contextWindow } = req.body;
+  const { modelId, type, contextWindow, projectId } = req.body;
   const settings = await getSettings();
   const effectiveModelId = modelId || settings.defaultModelId || "qwen3:8b";
   const savedContextWindow = settings.modelContextWindows?.[effectiveModelId];
+  let systemPrompt = settings.defaultSystemPrompt || "You are a helpful assistant.";
+  
+  // Inject project context if creating a chat within a project
+  if (projectId) {
+    const project = await getProject(projectId);
+    if (project) {
+      const agentsMd = await readAgentsMd(project.path);
+      if (agentsMd) {
+        systemPrompt = `You are working on the project: ${project.name}
+Path: ${project.path}
+
+Project context from AGENTS.md:
+${agentsMd}
+
+${systemPrompt}`;
+      }
+    }
+  }
+  
   const chat: Chat = {
     id: uuid(),
     title: type === "agent" ? "New Agent Chat" : "New Chat",
     type: type === "agent" ? "agent" : "quick",
     modelId: effectiveModelId,
-    systemPrompt: settings.defaultSystemPrompt,
+    systemPrompt,
     ...(contextWindow ?? savedContextWindow ? { contextWindow: contextWindow ?? savedContextWindow } : {}),
     messages: [],
     createdAt: new Date().toISOString(),
     lastModified: new Date().toISOString(),
+    ...(projectId ? { projectId } : {}),
   };
   await saveChat(chat);
   res.status(201).json(chat);

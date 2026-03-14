@@ -41,8 +41,8 @@ export function useChats() {
   }, [refresh]);
 
   const createChat = useCallback(
-    async (modelId: string, type: ChatType = "quick") => {
-      const chat = await apiCreateChat(modelId, type);
+    async (modelId: string, type: ChatType = "quick", projectId?: string) => {
+      const chat = await apiCreateChat(modelId, type, projectId);
       await refresh();
       return chat;
     },

@@ -11,6 +11,7 @@ const RippleGridBackground = lazy(() =>
 );
 import { useChats } from "./hooks/useChats";
 import { useChat, hasBackgroundStream } from "./hooks/useChat";
+import { useProjects } from "./hooks/useProjects";
 import { useModels } from "./hooks/useModels";
 import { useSettings } from "./hooks/useSettings";
 import { useAuth } from "./hooks/useAuth";
@@ -25,6 +26,7 @@ import type { Chat, ChatType } from "./types";
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { models } = useModels();
   const { chats, createChat, removeChat, refresh } = useChats();
+  const { projects, createProject, removeProject } = useProjects();
   const { settings, updateSettings } = useSettings();
   const { isOnline } = useOnlineStatus();
   const keyboardInset = useKeyboardInset();
@@ -185,10 +187,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     [loadMessages, setActiveChatData]
   );
 
-  const handleNewChat = useCallback(async (type: ChatType = "quick") => {
+  const handleNewChat = useCallback(async (type: ChatType = "quick", projectId?: string) => {
     try {
       const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
-      const chat = await createChat(modelId, type);
+      const chat = await createChat(modelId, type, projectId);
       setActiveChatId(chat.id);
       setActiveChat(chat);
       setActiveChatData(chat);
@@ -210,6 +212,26 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     },
     [activeChatId, removeChat, loadMessages]
   );
+
+  const handleNewProject = useCallback(async () => {
+    const name = prompt("Project name:");
+    if (!name) return;
+    const path = prompt("Project path (absolute):");
+    if (!path) return;
+    try {
+      await createProject(name, path);
+    } catch (e: any) {
+      console.error("[projects] create failed:", e);
+    }
+  }, [createProject]);
+
+  const handleDeleteProject = useCallback(async (id: string) => {
+    try {
+      await removeProject(id);
+    } catch (e: any) {
+      console.error("[projects] delete failed:", e);
+    }
+  }, [removeProject]);
 
   const handleSend = useCallback(
     (text: string, images?: import("./types").ImageAttachment[]) => {
@@ -296,10 +318,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       )}
       <Sidebar
         chats={chats}
+        projects={projects}
         activeChatId={activeChatId}
         onSelectChat={(id) => { selectChat(id); setImageSandboxOpen(false); }}
-        onNewChat={(type) => { handleNewChat(type); setImageSandboxOpen(false); }}
+        onNewChat={(type, projectId) => { handleNewChat(type, projectId); setImageSandboxOpen(false); }}
+        onNewProject={handleNewProject}
         onDeleteChat={handleDeleteChat}
+        onDeleteProject={handleDeleteProject}
         onOpenSettings={handleOpenSettings}
         onOpenImageSandbox={handleOpenImageSandbox}
         isOpen={sidebarOpen}

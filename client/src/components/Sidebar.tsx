@@ -1,14 +1,17 @@
 import { useMemo, useState } from "react";
-import type { ChatListItem as ChatListItemType, ChatType } from "../types";
+import type { ChatListItem as ChatListItemType, ChatType, Project } from "../types";
 import { ChatListItem } from "./ChatListItem";
 import { OctahedronLogo } from "./OctahedronLogo";
 
 interface Props {
   chats: ChatListItemType[];
+  projects: Project[];
   activeChatId: string | null;
   onSelectChat: (id: string) => void;
-  onNewChat: (type: ChatType) => void;
+  onNewChat: (type: ChatType, projectId?: string) => void;
+  onNewProject: () => void;
   onDeleteChat: (id: string) => void;
+  onDeleteProject: (id: string) => void;
   onOpenSettings: () => void;
   onOpenImageSandbox: () => void;
   isOpen: boolean;
@@ -35,29 +38,145 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
   );
 }
 
-export function Sidebar({
+function ProjectSection({
+  project,
   chats,
   activeChatId,
   onSelectChat,
   onNewChat,
   onDeleteChat,
+  onDeleteProject,
+}: {
+  project: Project;
+  chats: ChatListItemType[];
+  activeChatId: string | null;
+  onSelectChat: (id: string) => void;
+  onNewChat: (type: ChatType, projectId?: string) => void;
+  onDeleteChat: (id: string) => void;
+  onDeleteProject: (id: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  return (
+    <div className="rounded-lg bg-white/[0.03] border border-white/[0.06]">
+      <div className="flex items-center gap-1.5 px-2 py-1.5 group">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
+        >
+          <span className="text-emerald-400/50">
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+            </svg>
+          </span>
+          <span className="text-xs font-medium text-white/70 truncate">{project.name}</span>
+          <span className="text-white/20 ml-auto shrink-0">
+            <ChevronIcon expanded={expanded} />
+          </span>
+        </button>
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+          <button
+            onClick={() => onNewChat("agent", project.id)}
+            className="text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5"
+            title="New chat in project"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v14" />
+              <path d="M5 12h14" />
+            </svg>
+          </button>
+          {confirmDelete ? (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => { onDeleteProject(project.id); setConfirmDelete(false); }}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40"
+              >
+                Del
+              </button>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80"
+              >
+                No
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="text-white/30 hover:text-red-400 transition-colors p-0.5 rounded hover:bg-white/5"
+              title="Delete project"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18" />
+                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+      {expanded && (
+        <div className="px-1 pb-1.5">
+          {chats.length > 0 ? (
+            <div className="space-y-0.5">
+              {chats.map((chat) => (
+                <ChatListItem
+                  key={chat.id}
+                  chat={chat}
+                  active={chat.id === activeChatId}
+                  onSelect={() => onSelectChat(chat.id)}
+                  onDelete={() => onDeleteChat(chat.id)}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-center text-white/20 text-[10px] py-2">
+              No chats yet
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Sidebar({
+  chats,
+  projects,
+  activeChatId,
+  onSelectChat,
+  onNewChat,
+  onNewProject,
+  onDeleteChat,
+  onDeleteProject,
   onOpenSettings,
   onOpenImageSandbox,
   isOpen,
   onClose,
   isStreaming = false,
 }: Props) {
+  const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [agentExpanded, setAgentExpanded] = useState(true);
   const [quickExpanded, setQuickExpanded] = useState(true);
 
   const agentChats = useMemo(
-    () => chats.filter((c) => c.type === "agent"),
+    () => chats.filter((c) => c.type === "agent" && !c.projectId),
     [chats]
   );
   const quickChats = useMemo(
-    () => chats.filter((c) => c.type !== "agent"),
+    () => chats.filter((c) => c.type !== "agent" && !c.projectId),
     [chats]
   );
+
+  // Group chats by project
+  const chatsByProject = useMemo(() => {
+    const map: Record<string, ChatListItemType[]> = {};
+    for (const project of projects) {
+      map[project.id] = chats.filter((c) => c.projectId === project.id);
+    }
+    return map;
+  }, [chats, projects]);
 
   return (
     <div className={`w-72 h-full flex flex-col backdrop-blur-sm bg-white/[0.03] border-r border-white/10 fixed inset-y-0 left-0 z-30 transition-transform duration-300 ease-in-out md:static md:translate-x-0 md:z-auto ${isOpen ? "translate-x-0" : "-translate-x-full"}`}>
@@ -92,6 +211,76 @@ export function Sidebar({
 
       {/* Chat Sections — flex column, each section grows when expanded */}
       <div className="flex-1 flex flex-col min-h-0">
+        {/* Projects Section */}
+        {projects.length > 0 && (
+          <div className={`flex flex-col min-h-0 border-b border-white/5 ${projectsExpanded ? "flex-1" : "shrink-0"}`}>
+            <div className="px-3 pt-3 pb-1 shrink-0">
+              <div className="flex items-center justify-between mb-1.5">
+                <button
+                  onClick={() => setProjectsExpanded(!projectsExpanded)}
+                  className="flex items-center gap-1.5 px-1 group cursor-pointer"
+                >
+                  <span className="text-white/30 group-hover:text-white/50 transition-colors">
+                    <ChevronIcon expanded={projectsExpanded} />
+                  </span>
+                  <span className="text-[10px] font-semibold tracking-wider uppercase text-white/30 group-hover:text-white/50 transition-colors">
+                    Projects
+                  </span>
+                  {!projectsExpanded && projects.length > 0 && (
+                    <span className="text-[10px] text-white/20 ml-1">{projects.length}</span>
+                  )}
+                </button>
+                {projectsExpanded && (
+                  <button
+                    onClick={onNewProject}
+                    className="text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5"
+                    title="New project"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 5v14" />
+                      <path d="M5 12h14" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            </div>
+            {projectsExpanded && (
+              <div className="flex-1 overflow-y-auto px-3 pb-1">
+                <div className="space-y-1">
+                  {projects.map((project) => (
+                    <ProjectSection
+                      key={project.id}
+                      project={project}
+                      chats={chatsByProject[project.id] || []}
+                      activeChatId={activeChatId}
+                      onSelectChat={(id) => { onSelectChat(id); onClose(); }}
+                      onNewChat={onNewChat}
+                      onDeleteChat={onDeleteChat}
+                      onDeleteProject={onDeleteProject}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* New Project button when no projects exist */}
+        {projects.length === 0 && (
+          <div className="px-3 pt-3 pb-1 shrink-0 border-b border-white/5">
+            <button
+              onClick={onNewProject}
+              className="w-full px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-400/25 text-emerald-300 text-sm font-medium hover:bg-emerald-500/25 transition-all flex items-center justify-center gap-2"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14" />
+                <path d="M5 12h14" />
+              </svg>
+              New Project
+            </button>
+          </div>
+        )}
+
         {/* Agent Chats Section */}
         <div className={`flex flex-col min-h-0 border-b border-white/5 ${agentExpanded ? "flex-1" : "shrink-0"}`}>
           {/* Section header — always visible */}
