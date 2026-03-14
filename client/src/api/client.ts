@@ -1,4 +1,4 @@
-import type { Artifact, Chat, ChatListItem, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, MessageUsage, OllamaModel, Settings } from "../types";
+import type { Artifact, Chat, ChatListItem, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, MessageUsage, OllamaModel, Settings } from "../types";
 
 const BASE = "/api";
 
@@ -102,10 +102,11 @@ export interface StreamWarning {
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { thinking?: string; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number }) => void;
+  onDone: (message: { thinking?: string; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
   onArtifact?: (artifact: Artifact) => void;
+  onVisual?: (visual: InlineVisual) => void;
   onGeneratedImage?: (image: GeneratedImage) => void;
   onAskUser?: (question: string) => void;
   onIteration?: (info: IterationInfo) => void;
@@ -261,6 +262,7 @@ function processSSEEvent(
         usage: data.message?.usage,
         artifacts: data.message?.artifacts,
         generatedImages: data.message?.generatedImages,
+        visuals: data.message?.visuals,
         toolCalls: data.message?.toolCalls,
         toolResults: data.message?.toolResults,
         segments: data.message?.segments,
@@ -273,6 +275,9 @@ function processSSEEvent(
       break;
     case "artifact":
       callbacks.onArtifact?.(data);
+      break;
+    case "visual":
+      callbacks.onVisual?.(data);
       break;
     case "generated_image":
       callbacks.onGeneratedImage?.(data);

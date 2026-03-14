@@ -20,7 +20,7 @@ import {
   savePendingState,
 } from "../services/agent-state.js";
 import * as messageQueue from "../services/message-queue.js";
-import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment } from "../types.js";
+import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment, InlineVisual } from "../types.js";
 import { saveUserImage } from "../services/user-image-storage.js";
 
 /** Truncate a string to maxChars graphemes, preserving emoji and multi-byte characters */
@@ -135,12 +135,13 @@ async function handleChatStream(
   // Track ordering for interleaved display
   interface OutputSegment {
     seq: number;
-    type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image";
+    type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image" | "visual";
     content?: string;
     toolCall?: ChatToolCall;
     toolResult?: ChatToolResult;
     artifact?: Artifact;
     generatedImage?: GeneratedImage;
+    visual?: InlineVisual;
   }
 
   // Mutable accumulator state — reset between follow-up turns
@@ -150,6 +151,7 @@ async function handleChatStream(
     allToolCalls: [] as ChatToolCall[],
     allToolResults: [] as ChatToolResult[],
     allArtifacts: [] as Artifact[],
+    allVisuals: [] as InlineVisual[],
     allGeneratedImages: [] as GeneratedImage[],
     segments: [] as OutputSegment[],
     seqCounter: 0,
@@ -163,6 +165,7 @@ async function handleChatStream(
     state.allToolCalls = [];
     state.allToolResults = [];
     state.allArtifacts = [];
+    state.allVisuals = [];
     state.allGeneratedImages = [];
     state.segments = [];
     state.seqCounter = 0;
@@ -185,6 +188,7 @@ async function handleChatStream(
       toolCalls: state.allToolCalls.length > 0 ? state.allToolCalls : undefined,
       toolResults: state.allToolResults.length > 0 ? state.allToolResults : undefined,
       artifacts: state.allArtifacts.length > 0 ? state.allArtifacts : undefined,
+      visuals: state.allVisuals.length > 0 ? state.allVisuals : undefined,
       generatedImages: state.allGeneratedImages.length > 0 ? state.allGeneratedImages : undefined,
       segments: state.segments.length > 0 ? state.segments : undefined,
       timestamp: Date.now(),
@@ -209,6 +213,11 @@ async function handleChatStream(
       state.allArtifacts.push(artifact);
       state.segments.push({ seq: ++state.seqCounter, type: "artifact", artifact });
       res.write(`event: artifact\ndata: ${JSON.stringify(artifact)}\n\n`);
+    },
+    onVisual: (visual) => {
+      state.allVisuals.push(visual);
+      state.segments.push({ seq: ++state.seqCounter, type: "visual", visual });
+      res.write(`event: visual\ndata: ${JSON.stringify(visual)}\n\n`);
     },
     onGeneratedImage: (image) => {
       state.allGeneratedImages.push(image);

@@ -28,12 +28,13 @@ export interface ImageAttachment {
 
 export interface MessageSegment {
   seq: number;
-  type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image";
+  type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image" | "visual";
   content?: string;
   toolCall?: ChatToolCall;
   toolResult?: ChatToolResult;
   artifact?: Artifact;
   generatedImage?: GeneratedImage;
+  visual?: InlineVisual;
 }
 
 export interface ChatMessage {
@@ -45,6 +46,7 @@ export interface ChatMessage {
   toolResults?: ChatToolResult[];
   artifacts?: Artifact[];
   generatedImages?: GeneratedImage[];
+  visuals?: InlineVisual[];
   images?: ImageAttachment[];
   segments?: MessageSegment[];
   timestamp: number;
@@ -135,6 +137,13 @@ export type MemorySummary = Omit<Memory, "embedding">;
 export interface Artifact {
   id: string;
   title: string;
+  url: string;
+}
+
+export interface InlineVisual {
+  id: string;
+  title: string;
+  html: string;
   url: string;
 }
 

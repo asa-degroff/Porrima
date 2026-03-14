@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage } from "../api/client";
 import type { StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
-import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, MessageSegment, MessageUsage } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InlineVisual, MessageSegment, MessageUsage } from "../types";
 import {
   enqueueMessage,
   dequeueMessage,
@@ -16,6 +16,7 @@ interface BackgroundStream {
   thinking: string;
   tools: ToolStatus[];
   artifacts: Artifact[];
+  visuals: InlineVisual[];
   generatedImages: GeneratedImage[];
   messages: ChatMessage[];
   streaming: boolean;
@@ -75,6 +76,7 @@ function createBgStream(chatRef: Chat | null): BackgroundStream {
     thinking: "",
     tools: [],
     artifacts: [],
+    visuals: [],
     generatedImages: [],
     messages: [],
     streaming: true,
@@ -243,7 +245,23 @@ export function useChat(chatId: string | null) {
           }
         }
       },
-      onDone: ({ thinking, usage, artifacts: doneArtifacts, generatedImages: doneImages, toolCalls, toolResults, segments, waitingForInput: wfi }) => {
+      onVisual: (visual) => {
+        const bg = bgStreams.get(streamChatId);
+        if (!bg) return;
+        bg.visuals.push(visual);
+
+        // Add visual segment
+        bg.segments.push({ seq: bg.seqCounter++, type: "visual", visual });
+
+        if (activeChatIdRef.current === streamChatId) {
+          // Schedule segment flush
+          if (rafRef.current === null) {
+            streamingContentRef.current = bg.content;
+            rafRef.current = requestAnimationFrame(flushStreamingContent);
+          }
+        }
+      },
+      onDone: ({ thinking, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi }) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg || bg.doneCalled) return;
         bg.doneCalled = true;
@@ -259,6 +277,7 @@ export function useChat(chatId: string | null) {
             usage: usage || undefined,
             artifacts: doneArtifacts || undefined,
             generatedImages: doneImages || undefined,
+            visuals: doneVisuals || undefined,
             toolCalls: toolCalls || undefined,
             toolResults: toolResults || undefined,
             segments: segments || undefined,
@@ -424,6 +443,7 @@ export function useChat(chatId: string | null) {
         bg.thinking = "";
         bg.tools = [];
         bg.artifacts = [];
+        bg.visuals = [];
         bg.generatedImages = [];
         bg.segments = [];
         bg.seqCounter = 0;

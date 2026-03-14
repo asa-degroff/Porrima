@@ -20,12 +20,13 @@ export interface ChatToolResult {
 /** A segment represents one unit of agent output in chronological order */
 export interface MessageSegment {
   seq: number;
-  type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image";
+  type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image" | "visual";
   content?: string;
   toolCall?: ChatToolCall;
   toolResult?: ChatToolResult;
   artifact?: Artifact;
   generatedImage?: GeneratedImage;
+  visual?: InlineVisual;
   /** Client-only: live tool status during streaming (not persisted) */
   liveStatus?: { name: string; status: "running" | "done" | "error"; result?: string };
 }
@@ -48,6 +49,7 @@ export interface ChatMessage {
   toolResults?: ChatToolResult[];
   artifacts?: Artifact[];
   generatedImages?: GeneratedImage[];
+  visuals?: InlineVisual[];
   images?: ImageAttachment[];
   queued?: boolean;
   timestamp: number;
@@ -135,6 +137,13 @@ export interface MemorySummary {
 export interface Artifact {
   id: string;
   title: string;
+  url: string;
+}
+
+export interface InlineVisual {
+  id: string;
+  title: string;
+  html: string;
   url: string;
 }
 

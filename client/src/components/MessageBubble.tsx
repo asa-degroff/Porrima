@@ -5,6 +5,7 @@ import type { ToolStatus } from "../api/client";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ArtifactPanel } from "./ArtifactPanel";
+import { InlineVisual } from "./InlineVisual";
 import { GeneratedImagePanel } from "./GeneratedImagePanel";
 import { ToolCallDisplay } from "./ToolCallDisplay";
 import { SpeakerButton } from "./SpeakerButton";
@@ -243,6 +244,10 @@ export const MessageBubble = memo(function MessageBubble({
                   case "artifact":
                     return segment.artifact ? (
                       <ArtifactPanel key={`${segment.seq}-${i}`} artifact={segment.artifact} />
+                    ) : null;
+                  case "visual":
+                    return segment.visual ? (
+                      <InlineVisual key={`${segment.seq}-${i}`} visual={segment.visual} />
                     ) : null;
                   case "generated_image":
                     return segment.generatedImage ? (

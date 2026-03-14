@@ -5,6 +5,7 @@ import { tmpdir, homedir } from "os";
 import { v4 as uuid } from "uuid";
 
 const ARTIFACTS_DIR = join(homedir(), ".quje-agent", "artifacts");
+const VISUALS_DIR = join(homedir(), ".quje-agent", "visuals");
 const WORKSPACE_DIR = join(homedir(), ".quje-agent", "workspace");
 
 // Persistent sandbox sessions: sessionId -> { dir, createdAt, lastUsed }
@@ -253,6 +254,26 @@ const SCROLLBAR_STYLES = `<style>
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
 * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.15) transparent; }
 </style>`;
+
+export async function createVisual(
+  id: string,
+  html: string
+): Promise<string> {
+  await mkdir(VISUALS_DIR, { recursive: true });
+
+  // Inject scrollbar styling to match parent UI
+  let styledHtml = html;
+  if (html.includes("</head>")) {
+    styledHtml = html.replace("</head>", `${SCROLLBAR_STYLES}\n</head>`);
+  } else if (html.includes("<body")) {
+    styledHtml = html.replace("<body", `${SCROLLBAR_STYLES}\n<body`);
+  } else {
+    styledHtml = SCROLLBAR_STYLES + "\n" + html;
+  }
+
+  await writeFile(join(VISUALS_DIR, `${id}.html`), styledHtml, "utf-8");
+  return `/api/visuals/${id}`;
+}
 
 export async function createArtifact(
   id: string,

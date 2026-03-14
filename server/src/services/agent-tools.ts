@@ -9,9 +9,9 @@ import { glob } from "fs/promises";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
 import { IMAGE_TOOLS, executeImageTool } from "./image-tools.js";
-import { executePython, createArtifact } from "./sandbox.js";
+import { executePython, createArtifact, createVisual } from "./sandbox.js";
 import { v4 as uuid } from "uuid";
-import type { Artifact, GeneratedImage } from "../types.js";
+import type { Artifact, GeneratedImage, InlineVisual } from "../types.js";
 
 const HOME = homedir();
 
@@ -81,6 +81,15 @@ const CREATE_ARTIFACT_TOOL: Tool = {
   }),
 };
 
+const CREATE_VISUAL_TOOL: Tool = {
+  name: "create_visual",
+  description: "Create an inline HTML/SVG visualization rendered directly in the chat. Use for charts, diagrams, flowcharts, data visualizations, comparisons, timelines, and other visual aids. You can use any web technology: SVG, Canvas, CSS animations, or libraries like D3.js, Chart.js, or Mermaid (loaded via CDN). The visual renders in an iframe so full HTML documents work. For complex multi-page interactive apps, use create_artifact instead.",
+  parameters: Type.Object({
+    title: Type.String({ description: "Short title for the visual" }),
+    html: Type.String({ description: "Complete HTML content for the visualization. Can be a full HTML document with <script> tags loading CDN libraries, or simple inline SVG. Will be rendered in a same-origin iframe." }),
+  }),
+};
+
 const ASK_USER_TOOL: Tool = {
   name: "ask_user",
   description: "Ask the user a question and wait for their response. Use when you need clarification, a decision, or confirmation before proceeding.",
@@ -93,6 +102,7 @@ const ASK_USER_TOOL: Tool = {
 
 export interface ToolSideEffects {
   onArtifact: (artifact: Artifact) => void;
+  onVisual: (visual: InlineVisual) => void;
   onGeneratedImage: (image: GeneratedImage) => void;
   /** Called when the ask_user tool fires. The route owns the abort/suspend logic. */
   onAskUser: (question: string, toolCallId: string) => void;
@@ -119,6 +129,7 @@ const FILESYSTEM_TOOLS: Tool[] = [
   BASH_TOOL,
   RUN_PYTHON_TOOL,
   CREATE_ARTIFACT_TOOL,
+  CREATE_VISUAL_TOOL,
   ASK_USER_TOOL,
 ];
 
@@ -219,6 +230,19 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects): AgentTo
       const url = await createArtifact(id, args.html);
       effects.onArtifact({ id, title: args.title, url });
       return { content: [{ type: "text", text: `Artifact created: ${args.title} (${url})` }], details: {} };
+    },
+  });
+
+  // create_visual — uses effects.onVisual callback
+  tools.push({
+    ...CREATE_VISUAL_TOOL,
+    label: "create_visual",
+    execute: async (_id, params) => {
+      const args = params as Record<string, any>;
+      const id = uuid();
+      const url = await createVisual(id, args.html);
+      effects.onVisual({ id, title: args.title, html: args.html, url });
+      return { content: [{ type: "text", text: `Visual created: ${args.title} (${url})` }], details: {} };
     },
   });
 
