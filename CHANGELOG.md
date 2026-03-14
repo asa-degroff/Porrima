@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Improve Python sandbox isolation (#18)
 
 ### Added
+- Compaction summary — preserve removed message context (#51)
 - No queue size limits - risk of rapid message flooding (#39)
 - Add garbage collection for stale memories (#32)
 - Add chat history truncation after memory extraction (#28)
@@ -18,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Batch embeddings during memory extraction (#22)
 
 ### Fixed
+- Token estimation improvement — character count + system prompt accounting (#53)
+- Pre-compaction flush optimization — send only removed messages (#52)
+- Pre-send context protection — truncate before LLM call if >75% (#50)
 - onMessageComplete does not clear bg.artifacts and bg.generatedImages - verify if intentional (#42)
 - Title generation timing may not work correctly with queued first messages (#41)
 - Message duplication risk in /enqueue endpoint (#37)
@@ -33,6 +37,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Hoist remarkPlugins array to module scope in MarkdownRenderer (#1)
 
 ### Changed
+- Unused parameter 'messages' in preCompactionFlush() function signature (#59)
+- Inconsistent token estimation methods between compaction functions (#56)
+- Missing summary in post-response compaction (truncateChatHistory) (#54)
+- Race condition potential in concurrent chat modifications during compaction (#63)
+- Error handling in summary generation loses all context (#62)
+- Summary placement may confuse models - assistant message without preceding user turn (#61)
+- No compaction metadata tracking on Chat object (#60)
+- Duplicate truncation risk - both pre-send and post-response can fire (#58)
+- Summary message structure incomplete - missing ChatMessage fields (#57)
+- Flawed token calculation in truncateBeforeSend() backwards iteration (#55)
 - Memory extraction fires on every follow-up - consider batching (#40)
 - Empty assistant placeholder shows blank message during queue (#38)
 - Simplify token usage estimation in compaction trigger (#30)

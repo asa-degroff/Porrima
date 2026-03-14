@@ -1,21 +1,195 @@
-import type { Chat } from "../types.js";
+import type { Chat, ChatMessage } from "../types.js";
 
 export interface CompactionResult {
   truncated: boolean;
   removedCount: number;
+  removedMessages?: ChatMessage[];
 }
 
 /**
- * Truncate chat history to fit within the context window.
+ * Estimate token count from character count.
+ * English text averages ~4 chars/token. This is a rough proxy but fast.
+ */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/**
+ * Estimate total context size including system prompt and all messages.
+ */
+function estimateContextSize(messages: Chat["messages"], systemPrompt: string): number {
+  let total = estimateTokens(systemPrompt);
+  for (const m of messages) {
+    if (m.role === "user") {
+      total += estimateTokens(m.content);
+      if (m.images?.length) {
+        // Rough estimate: ~256 tokens per image
+        total += m.images.length * 256;
+      }
+    } else if (m.role === "assistant") {
+      total += estimateTokens(m.content);
+      if (m.thinking) total += estimateTokens(m.thinking);
+      // Tool calls/results add overhead
+      if (m.toolCalls) total += m.toolCalls.length * 50;
+      if (m.toolResults) {
+        for (const r of m.toolResults) {
+          total += estimateTokens(r.content) + 20; // content + framing overhead
+        }
+      }
+    }
+  }
+  return total;
+}
+
+/**
+ * Proactively truncate chat history BEFORE sending to the LLM if context
+ * would exceed the safe threshold (~80% of context window).
  *
- * Strategy: keep the first user message (for title/context) and trim the oldest
- * middle messages until estimated token usage drops below 50% of the context
- * window. This leaves headroom for the next exchange after compaction.
+ * This prevents broken responses from hitting the context limit mid-generation.
+ * Unlike post-response compaction (which targets 50%), pre-send truncation
+ * targets 75% to leave room for the new exchange.
  *
- * Token estimation uses the stored `usage.totalTokens` from the most recent
- * assistant message (which reflects the full context the LLM saw). We target
- * 50% after truncation so the conversation has room to grow before hitting
- * the limit again.
+ * Returns true if truncation occurred, false if context is already safe.
+ */
+export async function truncateBeforeSend(
+  chat: Chat,
+  contextWindow: number,
+  systemPrompt: string
+): Promise<boolean> {
+  const noOp = false;
+  const messages = chat.messages;
+  if (messages.length <= 2) return noOp;
+
+  const estimatedTokens = estimateContextSize(messages, systemPrompt);
+  const threshold = contextWindow * 0.75;
+  
+  if (estimatedTokens <= threshold) return noOp;
+
+  console.log(
+    `[compaction] Pre-send truncation triggered: ${estimatedTokens} tokens > ${threshold} threshold`
+  );
+
+  // Calculate how many messages to remove to get below threshold
+  // Use character-based estimation for per-message sizing
+  const messageTokenEstimates = messages.map((m, i) => {
+    let tokens = 0;
+    if (m.role === "user") {
+      tokens = estimateTokens(m.content);
+      if (m.images?.length) tokens += m.images.length * 256;
+    } else {
+      tokens = estimateTokens(m.content);
+      if (m.thinking) tokens += estimateTokens(m.thinking);
+      if (m.toolCalls) tokens += m.toolCalls.length * 50;
+      if (m.toolResults) {
+        for (const r of m.toolResults) {
+          tokens += estimateTokens(r.content) + 20;
+        }
+      }
+    }
+    return tokens;
+  });
+
+  // Keep first message (title context) + most RECENT messages that fit in budget.
+  // Iterate backwards from end to prioritize recent context.
+  let runningTotal = estimateTokens(systemPrompt) + messageTokenEstimates[0];
+  let keepFromIndex = messages.length; // start assuming we keep nothing after first
+
+  for (let i = messages.length - 1; i >= 1; i--) {
+    if (runningTotal + messageTokenEstimates[i] <= threshold) {
+      runningTotal += messageTokenEstimates[i];
+      keepFromIndex = i;
+    } else {
+      break;
+    }
+  }
+
+  // Ensure we keep at least 2 messages (first + last)
+  keepFromIndex = Math.min(keepFromIndex, messages.length - 1);
+  const messagesToRemove = keepFromIndex - 1; // messages between first and keepFromIndex
+
+  if (messagesToRemove <= 0) return noOp;
+
+  // Generate summary of removed messages before truncation
+  const removedMessages = messages.slice(1, keepFromIndex);
+  const summary = await generateCompactionSummary(removedMessages, chat.modelId);
+
+  // Keep first message, insert summary, then recent messages
+  const firstMessage = messages[0];
+  const recentMessages = messages.slice(keepFromIndex);
+  
+  const summaryMessage: typeof firstMessage = {
+    role: "assistant",
+    content: `[Conversation Summary] ${summary}`,
+    thinking: undefined,
+    timestamp: Date.now(),
+  };
+
+  chat.messages = [firstMessage, summaryMessage, ...recentMessages];
+
+  console.log(
+    `[compaction] Pre-send truncated chat ${chat.id}: removed ${messagesToRemove} messages, ` +
+    `inserted summary, ${messages.length} → ${chat.messages.length} messages`
+  );
+
+  return true;
+}
+
+/**
+ * Generate a brief summary of messages being removed during compaction.
+ * This preserves context continuity for the model.
+ */
+async function generateCompactionSummary(
+  messages: Chat["messages"],
+  modelId: string
+): Promise<string> {
+  if (messages.length === 0) return "";
+
+  const { streamChat } = await import("./agent.js");
+  
+  // Build summary input with enough content for meaningful summarization.
+  // Cap total input to ~8k chars (~2k tokens) to avoid overloading the summarizer.
+  // Distribute budget evenly across all messages so later ones aren't excluded.
+  const MAX_SUMMARY_INPUT = 8000;
+  const perMessageBudget = Math.max(100, Math.floor(MAX_SUMMARY_INPUT / messages.length));
+
+  const summaryParts: string[] = [];
+  for (const m of messages) {
+    const truncated = m.content.slice(0, perMessageBudget);
+    summaryParts.push(
+      `${m.role}: ${truncated}${m.content.length > perMessageBudget ? "..." : ""}`
+    );
+  }
+  const summaryPrompt = summaryParts.join("\n").slice(0, MAX_SUMMARY_INPUT);
+
+  const systemPrompt = `You are summarizing conversation messages that will be removed due to context limits.
+Provide a concise summary of the key points, decisions, code discussed, and outcomes.
+Focus on what the assistant needs to know to continue the conversation coherently.
+
+Example: "The user asked for help debugging a TypeScript type error. The assistant identified a missing generic parameter and provided a fix using Record<string, unknown>. The user confirmed the fix worked."
+
+Output ONLY the summary, no introduction or formatting.`;
+
+  try {
+    const result = await streamChat(
+      modelId,
+      [{ role: "user", content: summaryPrompt, timestamp: Date.now() }],
+      systemPrompt,
+      () => {}
+    );
+    return result.content.trim() || "Previous conversation context was truncated.";
+  } catch (err) {
+    console.error("[compaction] Summary generation failed:", err);
+    return "Previous conversation context was truncated.";
+  }
+}
+
+/**
+ * Truncate chat history to fit within the context window (post-response).
+ *
+ * Strategy: keep the first user message (for title/context) and the most recent
+ * messages. Uses character-based token estimation (consistent with truncateBeforeSend).
+ * Targets 50% of context window to leave headroom for the next exchange.
+ * Generates a summary of removed messages to preserve context continuity.
  */
 export async function truncateChatHistory(
   chat: Chat,
@@ -39,26 +213,60 @@ export async function truncateChatHistory(
   const targetTokens = contextWindow * 0.5;
   if (lastUsage <= targetTokens) return noOp;
 
-  // Estimate tokens per message by dividing total across all messages.
-  // This is rough but sufficient — we just need to get below the target.
-  const tokensPerMessage = lastUsage / messages.length;
-  const messagesToKeep = Math.max(2, Math.floor(targetTokens / tokensPerMessage));
-  const messagesToRemove = messages.length - messagesToKeep;
+  // Use character-based per-message estimation (consistent with truncateBeforeSend)
+  const messageTokenEstimates = messages.map((m) => {
+    let tokens = estimateTokens(m.content);
+    if (m.role === "user" && m.images?.length) {
+      tokens += m.images.length * 256;
+    }
+    if (m.role === "assistant") {
+      if (m.thinking) tokens += estimateTokens(m.thinking);
+      if (m.toolCalls) tokens += m.toolCalls.length * 50;
+      if (m.toolResults) {
+        for (const r of m.toolResults) {
+          tokens += estimateTokens(r.content) + 20;
+        }
+      }
+    }
+    return tokens;
+  });
+
+  // Iterate backwards to keep most recent messages that fit in target budget
+  let runningTotal = messageTokenEstimates[0]; // always keep first
+  let keepFromIndex = messages.length;
+
+  for (let i = messages.length - 1; i >= 1; i--) {
+    if (runningTotal + messageTokenEstimates[i] <= targetTokens) {
+      runningTotal += messageTokenEstimates[i];
+      keepFromIndex = i;
+    } else {
+      break;
+    }
+  }
+
+  keepFromIndex = Math.min(keepFromIndex, messages.length - 1);
+  const messagesToRemove = keepFromIndex - 1;
 
   if (messagesToRemove <= 0) return noOp;
 
-  // Keep the first message (preserves title context) and the most recent messages.
-  // Remove from index 1 up to messagesToRemove.
   const firstMessage = messages[0];
-  const recentMessages = messages.slice(1 + messagesToRemove);
+  const removedMessages = messages.slice(1, keepFromIndex);
+  const recentMessages = messages.slice(keepFromIndex);
 
-  chat.messages = [firstMessage, ...recentMessages];
+  // Generate summary of removed messages to preserve continuity
+  const summary = await generateCompactionSummary(removedMessages, chat.modelId);
+  const summaryMessage: ChatMessage = {
+    role: "assistant",
+    content: `[Conversation Summary] ${summary}`,
+    timestamp: Date.now(),
+  };
+
+  chat.messages = [firstMessage, summaryMessage, ...recentMessages];
 
   console.log(
-    `[compaction] Truncated chat ${chat.id}: removed ${messagesToRemove} messages ` +
-    `(${messages.length} → ${chat.messages.length}), ` +
-    `estimated ${lastUsage} → ~${Math.round(chat.messages.length * tokensPerMessage)} tokens`
+    `[compaction] Truncated chat ${chat.id}: removed ${messagesToRemove} messages, ` +
+    `inserted summary (${messages.length} → ${chat.messages.length})`
   );
 
-  return { truncated: true, removedCount: messagesToRemove };
+  return { truncated: true, removedCount: messagesToRemove, removedMessages };
 }

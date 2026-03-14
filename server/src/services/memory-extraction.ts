@@ -219,7 +219,10 @@ export async function extractMemories(
 
 const PRE_COMPACTION_SYSTEM_PROMPT = `You are a memory preservation system. A conversation is approaching its context limit and will be truncated.
 
-Review the ENTIRE conversation below and extract ALL important facts about the user that should be preserved. Be thorough — this is the last chance to capture information before it's lost.
+Review the conversation messages below that will be removed. Extract:
+1. Important facts about the user (preferences, personal details, behaviors, instructions)
+2. Current task/goal state — what is being worked on, what decisions were made, what code was discussed
+3. Key technical context the agent needs to continue effectively
 
 Output a JSON array of facts. Each fact should be:
 - "text": A concise, standalone statement
@@ -228,15 +231,26 @@ Output a JSON array of facts. Each fact should be:
 
 Output ONLY the JSON array.`;
 
+/**
+ * Pre-compaction flush: extract memories from messages that are about to be removed.
+ * Only sends the removed messages (not full conversation) to avoid hitting context limits.
+ * Captures both user facts AND task/goal state for agent continuity.
+ */
 export async function preCompactionFlush(
   modelId: string,
   chatId: string,
-  messages: ChatMessage[]
+  removedMessages: ChatMessage[]
 ): Promise<void> {
-  console.log("[memory] Pre-compaction flush triggered");
+  if (removedMessages.length === 0) {
+    console.log("[memory] Pre-compaction flush: no messages to process");
+    return;
+  }
 
-  const conversationText = messages
-    .map((m) => `${m.role}: ${m.content}`)
+  console.log(`[memory] Pre-compaction flush: processing ${removedMessages.length} removed messages`);
+
+  // Only send the messages being removed, not the full conversation
+  const removedText = removedMessages
+    .map((m, i) => `${m.role} (${i + 1}): ${m.content}`)
     .join("\n\n");
 
   let responseText = "";
@@ -245,7 +259,7 @@ export async function preCompactionFlush(
       responseText = "";
       await streamChat(
         modelId,
-        [{ role: "user", content: conversationText, timestamp: Date.now() }],
+        [{ role: "user", content: removedText, timestamp: Date.now() }],
         PRE_COMPACTION_SYSTEM_PROMPT,
         (event) => {
           if (event.type === "text_delta") {

@@ -9,7 +9,7 @@ import { chatMessagesToPiMessages } from "../services/agent.js";
 import { createPiModel, discoverOllamaModels } from "../services/models.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
 import { generateTitle } from "../services/title-generation.js";
-import { truncateChatHistory } from "../services/compaction.js";
+import { truncateChatHistory, truncateBeforeSend } from "../services/compaction.js";
 import { buildMemoryAugmentedPrompt, setCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
@@ -483,7 +483,7 @@ async function handleChatStream(
         extractMemories(chat.modelId, chat.id, lastUserMessage, assistantMsg.content)
           .catch((err) => console.error("[memory] extraction failed:", err));
 
-        // Check for compaction: extract memories then truncate when nearing context limit
+        // Check for compaction: extract memories from removed messages, then truncate
         try {
           const model = ollamaModels.find((m) => m.id === chat.modelId);
           if (model) {
@@ -491,9 +491,10 @@ async function handleChatStream(
             const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
             const usageRatio = lastUsage / effectiveContextWindow;
             if (usageRatio > 0.75) {
-              await preCompactionFlush(chat.modelId, chat.id, chat.messages);
               const compaction = await truncateChatHistory(chat, effectiveContextWindow);
-              if (compaction.truncated) {
+              if (compaction.truncated && compaction.removedMessages?.length) {
+                // Pass only the removed messages to flush, not full conversation
+                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages);
                 await saveChat(chat);
                 res.write(`event: compaction\ndata: ${JSON.stringify({
                   removedCount: compaction.removedCount,
@@ -657,6 +658,30 @@ router.post("/", async (req, res) => {
     });
     await saveChat(chat);
 
+    // Discover model for pre-send truncation
+    const ollamaModels = await discoverOllamaModels();
+    const model = ollamaModels.find((m) => m.id === chat.modelId);
+    
+    // Pre-send context protection for resume path
+    if (model) {
+      try {
+        const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
+        const truncated = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
+        if (truncated) {
+          await saveChat(chat);
+          // Rebuild system prompt after truncation
+          if (chat.type === "agent") {
+            systemPrompt = await buildMemoryAugmentedPrompt(
+              chat.systemPrompt || "You are a helpful assistant.",
+              chat.messages
+            );
+          }
+        }
+      } catch (err) {
+        console.error("[compaction] pre-send truncation failed (resume):", err);
+      }
+    }
+
     // Resume: userPiMessage=null triggers agentLoopContinue
     await handleChatStream(chat, message, contextMessages, systemPrompt, null, req, res);
   } else {
@@ -693,6 +718,30 @@ router.post("/", async (req, res) => {
         skillsCache.set(s.name, s);
       }
       systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+    }
+    
+    // Discover model for pre-send truncation
+    const ollamaModels = await discoverOllamaModels();
+    const model = ollamaModels.find((m) => m.id === chat.modelId);
+    
+    // Pre-send context protection: truncate BEFORE sending if >75% of context window
+    if (model) {
+      try {
+        const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
+        const truncated = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
+        if (truncated) {
+          await saveChat(chat);
+          // Rebuild system prompt after truncation (memories may have changed)
+          if (chat.type === "agent") {
+            systemPrompt = await buildMemoryAugmentedPrompt(
+              chat.systemPrompt || "You are a helpful assistant.",
+              chat.messages
+            );
+          }
+        }
+      } catch (err) {
+        console.error("[compaction] pre-send truncation failed:", err);
+      }
     }
     
     setCachedAugmentedPrompt(chat.id, systemPrompt);
@@ -791,6 +840,30 @@ router.post("/edit", async (req, res) => {
       skillsCache.set(s.name, s);
     }
     systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+  }
+  
+  // Discover model for pre-send truncation
+  const ollamaModels = await discoverOllamaModels();
+  const model = ollamaModels.find((m) => m.id === chat.modelId);
+  
+  // Pre-send context protection for edit path
+  if (model) {
+    try {
+      const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
+      const truncated = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
+      if (truncated) {
+        await saveChat(chat);
+        // Rebuild system prompt after truncation
+        if (chat.type === "agent") {
+          systemPrompt = await buildMemoryAugmentedPrompt(
+            chat.systemPrompt || "You are a helpful assistant.",
+            chat.messages
+          );
+        }
+      }
+    } catch (err) {
+      console.error("[compaction] pre-send truncation failed (edit):", err);
+    }
   }
   
   setCachedAugmentedPrompt(chat.id, systemPrompt);
