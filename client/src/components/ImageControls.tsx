@@ -333,15 +333,33 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           <label className="text-xs font-medium text-white/50">Steps</label>
           <span className="text-xs text-white/40">{steps}</span>
         </div>
-        <input
-          type="range"
-          min={1}
-          max={50}
-          value={steps}
-          onChange={(e) => setSteps(parseInt(e.target.value))}
-          className="w-full"
-          style={{ accentColor: `rgba(var(--theme-accent), 0.8)` }}
-        />
+        <div className="relative h-6 flex items-center">
+          <input
+            type="range"
+            min={1}
+            max={50}
+            value={steps}
+            onChange={(e) => setSteps(parseInt(e.target.value))}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+          />
+          <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-150"
+              style={{ 
+                width: `${((steps - 1) / 49) * 100}%`,
+                backgroundColor: `rgba(var(--theme-accent), 0.7)`
+              }}
+            />
+          </div>
+          <div
+            className="absolute w-4 h-4 rounded-full bg-white border-2 shadow-lg pointer-events-none transition-all duration-150"
+            style={{ 
+              left: `calc(${((steps - 1) / 49) * 100}% - 8px)`,
+              borderColor: `rgba(var(--theme-accent), 0.8)`,
+              backgroundColor: `rgba(var(--theme-accent), 0.9)`
+            }}
+          />
+        </div>
       </div>
 
       {/* CFG Scale */}
@@ -352,17 +370,35 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           </label>
           <span className="text-xs text-white/40">{cfgScale.toFixed(1)}</span>
         </div>
-        <input
-          type="range"
-          min={0}
-          max={20}
-          step={0.5}
-          value={cfgScale}
-          onChange={(e) => setCfgScale(parseFloat(e.target.value))}
-          disabled={isTurbo}
-          className="w-full disabled:opacity-40"
-          style={{ accentColor: `rgba(var(--theme-accent), 0.8)` }}
-        />
+        <div className={`relative h-6 flex items-center ${isTurbo ? 'opacity-40 pointer-events-none' : ''}`}>
+          <input
+            type="range"
+            min={0}
+            max={20}
+            step={0.5}
+            value={cfgScale}
+            onChange={(e) => setCfgScale(parseFloat(e.target.value))}
+            disabled={isTurbo}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+          />
+          <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-150"
+              style={{ 
+                width: `${(cfgScale / 20) * 100}%`,
+                backgroundColor: `rgba(var(--theme-accent), 0.7)`
+              }}
+            />
+          </div>
+          <div
+            className="absolute w-4 h-4 rounded-full bg-white border-2 shadow-lg pointer-events-none transition-all duration-150"
+            style={{ 
+              left: `calc(${(cfgScale / 20) * 100}% - 8px)`,
+              borderColor: `rgba(var(--theme-accent), 0.8)`,
+              backgroundColor: `rgba(var(--theme-accent), 0.9)`
+            }}
+          />
+        </div>
       </div>
 
       {/* Dimensions */}
