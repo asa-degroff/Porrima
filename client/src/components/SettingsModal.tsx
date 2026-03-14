@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import { searchMemories, fetchAllMemories, deleteMemory } from "../api/client";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryCategory } from "../types";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 
 function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
@@ -67,7 +67,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [memoryResults, setMemoryResults] = useState<(MemorySummary & { score?: number })[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryDeleting, setMemoryDeleting] = useState<string | null>(null);
-  const [memoryCategoryFilter, setMemoryCategoryFilter] = useState<MemoryCategory | "all">("all");
+  const [memoryCategoryFilter, setMemoryCategoryFilter] = useState<string>("all");
   const memorySearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
   const [passkeyMessage, setPasskeyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -776,22 +776,28 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       />
                     </div>
 
-                    {/* Category filter */}
-                    <div className="flex gap-1 flex-wrap">
-                      {(["all", "fact", "preference", "behavior", "instruction"] as const).map((cat) => (
-                        <button
-                          key={cat}
-                          onClick={() => setMemoryCategoryFilter(cat)}
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-all ${
-                            memoryCategoryFilter === cat
-                              ? "bg-purple-500/30 text-purple-200 border border-purple-400/30"
-                              : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
-                          }`}
-                        >
-                          {cat === "all" ? "All" : cat}
-                        </button>
-                      ))}
-                    </div>
+                    {/* Category filter — derived from actual data */}
+                    {(() => {
+                      const categories = [...new Set(memoryResults.map((m) => m.category))].sort();
+                      if (categories.length <= 1) return null;
+                      return (
+                        <div className="flex gap-1 flex-wrap">
+                          {["all", ...categories].map((cat) => (
+                            <button
+                              key={cat}
+                              onClick={() => setMemoryCategoryFilter(cat)}
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-all ${
+                                memoryCategoryFilter === cat
+                                  ? "bg-purple-500/30 text-purple-200 border border-purple-400/30"
+                                  : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
+                              }`}
+                            >
+                              {cat === "all" ? "All" : cat}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
 
                     {/* Results */}
                     <div className="max-h-[280px] overflow-y-auto space-y-1.5 pr-1">
