@@ -40,7 +40,7 @@ export function ChatListItem({ chat, active, onSelect, onDelete }: Props) {
   return (
     <button
       onClick={onSelect}
-      className={`w-full text-left px-3 py-2.5 rounded-xl transition-all group relative ${
+      className={`w-full text-left px-2.5 py-2 rounded-xl transition-all group relative ${
         active
           ? "bg-white/15 border border-white/20"
           : "hover:bg-white/8 border border-transparent"
@@ -48,11 +48,11 @@ export function ChatListItem({ chat, active, onSelect, onDelete }: Props) {
     >
       {/* Always-rendered content to maintain consistent height */}
       <div className={`min-w-0 ${confirmDelete ? "invisible" : ""}`}>
-        <p className="text-sm font-medium text-white/90 truncate pr-5">
+        <p className="text-sm font-medium text-white/90 leading-snug pr-5">
           {chat.title}
         </p>
         {chat.preview && (
-          <p className="text-xs text-white/40 truncate mt-0.5 pr-5">
+          <p className="text-xs text-white/40 truncate mt-0.25 pr-5">
             {chat.preview}
           </p>
         )}
