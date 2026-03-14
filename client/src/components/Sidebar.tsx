@@ -76,17 +76,7 @@ function ProjectSection({
           </span>
         </button>
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-          <button
-            onClick={() => onNewChat("agent", project.id)}
-            className="text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5"
-            title="New chat in project"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v14" />
-              <path d="M5 12h14" />
-            </svg>
-          </button>
-          {confirmDelete ? (
+            {confirmDelete ? (
             <div className="flex items-center gap-1">
               <button
                 onClick={() => { onDeleteProject(project.id); setConfirmDelete(false); }}
@@ -118,6 +108,16 @@ function ProjectSection({
       </div>
       {expanded && (
         <div className="px-1 pb-1.5">
+          <button
+            onClick={() => onNewChat("agent", project.id)}
+            className="w-full px-2 py-1.5 rounded-md bg-emerald-500/15 border border-emerald-400/25 text-emerald-300 text-xs font-medium hover:bg-emerald-500/25 transition-all flex items-center justify-center gap-1.5 mb-2"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v14" />
+              <path d="M5 12h14" />
+            </svg>
+            New Chat
+          </button>
           {chats.length > 0 ? (
             <div className="space-y-0.5">
               {chats.map((chat) => (
