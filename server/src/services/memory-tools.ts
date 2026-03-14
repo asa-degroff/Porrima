@@ -14,11 +14,11 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "save_memory",
     description:
-      "Save an important fact about the user. Use when they share personal info, preferences, or ask you to remember something.",
+      "Save an important fact. Use whenever you want to remember something.",
     parameters: Type.Object({
       text: Type.String({ description: "The fact to remember" }),
       category: StringEnum(
-        ["preference", "fact", "behavior", "instruction"] as const,
+        ["preference", "fact", "behavior", "instruction", "note", "reflection"] as const,
         { description: "Category of the memory" }
       ),
       importance: Type.Number({
@@ -31,7 +31,7 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "search_memory",
     description:
-      "Search your memories for relevant information. Use when you need to recall something specific about the user.",
+      "Search your memories for relevant information. Use when you need to recall something specific.",
     parameters: Type.Object({
       query: Type.String({ description: "What to search for" }),
     }),

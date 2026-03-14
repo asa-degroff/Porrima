@@ -89,7 +89,7 @@ router.get("/:id/rendered-prompt", async (req, res) => {
   const chat = await getChat(req.params.id);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
-  let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+  let systemPrompt = chat.systemPrompt || "You are an autonmous agent.";
   if (chat.type === "agent") {
     const cached = getCachedAugmentedPrompt(chat.id);
     if (cached) {

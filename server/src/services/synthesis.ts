@@ -108,11 +108,11 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           [
             {
               role: "user",
-              content: `Here are all current memories about the user:\n\n${memoriesText}\n\nWrite a brief daily summary (2-4 paragraphs) of what you know about this user, organized by theme. Note any contradictions or outdated info.`,
+              content: `Here are all current memories:\n\n${memoriesText}\n\nWrite a brief daily summary (2-4 paragraphs) of what you know, organized by theme. Note any contradictions or outdated info.`,
               timestamp: Date.now(),
             },
           ],
-          "You are a memory synthesis system. Summarize user memories concisely.",
+          "You are a memory synthesis system synthesizing facts, themes, and ideas.",
           (event) => {
             if (event.type === "text_delta") {
               summaryText += event.delta;
