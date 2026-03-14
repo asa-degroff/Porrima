@@ -13,6 +13,7 @@ interface Props {
   isOnline?: boolean;
   placeholder?: string;
   onSlashTyping?: () => void;
+  onSlashDeleted?: () => void;
   inputRef?: React.RefObject<HTMLDivElement | null>;
 }
 
@@ -57,7 +58,7 @@ async function processFiles(files: FileList | File[]): Promise<ImageAttachment[]
   );
 }
 
-export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, inputRef }: Props) {
+export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, onSlashDeleted, inputRef }: Props) {
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [hasContent, setHasContent] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -183,7 +184,12 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     // Save draft
     setDraft(chatId, textRef.current, images);
     updateLayout();
-  }, [updateLayout, chatId, images]);
+    // Check if / was deleted - close skill selector if no longer typing after /
+    const hasSlashPrefix = textRef.current.trim().startsWith("/");
+    if (!hasSlashPrefix && onSlashDeleted) {
+      onSlashDeleted();
+    }
+  }, [updateLayout, chatId, images, onSlashDeleted]);
 
   useLayoutEffect(() => {
     updateLayout();

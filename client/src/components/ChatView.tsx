@@ -431,6 +431,7 @@ export function ChatView({
         waitingForInput={waitingForInput}
         isOnline={isOnline}
         onSlashTyping={handleSlashTyping}
+        onSlashDeleted={closeSkillSelector}
         inputRef={inputRef}
       />
 

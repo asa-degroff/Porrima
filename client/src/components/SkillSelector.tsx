@@ -66,12 +66,14 @@ export function SkillSelector({ skills, filterText, onSelect, onClose, inputRect
     position: "fixed",
     left: inputRect.left,
     top: positionAbove ? inputRect.top - 200 : inputRect.bottom,
-    width: Math.max(250, inputRect.width),
+    minWidth: 250,
+    maxWidth: "calc(100vw - 32px)",
+    width: "fit-content",
     maxHeight: 200,
     overflowY: "auto",
     zIndex: 1000,
-    backgroundColor: "#1a1a2e",
-    border: "1px solid rgba(255,255,255,0.15)",
+    backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+    border: "1px solid rgba(var(--theme-primary-border), 0.5)",
     borderRadius: "12px",
     boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
   };
@@ -88,15 +90,15 @@ export function SkillSelector({ skills, filterText, onSelect, onClose, inputRect
             width: "100%",
             padding: "10px 14px",
             textAlign: "left",
-            background: i === selectedIndex ? "rgba(59,130,246,0.2)" : "transparent",
+            background: i === selectedIndex ? `rgba(var(--theme-secondary), 0.15)` : "transparent",
             border: "none",
             borderBottom: "1px solid rgba(255,255,255,0.05)",
-            color: "white",
+            color: i === selectedIndex ? "white" : "rgba(255,255,255,0.7)",
             cursor: "pointer",
             fontSize: "13px",
           }}
         >
-          <div style={{ fontWeight: 500, color: "rgba(147,197,253,0.9)" }}>
+          <div style={{ fontWeight: 500, color: i === selectedIndex ? "white" : "rgba(255,255,255,0.9)" }}>
             /{skill.name}
           </div>
           {skill.description && (
