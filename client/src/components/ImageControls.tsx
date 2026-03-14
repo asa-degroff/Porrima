@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { ImageGenerationParams } from "../types";
-import type { QueueItem } from "../hooks/useImageSandbox";
+import type { ImageGenerationParams, GenerationState } from "../types";
 
 const chevronSvg = (open: boolean) => (
   <svg
@@ -52,14 +51,11 @@ interface Props {
   progress: { step: number; total: number } | null;
   onEnqueue: (params: ImageGenerationParams, batchCount: number) => void;
   onAbort: () => void;
-  onAbortAll: () => void;
-  onClearQueue: () => void;
-  queue: QueueItem[];
-  currentItem: QueueItem | null;
+  activeGenerations: GenerationState[];
   initialParams?: Partial<ImageGenerationParams>;
 }
 
-export function ImageControls({ models, generating, progress, onEnqueue, onAbort, onAbortAll, onClearQueue, queue, currentItem, initialParams }: Props) {
+export function ImageControls({ models, generating, progress, onEnqueue, onAbort, activeGenerations, initialParams }: Props) {
   const [positivePrompt, setPositivePrompt] = useState(initialParams?.positivePrompt || "");
   const [negativePrompt, setNegativePrompt] = useState(initialParams?.negativePrompt || "");
   const [showNegative, setShowNegative] = useState(false);
@@ -249,7 +245,9 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
 
   const isTurbo = model.includes("turbo");
   const progressPercent = progress ? Math.round((progress.step / progress.total) * 100) : 0;
-  const totalPending = queue.length + (generating ? 1 : 0);
+  const queuedCount = activeGenerations.filter((g) => g.status === "queued").length;
+  const processingCount = activeGenerations.filter((g) => g.status === "processing").length;
+  const totalActive = queuedCount + processingCount;
 
   return (
     <div className="space-y-4">
@@ -590,7 +588,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
               color: `rgba(var(--theme-accent-text))`,
             }}
           >
-            {totalPending > 0
+            {totalActive > 0
               ? `Enqueue${batchCount > 1 ? ` ${batchCount}` : ""}`
               : `Generate${batchCount > 1 ? ` ${batchCount}` : ""}`
             }
@@ -599,7 +597,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
       </div>
 
       {/* Current generation progress */}
-      {generating && (
+      {generating && progress && (
         <div className="space-y-2">
           <div className="w-full bg-white/5 rounded-full h-2 overflow-hidden">
             <div
@@ -612,13 +610,10 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           </div>
           <div className="flex items-center justify-between">
             <span className="text-xs text-white/40">
-              {progress ? `Step ${progress.step}/${progress.total}` : "Starting..."}
-              {currentItem && currentItem.batchTotal > 1 && (
-                <span className="text-white/30"> ({currentItem.batchIndex}/{currentItem.batchTotal})</span>
-              )}
+              Step {progress.step}/{progress.total}
             </span>
             <button
-              onClick={queue.length > 0 ? onAbortAll : onAbort}
+              onClick={onAbort}
               className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-all"
               style={{
                 backgroundColor: `rgba(var(--theme-accent), 0.1)`,
@@ -626,40 +621,53 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
                 color: `rgba(var(--theme-accent-text))`,
               }}
             >
-              {queue.length > 0 ? "Cancel All" : "Cancel"}
+              Cancel
             </button>
           </div>
         </div>
       )}
 
-      {/* Queue display */}
-      {queue.length > 0 && (
+      {/* Active generations queue */}
+      {activeGenerations.length > 0 && (
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium text-white/40">
-              Queue ({queue.length} pending)
+              Active ({activeGenerations.length})
             </span>
-            <button
-              onClick={onClearQueue}
-              className="text-[10px] hover:transition-colors"
-              style={{ color: `rgba(var(--theme-accent-text), 0.6)` }}
-            >
-              Clear
-            </button>
+            {queuedCount > 0 && (
+              <span className="text-[10px] text-white/30">
+                {queuedCount} queued, {processingCount} processing
+              </span>
+            )}
           </div>
-          <div className="space-y-1 max-h-32 overflow-y-auto">
-            {queue.map((item) => (
+          <div className="space-y-1 max-h-48 overflow-y-auto">
+            {activeGenerations.map((gen) => (
               <div
-                key={item.id}
-                className="flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.03] border border-white/5"
+                key={gen.id}
+                className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-white/[0.03] border border-white/5"
               >
-                <div className="w-1.5 h-1.5 rounded-full shrink-0"
-                  style={{ backgroundColor: `rgba(var(--theme-accent), 0.4)` }}
+                <div
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                    gen.status === "processing" ? "animate-pulse" : ""
+                  }`}
+                  style={{
+                    backgroundColor: gen.status === "processing"
+                      ? `rgba(var(--theme-accent), 0.8)`
+                      : `rgba(var(--theme-accent), 0.4)`
+                  }}
                 />
-                <span className="text-[10px] text-white/40 truncate flex-1">{item.promptPreview}</span>
-                {item.batchTotal > 1 && (
-                  <span className="text-[10px] text-white/25 shrink-0">{item.batchIndex}/{item.batchTotal}</span>
+                <span className="text-[10px] text-white/40 truncate flex-1">
+                  {gen.params.positivePrompt.slice(0, 50)}
+                  {gen.params.positivePrompt.length > 50 ? "..." : ""}
+                </span>
+                {gen.progress && (
+                  <span className="text-[10px] text-white/25 shrink-0">
+                    {gen.progress.step}/{gen.progress.total}
+                  </span>
                 )}
+                <span className="text-[10px] text-white/25 shrink-0 uppercase">
+                  {gen.status}
+                </span>
               </div>
             ))}
           </div>

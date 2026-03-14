@@ -36,11 +36,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     error: imageError,
     enqueue,
     abort,
-    abortAll,
-    clearQueue,
     deleteImage: deleteGeneratedImage,
-    queue,
-    currentItem,
+    activeGenerations,
   } = useImageSandbox();
 
   const [lightboxImage, setLightboxImage] = useState<GeneratedImage | null>(null);
@@ -157,7 +154,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   const error = mode === "generate" ? imageError : visionError;
 
   const isAvailable = mode === "generate"
-    ? (comfyuiStatus?.available ?? false)
+    ? (comfyuiStatus?.available ?? false) || activeGenerations.length > 0
     : true;
 
   const handleUseParams = useCallback((params: Partial<ImageGenerationParams>) => {
@@ -239,9 +236,11 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               {mode === "generate"
                 ? comfyuiStatus === null
                   ? "Checking..."
-                  : isAvailable
-                  ? "ComfyUI Connected"
-                  : "ComfyUI Unavailable"
+                  : activeGenerations.length > 0
+                    ? `${activeGenerations.length} active`
+                    : isAvailable
+                      ? "ComfyUI Connected"
+                      : "ComfyUI Unavailable"
                 : "Vision Ready"
               }
             </span>
@@ -278,10 +277,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                 progress={progress}
                 onEnqueue={enqueue}
                 onAbort={abort}
-                onAbortAll={abortAll}
-                onClearQueue={clearQueue}
-                queue={queue}
-                currentItem={currentItem}
+                activeGenerations={activeGenerations}
                 initialParams={controlParams}
               />
             </div>

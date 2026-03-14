@@ -9,14 +9,6 @@ import {
 } from "../api/client";
 import type { ComfyUIStatus, GeneratedImage, ImageGenerationParams, GenerationState } from "../types";
 
-export interface QueueItem {
-  id: string;
-  params: ImageGenerationParams;
-  batchIndex: number;
-  batchTotal: number;
-  promptPreview: string;
-}
-
 // Check if a generation is actively running
 function isActiveGeneration(gen: GenerationState): boolean {
   return gen.status === "queued" || gen.status === "processing";
@@ -30,50 +22,43 @@ export function useImageSandbox() {
   const [comfyuiStatus, setComfyuiStatus] = useState<ComfyUIStatus | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [currentItem, setCurrentItem] = useState<QueueItem | null>(null);
-  const [activeGenerationId, setActiveGenerationId] = useState<string | null>(null);
+  const [activeGenerations, setActiveGenerations] = useState<GenerationState[]>([]);
   const abortRef = useRef<AbortController | null>(null);
-  const processingRef = useRef(false);
-  const subscribedGenerationId = useRef<string | null>(null);
-
-  const checkStatus = useCallback(async () => {
-    try {
-      const status = await fetchComfyUIStatus();
-      setComfyuiStatus(status);
-      if (status.models.length > 0) {
-        setModels(status.models);
-      }
-    } catch {
-      setComfyuiStatus({ available: false, queueSize: 0, models: [] });
-    }
-  }, []);
+  const subscribedGenerationIds = useRef<Set<string>>(new Set());
+  const statusPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Subscribe to a generation's SSE stream
   const subscribeToGenerationEvents = useCallback((generationId: string) => {
-    if (subscribedGenerationId.current === generationId) return;
+    if (subscribedGenerationIds.current.has(generationId)) return;
 
-    subscribedGenerationId.current = generationId;
+    subscribedGenerationIds.current.add(generationId);
     const abortController = subscribeToGeneration(generationId, {
       onState: (state) => {
+        // Update active generations list with latest state
+        setActiveGenerations((prev) => {
+          const idx = prev.findIndex((g) => g.id === state.id);
+          if (idx >= 0) {
+            const copy = [...prev];
+            copy[idx] = state;
+            return copy;
+          }
+          return prev;
+        });
+
+        // Update UI state for the primary generation display
         if (state.status === "processing" && state.progress) {
           setGenerating(true);
           setProgress({ step: state.progress.step, total: state.progress.total });
-          setActiveGenerationId(generationId);
           setError(null);
         } else if (state.status === "completed" && state.imageUrl) {
           setGenerating(false);
           setProgress(null);
-          setActiveGenerationId(null);
-          subscribedGenerationId.current = null;
-          processingRef.current = false;
+          subscribedGenerationIds.current.delete(generationId);
           // The image will appear in the list after refresh
         } else if (state.status === "error") {
           setGenerating(false);
           setProgress(null);
-          setActiveGenerationId(null);
-          subscribedGenerationId.current = null;
-          processingRef.current = false;
+          subscribedGenerationIds.current.delete(generationId);
           setError(state.error || "Generation failed");
         }
       },
@@ -81,102 +66,111 @@ export function useImageSandbox() {
         setError(err);
         setGenerating(false);
         setProgress(null);
-        setActiveGenerationId(null);
-        subscribedGenerationId.current = null;
-        processingRef.current = false;
+        subscribedGenerationIds.current.delete(generationId);
       },
     });
     abortRef.current = abortController;
   }, []);
 
-  // Check status, load images, and recover active generations on mount
+  // Poll ComfyUI status continuously (every 10 seconds)
   useEffect(() => {
-    checkStatus();
+    const pollStatus = async () => {
+      try {
+        const status = await fetchComfyUIStatus();
+        setComfyuiStatus(status);
+        if (status.models.length > 0) {
+          setModels(status.models);
+        }
+      } catch {
+        setComfyuiStatus({ available: false, queueSize: 0, models: [] });
+      }
+    };
+
+    // Initial poll
+    pollStatus();
+
+    // Poll every 10 seconds while component is mounted
+    statusPollingRef.current = setInterval(pollStatus, 10000);
+
+    return () => {
+      if (statusPollingRef.current) {
+        clearInterval(statusPollingRef.current);
+      }
+    };
+  }, []);
+
+  // Load images and recover active generations on mount
+  useEffect(() => {
     fetchGeneratedImages().then((existing) => {
       if (existing.length > 0) setImages(existing);
     }).catch(() => {});
 
     // Check for any active generations to recover
     fetchGenerations().then((generations) => {
-      const active = generations.find(isActiveGeneration);
-      if (active) {
-        console.log("[image-sandbox] recovering active generation:", active.id);
-        subscribeToGenerationEvents(active.id);
+      const active = generations.filter(isActiveGeneration);
+      if (active.length > 0) {
+        console.log(`[image-sandbox] recovering ${active.length} active generation(s)`);
+        setActiveGenerations(active);
+        // Subscribe to all active generations
+        active.forEach((gen) => subscribeToGenerationEvents(gen.id));
       }
     }).catch(() => {});
-  }, [checkStatus, subscribeToGenerationEvents]);
+  }, [subscribeToGenerationEvents]);
 
-  // Process queue: pick next item when not generating
+  // Refresh active generations list periodically
   useEffect(() => {
-    if (processingRef.current || queue.length === 0) return;
-    processingRef.current = true;
+    const refreshInterval = setInterval(() => {
+      fetchGenerations().then((generations) => {
+        const active = generations.filter(isActiveGeneration);
+        setActiveGenerations(active);
+      }).catch(() => {});
+    }, 2000);
 
-    const [next, ...rest] = queue;
-    setQueue(rest);
-    setCurrentItem(next);
-    setGenerating(true);
-    setProgress(null);
-    setError(null);
-
-    abortRef.current = apiGenerateImage(next.params, {
-      onStarted: (generationId) => {
-        setActiveGenerationId(generationId);
-        subscribeToGenerationEvents(generationId);
-      },
-      onProgress: (step, totalSteps) => {
-        setProgress({ step, total: totalSteps });
-      },
-      onDone: (image) => {
-        setImages((prev) => [image, ...prev]);
-        setSelectedImage(image);
-        setGenerating(false);
-        setProgress(null);
-        setCurrentItem(null);
-        setActiveGenerationId(null);
-        subscribedGenerationId.current = null;
-        processingRef.current = false;
-      },
-      onError: (err) => {
-        setError(err);
-        setGenerating(false);
-        setProgress(null);
-        setCurrentItem(null);
-        setActiveGenerationId(null);
-        subscribedGenerationId.current = null;
-        processingRef.current = false;
-      },
-    });
-  }, [queue, generating, subscribeToGenerationEvents]);
-
-  const enqueue = useCallback((params: ImageGenerationParams, batchCount: number = 1) => {
-    const batchId = crypto.randomUUID().slice(0, 8);
-    const preview = params.positivePrompt.slice(0, 60) + (params.positivePrompt.length > 60 ? "..." : "");
-    const items: QueueItem[] = Array.from({ length: batchCount }, (_, i) => ({
-      id: `${batchId}-${i}`,
-      params: { ...params, seed: undefined },
-      batchIndex: i + 1,
-      batchTotal: batchCount,
-      promptPreview: preview,
-    }));
-    setQueue((prev) => [...prev, ...items]);
+    return () => clearInterval(refreshInterval);
   }, []);
+
+  const enqueue = useCallback(async (params: ImageGenerationParams, batchCount: number = 1) => {
+    // Enqueue by creating generation states on the server
+    // Each batch item becomes a separate generation
+    for (let i = 0; i < batchCount; i++) {
+      const genParams: ImageGenerationParams = { ...params, seed: undefined };
+      // This will create a new generation and start it immediately
+      // The server handles queuing via generations.json state
+      let currentGenerationId: string | null = null;
+      abortRef.current = apiGenerateImage(genParams, {
+        onStarted: (generationId) => {
+          currentGenerationId = generationId;
+          subscribeToGenerationEvents(generationId);
+        },
+        onProgress: (step, totalSteps) => {
+          setProgress({ step, total: totalSteps });
+        },
+        onDone: (image) => {
+          setImages((prev) => [image, ...prev]);
+          setSelectedImage(image);
+          setGenerating(false);
+          setProgress(null);
+          if (currentGenerationId) {
+            subscribedGenerationIds.current.delete(currentGenerationId);
+          }
+        },
+        onError: (err) => {
+          setError(err);
+          setGenerating(false);
+          setProgress(null);
+          if (currentGenerationId) {
+            subscribedGenerationIds.current.delete(currentGenerationId);
+          }
+        },
+      });
+    }
+  }, [subscribeToGenerationEvents]);
 
   const abort = useCallback(() => {
     abortRef.current?.abort();
     setGenerating(false);
     setProgress(null);
-    setCurrentItem(null);
-    processingRef.current = false;
   }, []);
-
-  const clearQueue = useCallback(() => {
-    setQueue([]);
-  }, []);
-
-  const abortAll = useCallback(() => {
-    abort();
-    clearQueue();
-  }, [abort, clearQueue]);
 
   const deleteImage = useCallback(async (id: string) => {
     try {
@@ -201,11 +195,7 @@ export function useImageSandbox() {
     error,
     enqueue,
     abort,
-    abortAll,
-    clearQueue,
     deleteImage,
-    queue,
-    currentItem,
-    checkStatus,
+    activeGenerations,
   };
 }
