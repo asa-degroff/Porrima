@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { InlineVisual as InlineVisualType } from "../types";
 
 const MIN_HEIGHT = 80;
-const MAX_HEIGHT = 600;
+const MAX_HEIGHT = 1000;
 
 interface Props {
   visual: InlineVisualType;
@@ -14,8 +14,7 @@ export function InlineVisual({ visual }: Props) {
   const [height, setHeight] = useState(200);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const handleIframeLoad = useCallback(() => {
-    setIframeLoaded(true);
+  const updateHeight = useCallback(() => {
     try {
       const doc = iframeRef.current?.contentDocument;
       if (doc) {
@@ -26,6 +25,23 @@ export function InlineVisual({ visual }: Props) {
       // cross-origin fallback
     }
   }, []);
+
+  const handleIframeLoad = useCallback(() => {
+    setIframeLoaded(true);
+    updateHeight();
+    
+    // Watch for content size changes with ResizeObserver
+    const doc = iframeRef.current?.contentDocument;
+    if (doc) {
+      const observer = new ResizeObserver(() => {
+        updateHeight();
+      });
+      observer.observe(doc.documentElement);
+      
+      // Also observe body in case documentElement doesn't resize
+      observer.observe(doc.body);
+    }
+  }, [updateHeight]);
 
   // Create blob URL from inline HTML
   useEffect(() => {
@@ -88,7 +104,7 @@ export function InlineVisual({ visual }: Props) {
       </div>
 
       {/* Iframe content */}
-      <div className={`transition-colors duration-150 ${iframeLoaded ? "" : "bg-black/10"}`}>
+      <div className={`transition-colors duration-150 ${iframeLoaded ? "bg-white" : "bg-black/10"}`}>
         {blobUrl ? (
           <iframe
             ref={iframeRef}

@@ -367,7 +367,16 @@ async function handleChatStream(
               isError: event.isError,
             };
             state.allToolResults.push(toolResult);
-            state.segments.push({ seq: ++state.seqCounter, type: "tool_result", toolResult });
+            // Insert tool_result immediately after its tool_call segment (not at the end),
+            // so that visual/artifact segments emitted during tool execution stay after the pair.
+            const callIdx = state.segments.findIndex(
+              s => s.type === "tool_call" && s.toolCall?.id === event.toolCallId
+            );
+            if (callIdx >= 0) {
+              state.segments.splice(callIdx + 1, 0, { seq: ++state.seqCounter, type: "tool_result", toolResult });
+            } else {
+              state.segments.push({ seq: ++state.seqCounter, type: "tool_result", toolResult });
+            }
             res.write(`event: tool_status\ndata: ${JSON.stringify({
               name: event.toolName,
               status: event.isError ? "error" : "done",

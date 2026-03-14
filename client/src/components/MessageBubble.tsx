@@ -227,12 +227,12 @@ export const MessageBubble = memo(function MessageBubble({
                   case "tool_call": {
                     // Look ahead for immediate tool_result and pair them
                     const nextSegment = message.segments?.[i + 1];
-                    const hasResult = nextSegment?.type === "tool_result" && 
+                    const hasResult = nextSegment?.type === "tool_result" &&
                                      nextSegment.toolResult?.toolName === segment.toolCall?.name;
-                    
+
                     return segment.toolCall ? (
                       <ToolCallDisplay
-                        key={`${segment.seq}-${i}`}
+                        key={`tool-${segment.toolCall.id}`}
                         toolCall={segment.toolCall}
                         toolResult={hasResult ? nextSegment.toolResult : undefined}
                       />
@@ -243,15 +243,15 @@ export const MessageBubble = memo(function MessageBubble({
                     return null;
                   case "artifact":
                     return segment.artifact ? (
-                      <ArtifactPanel key={`${segment.seq}-${i}`} artifact={segment.artifact} />
+                      <ArtifactPanel key={`artifact-${segment.artifact.id}`} artifact={segment.artifact} />
                     ) : null;
                   case "visual":
                     return segment.visual ? (
-                      <InlineVisual key={`${segment.seq}-${i}`} visual={segment.visual} />
+                      <InlineVisual key={`visual-${segment.visual.id}`} visual={segment.visual} />
                     ) : null;
                   case "generated_image":
                     return segment.generatedImage ? (
-                      <GeneratedImagePanel key={`${segment.seq}-${i}`} image={segment.generatedImage} />
+                      <GeneratedImagePanel key={`image-${segment.generatedImage.id}`} image={segment.generatedImage} />
                     ) : null;
                   default:
                     return null;
