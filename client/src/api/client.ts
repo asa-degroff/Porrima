@@ -683,6 +683,29 @@ export async function deleteAnalyzedImage(id: string): Promise<void> {
   if (!res.ok) throw new Error("Failed to delete analyzed image");
 }
 
+// --- Memory API ---
+
+export async function searchMemories(query: string, topK = 10): Promise<(import("../types").MemorySummary & { score: number })[]> {
+  const res = await apiFetch(`${BASE}/memory/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, topK }),
+  });
+  if (!res.ok) throw new Error("Failed to search memories");
+  return res.json();
+}
+
+export async function fetchAllMemories(): Promise<import("../types").MemorySummary[]> {
+  const res = await apiFetch(`${BASE}/memory`);
+  if (!res.ok) throw new Error("Failed to fetch memories");
+  return res.json();
+}
+
+export async function deleteMemory(id: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/memory/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete memory");
+}
+
 // --- Skills API ---
 
 export interface SkillInfo {
