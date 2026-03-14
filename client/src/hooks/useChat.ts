@@ -34,9 +34,32 @@ interface BackgroundStream {
 /** Module-level store — survives hook re-renders and chat switches */
 const bgStreams = new Map<string, BackgroundStream>();
 
+/** Per-chat draft state stored when user is typing a message */
+interface Draft {
+  text: string;
+  images: ImageAttachment[];
+}
+
+const drafts = new Map<string, Draft>();
+
 /** Check if a chat has an active or completed background stream */
 export function hasBackgroundStream(chatId: string): boolean {
   return bgStreams.has(chatId);
+}
+
+/** Get draft for a chat */
+export function getDraft(chatId: string): Draft | undefined {
+  return drafts.get(chatId);
+}
+
+/** Set draft for a chat */
+export function setDraft(chatId: string, text: string, images: ImageAttachment[]): void {
+  drafts.set(chatId, { text, images });
+}
+
+/** Clear draft for a chat */
+export function clearDraft(chatId: string): void {
+  drafts.delete(chatId);
 }
 
 /** Get chat IDs with active (still streaming) background streams */

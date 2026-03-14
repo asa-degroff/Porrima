@@ -278,6 +278,7 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
       {/* Input */}
       <div className="shrink-0">
         <MessageInput
+          chatId={null}
           onSend={handleSend}
           disabled={chatting}
           placeholder="Ask about this image..."

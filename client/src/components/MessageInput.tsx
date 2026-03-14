@@ -1,8 +1,10 @@
 import { useState, useRef, useCallback, useLayoutEffect, useEffect, memo } from "react";
 import type { ImageAttachment } from "../types";
 import { useHaptics } from "../hooks/useHaptics";
+import { getDraft, setDraft, clearDraft } from "../hooks/useChat";
 
 interface Props {
+  chatId: string | null;
   onSend: (text: string, images?: ImageAttachment[]) => void;
   disabled: boolean;
   onAbort?: () => void;
@@ -55,7 +57,7 @@ async function processFiles(files: FileList | File[]): Promise<ImageAttachment[]
   );
 }
 
-export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, inputRef }: Props) {
+export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, inputRef }: Props) {
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [hasContent, setHasContent] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -74,6 +76,20 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
       (inputRef as React.RefObject<HTMLDivElement | null>).current = editorRef.current;
     }
   }, [inputRef]);
+
+  // Load draft when switching chats
+  useEffect(() => {
+    if (!chatId) return;
+    const draft = getDraft(chatId);
+    if (draft) {
+      textRef.current = draft.text;
+      setImages(draft.images);
+      setHasContent(!!draft.text.trim());
+      if (editorRef.current) {
+        editorRef.current.innerText = draft.text;
+      }
+    }
+  }, [chatId]);
 
   const canSend = (hasContent || images.length > 0) && (!disabled || streaming || !isOnline);
 
@@ -104,8 +120,10 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
       editorRef.current.textContent = "";
       editorRef.current.focus();
     }
+    // Clear draft for this chat
+    if (chatId) clearDraft(chatId);
     updateLayout();
-  }, [images, disabled, isOnline, onSend, medium, updateLayout]);
+  }, [images, disabled, isOnline, onSend, medium, updateLayout, chatId]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -133,11 +151,13 @@ export const MessageInput = memo(function MessageInput({ onSend, disabled, onAbo
 
   const handleInput = useCallback(() => {
     const el = editorRef.current;
-    if (!el) return;
+    if (!el || !chatId) return;
     textRef.current = el.innerText;
     setHasContent(!!textRef.current.trim());
+    // Save draft
+    setDraft(chatId, textRef.current, images);
     updateLayout();
-  }, [updateLayout]);
+  }, [updateLayout, chatId, images]);
 
   useLayoutEffect(() => {
     updateLayout();

@@ -423,6 +423,7 @@ export function ChatView({
 
       {/* Input */}
       <MessageInput
+        chatId={chatId}
         onSend={onSend}
         disabled={!chatId}
         onAbort={onAbort}
