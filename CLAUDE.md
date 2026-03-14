@@ -2,7 +2,7 @@
 
 ## Project
 
-qu.je Agent — a local Ollama chat UI with a persistent memory system. npm workspaces monorepo: `server/` (Express + TypeScript) and `client/` (React + Vite + Tailwind).
+qu.je Agent — A local Ollama chat UI with persistent memory, project context, and agentic tool execution. npm workspaces monorepo: `server/` (Express + TypeScript) and `client/` (React + Vite + Tailwind).
 
 ## Quick reference
 
@@ -11,12 +11,18 @@ qu.je Agent — a local Ollama chat UI with a persistent memory system. npm work
 - **Build server**: `cd server && npm run build` (outputs to `server/dist/`)
 - **Build client**: `cd client && npm run build` (outputs to `client/dist/`)
 - **Type check**: `npx tsc --noEmit` from either `server/` or `client/`
-- **Data dir**: `~/.quje-agent/` (chats, settings, memories)
+- **Data dir**: `~/.quje-agent/` (chats, projects, settings, memories, artifacts, images)
 - **systemd service**: `quje-agent.service` (user service, auto-starts on boot)
 
 ## Architecture
 
 Two chat types: **agent** (memory-augmented) and **quick** (standalone). Existing chats without a `type` field default to "quick".
+
+**Projects** provide persistent context for agent chats:
+- Projects stored in `~/.quje-agent/projects/` with name, path, and optional AGENTS.md
+- New chats in a project inject AGENTS.md content into the system prompt
+- Chats within projects are grouped under their project in the UI
+- Agent uses filesystem tools to explore project structure
 
 The server is the integration hub. The chat route (`server/src/routes/chat.ts`) orchestrates:
 1. Memory context augmentation (agent chats only)
@@ -78,8 +84,9 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 ## Style
 
 - Tailwind v4 with glassmorphism (`backdrop-blur-xl bg-white/[0.08]`)
-- Agent-related UI uses purple accent colors; quick chats use blue
+- Agent-related UI uses purple accent colors; quick chats use blue; projects use emerald
 - No external state management — React hooks + API calls
+- Lazy loading for heavy components (ImageSandbox, MarkdownRenderer, RippleGridBackground)
 
 ## Important notes
 
@@ -88,3 +95,4 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 - The scheduler (`scheduler.ts`) runs a synthesis check on startup and then hourly via `setInterval`.
 - When editing types, update both `server/src/types.ts` and `client/src/types.ts`.
 - The server may run compiled `dist/index.js` (via `npm start` / systemd) rather than tsx dev mode — source changes require `npm run build` + restart to take effect.
+- Blob URLs for artifacts are critical for Chrome animation performance — do not use cross-origin iframe src.
