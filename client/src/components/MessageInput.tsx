@@ -70,6 +70,8 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
   const dragCounterRef = useRef(0);
   const { medium, heavy, success } = useHaptics();
 
+  const prevChatIdRef = useRef<string | null>(null);
+
   // Expose editor ref to parent if provided
   useEffect(() => {
     if (inputRef && inputRef.current !== editorRef.current) {
@@ -77,9 +79,25 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     }
   }, [inputRef]);
 
-  // Load draft when switching chats
+  // Save current draft when switching chats, then load the new chat's draft
   useEffect(() => {
-    if (!chatId) return;
+    const prevChatId = prevChatIdRef.current;
+    prevChatIdRef.current = chatId;
+    
+    if (!chatId) {
+      // Switching to no-chat state — nothing to do
+      return;
+    }
+    
+    // Save draft for the previous chat if it exists
+    if (prevChatId && prevChatId !== chatId && editorRef.current) {
+      const text = editorRef.current.innerText;
+      if (text.trim() || images.length > 0) {
+        setDraft(prevChatId, text, images);
+      }
+    }
+    
+    // Load draft for the new chat
     const draft = getDraft(chatId);
     if (draft) {
       textRef.current = draft.text;
@@ -87,6 +105,14 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
       setHasContent(!!draft.text.trim());
       if (editorRef.current) {
         editorRef.current.innerText = draft.text;
+      }
+    } else {
+      // No draft for this chat — clear the input
+      textRef.current = "";
+      setImages([]);
+      setHasContent(false);
+      if (editorRef.current) {
+        editorRef.current.innerText = "";
       }
     }
   }, [chatId]);
