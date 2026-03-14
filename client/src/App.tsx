@@ -65,7 +65,21 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   // Apply theme to document
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', settings.theme || 'default');
+    const theme = settings.theme || 'default';
+    document.documentElement.setAttribute('data-theme', theme);
+    
+    // Update PWA theme-color meta tag
+    const themeColorMeta = document.getElementById('theme-color-meta');
+    if (themeColorMeta) {
+      const themeColors: Record<string, string> = {
+        default: '#0f172a',
+        ocean: '#0c1929',
+        forest: '#0a1a0f',
+        crimson: '#1a0a0f',
+        mono: '#0a0a0a',
+      };
+      themeColorMeta.setAttribute('content', themeColors[theme] || '#0f172a');
+    }
   }, [settings.theme]);
 
   // Apply background effect
