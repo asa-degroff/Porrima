@@ -137,6 +137,28 @@ body::before {
   color: rgba(255, 255, 255, 0.7);
 }
 
+.markdown-body .markdown-link {
+  color: rgba(var(--theme-secondary-text), 0.95);
+  text-decoration: underline;
+  text-decoration-color: rgba(var(--theme-secondary), 0.6);
+  text-underline-offset: 0.15em;
+  transition: all 0.15s ease;
+}
+
+.markdown-body .markdown-link:hover {
+  color: rgba(var(--theme-secondary-text), 1);
+  text-decoration-color: rgba(var(--theme-secondary), 1);
+  background: rgba(var(--theme-secondary), 0.1);
+  border-radius: 0.15em;
+  padding: 0 0.15em;
+  margin: 0 -0.15em;
+}
+
+.markdown-body .markdown-link:visited {
+  color: rgba(180, 140, 255, 0.9);
+  text-decoration-color: rgba(140, 100, 220, 0.5);
+}
+
 /* Wrap tables in a scrollable container to prevent page-wide horizontal scrolling */
 .markdown-body .table-wrapper {
   overflow-x: auto;

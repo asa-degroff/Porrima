@@ -18,6 +18,17 @@ export function MarkdownRenderer({ content }: Props) {
               <table {...props}>{children}</table>
             </div>
           ),
+          a: ({ href, children, ...props }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="markdown-link"
+              {...props}
+            >
+              {children}
+            </a>
+          ),
         }}
       >
         {content}
