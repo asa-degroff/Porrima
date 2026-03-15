@@ -85,15 +85,20 @@ export async function updateNotebookEntry(
   const entry = await getNotebookEntry(author, id);
   if (!entry) return null;
   
-  Object.assign(entry, updates);
+  // Strip protected fields - only allow content and links to be updated
+  const safeUpdates: Partial<NotebookEntry> = {};
+  if (updates.content !== undefined) safeUpdates.content = updates.content;
+  if (updates.links !== undefined) safeUpdates.links = updates.links;
+  
+  Object.assign(entry, safeUpdates);
   await writeFile(entryPath(author, entry.id), JSON.stringify(entry, null, 2));
   
   // Update index preview if content changed
-  if (updates.content !== undefined) {
+  if (safeUpdates.content !== undefined) {
     const index = await loadIndex(author);
     const idxEntry = index.entries.find(e => e.id === id);
     if (idxEntry) {
-      idxEntry.preview = updates.content.slice(0, 100);
+      idxEntry.preview = safeUpdates.content.slice(0, 100);
     }
     await saveIndex(author, index);
   }
