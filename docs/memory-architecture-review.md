@@ -129,4 +129,4 @@ The extraction→dedup→score pipeline closely mirrors Mem0's approach (extract
 
 ## Bottom Line
 
-The system is solid — on par with Mem0's core architecture and ahead of basic LangChain memory types. The persona evolution and synthesis pipeline are genuinely distinctive features. The main gap versus state-of-the-art (Zep/Graphiti, Cognee) is the lack of relational/graph memory and temporal reasoning. For a local-first Ollama chat UI, the simplicity is arguably a feature — it's debuggable, fast, and doesn't require external infrastructure.
+The system is solid — on par with Mem0's core architecture and ahead of basic LangChain memory types. The persona evolution and synthesis pipeline are genuinely distinctive features. The main gap versus state-of-the-art (Zep/Graphiti, Cognee) is the lack of relational/graph memory and temporal reasoning.
