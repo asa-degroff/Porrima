@@ -100,11 +100,12 @@ export function NotebookView({
     setLinkPickerOpen(true);
   }, []);
 
-  const handleRemoveComposerLink = useCallback((linkType: 'chat' | 'notebook', index: number) => {
+  const handleRemoveComposerLink = useCallback((linkType: 'chat' | 'notebook' | 'url', index: number) => {
     setComposerLinks(prev => ({
       ...prev,
       chats: linkType === 'chat' ? (prev.chats || []).filter((_, i) => i !== index) : prev.chats,
       notebooks: linkType === 'notebook' ? (prev.notebooks || []).filter((_, i) => i !== index) : prev.notebooks,
+      urls: linkType === 'url' ? (prev.urls || []).filter((_, i) => i !== index) : prev.urls,
     }));
   }, []);
 
@@ -145,13 +146,14 @@ export function NotebookView({
     }
   }, [onDeleteEntry, editingEntry]);
 
-  const handleRemoveLink = useCallback(async (entryId: string, author: 'user' | 'agent', linkType: 'chat' | 'notebook', index: number) => {
+  const handleRemoveLink = useCallback(async (entryId: string, author: 'user' | 'agent', linkType: 'chat' | 'notebook' | 'url', index: number) => {
     const entry = fullEntries[entryId];
     if (!entry?.links) return;
 
     const updatedLinks: NotebookLink = {
       chats: linkType === 'chat' ? (entry.links.chats || []).filter((_, i) => i !== index) : entry.links.chats,
       notebooks: linkType === 'notebook' ? (entry.links.notebooks || []).filter((_, i) => i !== index) : entry.links.notebooks,
+      urls: linkType === 'url' ? (entry.links.urls || []).filter((_, i) => i !== index) : entry.links.urls,
     };
 
     await onUpdateEntry(author, entryId, { links: updatedLinks });
@@ -274,7 +276,7 @@ export function NotebookView({
               onDelete={() => handleDelete(author, entry.id)}
               onLinkClick={handleEntryLinkClick}
               onChatLinkClick={handleChatLinkClick}
-              onAddLink={author === 'user' ? (type, anchorRect) => openLinkPicker(type, anchorRect, entry.id, author) : undefined}
+              onAddLink={author === 'user' ? (type: 'chat' | 'notebook', anchorRect) => openLinkPicker(type, anchorRect, entry.id, author) : undefined}
               onRemoveLink={author === 'user' ? (linkType, index) => handleRemoveLink(entry.id, author, linkType, index) : undefined}
             />
           )}

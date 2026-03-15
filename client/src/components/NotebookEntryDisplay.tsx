@@ -19,7 +19,7 @@ interface Props {
   onLinkClick?: (author: 'user' | 'agent', entryId: string) => void;
   onChatLinkClick?: (chatId: string) => void;
   onAddLink?: (type: 'chat' | 'notebook', anchorRect: DOMRect) => void;
-  onRemoveLink?: (linkType: 'chat' | 'notebook', index: number) => void;
+  onRemoveLink?: (linkType: 'chat' | 'notebook' | 'url', index: number) => void;
 }
 
 export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
@@ -139,6 +139,33 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
                       <button
                         onClick={() => onRemoveLink('chat', i)}
                         className="opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-red-400 ml-1"
+                        title="Remove link"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M18 6 6 18" />
+                          <path d="m6 6 12 12" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {entry.links.urls?.map((urlLink, i) => (
+                  <div
+                    key={`url-${i}`}
+                    className="group text-xs px-2 py-1 rounded bg-blue-500/10 border border-blue-400/20 text-blue-300 hover:bg-blue-500/20 transition-colors flex items-center gap-1"
+                  >
+                    <a
+                      href={urlLink.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1"
+                    >
+                      🔗 {urlLink.title || urlLink.url.replace(/^https?:\/\//, '')}
+                    </a>
+                    {onRemoveLink && (
+                      <button
+                        onClick={() => onRemoveLink('url', i)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-blue-400/60 hover:text-red-400 ml-1"
                         title="Remove link"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

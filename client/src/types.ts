@@ -237,6 +237,7 @@ export interface AnalyzedImage {
 export interface NotebookLink {
   notebooks?: { entryId: string; author: 'user' | 'agent' }[];
   chats?: { chatId: string; title?: string }[];
+  urls?: { url: string; title?: string }[];
 }
 
 export interface NotebookEntry {

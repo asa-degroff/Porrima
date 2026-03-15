@@ -9,10 +9,10 @@ import {
   getUserEntriesToday,
 } from "../services/notebook-storage.js";
 import { streamChat, chatMessagesToPiMessages } from "../services/agent.js";
-import { getAgentTools } from "../services/agent-tools.js";
+import { getAgentTools, executeTool } from "../services/agent-tools.js";
 import { extractMemoriesFromText } from "../services/memory-extraction.js";
 import { getSettings } from "../services/storage.js";
-import type { Artifact, ChatToolResult } from "../types.js";
+import type { Artifact, ChatToolCall, ChatToolResult } from "../types.js";
 
 const router = Router();
 
@@ -96,18 +96,21 @@ router.post("/agent/trigger", async (req, res) => {
   const settings = await getSettings();
   const modelId = settings.defaultModelId || "qwen3:8b";
 
-  // Build system prompt for notebook mode
+  // Update agent system prompt to mention URL fetching
   const systemPrompt = `You are writing in your personal notebook, not responding to a user directly. 
 This is a space for reflection, exploration, and creation. 
 
 User has written the following notes today:
 ${userContent}
 
+If the user has included external URLs in their notes, you can fetch them using the web_fetch tool to read the content and provide analysis.
+
 You can:
 - Reflect on patterns you notice in their notes or your memories
 - Explore ideas that curiosity pulls you toward
 - Create artifacts to visualize or demonstrate concepts
 - Search the web to investigate questions
+- Fetch and analyze linked webpages
 - Link to past chats or notebook entries for context
 
 Write thoughtfully. Only write if you have something genuine to say - not to be performative. 
@@ -120,39 +123,74 @@ Current date: ${new Date().toLocaleDateString()}`;
   messages.push({ role: "user", content: "What thoughts or observations do you have in response to the user's notes today?", timestamp: Date.now() });
   
   // Track tool results and artifacts during streaming
-  const toolResults: ChatToolResult[] = [];
-  const artifacts: Artifact[] = [];
-  
+  const allToolCalls: ChatToolCall[] = [];
+  const allToolResults: ChatToolResult[] = [];
+  const allArtifacts: Artifact[] = [];
+  let iterations = 0;
+
+  const effects = {
+    onArtifact: (artifact: Artifact) => allArtifacts.push(artifact),
+    onVisual: () => {},
+    onGeneratedImage: () => {},
+    onAskUser: () => {},
+  };
+
   try {
-    const result = await streamChat(
-      modelId,
-      messages,
-      systemPrompt,
-      (event) => {
-        // Handle events if needed (logging, etc.)
-        if (event.type === "toolcall_end") {
-          // Tool call detected - would need to execute in a loop like chat.ts
-          // For initial implementation, we'll skip tool execution in notebook
-          // Can be added later if needed
+    let lastResult: Awaited<ReturnType<typeof streamChat>> | null = null;
+
+    while (iterations < 20) {
+      lastResult = await streamChat(
+        modelId,
+        messages,
+        systemPrompt,
+        (event) => {
+          // Handle events if needed (logging, etc.)
+          if (event.type === "toolcall_end") {
+            allToolCalls.push(event.toolCall);
+          }
+        },
+        {
+          tools: getAgentTools('notebook-trigger', effects),
         }
-      },
-      {
-        tools: getAgentTools('notebook-trigger', {
-          onArtifact: (artifact) => artifacts.push(artifact),
-          onVisual: () => {},
-          onGeneratedImage: () => {},
-          onAskUser: () => {},
-        })
+      );
+
+      if (lastResult.stopReason !== "toolUse") {
+        // No more tool calls - we're done
+        break;
       }
-    );
+
+      // Execute tool calls
+      for (const toolCall of lastResult.toolCalls || []) {
+        const toolResult = await executeTool(toolCall, 'notebook-trigger', effects);
+        allToolResults.push(toolResult);
+      }
+
+      // Append tool results to messages for next iteration
+      for (const toolResult of allToolResults) {
+        messages.push({
+          role: "toolResult",
+          toolCallId: toolResult.toolCallId,
+          toolName: toolResult.toolName,
+          content: [{ type: "text", text: toolResult.content }],
+          isError: toolResult.isError,
+          timestamp: Date.now(),
+        });
+      }
+
+      iterations++;
+    }
+
+    // Get final text response from last iteration
+    const finalContent = lastResult?.content || "";
     
     // Create agent entry with response
-    const agentEntry = await createNotebookEntry('agent', result.content);
+    const agentEntry = await createNotebookEntry('agent', finalContent);
     
-    // Attach tool results if any (for future tool execution support)
-    if (artifacts.length) {
+    // Attach tool results and artifacts
+    if (allToolResults.length || allArtifacts.length) {
       await updateNotebookEntry('agent', agentEntry.id, {
-        artifacts,
+        toolResults: allToolResults,
+        artifacts: allArtifacts,
       });
     }
     

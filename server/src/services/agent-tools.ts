@@ -261,6 +261,26 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects): AgentTo
   return tools;
 }
 
+/** Execute a single tool call using the AgentTool registry */
+export async function executeTool(
+  toolCall: { id: string; name: string; arguments: Record<string, unknown> },
+  chatId: string,
+  effects: ToolSideEffects,
+): Promise<{ toolCallId: string; toolName: string; content: string; isError: boolean }> {
+  const tools = getAgentTools(chatId, effects);
+  const tool = tools.find(t => t.name === toolCall.name);
+  if (!tool) {
+    return { toolCallId: toolCall.id, toolName: toolCall.name, content: `Unknown tool: ${toolCall.name}`, isError: true };
+  }
+  try {
+    const result = await tool.execute(toolCall.id, toolCall.arguments);
+    const text = result.content?.map((c: any) => c.text || "").join("") || "";
+    return { toolCallId: toolCall.id, toolName: toolCall.name, content: text, isError: false };
+  } catch (e) {
+    return { toolCallId: toolCall.id, toolName: toolCall.name, content: e instanceof Error ? e.message : String(e), isError: true };
+  }
+}
+
 // --- Internal executor functions (unchanged) ---
 
 /** Resolve a path relative to $HOME */
