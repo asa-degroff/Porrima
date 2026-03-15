@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - Notebook: hardcoded model ID in agent trigger (#66)
+- Notebook: hardcoded model ID in agent trigger (#66)
 - Compaction summary — preserve removed message context (#51)
 - No queue size limits - risk of rapid message flooding (#39)
 - Add garbage collection for stale memories (#32)
@@ -20,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Batch embeddings during memory extraction (#22)
 
 ### Fixed
+- Notebook: PATCH endpoint accepts arbitrary body fields (#69)
+- Notebook: updateNotebookEntry allows overwriting protected fields (#64)
+- Notebook: agentToday computed but never used (#65)
+- Notebook: missing memory extraction for user entries (#67)
 - Notebook: PATCH endpoint accepts arbitrary body fields (#69)
 - Notebook: missing memory extraction for user entries (#67)
 - Notebook: agentToday computed but never used (#65)
@@ -42,6 +47,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Hoist remarkPlugins array to module scope in MarkdownRenderer (#1)
 
 ### Changed
+- Notebook: unused imports in notebooks.ts (#70)
+- Notebook: use proper types instead of any[] for toolResults and artifacts (#71)
 - Notebook: use proper types instead of any[] for toolResults and artifacts (#71)
 - Notebook: unused imports in notebooks.ts (#70)
 - Unused parameter 'messages' in preCompactionFlush() function signature (#59)
