@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import type { ChatListItem as ChatListItemType } from "../types";
-import { ContextMenu, ContextMenuItem } from "./ContextMenu";
+import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
 
 interface Props {
   chat: ChatListItemType;
@@ -19,6 +19,11 @@ export function ChatListItem({ chat, active, onSelect, onDelete, onSendToNoteboo
     e.stopPropagation();
     setContextMenu({ x: e.clientX, y: e.clientY });
   }, []);
+
+  const openContextMenu = useCallback((pos: { x: number; y: number }) => {
+    setContextMenu(pos);
+  }, []);
+  const longPressProps = useLongPress(openContextMenu);
 
   // Close confirmation on Escape
   useEffect(() => {
@@ -50,6 +55,7 @@ export function ChatListItem({ chat, active, onSelect, onDelete, onSendToNoteboo
     <button
       onClick={onSelect}
       onContextMenu={handleContextMenu}
+      {...longPressProps}
       className={`w-full text-left px-2.5 py-2 rounded-xl transition-all group relative ${
         active
           ? "bg-white/15 border border-white/20"

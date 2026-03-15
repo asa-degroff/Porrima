@@ -10,7 +10,7 @@ import { GeneratedImagePanel } from "./GeneratedImagePanel";
 import { ToolCallDisplay } from "./ToolCallDisplay";
 import { SpeakerButton } from "./SpeakerButton";
 import { UserImage } from "./UserImage";
-import { ContextMenu, ContextMenuItem } from "./ContextMenu";
+import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
 
 const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -53,6 +53,11 @@ export const MessageBubble = memo(function MessageBubble({
   const [lightboxImage, setLightboxImage] = useState<ImageAttachment | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const openContextMenu = useCallback((pos: { x: number; y: number }) => {
+    if (isUser && editable && !editing) setContextMenu(pos);
+  }, [isUser, editable, editing]);
+  const longPressProps = useLongPress(openContextMenu);
 
   useEffect(() => {
     if (editing && textareaRef.current) {
@@ -116,6 +121,7 @@ export const MessageBubble = memo(function MessageBubble({
           e.preventDefault();
           setContextMenu({ x: e.clientX, y: e.clientY });
         } : undefined}
+        {...(isUser && editable && !editing ? longPressProps : {})}
         className={`max-w-[92%] md:max-w-[80%] rounded-2xl px-3 md:px-4 py-3 ${
           isUser
             ? "text-white/95"

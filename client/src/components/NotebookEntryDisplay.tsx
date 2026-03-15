@@ -3,7 +3,7 @@ import type { NotebookEntry, Artifact, NotebookLink } from "../types";
 import type { ChatListItem } from "../types";
 import { ChatLinkPicker } from "./ChatLinkPicker";
 import { NotebookLinkPicker } from "./NotebookLinkPicker";
-import { ContextMenu, ContextMenuItem } from "./ContextMenu";
+import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
 
 const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -42,6 +42,11 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
     setContextMenu({ x: e.clientX, y: e.clientY });
   }, [onDelete]);
 
+  const openContextMenu = useCallback((pos: { x: number; y: number }) => {
+    if (onDelete) setContextMenu(pos);
+  }, [onDelete]);
+  const longPressProps = useLongPress(openContextMenu);
+
   const handleAddLink = useCallback(() => {
     if (onAddLink && linkButtonRef.current) {
       const rect = linkButtonRef.current.getBoundingClientRect();
@@ -53,6 +58,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
     <div
       className={`rounded-xl border border-white/10 overflow-hidden ${isAgent ? 'bg-purple-500/[0.03]' : 'bg-white/[0.03]'}`}
       onContextMenu={handleContextMenu}
+      {...longPressProps}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-white/[0.02]">
