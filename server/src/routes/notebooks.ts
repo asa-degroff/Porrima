@@ -276,7 +276,7 @@ Current date: ${new Date().toLocaleDateString()}`;
   }
 });
 
-// Update entry (add links, edit content)
+// Update entry (add links, edit content, attach images)
 router.patch("/:author/:id", async (req, res) => {
   const { author, id } = req.params;
   if (author !== 'user' && author !== 'agent') {
@@ -284,10 +284,11 @@ router.patch("/:author/:id", async (req, res) => {
   }
 
   // Allowlist mutable fields only
-  const { content, links } = req.body;
+  const { content, links, images } = req.body;
   const updates: Record<string, unknown> = {};
   if (content !== undefined) updates.content = content;
   if (links !== undefined) updates.links = links;
+  if (images !== undefined) updates.images = images;
 
   if (Object.keys(updates).length === 0) {
     return res.status(400).json({ error: "No valid fields to update" });

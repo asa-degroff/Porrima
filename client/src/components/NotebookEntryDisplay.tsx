@@ -1,5 +1,5 @@
 import { Suspense, memo, lazy, useRef, useCallback, useState } from "react";
-import type { NotebookEntry, Artifact, NotebookLink } from "../types";
+import type { NotebookEntry, Artifact, NotebookLink, ImageAttachment } from "../types";
 import type { ChatListItem } from "../types";
 import { ChatLinkPicker } from "./ChatLinkPicker";
 import { NotebookLinkPicker } from "./NotebookLinkPicker";
@@ -35,6 +35,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
   const timestamp = new Date(entry.createdAt).toLocaleString();
   const linkButtonRef = useRef<HTMLButtonElement>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<ImageAttachment | null>(null);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     if (!onDelete) return;
@@ -59,6 +60,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
       className={`rounded-xl border border-white/10 overflow-hidden ${isAgent ? 'bg-purple-500/[0.03]' : 'bg-white/[0.03]'}`}
       onContextMenu={handleContextMenu}
       {...longPressProps}
+      style={{ position: 'relative', zIndex: 1 }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-white/[0.02]">
