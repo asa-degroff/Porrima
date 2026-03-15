@@ -75,10 +75,30 @@ router.post("/agent/trigger", async (req, res) => {
     });
   }
   
-  // Build context from user entries
-  const userContent = userEntries.map(e => 
-    `[User note from ${new Date(e.createdAt).toLocaleTimeString()}]\n${e.content}`
-  ).join('\n\n');
+  // Build context from user entries, including attached and inline URLs
+  const userContent = userEntries.map(e => {
+    let text = `[User note from ${new Date(e.createdAt).toLocaleTimeString()}]\n${e.content}`;
+
+    // Collect structured link URLs
+    const structuredUrls = new Set(e.links?.urls?.map(u => u.url) || []);
+
+    // Extract inline URLs from content text (bare URLs and markdown links)
+    const urlRegex = /https?:\/\/[^\s)\]>,;"']+/g;
+    const inlineUrls = (e.content.match(urlRegex) || [])
+      .map(u => u.replace(/[.,!?:]+$/, '')) // trim trailing punctuation
+      .filter(u => !structuredUrls.has(u));  // dedupe against structured links
+
+    // Merge both into a single list for the agent
+    const allUrls = [
+      ...(e.links?.urls || []).map(u => `  - ${u.url}${u.title ? ` (${u.title})` : ''}`),
+      ...inlineUrls.map(u => `  - ${u}`),
+    ];
+
+    if (allUrls.length) {
+      text += `\n\nAttached URLs:\n${allUrls.join('\n')}`;
+    }
+    return text;
+  }).join('\n\n');
   
   // Guardrail: skip if agent already wrote today
   const agentIndex = await listNotebookEntries('agent');
