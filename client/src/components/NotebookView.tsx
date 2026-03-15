@@ -3,6 +3,8 @@ import type { NotebookEntry, NotebookIndex, NotebookLink, ChatListItem } from ".
 import { fetchNotebookEntry } from "../api/client";
 import { NotebookEntryComposer } from "./NotebookEntryComposer";
 import { NotebookEntryDisplay } from "./NotebookEntryDisplay";
+import { ChatLinkPicker } from "./ChatLinkPicker";
+import { NotebookLinkPicker } from "./NotebookLinkPicker";
 
 interface Props {
   userNotebooks: NotebookIndex;
@@ -90,13 +92,15 @@ export function NotebookView({
   }, [editingEntry, onUpdateEntry]);
 
   const handleDelete = useCallback(async (author: 'user' | 'agent', id: string) => {
-    await onDeleteEntry(author, id);
-    if (editingEntry?.id === id) setEditingEntry(null);
-    setFullEntries(prev => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
+    if (window.confirm("Delete this entry? This cannot be undone.")) {
+      await onDeleteEntry(author, id);
+      if (editingEntry?.id === id) setEditingEntry(null);
+      setFullEntries(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
   }, [onDeleteEntry, editingEntry]);
 
   const handleEntryLinkClick = useCallback((author: 'user' | 'agent', entryId: string) => {
@@ -109,6 +113,42 @@ export function NotebookView({
   const handleChatLinkClick = useCallback((chatId: string) => {
     onChatSelect(chatId);
   }, [onChatSelect]);
+
+  const [linkPickerOpen, setLinkPickerOpen] = useState(false);
+  const [linkPickerType, setLinkPickerType] = useState<'chat' | 'notebook' | null>(null);
+  const [linkPickerAnchor, setLinkPickerAnchor] = useState<DOMRect | null>(null);
+  const [pendingLink, setPendingLink] = useState<{ entryId: string; author: 'user' | 'agent' } | null>(null);
+  const [filterText, setFilterText] = useState('');
+
+  const openLinkPicker = useCallback((type: 'chat' | 'notebook', anchorRect: DOMRect, entryId: string, author: 'user' | 'agent') => {
+    setLinkPickerType(type);
+    setLinkPickerAnchor(anchorRect);
+    setPendingLink({ entryId, author });
+    setFilterText('');
+    setLinkPickerOpen(true);
+  }, []);
+
+  const handleLinkSelect = useCallback(async (targetId: string, targetAuthorOrTitle: string, preview?: string) => {
+    if (!pendingLink) return;
+
+    const links: NotebookLink = {};
+    if (linkPickerType === 'chat') {
+      links.chats = [{ chatId: targetId, title: preview || targetAuthorOrTitle }];
+    } else {
+      links.notebooks = [{ entryId: targetId, author: targetAuthorOrTitle as 'user' | 'agent' }];
+    }
+
+    await onUpdateEntry(pendingLink.author, pendingLink.entryId, { links });
+    setLinkPickerOpen(false);
+    setLinkPickerType(null);
+    setPendingLink(null);
+  }, [pendingLink, linkPickerType, onUpdateEntry]);
+
+  const closeLinkPicker = useCallback(() => {
+    setLinkPickerOpen(false);
+    setLinkPickerType(null);
+    setPendingLink(null);
+  }, []);
 
   const renderEntries = useCallback((entries: NotebookIndex['entries'], author: 'user' | 'agent') => {
     return entries.map((entryInfo) => {
@@ -135,12 +175,13 @@ export function NotebookView({
               onDelete={() => handleDelete(author, entry.id)}
               onLinkClick={handleEntryLinkClick}
               onChatLinkClick={handleChatLinkClick}
+              onAddLink={author === 'user' ? (type, anchorRect) => openLinkPicker(type, anchorRect, entry.id, author) : undefined}
             />
           )}
         </div>
       );
     });
-  }, [fullEntries, editingEntry, handleEdit, handleSaveEdit, handleDelete, handleEntryLinkClick, handleChatLinkClick]);
+  }, [fullEntries, editingEntry, handleEdit, handleSaveEdit, handleDelete, handleEntryLinkClick, handleChatLinkClick, openLinkPicker]);
 
   if (loading) {
     return (
@@ -212,6 +253,27 @@ export function NotebookView({
           </div>
         </div>
       </div>
+
+      {/* Link Pickers */}
+      {linkPickerOpen && linkPickerType === 'chat' && (
+        <ChatLinkPicker
+          chats={chats}
+          filterText={filterText}
+          onSelect={handleLinkSelect}
+          onClose={closeLinkPicker}
+          anchorRect={linkPickerAnchor}
+        />
+      )}
+      {linkPickerOpen && linkPickerType === 'notebook' && (
+        <NotebookLinkPicker
+          userNotebooks={userNotebooks}
+          agentNotebooks={agentNotebooks}
+          filterText={filterText}
+          onSelect={handleLinkSelect}
+          onClose={closeLinkPicker}
+          anchorRect={linkPickerAnchor}
+        />
+      )}
     </div>
   );
 }

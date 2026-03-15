@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Improve Python sandbox isolation (#18)
 
 ### Added
+- Notebook UI: no delete confirmation (#80)
 - Notebook UI: hasUnreadAgentEntries logic is brittle (#78)
 - Notebook: hardcoded model ID in agent trigger (#66)
 - Notebook: hardcoded model ID in agent trigger (#66)

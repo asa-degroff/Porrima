@@ -1,5 +1,8 @@
-import { Suspense, memo, lazy } from "react";
-import type { NotebookEntry, Artifact } from "../types";
+import { Suspense, memo, lazy, useRef, useCallback } from "react";
+import type { NotebookEntry, Artifact, NotebookLink } from "../types";
+import type { ChatListItem } from "../types";
+import { ChatLinkPicker } from "./ChatLinkPicker";
+import { NotebookLinkPicker } from "./NotebookLinkPicker";
 
 const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -14,6 +17,7 @@ interface Props {
   onDelete?: (id: string) => void;
   onLinkClick?: (author: 'user' | 'agent', entryId: string) => void;
   onChatLinkClick?: (chatId: string) => void;
+  onAddLink?: (type: 'chat' | 'notebook', anchorRect: DOMRect) => void;
 }
 
 export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
@@ -22,9 +26,18 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
   onDelete,
   onLinkClick,
   onChatLinkClick,
+  onAddLink,
 }: Props) {
   const isAgent = entry.author === 'agent';
   const timestamp = new Date(entry.createdAt).toLocaleString();
+  const linkButtonRef = useRef<HTMLButtonElement>(null);
+
+  const handleAddLink = useCallback(() => {
+    if (onAddLink && linkButtonRef.current) {
+      const rect = linkButtonRef.current.getBoundingClientRect();
+      onAddLink('chat', rect);
+    }
+  }, [onAddLink]);
 
   return (
     <div className={`rounded-xl border border-white/10 overflow-hidden ${isAgent ? 'bg-purple-500/[0.03]' : 'bg-white/[0.03]'}`}>
@@ -51,7 +64,11 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
           )}
           {onDelete && (
             <button
-              onClick={() => onDelete(entry.id)}
+              onClick={() => {
+                if (window.confirm("Delete this entry? This cannot be undone.")) {
+                  onDelete(entry.id);
+                }
+              }}
               className="text-white/30 hover:text-red-400 transition-colors p-1 rounded hover:bg-white/5"
               title="Delete"
             >
@@ -81,7 +98,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
               <button
                 key={`notebook-${i}`}
                 onClick={() => onLinkClick?.(link.author, link.entryId)}
-                className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-colors"
+                className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-colors flex items-center gap-1"
               >
                 📓 {link.author}'s entry
               </button>
@@ -90,11 +107,28 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
               <button
                 key={`chat-${i}`}
                 onClick={() => onChatLinkClick?.(link.chatId)}
-                className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-colors"
+                className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-colors flex items-center gap-1"
               >
                 💬 {link.title || 'Chat'}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* Add Link Button (user entries only) */}
+        {onAddLink && (
+          <div className="mt-3">
+            <button
+              ref={linkButtonRef}
+              onClick={handleAddLink}
+              className="text-xs px-2 py-1 rounded bg-white/5 border border-dashed border-white/20 text-white/40 hover:text-white/60 hover:bg-white/10 transition-colors flex items-center gap-1"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14" />
+                <path d="M5 12h14" />
+              </svg>
+              Add link
+            </button>
           </div>
         )}
 

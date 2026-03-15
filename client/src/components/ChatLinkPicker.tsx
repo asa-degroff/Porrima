@@ -4,7 +4,7 @@ import type { ChatListItem } from "../types";
 interface Props {
   chats: ChatListItem[];
   filterText: string;
-  onSelect: (chatId: string, chatTitle: string) => void;
+  onSelect: (chatId: string, chatTitle: string, preview?: string) => void;
   onClose: () => void;
   anchorRect: DOMRect | null;
 }
@@ -15,7 +15,7 @@ export function ChatLinkPicker({ chats, filterText, onSelect, onClose, anchorRec
   ).slice(0, 10);
 
   const handleSelect = useCallback((chat: ChatListItem) => {
-    onSelect(chat.id, chat.title);
+    onSelect(chat.id, chat.title, chat.preview);
     onClose();
   }, [onSelect, onClose]);
 
