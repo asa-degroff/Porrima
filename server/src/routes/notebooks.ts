@@ -145,8 +145,51 @@ router.post("/agent/trigger", async (req, res) => {
   const settings = await getSettings();
   const modelId = settings.defaultModelId || "qwen3:8b";
 
-  // Update agent system prompt to mention URL fetching
-  const systemPrompt = `You are writing in your personal notebook, not responding to a user directly. 
+  // Start with the agent's core identity from settings
+  let systemPrompt = settings.defaultSystemPrompt || "You are a helpful assistant.";
+
+  // Layer memory augmentation (persona + relevant memories)
+  // We don't have a chat object here, but we can still load persona and search memories
+  try {
+    const { loadPersona } = await import("../services/persona-store.js");
+    const { searchMemories } = await import("../services/memory-storage.js");
+    const { embed } = await import("../services/embeddings.js");
+
+    // Load persona
+    try {
+      const persona = await loadPersona();
+      systemPrompt += `\n\n## Your Persona\n${persona.content}\n\nRemember: This is your core identity. Act consistently with these traits while remaining adaptive to the user's needs.`;
+    } catch (e) {
+      console.error("[notebook] Failed to load persona, continuing without:", e);
+    }
+
+    // Search memories based on user's notes today
+    if (userContent) {
+      try {
+        const queryEmbedding = await embed(userContent);
+        const results = await searchMemories(queryEmbedding, 5, new Date(), userContent);
+        const relevant = results.filter((r) => r.score > 0.0003);
+
+        if (relevant.length > 0) {
+          const memoriesBlock = relevant
+            .map(
+              (r) =>
+                `- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10]`
+            )
+            .join("\n");
+
+          systemPrompt += `\n\n## What you remember about this user\n${memoriesBlock}\n\nUse these memories naturally in conversation — don't list them unless asked. If memories seem outdated or contradictory, trust the user's latest statements.`;
+        }
+      } catch (e) {
+        console.error("[notebook] Memory search failed:", e);
+      }
+    }
+  } catch (e) {
+    console.error("[notebook] Memory augmentation failed, using base prompt:", e);
+  }
+
+  // Append notebook-specific instructions
+  systemPrompt += `\n\n---\n\n## Notebook Mode\n\nYou are writing in your personal notebook, not responding to a user directly. 
 This is a space for reflection, exploration, and creation. 
 
 User has written the following notes today:
