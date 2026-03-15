@@ -162,11 +162,12 @@ export function buildSkillAugmentedPrompt(
 
 /**
  * Parse skill activations from a message.
- * Looks for all /skill-name patterns anywhere in the message.
+ * Looks for all /skill-name patterns that are preceded by whitespace or start of string.
+ * Uses lookahead to avoid consuming whitespace, allowing consecutive skills like "/one /two".
  * Returns an array of skill names found.
  */
 export function parseSkillInvocations(message: string): string[] {
-  const matches = message.match(/\/([a-zA-Z0-9\-_]+)(?:\s|$)/g);
+  const matches = message.match(/(?:^|(?<=\s))\/([a-zA-Z0-9\-_]+)(?=\s|$)/g);
   if (!matches) return [];
   
   return matches.map(m => {
@@ -177,8 +178,10 @@ export function parseSkillInvocations(message: string): string[] {
 
 /**
  * Strip skill invocations from a message.
- * Removes all /skill-name patterns and their trailing spaces.
+ * Removes all /skill-name patterns (preceded by whitespace or start) and normalizes whitespace.
+ * Uses lookahead to avoid consuming whitespace, allowing consecutive skills to be stripped correctly.
  */
 export function stripSkillInvocations(message: string): string {
-  return message.replace(/\/[a-zA-Z0-9\-_]+\s*/g, '').trim();
+  // Remove skill invocations and normalize whitespace
+  return message.replace(/(?:^|(?<=\s))\/[a-zA-Z0-9\-_]+(?=\s|$)/g, '').trim().replace(/\s+/g, ' ');
 }

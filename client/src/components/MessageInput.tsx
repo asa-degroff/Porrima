@@ -12,7 +12,7 @@ interface Props {
   waitingForInput?: boolean;
   isOnline?: boolean;
   placeholder?: string;
-  onSlashTyping?: () => void;
+  onSlashTyping?: (filterText: string, cursorRect?: DOMRect) => void;
   onSlashDeleted?: () => void;
   inputRef?: React.RefObject<HTMLDivElement | null>;
 }
@@ -157,9 +157,19 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
-    } else if (e.key === "/" && textRef.current.trim() === "") {
-      // Only trigger at start of message
-      onSlashTyping?.();
+    } else if (e.key === "/") {
+      // Trigger skill selector from any position
+      // Note: keydown fires before the character is inserted, so we pass empty filter
+      // The handleInput callback will update it once the / is in the text
+      const el = editorRef.current;
+      if (el) {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) {
+          const range = sel.getRangeAt(0);
+          const rect = range.getClientRects()[0];
+          onSlashTyping?.("", rect);
+        }
+      }
     } else if (e.key === "Backspace") {
       // Allow deleting skill chips with backspace
       const sel = window.getSelection();
@@ -185,11 +195,36 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     setDraft(chatId, textRef.current, images);
     updateLayout();
     // Check if / was deleted - close skill selector if no longer typing after /
-    const hasSlashPrefix = textRef.current.trim().startsWith("/");
-    if (!hasSlashPrefix && onSlashDeleted) {
-      onSlashDeleted();
+    const lastSlashIndex = textRef.current.lastIndexOf("/");
+    if (lastSlashIndex === -1) {
+      // No slash at all - close selector
+      if (onSlashDeleted) {
+        onSlashDeleted();
+      }
+    } else {
+      // Check if cursor is after the last slash
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        // Get text from start to cursor position
+        const preCaretRange = range.cloneRange();
+        preCaretRange.selectNodeContents(el);
+        preCaretRange.setEnd(range.startContainer, range.startOffset);
+        const caretText = preCaretRange.toString();
+        const caretSlashIndex = caretText.lastIndexOf("/");
+        
+        // Only show selector if cursor is after a slash
+        if (caretSlashIndex >= 0) {
+          const filterText = caretText.slice(caretSlashIndex + 1);
+          const rect = range.getClientRects()[0];
+          onSlashTyping?.(filterText, rect);
+        } else if (onSlashDeleted) {
+          // Cursor is before all slashes - close selector
+          onSlashDeleted();
+        }
+      }
     }
-  }, [updateLayout, chatId, images, onSlashDeleted]);
+  }, [updateLayout, chatId, images, onSlashDeleted, onSlashTyping]);
 
   useLayoutEffect(() => {
     updateLayout();

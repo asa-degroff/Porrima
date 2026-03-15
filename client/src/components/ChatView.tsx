@@ -126,28 +126,13 @@ export function ChatView({
     fetchSkills().then(setSkills).catch(() => setSkills([]));
   }, []);
   
-  const handleSlashTyping = useCallback(() => {
+  const handleSlashTyping = useCallback((filterText: string = "", cursorRect?: DOMRect) => {
     if (!inputRef.current) return;
-    const rect = inputRef.current.getBoundingClientRect();
+    // Use cursor position if available, otherwise fall back to input rect
+    const rect = cursorRect || inputRef.current.getBoundingClientRect();
     setInputRect(rect);
-    setSkillFilter("");
+    setSkillFilter(filterText);
     setSkillSelectorOpen(true);
-  }, []);
-  
-  // Get the text content after the last "/" in the editor
-  const getPartialSkillText = useCallback(() => {
-    if (!inputRef.current) return "";
-    const text = inputRef.current.innerText;
-    const lastSlashIndex = text.lastIndexOf("/");
-    if (lastSlashIndex === -1) return "";
-    return text.slice(lastSlashIndex + 1);
-  }, []);
-  
-  const handleSkillSelect = useCallback((skillName: string) => {
-    // Use the MessageInput's insertSkillChip method via callback
-    // We'll pass this down through MessageInput props
-    setSkillSelectorOpen(false);
-    inputRef.current?.focus();
   }, []);
   
   const closeSkillSelector = useCallback(() => {

@@ -57,7 +57,7 @@ export function SkillSelector({ skills, filterText, onSelect, onClose, inputRect
   
   if (filteredSkills.length === 0 || !inputRect) return null;
   
-  // Position the selector above or below the input
+  // Position the selector above or below the cursor
   const viewportHeight = window.innerHeight;
   const spaceBelow = viewportHeight - inputRect.bottom;
   const positionAbove = spaceBelow < 200 && inputRect.top > 200;
@@ -65,7 +65,7 @@ export function SkillSelector({ skills, filterText, onSelect, onClose, inputRect
   const style: React.CSSProperties = {
     position: "fixed",
     left: inputRect.left,
-    top: positionAbove ? inputRect.top - 200 : inputRect.bottom,
+    top: positionAbove ? inputRect.top - 200 : inputRect.bottom + 4,
     minWidth: 250,
     maxWidth: "calc(100vw - 32px)",
     width: "fit-content",
