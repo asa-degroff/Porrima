@@ -108,6 +108,7 @@ export interface StreamCallbacks {
   onArtifact?: (artifact: Artifact) => void;
   onVisual?: (visual: InlineVisual) => void;
   onGeneratedImage?: (image: GeneratedImage) => void;
+  onSegment?: (segment: import("../types").MessageSegment) => void;
   onAskUser?: (question: string) => void;
   onIteration?: (info: IterationInfo) => void;
   onWarning?: (warning: StreamWarning) => void;
@@ -272,6 +273,9 @@ function processSSEEvent(
       break;
     case "tool_status":
       callbacks.onToolStatus?.(data);
+      break;
+    case "segment":
+      callbacks.onSegment?.(data);
       break;
     case "artifact":
       callbacks.onArtifact?.(data);

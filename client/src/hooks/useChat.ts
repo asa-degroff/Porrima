@@ -323,12 +323,34 @@ export function useChat(chatId: string | null) {
           bg.tools.push(status);
         }
 
-        // Don't create segments here — the server sends tool_call/tool_result segments
-        // via tool_execution_start/tool_execution_end events. We only track activeTools
-        // for the progress indicator, not for message rendering.
-
         if (activeChatIdRef.current === streamChatId) {
           setActiveTools([...bg.tools]);
+        }
+      },
+      onSegment: (segment) => {
+        const bg = bgStreams.get(streamChatId);
+        if (!bg) return;
+
+        // For tool_result, insert immediately after its matching tool_call
+        // so visual/artifact segments stay in the right position
+        if (segment.type === "tool_result" && segment.toolResult) {
+          const callIdx = bg.segments.findIndex(
+            s => s.type === "tool_call" && s.toolCall?.id === segment.toolResult!.toolCallId
+          );
+          if (callIdx >= 0) {
+            bg.segments.splice(callIdx + 1, 0, segment);
+          } else {
+            bg.segments.push(segment);
+          }
+        } else {
+          bg.segments.push(segment);
+        }
+
+        if (activeChatIdRef.current === streamChatId) {
+          if (rafRef.current === null) {
+            streamingContentRef.current = bg.content;
+            rafRef.current = requestAnimationFrame(flushStreamingContent);
+          }
         }
       },
       onAskUser: (_question) => {
