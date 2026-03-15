@@ -13,7 +13,7 @@ import { truncateChatHistory, truncateBeforeSend } from "../services/compaction.
 import { buildMemoryAugmentedPrompt, setCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
-import { parseSkillInvocations, stripSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
+import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
 import type { Skill } from "../services/skills.js";
 import {
   loadPendingState,
@@ -620,16 +620,8 @@ router.post("/", async (req, res) => {
       }
     }
     
-    // Strip skill invocations from the message
-    const strippedMessage = stripSkillInvocations(message);
-    if (strippedMessage) {
-      message = strippedMessage;
-    } else if (activatedSkillNames.length > 0) {
-      // Message contained only skill activations
-      message = activatedSkillNames.length === 1
-        ? `I've activated the ${activatedSkillNames[0]} skill.`
-        : `I've activated ${activatedSkillNames.length} skills: ${activatedSkillNames.join(', ')}.`;
-    }
+    // Keep skill invocations in the message for display (they're already activated)
+    // No need to strip them - they serve as visual indicators of activated skills
   }
   
   // Check for pending agent state (ask_user resume flow)
@@ -650,7 +642,7 @@ router.post("/", async (req, res) => {
           console.log(`[skills] Activated skill "${skill.name}" for chat ${chatId} (resume)`);
         }
       }
-      message = stripSkillInvocations(message);
+      // Keep skill invocations in the message for display
     }
     
     // Inject active skills into the resumed system prompt

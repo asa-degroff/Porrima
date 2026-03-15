@@ -48,6 +48,53 @@ export const MessageBubble = memo(function MessageBubble({
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;
 
+  /**
+   * Render skill chips for /skill-name patterns in message content.
+   * Only applies to user messages (assistant messages have skills stripped server-side).
+   */
+  const renderSkillChips = (text: string) => {
+    if (!isUser) return text;
+    
+    const skillPattern = /\/([a-zA-Z0-9\-_]+)/g;
+    const parts = text.split(skillPattern);
+    
+    // parts array alternates: [text, skillName, text, skillName, ...]
+    const result = [];
+    for (let i = 0; i < parts.length; i++) {
+      if (i % 2 === 0) {
+        // Text segment
+        if (parts[i]) result.push(parts[i]);
+      } else {
+        // Skill name (odd indices)
+        const skillName = parts[i];
+        if (skillName) {
+          result.push(
+            <span
+              key={`skill-${skillName}`}
+              className="skill-chip"
+              style={{
+                display: 'inline-block',
+                padding: '2px 8px',
+                margin: '0 4px',
+                background: 'rgba(59,130,246,0.25)',
+                border: '1px solid rgba(59,130,246,0.4)',
+                borderRadius: '12px',
+                fontSize: '12px',
+                color: 'rgb(147,197,253)',
+                fontWeight: 500,
+                verticalAlign: 'middle',
+              }}
+            >
+              /{skillName}
+            </span>
+          );
+        }
+      }
+    }
+    
+    return result.length > 0 ? result : text;
+  };
+
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
   const [lightboxImage, setLightboxImage] = useState<ImageAttachment | null>(null);
@@ -194,7 +241,7 @@ export const MessageBubble = memo(function MessageBubble({
               )}
               {message.content && (
                 <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                  {message.content}
+                  {renderSkillChips(message.content)}
                 </p>
               )}
               {message.queued && (

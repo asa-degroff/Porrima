@@ -71,6 +71,29 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
   const dragCounterRef = useRef(0);
   const { medium, heavy, success } = useHaptics();
 
+  /**
+   * Insert skill chips for /skill-name patterns in text.
+   * Returns HTML string with skill spans and updated textRef.
+   */
+  const insertSkillChips = (text: string, container: HTMLElement): { html: string } => {
+    const skillPattern = /\/([a-zA-Z0-9\-_]+)/g;
+    let html = text;
+    const matches = [...text.matchAll(skillPattern)];
+    
+    // Replace each /skill with a chip span
+    html = text.replace(skillPattern, (match, skillName) => {
+      const chip = document.createElement('span');
+      chip.className = 'skill-chip';
+      chip.style.cssText = 'display:inline-block;padding:2px 8px;margin:0 4px;background:rgba(59,130,246,0.25);border:1px solid rgba(59,130,246,0.4);border-radius:12px;font-size:12px;color:rgb(147,197,253);font-weight:500;vertical-align:middle;';
+      chip.textContent = `/${skillName}`;
+      chip.setAttribute('data-skill', skillName);
+      chip.setAttribute('contenteditable', 'false');
+      return chip.outerHTML;
+    });
+    
+    return { html };
+  };
+
   const prevChatIdRef = useRef<string | null>(null);
 
   // Expose editor ref to parent if provided
@@ -105,7 +128,19 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
       setImages(draft.images);
       setHasContent(!!draft.text.trim());
       if (editorRef.current) {
-        editorRef.current.innerText = draft.text;
+        // Recreate skill chips from draft text
+        editorRef.current.innerHTML = "";
+        const textWithSkills = insertSkillChips(draft.text, editorRef.current);
+        editorRef.current.innerHTML = textWithSkills.html;
+        // Position cursor at end
+        const range = document.createRange();
+        range.selectNodeContents(editorRef.current);
+        range.collapse(false);
+        const sel = window.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
       }
     } else {
       // No draft for this chat — clear the input
