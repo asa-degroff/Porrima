@@ -157,6 +157,13 @@ async function handleChatStream(
     seqCounter: 0,
     pendingText: "",
     finalUsage: undefined as ChatMessage["usage"],
+    // Track tool calls and tool-related segments for the current iteration.
+    // These are cleared at the end of each iteration that continues the loop
+    // (stopReason === "toolUse"). Only the final iteration's tool calls are
+    // persisted on the message.
+    iterationToolCalls: [] as ChatToolCall[],
+    iterationToolResults: [] as ChatToolResult[],
+    iterationToolSegments: [] as OutputSegment[],
   };
 
   function resetAccumulators() {
@@ -171,6 +178,9 @@ async function handleChatStream(
     state.seqCounter = 0;
     state.pendingText = "";
     state.finalUsage = undefined;
+    state.iterationToolCalls = [];
+    state.iterationToolResults = [];
+    state.iterationToolSegments = [];
   }
 
   function buildCurrentAssistantMessage(): ChatMessage {
@@ -348,9 +358,12 @@ async function handleChatStream(
             arguments: event.args,
           };
           state.allToolCalls.push(toolCall);
+          state.iterationToolCalls.push(toolCall);
           if (event.toolName !== "ask_user") {
             console.log(`[tool] Executing ${event.toolName}:`, event.args);
-            state.segments.push({ seq: ++state.seqCounter, type: "tool_call", toolCall });
+            const segment: OutputSegment = { seq: ++state.seqCounter, type: "tool_call", toolCall };
+            state.segments.push(segment);
+            state.iterationToolSegments.push(segment);
             res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
           }
           break;
@@ -367,15 +380,20 @@ async function handleChatStream(
               isError: event.isError,
             };
             state.allToolResults.push(toolResult);
+            state.iterationToolResults.push(toolResult);
             // Insert tool_result immediately after its tool_call segment (not at the end),
             // so that visual/artifact segments emitted during tool execution stay after the pair.
             const callIdx = state.segments.findIndex(
               s => s.type === "tool_call" && s.toolCall?.id === event.toolCallId
             );
             if (callIdx >= 0) {
-              state.segments.splice(callIdx + 1, 0, { seq: ++state.seqCounter, type: "tool_result", toolResult });
+              const resultSegment: OutputSegment = { seq: ++state.seqCounter, type: "tool_result", toolResult };
+              state.segments.splice(callIdx + 1, 0, resultSegment);
+              state.iterationToolSegments.push(resultSegment);
             } else {
-              state.segments.push({ seq: ++state.seqCounter, type: "tool_result", toolResult });
+              const resultSegment: OutputSegment = { seq: ++state.seqCounter, type: "tool_result", toolResult };
+              state.segments.push(resultSegment);
+              state.iterationToolSegments.push(resultSegment);
             }
             res.write(`event: tool_status\ndata: ${JSON.stringify({
               name: event.toolName,
@@ -430,6 +448,19 @@ async function handleChatStream(
               message: `Stopped — reached ${MAX_ITERATIONS} iteration limit`,
             })}\n\n`);
             abortController.abort();
+          }
+
+          // If this iteration completed with tool use, the tool calls/results/segments are "consumed"
+          // by the loop — they executed and results were appended, then the loop continued.
+          // Clear iteration arrays and remove tool-related segments so only the final iteration's
+          // tool calls are persisted.
+          if (stopReason === "toolUse") {
+            // Remove tool_call and tool_result segments from the current iteration
+            const iterationSegmentIds = new Set(state.iterationToolSegments.map(s => s.seq));
+            state.segments = state.segments.filter(s => !iterationSegmentIds.has(s.seq));
+            state.iterationToolCalls = [];
+            state.iterationToolResults = [];
+            state.iterationToolSegments = [];
           }
           break;
         }

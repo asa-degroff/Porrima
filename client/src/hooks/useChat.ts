@@ -323,59 +323,12 @@ export function useChat(chatId: string | null) {
           bg.tools.push(status);
         }
 
-        // Build proper segments from tool_status events (not using liveStatus)
-        if (status.status === "running") {
-          // Create tool_call segment with unique ID
-          const toolCallId = `tool-${status.name}-${Date.now()}`;
-          const index = bg.segments.length;
-          bg.segments.push({ 
-            seq: bg.seqCounter++, 
-            type: "tool_call", 
-            toolCall: { id: toolCallId, name: status.name, arguments: {} } 
-          });
-          // Store mapping: callId → segment index for later pairing
-          const mapKey = `__callIndex_${toolCallId}`;
-          (bg as any)[mapKey] = index;
-        } else {
-          // Find matching call by name using FIFO order
-          // Search for the first tool_call with matching name that doesn't have an adjacent result
-          let targetIndex = -1;
-          for (let i = 0; i < bg.segments.length; i++) {
-            const s = bg.segments[i];
-            if (s.type === "tool_call" && s.toolCall?.name === status.name) {
-              // Check if next segment is already a result for this call
-              const next = bg.segments[i + 1];
-              if (!(next?.type === "tool_result" && next.toolResult?.toolCallId === s.toolCall.id)) {
-                // Found unmatched call
-                targetIndex = i;
-                break;
-              }
-            }
-          }
-          
-          if (targetIndex >= 0) {
-            const callSegment = bg.segments[targetIndex] as any;
-            // Insert result immediately after the call
-            bg.segments.splice(targetIndex + 1, 0, {
-              seq: bg.seqCounter++,
-              type: "tool_result",
-              toolResult: {
-                toolCallId: callSegment.toolCall.id,
-                toolName: status.name,
-                content: status.result || "",
-                isError: status.status === "error",
-              },
-            });
-          }
-        }
+        // Don't create segments here — the server sends tool_call/tool_result segments
+        // via tool_execution_start/tool_execution_end events. We only track activeTools
+        // for the progress indicator, not for message rendering.
 
         if (activeChatIdRef.current === streamChatId) {
           setActiveTools([...bg.tools]);
-          // Schedule segment flush to update rendering
-          if (rafRef.current === null) {
-            streamingContentRef.current = bg.content;
-            rafRef.current = requestAnimationFrame(flushStreamingContent);
-          }
         }
       },
       onAskUser: (_question) => {
