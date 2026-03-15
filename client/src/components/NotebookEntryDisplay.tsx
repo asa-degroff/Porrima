@@ -18,6 +18,7 @@ interface Props {
   onLinkClick?: (author: 'user' | 'agent', entryId: string) => void;
   onChatLinkClick?: (chatId: string) => void;
   onAddLink?: (type: 'chat' | 'notebook', anchorRect: DOMRect) => void;
+  onRemoveLink?: (linkType: 'chat' | 'notebook', index: number) => void;
 }
 
 export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
@@ -27,6 +28,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
   onLinkClick,
   onChatLinkClick,
   onAddLink,
+  onRemoveLink,
 }: Props) {
   const isAgent = entry.author === 'agent';
   const timestamp = new Date(entry.createdAt).toLocaleString();
@@ -91,29 +93,63 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
           </div>
         )}
 
-        {/* Links */}
-        {entry.links && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {entry.links.notebooks?.map((link, i) => (
-              <button
-                key={`notebook-${i}`}
-                onClick={() => onLinkClick?.(link.author, link.entryId)}
-                className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-colors flex items-center gap-1"
-              >
-                📓 {link.author}'s entry
-              </button>
-            ))}
-            {entry.links.chats?.map((link, i) => (
-              <button
-                key={`chat-${i}`}
-                onClick={() => onChatLinkClick?.(link.chatId)}
-                className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-colors flex items-center gap-1"
-              >
-                💬 {link.title || 'Chat'}
-              </button>
-            ))}
-          </div>
-        )}
+            {entry.links && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {entry.links.notebooks?.map((link, i) => (
+                  <div
+                    key={`notebook-${i}`}
+                    className="group text-xs px-2 py-1 rounded bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-colors flex items-center gap-1"
+                  >
+                    <button
+                      onClick={() => onLinkClick?.(link.author, link.entryId)}
+                      className="flex items-center gap-1"
+                    >
+                      📓 {link.author}'s entry
+                    </button>
+                    {onRemoveLink && (
+                      <button
+                        onClick={() => onRemoveLink('notebook', i)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-red-400 ml-1"
+                        title="Remove link"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M18 6 6 18" />
+                          <path d="m6 6 12 12" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {entry.links.chats?.map((link, i) => (
+                  <div
+                    key={`chat-${i}`}
+                    className="group text-xs rounded bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-colors flex items-center"
+                  >
+                    <button
+                      onClick={() => onChatLinkClick?.(link.chatId)}
+                      className="flex items-center gap-1.5 px-2 py-1"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                      </svg>
+                      <span className="font-medium truncate max-w-[200px]">{link.title || 'Chat'}</span>
+                    </button>
+                    {onRemoveLink && (
+                      <button
+                        onClick={() => onRemoveLink('chat', i)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-red-400 ml-1"
+                        title="Remove link"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M18 6 6 18" />
+                          <path d="m6 6 12 12" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
         {/* Add Link Button (user entries only) */}
         {onAddLink && (

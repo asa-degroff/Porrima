@@ -6,12 +6,14 @@ import { NotebookEntryDisplay } from "./NotebookEntryDisplay";
 import { ChatLinkPicker } from "./ChatLinkPicker";
 import { NotebookLinkPicker } from "./NotebookLinkPicker";
 
+const COMPOSER_TARGET = '__composer__';
+
 interface Props {
   userNotebooks: NotebookIndex;
   agentNotebooks: NotebookIndex;
   loading?: boolean;
   error?: string | null;
-  onCreateUserEntry: (content: string) => Promise<void>;
+  onCreateUserEntry: (content: string) => Promise<NotebookEntry>;
   onCreateAgentEntry: (content: string) => Promise<void>;
   onUpdateEntry: (author: 'user' | 'agent', id: string, updates: { content?: string; links?: NotebookLink }) => Promise<void>;
   onDeleteEntry: (author: 'user' | 'agent', id: string) => Promise<void>;
@@ -37,6 +39,14 @@ export function NotebookView({
 }: Props) {
   const [fullEntries, setFullEntries] = useState<Record<string, NotebookEntry>>({});
   const [editingEntry, setEditingEntry] = useState<{ author: 'user' | 'agent'; id: string; content: string } | null>(null);
+  const [composerLinks, setComposerLinks] = useState<NotebookLink>({});
+
+  // Link picker state
+  const [linkPickerOpen, setLinkPickerOpen] = useState(false);
+  const [linkPickerType, setLinkPickerType] = useState<'chat' | 'notebook' | null>(null);
+  const [linkPickerAnchor, setLinkPickerAnchor] = useState<DOMRect | null>(null);
+  const [pendingLink, setPendingLink] = useState<{ entryId: string; author: 'user' | 'agent' } | null>(null);
+  const [filterText, setFilterText] = useState('');
 
   // Mark as seen when view becomes visible
   useEffect(() => {
@@ -52,8 +62,7 @@ export function NotebookView({
     Promise.all(
       missing.map(async (e) => {
         try {
-          const full = await fetchNotebookEntry(e.author, e.id);
-          return full;
+          return await fetchNotebookEntry(e.author, e.id);
         } catch {
           return null;
         }
@@ -69,9 +78,37 @@ export function NotebookView({
     });
   }, [userNotebooks.entries, agentNotebooks.entries]);
 
-  const handleCreateUserEntry = useCallback(async (content: string) => {
-    await onCreateUserEntry(content);
-  }, [onCreateUserEntry]);
+  // --- Composer handlers ---
+
+  const handleCreateUserEntry = useCallback(async (content: string, links?: NotebookLink) => {
+    const entry = await onCreateUserEntry(content);
+    // If links were attached in the composer, update the entry with them
+    const linksToSave = links || (composerLinks.chats?.length || composerLinks.notebooks?.length ? composerLinks : undefined);
+    if (linksToSave && entry) {
+      await onUpdateEntry('user', entry.id, { links: linksToSave });
+      // Add to local cache with links
+      setFullEntries(prev => ({ ...prev, [entry.id]: { ...entry, links: linksToSave } }));
+    }
+    setComposerLinks({});
+  }, [onCreateUserEntry, onUpdateEntry, composerLinks]);
+
+  const handleComposerOpenLinkPicker = useCallback((type: 'chat' | 'notebook', anchorRect: DOMRect) => {
+    setLinkPickerType(type);
+    setLinkPickerAnchor(anchorRect);
+    setPendingLink({ entryId: COMPOSER_TARGET, author: 'user' });
+    setFilterText('');
+    setLinkPickerOpen(true);
+  }, []);
+
+  const handleRemoveComposerLink = useCallback((linkType: 'chat' | 'notebook', index: number) => {
+    setComposerLinks(prev => ({
+      ...prev,
+      chats: linkType === 'chat' ? (prev.chats || []).filter((_, i) => i !== index) : prev.chats,
+      notebooks: linkType === 'notebook' ? (prev.notebooks || []).filter((_, i) => i !== index) : prev.notebooks,
+    }));
+  }, []);
+
+  // --- Entry handlers ---
 
   const handleTriggerAgent = useCallback(async () => {
     const result = await onTriggerAgentReview();
@@ -87,6 +124,11 @@ export function NotebookView({
   const handleSaveEdit = useCallback(async (id: string, newContent: string) => {
     if (editingEntry) {
       await onUpdateEntry(editingEntry.author, id, { content: newContent });
+      setFullEntries(prev => {
+        const entry = prev[id];
+        if (!entry) return prev;
+        return { ...prev, [id]: { ...entry, content: newContent } };
+      });
       setEditingEntry(null);
     }
   }, [editingEntry, onUpdateEntry]);
@@ -103,6 +145,23 @@ export function NotebookView({
     }
   }, [onDeleteEntry, editingEntry]);
 
+  const handleRemoveLink = useCallback(async (entryId: string, author: 'user' | 'agent', linkType: 'chat' | 'notebook', index: number) => {
+    const entry = fullEntries[entryId];
+    if (!entry?.links) return;
+
+    const updatedLinks: NotebookLink = {
+      chats: linkType === 'chat' ? (entry.links.chats || []).filter((_, i) => i !== index) : entry.links.chats,
+      notebooks: linkType === 'notebook' ? (entry.links.notebooks || []).filter((_, i) => i !== index) : entry.links.notebooks,
+    };
+
+    await onUpdateEntry(author, entryId, { links: updatedLinks });
+    setFullEntries(prev => {
+      const e = prev[entryId];
+      if (!e) return prev;
+      return { ...prev, [entryId]: { ...e, links: updatedLinks } };
+    });
+  }, [fullEntries, onUpdateEntry]);
+
   const handleEntryLinkClick = useCallback((author: 'user' | 'agent', entryId: string) => {
     const element = document.getElementById(`entry-${entryId}`);
     element?.scrollIntoView({ behavior: 'smooth' });
@@ -114,11 +173,7 @@ export function NotebookView({
     onChatSelect(chatId);
   }, [onChatSelect]);
 
-  const [linkPickerOpen, setLinkPickerOpen] = useState(false);
-  const [linkPickerType, setLinkPickerType] = useState<'chat' | 'notebook' | null>(null);
-  const [linkPickerAnchor, setLinkPickerAnchor] = useState<DOMRect | null>(null);
-  const [pendingLink, setPendingLink] = useState<{ entryId: string; author: 'user' | 'agent' } | null>(null);
-  const [filterText, setFilterText] = useState('');
+  // --- Link picker ---
 
   const openLinkPicker = useCallback((type: 'chat' | 'notebook', anchorRect: DOMRect, entryId: string, author: 'user' | 'agent') => {
     setLinkPickerType(type);
@@ -131,24 +186,68 @@ export function NotebookView({
   const handleLinkSelect = useCallback(async (targetId: string, targetAuthorOrTitle: string, preview?: string) => {
     if (!pendingLink) return;
 
-    const links: NotebookLink = {};
+    const newLink: NotebookLink = {};
     if (linkPickerType === 'chat') {
-      links.chats = [{ chatId: targetId, title: preview || targetAuthorOrTitle }];
+      newLink.chats = [{ chatId: targetId, title: preview || targetAuthorOrTitle }];
     } else {
-      links.notebooks = [{ entryId: targetId, author: targetAuthorOrTitle as 'user' | 'agent' }];
+      newLink.notebooks = [{ entryId: targetId, author: targetAuthorOrTitle as 'user' | 'agent' }];
     }
 
-    await onUpdateEntry(pendingLink.author, pendingLink.entryId, { links });
+    if (pendingLink.entryId === COMPOSER_TARGET) {
+      // Add link to composer's pending links (no server call yet)
+      setComposerLinks(prev => ({
+        chats: [...(prev.chats || []), ...(newLink.chats || [])],
+        notebooks: [...(prev.notebooks || []), ...(newLink.notebooks || [])],
+      }));
+    } else {
+      // Merge with existing links on the entry, then send full set to server
+      const existingEntry = fullEntries[pendingLink.entryId];
+      const existingLinks = existingEntry?.links || {};
+      const mergedLinks: NotebookLink = {
+        chats: [...(existingLinks.chats || []), ...(newLink.chats || [])],
+        notebooks: [...(existingLinks.notebooks || []), ...(newLink.notebooks || [])],
+      };
+
+      await onUpdateEntry(pendingLink.author, pendingLink.entryId, { links: mergedLinks });
+      setFullEntries(prev => {
+        const entry = prev[pendingLink.entryId];
+        if (!entry) return prev;
+        return { ...prev, [pendingLink.entryId]: { ...entry, links: mergedLinks } };
+      });
+    }
+
     setLinkPickerOpen(false);
     setLinkPickerType(null);
     setPendingLink(null);
-  }, [pendingLink, linkPickerType, onUpdateEntry]);
+  }, [pendingLink, linkPickerType, onUpdateEntry, fullEntries]);
 
   const closeLinkPicker = useCallback(() => {
     setLinkPickerOpen(false);
     setLinkPickerType(null);
     setPendingLink(null);
   }, []);
+
+  // Close picker on Escape key or click outside
+  useEffect(() => {
+    if (!linkPickerOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeLinkPicker();
+    };
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.link-picker-popup')) closeLinkPicker();
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [linkPickerOpen, closeLinkPicker]);
+
+  // --- Render ---
 
   const renderEntries = useCallback((entries: NotebookIndex['entries'], author: 'user' | 'agent') => {
     return entries.map((entryInfo) => {
@@ -176,12 +275,13 @@ export function NotebookView({
               onLinkClick={handleEntryLinkClick}
               onChatLinkClick={handleChatLinkClick}
               onAddLink={author === 'user' ? (type, anchorRect) => openLinkPicker(type, anchorRect, entry.id, author) : undefined}
+              onRemoveLink={author === 'user' ? (linkType, index) => handleRemoveLink(entry.id, author, linkType, index) : undefined}
             />
           )}
         </div>
       );
     });
-  }, [fullEntries, editingEntry, handleEdit, handleSaveEdit, handleDelete, handleEntryLinkClick, handleChatLinkClick, openLinkPicker]);
+  }, [fullEntries, editingEntry, handleEdit, handleSaveEdit, handleDelete, handleEntryLinkClick, handleChatLinkClick, openLinkPicker, handleRemoveLink]);
 
   if (loading) {
     return (
@@ -224,7 +324,13 @@ export function NotebookView({
             <h3 className="text-xs font-medium text-white/60 uppercase tracking-wider">Your Notebook</h3>
           </div>
           <div className="flex-1 overflow-y-auto px-3 md:px-4 py-3">
-            <NotebookEntryComposer onSubmit={handleCreateUserEntry} placeholder="Write a note..." />
+            <NotebookEntryComposer
+              onSubmit={handleCreateUserEntry}
+              placeholder="Write a note..."
+              onOpenLinkPicker={handleComposerOpenLinkPicker}
+              pendingLinks={composerLinks}
+              onRemovePendingLink={handleRemoveComposerLink}
+            />
             <div className="mt-4 space-y-4">
               {renderEntries(userNotebooks.entries, 'user')}
             </div>

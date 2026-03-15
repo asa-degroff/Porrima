@@ -28,7 +28,7 @@ export function NotebookLinkPicker({ userNotebooks, agentNotebooks, filterText, 
 
   return (
     <div
-      className="fixed z-50 w-80 max-h-96 overflow-auto rounded-lg border border-white/10 bg-black/90 backdrop-blur-xl shadow-xl"
+      className="link-picker-popup fixed z-50 w-80 max-h-96 overflow-auto rounded-lg border border-white/10 bg-black/90 backdrop-blur-xl shadow-xl"
       style={position}
     >
       <div className="px-3 py-2 border-b border-white/10">
@@ -44,11 +44,13 @@ export function NotebookLinkPicker({ userNotebooks, agentNotebooks, filterText, 
             <button
               key={entry.id}
               onClick={() => handleSelect(entry)}
-              className="w-full px-4 py-2 text-left text-sm text-white/70 hover:text-white hover:bg-white/5 transition-colors flex items-center gap-2"
+              className="w-full px-4 py-2 text-left text-sm text-white/70 hover:text-white hover:bg-white/5 transition-colors flex flex-col gap-1"
             >
-              <span className={`w-2 h-2 rounded-full ${entry.author === 'agent' ? 'bg-purple-400' : 'bg-white/40'}`} />
-              <span className="truncate flex-1">{entry.preview}</span>
-              <span className="text-xs text-white/30">{entry.author}</span>
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${entry.author === 'agent' ? 'bg-purple-400' : 'bg-white/40'}`} />
+                <span className="font-medium truncate flex-1">{entry.author === 'agent' ? 'Agent' : 'User'}: {entry.preview}</span>
+              </div>
+              <span className="text-xs text-white/30 truncate pl-4">{new Date(entry.createdAt).toLocaleDateString()}</span>
             </button>
           ))}
         </div>
