@@ -233,3 +233,24 @@ export interface AnalyzedImage {
   conversation: VisionMessage[];
   createdAt: string;
 }
+
+export interface NotebookLink {
+  notebooks?: { entryId: string; author: 'user' | 'agent' }[];
+  chats?: { chatId: string; title?: string }[];
+}
+
+export interface NotebookEntry {
+  id: string;
+  createdAt: string;
+  author: 'user' | 'agent';
+  content: string;
+  links?: NotebookLink;
+  toolResults?: ChatToolResult[];
+  artifacts?: Artifact[];
+  memories?: { memoryId: string; text: string }[];
+}
+
+export interface NotebookIndex {
+  entries: { id: string; createdAt: string; author: 'user' | 'agent'; preview: string }[];
+  lastActivityDate: string | null;
+}

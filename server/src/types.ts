@@ -190,3 +190,24 @@ export interface GenerationState {
   createdAt: number;
   updatedAt: number;
 }
+
+export interface NotebookLink {
+  notebooks?: { entryId: string; author: 'user' | 'agent' }[];
+  chats?: { chatId: string; title?: string }[];
+}
+
+export interface NotebookEntry {
+  id: string;
+  createdAt: string;
+  author: 'user' | 'agent';
+  content: string;              // Markdown
+  links?: NotebookLink;
+  toolResults?: ChatToolResult[];   // Agent entries only
+  artifacts?: Artifact[];           // Agent entries only
+  memories?: { memoryId: string; text: string }[];  // Extracted or explicit
+}
+
+export interface NotebookIndex {
+  entries: { id: string; createdAt: string; author: 'user' | 'agent'; preview: string }[];
+  lastActivityDate: string | null;  // ISO date of most recent entry
+}

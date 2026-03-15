@@ -295,3 +295,63 @@ export async function preCompactionFlush(
 
   console.log("[memory] Pre-compaction flush complete");
 }
+
+/**
+ * Extract memories from notebook entry content.
+ * Reuses the same extraction pipeline as chat messages.
+ */
+export async function extractMemoriesFromText(
+  modelId: string,
+  text: string,
+  author: 'user' | 'agent',
+  entryId: string
+): Promise<void> {
+  console.log(`[memory] Extracting from ${author} notebook entry ${entryId}`);
+  
+  const extractionPrompt = `${author === 'user' ? 'User' : 'Agent'} notebook entry:\n${text}`;
+
+  let responseText = "";
+  try {
+    await withRetry(
+      async () => {
+        responseText = "";
+        await streamChat(
+          modelId,
+          [{ role: "user", content: extractionPrompt, timestamp: Date.now() }],
+          EXTRACTION_SYSTEM_PROMPT,
+          (event) => {
+            if (event.type === "text_delta") {
+              responseText += event.delta;
+            }
+          }
+        );
+      },
+      `extractMemoriesFromText LLM call (entry ${entryId})`
+    );
+
+    const facts = parseExtractionResponse(responseText);
+    if (facts.length === 0) {
+      console.log("[memory] No facts extracted from notebook entry");
+      return;
+    }
+
+    console.log(`[memory] Extracted ${facts.length} fact(s) from notebook, embedding batch...`);
+
+    let embeddings: number[][];
+    try {
+      embeddings = await withRetry(
+        () => embedBatch(facts.map((f) => f.text)),
+        `embedBatch for ${facts.length} notebook facts (entry ${entryId})`
+      );
+    } catch (e) {
+      console.error("[memory] Batch embedding failed:", e);
+      return;
+    }
+
+    await dedupAndSave(facts, embeddings, entryId);
+    console.log("[memory] Notebook memory extraction complete");
+  } catch (e) {
+    console.error("[memory] Notebook extraction failed:", e);
+    throw e;
+  }
+}
