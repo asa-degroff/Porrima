@@ -203,12 +203,16 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     return () => observer.disconnect();
   }, [updateLayout]);
 
-  const addFiles = async (files: FileList | File[]) => {
-    const newImages = await processFiles(files);
-    if (newImages.length > 0) {
-      success();
-      setImages((prev) => [...prev, ...newImages]);
-    }
+  const addFiles = (files: FileList | File[]) => {
+    // Process images asynchronously without blocking the input
+    // Fire-and-forget - state updates when processing completes
+    Promise.resolve(files).then(async (f) => {
+      const newImages = await processFiles(f);
+      if (newImages.length > 0) {
+        success();
+        setImages((prev) => [...prev, ...newImages]);
+      }
+    });
   };
 
   const removeImage = (index: number) => {
@@ -238,24 +242,24 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     e.stopPropagation();
   };
 
-  const handleDrop = async (e: React.DragEvent) => {
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current = 0;
     setDragging(false);
     if (e.dataTransfer.files.length > 0) {
-      await addFiles(e.dataTransfer.files);
+      addFiles(e.dataTransfer.files);
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      await addFiles(e.target.files);
+      addFiles(e.target.files);
       e.target.value = "";
     }
   };
 
-  const handlePaste = async (e: React.ClipboardEvent) => {
+  const handlePaste = (e: React.ClipboardEvent) => {
     const items = e.clipboardData.items;
     const imageFiles: File[] = [];
     for (const item of items) {
@@ -266,7 +270,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     }
     if (imageFiles.length > 0) {
       e.preventDefault();
-      await addFiles(imageFiles);
+      addFiles(imageFiles);
       return;
     }
     e.preventDefault();
