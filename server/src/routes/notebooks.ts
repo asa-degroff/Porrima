@@ -71,7 +71,7 @@ router.post("/user", async (req, res) => {
 
   // Auto-extract memories from user entry (fire-and-forget)
   const settings = await getSettings();
-  const modelId = settings.defaultModelId || "qwen3:8b";
+  const modelId = settings.defaultModelId || "qwen3.5:9b";
   extractMemoriesFromText(modelId, content, 'user', entry.id).catch(e =>
     console.error("[notebook] User entry memory extraction failed:", e)
   );
