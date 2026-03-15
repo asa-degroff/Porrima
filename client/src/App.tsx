@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, lazy, Suspense, useRef } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
+import { NotebookView } from "./components/NotebookView";
 import { SettingsModal } from "./components/SettingsModal";
 import { LoginPage } from "./components/LoginPage";
 
@@ -21,6 +22,7 @@ import { updateChat as apiUpdateChat } from "./api/client";
 import { setCachedChat, getCachedChat, clearCachedChat } from "./lib/db";
 import { HapticsProvider } from "./hooks/useHaptics";
 import { useTTS } from "./hooks/useTTS";
+import { useNotebooks } from "./hooks/useNotebooks";
 import type { Chat, ChatType } from "./types";
 
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
@@ -32,6 +34,20 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
   const { playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts } = useTTS();
+  const {
+    userNotebooks,
+    agentNotebooks,
+    loading: notebooksLoading,
+    error: notebooksError,
+    createUserEntry,
+    createAgentEntry,
+    updateEntry,
+    removeEntry,
+    triggerAgentReview,
+    hasUnreadAgentEntries,
+    markAgentEntriesSeen,
+  } = useNotebooks();
+  const [activeView, setActiveView] = useState<'chats' | 'notebooks'>('chats');
   const [activeChatId, setActiveChatId] = useState<string | null>(() => {
     return localStorage.getItem("quje-active-chat-id");
   });
@@ -99,8 +115,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   }, [activeChatId]);
 
   useEffect(() => {
-    localStorage.setItem("quje-active-view", imageSandboxOpen ? "image-sandbox" : "chat");
-  }, [imageSandboxOpen]);
+    localStorage.setItem("quje-active-view", activeView);
+  }, [activeView]);
 
   // Restore active chat on mount
   useEffect(() => {
@@ -322,6 +338,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     },
     [updateSettings]
   );
+  const handleSwitchView = useCallback((view: 'chats' | 'notebooks') => {
+    setActiveView(view);
+    setSidebarOpen(false);
+  }, []);
 
   return (
     <div className="flex h-full overflow-hidden relative" style={keyboardInset ? { paddingBottom: keyboardInset } : undefined}>
@@ -333,9 +353,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       <Sidebar
         chats={chats}
         projects={projects}
-        activeChatId={activeChatId}
-        onSelectChat={(id) => { selectChat(id); setImageSandboxOpen(false); }}
-        onNewChat={(type, projectId) => { handleNewChat(type, projectId); setImageSandboxOpen(false); }}
+        activeChatId={activeView === 'chats' ? activeChatId : null}
+        activeView={activeView}
+        onSelectChat={(id) => { selectChat(id); setImageSandboxOpen(false); setActiveView('chats'); }}
+        onSwitchView={handleSwitchView}
+        onNewChat={(type, projectId) => { handleNewChat(type, projectId); setImageSandboxOpen(false); setActiveView('chats'); }}
         onNewProject={handleNewProject}
         onDeleteChat={handleDeleteChat}
         onDeleteProject={handleDeleteProject}
@@ -344,6 +366,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         isOpen={sidebarOpen}
         onClose={handleCloseSidebar}
         isStreaming={streaming}
+        hasUnreadNotebooks={hasUnreadAgentEntries()}
       />
       {sidebarOpen && (
         <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={handleCloseSidebar} />
@@ -354,6 +377,21 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           defaultModelId={activeChat?.modelId || settings.defaultModelId || models[0]?.id || ""}
           defaultVisionModelId={settings.defaultVisionModelId}
           onClose={handleCloseImageSandbox}
+        />
+      ) : activeView === 'notebooks' ? (
+        <NotebookView
+          userNotebooks={userNotebooks}
+          agentNotebooks={agentNotebooks}
+          loading={notebooksLoading}
+          error={notebooksError}
+          onCreateUserEntry={async (content) => { await createUserEntry(content); }}
+          onCreateAgentEntry={async (content) => { await createAgentEntry(content); }}
+          onUpdateEntry={async (author, id, updates) => { await updateEntry(author, id, updates); }}
+          onDeleteEntry={async (author, id) => { await removeEntry(author, id); }}
+          onTriggerAgentReview={async () => { return await triggerAgentReview(); }}
+          chats={chats}
+          onChatSelect={(chatId) => { selectChat(chatId); setActiveView('chats'); }}
+          onVisible={markAgentEntriesSeen}
         />
       ) : (
       <ChatView

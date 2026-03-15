@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Improve Python sandbox isolation (#18)
 
 ### Added
+- Notebook UI: hasUnreadAgentEntries logic is brittle (#78)
 - Notebook: hardcoded model ID in agent trigger (#66)
 - Notebook: hardcoded model ID in agent trigger (#66)
 - Compaction summary — preserve removed message context (#51)
@@ -21,6 +22,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Batch embeddings during memory extraction (#22)
 
 ### Fixed
+- Notebook UI: composer clears before async completes (#81)
+- Notebook UI: no loading/error states displayed (#79)
+- Notebook UI: links replaced not appended on update (#77)
+- Notebook UI: handleLinkSelect signature mismatch with ChatLinkPicker (#76)
+- Notebook UI: link picker is unreachable (#75)
+- Notebook UI: handleEdit hardcodes author to user (#74)
+- Notebook UI: handleDelete only works in edit mode (#73)
+- Notebook UI: renderEntries only shows 100-char preview, not full content (#72)
+- Notebook: race condition on index.json (#68)
 - Notebook: PATCH endpoint accepts arbitrary body fields (#69)
 - Notebook: updateNotebookEntry allows overwriting protected fields (#64)
 - Notebook: agentToday computed but never used (#65)
@@ -47,6 +57,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Hoist remarkPlugins array to module scope in MarkdownRenderer (#1)
 
 ### Changed
+- Notebook UI: unused imports across notebook components (#85)
+- Notebook UI: renderEntries dependency array over-specified (#84)
+- Notebook UI: duplicate type definitions in api/client.ts (#83)
+- Notebook UI: multiple any types need proper typing (#82)
 - Notebook: unused imports in notebooks.ts (#70)
 - Notebook: use proper types instead of any[] for toolResults and artifacts (#71)
 - Notebook: use proper types instead of any[] for toolResults and artifacts (#71)

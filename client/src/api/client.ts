@@ -1,4 +1,4 @@
-import type { Artifact, Chat, ChatListItem, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, MessageUsage, OllamaModel, Settings } from "../types";
+import type { Artifact, Chat, ChatListItem, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
 
 const BASE = "/api";
 
@@ -773,6 +773,73 @@ export async function deleteProject(id: string): Promise<void> {
 export async function getProjectAgentsMd(id: string): Promise<{ content: string | null; path: string }> {
   const res = await apiFetch(`${BASE}/projects/${id}/agents-md`);
   if (!res.ok) throw new Error("Failed to fetch AGENTS.md");
+  return res.json();
+}
+
+// --- Notebook API ---
+
+export async function fetchUserNotebooks(): Promise<NotebookIndex> {
+  const res = await apiFetch(`${BASE}/notebooks/user`);
+  if (!res.ok) throw new Error("Failed to fetch user notebooks");
+  return res.json();
+}
+
+export async function fetchAgentNotebooks(): Promise<NotebookIndex> {
+  const res = await apiFetch(`${BASE}/notebooks/agent`);
+  if (!res.ok) throw new Error("Failed to fetch agent notebooks");
+  return res.json();
+}
+
+export async function fetchNotebookEntry(author: 'user' | 'agent', id: string): Promise<NotebookEntry> {
+  const res = await apiFetch(`${BASE}/notebooks/${author}/${id}`);
+  if (!res.ok) throw new Error("Failed to fetch notebook entry");
+  return res.json();
+}
+
+export async function createNotebookEntry(author: 'user' | 'agent', content: string): Promise<NotebookEntry> {
+  const res = await apiFetch(`${BASE}/notebooks/${author}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to create notebook entry");
+  }
+  return res.json();
+}
+
+export async function updateNotebookEntry(
+  author: 'user' | 'agent',
+  id: string,
+  updates: { content?: string; links?: NotebookLink }
+): Promise<NotebookEntry> {
+  const res = await apiFetch(`${BASE}/notebooks/${author}/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to update notebook entry");
+  }
+  return res.json();
+}
+
+export async function deleteNotebookEntry(author: 'user' | 'agent', id: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/notebooks/${author}/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete notebook entry");
+}
+
+export async function triggerAgentNotebookReview(): Promise<{ skipped?: boolean; reason?: string } | NotebookEntry> {
+  const res = await apiFetch(`${BASE}/notebooks/agent/trigger`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to trigger agent review");
+  }
   return res.json();
 }
 
