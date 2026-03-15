@@ -235,6 +235,7 @@ async function handleChatStream(
 
   let iterations = 0;
   let waitingForInput = false;
+  let hitContextLimit = false;
   let lastUserMessage = userMessage; // tracks the current user message text for title gen / memory
 
   console.log(`[chat] type=${chat.type} tools=${agentTools ? agentTools.map(t => t.name).join(",") : "none"}`);
@@ -419,6 +420,7 @@ async function handleChatStream(
           }
 
           if (stopReason === "length") {
+            hitContextLimit = true;
             console.warn(`[chat] stopped due to context length at iteration ${iterations}`);
             res.write(`event: warning\ndata: ${JSON.stringify({
               type: "context_length",
@@ -505,30 +507,32 @@ async function handleChatStream(
       if (chat.type === "agent") {
         extractMemories(chat.modelId, chat.id, lastUserMessage, assistantMsg.content)
           .catch((err) => console.error("[memory] extraction failed:", err));
+      }
 
-        // Check for compaction: extract memories from removed messages, then truncate
-        try {
-          const model = ollamaModels.find((m) => m.id === chat.modelId);
-          if (model) {
-            const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-            const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
-            const usageRatio = lastUsage / effectiveContextWindow;
-            if (usageRatio > 0.75) {
-              const compaction = await truncateChatHistory(chat, effectiveContextWindow);
-              if (compaction.truncated && compaction.removedMessages?.length) {
-                // Pass only the removed messages to flush, not full conversation
+      // Post-response compaction: truncate if usage > 75% OR if we hit the context limit
+      try {
+        const model = ollamaModels.find((m) => m.id === chat.modelId);
+        if (model) {
+          const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
+          const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
+          const usageRatio = lastUsage / effectiveContextWindow;
+          if (hitContextLimit || usageRatio > 0.75) {
+            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit);
+            if (compaction.truncated) {
+              // Extract memories from removed messages (agent chats only)
+              if (chat.type === "agent" && compaction.removedMessages?.length) {
                 await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages);
-                await saveChat(chat);
-                res.write(`event: compaction\ndata: ${JSON.stringify({
-                  removedCount: compaction.removedCount,
-                  remainingCount: chat.messages.length,
-                })}\n\n`);
               }
+              await saveChat(chat);
+              res.write(`event: compaction\ndata: ${JSON.stringify({
+                removedCount: compaction.removedCount,
+                remainingCount: chat.messages.length,
+              })}\n\n`);
             }
           }
-        } catch (err) {
-          console.error("[compaction] failed:", err);
         }
+      } catch (err) {
+        console.error("[compaction] failed:", err);
       }
     }
   } catch (e: any) {
@@ -689,8 +693,8 @@ router.post("/", async (req, res) => {
     if (model) {
       try {
         const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-        const truncated = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
-        if (truncated) {
+        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
+        if (compaction && compaction.truncated) {
           await saveChat(chat);
           // Rebuild system prompt after truncation
           if (chat.type === "agent") {
@@ -699,6 +703,11 @@ router.post("/", async (req, res) => {
               chat.messages
             );
           }
+          // Emit compaction event for UI indicator
+          res.write(`event: compaction\ndata: ${JSON.stringify({
+            removedCount: compaction.removedCount,
+            remainingCount: chat.messages.length,
+          })}\n\n`);
         }
       } catch (err) {
         console.error("[compaction] pre-send truncation failed (resume):", err);
@@ -751,8 +760,8 @@ router.post("/", async (req, res) => {
     if (model) {
       try {
         const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-        const truncated = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
-        if (truncated) {
+        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
+        if (compaction && compaction.truncated) {
           await saveChat(chat);
           // Rebuild system prompt after truncation (memories may have changed)
           if (chat.type === "agent") {
@@ -761,6 +770,11 @@ router.post("/", async (req, res) => {
               chat.messages
             );
           }
+          // Emit compaction event for UI indicator
+          res.write(`event: compaction\ndata: ${JSON.stringify({
+            removedCount: compaction.removedCount,
+            remainingCount: chat.messages.length,
+          })}\n\n`);
         }
       } catch (err) {
         console.error("[compaction] pre-send truncation failed:", err);
@@ -873,8 +887,8 @@ router.post("/edit", async (req, res) => {
   if (model) {
     try {
       const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-      const truncated = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
-      if (truncated) {
+      const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
+      if (compaction && compaction.truncated) {
         await saveChat(chat);
         // Rebuild system prompt after truncation
         if (chat.type === "agent") {
@@ -883,6 +897,11 @@ router.post("/edit", async (req, res) => {
             chat.messages
           );
         }
+        // Emit compaction event for UI indicator
+        res.write(`event: compaction\ndata: ${JSON.stringify({
+          removedCount: compaction.removedCount,
+          remainingCount: chat.messages.length,
+        })}\n\n`);
       }
     } catch (err) {
       console.error("[compaction] pre-send truncation failed (edit):", err);

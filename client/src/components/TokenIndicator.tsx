@@ -17,7 +17,7 @@ function formatNumber(n: number): string {
 }
 
 export function TokenIndicator({ usage, contextWindow, compaction }: Props) {
-  if (usage.totalTokens === 0) return null;
+  if (usage.totalTokens === 0 && !compaction) return null;
 
   const pct = Math.min((usage.totalTokens / contextWindow) * 100, 100);
 

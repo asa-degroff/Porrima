@@ -49,14 +49,14 @@ function estimateContextSize(messages: Chat["messages"], systemPrompt: string): 
  * Unlike post-response compaction (which targets 50%), pre-send truncation
  * targets 75% to leave room for the new exchange.
  *
- * Returns true if truncation occurred, false if context is already safe.
+ * Returns CompactionResult if truncation occurred, null if context is already safe.
  */
 export async function truncateBeforeSend(
   chat: Chat,
   contextWindow: number,
   systemPrompt: string
-): Promise<boolean> {
-  const noOp = false;
+): Promise<CompactionResult | null> {
+  const noOp = null;
   const messages = chat.messages;
   if (messages.length <= 2) return noOp;
 
@@ -131,7 +131,7 @@ export async function truncateBeforeSend(
     `inserted summary, ${messages.length} → ${chat.messages.length} messages`
   );
 
-  return true;
+  return { truncated: true, removedCount: messagesToRemove };
 }
 
 /**
@@ -190,28 +190,35 @@ Output ONLY the summary, no introduction or formatting.`;
  * messages. Uses character-based token estimation (consistent with truncateBeforeSend).
  * Targets 50% of context window to leave headroom for the next exchange.
  * Generates a summary of removed messages to preserve context continuity.
+ *
+ * @param forceCompact - When true (e.g. stopReason was "length"), skip usage
+ *   checks and compact based on character estimation. This handles cases where
+ *   the model hit the context limit but usage data is missing or inaccurate.
  */
 export async function truncateChatHistory(
   chat: Chat,
-  contextWindow: number
+  contextWindow: number,
+  forceCompact: boolean = false
 ): Promise<CompactionResult> {
   const noOp: CompactionResult = { truncated: false, removedCount: 0 };
   const messages = chat.messages;
   if (messages.length <= 2) return noOp;
 
-  // Find the most recent assistant message with usage info
-  let lastUsage = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].usage?.totalTokens) {
-      lastUsage = messages[i].usage!.totalTokens;
-      break;
-    }
-  }
-
-  if (lastUsage === 0) return noOp;
-
   const targetTokens = contextWindow * 0.5;
-  if (lastUsage <= targetTokens) return noOp;
+
+  if (!forceCompact) {
+    // Find the most recent assistant message with usage info
+    let lastUsage = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].usage?.totalTokens) {
+        lastUsage = messages[i].usage!.totalTokens;
+        break;
+      }
+    }
+
+    if (lastUsage === 0) return noOp;
+    if (lastUsage <= targetTokens) return noOp;
+  }
 
   // Use character-based per-message estimation (consistent with truncateBeforeSend)
   const messageTokenEstimates = messages.map((m) => {
