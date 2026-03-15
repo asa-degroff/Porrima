@@ -1,40 +1,138 @@
-import { useState, useCallback, useRef, useEffect } from "react";
-import type { NotebookLink } from "../types";
+import { useState, useCallback, useRef } from "react";
+import type { NotebookLink, ImageAttachment } from "../types";
+import { useHaptics } from "../hooks/useHaptics";
+
+const MAX_IMAGES = 5;
 
 interface Props {
-  onSubmit: (content: string, links?: NotebookLink) => Promise<void> | void;
+  onSubmit: (content: string, links?: NotebookLink, images?: ImageAttachment[]) => Promise<void> | void;
   onCancel?: () => void;
   placeholder?: string;
   initialContent?: string;
   initialLinks?: NotebookLink;
+  initialImages?: ImageAttachment[];
   autoFocus?: boolean;
   onOpenLinkPicker?: (type: 'chat' | 'notebook', anchorRect: DOMRect) => void;
   pendingLinks?: NotebookLink;
   onRemovePendingLink?: (linkType: 'chat' | 'notebook', index: number) => void;
 }
 
-export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initialContent, initialLinks, autoFocus, onOpenLinkPicker, pendingLinks, onRemovePendingLink }: Props) {
+export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initialContent, initialLinks, initialImages, autoFocus, onOpenLinkPicker, pendingLinks, onRemovePendingLink }: Props) {
   const [content, setContent] = useState(initialContent || '');
   const [submitting, setSubmitting] = useState(false);
+  const [images, setImages] = useState<ImageAttachment[]>(initialImages || []);
+  const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const linkButtonRef = useRef<HTMLButtonElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragCounterRef = useRef(0);
+  const { medium } = useHaptics();
 
   // Use pendingLinks from parent (controlled) or initialLinks (uncontrolled edit mode)
   const displayLinks = pendingLinks || initialLinks;
   const hasLinks = displayLinks && ((displayLinks.chats?.length || 0) + (displayLinks.notebooks?.length || 0) > 0);
+  const hasImages = images.length > 0;
+
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve((reader.result as string).split(",")[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const processFiles = async (files: FileList | File[]): Promise<ImageAttachment[]> => {
+    const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    
+    return Promise.all(
+      imageFiles.map(async (file) => {
+        const base64 = await fileToBase64(file);
+        const mimeType = file.type;
+        
+        // Compress if larger than 2MB
+        if (file.size > 2 * 1024 * 1024) {
+          try {
+            const { compressImage } = await import("../utils/image");
+            const compressed = await compressImage(base64, mimeType, 1200, 0.8);
+            return { ...compressed, name: file.name };
+          } catch (err) {
+            console.warn("[NotebookEntryComposer] Compression failed, using original:", err);
+          }
+        }
+        
+        return { data: base64, mimeType, name: file.name };
+      })
+    );
+  };
+
+  const handleFileSelect = async (files: FileList) => {
+    medium();
+    const processed = await processFiles(files);
+    setImages(prev => {
+      const remaining = [...prev, ...processed].slice(0, MAX_IMAGES);
+      return remaining;
+    });
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleRemoveImage = useCallback((index: number) => {
+    setImages(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+  // Drag-and-drop handlers
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (dragCounterRef.current === 1) {
+      setDragging(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current === 0) {
+      setDragging(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragging(false);
+    dragCounterRef.current = 0;
+    
+    const files = e.dataTransfer.files;
+    if (files && files.length) {
+      await handleFileSelect(files);
+    }
+  }, []);
 
   const handleSubmit = useCallback(async () => {
     if (content.trim() && !submitting) {
       setSubmitting(true);
       try {
         const linksToSend = hasLinks ? displayLinks : undefined;
-        await onSubmit(content.trim(), linksToSend);
+        const imagesToSend = hasImages ? images : undefined;
+        await onSubmit(content.trim(), linksToSend, imagesToSend);
         setContent('');
+        setImages([]);
       } finally {
         setSubmitting(false);
       }
     }
-  }, [content, onSubmit, submitting, displayLinks, hasLinks]);
+  }, [content, onSubmit, submitting, displayLinks, hasLinks, images, hasImages]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -53,7 +151,14 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
   }, [onOpenLinkPicker]);
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden">
+    <div
+      ref={containerRef}
+      className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <textarea
         ref={textareaRef}
         value={content}
@@ -65,6 +170,54 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
         className="w-full px-4 py-3 bg-transparent text-sm text-white/80 placeholder-white/30 outline-none resize-none"
         style={{ minHeight: '80px' }}
       />
+      {/* Drag overlay */}
+      {dragging && (
+        <div className="absolute inset-0 bg-purple-500/10 border-2 border-dashed border-purple-400/40 flex items-center justify-center pointer-events-none z-10">
+          <div className="text-center">
+            <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto text-purple-400 mb-2">
+              <path d="M12 5v14" /><path d="M5 12h14" />
+            </svg>
+            <span className="text-purple-300 text-sm">Drop images here</span>
+          </div>
+        </div>
+      )}
+      {/* Image previews */}
+      {hasImages && (
+        <div className="px-3 py-2 flex flex-wrap gap-2 border-t border-white/5">
+          {images.map((img, i) => (
+            <div key={i} className="group relative">
+              <img
+                src={img.thumbUrl || `data:${img.mimeType};base64,${img.data}`}
+                alt={img.name}
+                className="w-16 h-16 object-cover rounded-lg border border-white/10"
+              />
+              <button
+                onClick={() => handleRemoveImage(i)}
+                className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 6 6 18" /><path d="m6 6 12 12" />
+                </svg>
+              </button>
+            </div>
+          ))}
+          {images.length < MAX_IMAGES && (
+            <label className="w-16 h-16 rounded-lg border border-dashed border-white/20 flex items-center justify-center text-white/30 hover:text-white/50 hover:border-white/40 transition-colors cursor-pointer">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14" /><path d="M5 12h14" />
+              </svg>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(e) => e.target.files && handleFileSelect(e.target.files!)}
+                className="hidden"
+              />
+            </label>
+          )}
+        </div>
+      )}
       {/* Pending links display */}
       {hasLinks && (
         <div className="px-3 py-2 flex flex-wrap gap-2 border-t border-white/5">

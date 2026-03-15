@@ -86,6 +86,18 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
 
       {/* Content */}
       <div className="p-4">
+        {entry.images && entry.images.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-3">
+            {entry.images.map((img, i) => (
+              <img
+                key={i}
+                src={img.thumbUrl || img.url || `data:${img.mimeType};base64,${img.data}`}
+                alt={img.name}
+                className="max-h-40 rounded-lg border border-white/10 object-cover"
+              />
+            ))}
+          </div>
+        )}
         {entry.content && (
           <div className="text-sm leading-relaxed text-white/80">
             <Suspense fallback={<span className="whitespace-pre-wrap">{entry.content}</span>}>

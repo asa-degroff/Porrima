@@ -400,7 +400,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           agentNotebooks={agentNotebooks}
           loading={notebooksLoading}
           error={notebooksError}
-          onCreateUserEntry={async (content) => { return await createUserEntry(content); }}
+          onCreateUserEntry={async (content, images) => { return await createUserEntry(content, images); }}
           onCreateAgentEntry={async (content) => { await createAgentEntry(content); }}
           onUpdateEntry={async (author, id, updates) => { await updateEntry(author, id, updates); }}
           onDeleteEntry={async (author, id) => { await removeEntry(author, id); }}

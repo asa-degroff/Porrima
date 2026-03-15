@@ -85,10 +85,13 @@ export async function updateNotebookEntry(
   const entry = await getNotebookEntry(author, id);
   if (!entry) return null;
   
-  // Strip protected fields - only allow content and links to be updated
+  // Strip protected fields - only allow mutable fields to be updated
   const safeUpdates: Partial<NotebookEntry> = {};
   if (updates.content !== undefined) safeUpdates.content = updates.content;
   if (updates.links !== undefined) safeUpdates.links = updates.links;
+  if (updates.images !== undefined) safeUpdates.images = updates.images;
+  if (updates.toolResults !== undefined) safeUpdates.toolResults = updates.toolResults;
+  if (updates.artifacts !== undefined) safeUpdates.artifacts = updates.artifacts;
   
   Object.assign(entry, safeUpdates);
   await writeFile(entryPath(author, entry.id), JSON.stringify(entry, null, 2));

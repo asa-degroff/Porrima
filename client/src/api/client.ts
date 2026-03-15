@@ -796,11 +796,11 @@ export async function fetchNotebookEntry(author: 'user' | 'agent', id: string): 
   return res.json();
 }
 
-export async function createNotebookEntry(author: 'user' | 'agent', content: string): Promise<NotebookEntry> {
+export async function createNotebookEntry(author: 'user' | 'agent', content: string, images?: ImageAttachment[]): Promise<NotebookEntry> {
   const res = await apiFetch(`${BASE}/notebooks/${author}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, images: images?.length ? images : undefined }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

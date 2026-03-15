@@ -8,7 +8,7 @@ import {
   triggerAgentNotebookReview,
   OfflineError,
 } from "../api/client";
-import type { NotebookEntry, NotebookIndex, NotebookLink } from "../types";
+import type { NotebookEntry, NotebookIndex, NotebookLink, ImageAttachment } from "../types";
 
 const LAST_SEEN_KEY = "quje-notebook-agent-last-seen";
 
@@ -42,8 +42,8 @@ export function useNotebooks() {
   }, [refresh]);
 
   const createUserEntry = useCallback(
-    async (content: string) => {
-      const entry = await createNotebookEntry('user', content);
+    async (content: string, images?: ImageAttachment[]) => {
+      const entry = await createNotebookEntry('user', content, images);
       await refresh();
       return entry;
     },

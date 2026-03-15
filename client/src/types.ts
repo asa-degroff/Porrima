@@ -246,6 +246,7 @@ export interface NotebookEntry {
   author: 'user' | 'agent';
   content: string;
   links?: NotebookLink;
+  images?: ImageAttachment[];
   toolResults?: ChatToolResult[];
   artifacts?: Artifact[];
   memories?: { memoryId: string; text: string }[];

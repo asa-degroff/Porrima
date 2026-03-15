@@ -203,6 +203,7 @@ export interface NotebookEntry {
   author: 'user' | 'agent';
   content: string;              // Markdown
   links?: NotebookLink;
+  images?: ImageAttachment[];   // User entries only
   toolResults?: ChatToolResult[];   // Agent entries only
   artifacts?: Artifact[];           // Agent entries only
   memories?: { memoryId: string; text: string }[];  // Extracted or explicit

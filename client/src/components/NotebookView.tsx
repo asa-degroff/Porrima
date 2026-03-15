@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import type { NotebookEntry, NotebookIndex, NotebookLink, ChatListItem } from "../types";
+import type { NotebookEntry, NotebookIndex, NotebookLink, ChatListItem, ImageAttachment } from "../types";
 import { fetchNotebookEntry } from "../api/client";
 import { NotebookEntryComposer } from "./NotebookEntryComposer";
 import { NotebookEntryDisplay } from "./NotebookEntryDisplay";
@@ -13,7 +13,7 @@ interface Props {
   agentNotebooks: NotebookIndex;
   loading?: boolean;
   error?: string | null;
-  onCreateUserEntry: (content: string) => Promise<NotebookEntry>;
+  onCreateUserEntry: (content: string, images?: ImageAttachment[]) => Promise<NotebookEntry>;
   onCreateAgentEntry: (content: string) => Promise<void>;
   onUpdateEntry: (author: 'user' | 'agent', id: string, updates: { content?: string; links?: NotebookLink }) => Promise<void>;
   onDeleteEntry: (author: 'user' | 'agent', id: string) => Promise<void>;
@@ -80,8 +80,8 @@ export function NotebookView({
 
   // --- Composer handlers ---
 
-  const handleCreateUserEntry = useCallback(async (content: string, links?: NotebookLink) => {
-    const entry = await onCreateUserEntry(content);
+  const handleCreateUserEntry = useCallback(async (content: string, links?: NotebookLink, images?: ImageAttachment[]) => {
+    const entry = await onCreateUserEntry(content, images);
     // If links were attached in the composer, update the entry with them
     const linksToSave = links || (composerLinks.chats?.length || composerLinks.notebooks?.length ? composerLinks : undefined);
     if (linksToSave && entry) {

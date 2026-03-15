@@ -12,7 +12,8 @@ import { streamChat, chatMessagesToPiMessages } from "../services/agent.js";
 import { getAgentTools, executeTool } from "../services/agent-tools.js";
 import { extractMemoriesFromText } from "../services/memory-extraction.js";
 import { getSettings } from "../services/storage.js";
-import type { Artifact, ChatToolCall, ChatToolResult } from "../types.js";
+import { saveUserImage } from "../services/user-image-storage.js";
+import type { Artifact, ChatToolCall, ChatToolResult, ImageAttachment } from "../types.js";
 
 const router = Router();
 
@@ -41,10 +42,32 @@ router.get("/:author/:id", async (req, res) => {
 
 // Create user entry
 router.post("/user", async (req, res) => {
-  const { content } = req.body;
+  const { content, images } = req.body;
   if (!content) return res.status(400).json({ error: "Content required" });
   
   const entry = await createNotebookEntry('user', content);
+
+  // Persist images if provided
+  if (images?.length) {
+    const persistedImages: ImageAttachment[] = [];
+    for (const img of images) {
+      if (img.id && img.url && img.thumbUrl) {
+        persistedImages.push(img);
+        continue;
+      }
+      try {
+        const buffer = Buffer.from(img.data, "base64");
+        const id = crypto.randomUUID();
+        const record = await saveUserImage(id, buffer, img.mimeType, img.name);
+        persistedImages.push({ ...img, id: record.id, url: record.url, thumbUrl: record.thumbUrl });
+      } catch (e) {
+        console.error("[notebook] Failed to persist image:", e);
+        persistedImages.push(img);
+      }
+    }
+    entry.images = persistedImages;
+    await updateNotebookEntry('user', entry.id, { images: persistedImages });
+  }
 
   // Auto-extract memories from user entry (fire-and-forget)
   const settings = await getSettings();
@@ -75,7 +98,7 @@ router.post("/agent/trigger", async (req, res) => {
     });
   }
   
-  // Build context from user entries, including attached and inline URLs
+  // Build context from user entries, including attached URLs and images
   const userContent = userEntries.map(e => {
     let text = `[User note from ${new Date(e.createdAt).toLocaleTimeString()}]\n${e.content}`;
 
@@ -97,6 +120,12 @@ router.post("/agent/trigger", async (req, res) => {
     if (allUrls.length) {
       text += `\n\nAttached URLs:\n${allUrls.join('\n')}`;
     }
+
+    // Include image count for vision-capable models
+    if (e.images?.length) {
+      text += `\n\nAttached images: ${e.images.length} image(s) will be provided for visual analysis.`;
+    }
+
     return text;
   }).join('\n\n');
   
@@ -138,9 +167,32 @@ If the user's notes don't spark anything for you, it's fine to skip writing toda
 
 Current date: ${new Date().toLocaleDateString()}`;
 
-  // Prepare messages for streamChat
+  // Prepare messages for streamChat - multimodal if images present
+  const userImages = userEntries.flatMap(e => e.images || []);
   const messages = chatMessagesToPiMessages([], modelId);
-  messages.push({ role: "user", content: "What thoughts or observations do you have in response to the user's notes today?", timestamp: Date.now() });
+  
+  if (userImages.length) {
+    // Build multimodal message with text + images
+    const imageContent = userImages.map(img => ({
+      type: "image" as const,
+      data: img.data,
+      mimeType: img.mimeType,
+    }));
+    messages.push({
+      role: "user",
+      content: [
+        { type: "text", text: "What thoughts or observations do you have in response to the user's notes and images today?" },
+        ...imageContent,
+      ],
+      timestamp: Date.now(),
+    });
+  } else {
+    messages.push({
+      role: "user",
+      content: "What thoughts or observations do you have in response to the user's notes today?",
+      timestamp: Date.now(),
+    });
+  }
   
   // Track tool results and artifacts during streaming
   const allToolCalls: ChatToolCall[] = [];
