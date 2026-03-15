@@ -61,19 +61,19 @@ async function withRetry<T>(
   throw lastError;
 }
 
-const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction system. Your job is to extract atomic facts about the user from a conversation exchange.
+const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction system. Your job is to extract atomic facts from a conversation exchange.
 
-Analyze the user's message and the assistant's response. Extract any facts worth remembering about the user — their preferences, personal details, behaviors, instructions, or important context.
+Analyze the user's message and the assistant's response. Extract any facts worth remembering — user preferences, personal details, behaviors, instructions, or important context.
 
 Output a JSON array of facts. Each fact should be:
-- "text": A concise, standalone statement about the user (e.g., "User prefers TypeScript over JavaScript")
-- "category": One of "preference", "fact", "behavior", "instruction"
-- "importance": 1-10 (10 = critical personal info, 1 = trivial detail)
+- "text": A concise, standalone statement
+- "category": One of "preference", "fact", "behavior", "instruction", "note", "reflection"
+- "importance": 1-10 (10 = critical info, 1 = trivial detail)
 
 If there is nothing worth remembering, output an empty array: []
 
 IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences. Example:
-[{"text": "User's name is Alex", "category": "fact", "importance": 8}, {"text": "User prefers dark mode", "category": "preference", "importance": 4}]`;
+[{"text": "User's name is Alex", "category": "fact", "importance": 8}, {"text": "Project supports dark mode", "category": "preference", "importance": 4}]`;
 
 interface ExtractedFact {
   text: string;
@@ -220,7 +220,7 @@ export async function extractMemories(
 const PRE_COMPACTION_SYSTEM_PROMPT = `You are a memory preservation system. A conversation is approaching its context limit and will be truncated.
 
 Review the conversation messages below that will be removed. Extract:
-1. Important facts about the user (preferences, personal details, behaviors, instructions)
+1. Important facts (user preferences, project details, preferences, instructions)
 2. Current task/goal state — what is being worked on, what decisions were made, what code was discussed
 3. Key technical context the agent needs to continue effectively
 
