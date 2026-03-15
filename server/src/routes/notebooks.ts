@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { v4 as uuid } from "uuid";
 import {
   listNotebookEntries,
   getNotebookEntry,
@@ -12,7 +11,8 @@ import {
 import { streamChat, chatMessagesToPiMessages } from "../services/agent.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import { extractMemoriesFromText } from "../services/memory-extraction.js";
-import type { NotebookEntry } from "../types.js";
+import { getSettings } from "../services/storage.js";
+import type { Artifact, ChatToolResult } from "../types.js";
 
 const router = Router();
 
@@ -45,6 +45,14 @@ router.post("/user", async (req, res) => {
   if (!content) return res.status(400).json({ error: "Content required" });
   
   const entry = await createNotebookEntry('user', content);
+
+  // Auto-extract memories from user entry (fire-and-forget)
+  const settings = await getSettings();
+  const modelId = settings.defaultModelId || "qwen3:8b";
+  extractMemoriesFromText(modelId, content, 'user', entry.id).catch(e =>
+    console.error("[notebook] User entry memory extraction failed:", e)
+  );
+
   res.status(201).json(entry);
 });
 
@@ -72,12 +80,22 @@ router.post("/agent/trigger", async (req, res) => {
     `[User note from ${new Date(e.createdAt).toLocaleTimeString()}]\n${e.content}`
   ).join('\n\n');
   
-  // Check if agent already wrote today
+  // Guardrail: skip if agent already wrote today
   const agentIndex = await listNotebookEntries('agent');
-  const agentToday = agentIndex.entries.filter(e => 
+  const agentToday = agentIndex.entries.filter(e =>
     new Date(e.createdAt).toDateString() === new Date().toDateString()
   );
-  
+  if (agentToday.length > 0) {
+    return res.status(200).json({
+      skipped: true,
+      reason: "Agent already wrote today"
+    });
+  }
+
+  // Resolve model from settings
+  const settings = await getSettings();
+  const modelId = settings.defaultModelId || "qwen3:8b";
+
   // Build system prompt for notebook mode
   const systemPrompt = `You are writing in your personal notebook, not responding to a user directly. 
 This is a space for reflection, exploration, and creation. 
@@ -98,16 +116,16 @@ If the user's notes don't spark anything for you, it's fine to skip writing toda
 Current date: ${new Date().toLocaleDateString()}`;
 
   // Prepare messages for streamChat
-  const messages = chatMessagesToPiMessages([], "qwen3:8b");
+  const messages = chatMessagesToPiMessages([], modelId);
   messages.push({ role: "user", content: "What thoughts or observations do you have in response to the user's notes today?", timestamp: Date.now() });
   
   // Track tool results and artifacts during streaming
-  const toolResults: any[] = [];
-  const artifacts: any[] = [];
+  const toolResults: ChatToolResult[] = [];
+  const artifacts: Artifact[] = [];
   
   try {
     const result = await streamChat(
-      "qwen3:8b",
+      modelId,
       messages,
       systemPrompt,
       (event) => {
@@ -139,7 +157,7 @@ Current date: ${new Date().toLocaleDateString()}`;
     }
     
     // Extract memories from agent entry
-    await extractMemoriesFromText("qwen3:8b", agentEntry.content, 'agent', agentEntry.id);
+    await extractMemoriesFromText(modelId, agentEntry.content, 'agent', agentEntry.id);
     
     res.status(201).json(agentEntry);
   } catch (error) {
@@ -154,8 +172,18 @@ router.patch("/:author/:id", async (req, res) => {
   if (author !== 'user' && author !== 'agent') {
     return res.status(400).json({ error: "Invalid author" });
   }
-  
-  const entry = await updateNotebookEntry(author as 'user' | 'agent', id, req.body);
+
+  // Allowlist mutable fields only
+  const { content, links } = req.body;
+  const updates: Record<string, unknown> = {};
+  if (content !== undefined) updates.content = content;
+  if (links !== undefined) updates.links = links;
+
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: "No valid fields to update" });
+  }
+
+  const entry = await updateNotebookEntry(author as 'user' | 'agent', id, updates);
   if (!entry) return res.status(404).json({ error: "Entry not found" });
   res.json(entry);
 });
