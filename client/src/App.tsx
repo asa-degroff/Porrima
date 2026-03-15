@@ -343,6 +343,21 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     setSidebarOpen(false);
   }, []);
 
+  const handleSendToNotebook = useCallback(async (chatId: string, chatTitle: string) => {
+    try {
+      const entry = await createUserEntry(`Linked from chat: **${chatTitle}**`);
+      if (entry) {
+        await updateEntry('user', entry.id, {
+          links: { chats: [{ chatId, title: chatTitle }] },
+        });
+      }
+      setActiveView('notebooks');
+      setSidebarOpen(false);
+    } catch (e) {
+      console.error("[send-to-notebook] failed:", e);
+    }
+  }, [createUserEntry, updateEntry]);
+
   return (
     <div className="flex h-full overflow-hidden relative" style={keyboardInset ? { paddingBottom: keyboardInset } : undefined}>
       {settings.backgroundEffect === "ripple-grid" && (
@@ -361,6 +376,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onNewProject={handleNewProject}
         onDeleteChat={handleDeleteChat}
         onDeleteProject={handleDeleteProject}
+        onSendToNotebook={handleSendToNotebook}
         onOpenSettings={handleOpenSettings}
         onOpenImageSandbox={handleOpenImageSandbox}
         isOpen={sidebarOpen}

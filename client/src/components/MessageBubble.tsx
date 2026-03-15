@@ -10,6 +10,7 @@ import { GeneratedImagePanel } from "./GeneratedImagePanel";
 import { ToolCallDisplay } from "./ToolCallDisplay";
 import { SpeakerButton } from "./SpeakerButton";
 import { UserImage } from "./UserImage";
+import { ContextMenu, ContextMenuItem } from "./ContextMenu";
 
 const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -50,6 +51,7 @@ export const MessageBubble = memo(function MessageBubble({
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
   const [lightboxImage, setLightboxImage] = useState<ImageAttachment | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -110,6 +112,10 @@ export const MessageBubble = memo(function MessageBubble({
         </button>
       )}
       <div
+        onContextMenu={isUser && editable && !editing ? (e: React.MouseEvent) => {
+          e.preventDefault();
+          setContextMenu({ x: e.clientX, y: e.clientY });
+        } : undefined}
         className={`max-w-[92%] md:max-w-[80%] rounded-2xl px-3 md:px-4 py-3 ${
           isUser
             ? "text-white/95"
@@ -328,6 +334,19 @@ export const MessageBubble = memo(function MessageBubble({
             </svg>
           )}
         </button>
+      )}
+
+      {/* User message context menu */}
+      {contextMenu && isUser && editable && !editing && (
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
+          <ContextMenuItem onClick={() => { setContextMenu(null); handleStartEdit(); }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+              <path d="m15 5 4 4" />
+            </svg>
+            Edit message
+          </ContextMenuItem>
+        </ContextMenu>
       )}
 
       {/* Image lightbox */}

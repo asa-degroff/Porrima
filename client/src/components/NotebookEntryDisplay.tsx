@@ -1,8 +1,9 @@
-import { Suspense, memo, lazy, useRef, useCallback } from "react";
+import { Suspense, memo, lazy, useRef, useCallback, useState } from "react";
 import type { NotebookEntry, Artifact, NotebookLink } from "../types";
 import type { ChatListItem } from "../types";
 import { ChatLinkPicker } from "./ChatLinkPicker";
 import { NotebookLinkPicker } from "./NotebookLinkPicker";
+import { ContextMenu, ContextMenuItem } from "./ContextMenu";
 
 const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -33,6 +34,13 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
   const isAgent = entry.author === 'agent';
   const timestamp = new Date(entry.createdAt).toLocaleString();
   const linkButtonRef = useRef<HTMLButtonElement>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    if (!onDelete) return;
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  }, [onDelete]);
 
   const handleAddLink = useCallback(() => {
     if (onAddLink && linkButtonRef.current) {
@@ -42,7 +50,10 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
   }, [onAddLink]);
 
   return (
-    <div className={`rounded-xl border border-white/10 overflow-hidden ${isAgent ? 'bg-purple-500/[0.03]' : 'bg-white/[0.03]'}`}>
+    <div
+      className={`rounded-xl border border-white/10 overflow-hidden ${isAgent ? 'bg-purple-500/[0.03]' : 'bg-white/[0.03]'}`}
+      onContextMenu={handleContextMenu}
+    >
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-white/[0.02]">
         <div className="flex items-center gap-2">
@@ -61,22 +72,6 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-              </svg>
-            </button>
-          )}
-          {onDelete && (
-            <button
-              onClick={() => {
-                if (window.confirm("Delete this entry? This cannot be undone.")) {
-                  onDelete(entry.id);
-                }
-              }}
-              className="text-white/30 hover:text-red-400 transition-colors p-1 rounded hover:bg-white/5"
-              title="Delete"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 6h18" />
-                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
               </svg>
             </button>
           )}
@@ -173,6 +168,27 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
           <ArtifactPanel key={artifact.id} artifact={artifact} />
         ))}
       </div>
+
+      {/* Context menu */}
+      {contextMenu && onDelete && (
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
+          <ContextMenuItem
+            destructive
+            onClick={() => {
+              setContextMenu(null);
+              if (window.confirm("Delete this entry? This cannot be undone.")) {
+                onDelete(entry.id);
+              }
+            }}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 6h18" />
+              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+            </svg>
+            Delete
+          </ContextMenuItem>
+        </ContextMenu>
+      )}
     </div>
   );
 });

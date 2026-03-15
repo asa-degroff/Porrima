@@ -1,15 +1,24 @@
 import { useState, useCallback, useEffect } from "react";
 import type { ChatListItem as ChatListItemType } from "../types";
+import { ContextMenu, ContextMenuItem } from "./ContextMenu";
 
 interface Props {
   chat: ChatListItemType;
   active: boolean;
   onSelect: () => void;
   onDelete: () => void;
+  onSendToNotebook?: (chatId: string, chatTitle: string) => void;
 }
 
-export function ChatListItem({ chat, active, onSelect, onDelete }: Props) {
+export function ChatListItem({ chat, active, onSelect, onDelete, onSendToNotebook }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  }, []);
 
   // Close confirmation on Escape
   useEffect(() => {
@@ -40,6 +49,7 @@ export function ChatListItem({ chat, active, onSelect, onDelete }: Props) {
   return (
     <button
       onClick={onSelect}
+      onContextMenu={handleContextMenu}
       className={`w-full text-left px-2.5 py-2 rounded-xl transition-all group relative ${
         active
           ? "bg-white/15 border border-white/20"
@@ -110,6 +120,31 @@ export function ChatListItem({ chat, active, onSelect, onDelete }: Props) {
             </svg>
           </div>
         </div>
+      )}
+
+      {/* Context menu */}
+      {contextMenu && (
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
+          {onSendToNotebook && (
+            <ContextMenuItem onClick={() => { setContextMenu(null); onSendToNotebook(chat.id, chat.title); }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-purple-400">
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                <polyline points="14 2 14 8 20 8" />
+                <path d="M12 18v-6" />
+                <path d="m8 15 4 4 4-4" />
+              </svg>
+              Send to notebook
+            </ContextMenuItem>
+          )}
+          <ContextMenuItem destructive onClick={() => { setContextMenu(null); setConfirmDelete(true); }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 6h18" />
+              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+            </svg>
+            Delete
+          </ContextMenuItem>
+        </ContextMenu>
       )}
     </button>
   );

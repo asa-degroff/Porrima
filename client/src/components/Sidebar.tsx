@@ -14,6 +14,7 @@ interface Props {
   onNewProject: () => void;
   onDeleteChat: (id: string) => void;
   onDeleteProject: (id: string) => void;
+  onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   onOpenSettings: () => void;
   onOpenImageSandbox: () => void;
   isOpen: boolean;
@@ -49,6 +50,7 @@ function ProjectSection({
   onNewChat,
   onDeleteChat,
   onDeleteProject,
+  onSendToNotebook,
 }: {
   project: Project;
   chats: ChatListItemType[];
@@ -57,6 +59,7 @@ function ProjectSection({
   onNewChat: (type: ChatType, projectId?: string) => void;
   onDeleteChat: (id: string) => void;
   onDeleteProject: (id: string) => void;
+  onSendToNotebook?: (chatId: string, chatTitle: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -130,6 +133,7 @@ function ProjectSection({
                   active={chat.id === activeChatId}
                   onSelect={() => onSelectChat(chat.id)}
                   onDelete={() => onDeleteChat(chat.id)}
+                  onSendToNotebook={onSendToNotebook}
                 />
               ))}
             </div>
@@ -155,6 +159,7 @@ export function Sidebar({
   onNewProject,
   onDeleteChat,
   onDeleteProject,
+  onSendToNotebook,
   onOpenSettings,
   onOpenImageSandbox,
   isOpen,
@@ -281,6 +286,7 @@ export function Sidebar({
                       onNewChat={onNewChat}
                       onDeleteChat={onDeleteChat}
                       onDeleteProject={onDeleteProject}
+                      onSendToNotebook={onSendToNotebook}
                     />
                   ))}
                 </div>
@@ -347,6 +353,7 @@ export function Sidebar({
                     active={chat.id === activeChatId}
                     onSelect={() => { onSelectChat(chat.id); onClose(); }}
                     onDelete={() => onDeleteChat(chat.id)}
+                    onSendToNotebook={onSendToNotebook}
                   />
                 ))}
                 {agentChats.length === 0 && (
@@ -401,6 +408,7 @@ export function Sidebar({
                     active={chat.id === activeChatId}
                     onSelect={() => { onSelectChat(chat.id); onClose(); }}
                     onDelete={() => onDeleteChat(chat.id)}
+                    onSendToNotebook={onSendToNotebook}
                   />
                 ))}
                 {quickChats.length === 0 && (
