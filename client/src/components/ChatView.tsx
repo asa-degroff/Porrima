@@ -53,6 +53,8 @@ interface Props {
   ttsAutoReadEnabled?: boolean;
   onTtsAutoReadToggle?: (enabled: boolean) => void;
   onReadAloud?: (text: string) => void;
+  playbackState?: import("../hooks/useTTS").PlaybackState;
+  ttsBarVisible?: boolean;
   onSend: (text: string, images?: import("../types").ImageAttachment[]) => void;
   onEditMessage: (index: number, newText: string) => void;
   onAbort: () => void;
@@ -87,6 +89,8 @@ export function ChatView({
   systemPrompt,
   systemPromptPresets,
   ttsAutoReadEnabled = false,
+  playbackState,
+  ttsBarVisible,
   onTtsAutoReadToggle,
   onReadAloud,
   onSend,
@@ -343,20 +347,28 @@ export function ChatView({
           {onTtsAutoReadToggle && (
             <button
               onClick={() => onTtsAutoReadToggle(!ttsAutoReadEnabled)}
-              className={`p-1.5 rounded-lg transition-colors ${
+              className={`p-1.5 rounded-lg transition-colors relative ${
                 ttsAutoReadEnabled
                   ? "bg-blue-500/20 border border-blue-400/30 text-blue-300"
                   : "text-white/30 hover:text-white/50 hover:bg-white/5"
               }`}
               title={ttsAutoReadEnabled ? "Auto-read enabled" : "Enable auto-read"}
+              disabled={playbackState?.isLoading}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
                 <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                {ttsAutoReadEnabled && (
+                {ttsAutoReadEnabled && !playbackState?.isLoading && (
                   <circle cx="19" cy="5" r="2" fill="currentColor" />
                 )}
               </svg>
+              {playbackState?.isLoading && (
+                <span className="absolute -top-1 -right-1 w-4 h-4">
+                  <svg className="animate-spin text-blue-300" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                  </svg>
+                </span>
+              )}
             </button>
           )}
           <ModelSelector
@@ -422,18 +434,20 @@ export function ChatView({
       </div>
 
       {/* Input */}
-      <MessageInput
-        chatId={chatId}
-        onSend={onSend}
-        disabled={!chatId}
-        onAbort={onAbort}
-        streaming={streaming}
-        waitingForInput={waitingForInput}
-        isOnline={isOnline}
-        onSlashTyping={handleSlashTyping}
-        onSlashDeleted={closeSkillSelector}
-        inputRef={inputRef}
-      />
+      <div style={ttsBarVisible ? { paddingBottom: "56px" } : undefined}>
+        <MessageInput
+          chatId={chatId}
+          onSend={onSend}
+          disabled={!chatId}
+          onAbort={onAbort}
+          streaming={streaming}
+          waitingForInput={waitingForInput}
+          isOnline={isOnline}
+          onSlashTyping={handleSlashTyping}
+          onSlashDeleted={closeSkillSelector}
+          inputRef={inputRef}
+        />
+      </div>
 
       {/* Skill Selector Popup */}
       {skillSelectorOpen && (

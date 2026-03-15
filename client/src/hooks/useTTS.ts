@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS: TTSSettings = {
 export interface PlaybackState {
   isPlaying: boolean;
   isPaused: boolean;
+  isLoading: boolean;
   currentTime: number;
   duration: number;
   audioUrl: string | null;
@@ -24,6 +25,7 @@ export function useTTS() {
   const [playbackState, setPlaybackState] = useState<PlaybackState>({
     isPlaying: false,
     isPaused: false,
+    isLoading: false,
     currentTime: 0,
     duration: 0,
     audioUrl: null,
@@ -109,6 +111,9 @@ export function useTTS() {
       setError(null);
 
       try {
+        // Set loading state
+        setPlaybackState((prev) => ({ ...prev, isLoading: true }));
+
         // Stop any current playback
         if (audioRef.current) {
           audioRef.current.pause();
@@ -143,6 +148,7 @@ export function useTTS() {
           setPlaybackState({
             isPlaying: true,
             isPaused: false,
+            isLoading: false,
             currentTime: 0,
             duration: data.duration,
             audioUrl,
@@ -154,6 +160,7 @@ export function useTTS() {
         const message = err instanceof Error ? err.message : "Failed to play audio";
         setError(message);
         console.error("[TTS] Play error:", err);
+        setPlaybackState((prev) => ({ ...prev, isLoading: false }));
       }
     },
     [settings.voice, settings.speed, settings.pitch]

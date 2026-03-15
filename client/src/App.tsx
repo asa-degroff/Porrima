@@ -22,6 +22,7 @@ import { updateChat as apiUpdateChat } from "./api/client";
 import { setCachedChat, getCachedChat, clearCachedChat } from "./lib/db";
 import { HapticsProvider } from "./hooks/useHaptics";
 import { useTTS } from "./hooks/useTTS";
+import { TTSControlBar } from "./components/TTSControlBar";
 import { useNotebooks } from "./hooks/useNotebooks";
 import type { Chat, ChatType } from "./types";
 
@@ -33,7 +34,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { isOnline } = useOnlineStatus();
   const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
-  const { playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts } = useTTS();
+  const { playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts } = useTTS();
   const {
     userNotebooks,
     agentNotebooks,
@@ -358,8 +359,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, [createUserEntry, updateEntry]);
 
+  // Keyboard inset only - TTS bar is handled within ChatView
+  const totalBottomInset = keyboardInset || 0;
+
   return (
-    <div className="flex h-full overflow-hidden relative" style={keyboardInset ? { paddingBottom: keyboardInset } : undefined}>
+    <div className="flex h-full overflow-hidden relative" style={totalBottomInset ? { paddingBottom: totalBottomInset } : undefined}>
       {settings.backgroundEffect === "ripple-grid" && (
         <Suspense fallback={null}>
           <RippleGridBackground />
@@ -383,6 +387,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onClose={handleCloseSidebar}
         isStreaming={streaming}
         hasUnreadNotebooks={hasUnreadAgentEntries()}
+        ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}
       />
       {sidebarOpen && (
         <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={handleCloseSidebar} />
@@ -430,6 +435,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}
         systemPromptPresets={settings.systemPromptPresets}
         ttsAutoReadEnabled={playbackState.isPlaying || playbackState.isPaused}
+        playbackState={playbackState}
+        ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}
         onTtsAutoReadToggle={(enabled) => {
           if (enabled) {
             const lastAssistantMsg = [...messages].reverse().find(m => m.role === "assistant" && m.content);
@@ -466,32 +473,19 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       )}
       
       {/* TTS Control Bar */}
-      {(playbackState.isPlaying || playbackState.isPaused) && (
+      {(playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading) && (
         <div className="fixed bottom-0 left-0 right-0 z-40">
-          <div className="bg-[#1a1a2e]/95 backdrop-blur-md border-t border-white/10 py-2 px-4">
-            <div className="max-w-4xl mx-auto flex items-center gap-3">
-              <button
-                onClick={() => playbackState.isPlaying ? stopTts() : playbackState.isPaused && playTts(lastMessageRef.current ? messages[messages.length-1]?.content || "" : "")}
-                className="w-9 h-9 rounded-full bg-white/10 border border-white/20 text-white/60 flex items-center justify-center hover:bg-white/20 hover:text-white/80 transition-colors shrink-0"
-                title="Stop"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                </svg>
-              </button>
-              <div className="flex-1 min-w-0">
-                <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-400/60 transition-all duration-300 animate-pulse"
-                    style={{ width: playbackState.isPlaying ? "100%" : "30%" }}
-                  />
-                </div>
-                <div className="flex justify-between mt-1 text-[10px] text-white/40">
-                  <span>{playbackState.isPlaying ? "Playing..." : "Paused"}</span>
-                </div>
-              </div>
-            </div>
-          </div>
+          <TTSControlBar
+            playbackState={playbackState}
+            onPause={() => pauseTts()}
+            onResume={() => {
+              if (lastMessageRef.current) {
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) playTts(lastMsg.content);
+              }
+            }}
+            onStop={() => stopTts()}
+          />
         </div>
       )}
     </div>

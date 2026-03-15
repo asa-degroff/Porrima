@@ -21,6 +21,7 @@ interface Props {
   onClose: () => void;
   isStreaming?: boolean;
   hasUnreadNotebooks?: boolean;
+  ttsBarVisible?: boolean;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -166,6 +167,7 @@ export function Sidebar({
   onClose,
   isStreaming = false,
   hasUnreadNotebooks = false,
+  ttsBarVisible = false,
 }: Props) {
   const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [agentExpanded, setAgentExpanded] = useState(true);
@@ -435,6 +437,8 @@ export function Sidebar({
           Image Sandbox
         </button>
       </div>
+      {/* Spacer for TTS bar */}
+      {ttsBarVisible && <div className="h-[56px] shrink-0" />}
       </div>
     </div>
   );
