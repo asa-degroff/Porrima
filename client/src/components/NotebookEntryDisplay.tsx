@@ -72,6 +72,20 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
           <span className="text-xs text-white/30">{timestamp}</span>
         </div>
         <div className="flex items-center gap-1">
+          {onAddLink && (
+            <button
+              ref={linkButtonRef}
+              type="button"
+              onClick={handleAddLink}
+              className="text-white/30 hover:text-white/60 transition-colors p-1 rounded hover:bg-white/5"
+              title="Add link"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+              </svg>
+            </button>
+          )}
           {onEdit && (
             <button
               onClick={() => onEdit(entry.id, entry.content)}
@@ -80,6 +94,22 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+              </svg>
+            </button>
+          )}
+          {onDelete && (
+            <button
+              onClick={() => {
+                if (window.confirm("Delete this entry? This cannot be undone.")) {
+                  onDelete(entry.id);
+                }
+              }}
+              className="text-white/30 hover:text-red-400 transition-colors p-1 rounded hover:bg-white/5"
+              title="Delete"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18" />
+                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
               </svg>
             </button>
           )}
@@ -192,23 +222,6 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
                 ))}
               </div>
             )}
-
-        {/* Add Link Button (user entries only) */}
-        {onAddLink && (
-          <div className="mt-3">
-            <button
-              ref={linkButtonRef}
-              onClick={handleAddLink}
-              className="text-xs px-2 py-1 rounded bg-white/5 border border-dashed border-white/20 text-white/40 hover:text-white/60 hover:bg-white/10 transition-colors flex items-center gap-1"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 5v14" />
-                <path d="M5 12h14" />
-              </svg>
-              Add link
-            </button>
-          </div>
-        )}
 
         {/* Artifacts */}
         {entry.artifacts?.map((artifact) => (
