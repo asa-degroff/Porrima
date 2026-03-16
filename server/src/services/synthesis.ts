@@ -10,6 +10,7 @@ import {
 } from "./memory-storage.js";
 import { discoverOllamaModels } from "./models.js";
 import { loadPersona, savePersona } from "./persona-store.js";
+import { getSettings } from "./storage.js";
 
 const SYNTHESIS_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MERGE_THRESHOLD = 0.90;
@@ -92,7 +93,7 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
     }
 
     // Step 3: Generate daily summary via LLM
-    const resolvedModelId = modelId || (await getDefaultModelId());
+    const resolvedModelId = modelId || (await getSynthesisModelId());
     if (resolvedModelId) {
       try {
         const memoriesText = store.memories
@@ -103,29 +104,42 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           .join("\n");
 
         let summaryText = "";
+        let thinkingText = "";
         await streamChat(
           resolvedModelId,
           [
             {
               role: "user",
-              content: `Here are all current memories:\n\n${memoriesText}\n\nWrite a brief daily summary (2-4 paragraphs) of what you know, organized by theme. Note any contradictions or outdated info.`,
+              content: `Here are all current memories:\n\n${memoriesText}\n\nWrite a brief daily summary (2-4 paragraphs) of what you know about this user and their projects, organized by theme. Note any contradictions or outdated info that should be cleaned up.`,
               timestamp: Date.now(),
             },
           ],
-          "You are a memory synthesis system synthesizing facts, themes, and ideas.",
+          "You are a memory synthesis system. Summarize the given memories into a coherent overview organized by theme. Write in English. Be concise and direct — focus on actionable patterns, not restating each memory.",
           (event) => {
             if (event.type === "text_delta") {
               summaryText += event.delta;
+            } else if (event.type === "thinking_delta") {
+              thinkingText += event.delta;
             }
           }
         );
 
+        // Use thinking content as fallback if text output is empty
+        // (qwen3 reasoning mode can put all content into thinking tokens)
+        const finalSummary = summaryText.trim() || thinkingText.trim();
+
         const today = new Date().toISOString().split("T")[0];
-        await saveDailyLog(
-          today,
-          `# Daily Synthesis - ${today}\n\n**Memories: ${store.memories.length}** | Merged: ${merged.size}\n\n${summaryText}`
-        );
-        console.log(`[synthesis] Daily log saved for ${today}`);
+        if (finalSummary) {
+          await saveDailyLog(
+            today,
+            `# Daily Synthesis - ${today}\n\n**Memories: ${store.memories.length}** | Merged: ${merged.size}\n\n${finalSummary}`
+          );
+          console.log(`[synthesis] Daily log saved for ${today} (${finalSummary.length} chars)`);
+        } else {
+          console.warn(
+            `[synthesis] LLM returned empty summary for ${today} (model: ${resolvedModelId}). Skipping daily log write.`
+          );
+        }
       } catch (e) {
         console.error("[synthesis] Summary generation failed:", e);
       }
@@ -136,6 +150,8 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       } catch (e) {
         console.error("[synthesis] Persona pattern analysis failed:", e);
       }
+    } else {
+      console.warn("[synthesis] No model available — skipping summary generation and persona analysis");
     }
 
     store.lastSynthesis = new Date().toISOString();
@@ -236,6 +252,7 @@ async function analyzeAndPromotePersonaPatterns(
         .join("\n");
 
       let suggestedUpdate = "";
+      let suggestedThinking = "";
       await streamChat(
         modelId,
         [
@@ -245,17 +262,24 @@ async function analyzeAndPromotePersonaPatterns(
             timestamp: Date.now(),
           },
         ],
-        "You are analyzing user interaction patterns to improve the agent's core persona. Be conservative—only suggest changes for genuinely significant, recurring patterns.",
+        "You are analyzing user interaction patterns to improve the agent's core persona. Be conservative—only suggest changes for genuinely significant, recurring patterns. Write in English.",
         (event) => {
           if (event.type === "text_delta") {
             suggestedUpdate += event.delta;
+          } else if (event.type === "thinking_delta") {
+            suggestedThinking += event.delta;
           }
         }
       );
 
-      console.log(
-        `[synthesis] Persona pattern suggestion:\n${suggestedUpdate}`
-      );
+      const finalSuggestion = suggestedUpdate.trim() || suggestedThinking.trim();
+      if (finalSuggestion) {
+        console.log(
+          `[synthesis] Persona pattern suggestion:\n${finalSuggestion}`
+        );
+      } else {
+        console.warn("[synthesis] Persona pattern analysis returned empty suggestion");
+      }
 
       // Log to daily summary (automatic implementation would parse and apply)
       // For now, this serves as an audit trail for manual review or future auto-implementation
@@ -270,11 +294,34 @@ async function analyzeAndPromotePersonaPatterns(
   console.log("[synthesis] Persona pattern analysis complete");
 }
 
-async function getDefaultModelId(): Promise<string | null> {
+async function getSynthesisModelId(): Promise<string | null> {
+  // Prefer user's configured default model
+  try {
+    const settings = await getSettings();
+    if (settings.defaultModelId) {
+      // Verify the configured model is actually available in Ollama
+      const models = await discoverOllamaModels();
+      const found = models.find((m) => m.id === settings.defaultModelId);
+      if (found) return found.id;
+      console.warn(
+        `[synthesis] Configured model "${settings.defaultModelId}" not available in Ollama, falling back`
+      );
+    }
+  } catch {
+    console.warn("[synthesis] Could not load settings, falling back to model discovery");
+  }
+
+  // Fallback: pick the first available non-embedding model
   try {
     const models = await discoverOllamaModels();
-    return models.length > 0 ? models[0].id : null;
-  } catch {
+    if (models.length === 0) {
+      console.error("[synthesis] No Ollama models available for synthesis");
+      return null;
+    }
+    console.log(`[synthesis] Using fallback model: ${models[0].id}`);
+    return models[0].id;
+  } catch (e) {
+    console.error("[synthesis] Ollama unreachable:", e);
     return null;
   }
 }
