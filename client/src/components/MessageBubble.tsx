@@ -279,70 +279,21 @@ export const MessageBubble = memo(function MessageBubble({
 
             {renderSegments ? (
               // Interleaved segments in chronological order (streaming + persisted)
-              message.segments?.map((segment, i) => {
-                switch (segment.type) {
-                  case "text": {
-                    // During streaming, show cursor only on the last segment if it's text
-                    const isActivelyStreaming = showStreaming && i === message.segments!.length - 1;
-                    return segment.content ? (
-                      <div key={`${segment.seq}-${i}`} className="text-sm leading-relaxed">
-                        {isActivelyStreaming ? (
-                          <StreamingText content={segment.content} isStreaming={!isThinkingStreaming} />
-                        ) : (
-                          <Suspense fallback={<span className="whitespace-pre-wrap">{segment.content}</span>}>
-                            <MarkdownRenderer content={segment.content} />
-                          </Suspense>
-                        )}
-                      </div>
-                    ) : null;
-                  }
-                  case "tool_call": {
-                    // Look ahead for immediate tool_result and pair them
-                    const nextSegment = message.segments?.[i + 1];
-                    const hasResult = nextSegment?.type === "tool_result" &&
-                                     nextSegment.toolResult?.toolName === segment.toolCall?.name;
-
-                    return segment.toolCall ? (
-                      <ToolCallDisplay
-                        key={`tool-${segment.toolCall.id}`}
-                        toolCall={segment.toolCall}
-                        toolResult={hasResult ? nextSegment.toolResult : undefined}
-                      />
-                    ) : null;
-                  }
-                  case "tool_result":
-                    // Skipped - rendered inline with its tool_call above
-                    return null;
-                  case "artifact":
-                    return segment.artifact ? (
-                      <ArtifactPanel key={`artifact-${segment.artifact.id}`} artifact={segment.artifact} />
-                    ) : null;
-                  case "visual":
-                    return segment.visual ? (
-                      <InlineVisual key={`visual-${segment.visual.id}`} visual={segment.visual} />
-                    ) : null;
-                  case "generated_image":
-                    return segment.generatedImage ? (
-                      <GeneratedImagePanel key={`image-${segment.generatedImage.id}`} image={segment.generatedImage} />
-                    ) : null;
-                  default:
-                    return null;
-                }
-              })
+              <MessageSegments
+                segments={message.segments}
+                showStreaming={showStreaming}
+                isThinkingStreaming={isThinkingStreaming}
+              />
             ) : (
               // Legacy fallback (no segments — old messages or non-agent chats)
               <>
                 {/* Tool calls - only show if we don't have segments (prevent duplicates) */}
-                {message.toolCalls && message.toolCalls.map((tc, i) => {
-                  const tr = message.toolResults?.find((r) => r.toolCallId === tc.id);
-                  return (
-                    <ToolCallDisplay
-                      key={tc.id}
-                      toolCall={tc}
-                      toolResult={tr}
-                    />
-                  );
-                })}
+                {message.toolCalls && message.toolCalls.length > 0 && (
+                  <ToolCallsList
+                    toolCalls={message.toolCalls}
+                    toolResults={message.toolResults || []}
+                  />
+                )}
 
                 {message.content && (
                   <div className="text-sm leading-relaxed">
@@ -423,6 +374,221 @@ export const MessageBubble = memo(function MessageBubble({
     </div>
   );
 });
+
+/**
+ * Renders message segments with automatic scrollable container for long sequences of tool calls.
+ * When more than 6 consecutive tool calls are detected, they are wrapped in a scrollable box.
+ */
+function MessageSegments({
+  segments,
+  showStreaming,
+  isThinkingStreaming,
+}: {
+  segments: ChatMessage["segments"];
+  showStreaming: boolean;
+  isThinkingStreaming: boolean;
+}) {
+  const MAX_CONSECUTIVE_TOOLS = 6;
+  
+  // Group segments into runs of consecutive tool calls
+  const groups: Array<{
+    type: "tools" | "other";
+    segments: typeof segments;
+  }> = [];
+  
+  let currentGroup: typeof segments = [];
+  let currentGroupIsTools = false;
+  
+  for (const segment of segments || []) {
+    const isTool = segment.type === "tool_call" || segment.type === "tool_result";
+    
+    if (isTool !== currentGroupIsTools && currentGroup.length > 0) {
+      groups.push({
+        type: currentGroupIsTools ? "tools" : "other",
+        segments: [...currentGroup],
+      });
+      currentGroup = [];
+    }
+    
+    currentGroupIsTools = isTool;
+    currentGroup.push(segment);
+  }
+  
+  if (currentGroup.length > 0) {
+    groups.push({
+      type: currentGroupIsTools ? "tools" : "other",
+      segments: [...currentGroup],
+    });
+  }
+  
+  return (
+    <>
+      {groups.map((group, groupIndex) => {
+        if (group.type === "tools" && group.segments) {
+          // Count actual tool_call segments (not tool_result which are skipped)
+          const toolCallCount = group.segments.filter(s => s.type === "tool_call").length;
+          const useScrollContainer = toolCallCount > MAX_CONSECUTIVE_TOOLS;
+          
+          if (useScrollContainer) {
+            return (
+              <div
+                key={`group-${groupIndex}`}
+                className="my-2 rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden"
+              >
+                <div className="px-3 py-1.5 text-xs text-white/40 border-b border-white/5 flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="4 7 4 4 20 4 20 7" />
+                    <line x1="9" y1="20" x2="15" y2="20" />
+                    <line x1="12" y1="4" x2="12" y2="7" />
+                  </svg>
+                  <span>{toolCallCount} tool calls</span>
+                  <span className="text-white/20">•</span>
+                  <span className="text-[11px]">Scroll to view all</span>
+                </div>
+                <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
+                  {group.segments.map((segment, i) => (
+                    <SegmentRenderer
+                      key={`${segment.type}-${segment.seq}-${i}`}
+                      segment={segment}
+                      index={i}
+                      allSegments={group.segments!}
+                      showStreaming={showStreaming}
+                      isThinkingStreaming={isThinkingStreaming}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          }
+        }
+        
+        // Render without scroll container
+        if (!group.segments) return null;
+        return group.segments.map((segment, i) => (
+          <SegmentRenderer
+            key={`${segment.type}-${segment.seq}-${i}`}
+            segment={segment}
+            index={i}
+            allSegments={group.segments!}
+            showStreaming={showStreaming}
+            isThinkingStreaming={isThinkingStreaming}
+          />
+        ));
+      })}
+    </>
+  );
+}
+
+/**
+ * Renders a list of tool calls with automatic scrollable container when there are more than 6.
+ */
+function ToolCallsList({
+  toolCalls,
+  toolResults,
+}: {
+  toolCalls: ChatMessage["toolCalls"];
+  toolResults: ChatMessage["toolResults"];
+}) {
+  const MAX_TOOLS = 6;
+  const useScrollContainer = (toolCalls?.length || 0) > MAX_TOOLS;
+  
+  const renderToolCalls = () =>
+    (toolCalls || []).map((tc, i) => {
+      const tr = toolResults?.find((r) => r.toolCallId === tc.id);
+      return (
+        <ToolCallDisplay
+          key={tc.id}
+          toolCall={tc}
+          toolResult={tr}
+        />
+      );
+    });
+  
+  if (useScrollContainer) {
+    return (
+      <div className="my-2 rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden">
+        <div className="px-3 py-1.5 text-xs text-white/40 border-b border-white/5 flex items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="4 7 4 4 20 4 20 7" />
+            <line x1="9" y1="20" x2="15" y2="20" />
+            <line x1="12" y1="4" x2="12" y2="7" />
+          </svg>
+          <span>{toolCalls?.length} tool calls</span>
+          <span className="text-white/20">•</span>
+          <span className="text-[11px]">Scroll to view all</span>
+        </div>
+        <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
+          {renderToolCalls()}
+        </div>
+      </div>
+    );
+  }
+  
+  return <>{renderToolCalls()}</>;
+}
+
+/**
+ * Renders an individual segment, handling tool_call/tool_result pairing.
+ */
+function SegmentRenderer({
+  segment,
+  index,
+  allSegments,
+  showStreaming,
+  isThinkingStreaming,
+}: {
+  segment: NonNullable<ChatMessage["segments"]>[number];
+  index: number;
+  allSegments: NonNullable<ChatMessage["segments"]>;
+  showStreaming: boolean;
+  isThinkingStreaming: boolean;
+}) {
+  switch (segment.type) {
+    case "text": {
+      const isActivelyStreaming = showStreaming && index === allSegments.length - 1;
+      return segment.content ? (
+        <div className="text-sm leading-relaxed">
+          {isActivelyStreaming ? (
+            <StreamingText content={segment.content} isStreaming={!isThinkingStreaming} />
+          ) : (
+            <Suspense fallback={<span className="whitespace-pre-wrap">{segment.content}</span>}>
+              <MarkdownRenderer content={segment.content} />
+            </Suspense>
+          )}
+        </div>
+      ) : null;
+    }
+    case "tool_call": {
+      const nextSegment = allSegments[index + 1];
+      const hasResult = nextSegment?.type === "tool_result" &&
+                       nextSegment.toolResult?.toolName === segment.toolCall?.name;
+
+      return segment.toolCall ? (
+        <ToolCallDisplay
+          key={`tool-${segment.toolCall.id}`}
+          toolCall={segment.toolCall}
+          toolResult={hasResult ? nextSegment.toolResult : undefined}
+        />
+      ) : null;
+    }
+    case "tool_result":
+      return null;
+    case "artifact":
+      return segment.artifact ? (
+        <ArtifactPanel key={`artifact-${segment.artifact.id}`} artifact={segment.artifact} />
+      ) : null;
+    case "visual":
+      return segment.visual ? (
+        <InlineVisual key={`visual-${segment.visual.id}`} visual={segment.visual} />
+      ) : null;
+    case "generated_image":
+      return segment.generatedImage ? (
+        <GeneratedImagePanel key={`image-${segment.generatedImage.id}`} image={segment.generatedImage} />
+      ) : null;
+    default:
+      return null;
+  }
+}
 
 function ImageLightbox({ image, onClose }: { image: ImageAttachment; onClose: () => void }) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
