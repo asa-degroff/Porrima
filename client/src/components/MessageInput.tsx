@@ -15,6 +15,7 @@ interface Props {
   onSlashTyping?: (filterText: string, cursorRect?: DOMRect) => void;
   onSlashDeleted?: () => void;
   inputRef?: React.RefObject<HTMLDivElement | null>;
+  availableSkills?: string[];
 }
 
 /**
@@ -58,7 +59,7 @@ async function processFiles(files: FileList | File[]): Promise<ImageAttachment[]
   );
 }
 
-export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, onSlashDeleted, inputRef }: Props) {
+export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, onSlashDeleted, inputRef, availableSkills }: Props) {
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [processingImages, setProcessingImages] = useState<Set<number>>(new Set());
   const [hasContent, setHasContent] = useState(false);
@@ -74,15 +75,21 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
 
   /**
    * Insert skill chips for /skill-name patterns in text.
+   * Only creates chips for recognized skills from the skills list.
    * Returns HTML string with skill spans and updated textRef.
    */
-  const insertSkillChips = (text: string, container: HTMLElement): { html: string } => {
+  const insertSkillChips = (text: string, container: HTMLElement, skillsList: string[]): { html: string } => {
     const skillPattern = /\/([a-zA-Z0-9\-_]+)/g;
     let html = text;
     const matches = [...text.matchAll(skillPattern)];
     
-    // Replace each /skill with a chip span
+    // Replace each /skill with a chip span only if it's a recognized skill
     html = text.replace(skillPattern, (match, skillName) => {
+      if (!skillsList.includes(skillName)) {
+        // Not a recognized skill - leave as plain text
+        return match;
+      }
+      
       const chip = document.createElement('span');
       chip.className = 'skill-chip';
       chip.style.cssText = 'display:inline-block;padding:2px 8px;margin:0 4px;background:rgba(59,130,246,0.25);border:1px solid rgba(59,130,246,0.4);border-radius:12px;font-size:12px;color:rgb(147,197,253);font-weight:500;vertical-align:middle;';
@@ -131,7 +138,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
       if (editorRef.current) {
         // Recreate skill chips from draft text
         editorRef.current.innerHTML = "";
-        const textWithSkills = insertSkillChips(draft.text, editorRef.current);
+        const textWithSkills = insertSkillChips(draft.text, editorRef.current, availableSkills || []);
         editorRef.current.innerHTML = textWithSkills.html;
         // Position cursor at end
         const range = document.createRange();

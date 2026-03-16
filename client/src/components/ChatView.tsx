@@ -399,6 +399,7 @@ export function ChatView({
                     editable={msg.role === "user" && !streaming && isOnline}
                     onEditMessage={msg.role === "user" ? onEditMessage : undefined}
                     messageIndex={i}
+                    availableSkills={skills.map(s => s.name)}
                   />
                 </div>
               );
@@ -431,6 +432,7 @@ export function ChatView({
           onSlashTyping={handleSlashTyping}
           onSlashDeleted={closeSkillSelector}
           inputRef={inputRef}
+          availableSkills={skills.map(s => s.name)}
         />
       </div>
 

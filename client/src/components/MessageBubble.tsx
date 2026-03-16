@@ -29,6 +29,7 @@ interface Props {
   editable?: boolean;
   onReadAloud?: (text: string) => void;
   isPlayingTts?: boolean;
+  availableSkills?: string[];
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -44,6 +45,7 @@ export const MessageBubble = memo(function MessageBubble({
   editable,
   onReadAloud,
   isPlayingTts,
+  availableSkills,
 }: Props) {
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;
@@ -51,6 +53,7 @@ export const MessageBubble = memo(function MessageBubble({
   /**
    * Render skill chips for /skill-name patterns in message content.
    * Only applies to user messages (assistant messages have skills stripped server-side).
+   * Only formats recognized skill names from the availableSkills list.
    */
   const renderSkillChips = (text: string) => {
     if (!isUser) return text;
@@ -65,9 +68,9 @@ export const MessageBubble = memo(function MessageBubble({
         // Text segment
         if (parts[i]) result.push(parts[i]);
       } else {
-        // Skill name (odd indices)
+        // Skill name (odd indices) - only format if it's a recognized skill
         const skillName = parts[i];
-        if (skillName) {
+        if (skillName && availableSkills?.includes(skillName)) {
           result.push(
             <span
               key={`skill-${skillName}`}
@@ -88,6 +91,9 @@ export const MessageBubble = memo(function MessageBubble({
               /{skillName}
             </span>
           );
+        } else if (skillName) {
+          // Not a recognized skill - render as plain text
+          result.push(`/${skillName}`);
         }
       }
     }
