@@ -11,6 +11,8 @@ import {
 import { discoverOllamaModels } from "./models.js";
 import { loadPersona, savePersona } from "./persona-store.js";
 import { getSettings, listChats, getChat } from "./storage.js";
+import { listProjects, getProject, readAgentsMd } from "./project-storage.js";
+import type { Chat, ChatMessage, Project } from "../types.js";
 
 const SYNTHESIS_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MERGE_THRESHOLD = 0.90;
@@ -93,13 +95,19 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
     }
 
     // Step 3: Load today's chats — skip synthesis entirely if no activity
-    const chatDigest = await buildTodaysChatDigest();
-    if (!chatDigest) {
+    const todaysDigest = await buildTodaysChatDigest();
+    if (!todaysDigest) {
       console.log("[synthesis] No agent chats today — skipping summary generation");
       store.lastSynthesis = new Date().toISOString();
       await saveMemoryStore(store);
       return;
     }
+
+    const formattedDigest = formatDigest(todaysDigest);
+    const projectNames = todaysDigest.projectSections.map((ps) => ps.project.name);
+    const projectNote = projectNames.length > 0
+      ? `Active projects today: ${projectNames.join(", ")}.`
+      : "No project-scoped chats today.";
 
     // Step 4: Generate daily summary via LLM
     const resolvedModelId = modelId || (await getSynthesisModelId());
@@ -107,8 +115,10 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       try {
         const memoriesText = store.memories
           .map(
-            (m) =>
-              `- [${m.category}] ${m.text} (importance: ${m.importance}/10, accessed: ${m.accessCount} times)`
+            (m) => {
+              const proj = m.projectId ? ` [project: ${m.projectId}]` : "";
+              return `- [${m.category}] ${m.text} (importance: ${m.importance}/10, accessed: ${m.accessCount} times)${proj}`;
+            }
           )
           .join("\n");
 
@@ -119,11 +129,11 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           [
             {
               role: "user",
-              content: `## Today's Conversations\n\n${chatDigest}\n\n---\n\n## Stored Memories (${store.memories.length} total)\n\n${memoriesText}\n\nBased on today's conversations and the stored memories, write a daily synthesis. Include:\n1. What was worked on today — key topics, tasks, and outcomes\n2. Broader themes and patterns across the user's projects\n3. Any contradictions or outdated info in the stored memories that should be cleaned up`,
+              content: `## Today's Conversations\n\n${projectNote}\n\n${formattedDigest}\n\n---\n\n## Stored Memories (${store.memories.length} total)\n\n${memoriesText}\n\nBased on today's conversations and the stored memories, write a daily synthesis. Include:\n1. What was worked on today — key topics, tasks, and outcomes per project\n2. Broader themes and patterns across the user's projects\n3. Any contradictions or outdated info in the stored memories that should be cleaned up`,
               timestamp: Date.now(),
             },
           ],
-          "You are a memory synthesis system. Write a daily synthesis document that captures what happened today and how it fits into the broader picture of the user's work. Write in English. Be concrete and specific — reference actual projects, decisions, and topics rather than vague generalizations. 3-5 paragraphs.",
+          "You are a memory synthesis system. Write a daily synthesis document that captures what happened today and how it fits into the broader picture of the user's work. When conversations are grouped by project, synthesize each project's progress separately before drawing cross-project themes. Write in English. Be concrete and specific — reference actual projects, decisions, and topics rather than vague generalizations. 3-5 paragraphs.",
           (event) => {
             if (event.type === "text_delta") {
               summaryText += event.delta;
@@ -304,12 +314,45 @@ async function analyzeAndPromotePersonaPatterns(
 }
 
 const MAX_DIGEST_CHARS = 12000; // Cap total digest size to stay within context limits
+const MAX_AGENTS_MD_CHARS = 1500; // Cap AGENTS.md inclusion per project
+
+interface ProjectDigest {
+  project: Project;
+  agentsMd: string | null;
+  chatDigests: string[];
+}
+
+interface TodaysDigest {
+  projectSections: ProjectDigest[];
+  generalChats: string[];
+  totalChats: number;
+}
 
 /**
- * Load today's agent chats and build a condensed digest of conversations.
- * Returns a formatted string summarizing what was discussed, or empty string if no chats.
+ * Condense a list of messages into a readable digest string.
  */
-async function buildTodaysChatDigest(): Promise<string> {
+function condenseChatMessages(messages: ChatMessage[]): string {
+  return messages
+    .map((m) => {
+      const prefix = m.role === "user" ? "User" : "Agent";
+      let text = m.content;
+      if (text.length > 500) {
+        text = text.slice(0, 500) + "...";
+      }
+      const toolNote =
+        m.toolCalls && m.toolCalls.length > 0
+          ? ` [used tools: ${m.toolCalls.map((t) => t.name).join(", ")}]`
+          : "";
+      return `${prefix}: ${text}${toolNote}`;
+    })
+    .join("\n");
+}
+
+/**
+ * Load today's agent chats grouped by project, with AGENTS.md context.
+ * Returns null if no agent chats occurred today.
+ */
+async function buildTodaysChatDigest(): Promise<TodaysDigest | null> {
   const allChats = await listChats();
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -320,52 +363,120 @@ async function buildTodaysChatDigest(): Promise<string> {
     (c) => c.type === "agent" && new Date(c.lastModified).getTime() >= todayMs
   );
 
-  if (todaysAgentChats.length === 0) return "";
+  if (todaysAgentChats.length === 0) return null;
 
   console.log(`[synthesis] Found ${todaysAgentChats.length} agent chat(s) from today`);
 
-  const chatDigests: string[] = [];
-  let totalChars = 0;
+  // Group by projectId
+  const byProject = new Map<string, typeof todaysAgentChats>();
+  const general: typeof todaysAgentChats = [];
 
   for (const chatItem of todaysAgentChats) {
+    if (chatItem.projectId) {
+      const list = byProject.get(chatItem.projectId) || [];
+      list.push(chatItem);
+      byProject.set(chatItem.projectId, list);
+    } else {
+      general.push(chatItem);
+    }
+  }
+
+  let totalChars = 0;
+
+  // Build project-grouped digests
+  const projectSections: ProjectDigest[] = [];
+  for (const [projectId, chatItems] of byProject) {
+    const project = await getProject(projectId);
+    if (!project) continue;
+
+    // Load AGENTS.md for project context (truncated)
+    let agentsMd: string | null = null;
+    try {
+      const raw = await readAgentsMd(project.path);
+      if (raw) {
+        agentsMd = raw.length > MAX_AGENTS_MD_CHARS
+          ? raw.slice(0, MAX_AGENTS_MD_CHARS) + "\n...(truncated)"
+          : raw;
+      }
+    } catch {
+      // Project path may not be accessible
+    }
+
+    const chatDigests: string[] = [];
+    for (const chatItem of chatItems) {
+      const chat = await getChat(chatItem.id);
+      if (!chat || chat.messages.length === 0) continue;
+
+      const todaysMessages = chat.messages.filter((m) => m.timestamp >= todayMs);
+      if (todaysMessages.length === 0) continue;
+
+      const condensed = condenseChatMessages(todaysMessages);
+      const digest = `#### ${chat.title || "Untitled Chat"}\n${condensed}`;
+
+      if (totalChars + digest.length > MAX_DIGEST_CHARS) {
+        chatDigests.push(`#### ${chat.title || "Untitled Chat"}\n(truncated — ${todaysMessages.length} messages)`);
+        break;
+      }
+
+      chatDigests.push(digest);
+      totalChars += digest.length;
+    }
+
+    if (chatDigests.length > 0) {
+      projectSections.push({ project, agentsMd, chatDigests });
+    }
+  }
+
+  // Build general (unscoped) chat digests
+  const generalDigests: string[] = [];
+  for (const chatItem of general) {
     const chat = await getChat(chatItem.id);
     if (!chat || chat.messages.length === 0) continue;
 
-    // Filter to today's messages only
     const todaysMessages = chat.messages.filter((m) => m.timestamp >= todayMs);
     if (todaysMessages.length === 0) continue;
 
-    // Build a condensed version: skip tool call details, truncate long messages
-    const condensed = todaysMessages
-      .map((m) => {
-        const prefix = m.role === "user" ? "User" : "Agent";
-        let text = m.content;
-        // Truncate very long messages
-        if (text.length > 500) {
-          text = text.slice(0, 500) + "...";
-        }
-        // Note tool usage without full details
-        const toolNote =
-          m.toolCalls && m.toolCalls.length > 0
-            ? ` [used tools: ${m.toolCalls.map((t) => t.name).join(", ")}]`
-            : "";
-        return `${prefix}: ${text}${toolNote}`;
-      })
-      .join("\n");
+    const condensed = condenseChatMessages(todaysMessages);
+    const digest = `#### ${chat.title || "Untitled Chat"}\n${condensed}`;
 
-    const digest = `### ${chat.title || "Untitled Chat"}\n${condensed}`;
-
-    // Respect the cap
     if (totalChars + digest.length > MAX_DIGEST_CHARS) {
-      chatDigests.push(`### ${chat.title || "Untitled Chat"}\n(truncated — ${todaysMessages.length} messages)`);
+      generalDigests.push(`#### ${chat.title || "Untitled Chat"}\n(truncated — ${todaysMessages.length} messages)`);
       break;
     }
 
-    chatDigests.push(digest);
+    generalDigests.push(digest);
     totalChars += digest.length;
   }
 
-  return chatDigests.join("\n\n---\n\n");
+  if (projectSections.length === 0 && generalDigests.length === 0) return null;
+
+  return {
+    projectSections,
+    generalChats: generalDigests,
+    totalChats: todaysAgentChats.length,
+  };
+}
+
+/**
+ * Format a TodaysDigest into a string for the synthesis prompt.
+ */
+function formatDigest(digest: TodaysDigest): string {
+  const sections: string[] = [];
+
+  for (const ps of digest.projectSections) {
+    let header = `### Project: ${ps.project.name}\n**Path:** ${ps.project.path}`;
+    if (ps.agentsMd) {
+      header += `\n\n**Project context (AGENTS.md):**\n${ps.agentsMd}`;
+    }
+    header += `\n\n**Conversations:**`;
+    sections.push(header + "\n" + ps.chatDigests.join("\n\n"));
+  }
+
+  if (digest.generalChats.length > 0) {
+    sections.push("### General (no project)\n" + digest.generalChats.join("\n\n"));
+  }
+
+  return sections.join("\n\n---\n\n");
 }
 
 async function getSynthesisModelId(): Promise<string | null> {
