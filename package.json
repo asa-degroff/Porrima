@@ -1,5 +1,12 @@
 {
   "name": "quje-agent",
   "private": true,
-  "workspaces": ["server", "client"]
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
 }

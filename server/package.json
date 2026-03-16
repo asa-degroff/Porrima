@@ -20,6 +20,7 @@
     "express-session": "^1.19.0",
     "linkedom": "^0.18.12",
     "puppeteer-core": "^24.37.5",
+    "sentence-tokenizer": "^1.0.1",
     "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.7-alpha.2",
     "turndown": "^7.2.2",
@@ -36,7 +37,7 @@
     "@types/uuid": "^10.0.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0",
-    "vitest": "^4.0.18"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   }
 }
