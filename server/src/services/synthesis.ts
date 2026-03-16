@@ -150,7 +150,7 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           `## Today's Conversations\n\n${projectNote}\n\n${formattedDigest}`,
           notebookSection ? `---\n\n## Notebook Entries Today\n\n${notebookSection}` : "",
           `---\n\n## Stored Memories (${store.memories.length} total)\n\n${memoriesText}`,
-          `Based on today's conversations${notebookSection ? ", notebook entries," : ""} and the stored memories, write a daily synthesis. Include:\n1. What was worked on today — key topics, tasks, and outcomes per project\n2. Broader themes and patterns across the user's projects\n3. If the user wrote notebook entries, incorporate their thoughts and observations\n4. Any contradictions or outdated info in the stored memories that should be cleaned up`,
+          `Based on today's conversations${notebookSection ? ", notebook entries," : ""} and the stored memories, write a daily synthesis. Include:\n1. What the user worked on and asked for today — their goals, decisions, and direction\n2. What you (the agent) accomplished — code written, problems solved, suggestions made, tools used\n3. Broader themes and patterns across the user's projects\n4. If the user wrote notebook entries, incorporate their thoughts and observations\n5. Any contradictions or outdated info in the stored memories that should be cleaned up`,
         ].filter(Boolean).join("\n\n");
 
         let summaryText = "";
@@ -164,7 +164,7 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
               timestamp: Date.now(),
             },
           ],
-          "You are a memory synthesis system. Write a daily synthesis document that captures what happened today and how it fits into the broader picture of the user's work. When conversations are grouped by project, synthesize each project's progress separately before drawing cross-project themes. If the user wrote notebook entries, treat them as high-signal — they represent deliberate thoughts the user chose to write down, which may or may not relate to their projects. Write in English. Be concrete and specific — reference actual projects, decisions, and topics rather than vague generalizations. 3-5 paragraphs.",
+          "You are the agent writing a daily synthesis of your shared work with the user. Distinguish clearly between what the user did or asked for and what you (the agent) accomplished, suggested, or produced. Use first person for your own actions (\"I implemented...\", \"I suggested...\") and third person for the user (\"the user asked...\", \"they decided...\"). When conversations are grouped by project, synthesize each project's progress separately before drawing cross-project themes. If the user wrote notebook entries, treat them as high-signal — they represent deliberate thoughts the user chose to write down, which may or may not relate to their projects. Write in English. Be concrete and specific — reference actual projects, decisions, and topics rather than vague generalizations. 3-5 paragraphs.",
           (event) => {
             if (event.type === "text_delta") {
               summaryText += event.delta;
@@ -234,14 +234,17 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
 
 const MAX_REFLECTIONS = 5;
 
-const REFLECTION_SYSTEM_PROMPT = `You are a reflection system. Given today's conversations and existing memories, generate higher-order insights — patterns, connections, and observations that no single conversation would produce on its own.
+const REFLECTION_SYSTEM_PROMPT = `You are the agent reflecting on today's work with the user. Generate higher-order insights — patterns, connections, and observations that no single conversation would produce on its own.
+
+You have two perspectives to draw from:
+1. **The user's perspective**: their goals, decisions, evolving priorities, and what they're trying to achieve
+2. **Your own perspective**: what you did well, what was challenging, what approaches you liked
 
 Good reflections:
 - Connect themes across different conversations or projects
-- Note how the user's approach or priorities are evolving over time
-- Identify recurring challenges or decisions that keep coming up
 - Capture the "why" behind what the user is building or changing
 - Notice when today's work contradicts or builds on past patterns
+- Reflect on your own perspective: what you accomplished, what you struggled with, what you learned, your personal preferences
 
 Bad reflections (avoid):
 - Repeating existing memories verbatim
@@ -770,9 +773,9 @@ async function writeSynthesisNotebookEntry(
   const notebookCount = notebookEntries.filter((e) => e.author === "user").length;
 
   const activityItems: string[] = [];
-  if (chatCount > 0) activityItems.push(`${chatCount} agent chat${chatCount > 1 ? "s" : ""}`);
+  if (chatCount > 0) activityItems.push(`${chatCount} conversation${chatCount > 1 ? "s" : ""}`);
   if (projectNames.length > 0) activityItems.push(`projects: ${projectNames.join(", ")}`);
-  if (notebookCount > 0) activityItems.push(`${notebookCount} notebook entr${notebookCount > 1 ? "ies" : "y"}`);
+  if (notebookCount > 0) activityItems.push(`${notebookCount} user notebook entr${notebookCount > 1 ? "ies" : "y"}`);
 
   if (activityItems.length > 0) {
     parts.push(`*Today's activity: ${activityItems.join(" · ")}*`);
