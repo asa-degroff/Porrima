@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSy
 import { join } from "node:path";
 import type { TTSGenerateRequest, TTSGenerateResponse, TTSSettings } from "../types/tts.js";
 import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
+import { extractTextForTTS } from "./tts-text-preprocessor.js";
 
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache");
 const MAX_CACHE_SIZE_MB = 500; // LRU cleanup threshold
@@ -177,8 +178,12 @@ export async function generateTTS(request: TTSGenerateRequest): Promise<TTSGener
 
   console.log(`[TTS] Cache miss: ${cacheKey}, generating...`);
 
+  // Preprocess markdown text for TTS (strip formatting)
+  const cleanText = extractTextForTTS(request.text);
+  console.log(`[TTS] Preprocessed text: ${cleanText.substring(0, 100)}${cleanText.length > 100 ? "..." : ""}`);
+
   // Generate audio
-  const { audio, duration } = await runKokoro(request.text, settings.voice, settings.speed, settings.pitch);
+  const { audio, duration } = await runKokoro(cleanText, settings.voice, settings.speed, settings.pitch);
 
   // Save to cache
   writeFileSync(cachePath, audio);
