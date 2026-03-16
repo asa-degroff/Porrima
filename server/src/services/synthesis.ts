@@ -10,7 +10,7 @@ import {
 } from "./memory-storage.js";
 import { discoverOllamaModels } from "./models.js";
 import { loadPersona, savePersona } from "./persona-store.js";
-import { getSettings } from "./storage.js";
+import { getSettings, listChats, getChat } from "./storage.js";
 
 const SYNTHESIS_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MERGE_THRESHOLD = 0.90;
@@ -92,7 +92,16 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       console.log(`[synthesis] Purged ${staleIds.size} stale memories (>6 months, importance ≤2)`);
     }
 
-    // Step 3: Generate daily summary via LLM
+    // Step 3: Load today's chats — skip synthesis entirely if no activity
+    const chatDigest = await buildTodaysChatDigest();
+    if (!chatDigest) {
+      console.log("[synthesis] No agent chats today — skipping summary generation");
+      store.lastSynthesis = new Date().toISOString();
+      await saveMemoryStore(store);
+      return;
+    }
+
+    // Step 4: Generate daily summary via LLM
     const resolvedModelId = modelId || (await getSynthesisModelId());
     if (resolvedModelId) {
       try {
@@ -110,11 +119,11 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           [
             {
               role: "user",
-              content: `Here are all current memories:\n\n${memoriesText}\n\nWrite a brief daily summary (2-4 paragraphs) of what you know about this user and their projects, organized by theme. Note any contradictions or outdated info that should be cleaned up.`,
+              content: `## Today's Conversations\n\n${chatDigest}\n\n---\n\n## Stored Memories (${store.memories.length} total)\n\n${memoriesText}\n\nBased on today's conversations and the stored memories, write a daily synthesis. Include:\n1. What was worked on today — key topics, tasks, and outcomes\n2. Broader themes and patterns across the user's projects\n3. Any contradictions or outdated info in the stored memories that should be cleaned up`,
               timestamp: Date.now(),
             },
           ],
-          "You are a memory synthesis system. Summarize the given memories into a coherent overview organized by theme. Write in English. Be concise and direct — focus on actionable patterns, not restating each memory.",
+          "You are a memory synthesis system. Write a daily synthesis document that captures what happened today and how it fits into the broader picture of the user's work. Write in English. Be concrete and specific — reference actual projects, decisions, and topics rather than vague generalizations. 3-5 paragraphs.",
           (event) => {
             if (event.type === "text_delta") {
               summaryText += event.delta;
@@ -144,7 +153,7 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
         console.error("[synthesis] Summary generation failed:", e);
       }
 
-      // Step 4: Analyze memories for persona promotion candidates
+      // Step 5: Analyze memories for persona promotion candidates
       try {
         await analyzeAndPromotePersonaPatterns(store.memories, resolvedModelId);
       } catch (e) {
@@ -292,6 +301,71 @@ async function analyzeAndPromotePersonaPatterns(
   }
 
   console.log("[synthesis] Persona pattern analysis complete");
+}
+
+const MAX_DIGEST_CHARS = 12000; // Cap total digest size to stay within context limits
+
+/**
+ * Load today's agent chats and build a condensed digest of conversations.
+ * Returns a formatted string summarizing what was discussed, or empty string if no chats.
+ */
+async function buildTodaysChatDigest(): Promise<string> {
+  const allChats = await listChats();
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayMs = todayStart.getTime();
+
+  // Find agent chats modified today
+  const todaysAgentChats = allChats.filter(
+    (c) => c.type === "agent" && new Date(c.lastModified).getTime() >= todayMs
+  );
+
+  if (todaysAgentChats.length === 0) return "";
+
+  console.log(`[synthesis] Found ${todaysAgentChats.length} agent chat(s) from today`);
+
+  const chatDigests: string[] = [];
+  let totalChars = 0;
+
+  for (const chatItem of todaysAgentChats) {
+    const chat = await getChat(chatItem.id);
+    if (!chat || chat.messages.length === 0) continue;
+
+    // Filter to today's messages only
+    const todaysMessages = chat.messages.filter((m) => m.timestamp >= todayMs);
+    if (todaysMessages.length === 0) continue;
+
+    // Build a condensed version: skip tool call details, truncate long messages
+    const condensed = todaysMessages
+      .map((m) => {
+        const prefix = m.role === "user" ? "User" : "Agent";
+        let text = m.content;
+        // Truncate very long messages
+        if (text.length > 500) {
+          text = text.slice(0, 500) + "...";
+        }
+        // Note tool usage without full details
+        const toolNote =
+          m.toolCalls && m.toolCalls.length > 0
+            ? ` [used tools: ${m.toolCalls.map((t) => t.name).join(", ")}]`
+            : "";
+        return `${prefix}: ${text}${toolNote}`;
+      })
+      .join("\n");
+
+    const digest = `### ${chat.title || "Untitled Chat"}\n${condensed}`;
+
+    // Respect the cap
+    if (totalChars + digest.length > MAX_DIGEST_CHARS) {
+      chatDigests.push(`### ${chat.title || "Untitled Chat"}\n(truncated — ${todaysMessages.length} messages)`);
+      break;
+    }
+
+    chatDigests.push(digest);
+    totalChars += digest.length;
+  }
+
+  return chatDigests.join("\n\n---\n\n");
 }
 
 async function getSynthesisModelId(): Promise<string | null> {
