@@ -135,15 +135,13 @@ export function NotebookView({
   }, [editingEntry, onUpdateEntry]);
 
   const handleDelete = useCallback(async (author: 'user' | 'agent', id: string) => {
-    if (window.confirm("Delete this entry? This cannot be undone.")) {
-      await onDeleteEntry(author, id);
-      if (editingEntry?.id === id) setEditingEntry(null);
-      setFullEntries(prev => {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-    }
+    await onDeleteEntry(author, id);
+    if (editingEntry?.id === id) setEditingEntry(null);
+    setFullEntries(prev => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   }, [onDeleteEntry, editingEntry]);
 
   const handleRemoveLink = useCallback(async (entryId: string, author: 'user' | 'agent', linkType: 'chat' | 'notebook' | 'url', index: number) => {

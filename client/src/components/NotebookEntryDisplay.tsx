@@ -1,4 +1,4 @@
-import { Suspense, memo, lazy, useRef, useCallback, useState } from "react";
+import { Suspense, memo, lazy, useRef, useCallback, useState, useEffect } from "react";
 import type { NotebookEntry, Artifact, NotebookLink, ImageAttachment } from "../types";
 import type { ChatListItem } from "../types";
 import { ChatLinkPicker } from "./ChatLinkPicker";
@@ -36,6 +36,18 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
   const linkButtonRef = useRef<HTMLButtonElement>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [lightboxImage, setLightboxImage] = useState<ImageAttachment | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Close confirmation on Escape
+  const handleEscape = useCallback((e: KeyboardEvent) => {
+    if (e.key === "Escape") setConfirmDelete(false);
+  }, []);
+
+  useEffect(() => {
+    if (!confirmDelete) return;
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [confirmDelete, handleEscape]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     if (!onDelete) return;
@@ -54,6 +66,24 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
       onAddLink('chat', rect);
     }
   }, [onAddLink]);
+
+  const handleDeleteClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmDelete(true);
+  }, []);
+
+  const handleConfirmDelete = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onDelete) {
+      onDelete(entry.id);
+      setConfirmDelete(false);
+    }
+  }, [onDelete, entry.id]);
+
+  const handleCancelDelete = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmDelete(false);
+  }, []);
 
   return (
     <div
@@ -97,13 +127,9 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
               </svg>
             </button>
           )}
-          {onDelete && (
+          {!confirmDelete && onDelete && (
             <button
-              onClick={() => {
-                if (window.confirm("Delete this entry? This cannot be undone.")) {
-                  onDelete(entry.id);
-                }
-              }}
+              onClick={handleDeleteClick}
               className="text-white/30 hover:text-red-400 transition-colors p-1 rounded hover:bg-white/5"
               title="Delete"
             >
@@ -229,6 +255,30 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
         ))}
       </div>
 
+      {/* Delete confirmation overlay */}
+      {confirmDelete && onDelete && (
+        <div
+          className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-2 z-20"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="text-xs text-white/80">Delete this entry?</p>
+          <div className="flex gap-2">
+            <button
+              onClick={handleConfirmDelete}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40 transition-all"
+            >
+              Delete
+            </button>
+            <button
+              onClick={handleCancelDelete}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/15 transition-all"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Context menu */}
       {contextMenu && onDelete && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
@@ -236,9 +286,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
             destructive
             onClick={() => {
               setContextMenu(null);
-              if (window.confirm("Delete this entry? This cannot be undone.")) {
-                onDelete(entry.id);
-              }
+              setConfirmDelete(true);
             }}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
