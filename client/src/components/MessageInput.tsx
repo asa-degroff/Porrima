@@ -60,6 +60,7 @@ async function processFiles(files: FileList | File[]): Promise<ImageAttachment[]
 
 export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, onSlashDeleted, inputRef }: Props) {
   const [images, setImages] = useState<ImageAttachment[]>([]);
+  const [processingImages, setProcessingImages] = useState<Set<number>>(new Set());
   const [hasContent, setHasContent] = useState(false);
   const [dragging, setDragging] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -274,13 +275,31 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
   }, [updateLayout]);
 
   const addFiles = (files: FileList | File[]) => {
-    // Process images asynchronously without blocking the input
-    // Fire-and-forget - state updates when processing completes
+    // Process images asynchronously with progress feedback
+    const startIndex = images.length;
     Promise.resolve(files).then(async (f) => {
-      const newImages = await processFiles(f);
-      if (newImages.length > 0) {
-        success();
-        setImages((prev) => [...prev, ...newImages]);
+      const imageFiles = Array.from(f).filter((file) => file.type.startsWith("image/"));
+      
+      // Mark all as processing
+      setProcessingImages(prev => {
+        const next = new Set(prev);
+        imageFiles.forEach((_, idx) => next.add(startIndex + idx));
+        return next;
+      });
+      
+      try {
+        const newImages = await processFiles(f);
+        if (newImages.length > 0) {
+          success();
+          setImages((prev) => [...prev, ...newImages]);
+        }
+      } finally {
+        // Clear processing state
+        setProcessingImages(prev => {
+          const next = new Set(prev);
+          imageFiles.forEach((_, idx) => next.delete(startIndex + idx));
+          return next;
+        });
       }
     });
   };
@@ -369,20 +388,30 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
           <div className="flex flex-wrap gap-2 mb-2">
             {images.map((img, i) => (
               <div key={i} className="relative group/thumb">
-                <img
-                  src={`data:${img.mimeType};base64,${img.data}`}
-                  alt={img.name}
-                  className="h-16 w-16 object-cover rounded-lg border border-white/15"
-                />
-                <button
-                  onClick={() => removeImage(i)}
-                  className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500/80 text-white text-xs flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity hover:bg-red-500"
-                >
-                  ×
-                </button>
-                <span className="absolute bottom-0 left-0 right-0 text-[9px] text-white/60 bg-black/50 rounded-b-lg px-1 truncate">
-                  {img.name}
-                </span>
+                {processingImages.has(i) ? (
+                  <div className="h-16 w-16 rounded-lg border border-white/15 bg-white/5 flex items-center justify-center">
+                    <div className="w-5 h-5 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
+                  </div>
+                ) : (
+                  <img
+                    src={`data:${img.mimeType};base64,${img.data}`}
+                    alt={img.name}
+                    className="h-16 w-16 object-cover rounded-lg border border-white/15"
+                  />
+                )}
+                {!processingImages.has(i) && (
+                  <button
+                    onClick={() => removeImage(i)}
+                    className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500/80 text-white text-xs flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity hover:bg-red-500"
+                  >
+                    ×
+                  </button>
+                )}
+                {!processingImages.has(i) && (
+                  <span className="absolute bottom-0 left-0 right-0 text-[9px] text-white/60 bg-black/50 rounded-b-lg px-1 truncate">
+                    {img.name}
+                  </span>
+                )}
               </div>
             ))}
           </div>

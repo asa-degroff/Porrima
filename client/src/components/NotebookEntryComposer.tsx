@@ -21,6 +21,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
   const [content, setContent] = useState(initialContent || '');
   const [submitting, setSubmitting] = useState(false);
   const [images, setImages] = useState<ImageAttachment[]>(initialImages || []);
+  const [processingImages, setProcessingImages] = useState<Set<number>>(new Set());
   const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -43,33 +44,47 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
     });
   };
 
-  const processFiles = async (files: FileList | File[]): Promise<ImageAttachment[]> => {
+  const processFiles = async (files: FileList | File[], startIndex: number = 0): Promise<ImageAttachment[]> => {
     const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
     
     return Promise.all(
-      imageFiles.map(async (file) => {
-        const base64 = await fileToBase64(file);
-        const mimeType = file.type;
+      imageFiles.map(async (file, idx) => {
+        const globalIdx = startIndex + idx;
+        // Mark as processing
+        setProcessingImages(prev => new Set(prev).add(globalIdx));
         
-        // Compress if larger than 2MB
-        if (file.size > 2 * 1024 * 1024) {
-          try {
-            const { compressImage } = await import("../utils/image");
-            const compressed = await compressImage(base64, mimeType, 1200, 0.8);
-            return { ...compressed, name: file.name };
-          } catch (err) {
-            console.warn("[NotebookEntryComposer] Compression failed, using original:", err);
+        try {
+          const base64 = await fileToBase64(file);
+          const mimeType = file.type;
+          
+          // Compress if larger than 2MB
+          if (file.size > 2 * 1024 * 1024) {
+            try {
+              const { compressImage } = await import("../utils/image");
+              const compressed = await compressImage(base64, mimeType, 1200, 0.8);
+              return { ...compressed, name: file.name };
+            } catch (err) {
+              console.warn("[NotebookEntryComposer] Compression failed, using original:", err);
+            }
           }
+          
+          return { data: base64, mimeType, name: file.name };
+        } finally {
+          // Mark as done
+          setProcessingImages(prev => {
+            const next = new Set(prev);
+            next.delete(globalIdx);
+            return next;
+          });
         }
-        
-        return { data: base64, mimeType, name: file.name };
       })
     );
   };
 
   const handleFileSelect = async (files: FileList) => {
     medium();
-    const processed = await processFiles(files);
+    const startIndex = images.length;
+    const processed = await processFiles(files, startIndex);
     setImages(prev => {
       const remaining = [...prev, ...processed].slice(0, MAX_IMAGES);
       return remaining;
@@ -186,19 +201,29 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
         <div className="px-3 py-2 flex flex-wrap gap-2 border-t border-white/5">
           {images.map((img, i) => (
             <div key={i} className="group relative">
-              <img
-                src={img.thumbUrl || `data:${img.mimeType};base64,${img.data}`}
-                alt={img.name}
-                className="w-16 h-16 object-cover rounded-lg border border-white/10"
-              />
-              <button
-                onClick={() => handleRemoveImage(i)}
-                className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-                </svg>
-              </button>
+              {processingImages.has(i) ? (
+                <div
+                  className="w-16 h-16 rounded-lg border border-white/10 bg-white/5 flex items-center justify-center"
+                >
+                  <div className="w-5 h-5 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
+                </div>
+              ) : (
+                <img
+                  src={img.thumbUrl || `data:${img.mimeType};base64,${img.data}`}
+                  alt={img.name}
+                  className="w-16 h-16 object-cover rounded-lg border border-white/10"
+                />
+              )}
+              {!processingImages.has(i) && (
+                <button
+                  onClick={() => handleRemoveImage(i)}
+                  className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6 6 18" /><path d="m6 6 12 12" />
+                  </svg>
+                </button>
+              )}
             </div>
           ))}
           {images.length < MAX_IMAGES && (
@@ -295,9 +320,12 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
           <button
             onClick={handleSubmit}
             disabled={!content.trim() || submitting}
-            className="px-3 py-1.5 text-xs rounded-lg transition-colors bg-purple-500/15 border border-purple-400/25 text-purple-300 font-medium hover:bg-purple-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-3 py-1.5 text-xs rounded-lg transition-colors bg-purple-500/15 border border-purple-400/25 text-purple-300 font-medium hover:bg-purple-500/25 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
           >
-            Post
+            {submitting && (
+              <div className="w-3 h-3 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
+            )}
+            {submitting ? "Posting..." : "Post"}
           </button>
         </div>
       </div>
