@@ -13,7 +13,8 @@ import { discoverOllamaModels } from "./models.js";
 import { loadPersona, savePersona } from "./persona-store.js";
 import { getSettings, listChats, getChat } from "./storage.js";
 import { listProjects, getProject, readAgentsMd } from "./project-storage.js";
-import type { Chat, ChatMessage, Project } from "../types.js";
+import { getUserEntriesToday, listNotebookEntries, getNotebookEntry } from "./notebook-storage.js";
+import type { Chat, ChatMessage, Project, NotebookEntry } from "../types.js";
 
 const SYNTHESIS_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MERGE_THRESHOLD = 0.90;
@@ -110,6 +111,10 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       ? `Active projects today: ${projectNames.join(", ")}.`
       : "No project-scoped chats today.";
 
+    // Step 3b: Load today's notebook entries
+    const notebookEntries = await loadTodaysNotebookEntries();
+    const notebookSection = formatNotebookEntries(notebookEntries);
+
     // Step 4: Generate daily summary via LLM
     const resolvedModelId = modelId || (await getSynthesisModelId());
     if (resolvedModelId) {
@@ -123,6 +128,13 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           )
           .join("\n");
 
+        const promptParts = [
+          `## Today's Conversations\n\n${projectNote}\n\n${formattedDigest}`,
+          notebookSection ? `---\n\n## Notebook Entries Today\n\n${notebookSection}` : "",
+          `---\n\n## Stored Memories (${store.memories.length} total)\n\n${memoriesText}`,
+          `Based on today's conversations${notebookSection ? ", notebook entries," : ""} and the stored memories, write a daily synthesis. Include:\n1. What was worked on today — key topics, tasks, and outcomes per project\n2. Broader themes and patterns across the user's projects\n3. If the user wrote notebook entries, incorporate their thoughts and observations\n4. Any contradictions or outdated info in the stored memories that should be cleaned up`,
+        ].filter(Boolean).join("\n\n");
+
         let summaryText = "";
         let thinkingText = "";
         await streamChat(
@@ -130,11 +142,11 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           [
             {
               role: "user",
-              content: `## Today's Conversations\n\n${projectNote}\n\n${formattedDigest}\n\n---\n\n## Stored Memories (${store.memories.length} total)\n\n${memoriesText}\n\nBased on today's conversations and the stored memories, write a daily synthesis. Include:\n1. What was worked on today — key topics, tasks, and outcomes per project\n2. Broader themes and patterns across the user's projects\n3. Any contradictions or outdated info in the stored memories that should be cleaned up`,
+              content: promptParts,
               timestamp: Date.now(),
             },
           ],
-          "You are a memory synthesis system. Write a daily synthesis document that captures what happened today and how it fits into the broader picture of the user's work. When conversations are grouped by project, synthesize each project's progress separately before drawing cross-project themes. Write in English. Be concrete and specific — reference actual projects, decisions, and topics rather than vague generalizations. 3-5 paragraphs.",
+          "You are a memory synthesis system. Write a daily synthesis document that captures what happened today and how it fits into the broader picture of the user's work. When conversations are grouped by project, synthesize each project's progress separately before drawing cross-project themes. If the user wrote notebook entries, treat them as high-signal — they represent deliberate thoughts the user chose to write down, which may or may not relate to their projects. Write in English. Be concrete and specific — reference actual projects, decisions, and topics rather than vague generalizations. 3-5 paragraphs.",
           (event) => {
             if (event.type === "text_delta") {
               summaryText += event.delta;
@@ -170,7 +182,8 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           resolvedModelId,
           formattedDigest,
           store.memories,
-          todaysDigest
+          todaysDigest,
+          notebookSection
         );
       } catch (e) {
         console.error("[synthesis] Reflection generation failed:", e);
@@ -227,7 +240,8 @@ async function generateReflections(
   modelId: string,
   formattedDigest: string,
   memories: Array<{ text: string; category: string; importance: number; projectId?: string }>,
-  todaysDigest: TodaysDigest
+  todaysDigest: TodaysDigest,
+  notebookSection: string
 ): Promise<void> {
   console.log("[synthesis] Generating reflections...");
 
@@ -245,6 +259,14 @@ async function generateReflections(
     .map((ps) => `- ${ps.project.name}: ${ps.project.path}`)
     .join("\n");
 
+  const promptParts = [
+    `## Today's Activity\n\n${formattedDigest}`,
+    notebookSection ? `## User's Notebook Entries\n\n${notebookSection}` : "",
+    `## Key Existing Memories (${memories.length} total, showing top 50)\n\n${topMemories}`,
+    projectContext ? `## Active Projects\n${projectContext}` : "",
+    "Generate reflections based on today's activity in the context of what you already know.",
+  ].filter(Boolean).join("\n\n");
+
   let responseText = "";
   let thinkingText = "";
   await streamChat(
@@ -252,7 +274,7 @@ async function generateReflections(
     [
       {
         role: "user",
-        content: `## Today's Activity\n\n${formattedDigest}\n\n## Key Existing Memories (${memories.length} total, showing top 50)\n\n${topMemories}\n\n${projectContext ? `## Active Projects\n${projectContext}\n\n` : ""}Generate reflections based on today's activity in the context of what you already know.`,
+        content: promptParts,
         timestamp: Date.now(),
       },
     ],
@@ -604,6 +626,89 @@ function formatDigest(digest: TodaysDigest): string {
   }
 
   return sections.join("\n\n---\n\n");
+}
+
+const MAX_NOTEBOOK_ENTRY_CHARS = 800;
+
+/**
+ * Load today's notebook entries (both user and agent).
+ */
+async function loadTodaysNotebookEntries(): Promise<NotebookEntry[]> {
+  const entries: NotebookEntry[] = [];
+
+  // User entries
+  try {
+    const userEntries = await getUserEntriesToday();
+    entries.push(...userEntries);
+  } catch (e) {
+    console.warn("[synthesis] Failed to load user notebook entries:", e);
+  }
+
+  // Agent entries
+  try {
+    const agentIndex = await listNotebookEntries("agent");
+    const today = new Date().toDateString();
+    for (const info of agentIndex.entries) {
+      if (new Date(info.createdAt).toDateString() === today) {
+        const entry = await getNotebookEntry("agent", info.id);
+        if (entry) entries.push(entry);
+      }
+    }
+  } catch (e) {
+    console.warn("[synthesis] Failed to load agent notebook entries:", e);
+  }
+
+  return entries;
+}
+
+/**
+ * Format notebook entries into a string for the synthesis prompt.
+ * Returns empty string if no entries.
+ */
+function formatNotebookEntries(entries: NotebookEntry[]): string {
+  if (entries.length === 0) return "";
+
+  const userEntries = entries.filter((e) => e.author === "user");
+  const agentEntries = entries.filter((e) => e.author === "agent");
+
+  const sections: string[] = [];
+
+  if (userEntries.length > 0) {
+    const formatted = userEntries
+      .map((e) => {
+        const time = new Date(e.createdAt).toLocaleTimeString("en-US", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        let content = e.content;
+        if (content.length > MAX_NOTEBOOK_ENTRY_CHARS) {
+          content = content.slice(0, MAX_NOTEBOOK_ENTRY_CHARS) + "...";
+        }
+        return `**[${time}] User wrote:**\n${content}`;
+      })
+      .join("\n\n");
+    sections.push(formatted);
+  }
+
+  if (agentEntries.length > 0) {
+    const formatted = agentEntries
+      .map((e) => {
+        const time = new Date(e.createdAt).toLocaleTimeString("en-US", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        let content = e.content;
+        if (content.length > MAX_NOTEBOOK_ENTRY_CHARS) {
+          content = content.slice(0, MAX_NOTEBOOK_ENTRY_CHARS) + "...";
+        }
+        return `**[${time}] Agent wrote:**\n${content}`;
+      })
+      .join("\n\n");
+    sections.push(formatted);
+  }
+
+  console.log(`[synthesis] Loaded ${userEntries.length} user + ${agentEntries.length} agent notebook entries`);
+  return sections.join("\n\n");
 }
 
 async function getSynthesisModelId(): Promise<string | null> {
