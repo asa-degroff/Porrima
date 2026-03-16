@@ -5,10 +5,11 @@ import { join } from "node:path";
 import type { TTSGenerateRequest, TTSGenerateResponse, TTSSettings } from "../types/tts.js";
 import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
 import { extractTextForTTS } from "./tts-text-preprocessor.js";
+import { generateQwen3TTS, getQwen3AudioFile, getQwen3Voices, checkQwen3Availability } from "./tts-qwen3.js";
 
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache");
 const MAX_CACHE_SIZE_MB = 500; // LRU cleanup threshold
-const PYTHON_SCRIPT = join(process.cwd(), "src", "tts", "kokoro_wrapper.py");
+const KOKORO_SCRIPT = join(process.cwd(), "src", "tts", "kokoro_wrapper.py");
 const VENV_PYTHON = process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), ".venv", "bin", "python");
 
 // Ensure cache directory exists
@@ -75,7 +76,7 @@ async function runKokoro(
     // Note: Kokoro doesn't support pitch control natively
     // Pitch would require ffmpeg post-processing (not yet implemented)
     const args = [
-      PYTHON_SCRIPT,
+      KOKORO_SCRIPT,
       "--text",
       text,
       "--voice",
@@ -150,17 +151,9 @@ async function runKokoro(
 }
 
 /**
- * Generate TTS audio with caching
+ * Generate TTS audio with caching (backend-agnostic)
  */
-export async function generateTTS(request: TTSGenerateRequest): Promise<TTSGenerateResponse> {
-  const settings: TTSSettings = {
-    ...DEFAULT_TTS_SETTINGS,
-    voice: request.voice ?? DEFAULT_TTS_SETTINGS.voice,
-    speed: request.speed ?? DEFAULT_TTS_SETTINGS.speed,
-    // Note: pitch is stored in settings for future use, but not currently sent to Kokoro
-    pitch: request.pitch ?? DEFAULT_TTS_SETTINGS.pitch,
-  };
-
+export async function generateTTS(request: TTSGenerateRequest, settings: TTSSettings = DEFAULT_TTS_SETTINGS): Promise<TTSGenerateResponse> {
   const cacheKey = generateCacheKey(request.text, settings);
   const cachePath = getCachePath(cacheKey);
 
@@ -171,36 +164,47 @@ export async function generateTTS(request: TTSGenerateRequest): Promise<TTSGener
     const stat = statSync(cachePath);
     return {
       audioUrl: `/api/tts/audio/${cacheKey}.wav`,
-      duration: stat.size / (24000 * 2), // Approximate duration from size
+      duration: stat.size / (24000 * 2),
       fileSize: stat.size,
     };
   }
 
-  console.log(`[TTS] Cache miss: ${cacheKey}, generating...`);
+  console.log(`[TTS] Cache miss: ${cacheKey}, generating with ${settings.backend}...`);
 
   // Preprocess markdown text for TTS (strip formatting)
   const cleanText = extractTextForTTS(request.text);
   console.log(`[TTS] Preprocessed text: ${cleanText.substring(0, 100)}${cleanText.length > 100 ? "..." : ""}`);
 
-  // Generate audio
-  const { audio, duration } = await runKokoro(cleanText, settings.voice, settings.speed, settings.pitch);
+  let audio: Buffer;
+  let duration: number;
 
-  // Save to cache
-  writeFileSync(cachePath, audio);
-  console.log(`[TTS] Saved ${cacheKey} (${Math.round(audio.length / 1024)}KB, ${duration.toFixed(2)}s)`);
-
-  // Run cleanup
-  cleanupCache();
-
-  return {
-    audioUrl: `/api/tts/audio/${cacheKey}.wav`,
-    duration,
-    fileSize: audio.length,
-  };
+  // Route to appropriate backend
+  if (settings.backend === "qwen3-tts") {
+    const result = await generateQwen3TTS(request, settings);
+    return result; // Qwen3 handles its own caching
+  } else {
+    // Kokoro backend
+    const result = await runKokoro(cleanText, settings.voice, settings.speed, settings.pitch);
+    audio = result.audio;
+    duration = result.duration;
+    
+    // Save to cache
+    writeFileSync(cachePath, audio);
+    console.log(`[TTS] Saved ${cacheKey} (${Math.round(audio.length / 1024)}KB, ${duration.toFixed(2)}s)`);
+    
+    // Run cleanup
+    cleanupCache();
+    
+    return {
+      audioUrl: `/api/tts/audio/${cacheKey}.wav`,
+      duration,
+      fileSize: audio.length,
+    };
+  }
 }
 
 /**
- * Serve cached audio file
+ * Serve cached audio file (Kokoro backend)
  */
 export function getAudioFile(cacheKey: string): Buffer | null {
   const cachePath = getCachePath(cacheKey);
@@ -211,90 +215,93 @@ export function getAudioFile(cacheKey: string): Buffer | null {
 }
 
 /**
- * List available Kokoro voices
- * For now, return a hardcoded list based on Kokoro's defaults
+ * List available voices from both backends
  */
-export function getAvailableVoices(): string[] {
-  // These are the standard Kokoro voices
-  // In the future, we could query the model dynamically
-  return [
-    "af_heart",
-    "af_alloy",
-    "af_aoede",
-    "af_bella",
-    "af_jessica",
-    "af_kore",
-    "af_nicole",
-    "af_nova",
-    "af_river",
-    "af_sarah",
-    "af_sky",
-    "am_adam",
-    "am_echo",
-    "am_eric",
-    "am_fenrir",
-    "am_liam",
-    "am_michael",
-    "am_onyx",
-    "am_puck",
-    "am_santa",
-    "bf_emma",
-    "bf_isabella",
-    "bm_george",
-    "bm_lewis",
-  ];
-}
-
-/**
- * Parse voice ID into display info
- */
-export function parseVoiceId(id: string): { id: string; name: string; gender: "female" | "male"; accent: "american" | "british" | "other" } {
-  const parts = id.split("_");
-  if (parts.length < 2) {
-    return { id, name: id, gender: "female", accent: "other" };
+export function getAvailableVoices(backend: "kokoro" | "qwen3-tts" = "kokoro"): Array<{ id: string; name: string; gender: "female" | "male"; accent?: "american" | "british" | "other"; language?: string; description?: string }> {
+  if (backend === "qwen3-tts") {
+    return getQwen3Voices();
+  } else {
+    // Kokoro voices
+    return [
+      { id: "af_heart", name: "Heart", gender: "female", accent: "american" },
+      { id: "af_alloy", name: "Alloy", gender: "female", accent: "american" },
+      { id: "af_aoede", name: "Aoede", gender: "female", accent: "american" },
+      { id: "af_bella", name: "Bella", gender: "female", accent: "american" },
+      { id: "af_jessica", name: "Jessica", gender: "female", accent: "american" },
+      { id: "af_kore", name: "Kore", gender: "female", accent: "american" },
+      { id: "af_nicole", name: "Nicole", gender: "female", accent: "american" },
+      { id: "af_nova", name: "Nova", gender: "female", accent: "american" },
+      { id: "af_river", name: "River", gender: "female", accent: "american" },
+      { id: "af_sarah", name: "Sarah", gender: "female", accent: "american" },
+      { id: "af_sky", name: "Sky", gender: "female", accent: "american" },
+      { id: "am_adam", name: "Adam", gender: "male", accent: "american" },
+      { id: "am_echo", name: "Echo", gender: "male", accent: "american" },
+      { id: "am_eric", name: "Eric", gender: "male", accent: "american" },
+      { id: "am_fenrir", name: "Fenrir", gender: "male", accent: "american" },
+      { id: "am_liam", name: "Liam", gender: "male", accent: "american" },
+      { id: "am_michael", name: "Michael", gender: "male", accent: "american" },
+      { id: "am_onyx", name: "Onyx", gender: "male", accent: "american" },
+      { id: "am_puck", name: "Puck", gender: "male", accent: "american" },
+      { id: "am_santa", name: "Santa", gender: "male", accent: "american" },
+      { id: "bf_emma", name: "Emma", gender: "female", accent: "british" },
+      { id: "bf_isabella", name: "Isabella", gender: "female", accent: "british" },
+      { id: "bm_george", name: "George", gender: "male", accent: "british" },
+      { id: "bm_lewis", name: "Lewis", gender: "male", accent: "british" },
+    ];
   }
-
-  const [prefix, ...nameParts] = parts;
-  const name = nameParts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
-
-  const accentChar = prefix.charAt(0).toLowerCase();
-  const genderChar = prefix.charAt(1).toLowerCase();
-
-  const accent = accentChar === "a" ? "american" : accentChar === "b" ? "british" : "other";
-  const gender = genderChar === "m" ? "male" : "female";
-
-  return { id, name, gender, accent };
 }
 
 /**
  * Group voices by category for UI display
  */
-export function groupVoices(voiceIds: string[]): Array<{ label: string; voices: ReturnType<typeof parseVoiceId>[] }> {
-  const categories = [
-    { label: "American Female", voices: [] as ReturnType<typeof parseVoiceId>[] },
-    { label: "American Male", voices: [] as ReturnType<typeof parseVoiceId>[] },
-    { label: "British Female", voices: [] as ReturnType<typeof parseVoiceId>[] },
-    { label: "British Male", voices: [] as ReturnType<typeof parseVoiceId>[] },
-    { label: "Other", voices: [] as ReturnType<typeof parseVoiceId>[] },
-  ];
+export function groupVoices(voiceIds: Array<{ id: string; name: string; gender: "female" | "male"; accent?: "american" | "british" | "other"; language?: string; description?: string }>): Array<{ label: string; voices: Array<{ id: string; name: string; gender: "female" | "male"; accent?: "american" | "british" | "other"; language?: string; description?: string }> }> {
+  // Group by language for Qwen3, by accent for Kokoro
+  const hasLanguage = voiceIds.some((v) => "language" in v && v.language);
+  
+  if (hasLanguage) {
+    // Qwen3 grouping by language
+    const languages = new Set(voiceIds.map((v) => v.language || "Other"));
+    const categories = Array.from(languages).map((lang) => ({
+      label: lang,
+      voices: voiceIds.filter((v) => (v.language || "Other") === lang).sort((a, b) => a.name.localeCompare(b.name)),
+    }));
+    return categories;
+  } else {
+    // Kokoro grouping by accent
+    const categories = [
+      { label: "American Female", voices: [] as Array<{ id: string; name: string; gender: "female" | "male"; accent?: "american" | "british" | "other"; language?: string; description?: string }> },
+      { label: "American Male", voices: [] as Array<{ id: string; name: string; gender: "female" | "male"; accent?: "american" | "british" | "other"; language?: string; description?: string }> },
+      { label: "British Female", voices: [] as Array<{ id: string; name: string; gender: "female" | "male"; accent?: "american" | "british" | "other"; language?: string; description?: string }> },
+      { label: "British Male", voices: [] as Array<{ id: string; name: string; gender: "female" | "male"; accent?: "american" | "british" | "other"; language?: string; description?: string }> },
+      { label: "Other", voices: [] as Array<{ id: string; name: string; gender: "female" | "male"; accent?: "american" | "british" | "other"; language?: string; description?: string }> },
+    ];
 
-  for (const id of voiceIds) {
-    const info = parseVoiceId(id);
-    let categoryIndex: number;
-    if (info.accent === "american") {
-      categoryIndex = info.gender === "female" ? 0 : 1;
-    } else if (info.accent === "british") {
-      categoryIndex = info.gender === "female" ? 2 : 3;
-    } else {
-      categoryIndex = 4;
+    for (const voice of voiceIds) {
+      const accent = voice.accent || "other";
+      const gender = voice.gender;
+      let categoryIndex: number;
+      if (accent === "american") {
+        categoryIndex = gender === "female" ? 0 : 1;
+      } else if (accent === "british") {
+        categoryIndex = gender === "female" ? 2 : 3;
+      } else {
+        categoryIndex = 4;
+      }
+      categories[categoryIndex].voices.push(voice);
     }
-    categories[categoryIndex].voices.push(info);
-  }
 
-  // Sort within each category
-  for (const category of categories) {
-    category.voices.sort((a, b) => a.name.localeCompare(b.name));
-  }
+    // Sort within each category
+    for (const category of categories) {
+      category.voices.sort((a, b) => a.name.localeCompare(b.name));
+    }
 
-  return categories.filter((c) => c.voices.length > 0);
+    return categories.filter((c) => c.voices.length > 0);
+  }
+}
+
+/**
+ * Check if Qwen3-TTS is available
+ */
+export async function checkQwen3TTSInstallation(): Promise<{ available: boolean; error?: string }> {
+  return await checkQwen3Availability();
 }

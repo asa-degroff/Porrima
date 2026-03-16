@@ -1,21 +1,22 @@
 import express from "express";
 import type { TTSSettings } from "../types/tts.js";
 import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
-import { generateTTS, getAudioFile, getAvailableVoices, groupVoices } from "../services/tts.js";
+import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkQwen3TTSInstallation } from "../services/tts.js";
 
 const router = express.Router();
 
 // In-memory storage for user TTS settings
-// In a multi-user setup, this would be in the database
 let userSettings: TTSSettings = { ...DEFAULT_TTS_SETTINGS };
 
 /**
  * GET /api/tts/voices
  * List available voices grouped by category
+ * Query param: backend=kokoro|qwen3-tts (default: kokoro)
  */
 router.get("/voices", (req, res) => {
   try {
-    const voices = getAvailableVoices();
+    const backend = req.query.backend as "kokoro" | "qwen3-tts" || "kokoro";
+    const voices = getAvailableVoices(backend);
     const grouped = groupVoices(voices);
     res.json(grouped);
   } catch (error) {
@@ -38,7 +39,7 @@ router.get("/settings", (req, res) => {
  */
 router.post("/settings", (req, res) => {
   try {
-    const { voice, speed, pitch, autoReadEnabled } = req.body;
+    const { voice, speed, pitch, autoReadEnabled, backend, streamingEnabled, streamingChunkSize, streamingBoundaryTier } = req.body;
 
     if (voice !== undefined) {
       if (typeof voice !== "string" || !voice.trim()) {
@@ -66,6 +67,34 @@ router.post("/settings", (req, res) => {
         return res.status(400).json({ error: "autoReadEnabled must be a boolean" });
       }
       userSettings.autoReadEnabled = autoReadEnabled;
+    }
+
+    if (backend !== undefined) {
+      if (!["kokoro", "qwen3-tts"].includes(backend)) {
+        return res.status(400).json({ error: "Backend must be 'kokoro' or 'qwen3-tts'" });
+      }
+      userSettings.backend = backend;
+    }
+
+    if (streamingEnabled !== undefined) {
+      if (typeof streamingEnabled !== "boolean") {
+        return res.status(400).json({ error: "streamingEnabled must be a boolean" });
+      }
+      userSettings.streamingEnabled = streamingEnabled;
+    }
+
+    if (streamingChunkSize !== undefined) {
+      if (typeof streamingChunkSize !== "number" || streamingChunkSize < 30 || streamingChunkSize > 80) {
+        return res.status(400).json({ error: "streamingChunkSize must be between 30 and 80" });
+      }
+      userSettings.streamingChunkSize = streamingChunkSize;
+    }
+
+    if (streamingBoundaryTier !== undefined) {
+      if (!["clause", "sentence"].includes(streamingBoundaryTier)) {
+        return res.status(400).json({ error: "streamingBoundaryTier must be 'clause' or 'sentence'" });
+      }
+      userSettings.streamingBoundaryTier = streamingBoundaryTier;
     }
 
     res.json(userSettings);
@@ -132,27 +161,44 @@ router.get("/audio/:cacheKey.wav", (req, res) => {
 /**
  * GET /api/tts/status
  * Check if TTS service is available
+ * Query param: backend=kokoro|qwen3-tts (default: kokoro)
  */
 router.get("/status", async (req, res) => {
   try {
-    // Quick check: verify Python script exists
+    const backend = req.query.backend as "kokoro" | "qwen3-tts" || "kokoro";
     const { existsSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const scriptPath = join(process.cwd(), "src", "tts", "kokoro_wrapper.py");
-
-    if (!existsSync(scriptPath)) {
-      return res.json({ available: false, error: "TTS script not found" });
+    
+    if (backend === "qwen3-tts") {
+      const result = await checkQwen3TTSInstallation();
+      res.json({
+        backend: "qwen3-tts",
+        available: result.available,
+        error: result.error,
+        pythonPath: process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), ".venv", "bin", "python"),
+      });
+    } else {
+      const scriptPath = join(process.cwd(), "src", "tts", "kokoro_wrapper.py");
+      if (!existsSync(scriptPath)) {
+        return res.json({ 
+          backend: "kokoro",
+          available: false, 
+          error: "TTS script not found" 
+        });
+      }
+      res.json({
+        backend: "kokoro",
+        available: true,
+        pythonPath: process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), ".venv", "bin", "python"),
+      });
     }
-
-    // Could test Python here, but that's expensive
-    // For now, just confirm the script exists
-    res.json({
-      available: true,
-      pythonPath: process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), ".venv", "bin", "python"),
-    });
   } catch (error) {
     console.error("[TTS] Status check failed:", error);
-    res.json({ available: false, error: error instanceof Error ? error.message : "Unknown error" });
+    res.json({ 
+      backend: req.query.backend || "kokoro",
+      available: false, 
+      error: error instanceof Error ? error.message : "Unknown error" 
+    });
   }
 });
 
