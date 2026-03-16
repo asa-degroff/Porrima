@@ -1,5 +1,6 @@
 import { streamChat } from "./agent.js";
-import { cosineSimilarity, embed } from "./embeddings.js";
+import { cosineSimilarity, embed, embedBatch } from "./embeddings.js";
+import { dedupAndSave, parseExtractionResponse } from "./memory-extraction.js";
 import {
   loadMemoryStore,
   saveMemoryStore,
@@ -163,7 +164,19 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
         console.error("[synthesis] Summary generation failed:", e);
       }
 
-      // Step 5: Analyze memories for persona promotion candidates
+      // Step 5: Generate reflections and save as memories
+      try {
+        await generateReflections(
+          resolvedModelId,
+          formattedDigest,
+          store.memories,
+          todaysDigest
+        );
+      } catch (e) {
+        console.error("[synthesis] Reflection generation failed:", e);
+      }
+
+      // Step 6: Analyze memories for persona promotion candidates
       try {
         await analyzeAndPromotePersonaPatterns(store.memories, resolvedModelId);
       } catch (e) {
@@ -177,6 +190,120 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
     await saveMemoryStore(store);
     console.log("[synthesis] Complete");
   });
+}
+
+const MAX_REFLECTIONS = 5;
+
+const REFLECTION_SYSTEM_PROMPT = `You are a reflection system. Given today's conversations and existing memories, generate higher-order insights — patterns, connections, and observations that no single conversation would produce on its own.
+
+Good reflections:
+- Connect themes across different conversations or projects
+- Note how the user's approach or priorities are evolving over time
+- Identify recurring challenges or decisions that keep coming up
+- Capture the "why" behind what the user is building or changing
+- Notice when today's work contradicts or builds on past patterns
+
+Bad reflections (avoid):
+- Restating what happened today (that's the summary's job)
+- Repeating existing memories verbatim
+- Generic observations that could apply to anyone
+- Trivial or obvious connections
+
+Output a JSON array. Each item:
+- "text": A self-contained insight (1-3 sentences) with enough context to be meaningful on its own
+- "category": "reflection"
+- "importance": 7-9 (reflections are inherently high-value)
+
+Generate 1-${MAX_REFLECTIONS} reflections. If nothing insightful emerges, output: []
+
+IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
+
+/**
+ * Generate reflection memories from today's activity.
+ * These are higher-order insights that emerge from looking at the day's work
+ * in the context of accumulated memories.
+ */
+async function generateReflections(
+  modelId: string,
+  formattedDigest: string,
+  memories: Array<{ text: string; category: string; importance: number; projectId?: string }>,
+  todaysDigest: TodaysDigest
+): Promise<void> {
+  console.log("[synthesis] Generating reflections...");
+
+  // Build a concise memory context (top importance memories, capped)
+  const topMemories = [...memories]
+    .sort((a, b) => b.importance - a.importance)
+    .slice(0, 50)
+    .map((m) => {
+      const proj = m.projectId ? ` [${m.projectId}]` : "";
+      return `- [${m.category}] ${m.text}${proj}`;
+    })
+    .join("\n");
+
+  const projectContext = todaysDigest.projectSections
+    .map((ps) => `- ${ps.project.name}: ${ps.project.path}`)
+    .join("\n");
+
+  let responseText = "";
+  let thinkingText = "";
+  await streamChat(
+    modelId,
+    [
+      {
+        role: "user",
+        content: `## Today's Activity\n\n${formattedDigest}\n\n## Key Existing Memories (${memories.length} total, showing top 50)\n\n${topMemories}\n\n${projectContext ? `## Active Projects\n${projectContext}\n\n` : ""}Generate reflections based on today's activity in the context of what you already know.`,
+        timestamp: Date.now(),
+      },
+    ],
+    REFLECTION_SYSTEM_PROMPT,
+    (event) => {
+      if (event.type === "text_delta") {
+        responseText += event.delta;
+      } else if (event.type === "thinking_delta") {
+        thinkingText += event.delta;
+      }
+    }
+  );
+
+  const finalResponse = responseText.trim() || thinkingText.trim();
+  if (!finalResponse) {
+    console.warn("[synthesis] Reflection LLM returned empty response");
+    return;
+  }
+
+  const reflections = parseExtractionResponse(finalResponse).slice(0, MAX_REFLECTIONS);
+  if (reflections.length === 0) {
+    console.log("[synthesis] No reflections generated");
+    return;
+  }
+
+  console.log(`[synthesis] Generated ${reflections.length} reflection(s), embedding...`);
+
+  // Force category to "reflection" and clamp importance
+  const normalized = reflections.map((r) => ({
+    ...r,
+    category: "reflection" as const,
+    importance: Math.min(9, Math.max(7, r.importance)),
+  }));
+
+  let embeddings: number[][];
+  try {
+    embeddings = await embedBatch(normalized.map((r) => r.text));
+  } catch (e) {
+    console.error("[synthesis] Reflection embedding failed:", e);
+    return;
+  }
+
+  // Determine projectId: if all today's chats were in one project, tag reflections with it
+  const projectIds = todaysDigest.projectSections.map((ps) => ps.project.id);
+  const singleProject = projectIds.length === 1 && todaysDigest.generalChats.length === 0
+    ? projectIds[0]
+    : undefined;
+
+  await dedupAndSave(normalized, embeddings, "synthesis", singleProject);
+
+  console.log(`[synthesis] Saved ${normalized.length} reflection(s) to memory`);
 }
 
 /**
