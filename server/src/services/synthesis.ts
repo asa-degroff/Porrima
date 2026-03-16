@@ -1,5 +1,5 @@
 import { streamChat } from "./agent.js";
-import { cosineSimilarity, embed, embedBatch } from "./embeddings.js";
+import { cosineSimilarity, embedBatch } from "./embeddings.js";
 import { dedupAndSave, parseExtractionResponse } from "./memory-extraction.js";
 import {
   loadMemoryStore,
@@ -10,16 +10,16 @@ import {
   getLastSynthesis,
 } from "./memory-storage.js";
 import { discoverOllamaModels } from "./models.js";
-import { loadPersona, savePersona } from "./persona-store.js";
+// persona-store used by analyzeAndPromotePersonaPatterns (suggestions only, no auto-apply yet)
 import { getSettings, listChats, getChat } from "./storage.js";
-import { listProjects, getProject, readAgentsMd } from "./project-storage.js";
+import { getProject, readAgentsMd } from "./project-storage.js";
 import {
   getUserEntriesToday,
   listNotebookEntries,
   getNotebookEntry,
   createNotebookEntry,
 } from "./notebook-storage.js";
-import type { Chat, ChatMessage, Project, NotebookEntry } from "../types.js";
+import type { ChatMessage, Project, NotebookEntry } from "../types.js";
 
 const SYNTHESIS_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MERGE_THRESHOLD = 0.90;
@@ -119,16 +119,28 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
     // Step 3b: Load today's notebook entries
     const notebookEntries = await loadTodaysNotebookEntries();
     const notebookSection = formatNotebookEntries(notebookEntries);
+    if (notebookEntries.length > 0) {
+      const userCount = notebookEntries.filter((e) => e.author === "user").length;
+      const agentCount = notebookEntries.filter((e) => e.author === "agent").length;
+      console.log(`[synthesis] Loaded ${userCount} user + ${agentCount} agent notebook entries`);
+    }
 
     // Step 4: Generate daily summary via LLM
     const resolvedModelId = modelId || (await getSynthesisModelId());
     let finalSummary = "";
     if (resolvedModelId) {
       try {
+        // Build project name lookup from today's digest
+        const projectNameMap = new Map<string, string>();
+        for (const ps of todaysDigest.projectSections) {
+          projectNameMap.set(ps.project.id, ps.project.name);
+        }
+
         const memoriesText = store.memories
           .map(
             (m) => {
-              const proj = m.projectId ? ` [project: ${m.projectId}]` : "";
+              const projName = m.projectId ? projectNameMap.get(m.projectId) : undefined;
+              const proj = projName ? ` [project: ${projName}]` : "";
               return `- [${m.category}] ${m.text} (importance: ${m.importance}/10, accessed: ${m.accessCount} times)${proj}`;
             }
           )
@@ -659,12 +671,15 @@ async function loadTodaysNotebookEntries(): Promise<NotebookEntry[]> {
     console.warn("[synthesis] Failed to load user notebook entries:", e);
   }
 
-  // Agent entries
+  // Agent entries (exclude prior synthesis entries to avoid self-referencing)
   try {
     const agentIndex = await listNotebookEntries("agent");
     const today = new Date().toDateString();
     for (const info of agentIndex.entries) {
-      if (new Date(info.createdAt).toDateString() === today) {
+      if (
+        new Date(info.createdAt).toDateString() === today &&
+        !info.preview.startsWith("# Daily Synthesis")
+      ) {
         const entry = await getNotebookEntry("agent", info.id);
         if (entry) entries.push(entry);
       }
@@ -722,7 +737,6 @@ function formatNotebookEntries(entries: NotebookEntry[]): string {
     sections.push(formatted);
   }
 
-  console.log(`[synthesis] Loaded ${userEntries.length} user + ${agentEntries.length} agent notebook entries`);
   return sections.join("\n\n");
 }
 
