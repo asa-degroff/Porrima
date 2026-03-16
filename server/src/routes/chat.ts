@@ -77,6 +77,7 @@ async function persistImages(images: ImageAttachment[]): Promise<ImageAttachment
 function createSafeStreamFn(): StreamFn {
   return (model, ctx, options) => {
     if (options?.signal?.aborted) {
+      console.log(`[stream] signal already aborted, returning empty abort stream`);
       const stream = createAssistantMessageEventStream();
       const msg: AssistantMessage = {
         role: "assistant",
@@ -127,8 +128,8 @@ async function handleChatStream(
   // instead of batching small SSE events into fewer TCP packets
   res.socket?.setNoDelay(true);
 
-  const abortController = new AbortController();
-  req.on("close", () => abortController.abort());
+  const connectionAbortController = new AbortController();
+  req.on("close", () => connectionAbortController.abort());
 
   const MAX_ITERATIONS = 500;
 
@@ -157,6 +158,8 @@ async function handleChatStream(
     seqCounter: 0,
     pendingText: "",
     finalUsage: undefined as ChatMessage["usage"],
+    // Track if last turn ended with toolUse but no final text
+    incompleteToolTurn: false,
   };
 
   function resetAccumulators() {
@@ -171,6 +174,7 @@ async function handleChatStream(
     state.seqCounter = 0;
     state.pendingText = "";
     state.finalUsage = undefined;
+    state.incompleteToolTurn = false;
   }
 
   function buildCurrentAssistantMessage(): ChatMessage {
@@ -203,6 +207,10 @@ async function handleChatStream(
     state.pendingText = "";
   }
 
+  // Create a turn-level abort controller to prevent signal bleeding across iterations
+  // This is separate from connectionAbortController which handles SSE disconnect
+  const turnAbortController = new AbortController();
+
   // ask_user state — owned by the route, set via callback.
   // Uses a ref object so TypeScript can track mutations through closures.
   const askUserRef: { current: { question: string; toolCallId: string } | null } = { current: null };
@@ -226,7 +234,7 @@ async function handleChatStream(
     },
     onAskUser: (question, toolCallId) => {
       askUserRef.current = { question, toolCallId };
-      abortController.abort();
+      turnAbortController.abort(); // Only abort the current turn, not the SSE connection
     },
   };
 
@@ -320,10 +328,10 @@ async function handleChatStream(
 
     const safeStreamFn = createSafeStreamFn();
 
-    // Start the agent loop
+    // Start the agent loop (uses turnAbortController declared earlier)
     const eventStream = userPiMessage
-      ? agentLoop([userPiMessage], context, config, abortController.signal, safeStreamFn)
-      : agentLoopContinue(context, config, abortController.signal, safeStreamFn);
+      ? agentLoop([userPiMessage], context, config, turnAbortController.signal, safeStreamFn)
+      : agentLoopContinue(context, config, turnAbortController.signal, safeStreamFn);
 
     // Process events → SSE
     for await (const event of eventStream) {
@@ -395,14 +403,28 @@ async function handleChatStream(
           const msg = event.message as AssistantMessage;
           const stopReason = msg.stopReason || "stop";
 
-          // Skip the synthetic aborted turn (from ask_user abort)
-          if (stopReason === "aborted") break;
+          // Handle aborted turns gracefully - they're expected from ask_user
+          if (stopReason === "aborted") {
+            console.log(`[chat] turn aborted (expected from ask_user or disconnect)`);
+            break;
+          }
 
           iterations++;
+          
+          // Track incomplete tool turns: if stopReason is "toolUse" but no text content followed
+          const hasToolCalls = event.toolResults && event.toolResults.length > 0;
+          const hasTextContent = state.fullText.trim().length > 0;
+          if (stopReason === "toolUse" && hasToolCalls && !hasTextContent) {
+            state.incompleteToolTurn = true;
+            console.log(`[chat] turn ended with toolUse but no final text - marking incomplete`);
+          } else {
+            state.incompleteToolTurn = false;
+          }
+          
           console.log(
             `[chat] iter=${iterations} stop=${stopReason} tools=${event.toolResults?.length || 0}` +
             ` content=${state.fullText.length}ch thinking=${state.thinkingText.length}ch` +
-            ` tokens=${msg.usage?.totalTokens || "?"}`,
+            ` tokens=${msg.usage?.totalTokens || "?"} incomplete=${state.incompleteToolTurn}`,
           );
 
           res.write(`event: iteration\ndata: ${JSON.stringify({
@@ -435,7 +457,7 @@ async function handleChatStream(
               type: "iteration_limit",
               message: `Stopped — reached ${MAX_ITERATIONS} iteration limit`,
             })}\n\n`);
-            abortController.abort();
+            turnAbortController.abort();
           }
 
           break;
@@ -443,7 +465,100 @@ async function handleChatStream(
       }
     }
 
-    // --- Post-loop: handle ask_user, build message, compaction ---
+    // --- Post-loop: handle incomplete tool turns, ask_user, build message, compaction ---
+
+    // If the last turn ended with toolUse but no final text, continue the loop
+    // This handles cases where the LLM signaled tool use but didn't produce the final text response
+    if (state.incompleteToolTurn && !askUserRef.current && iterations < MAX_ITERATIONS) {
+      console.log(`[chat] incomplete tool turn detected - continuing loop for final text`);
+      
+      // Continue the agent loop from current context (no new user message, just resume)
+      const continueAbortController = new AbortController();
+      const continueEventStream = agentLoopContinue(context, config, continueAbortController.signal, safeStreamFn);
+      
+      // Process the continuation events
+      for await (const event of continueEventStream) {
+        if (event.type === "message_update") {
+          const ame = event.assistantMessageEvent;
+          if (ame.type === "text_delta") {
+            state.fullText += ame.delta;
+            state.pendingText += ame.delta;
+            res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+          } else if (ame.type === "thinking_delta") {
+            state.thinkingText += ame.delta;
+            res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+          }
+        } else if (event.type === "turn_end") {
+          const msg = event.message as AssistantMessage;
+          const stopReason = msg.stopReason || "stop";
+          console.log(`[chat] continuation turn_end: stop=${stopReason} content=${state.fullText.length}ch`);
+          if (stopReason !== "toolUse") {
+            break; // Got final text, exit continuation loop
+          }
+        }
+      }
+      
+      continueAbortController.abort(); // Clean up
+    }
+
+    // Check for queued follow-up messages even if loop exited early (e.g., due to abort)
+    // This ensures messages aren't lost when agent-loop.js returns early on abort/error
+    const queuedFollowUp = await messageQueue.drainOne(chat.id);
+    if (queuedFollowUp && !askUserRef.current && !waitingForInput) {
+      console.log(`[chat] post-loop: found queued follow-up message ${queuedFollowUp.id}, processing`);
+      
+      // Build current message first
+      const currentAssistantMsg = buildCurrentAssistantMessage();
+      chat.messages.push(currentAssistantMsg);
+      
+      // Add queued user message
+      const queuedUserMsg: ChatMessage = {
+        role: "user",
+        content: queuedFollowUp.message,
+        images: queuedFollowUp.images?.length ? queuedFollowUp.images : undefined,
+        timestamp: queuedFollowUp.timestamp,
+      };
+      chat.messages.push(queuedUserMsg);
+      await saveChat(chat);
+
+      // Emit events to finalize current and start follow-up
+      res.write(`event: message_complete\ndata: ${JSON.stringify({ message: currentAssistantMsg })}\n\n`);
+      res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queuedFollowUp.id })}\n\n`);
+
+      // Fire-and-forget memory extraction
+      if (chat.type === "agent") {
+        extractMemories(chat.modelId, chat.id, lastUserMessage, currentAssistantMsg.content)
+          .catch(err => console.error("[memory] extraction failed:", err));
+      }
+
+      // Title generation for first exchange
+      if (chat.messages.length === 2) {
+        generateTitle(lastUserMessage, currentAssistantMsg.content)
+          .then(title => {
+            if (title) {
+              chat.title = title;
+              saveChat(chat).catch(() => {});
+              res.write(`event: title_update\ndata: ${JSON.stringify({ chatId: chat.id, title })}\n\n`);
+            }
+          })
+          .catch(err => console.warn("[title] generation failed:", err));
+      }
+
+      // Continue processing the follow-up by recursively calling handleChatStream
+      // Reset accumulators and update state
+      resetAccumulators();
+      lastUserMessage = queuedFollowUp.message;
+      
+      // Build new context for follow-up (all messages including the queued one)
+      const followUpContextMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
+      const followUpSystemPrompt = chat.type === "agent"
+        ? await buildMemoryAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages)
+        : chat.systemPrompt || "You are a helpful assistant.";
+      
+      // Recursively handle the follow-up with a fresh turn abort controller
+      await handleChatStream(chat, queuedFollowUp.message, followUpContextMessages, followUpSystemPrompt, null, req, res);
+      return; // Exit early since we've recursively handled the follow-up
+    }
 
     if (askUserRef.current) {
       waitingForInput = true;
