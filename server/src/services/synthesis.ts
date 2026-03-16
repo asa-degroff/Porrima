@@ -13,7 +13,12 @@ import { discoverOllamaModels } from "./models.js";
 import { loadPersona, savePersona } from "./persona-store.js";
 import { getSettings, listChats, getChat } from "./storage.js";
 import { listProjects, getProject, readAgentsMd } from "./project-storage.js";
-import { getUserEntriesToday, listNotebookEntries, getNotebookEntry } from "./notebook-storage.js";
+import {
+  getUserEntriesToday,
+  listNotebookEntries,
+  getNotebookEntry,
+  createNotebookEntry,
+} from "./notebook-storage.js";
 import type { Chat, ChatMessage, Project, NotebookEntry } from "../types.js";
 
 const SYNTHESIS_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -117,6 +122,7 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
 
     // Step 4: Generate daily summary via LLM
     const resolvedModelId = modelId || (await getSynthesisModelId());
+    let finalSummary = "";
     if (resolvedModelId) {
       try {
         const memoriesText = store.memories
@@ -158,7 +164,7 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
 
         // Use thinking content as fallback if text output is empty
         // (qwen3 reasoning mode can put all content into thinking tokens)
-        const finalSummary = summaryText.trim() || thinkingText.trim();
+        finalSummary = summaryText.trim() || thinkingText.trim();
 
         const today = new Date().toISOString().split("T")[0];
         if (finalSummary) {
@@ -194,6 +200,15 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
         await analyzeAndPromotePersonaPatterns(store.memories, resolvedModelId);
       } catch (e) {
         console.error("[synthesis] Persona pattern analysis failed:", e);
+      }
+
+      // Step 7: Write synthesis notebook entry
+      if (finalSummary) {
+        try {
+          await writeSynthesisNotebookEntry(finalSummary, todaysDigest, notebookEntries);
+        } catch (e) {
+          console.error("[synthesis] Notebook entry write failed:", e);
+        }
       }
     } else {
       console.warn("[synthesis] No model available — skipping summary generation and persona analysis");
@@ -709,6 +724,53 @@ function formatNotebookEntries(entries: NotebookEntry[]): string {
 
   console.log(`[synthesis] Loaded ${userEntries.length} user + ${agentEntries.length} agent notebook entries`);
   return sections.join("\n\n");
+}
+
+/**
+ * Write an agent notebook entry summarizing the day's synthesis.
+ * Creates a readable log the user can review in their notebook.
+ */
+async function writeSynthesisNotebookEntry(
+  summary: string,
+  todaysDigest: TodaysDigest,
+  notebookEntries: NotebookEntry[]
+): Promise<void> {
+  // Check if synthesis already wrote a notebook entry today
+  const agentIndex = await listNotebookEntries("agent");
+  const today = new Date().toDateString();
+  const existingSynthesis = agentIndex.entries.some(
+    (e) => new Date(e.createdAt).toDateString() === today && e.preview.startsWith("# Daily Synthesis")
+  );
+  if (existingSynthesis) {
+    console.log("[synthesis] Agent notebook entry already exists for today, skipping");
+    return;
+  }
+
+  const todayDate = new Date().toISOString().split("T")[0];
+
+  // Build the notebook entry content
+  const parts: string[] = [];
+  parts.push(`# Daily Synthesis — ${todayDate}`);
+
+  // Activity summary
+  const projectNames = todaysDigest.projectSections.map((ps) => ps.project.name);
+  const chatCount = todaysDigest.totalChats;
+  const notebookCount = notebookEntries.filter((e) => e.author === "user").length;
+
+  const activityItems: string[] = [];
+  if (chatCount > 0) activityItems.push(`${chatCount} agent chat${chatCount > 1 ? "s" : ""}`);
+  if (projectNames.length > 0) activityItems.push(`projects: ${projectNames.join(", ")}`);
+  if (notebookCount > 0) activityItems.push(`${notebookCount} notebook entr${notebookCount > 1 ? "ies" : "y"}`);
+
+  if (activityItems.length > 0) {
+    parts.push(`*Today's activity: ${activityItems.join(" · ")}*`);
+  }
+
+  parts.push(summary);
+
+  const content = parts.join("\n\n");
+  const entry = await createNotebookEntry("agent", content);
+  console.log(`[synthesis] Wrote synthesis notebook entry: ${entry.id}`);
 }
 
 async function getSynthesisModelId(): Promise<string | null> {
