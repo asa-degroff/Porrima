@@ -61,19 +61,33 @@ async function withRetry<T>(
   throw lastError;
 }
 
-const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction system. Your job is to extract atomic facts from a conversation exchange.
+const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction system. Analyze a conversation exchange and extract information worth remembering for future interactions.
 
-Analyze the user's message and the assistant's response. Extract any facts worth remembering — user preferences, personal details, behaviors, instructions, or important context.
+Think beyond surface-level facts. Consider:
+- **User context**: preferences, expertise, role, goals, working style
+- **Project context**: architecture decisions, tech stack details, ongoing initiatives, constraints, what's being built and why
+- **Decisions & rationale**: why something was chosen over alternatives, tradeoffs discussed
+- **Relationships**: connections between concepts, dependencies, blockers
+- **Lessons**: what worked, what didn't, patterns that emerged
 
-Output a JSON array of facts. Each fact should be:
-- "text": A concise, standalone statement
-- "category": One of "preference", "fact", "behavior", "instruction", "note", "reflection"
-- "importance": 1-10 (10 = critical info, 1 = trivial detail)
+Each extracted memory should be a self-contained statement that would be meaningful without the original conversation. Include enough context to understand the "why" — not just the "what." 1-3 sentences per memory is ideal.
 
-If there is nothing worth remembering, output an empty array: []
+Output a JSON array. Each item:
+- "text": A standalone statement with sufficient context (1-3 sentences)
+- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision"
+- "importance": 1-10 (10 = critical, 1 = trivial)
 
-IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences. Example:
-[{"text": "User's name is Alex", "category": "fact", "importance": 8}, {"text": "Project supports dark mode", "category": "preference", "importance": 4}]`;
+Categories:
+- "preference" — user likes, dislikes, stylistic choices
+- "fact" — concrete information about the user, their role, or their environment
+- "behavior" — recurring patterns in how the user works or communicates
+- "instruction" — explicit directives about how the agent should behave
+- "context" — project-level information: architecture, tech choices, ongoing work, constraints, relationships between systems
+- "decision" — a choice that was made and why, tradeoffs considered
+
+If nothing is worth remembering, output: []
+
+IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 
 interface ExtractedFact {
   text: string;
@@ -101,7 +115,7 @@ export function parseExtractionResponse(text: string): ExtractedFact[] {
       (f: any) =>
         typeof f.text === "string" &&
         f.text.length > 0 &&
-        ["preference", "fact", "behavior", "instruction"].includes(f.category)
+        ["preference", "fact", "behavior", "instruction", "context", "decision"].includes(f.category)
     );
   } catch {
     return [];
@@ -217,16 +231,19 @@ export async function extractMemories(
   }
 }
 
-const PRE_COMPACTION_SYSTEM_PROMPT = `You are a memory preservation system. A conversation is approaching its context limit and will be truncated.
+const PRE_COMPACTION_SYSTEM_PROMPT = `You are a memory preservation system. A conversation is approaching its context limit and messages will be removed.
 
-Review the conversation messages below that will be removed. Extract:
-1. Important facts (user preferences, project details, preferences, instructions)
-2. Current task/goal state — what is being worked on, what decisions were made, what code was discussed
-3. Key technical context the agent needs to continue effectively
+Review the messages below and extract everything the agent needs to continue effectively. Focus on:
+1. Task state — what is being worked on, what's done, what's pending, what decisions were made
+2. Technical context — files discussed, architecture patterns, code changes, API details
+3. User context — preferences, instructions, corrections, expertise revealed
+4. Decisions & rationale — why approaches were chosen, tradeoffs considered, alternatives rejected
 
-Output a JSON array of facts. Each fact should be:
-- "text": A concise, standalone statement
-- "category": One of "preference", "fact", "behavior", "instruction"
+Each memory should be self-contained and meaningful without the original conversation (1-3 sentences).
+
+Output a JSON array. Each item:
+- "text": A standalone statement with sufficient context (1-3 sentences)
+- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision"
 - "importance": 1-10
 
 Output ONLY the JSON array.`;

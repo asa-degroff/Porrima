@@ -837,6 +837,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                                   memory.category === "fact" ? "bg-blue-500/20 text-blue-300" :
                                   memory.category === "preference" ? "bg-purple-500/20 text-purple-300" :
                                   memory.category === "behavior" ? "bg-amber-500/20 text-amber-300" :
+                                  memory.category === "context" ? "bg-cyan-500/20 text-cyan-300" :
+                                  memory.category === "decision" ? "bg-rose-500/20 text-rose-300" :
                                   "bg-emerald-500/20 text-emerald-300"
                                 }`}>
                                   {memory.category}
