@@ -6,12 +6,12 @@ Generates WAV audio from text and outputs to stdout.
 Usage:
     python qwen3_wrapper.py --text "Hello world" --speaker Ryan --speed 1.0
 
+Environment:
+    QWEN_TTS_ATTN: Attention backend (sdpa, eager, flash_attention_2). Default: sdpa for ROCm.
+
 Output:
     Binary WAV data to stdout
     Metadata JSON to stderr
-
-Requires:
-    pip install qwen-tts torch soundfile
 """
 
 import argparse
@@ -37,33 +37,38 @@ def main():
 
     try:
         # Load model on startup (cached for subsequent calls in same process)
-        # Check if model is already loaded via environment variable
         model = getattr(main, '_model', None)
         if model is None:
             print(f"[Qwen3-TTS] Loading model: {args.model}", file=sys.stderr)
-
-            # Detect device: ROCm (AMD GPU) or CUDA (NVIDIA) or CPU
+            
+            # Detect device
             if torch.cuda.is_available():
                 device_map = "cuda:0"
                 gpu_name = torch.cuda.get_device_name(0)
                 print(f"[Qwen3-TTS] Using GPU: {gpu_name}", file=sys.stderr)
-
-                if torch.version.hip:
-                    # ROCm (AMD): float16 crashes on RDNA3 (gfx1100), use bfloat16
-                    dtype = torch.bfloat16
-                    attn_impl = os.environ.get("QWEN_TTS_ATTN", "eager")
-                    if attn_impl == "sdpa":
-                        os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1"
-                    print(f"[Qwen3-TTS] ROCm mode: bfloat16 + {attn_impl}", file=sys.stderr)
-                else:
-                    # CUDA (NVIDIA): use bfloat16, flash_attention_2
-                    dtype = torch.bfloat16
-                    attn_impl = "flash_attention_2"
+                
+                # bfloat16 works on both ROCm and CUDA (float16 broken on ROCm RDNA3)
+                dtype = torch.bfloat16
+                print(f"[Qwen3-TTS] Using bfloat16", file=sys.stderr)
             else:
                 device_map = "cpu"
                 dtype = torch.float32
+                print("[Qwen3-TTS] Using CPU", file=sys.stderr)
+            
+            # Attention: sdpa for GPU, eager for CPU
+            attn_env = os.environ.get("QWEN_TTS_ATTN", "").lower()
+            if attn_env == "flash_attention_2":
+                attn_impl = "flash_attention_2"
+            elif attn_env == "sdpa" or (attn_env == "" and torch.cuda.is_available()):
+                attn_impl = "sdpa"
+                if torch.version.hip:
+                    os.environ["TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"] = "1"
+                    # FAST mode avoids exhaustive MIOpen kernel search (huge perf difference)
+                    os.environ.setdefault("MIOPEN_FIND_MODE", "FAST")
+            else:
                 attn_impl = "eager"
-                print("[Qwen3-TTS] No GPU detected, using CPU", file=sys.stderr)
+            
+            print(f"[Qwen3-TTS] Using {attn_impl} attention", file=sys.stderr)
             
             model = Qwen3TTSModel.from_pretrained(
                 args.model,
@@ -71,7 +76,7 @@ def main():
                 dtype=dtype,
                 attn_implementation=attn_impl,
             )
-            main._model = model  # Cache for reuse
+            main._model = model
             print(f"[Qwen3-TTS] Model loaded on {device_map} with dtype {dtype}", file=sys.stderr)
         
         # Generate audio
@@ -85,24 +90,14 @@ def main():
         if wavs is None or len(wavs) == 0:
             raise ValueError("No audio generated")
         
-        # wavs is already in WAV format with header from Qwen3TTS
-        # Convert to bytes
+        # Write WAV to stdout
         wav_buffer = io.BytesIO()
         sf.write(wav_buffer, wavs[0], sr, format='WAV')
-        
-        # Write binary WAV data to stdout
         sys.stdout.buffer.write(wav_buffer.getvalue())
         sys.stdout.buffer.flush()
         
-        # Write metadata to stderr as JSON
+        # Metadata to stderr
         duration = len(wavs[0]) / sr
-        
-        # Get dtype safely (may not be available on all versions)
-        try:
-            dtype = str(model.dtype)
-        except AttributeError:
-            dtype = "unknown"
-        
         metadata = {
             "duration": duration,
             "sample_rate": sr,
@@ -110,13 +105,11 @@ def main():
             "language": args.language,
             "speed": args.speed,
             "model": args.model,
-            "dtype": dtype,
             "device": str(model.device),
         }
         print(json.dumps(metadata), file=sys.stderr)
         
     except Exception as e:
-        # Write error to stderr
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)
 
