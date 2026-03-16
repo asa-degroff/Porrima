@@ -1,4 +1,5 @@
 import { Suspense, memo, lazy, useRef, useCallback, useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { NotebookEntry, Artifact, NotebookLink, ImageAttachment } from "../types";
 import type { ChatListItem } from "../types";
 import { ChatLinkPicker } from "./ChatLinkPicker";
@@ -85,6 +86,16 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
     setConfirmDelete(false);
   }, []);
 
+  // Close lightbox on Escape
+  useEffect(() => {
+    if (!lightboxImage) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightboxImage(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [lightboxImage]);
+
   return (
     <div
       className={`rounded-xl border border-white/10 overflow-hidden ${isAgent ? 'bg-purple-500/[0.03]' : 'bg-white/[0.03]'}`}
@@ -151,7 +162,8 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
                 key={i}
                 src={img.thumbUrl || img.url || `data:${img.mimeType};base64,${img.data}`}
                 alt={img.name}
-                className="max-h-40 rounded-lg border border-white/10 object-cover"
+                className="max-h-40 rounded-lg border border-white/10 object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                onClick={() => setLightboxImage(img)}
               />
             ))}
           </div>
@@ -296,6 +308,39 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
             Delete
           </ContextMenuItem>
         </ContextMenu>
+      )}
+
+      {/* Image lightbox */}
+      {lightboxImage && createPortal(
+        <div
+          className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4"
+          onClick={() => setLightboxImage(null)}
+        >
+          <div
+            className="relative w-full h-full flex items-center justify-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={lightboxImage.thumbUrl || lightboxImage.url || `data:${lightboxImage.mimeType};base64,${lightboxImage.data}`}
+              alt={lightboxImage.name}
+              className="max-h-[90vh] max-w-[90vw] w-auto h-auto object-contain rounded-lg shadow-2xl"
+            />
+            <button
+              onClick={() => setLightboxImage(null)}
+              className="absolute top-4 right-4 text-white/60 hover:text-white transition-colors p-2"
+              title="Close"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
+            </button>
+            <div className="absolute bottom-4 left-0 right-0 text-center text-sm text-white/60">
+              {lightboxImage.name}
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
