@@ -113,7 +113,7 @@ export interface Settings {
   systemPromptPresets?: SystemPromptPreset[];
 }
 
-export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision";
+export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
 
 export interface Memory {
   id: string;

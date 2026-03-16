@@ -121,7 +121,7 @@ export interface Settings {
   hapticsEnabled?: boolean;
 }
 
-export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision";
+export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
 
 export interface MemorySummary {
   id: string;

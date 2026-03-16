@@ -74,7 +74,7 @@ Each extracted memory should be a self-contained statement that would be meaning
 
 Output a JSON array. Each item:
 - "text": A standalone statement with sufficient context (1-3 sentences)
-- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision"
+- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
 - "importance": 1-10 (10 = critical, 1 = trivial)
 
 Categories:
@@ -84,6 +84,7 @@ Categories:
 - "instruction" — explicit directives about how the agent should behave
 - "context" — project-level information: architecture, tech choices, ongoing work, constraints, relationships between systems
 - "decision" — a choice that was made and why, tradeoffs considered
+- "note" — general observations, curiosities, personal details, or anything worth remembering that doesn't fit the above categories
 
 If nothing is worth remembering, output: []
 
@@ -115,7 +116,7 @@ export function parseExtractionResponse(text: string): ExtractedFact[] {
       (f: any) =>
         typeof f.text === "string" &&
         f.text.length > 0 &&
-        ["preference", "fact", "behavior", "instruction", "context", "decision"].includes(f.category)
+        ["preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"].includes(f.category)
     );
   } catch {
     return [];
@@ -243,7 +244,7 @@ Each memory should be self-contained and meaningful without the original convers
 
 Output a JSON array. Each item:
 - "text": A standalone statement with sufficient context (1-3 sentences)
-- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision"
+- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
 - "importance": 1-10
 
 Output ONLY the JSON array.`;
