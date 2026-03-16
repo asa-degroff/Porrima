@@ -421,6 +421,14 @@ async function handleChatStream(
             state.incompleteToolTurn = false;
           }
           
+          // Handle thinking-only outputs: if turn ended with stop reason but only thinking was produced
+          // This happens when reasoning models output via thinking stream without text stream
+          if (stopReason === "stop" && !hasTextContent && state.thinkingText.trim().length > 0) {
+            state.fullText = state.thinkingText;
+            state.thinkingText = "";
+            console.log(`[chat] promoted thinking to content (${state.fullText.length}ch) - model output thinking only`);
+          }
+          
           console.log(
             `[chat] iter=${iterations} stop=${stopReason} tools=${event.toolResults?.length || 0}` +
             ` content=${state.fullText.length}ch thinking=${state.thinkingText.length}ch` +
@@ -492,6 +500,14 @@ async function handleChatStream(
           const msg = event.message as AssistantMessage;
           const stopReason = msg.stopReason || "stop";
           console.log(`[chat] continuation turn_end: stop=${stopReason} content=${state.fullText.length}ch`);
+          
+          // Also handle thinking-only in continuation
+          if (stopReason === "stop" && !state.fullText.trim() && state.thinkingText.trim().length > 0) {
+            state.fullText = state.thinkingText;
+            state.thinkingText = "";
+            console.log(`[chat] continuation: promoted thinking to content (${state.fullText.length}ch)`);
+          }
+          
           if (stopReason !== "toolUse") {
             break; // Got final text, exit continuation loop
           }

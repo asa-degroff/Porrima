@@ -270,6 +270,13 @@ export const MessageBubble = memo(function MessageBubble({
               />
             )}
 
+            {/* Fallback: if message has thinking but no content/segments, show thinking as visible text (backward compat for pre-fix messages) */}
+            {!renderSegments && !message.content && thinkingText && !showStreaming && (
+              <div className="text-sm leading-relaxed mt-2 text-white/70">
+                {thinkingText}
+              </div>
+            )}
+
             {renderSegments ? (
               // Interleaved segments in chronological order (streaming + persisted)
               message.segments?.map((segment, i) => {
