@@ -92,6 +92,13 @@ function getDb(): Database.Database {
     console.log("[memory] Built FTS5 index for existing memories");
   }
 
+  // Migration: add project_id column if missing
+  const cols = db.prepare("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "project_id")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`);
+    console.log("[memory] Added project_id column to memories table");
+  }
+
   // Auto-migrate from JSON if needed
   if (needsMigration) {
     migrateFromJson(db);
@@ -107,8 +114,8 @@ function migrateFromJson(db: Database.Database): void {
     const store = JSON.parse(raw) as MemoryStore;
 
     const insertMemory = db.prepare(`
-      INSERT OR IGNORE INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
     `);
     const insertVec = db.prepare(`
       INSERT OR IGNORE INTO vec_memories (id, embedding)
@@ -171,7 +178,7 @@ export async function loadMemoryStore(): Promise<MemoryStore> {
 
   const rows = db
     .prepare(
-      "SELECT m.id, m.text, m.category, m.importance, m.created_at, m.last_accessed, m.access_count, m.source_chat_id, v.embedding FROM memories m JOIN vec_memories v ON m.id = v.id"
+      "SELECT m.id, m.text, m.category, m.importance, m.created_at, m.last_accessed, m.access_count, m.source_chat_id, m.project_id, v.embedding FROM memories m JOIN vec_memories v ON m.id = v.id"
     )
     .all() as Array<{
     id: string;
@@ -182,6 +189,7 @@ export async function loadMemoryStore(): Promise<MemoryStore> {
     last_accessed: string;
     access_count: number;
     source_chat_id: string;
+    project_id: string;
     embedding: Buffer;
   }>;
 
@@ -195,6 +203,7 @@ export async function loadMemoryStore(): Promise<MemoryStore> {
     lastAccessed: r.last_accessed,
     accessCount: r.access_count,
     sourceChatId: r.source_chat_id,
+    ...(r.project_id ? { projectId: r.project_id } : {}),
   }));
 
   const meta = db
@@ -215,8 +224,8 @@ export async function saveMemoryStore(store: MemoryStore): Promise<void> {
     db.prepare("DELETE FROM memories").run();
 
     const insertMemory = db.prepare(`
-      INSERT INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertVec = db.prepare(`
       INSERT INTO vec_memories (id, embedding)
@@ -232,7 +241,8 @@ export async function saveMemoryStore(store: MemoryStore): Promise<void> {
         m.createdAt,
         m.lastAccessed,
         m.accessCount,
-        m.sourceChatId || ""
+        m.sourceChatId || "",
+        m.projectId || ""
       );
       insertVec.run(m.id, new Float32Array(m.embedding));
     }
@@ -257,8 +267,8 @@ export async function addMemory(memory: Memory): Promise<void> {
 
   const add = db.transaction(() => {
     db.prepare(`
-      INSERT INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       memory.id,
       memory.text,
@@ -267,7 +277,8 @@ export async function addMemory(memory: Memory): Promise<void> {
       memory.createdAt,
       memory.lastAccessed,
       memory.accessCount,
-      memory.sourceChatId || ""
+      memory.sourceChatId || "",
+      memory.projectId || ""
     );
     db.prepare("INSERT INTO vec_memories (id, embedding) VALUES (?, ?)").run(
       memory.id,
@@ -309,6 +320,10 @@ export async function updateMemory(
   if (updates.sourceChatId !== undefined) {
     setClauses.push("source_chat_id = ?");
     values.push(updates.sourceChatId);
+  }
+  if (updates.projectId !== undefined) {
+    setClauses.push("project_id = ?");
+    values.push(updates.projectId);
   }
 
   if (setClauses.length === 0 && !updates.embedding) return true;
@@ -451,7 +466,7 @@ export async function searchMemories(
   const placeholders = ids.map(() => "?").join(",");
   const metaRows = db
     .prepare(
-      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id FROM memories WHERE id IN (${placeholders})`
+      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id FROM memories WHERE id IN (${placeholders})`
     )
     .all(...ids) as Array<{
     id: string;
@@ -462,6 +477,7 @@ export async function searchMemories(
     last_accessed: string;
     access_count: number;
     source_chat_id: string;
+    project_id: string;
   }>;
 
   const nowMs = now.getTime();
@@ -478,11 +494,12 @@ export async function searchMemories(
         text: r.text,
         category: r.category as Memory["category"],
         importance: r.importance,
-        embedding: [], // not needed by any caller of searchMemories
+        embedding: [],
         createdAt: r.created_at,
         lastAccessed: r.last_accessed,
         accessCount: r.access_count,
         sourceChatId: r.source_chat_id,
+        ...(r.project_id ? { projectId: r.project_id } : {}),
       },
       score,
     };
@@ -500,7 +517,7 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
   const db = getDb();
   const row = db
     .prepare(
-      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id FROM memories WHERE id = ?"
+      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id FROM memories WHERE id = ?"
     )
     .get(id) as {
     id: string;
@@ -511,6 +528,7 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
     last_accessed: string;
     access_count: number;
     source_chat_id: string;
+    project_id: string;
   } | undefined;
 
   if (!row) return null;
@@ -520,11 +538,12 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
     text: row.text,
     category: row.category as Memory["category"],
     importance: row.importance,
-    embedding: [], // callers don't need embedding from this function
+    embedding: [],
     createdAt: row.created_at,
     lastAccessed: row.last_accessed,
     accessCount: row.access_count,
     sourceChatId: row.source_chat_id,
+    ...(row.project_id ? { projectId: row.project_id } : {}),
   };
 }
 
@@ -561,7 +580,7 @@ export async function getAllMemories(): Promise<
   const db = getDb();
   const rows = db
     .prepare(
-      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id FROM memories"
+      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id FROM memories"
     )
     .all() as Array<{
     id: string;
@@ -572,6 +591,7 @@ export async function getAllMemories(): Promise<
     last_accessed: string;
     access_count: number;
     source_chat_id: string;
+    project_id: string;
   }>;
 
   return rows.map((r) => ({
@@ -583,6 +603,7 @@ export async function getAllMemories(): Promise<
     lastAccessed: r.last_accessed,
     accessCount: r.access_count,
     sourceChatId: r.source_chat_id,
+    ...(r.project_id ? { projectId: r.project_id } : {}),
   }));
 }
 
@@ -613,7 +634,7 @@ export async function findDuplicates(
 
   const metaRow = db
     .prepare(
-      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id FROM memories WHERE id = ?"
+      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id FROM memories WHERE id = ?"
     )
     .get(vecRow.id) as {
     id: string;
@@ -624,6 +645,7 @@ export async function findDuplicates(
     last_accessed: string;
     access_count: number;
     source_chat_id: string;
+    project_id: string;
   } | undefined;
 
   if (!metaRow) return null;
@@ -634,11 +656,12 @@ export async function findDuplicates(
       text: metaRow.text,
       category: metaRow.category as Memory["category"],
       importance: metaRow.importance,
-      embedding: [], // not needed by callers
+      embedding: [],
       createdAt: metaRow.created_at,
       lastAccessed: metaRow.last_accessed,
       accessCount: metaRow.access_count,
       sourceChatId: metaRow.source_chat_id,
+      ...(metaRow.project_id ? { projectId: metaRow.project_id } : {}),
     },
     similarity,
   };

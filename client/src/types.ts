@@ -132,6 +132,7 @@ export interface MemorySummary {
   lastAccessed: string;
   accessCount: number;
   sourceChatId: string;
+  projectId?: string;
 }
 
 export interface Artifact {

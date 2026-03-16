@@ -125,6 +125,7 @@ export interface Memory {
   lastAccessed: string;
   accessCount: number;
   sourceChatId: string;
+  projectId?: string;
 }
 
 export interface MemoryStore {

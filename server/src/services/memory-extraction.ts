@@ -132,7 +132,8 @@ const DEDUP_THRESHOLD = 0.85;
 export async function dedupAndSave(
   facts: ExtractedFact[],
   embeddings: number[][],
-  chatId: string
+  chatId: string,
+  projectId?: string
 ): Promise<void> {
   for (let i = 0; i < facts.length; i++) {
     const fact = facts[i];
@@ -163,6 +164,7 @@ export async function dedupAndSave(
         lastAccessed: now,
         accessCount: 0,
         sourceChatId: chatId,
+        ...(projectId ? { projectId } : {}),
       });
     }
   }
@@ -172,7 +174,8 @@ export async function extractMemories(
   modelId: string,
   chatId: string,
   userMsg: string,
-  assistantMsg: string
+  assistantMsg: string,
+  projectId?: string
 ): Promise<void> {
   extractionMetrics.totalExtractions++;
   try {
@@ -220,7 +223,7 @@ export async function extractMemories(
   }
 
   // Dedup and save inside a single write lock to prevent concurrent overwrites
-  await dedupAndSave(facts, embeddings, chatId);
+  await dedupAndSave(facts, embeddings, chatId, projectId);
 
   extractionMetrics.successfulExtractions++;
   extractionMetrics.totalFactsExtracted += facts.length;
@@ -257,7 +260,8 @@ Output ONLY the JSON array.`;
 export async function preCompactionFlush(
   modelId: string,
   chatId: string,
-  removedMessages: ChatMessage[]
+  removedMessages: ChatMessage[],
+  projectId?: string
 ): Promise<void> {
   if (removedMessages.length === 0) {
     console.log("[memory] Pre-compaction flush: no messages to process");
@@ -309,7 +313,7 @@ export async function preCompactionFlush(
     return;
   }
 
-  await dedupAndSave(facts, embeddings, chatId);
+  await dedupAndSave(facts, embeddings, chatId, projectId);
 
   console.log("[memory] Pre-compaction flush complete");
 }
