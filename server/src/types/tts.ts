@@ -2,6 +2,7 @@ export interface TTSSettings {
   voice: string;
   speed: number;
   pitch: number;
+  enabled: boolean; // Master TTS toggle
   autoReadEnabled: boolean; // Global default for new chats
   // Streaming TTS settings (Qwen3-TTS only)
   backend: "kokoro" | "qwen3-tts";
@@ -34,6 +35,7 @@ export const DEFAULT_TTS_SETTINGS: TTSSettings = {
   voice: "af_heart",
   speed: 1.0,
   pitch: 1.0,
+  enabled: false,
   autoReadEnabled: false,
   backend: "kokoro",
   streamingEnabled: false,

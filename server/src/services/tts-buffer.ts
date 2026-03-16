@@ -9,7 +9,7 @@
  * Based on Deepgram's TTS chunking research.
  */
 
-import { sentenceTokenizer } from 'sentence-tokenizer';
+import Tokenizer from 'sentence-tokenizer';
 
 export interface BoundaryResult {
   shouldEmit: boolean;
@@ -46,7 +46,7 @@ export class StreamingTokenBuffer {
   private tokens: string[] = [];
   private readonly options: Required<StreamingTokenBufferOptions>;
   
-  constructor(options: StreamingTokenBufferOptions = {}) {
+  constructor(options: Partial<StreamingTokenBufferOptions> = {}) {
     this.options = {
       minTokens: options.minTokens ?? 30,    // ~1-2 seconds speech
       maxTokens: options.maxTokens ?? 80,    // ~4-5 seconds speech
@@ -110,7 +110,9 @@ export class StreamingTokenBuffer {
     // Tier 3: Sentence boundary (best prosody, optional)
     if (this.options.boundaryTier === 'sentence') {
       try {
-        const sentences = sentenceTokenizer(text);
+        const tokenizer = new Tokenizer();
+        tokenizer.setEntry(text);
+        const sentences = tokenizer.getSentences();
         if (sentences.length > 1) {
           // We have complete sentence(s)
           return { shouldEmit: true, reason: 'sentence', chunkText: sentences[0] };
@@ -184,7 +186,9 @@ export class StreamingTokenBuffer {
  */
 try {
   // Warmup with a test sentence
-  sentenceTokenizer('Warmup sentence.');
+  const tokenizer = new Tokenizer();
+  tokenizer.setEntry('Warmup sentence.');
+  tokenizer.getSentences();
 } catch (e) {
   console.warn('[StreamingTokenBuffer] Sentence tokenizer warmup failed - will load on first use');
 }

@@ -4,7 +4,7 @@ import type { Message, ToolCall, ToolResultMessage, AssistantMessage } from "@ma
 import { streamSimple, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
 import type { AgentContext, AgentLoopConfig, StreamFn } from "@mariozechner/pi-agent-core";
-import { getChat, saveChat } from "../services/storage.js";
+import { getChat, saveChat, getSettings } from "../services/storage.js";
 import { chatMessagesToPiMessages } from "../services/agent.js";
 import { createPiModel, discoverOllamaModels } from "../services/models.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
@@ -22,6 +22,8 @@ import {
 import * as messageQueue from "../services/message-queue.js";
 import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment, InlineVisual } from "../types.js";
 import { saveUserImage } from "../services/user-image-storage.js";
+import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
+import type { TTSSettings } from "../types/tts.js";
 
 /** Truncate a string to maxChars graphemes, preserving emoji and multi-byte characters */
 function truncateTitle(text: string, maxChars: number = 50): string {
@@ -241,12 +243,20 @@ async function handleChatStream(
   const isAgent = chat.type === "agent";
   const agentTools = isAgent ? getAgentTools(chat.id, effects) : undefined;
 
+  // Load TTS settings
+  const settings = await getSettings();
+  const ttsSettings: TTSSettings = (settings as any).tts || { enabled: false, backend: "kokoro" };
+  const ttsEnabled = ttsSettings.enabled && ttsSettings.streamingEnabled && isStreamingCapable(ttsSettings.backend);
+  
+  // TTS pause controller - aborts TTS stream on tool execution
+  let ttsPauseController: AbortController | null = null;
+
   let iterations = 0;
   let waitingForInput = false;
   let hitContextLimit = false;
   let lastUserMessage = userMessage; // tracks the current user message text for title gen / memory
 
-  console.log(`[chat] type=${chat.type} tools=${agentTools ? agentTools.map(t => t.name).join(",") : "none"}`);
+  console.log(`[chat] type=${chat.type} tools=${agentTools ? agentTools.map(t => t.name).join(",") : "none"} tts=${ttsEnabled}`);
 
   try {
     // Discover model
@@ -333,7 +343,26 @@ async function handleChatStream(
       ? agentLoop([userPiMessage], context, config, turnAbortController.signal, safeStreamFn)
       : agentLoopContinue(context, config, turnAbortController.signal, safeStreamFn);
 
-    // Process events → SSE
+    // Extract token stream for TTS (if enabled)
+    async function* extractTokenStream() {
+      for await (const event of eventStream) {
+        if (event.type === "message_update") {
+          const ame = event.assistantMessageEvent;
+          if (ame.type === "text_delta") {
+            yield ame.delta;
+          }
+        }
+      }
+    }
+
+    // Create TTS audio stream if enabled
+    const audioStream = ttsEnabled ? streamTTS(extractTokenStream(), {
+      ...ttsSettings,
+      chunkSize: ttsSettings.streamingChunkSize ?? 50,
+      boundaryTier: ttsSettings.streamingBoundaryTier ?? 'clause',
+    }) : null;
+
+    // Process LLM events → SSE (main loop)
     for await (const event of eventStream) {
       switch (event.type) {
         case "message_update": {
@@ -363,6 +392,12 @@ async function handleChatStream(
             state.segments.push(segment);
             res.write(`event: segment\ndata: ${JSON.stringify(segment)}\n\n`);
             res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
+            
+            // Pause TTS on tool execution
+            if (ttsEnabled) {
+              ttsPauseController?.abort();
+              ttsPauseController = new AbortController();
+            }
           }
           break;
         }
@@ -471,6 +506,29 @@ async function handleChatStream(
           break;
         }
       }
+    }
+
+    // Parallel: Stream audio chunks if TTS enabled
+    if (audioStream) {
+      console.log("[TTS] Starting audio stream");
+      (async () => {
+        try {
+          for await (const wavChunk of audioStream) {
+            // Check if connection is still open
+            if (res.writableEnded) break;
+            
+            res.write(`event: audio_chunk\ndata: ${JSON.stringify({
+              chunkId: crypto.randomUUID(),
+              data: wavChunk.toString('base64'),
+              mimeType: 'audio/wav',
+              sampleRate: 24000,
+            })}\n\n`);
+          }
+          console.log("[TTS] Audio stream completed");
+        } catch (err) {
+          console.error("[TTS] Streaming error:", err);
+        }
+      })();
     }
 
     // --- Post-loop: handle incomplete tool turns, ask_user, build message, compaction ---

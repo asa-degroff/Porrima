@@ -442,8 +442,6 @@ function MessageSegments({
                     <line x1="12" y1="4" x2="12" y2="7" />
                   </svg>
                   <span>{toolCallCount} tool calls</span>
-                  <span className="text-white/20">•</span>
-                  <span className="text-[11px]">Scroll to view all</span>
                 </div>
                 <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
                   {group.segments.map((segment, i) => (
