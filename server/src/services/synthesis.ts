@@ -244,7 +244,6 @@ Good reflections:
 - Notice when today's work contradicts or builds on past patterns
 
 Bad reflections (avoid):
-- Restating what happened today (that's the summary's job)
 - Repeating existing memories verbatim
 - Generic observations that could apply to anyone
 - Trivial or obvious connections
@@ -252,7 +251,6 @@ Bad reflections (avoid):
 Output a JSON array. Each item:
 - "text": A self-contained insight (1-3 sentences) with enough context to be meaningful on its own
 - "category": "reflection"
-- "importance": 7-9 (reflections are inherently high-value)
 
 Generate 1-${MAX_REFLECTIONS} reflections. If nothing insightful emerges, output: []
 
