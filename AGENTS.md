@@ -68,10 +68,22 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 
 ### Memory System
 
-- **Automatic extraction**: after each agent response, a background LLM call extracts facts (preferences, personal details, behaviors, instructions) and deduplicates them against existing memories using cosine similarity.
-- **Context augmentation**: relevant memories are retrieved via semantic search and injected into the system prompt so the agent naturally references what it knows.
+**Categories** (8 types):
+- `preference` — user likes, dislikes, stylistic choices
+- `fact` — concrete information about the user or their world
+- `behavior` — observed patterns in how the user works or communicates
+- `instruction` — explicit directives from the user
+- `context` — project-level information: architecture, tech choices, ongoing work
+- `decision` — choices made and why, tradeoffs considered
+- `note` — general observations, curiosities, personal details
+- `reflection` — synthesis-only: higher-order insights, cross-session patterns, agent self-reflection
+
+**Project scoping**: memories have an optional `projectId` field for project-scoped context. The DB auto-migrates the `project_id` column.
+
+- **Automatic extraction**: after each agent response, a background LLM call extracts memories (1-3 sentences each with context and rationale, not just atomic one-liners) and deduplicates them against existing memories using cosine similarity.
+- **Context augmentation**: relevant memories are retrieved via RRF (Reciprocal Rank Fusion) combining vector search + FTS5 full-text search, then injected into the system prompt so the agent naturally references what it knows.
 - **Agent tools**: the agent can explicitly save, search, and forget memories when asked.
-- **Daily synthesis**: a scheduler merges near-duplicate memories, applies importance decay, and generates a daily summary log.
+- **Daily synthesis** (`synthesis.ts`): only runs when agent chats occurred that day (inactive days skipped). Groups today's chats by project, loads AGENTS.md for each active project. Loads today's notebook entries (user + agent, excluding prior synthesis entries). Uses `defaultModelId` from settings (not first Ollama model); captures `thinking_delta` as fallback for qwen3 reasoning mode. Generates reflections (1-5 per day, saved as `reflection` memories with importance 7-9). Writes an agent notebook entry with the synthesis summary. Includes persona pattern analysis (suggestions logged, not auto-applied). System prompt uses first-person for agent actions, third-person for user.
 - **Pre-compaction flush**: when a conversation approaches the context window limit (>75% usage), all important facts are extracted and preserved before truncation.
 
 ### Artifact System
@@ -357,12 +369,13 @@ All data is stored in `~/.quje-agent/`:
 
 - **Streaming**: SSE with event types `text_delta`, `thinking_delta`, `tool_status`, `artifact`, `ask_user`, `done`, `error`, `iteration`, `warning`, `compaction`, `title_update`, `message_complete`, `follow_up_start`
 - **Types**: Shared interfaces in `server/src/types.ts` and `client/src/types.ts` (kept in sync manually)
-- **Storage**: Chat/project persistence uses JSON files (`storage.ts`, `project-storage.ts`), memory persistence uses SQLite + sqlite-vec (`memory-storage.ts` → `~/.quje-agent/memory/memories.db`). Both use `~/.quje-agent/` as the base directory.
+- **Storage**: Chat/project persistence uses JSON files (`storage.ts`, `project-storage.ts`), memory persistence uses SQLite + sqlite-vec (`memory-storage.ts` → `~/.quje-agent/memory/memories.db`), notebooks via `notebook-storage.ts` → `~/.quje-agent/notebooks/`. All use `~/.quje-agent/` as the base directory.
 - **Context window**: Fetched per-model from Ollama `/api/show` (`model_info.*.context_length`). Per-chat override via `chat.contextWindow`; effective value is `chat.contextWindow ?? model.contextWindow`.
-- **Embeddings**: Ollama `qwen3-embedding:0.6b` via `POST http://localhost:11434/api/embed`. Vectors are L2-normalized, so cosine similarity = dot product.
-- **Memory scoring**: `cosine_sim * recency_decay * (importance / 10)` with a 30-day half-life on recency.
+- **Embeddings**: Ollama `qwen3-embedding:0.6b` via `POST http://localhost:11434/api/embed` (supports 32k context). Vectors are L2-normalized, so cosine similarity = dot product.
+- **Memory scoring**: `rrf_score * recency_decay * (importance / 10)` with RRF combining vector search and FTS5 full-text search rankings; 30-day half-life on recency.
 - **Memory dedup**: cosine > 0.85 between a new fact and existing memory triggers UPDATE instead of ADD. Uses sqlite-vec KNN MATCH for nearest-neighbor lookup.
-- **Backward compat**: `getChat()` and `listChats()` default missing `type` to "quick".
+- **Project scoping**: memories have optional `projectId`; synthesis groups chats and memories by project, loading each project's AGENTS.md for context.
+- **Backward compat**: `getChat()` and `listChats()` default missing `type` to "quick". Memory DB auto-migrates `project_id` column.
 
 ## Style
 

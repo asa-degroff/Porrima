@@ -51,13 +51,14 @@ Quick-type chats bypass all of this. Memory is only active when `chat.type === "
 interface Memory {
   id: string;            // UUIDv4
   text: string;          // The fact itself, e.g. "User prefers dark mode"
-  category: MemoryCategory;  // "preference" | "fact" | "behavior" | "instruction"
+  category: MemoryCategory;  // See categories table below
   importance: number;    // 1-10 scale (clamped)
   embedding: number[];   // L2-normalized vector from qwen3-embedding:0.6b
   createdAt: string;     // ISO 8601 timestamp
   lastAccessed: string;  // ISO 8601 — updated on every recall
   accessCount: number;   // Incremented each time the memory is surfaced
   sourceChatId: string;  // The chat ID where this memory originated
+  projectId?: string;    // Optional project UUID — scopes the memory to a specific project
 }
 ```
 
@@ -80,12 +81,25 @@ Used by the REST API to return memories without the (large) embedding vectors.
 
 ### Categories
 
-| Category      | Purpose                                        | Example                                |
-|---------------|------------------------------------------------|----------------------------------------|
-| `preference`  | Things the user likes, wants, or prefers       | "User prefers TypeScript over JS"      |
-| `fact`        | Personal details, biographical info            | "User's name is Alex"                  |
-| `behavior`    | Patterns in how the user works or communicates  | "User often asks follow-up questions"  |
-| `instruction` | Explicit directives from the user              | "Always explain code before writing it"|
+`MemoryCategory` is a union of 8 string literals:
+
+```typescript
+type MemoryCategory = "preference" | "fact" | "behavior" | "instruction"
+                    | "context" | "decision" | "note" | "reflection";
+```
+
+| Category      | Purpose                                                        | Example                                              |
+|---------------|----------------------------------------------------------------|------------------------------------------------------|
+| `preference`  | Things the user likes, wants, or prefers                       | "User prefers TypeScript over JS"                    |
+| `fact`        | Personal details, biographical info                            | "User's name is Alex"                                |
+| `behavior`    | Patterns in how the user works or communicates                 | "User often asks follow-up questions"                |
+| `instruction` | Explicit directives from the user                              | "Always explain code before writing it"              |
+| `context`     | Project-level information: architecture, tech choices, ongoing work, constraints | "The server uses Express + SQLite with WAL mode"     |
+| `decision`    | A choice that was made and why, tradeoffs considered           | "Chose sqlite-vec over pgvector for local-first KNN" |
+| `note`        | General observations, curiosities, personal details that don't fit other categories | "User mentioned they're moving to a new city soon"   |
+| `reflection`  | Synthesis-only: higher-order insights, cross-session patterns, agent self-reflection | "User tends to refactor immediately after prototyping" |
+
+The first 7 categories (`preference` through `note`) can be created by extraction, tool calls, and the REST API. The `reflection` category is reserved exclusively for synthesis — it is never produced by extraction prompts or the `save_memory` tool.
 
 ---
 
@@ -109,7 +123,8 @@ CREATE TABLE memories (
   created_at TEXT NOT NULL,
   last_accessed TEXT NOT NULL,
   access_count INTEGER NOT NULL DEFAULT 0,
-  source_chat_id TEXT NOT NULL DEFAULT ''
+  source_chat_id TEXT NOT NULL DEFAULT '',
+  project_id TEXT NOT NULL DEFAULT ''
 );
 
 -- Vector index for KNN search (vec0 virtual table)
@@ -126,6 +141,8 @@ CREATE TABLE metadata (
 ```
 
 The two-table design separates metadata (normal SQL operations) from embeddings (vec0 virtual table for SIMD-accelerated KNN search). The `metadata` table stores the `lastSynthesis` timestamp.
+
+**Auto-migration for `project_id`**: On database initialization, a `PRAGMA table_info(memories)` check detects whether the `project_id` column exists. If missing, an `ALTER TABLE memories ADD COLUMN project_id TEXT NOT NULL DEFAULT ''` is executed automatically. This ensures existing databases are upgraded in place without requiring a full re-migration.
 
 ### Operations
 
@@ -182,7 +199,8 @@ The `dedupAndSave()` function (in `memory-extraction.ts`) performs per-fact dedu
 export async function dedupAndSave(
   facts: ExtractedFact[],
   embeddings: number[][],
-  chatId: string
+  chatId: string,
+  projectId?: string
 ): Promise<void> {
   for (let i = 0; i < facts.length; i++) {
     const match = await findDuplicates(factEmbedding, 0.85);
@@ -235,6 +253,14 @@ The extraction pipeline:
 4. **Batch embedding**: All extracted facts are embedded in a single `embedBatch()` call (not sequential calls).
 5. **Atomic dedup+save**: Calls `dedupAndSave()` which performs deduplication and persistence in a single locked transaction.
 
+`extractMemories()` and `preCompactionFlush()` both accept an optional `projectId` parameter, which is forwarded to `dedupAndSave()` so that memories created from project-scoped chats are tagged with the project.
+
+**Extraction prompt design**: The extraction prompts have been rewritten to encourage richer memories — 1-3 sentences with context and rationale rather than atomic one-liners. The prompts include all 7 extractable categories (all except `reflection`, which is synthesis-only) and guide the model to think about:
+- Project context and architectural decisions
+- Decisions and their rationale
+- Relationships between concepts
+- Lessons learned from the conversation
+
 **Error Handling**: 
 - LLM/embedding failures retry up to 2 times with exponential backoff
 - Persistent failures logged to `~/.quje-agent/logs/memory-errors.log`
@@ -251,6 +277,8 @@ The agent LLM can directly invoke three memory tools during its tool loop:
 #### `save_memory`
 
 Parameters: `{ text: string, category: MemoryCategory, importance: number }`
+
+Accepted categories: `preference`, `fact`, `behavior`, `instruction`, `context`, `decision`, `note` (not `reflection` — that is reserved for synthesis).
 
 Creates a new memory with deduplication. Embeds the text, then calls `dedupAndSave()` which:
 1. Checks for existing memories with cosine similarity > 0.85
@@ -346,30 +374,34 @@ The `search_memory` tool lets the agent actively query memories during a convers
 
 **File**: `server/src/services/memory-storage.ts` (`searchMemories()`)
 
-Search uses a two-phase approach:
+Search uses **hybrid Reciprocal Rank Fusion (RRF)** combining two retrieval strategies:
 
-1. **Phase 1 — sqlite-vec KNN**: Query `vec_memories` with `MATCH` for the top N nearest neighbors by cosine distance (oversampled at 3x `topK`, minimum 20). This runs in C with SIMD acceleration.
-2. **Phase 2 — JS re-ranking**: For each candidate, compute the full composite score and re-sort. Recency and importance can reorder pure cosine results, so oversampling ensures good candidates aren't missed.
+1. **Vector KNN search**: Query `vec_memories` with `MATCH` for the top N nearest neighbors by cosine distance (oversampled at 3x `topK`). This runs in C with SIMD acceleration via sqlite-vec.
+2. **FTS5 full-text search**: Query the `memories_fts` FTS5 index. Tries a phrase match first (exact query as a phrase), then falls back to individual terms if the phrase match returns no results.
+3. **RRF fusion**: Results from both sources are merged using Reciprocal Rank Fusion. Each result's RRF contribution is `1 / (K + rank)` where K=60 (a standard RRF constant that balances early vs. late rank contributions). If a memory appears in both result sets, its RRF scores are summed.
+4. **Re-ranking**: The fused RRF score is multiplied by recency decay and importance weight to produce the final score.
 
-Each memory's relevance score is a product of three factors:
+Each memory's final relevance score:
 
 ```
-score = cosine_similarity × recency_decay × importance_weight
+score = rrf_score × recency_decay × importance_weight
 ```
 
-Where `cosine_similarity = 1 - distance` (sqlite-vec returns cosine distance).
+Where `rrf_score = sum(1 / (60 + rank))` across both vector and FTS5 sources.
 
 | Factor | Formula | Range | Purpose |
 |---|---|---|---|
-| `cosine_similarity` | `1 - vec_distance` | [-1, 1] (typically 0-1) | Semantic relevance to the current query |
+| `rrf_score` | `sum(1 / (K + rank))` across sources | (0, ~0.033] | Fused retrieval relevance from vector + text search |
 | `recency_decay` | `0.5 ^ (age_ms / HALF_LIFE_MS)` | (0, 1] | Exponential decay with 30-day half-life |
 | `importance_weight` | `importance / 10` | [0.1, 1.0] | Normalized importance (1-10 → 0.1-1.0) |
 
 **Half-life**: 30 days. A memory accessed 30 days ago has its recency factor halved. At 60 days it's at 0.25, at 90 days 0.125, etc. Accessing a memory resets its `lastAccessed`, effectively refreshing the decay clock.
 
-**Effect**: High-importance, recently-accessed, semantically-relevant memories dominate. Old but important memories can still surface if they're a strong semantic match. Low-importance old memories effectively disappear over time.
+**Why hybrid RRF?** Vector search excels at semantic similarity (paraphrased queries, synonyms) while FTS5 excels at exact keyword matches (names, identifiers, specific terms). RRF combines both without requiring score normalization — it only uses rank positions, making it robust across different scoring distributions.
 
-**Performance**: The KNN query runs in native C code via sqlite-vec, so search is fast even at thousands of memories. The JS re-ranking phase only processes the oversampled candidates (not all memories).
+**Effect**: Memories that rank highly in both vector and text search dominate. A memory that is a strong semantic match but doesn't contain the exact query terms can still surface (and vice versa). Recency and importance further modulate the fused score.
+
+**Performance**: Both the KNN query (native C via sqlite-vec) and FTS5 query (SQLite built-in) are fast. The JS fusion and re-ranking phase only processes the combined candidate set.
 
 ---
 
@@ -415,7 +447,9 @@ This is fire-and-forget. It runs concurrently with normal extraction after the s
 
 **File**: `server/src/services/synthesis.ts`
 
-A maintenance job that runs once per 24-hour period. The entire synthesis process uses `loadMemoryStore()` + in-memory mutations + `saveMemoryStore()` for its O(n²) pairwise comparisons, which is appropriate since it runs infrequently.
+A maintenance job that runs once per 24-hour period. The synthesis has been significantly expanded from simple dedup+summary to a project-aware, multi-step pipeline with reflection generation and notebook integration.
+
+**Model selection**: `getSynthesisModelId()` reads `defaultModelId` from user settings, verifies availability in Ollama via the `/api/tags` endpoint, and falls back to the first discovered model if the configured one is unavailable. The selected model is logged at each synthesis step.
 
 ### Step 1: Consolidate Near-Duplicates
 
@@ -445,13 +479,46 @@ This automatic garbage collection prevents unbounded memory growth and removes g
 [synthesis] Purged X stale memories (>6 months, importance ≤2)
 ```
 
-### Step 3: Generate Daily Summary
+### Step 3: Load Today's Activity
 
-Sends all current memories to the LLM and asks for a 2-4 paragraph thematic summary. The output is saved as a markdown file at `~/.quje-agent/memory/daily/{YYYY-MM-DD}.md`.
+Groups today's agent chats by project. For each active project, loads the project's `AGENTS.md` content to provide architectural context for the summary. **If no agent chats occurred today, synthesis skips steps 4-8 entirely** — it updates `lastSynthesis` and returns early. This prevents empty or meaningless summaries on inactive days.
 
-The summary includes a header with memory count, merge count, and purge count. These daily logs are for human review — they're never read back by the system.
+### Step 4: Load Notebook Entries
 
-**Note**: Daily logs accumulate indefinitely. Future enhancement: add log rotation or compression for logs older than N days.
+Loads both user and agent notebook entries from today. Prior synthesis entries are excluded from the input to avoid self-referencing loops (where the synthesis summarizes its own previous synthesis output).
+
+### Step 5: Generate Daily Summary
+
+An LLM call produces the daily summary with rich context:
+
+**Inputs**:
+- Chat digest grouped by project, with each project's `AGENTS.md` content included for context
+- Today's notebook entries (user and agent)
+- All stored memories, with project UUIDs resolved to human-readable project names
+
+**System prompt conventions**:
+- First-person for agent actions ("I refactored the memory system...")
+- Third-person for user actions ("The user asked about...")
+
+The LLM response captures both `text_delta` and `thinking_delta` events (the latter as a fallback for qwen3's reasoning tokens). The output is written to `~/.quje-agent/memory/daily/{YYYY-MM-DD}.md` with a header containing memory count, merge count, and purge count.
+
+### Step 6: Generate Reflections
+
+A separate LLM call produces 1-5 `reflection` category memories with importance 7-9. The reflection prompt encourages:
+
+- **Agent self-awareness**: Observations about the agent's own performance, patterns in how it helps (or fails to help) the user
+- **Cross-project pattern recognition**: Themes or approaches that recur across different projects
+- **Meta-cognitive insights**: Higher-order observations about the user's workflow, communication style, or evolving needs
+
+Reflections are saved via `dedupAndSave()` with `sourceChatId` set to `"synthesis"`. If all of today's activity was within a single project, the reflections are tagged with that project's `projectId`; otherwise they remain unscoped.
+
+### Step 7: Persona Pattern Analysis
+
+Clusters high-importance, frequently-accessed memories and generates suggestions for persona refinement. Results are logged to the console but not auto-applied — this is an advisory step for human review.
+
+### Step 8: Write Notebook Entry
+
+Creates an agent notebook entry containing the synthesis summary. This entry is dedup-guarded: the system checks for an existing entry with a matching preview prefix before creating a new one, ensuring at most one synthesis notebook entry per day. This makes synthesis results visible in the notebook UI alongside user entries.
 
 Finally, `lastSynthesis` is set to the current timestamp and the store is saved.
 
@@ -510,7 +577,9 @@ server/src/
     ├── memory-context.ts           # System prompt augmentation with recalled memories
     ├── memory-tools.ts             # save_memory, search_memory, forget_memory tool implementations
     ├── embeddings.ts               # Ollama embedding interface + cosine similarity
-    ├── synthesis.ts                # Daily dedup, decay, and summary generation
+    ├── synthesis.ts                # Project-aware daily synthesis: dedup, decay, summary, reflection generation, notebook integration
+    ├── notebook-storage.ts         # Notebook entry persistence (read/write notebook entries, used by synthesis for loading today's entries and writing synthesis summaries)
+    ├── persona-store.ts            # Persona pattern analysis and suggestion storage (used by synthesis Step 7)
     ├── scheduler.ts                # Hourly synthesis check
     ├── agent-tools.ts              # Tool registry (imports and dispatches memory tools)
     └── agent.ts                    # streamChat() — shared LLM interface used by extraction/synthesis
@@ -568,8 +637,10 @@ buildMemoryAugmentedPrompt()
     ├── Concat last 3 user messages
     ├── embed(query)
     ├── searchMemories(embedding, top 5)
-    │     ├── Phase 1: KNN MATCH on vec_memories (oversample 3x)
-    │     └── Phase 2: Re-rank with score = cosine × recency × importance
+    │     ├── Vector KNN MATCH on vec_memories (oversample 3x)
+    │     ├── FTS5 full-text search (phrase match, fallback to terms)
+    │     ├── RRF fusion: score = sum(1/(60+rank)) across sources
+    │     └── Re-rank: rrf_score × recency × importance
     ├── Filter score > 0.01
     ├── Inject into system prompt
     └── Update lastAccessed + accessCount [fire-and-forget]
@@ -592,9 +663,27 @@ Step 1: Pairwise dedup (cosine > 0.90)
     │  └── Merge: keep higher importance, sum access counts, remove duplicate
     ▼
 Step 2: Importance decay (>30 days unused → importance -= 1)
+    │  └── Purge stale memories (>6 months, importance ≤2)
+    ▼
+Step 3: Load today's agent chats, group by project
+    │  └── Load AGENTS.md for each active project
+    │  └── No agent chats today? → update lastSynthesis, return early
+    ▼
+Step 4: Load today's notebook entries (exclude prior synthesis entries)
     │
     ▼
-Step 3: LLM generates thematic summary → daily/{date}.md
+Step 5: LLM generates daily summary → daily/{date}.md
+    │  └── Inputs: chat digest (by project + AGENTS.md), notebook entries, memories
+    │  └── First-person agent actions, third-person user actions
+    ▼
+Step 6: LLM generates 1-5 reflection memories (importance 7-9)
+    │  └── Saved via dedupAndSave(sourceChatId: "synthesis")
+    │  └── Tagged with projectId if single-project day
+    ▼
+Step 7: Persona pattern analysis (logged suggestions, not auto-applied)
+    │
+    ▼
+Step 8: Write agent notebook entry (dedup-guarded, one per day)
     │
     ▼
 Update lastSynthesis, save store
@@ -637,10 +726,12 @@ Update lastSynthesis, save store
 
 2. **Importance decay is one-way**: Once `importance` is decremented during synthesis, only a dedup merge with a higher-importance version can restore it. There's no mechanism for the system to re-evaluate and increase the importance of a memory that becomes relevant again (though accessing it does reset the recency decay, which partially compensates).
 
-3. **Daily log is write-only**: The synthesis summaries in `~/.quje-agent/memory/daily/` are never read by the system. They're purely for human auditing. If disk space becomes a concern, there's no rotation or cleanup.
+3. **Daily log is partially integrated**: The synthesis summaries in `~/.quje-agent/memory/daily/` are now partially addressable — synthesis writes a notebook entry containing the summary, making it visible in the UI alongside user notebook entries. However, the daily markdown files themselves are still not read back by the system for any downstream processing. Disk rotation/cleanup is still not implemented.
 
-4. **Single embedding model**: The embedding model (`qwen3-embedding:0.6b`) is hardcoded. If you change it, existing embeddings become incompatible with new ones (different vector spaces), which would silently break similarity calculations. A migration path (re-embed all memories) would be needed.
+4. **`reflection` category is synthesis-only**: The `reflection` memory category is reserved exclusively for the synthesis pipeline (Step 6). It is not available in extraction prompts or the `save_memory` tool. This is enforced by convention in the prompts and tool schema, not by a hard validation layer — a direct REST API `POST /api/memory` call could still create a `reflection` memory.
 
-5. **Context augmentation query construction**: The system concatenates the last 3 user messages as the recall query. In conversations where the user switches topics, old messages could pull in irrelevant memories. A single-message or topic-aware query strategy might be more precise, though the current approach has the advantage of maintaining continuity across multi-turn discussions.
+5. **Single embedding model**: The embedding model (`qwen3-embedding:0.6b`) is hardcoded. If you change it, existing embeddings become incompatible with new ones (different vector spaces), which would silently break similarity calculations. A migration path (re-embed all memories) would be needed.
 
-6. **No embedding model versioning**: The `metadata` table could store the embedding model name for future migration tooling, but this isn't implemented yet.
+6. **Context augmentation query construction**: The system concatenates the last 3 user messages as the recall query. In conversations where the user switches topics, old messages could pull in irrelevant memories. A single-message or topic-aware query strategy might be more precise, though the current approach has the advantage of maintaining continuity across multi-turn discussions.
+
+7. **No embedding model versioning**: The `metadata` table could store the embedding model name for future migration tooling, but this isn't implemented yet.

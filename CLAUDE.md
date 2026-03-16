@@ -33,6 +33,63 @@ The server is the integration hub. The chat route (`server/src/routes/chat.ts`) 
 
 Memory services are in `server/src/services/memory-*.ts`. They share the pi-ai `streamChat` function for LLM calls (extraction, synthesis, tool execution all use it with different system prompts).
 
+## Memory system
+
+### Categories
+
+`MemoryCategory` (in both `server/src/types.ts` and `client/src/types.ts`):
+- `preference` — user likes, dislikes, stylistic choices
+- `fact` — concrete information about the user, their role, or their environment
+- `behavior` — recurring patterns in how the user works or communicates
+- `instruction` — explicit directives about how the agent should behave
+- `context` — project-level information: architecture, tech choices, ongoing work, constraints
+- `decision` — a choice that was made and why, tradeoffs considered
+- `note` — general observations, curiosities, personal details that don't fit other categories
+- `reflection` — synthesis-only: higher-order insights, cross-session patterns, agent self-reflection
+
+### Schema
+
+Memories are stored in SQLite (`~/.quje-agent/memory/memories.db`) with three tables:
+- `memories` — metadata: id, text, category, importance (1-10), timestamps, access_count, source_chat_id, **project_id** (optional, for project-scoped memories)
+- `vec_memories` — 1024-dim embeddings (sqlite-vec, cosine distance)
+- `fts_memories` — FTS5 full-text index (auto-synced via triggers)
+
+### Extraction (`memory-extraction.ts`)
+
+Two extraction paths run during chat:
+1. **Per-exchange extraction** — fire-and-forget after each assistant response. Extracts 1-3 sentence memories with context and rationale (not just atomic facts). Accepts optional `projectId` to tag memories with their source project.
+2. **Pre-compaction flush** — when messages are about to be removed due to context limits, extracts task state and technical context from the removed messages before they're lost.
+
+Both use `dedupAndSave()` which checks cosine similarity > 0.85 against existing memories: updates if duplicate, inserts if new.
+
+### Synthesis (`synthesis.ts`)
+
+Daily synthesis runs via the scheduler (hourly check, 24h interval). **Only runs when agent chats occurred that day** — inactive days are skipped entirely.
+
+**Flow:**
+1. **Consolidate** — merge near-duplicate memories (cosine > 0.90)
+2. **Decay/purge** — decrease importance for memories unused >30 days; purge if unused >6 months with importance ≤2
+3. **Load today's activity** — group agent chats by project, load AGENTS.md for each active project, load notebook entries (user + agent, excluding prior synthesis entries)
+4. **Generate daily summary** — LLM call with chat digest + notebook entries + stored memories. Prompt instructs first-person voice for agent actions, third-person for user actions. Uses `defaultModelId` from settings (falls back to first available Ollama model). Captures both `text_delta` and `thinking_delta` (qwen3 reasoning fallback). Writes to `~/.quje-agent/memory/daily/{YYYY-MM-DD}.md`
+5. **Generate reflections** — separate LLM call producing 1-5 `reflection` memories (importance 7-9). Prompt encourages agent self-awareness and cross-project pattern recognition. Saved via `dedupAndSave` with `sourceChatId: "synthesis"`. Tagged with projectId if all activity was in a single project
+6. **Persona pattern analysis** — clusters high-importance frequently-accessed memories, generates persona update suggestions (logged, not auto-applied)
+7. **Write notebook entry** — creates an agent notebook entry with the synthesis summary, dedup-guarded (one per day)
+
+**Model selection** (`getSynthesisModelId()`): reads `defaultModelId` from settings, verifies availability in Ollama, falls back to first discovered model.
+
+### Memory augmentation (`memory-context.ts`)
+
+For agent chats, the system prompt is augmented with:
+1. Persona content (`~/.quje-agent/persona.md`)
+2. Top 5 memories matching the last 3 user messages (hybrid RRF search: vector + FTS5, filtered by score > 0.0003)
+
+### Memory tools (agent-callable)
+
+- `save_memory` — explicit memory save (all categories except `reflection`)
+- `search_memory` — semantic search, returns top 5 with scores
+- `forget_memory` — delete by ID or search query
+- `update_persona` — modify persona document sections
+
 ## Tool system (agent chats)
 
 Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMessage`) with TypeBox schemas — NOT fenced code blocks.
@@ -74,12 +131,13 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 
 - **Streaming**: SSE with event types `text_delta`, `thinking_delta`, `tool_status`, `artifact`, `ask_user`, `done`, `error`
 - **Types**: Shared interfaces in `server/src/types.ts` and `client/src/types.ts` (kept in sync manually)
-- **Storage**: Chat persistence uses JSON files (`storage.ts`), memory persistence uses SQLite + sqlite-vec (`memory-storage.ts` → `~/.quje-agent/memory/memories.db`). Both use `~/.quje-agent/` as the base directory.
+- **Storage**: Chat persistence uses JSON files (`storage.ts`), memory persistence uses SQLite + sqlite-vec (`memory-storage.ts` → `~/.quje-agent/memory/memories.db`), notebooks use JSON files (`notebook-storage.ts` → `~/.quje-agent/notebooks/`). All use `~/.quje-agent/` as the base directory.
 - **Context window**: Fetched per-model from Ollama `/api/show` (`model_info.*.context_length`). Per-chat override via `chat.contextWindow`; effective value is `chat.contextWindow ?? model.contextWindow`.
-- **Embeddings**: Ollama `qwen3-embedding:0.6b` via `POST http://localhost:11434/api/embed`. Vectors are L2-normalized, so cosine similarity = dot product.
-- **Memory scoring**: `cosine_sim * recency_decay * (importance / 10)` with a 30-day half-life on recency.
+- **Embeddings**: Ollama `qwen3-embedding:0.6b` via `POST http://localhost:11434/api/embed`. Vectors are L2-normalized, so cosine similarity = dot product. Supports 32k context.
+- **Memory scoring**: `rrf_score * recency_decay * (importance / 10)` with a 30-day half-life on recency. RRF combines vector and FTS5 rankings.
 - **Memory dedup**: cosine > 0.85 between a new fact and existing memory triggers UPDATE instead of ADD. Uses sqlite-vec KNN MATCH for nearest-neighbor lookup.
-- **Backward compat**: `getChat()` and `listChats()` default missing `type` to "quick".
+- **Project scoping**: Memories have an optional `projectId` field. Chats in a project can tag their extracted memories with the project ID. Synthesis groups chats by project and loads AGENTS.md for context.
+- **Backward compat**: `getChat()` and `listChats()` default missing `type` to "quick". Memory DB auto-migrates `project_id` column if missing.
 
 ## Style
 
@@ -92,7 +150,9 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 
 - The `memory.ts` routes must define `/status`, `/synthesis/*`, and `/search` **before** the `/:id` param routes to avoid Express matching those paths as IDs.
 - `streamChat` from `agent.ts` is reused by extraction, synthesis, and tool execution — it's the single LLM call interface.
-- The scheduler (`scheduler.ts`) runs a synthesis check on startup and then hourly via `setInterval`.
+- The scheduler (`scheduler.ts`) runs a synthesis check on startup and then hourly via `setInterval`. Synthesis only runs if agent chats occurred that day — inactive days are skipped.
+- Synthesis uses `defaultModelId` from settings, not the first Ollama model. It captures `thinking_delta` as fallback for qwen3 reasoning mode where text output may be empty.
+- The `reflection` memory category is reserved for synthesis — extraction prompts and the `save_memory` tool do not include it.
 - When editing types, update both `server/src/types.ts` and `client/src/types.ts`.
 - The server may run compiled `dist/index.js` (via `npm start` / systemd) rather than tsx dev mode — source changes require `npm run build` + restart to take effect.
 - Blob URLs for artifacts are critical for Chrome animation performance — do not use cross-origin iframe src.
