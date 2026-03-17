@@ -68,6 +68,7 @@ interface Props {
   isOnline?: boolean;
   queueProcessing?: boolean;
   activeSkills?: string[];
+  streamingSegmentIndex: number | null;
 }
 
 export function ChatView({
@@ -106,6 +107,7 @@ export function ChatView({
   isOnline = true,
   queueProcessing = false,
   activeSkills,
+  streamingSegmentIndex,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -400,6 +402,7 @@ export function ChatView({
                     onEditMessage={msg.role === "user" ? onEditMessage : undefined}
                     messageIndex={i}
                     availableSkills={skills.map(s => s.name)}
+                    streamingSegmentIndex={streamingSegmentIndex}
                   />
                 </div>
               );

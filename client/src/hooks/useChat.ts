@@ -106,6 +106,7 @@ export function useChat(chatId: string | null) {
   const [compaction, setCompaction] = useState<{ removedCount: number; remainingCount: number } | null>(null);
   const [queueProcessing, setQueueProcessing] = useState(false);
   const [titleUpdate, setTitleUpdate] = useState<{ chatId: string; title: string } | null>(null);
+  const [streamingSegmentIndex, setStreamingSegmentIndex] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
   const streamingContentRef = useRef("");
@@ -144,6 +145,7 @@ export function useChat(chatId: string | null) {
       if (!bg.streaming) {
         // Stream finished while in background — clean up entry
         bgStreams.delete(chatId!);
+        setStreamingSegmentIndex(null);
       }
     } else {
       // No background stream — fresh reset
@@ -156,6 +158,7 @@ export function useChat(chatId: string | null) {
       setError(null);
       setWarning(null);
       setCompaction(null);
+      setStreamingSegmentIndex(null);
     }
   }, [chatId]);
 
@@ -239,6 +242,8 @@ export function useChat(chatId: string | null) {
 
         if (activeChatIdRef.current === streamChatId) {
           setGeneratedImages([...bg.generatedImages]);
+          // Generated image segments indicate text is complete
+          setStreamingSegmentIndex(null);
           // Schedule segment flush
           if (rafRef.current === null) {
             streamingContentRef.current = bg.content;
@@ -255,6 +260,8 @@ export function useChat(chatId: string | null) {
         bg.segments.push({ seq: bg.seqCounter++, type: "visual", visual });
 
         if (activeChatIdRef.current === streamChatId) {
+          // Visual segments indicate text is complete
+          setStreamingSegmentIndex(null);
           // Schedule segment flush
           if (rafRef.current === null) {
             streamingContentRef.current = bg.content;
@@ -299,6 +306,7 @@ export function useChat(chatId: string | null) {
           setMessages(finalMsgs);
           setStreamingThinking("");
           setStreaming(false);
+          setStreamingSegmentIndex(null);
           if (wfi) setWaitingForInput(true);
           bgStreams.delete(streamChatId);
         }
@@ -348,6 +356,10 @@ export function useChat(chatId: string | null) {
         }
 
         if (activeChatIdRef.current === streamChatId) {
+          // Track which segment is actively streaming (text segments only)
+          if (segment.type === "text") {
+            setStreamingSegmentIndex(bg.segments.length - 1);
+          }
           if (rafRef.current === null) {
             streamingContentRef.current = bg.content;
             rafRef.current = requestAnimationFrame(flushStreamingContent);
@@ -372,6 +384,8 @@ export function useChat(chatId: string | null) {
 
         if (activeChatIdRef.current === streamChatId) {
           setArtifacts([...bg.artifacts]);
+          // Artifact segments indicate text is complete
+          setStreamingSegmentIndex(null);
           // Schedule segment flush
           if (rafRef.current === null) {
             streamingContentRef.current = bg.content;
@@ -708,6 +722,7 @@ export function useChat(chatId: string | null) {
     compaction,
     error,
     warning,
+    streamingSegmentIndex,
     send,
     editMessage,
     abort,

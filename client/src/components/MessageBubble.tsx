@@ -30,6 +30,7 @@ interface Props {
   onReadAloud?: (text: string) => void;
   isPlayingTts?: boolean;
   availableSkills?: string[];
+  streamingSegmentIndex?: number | null;
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -46,6 +47,7 @@ export const MessageBubble = memo(function MessageBubble({
   onReadAloud,
   isPlayingTts,
   availableSkills,
+  streamingSegmentIndex,
 }: Props) {
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;
@@ -283,6 +285,7 @@ export const MessageBubble = memo(function MessageBubble({
                 segments={message.segments}
                 showStreaming={showStreaming}
                 isThinkingStreaming={isThinkingStreaming}
+                streamingSegmentIndex={streamingSegmentIndex ?? null}
               />
             ) : (
               // Legacy fallback (no segments — old messages or non-agent chats)
@@ -383,10 +386,12 @@ function MessageSegments({
   segments,
   showStreaming,
   isThinkingStreaming,
+  streamingSegmentIndex,
 }: {
   segments: ChatMessage["segments"];
   showStreaming: boolean;
   isThinkingStreaming: boolean;
+  streamingSegmentIndex: number | null;
 }) {
   const MAX_CONSECUTIVE_TOOLS = 6;
   
@@ -421,6 +426,9 @@ function MessageSegments({
     });
   }
   
+  // Track global segment index across all groups
+  let globalIndex = 0;
+  
   return (
     <>
       {groups.map((group, groupIndex) => {
@@ -430,6 +438,9 @@ function MessageSegments({
           const useScrollContainer = toolCallCount > MAX_CONSECUTIVE_TOOLS;
           
           if (useScrollContainer) {
+            const groupStartIndex = globalIndex;
+            globalIndex += group.segments.length;
+            
             return (
               <div
                 key={`group-${groupIndex}`}
@@ -448,10 +459,11 @@ function MessageSegments({
                     <SegmentRenderer
                       key={`${segment.type}-${segment.seq}-${i}`}
                       segment={segment}
-                      index={i}
-                      allSegments={group.segments!}
+                      index={groupStartIndex + i}
+                      allSegments={segments || []}
                       showStreaming={showStreaming}
                       isThinkingStreaming={isThinkingStreaming}
+                      streamingSegmentIndex={streamingSegmentIndex}
                     />
                   ))}
                 </div>
@@ -462,14 +474,17 @@ function MessageSegments({
         
         // Render without scroll container
         if (!group.segments) return null;
+        const groupStartIndex = globalIndex;
+        globalIndex += group.segments.length;
         return group.segments.map((segment, i) => (
           <SegmentRenderer
             key={`${segment.type}-${segment.seq}-${i}`}
             segment={segment}
-            index={i}
-            allSegments={group.segments!}
+            index={groupStartIndex + i}
+            allSegments={segments || []}
             showStreaming={showStreaming}
             isThinkingStreaming={isThinkingStreaming}
+            streamingSegmentIndex={streamingSegmentIndex}
           />
         ));
       })}
@@ -534,16 +549,19 @@ function SegmentRenderer({
   allSegments,
   showStreaming,
   isThinkingStreaming,
+  streamingSegmentIndex,
 }: {
   segment: NonNullable<ChatMessage["segments"]>[number];
   index: number;
   allSegments: NonNullable<ChatMessage["segments"]>;
   showStreaming: boolean;
   isThinkingStreaming: boolean;
+  streamingSegmentIndex: number | null;
 }) {
   switch (segment.type) {
     case "text": {
-      const isActivelyStreaming = showStreaming && index === allSegments.length - 1;
+      // Only show cursor on the actively streaming text segment
+      const isActivelyStreaming = showStreaming && streamingSegmentIndex === index && segment.type === "text";
       return segment.content ? (
         <div className="text-sm leading-relaxed">
           {isActivelyStreaming ? (
