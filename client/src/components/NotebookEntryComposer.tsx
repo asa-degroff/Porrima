@@ -150,13 +150,27 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
   }, [content, onSubmit, submitting, displayLinks, hasLinks, images, hasImages]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault();
       handleSubmit();
     } else if (e.key === 'Escape' && onCancel) {
       onCancel();
     }
   }, [handleSubmit, onCancel]);
+
+  // Auto-resize textarea as content grows
+  const autoResize = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    
+    // Reset height to auto to get the correct scrollHeight
+    textarea.style.height = 'auto';
+    const scrollHeight = textarea.scrollHeight;
+    const maxHeight = 240; // Max height in pixels (about 12 rows)
+    
+    // Set height to scrollHeight, capped at maxHeight
+    textarea.style.height = Math.min(scrollHeight, maxHeight) + 'px';
+  }, []);
 
   const handleOpenLinkPicker = useCallback(() => {
     if (onOpenLinkPicker && linkButtonRef.current) {
@@ -177,13 +191,16 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
       <textarea
         ref={textareaRef}
         value={content}
-        onChange={(e) => setContent(e.target.value)}
+        onChange={(e) => {
+          setContent(e.target.value);
+          autoResize();
+        }}
         onKeyDown={handleKeyDown}
         placeholder={placeholder || "Write a note..."}
         autoFocus={autoFocus}
         rows={3}
-        className="w-full px-4 py-3 bg-transparent text-sm text-white/80 placeholder-white/30 outline-none resize-none"
-        style={{ minHeight: '80px' }}
+        className="w-full px-4 py-3 bg-transparent text-sm text-white/80 placeholder-white/30 outline-none resize-none overflow-hidden"
+        style={{ minHeight: '80px', maxHeight: '240px' }}
       />
       {/* Drag overlay */}
       {dragging && (
@@ -291,7 +308,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
             <path d="M12 16v-4" />
             <path d="M12 8h.01" />
           </svg>
-          <span>Shift+Enter for new line</span>
+          <span>Shift+Enter to post</span>
         </div>
         <div className="flex items-center gap-2">
           {onOpenLinkPicker && (
