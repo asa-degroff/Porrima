@@ -342,7 +342,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleSwitchView = useCallback((view: 'chats' | 'notebooks') => {
     setActiveView(view);
     setSidebarOpen(false);
-  }, []);
+    // Close image sandbox when switching views
+    if (view === 'notebooks' && imageSandboxOpen) {
+      setImageSandboxOpen(false);
+    }
+  }, [imageSandboxOpen]);
 
   const handleSendToNotebook = useCallback(async (chatId: string, chatTitle: string) => {
     try {
@@ -411,8 +415,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           onDeleteEntry={async (author, id) => { await removeEntry(author, id); }}
           onTriggerAgentReview={async () => { return await triggerAgentReview(); }}
           chats={chats}
-          onChatSelect={(chatId) => { selectChat(chatId); setActiveView('chats'); }}
+          onChatSelect={(chatId) => { selectChat(chatId); setActiveView('chats'); setImageSandboxOpen(false); }}
           onVisible={markAgentEntriesSeen}
+          onOpenSidebar={() => setSidebarOpen(true)}
         />
       ) : (
       <ChatView

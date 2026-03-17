@@ -21,6 +21,7 @@ interface Props {
   chats: ChatListItem[];
   onChatSelect: (chatId: string) => void;
   onVisible?: () => void;
+  onOpenSidebar?: () => void;
 }
 
 export function NotebookView({
@@ -36,6 +37,7 @@ export function NotebookView({
   chats,
   onChatSelect,
   onVisible,
+  onOpenSidebar,
 }: Props) {
   const [fullEntries, setFullEntries] = useState<Record<string, NotebookEntry>>({});
   const [editingEntry, setEditingEntry] = useState<{ author: 'user' | 'agent'; id: string; content: string } | null>(null);
@@ -303,7 +305,20 @@ export function NotebookView({
     <div className="flex-1 flex flex-col min-h-0">
       {/* Header */}
       <div className="px-3 md:px-6 py-3 border-b border-white/10 flex items-center justify-between gap-3 backdrop-blur-sm bg-white/[0.03]">
-        <h2 className="text-sm font-medium text-white/80">Notebooks</h2>
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Hamburger menu - mobile only */}
+          <button
+            onClick={onOpenSidebar}
+            className="md:hidden text-white/50 hover:text-white/80 transition-colors p-1 rounded-lg hover:bg-white/5 shrink-0"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
+          <h2 className="text-sm font-medium text-white/80 truncate">Notebooks</h2>
+        </div>
         <button
           onClick={handleTriggerAgent}
           className="px-3 py-1.5 text-xs rounded-lg transition-colors bg-purple-500/15 border border-purple-400/25 text-purple-300 font-medium hover:bg-purple-500/25"
