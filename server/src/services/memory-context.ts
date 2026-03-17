@@ -24,7 +24,7 @@ export async function buildMemoryAugmentedPrompt(
     let personaSection = "";
     try {
       const persona = await loadPersona();
-      personaSection = `\n\n## Your Persona\n${persona.content}\n\nRemember: This is your core identity. Act consistently with these traits while remaining adaptive to the user's needs.`;
+      personaSection = `\n\n## Your Persona\n${persona.content}\n\nRemember: This is your core identity.`;
     } catch (e) {
       console.error("[memory] Failed to load persona, continuing without:", e);
     }
@@ -61,7 +61,7 @@ export async function buildMemoryAugmentedPrompt(
           }).catch(() => {});
         }
 
-        memoriesSection = `\n\n## What you remember about this user\n${memoriesBlock}\n\nUse these memories naturally in conversation — don't list them unless asked. If memories seem outdated or contradictory, trust the user's latest statements.`;
+        memoriesSection = `\n\n## My relevant memories to this chat:\n${memoriesBlock}\n\nUse these memories as needed — there's no need to list them unless asked.`;
       }
     }
 
