@@ -70,6 +70,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     compaction,
     error,
     warning,
+    streamingSegmentIndex,
     send,
     editMessage,
     abort,
@@ -465,6 +466,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         isOnline={isOnline}
         queueProcessing={queueProcessing}
         activeSkills={activeChat?.activeSkills}
+        streamingSegmentIndex={streamingSegmentIndex}
       />
       )}
       {settingsOpen && (

@@ -45,17 +45,39 @@ export function useTTS() {
 
   // Fetch TTS settings from server on mount
   useEffect(() => {
+    let mounted = true;
     getTTSSettings()
       .then((fetchedSettings) => {
-        setSettings(fetchedSettings);
+        if (mounted) {
+          setSettings(fetchedSettings);
+        }
       })
       .catch((err) => {
         console.error("[useTTS] Failed to fetch settings:", err);
         setError("Failed to load TTS settings");
       })
       .finally(() => {
-        setLoading(false);
+        if (mounted) {
+          setLoading(false);
+        }
       });
+    
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Listen for settings changes from SettingsModal
+  useEffect(() => {
+    const handleSettingsChange = (event: CustomEvent<TTSSettings>) => {
+      console.log("[useTTS] Settings updated:", event.detail);
+      setSettings(event.detail);
+    };
+    
+    window.addEventListener('tts-settings-updated', handleSettingsChange as EventListener);
+    return () => {
+      window.removeEventListener('tts-settings-updated', handleSettingsChange as EventListener);
+    };
   }, []);
 
   // Initialize audio element

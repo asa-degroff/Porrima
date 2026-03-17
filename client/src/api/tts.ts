@@ -34,9 +34,11 @@ export async function generateTTS(request: TTSGenerateRequest): Promise<TTSGener
 
 /**
  * Get available TTS voices
+ * @param backend - TTS backend ("kokoro" or "qwen3-tts")
  */
-export async function getTTSVoices(): Promise<TTSVoiceCategory[]> {
-  const res = await fetch("/api/tts/voices", {
+export async function getTTSVoices(backend?: "kokoro" | "qwen3-tts"): Promise<TTSVoiceCategory[]> {
+  const url = backend ? `/api/tts/voices?backend=${backend}` : "/api/tts/voices";
+  const res = await fetch(url, {
     credentials: "include",
   });
 

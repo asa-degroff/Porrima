@@ -112,7 +112,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useEffect(() => {
     setTtsLoading(true);
     setTtsError(null);
-    Promise.all([getTTSSettings(), getTTSVoices()])
+    Promise.all([getTTSSettings(), getTTSVoices(ttsSettings?.backend || "kokoro")])
       .then(([settings, voices]) => {
         setTtsSettings(settings);
         setTtsVoices(voices);
@@ -123,6 +123,27 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       })
       .finally(() => setTtsLoading(false));
   }, []);
+
+  // Fetch voices when backend changes
+  useEffect(() => {
+    if (ttsSettings?.backend) {
+      getTTSVoices(ttsSettings.backend)
+        .then(setTtsVoices)
+        .catch((err) => {
+          console.error("[TTS] Failed to load voices:", err);
+        });
+      
+      // Auto-switch voice if current voice is not valid for the new backend
+      const validVoices = ttsVoices.flatMap(cat => cat.voices.map(v => v.id));
+      if (ttsSettings.voice && !validVoices.includes(ttsSettings.voice)) {
+        // Switch to first available voice for this backend
+        const firstVoice = ttsVoices[0]?.voices[0]?.id;
+        if (firstVoice) {
+          updateTTSSettings({ voice: firstVoice }).then(setTtsSettings);
+        }
+      }
+    }
+  }, [ttsSettings?.backend]);
 
   const handleSave = () => {
     const defaultPreset = presets.find((p) => p.isDefault);
@@ -139,6 +160,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       hapticsEnabled,
       modelContextWindows: Object.keys(modelContextWindows).length > 0 ? modelContextWindows : undefined,
     });
+    
+    // Emit TTS settings update event for useTTS hook
+    if (ttsSettings) {
+      window.dispatchEvent(new CustomEvent('tts-settings-updated', { detail: ttsSettings }));
+      console.log("[SettingsModal] Emitted tts-settings-updated:", ttsSettings);
+    }
   };
 
   const handleAddPreset = () => {
@@ -909,7 +936,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         }}>
                         <button
                           onClick={async () => {
-                            const updated = await updateTTSSettings({ backend: "kokoro" });
+                            const updated = await updateTTSSettings({ backend: "kokoro", voice: "af_heart" });
                             if (updated) setTtsSettings(updated);
                             setBackendDropdownOpen(false);
                           }}
@@ -925,7 +952,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         </button>
                         <button
                           onClick={async () => {
-                            const updated = await updateTTSSettings({ backend: "qwen3-tts" });
+                            const updated = await updateTTSSettings({ backend: "qwen3-tts", voice: "Ryan" });
                             if (updated) setTtsSettings(updated);
                             setBackendDropdownOpen(false);
                           }}
