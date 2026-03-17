@@ -196,11 +196,11 @@ export async function generateImageWithState(
       } catch {}
     };
 
-    // Timeout after 15 minutes
+    // Timeout after 2 hours — batch generation can take a long time
     wsTimeout = setTimeout(() => {
       cleanup();
-      reject(new Error("Image generation timed out after 15 minutes"));
-    }, 15 * 60 * 1000);
+      reject(new Error("Image generation timed out after 2 hours"));
+    }, 2 * 60 * 60 * 1000);
 
     ws.on("error", (err) => {
       cleanup();
