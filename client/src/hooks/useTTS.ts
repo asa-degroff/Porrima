@@ -5,7 +5,12 @@ const DEFAULT_SETTINGS: TTSSettings = {
   voice: "af_heart",
   speed: 1.0,
   pitch: 1.0,
+  enabled: false,
   autoReadEnabled: false,
+  backend: "kokoro",
+  streamingEnabled: false,
+  streamingChunkSize: 50,
+  streamingBoundaryTier: "clause",
 };
 
 export interface PlaybackState {

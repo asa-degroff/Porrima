@@ -195,7 +195,12 @@ export interface TTSSettings {
   voice: string;
   speed: number;
   pitch: number;
+  enabled: boolean;
   autoReadEnabled: boolean;
+  backend: "kokoro" | "qwen3-tts";
+  streamingEnabled: boolean;
+  streamingChunkSize: number;
+  streamingBoundaryTier: "clause" | "sentence";
 }
 
 export interface TTSVoiceInfo {

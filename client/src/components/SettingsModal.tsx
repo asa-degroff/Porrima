@@ -78,13 +78,19 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [visionModelDropdownOpen, setVisionModelDropdownOpen] = useState(false);
   const [voiceDropdownOpen, setVoiceDropdownOpen] = useState(false);
+  const [backendDropdownOpen, setBackendDropdownOpen] = useState(false);
+  const [boundaryTierDropdownOpen, setBoundaryTierDropdownOpen] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const visionModelDropdownRef = useRef<HTMLDivElement>(null);
   const voiceDropdownRef = useRef<HTMLDivElement>(null);
+  const backendDropdownRef = useRef<HTMLDivElement>(null);
+  const boundaryTierDropdownRef = useRef<HTMLDivElement>(null);
 
   useClickOutside(modelDropdownRef, () => setModelDropdownOpen(false), modelDropdownOpen);
   useClickOutside(visionModelDropdownRef, () => setVisionModelDropdownOpen(false), visionModelDropdownOpen);
   useClickOutside(voiceDropdownRef, () => setVoiceDropdownOpen(false), voiceDropdownOpen);
+  useClickOutside(backendDropdownRef, () => setBackendDropdownOpen(false), backendDropdownOpen);
+  useClickOutside(boundaryTierDropdownRef, () => setBoundaryTierDropdownOpen(false), boundaryTierDropdownOpen);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -882,6 +888,173 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               <p className="text-white/30 text-sm">Loading TTS settings...</p>
             ) : (
               <div className="space-y-3">
+                {/* Backend selector */}
+                <div className="space-y-1">
+                  <label className="block text-sm text-white/50">TTS Backend</label>
+                  <div className="relative">
+                    <button
+                      onClick={() => setBackendDropdownOpen((o) => !o)}
+                      className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+                    >
+                      <span className="truncate flex-1 text-left">
+                        {ttsSettings.backend === "kokoro" ? "Kokoro (Standard)" : "Qwen3-TTS (Streaming)"}
+                      </span>
+                      {chevronSvg(backendDropdownOpen)}
+                    </button>
+                    {backendDropdownOpen && (
+                      <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                        style={{
+                          backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                          borderColor: `rgba(var(--theme-primary-border))`,
+                        }}>
+                        <button
+                          onClick={async () => {
+                            const updated = await updateTTSSettings({ backend: "kokoro" });
+                            if (updated) setTtsSettings(updated);
+                            setBackendDropdownOpen(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                            ttsSettings.backend === "kokoro" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                          }`}
+                          style={{
+                            backgroundColor: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                            color: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary-text))` : '',
+                          }}
+                        >
+                          Kokoro (Standard)
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const updated = await updateTTSSettings({ backend: "qwen3-tts" });
+                            if (updated) setTtsSettings(updated);
+                            setBackendDropdownOpen(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                            ttsSettings.backend === "qwen3-tts" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                          }`}
+                          style={{
+                            backgroundColor: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                            color: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary-text))` : '',
+                          }}
+                        >
+                          Qwen3-TTS (Streaming)
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-white/30 text-xs">
+                    {ttsSettings.backend === "kokoro" 
+                      ? "Lightweight (~100MB), mature ecosystem"
+                      : "Advanced model with streaming support (~2GB)"}
+                  </p>
+                </div>
+
+                {/* Streaming toggle (Qwen3-TTS only) */}
+                {ttsSettings.backend === "qwen3-tts" && (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <label className="block text-sm font-medium text-white/60">Streaming Mode</label>
+                        <p className="text-xs text-white/30 mt-0.5">Speak while generating (lower latency)</p>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          const updated = await updateTTSSettings({ streamingEnabled: !ttsSettings.streamingEnabled });
+                          if (updated) setTtsSettings(updated);
+                        }}
+                        className={`relative w-12 h-6 rounded-full transition-colors ${
+                          ttsSettings.streamingEnabled ? "bg-purple-500/30" : "bg-white/10"
+                        }`}
+                      >
+                        <div
+                          className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                            ttsSettings.streamingEnabled ? "left-7" : "left-1"
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* Streaming chunk size */}
+                    <div className="space-y-1">
+                      <label className="block text-sm text-white/50">Chunk Size: {ttsSettings.streamingChunkSize} tokens</label>
+                      <input
+                        type="range"
+                        min="30"
+                        max="80"
+                        step="5"
+                        value={ttsSettings.streamingChunkSize}
+                        onChange={async (e) => {
+                          const updated = await updateTTSSettings({ streamingChunkSize: parseInt(e.target.value, 10) });
+                          if (updated) setTtsSettings(updated);
+                        }}
+                        className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-purple-400"
+                      />
+                      <div className="flex justify-between text-xs text-white/30">
+                        <span>30 (low latency)</span>
+                        <span>80 (smoother)</span>
+                      </div>
+                    </div>
+
+                    {/* Boundary tier */}
+                    <div className="space-y-1">
+                      <label className="block text-sm text-white/50">Boundary Detection</label>
+                      <div className="relative" ref={boundaryTierDropdownRef}>
+                        <button
+                          onClick={() => setBoundaryTierDropdownOpen((o) => !o)}
+                          className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+                        >
+                          <span className="truncate flex-1 text-left">
+                            {ttsSettings.streamingBoundaryTier === "clause" 
+                              ? "Clause (faster, ~1ms)" 
+                              : "Sentence (better prosody, ~5ms)"}
+                          </span>
+                          {chevronSvg(boundaryTierDropdownOpen)}
+                        </button>
+                        {boundaryTierDropdownOpen && (
+                          <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                            style={{
+                              backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                              borderColor: `rgba(var(--theme-primary-border))`,
+                            }}>
+                            <button
+                              onClick={async () => {
+                                const updated = await updateTTSSettings({ streamingBoundaryTier: "clause" });
+                                if (updated) setTtsSettings(updated);
+                                setBoundaryTierDropdownOpen(false);
+                              }}
+                              className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                                ttsSettings.streamingBoundaryTier === "clause" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                              }`}
+                              style={{
+                                backgroundColor: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                color: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary-text))` : '',
+                              }}
+                            >
+                              Clause (faster, ~1ms)
+                            </button>
+                            <button
+                              onClick={async () => {
+                                const updated = await updateTTSSettings({ streamingBoundaryTier: "sentence" });
+                                if (updated) setTtsSettings(updated);
+                                setBoundaryTierDropdownOpen(false);
+                              }}
+                              className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                                ttsSettings.streamingBoundaryTier === "sentence" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                              }`}
+                              style={{
+                                backgroundColor: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                color: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary-text))` : '',
+                              }}
+                            >
+                              Sentence (better prosody, ~5ms)
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+
                 {/* Auto-read toggle */}
                 <div className="flex items-center justify-between">
                   <div>

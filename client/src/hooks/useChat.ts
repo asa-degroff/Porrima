@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage } from "../api/client";
 import type { StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InlineVisual, MessageSegment, MessageUsage } from "../types";
+import { useStreamingTTS } from "./useStreamingTTS";
 import {
   enqueueMessage,
   dequeueMessage,
