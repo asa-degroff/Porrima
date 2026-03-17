@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import type { TTSSettings } from "../types/tts.js";
 import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
 import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkQwen3TTSInstallation } from "../services/tts.js";
+import { getQwen3AudioFile } from "../services/tts-qwen3.js";
 
 const router = express.Router();
 
@@ -177,7 +178,8 @@ router.get("/audio/:cacheKey.wav", (req, res) => {
       return res.status(400).json({ error: "Invalid cache key" });
     }
 
-    const audio = getAudioFile(cacheKey);
+    // Check both Kokoro and Qwen3 cache directories
+    const audio = getAudioFile(cacheKey) ?? getQwen3AudioFile(cacheKey);
     if (!audio) {
       return res.status(404).json({ error: "Audio not found" });
     }

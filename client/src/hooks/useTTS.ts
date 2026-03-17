@@ -42,6 +42,7 @@ export function useTTS() {
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentAudioUrlRef = useRef<string | null>(null);
+  const loadingRef = useRef(false);
 
   // Fetch TTS settings from server on mount
   useEffect(() => {
@@ -98,6 +99,8 @@ export function useTTS() {
     });
 
     audio.addEventListener("error", (e) => {
+      // Ignore errors from src reset during loading transition
+      if (loadingRef.current) return;
       console.error("[TTS] Audio error:", e);
       setError("Playback error");
       setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false }));
@@ -156,13 +159,13 @@ export function useTTS() {
       setError(null);
 
       try {
-        // Set loading state
+        // Set loading state and suppress spurious error events
+        loadingRef.current = true;
         setPlaybackState((prev) => ({ ...prev, isLoading: true }));
 
         // Stop any current playback
         if (audioRef.current) {
           audioRef.current.pause();
-          audioRef.current.src = "";
         }
 
         // Generate audio
@@ -187,10 +190,29 @@ export function useTTS() {
         const data = await res.json();
         const audioUrl = data.audioUrl;
 
-        // Play the audio
+        // Play the audio — wait for it to be ready first
         if (audioRef.current) {
-          audioRef.current.src = audioUrl;
+          const audio = audioRef.current;
           currentAudioUrlRef.current = audioUrl;
+
+          // Set up listeners BEFORE setting src
+          await new Promise<void>((resolve, reject) => {
+            const onReady = () => {
+              audio.removeEventListener("error", onError);
+              resolve();
+            };
+            const onError = () => {
+              audio.removeEventListener("canplaythrough", onReady);
+              reject(new Error(`Failed to load audio from ${audioUrl}`));
+            };
+            audio.addEventListener("canplaythrough", onReady, { once: true });
+            audio.addEventListener("error", onError, { once: true });
+            // Setting src triggers the load
+            audio.src = audioUrl;
+          });
+
+          loadingRef.current = false;
+
           setPlaybackState({
             isPlaying: true,
             isPaused: false,
@@ -200,12 +222,13 @@ export function useTTS() {
             audioUrl,
           });
 
-          await audioRef.current.play();
+          await audio.play();
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to play audio";
         setError(message);
         console.error("[TTS] Play error:", err);
+        loadingRef.current = false;
         setPlaybackState((prev) => ({ ...prev, isLoading: false }));
       }
     },

@@ -8,7 +8,7 @@ import { extractTextForTTS } from "./tts-text-preprocessor.js";
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache-qwen3");
 const MAX_CACHE_SIZE_MB = 500;
 const PYTHON_SCRIPT = join(process.cwd(), "src", "tts", "qwen3_wrapper.py");
-const VENV_PYTHON = process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), ".venv", "bin", "python");
+const VENV_PYTHON = process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), "..", ".venv", "bin", "python");
 
 // Ensure cache directory exists
 if (!existsSync(CACHE_DIR)) {
