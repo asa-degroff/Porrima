@@ -119,6 +119,7 @@ export interface Settings {
   backgroundEffect?: BackgroundEffect;
   systemPromptPresets?: SystemPromptPreset[];
   hapticsEnabled?: boolean;
+  defaultVisionPreset?: string;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";

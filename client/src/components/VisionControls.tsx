@@ -80,6 +80,8 @@ interface Props {
   selectedImage: AnalyzedImage | null;
   onSelectImage: (id: string) => void;
   onDeleteImage?: (id: string) => void;
+  selectedPreset: string;
+  setSelectedPreset: (preset: string) => void;
 }
 
 export function VisionControls({
@@ -94,8 +96,9 @@ export function VisionControls({
   selectedImage,
   onSelectImage,
   onDeleteImage,
+  selectedPreset,
+  setSelectedPreset,
 }: Props) {
-  const [selectedPreset, setSelectedPreset] = useState<string>("detailed");
   const [modelOpen, setModelOpen] = useState(false);
   const [presetOpen, setPresetOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);

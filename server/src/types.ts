@@ -111,6 +111,7 @@ export interface Settings {
   modelContextWindows?: Record<string, number>;
   theme?: Theme;
   systemPromptPresets?: SystemPromptPreset[];
+  defaultVisionPreset?: string;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";

@@ -10,6 +10,8 @@ import {
   reanalyzeImage as apiReanalyzeImage,
   streamReanalyzeImage,
   deleteAnalyzedImage as apiDeleteAnalyzedImage,
+  fetchSettings,
+  updateSettings,
   type VisionPreset,
   type AnalyzedImage,
   type VisionMessage,
@@ -24,20 +26,25 @@ export function useVisionSandbox() {
   const [streamingDescription, setStreamingDescription] = useState<string | null>(null);
   const [pendingImageData, setPendingImageData] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedPreset, setSelectedPreset] = useState<string>("detailed");
 
   // Cache fetched images so switching back is instant
   const imageCacheRef = useRef(new Map<string, AnalyzedImage>());
 
-  // Load presets and images on mount
+  // Load presets, images, and settings on mount
   useEffect(() => {
     async function load() {
       try {
-        const [presetsData, imagesData] = await Promise.all([
+        const [presetsData, imagesData, settingsData] = await Promise.all([
           fetchVisionPresets(),
           fetchAnalyzedImages(),
+          fetchSettings(),
         ]);
         setPresets(presetsData);
         setAnalyzedImages(imagesData);
+        if (settingsData.defaultVisionPreset) {
+          setSelectedPreset(settingsData.defaultVisionPreset);
+        }
       } catch (e: any) {
         setError(e.message);
       }
@@ -80,6 +87,16 @@ export function useVisionSandbox() {
       setError(e.message);
       setAnalyzing(false);
       throw e;
+    }
+  }, []);
+
+  const updateSelectedPreset = useCallback(async (preset: string) => {
+    setSelectedPreset(preset);
+    try {
+      const settings = await fetchSettings();
+      await updateSettings({ ...settings, defaultVisionPreset: preset });
+    } catch (e: any) {
+      console.error("Failed to save preset preference:", e);
     }
   }, []);
 
@@ -209,12 +226,14 @@ export function useVisionSandbox() {
     streamingDescription,
     pendingImageData,
     error,
+    selectedPreset,
     analyzeImage,
     chatAboutImage,
     reanalyzeImage,
     deleteImage,
     selectImage,
     setSelectedImage,
+    setSelectedPreset: updateSelectedPreset,
     refreshImages,
   };
 }

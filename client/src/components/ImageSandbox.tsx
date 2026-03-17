@@ -86,12 +86,14 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     streamingDescription,
     pendingImageData,
     error: visionError,
+    selectedPreset,
     analyzeImage,
     chatAboutImage,
     reanalyzeImage,
     deleteImage,
     selectImage,
     setSelectedImage: setSelectedAnalyzedImage,
+    setSelectedPreset,
   } = useVisionSandbox();
 
   const [mode, setMode] = useState<SandboxMode>(() => {
@@ -523,6 +525,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                 selectedImage={selectedAnalyzedImage}
                 onSelectImage={handleSelectAnalyzedImage}
                 onDeleteImage={deleteImage}
+                selectedPreset={selectedPreset}
+                setSelectedPreset={setSelectedPreset}
               />
             </div>
 
@@ -616,6 +620,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                       selectedImage={selectedAnalyzedImage}
                       onSelectImage={handleSelectAnalyzedImage}
                       onDeleteImage={deleteImage}
+                      selectedPreset={selectedPreset}
+                      setSelectedPreset={setSelectedPreset}
                     />
                   </div>
                 </div>

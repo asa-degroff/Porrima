@@ -131,16 +131,24 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
                 Re-analyze
               </button>
               {presetSelectOpen && (
-                <div className="absolute left-0 top-full mt-1 z-30 min-w-[160px] backdrop-blur-xl bg-[#1a1a2e]/95 border border-white/15 rounded-xl shadow-2xl py-1">
+                <div className="absolute left-0 top-full mt-1 z-30 min-w-[160px] backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                  style={{
+                    backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                    borderColor: `rgba(var(--theme-primary-border))`,
+                  }}>
                   {presets.map((preset) => (
                     <button
                       key={preset.key}
                       onClick={() => handlePresetSelect(preset.key)}
                       className={`w-full text-left px-3 py-2 text-xs transition-all ${
                         preset.key === image.preset
-                          ? "bg-blue-500/15 text-blue-200"
+                          ? "text-white"
                           : "text-white/60 hover:bg-white/10 hover:text-white/80"
                       }`}
+                      style={{
+                        backgroundColor: preset.key === image.preset ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: preset.key === image.preset ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
                     >
                       {preset.name}
                     </button>
