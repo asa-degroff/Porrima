@@ -1,12 +1,35 @@
 import express from "express";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import type { TTSSettings } from "../types/tts.js";
 import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
 import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkQwen3TTSInstallation } from "../services/tts.js";
 
 const router = express.Router();
 
-// In-memory storage for user TTS settings
+const BASE_DIR = join(homedir(), ".quje-agent");
+const TTS_SETTINGS_PATH = join(BASE_DIR, "tts-settings.json");
+
+// In-memory cache, loaded from disk on startup
 let userSettings: TTSSettings = { ...DEFAULT_TTS_SETTINGS };
+
+async function loadTTSSettings(): Promise<void> {
+  try {
+    const data = await readFile(TTS_SETTINGS_PATH, "utf-8");
+    userSettings = { ...DEFAULT_TTS_SETTINGS, ...JSON.parse(data) };
+  } catch {
+    // File doesn't exist yet, use defaults
+  }
+}
+
+async function saveTTSSettings(): Promise<void> {
+  await mkdir(BASE_DIR, { recursive: true });
+  await writeFile(TTS_SETTINGS_PATH, JSON.stringify(userSettings, null, 2));
+}
+
+// Load persisted settings on module init
+loadTTSSettings();
 
 /**
  * GET /api/tts/voices
@@ -37,7 +60,7 @@ router.get("/settings", (req, res) => {
  * POST /api/tts/settings
  * Update TTS settings
  */
-router.post("/settings", (req, res) => {
+router.post("/settings", async (req, res) => {
   try {
     const { voice, speed, pitch, autoReadEnabled, backend, streamingEnabled, streamingChunkSize, streamingBoundaryTier } = req.body;
 
@@ -97,6 +120,7 @@ router.post("/settings", (req, res) => {
       userSettings.streamingBoundaryTier = streamingBoundaryTier;
     }
 
+    await saveTTSSettings();
     res.json(userSettings);
   } catch (error) {
     console.error("[TTS] Error updating settings:", error);
@@ -110,18 +134,27 @@ router.post("/settings", (req, res) => {
  */
 router.post("/generate", async (req, res) => {
   try {
-    const { text, voice, speed, pitch } = req.body;
+    const { text, voice, speed, pitch, backend } = req.body;
 
     if (!text || typeof text !== "string" || !text.trim()) {
       return res.status(400).json({ error: "Text is required" });
     }
 
+    // Build effective settings: request body overrides > server-side user settings > defaults
+    const effectiveSettings: TTSSettings = {
+      ...userSettings,
+      ...(voice !== undefined && { voice }),
+      ...(speed !== undefined && { speed }),
+      ...(pitch !== undefined && { pitch }),
+      ...(backend !== undefined && { backend }),
+    };
+
     const response = await generateTTS({
       text: text.trim(),
-      voice,
-      speed,
-      pitch,
-    });
+      voice: effectiveSettings.voice,
+      speed: effectiveSettings.speed,
+      pitch: effectiveSettings.pitch,
+    }, effectiveSettings);
 
     res.json(response);
   } catch (error) {

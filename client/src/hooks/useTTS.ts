@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { TTSSettings } from "../types";
+import { getTTSSettings, updateTTSSettings } from "../api/tts";
 
 const DEFAULT_SETTINGS: TTSSettings = {
   voice: "af_heart",
@@ -24,6 +25,7 @@ export interface PlaybackState {
 
 /**
  * Hook for managing TTS playback
+ * Fetches current TTS settings from server on mount
  */
 export function useTTS() {
   const [settings, setSettings] = useState<TTSSettings>(DEFAULT_SETTINGS);
@@ -36,9 +38,25 @@ export function useTTS() {
     audioUrl: null,
   });
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentAudioUrlRef = useRef<string | null>(null);
+
+  // Fetch TTS settings from server on mount
+  useEffect(() => {
+    getTTSSettings()
+      .then((fetchedSettings) => {
+        setSettings(fetchedSettings);
+      })
+      .catch((err) => {
+        console.error("[useTTS] Failed to fetch settings:", err);
+        setError("Failed to load TTS settings");
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, []);
 
   // Initialize audio element
   useEffect(() => {
@@ -135,6 +153,7 @@ export function useTTS() {
             voice: options?.voice ?? settings.voice,
             speed: options?.speed ?? settings.speed,
             pitch: options?.pitch ?? settings.pitch,
+            backend: settings.backend,
           }),
         });
 
@@ -168,7 +187,7 @@ export function useTTS() {
         setPlaybackState((prev) => ({ ...prev, isLoading: false }));
       }
     },
-    [settings.voice, settings.speed, settings.pitch]
+    [settings.voice, settings.speed, settings.pitch, settings.backend]
   );
 
   /**
