@@ -109,6 +109,13 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
       localStorage.setItem("quje-sandbox-mode", mode);
     } catch {}
   }, [mode]);
+
+  // Close drawers when switching modes
+  useEffect(() => {
+    setControlsOpen(false);
+    setDetailsOpen(false);
+  }, [mode]);
+
   const [visionModel, setVisionModelRaw] = useState<string>(() => {
     // 1. Check localStorage for a previously selected vision model
     try {
@@ -194,6 +201,10 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     await selectImage(id);
   }, [selectImage]);
 
+  // Drawer state for mobile
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+
   return (
     <div className="flex-1 flex flex-col h-full min-w-0">
       {/* Header */}
@@ -201,8 +212,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold text-white/90">Image Sandbox</h2>
 
-          {/* Mode switcher */}
-          <div className="flex items-center gap-1 bg-white/5 rounded-lg p-1">
+          {/* Mode switcher - hidden on mobile, shown desktop */}
+          <div className="hidden md:flex items-center gap-1 bg-white/5 rounded-lg p-1">
             <button
               onClick={() => setMode("analyze")}
               className={`px-3 py-1 text-xs rounded-md transition-colors ${
@@ -225,8 +236,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             </button>
           </div>
 
-          {/* Status indicator */}
-          <div className="flex items-center gap-1.5">
+          {/* Status indicator - hidden on mobile, shown desktop */}
+          <div className="hidden lg:flex items-center gap-1.5">
             <div
               className={`w-2 h-2 rounded-full ${
                 isAvailable ? "bg-green-400" : "bg-red-400"
@@ -247,15 +258,93 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
           </div>
         </div>
 
-        <button
-          onClick={onClose}
-          className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M18 6L6 18" />
-            <path d="M6 6l12 12" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Mobile drawer toggles */}
+          <div className="flex md:hidden items-center gap-1">
+            {mode === "generate" ? (
+              <>
+                <button
+                  onClick={() => setControlsOpen(true)}
+                  className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                  title="Generation controls"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z" />
+                    <path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />
+                    <path d="M12 2v2" />
+                    <path d="M12 22v-2" />
+                    <path d="m17 20.66-1-1" />
+                    <path d="M11 10a2 2 0 0 0-1-1.73V10" />
+                    <path d="M7 12a2 2 0 0 0 1-1.73V12" />
+                  </svg>
+                </button>
+                {selectedImage && (
+                  <button
+                    onClick={() => setDetailsOpen(true)}
+                    className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                    title="Image details"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect width="18" height="18" x="3" y="3" rx="2" />
+                      <circle cx="9" cy="9" r="2" />
+                      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+                    </svg>
+                  </button>
+                )}
+              </>
+            ) : (
+              <button
+                onClick={() => setControlsOpen(true)}
+                className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                title="Vision controls"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z" />
+                  <path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />
+                  <path d="M12 2v2" />
+                  <path d="M12 22v-2" />
+                  <path d="m17 20.66-1-1" />
+                  <path d="M11 10a2 2 0 0 0-1-1.73V10" />
+                  <path d="M7 12a2 2 0 0 0 1-1.73V12" />
+                </svg>
+              </button>
+            )}
+          </div>
+
+          {/* Mobile mode switcher */}
+          <div className="flex md:hidden items-center gap-1 bg-white/5 rounded-lg p-1">
+            <button
+              onClick={() => setMode("analyze")}
+              className={`px-2 py-1 text-xs rounded-md transition-colors ${
+                mode === "analyze"
+                  ? "bg-white/10 text-white/90"
+                  : "text-white/50 hover:text-white/70"
+              }`}
+            >
+              A
+            </button>
+            <button
+              onClick={() => setMode("generate")}
+              className={`px-2 py-1 text-xs rounded-md transition-colors ${
+                mode === "generate"
+                  ? "bg-white/10 text-white/90"
+                  : "text-white/50 hover:text-white/70"
+              }`}
+            >
+              G
+            </button>
+          </div>
+
+          <button
+            onClick={onClose}
+            className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 6L6 18" />
+              <path d="M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Error banner */}
@@ -266,11 +355,11 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
       )}
 
       {/* Main layout */}
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 relative">
         {mode === "generate" ? (
           <>
-            {/* Generation Controls panel */}
-            <div className="w-80 shrink-0 border-r border-white/10 overflow-y-auto p-4 backdrop-blur-xl bg-white/[0.03]">
+            {/* Generation Controls - desktop sidebar */}
+            <div className="hidden md:block w-80 shrink-0 border-r border-white/10 overflow-y-auto p-4 backdrop-blur-xl bg-white/[0.03]">
               <ImageControls
                 models={models}
                 generating={generating}
@@ -292,9 +381,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               />
             </div>
 
-            {/* Details panel (conditional) */}
+            {/* Details panel - desktop sidebar */}
             {selectedImage && (
-              <div className="w-80 shrink-0 border-l border-white/10 p-4 backdrop-blur-xl bg-white/[0.03] flex flex-col">
+              <div className="hidden md:flex w-80 shrink-0 border-l border-white/10 p-4 backdrop-blur-xl bg-white/[0.03] flex-col">
                 <ImageDetails
                   image={selectedImage}
                   onUseParams={handleUseParams}
@@ -304,6 +393,70 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   hasPrev={hasPrevImage}
                   hasNext={hasNextImage}
                 />
+              </div>
+            )}
+
+            {/* Mobile slide-up drawer - Controls */}
+            {controlsOpen && (
+              <div className="md:hidden fixed inset-0 z-50 flex items-end">
+                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setControlsOpen(false)} />
+                <div className="relative w-full max-h-[85vh] bg-[#0f0f14] border-t border-white/10 rounded-t-2xl overflow-hidden flex flex-col drawer-slide-up">
+                  <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-white/10">
+                    <h3 className="text-sm font-semibold text-white/90">Generation Controls</h3>
+                    <button
+                      onClick={() => setControlsOpen(false)}
+                      className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 6L6 18" />
+                        <path d="M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4">
+                    <ImageControls
+                      models={models}
+                      generating={generating}
+                      progress={progress}
+                      onEnqueue={enqueue}
+                      onAbort={abort}
+                      activeGenerations={activeGenerations}
+                      initialParams={controlParams}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Mobile slide-up drawer - Details */}
+            {detailsOpen && selectedImage && (
+              <div className="md:hidden fixed inset-0 z-50 flex items-end">
+                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setDetailsOpen(false)} />
+                <div className="relative w-full max-h-[85vh] bg-[#0f0f14] border-t border-white/10 rounded-t-2xl overflow-hidden flex flex-col drawer-slide-up">
+                  <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-white/10">
+                    <h3 className="text-sm font-semibold text-white/90">Image Details</h3>
+                    <button
+                      onClick={() => setDetailsOpen(false)}
+                      className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 6L6 18" />
+                        <path d="M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4">
+                    <ImageDetails
+                      image={selectedImage}
+                      onUseParams={handleUseParams}
+                      onOpenLightbox={setLightboxImage}
+                      onPrev={() => navigateImage(-1)}
+                      onNext={() => navigateImage(1)}
+                      hasPrev={hasPrevImage}
+                      hasNext={hasNextImage}
+                    />
+                  </div>
+                </div>
               </div>
             )}
 
@@ -356,8 +509,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
           </>
         ) : (
           <>
-            {/* Left panel: controls + conversation list */}
-            <div className="w-80 shrink-0 border-r border-white/10 backdrop-blur-xl bg-white/[0.03]">
+            {/* Vision Controls - desktop sidebar */}
+            <div className="hidden md:block w-80 shrink-0 border-r border-white/10 backdrop-blur-xl bg-white/[0.03]">
               <VisionControls
                 presets={presets}
                 models={ollamaModels}
@@ -432,6 +585,42 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                 </div>
               )}
             </div>
+
+            {/* Mobile slide-up drawer - Vision Controls */}
+            {controlsOpen && (
+              <div className="md:hidden fixed inset-0 z-50 flex items-end">
+                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setControlsOpen(false)} />
+                <div className="relative w-full max-h-[85vh] bg-[#0f0f14] border-t border-white/10 rounded-t-2xl overflow-hidden flex flex-col drawer-slide-up">
+                  <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-white/10">
+                    <h3 className="text-sm font-semibold text-white/90">Vision Controls</h3>
+                    <button
+                      onClick={() => setControlsOpen(false)}
+                      className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 6L6 18" />
+                        <path d="M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4">
+                    <VisionControls
+                      presets={presets}
+                      models={ollamaModels}
+                      selectedModel={visionModel}
+                      onModelChange={setVisionModel}
+                      analyzing={analyzing}
+                      streamingDescription={streamingDescription}
+                      onAnalyze={handleAnalyze}
+                      analyzedImages={analyzedImages}
+                      selectedImage={selectedAnalyzedImage}
+                      onSelectImage={handleSelectAnalyzedImage}
+                      onDeleteImage={deleteImage}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>

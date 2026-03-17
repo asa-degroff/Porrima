@@ -221,3 +221,17 @@ body::before {
   animation: blink 1s infinite;
   color: rgba(var(--theme-secondary-text), 0.8);
 }
+
+/* Slide-up drawer animation */
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.drawer-slide-up {
+  animation: slideUp 0.3s ease-out forwards;
+}
