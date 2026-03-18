@@ -193,6 +193,10 @@ function streamSSE(
               if (currentEvent === "done" || currentEvent === "error") {
                 receivedDoneOrError = true;
               }
+              // Vision streams use description_complete/reanalyze_complete instead of "done"
+              if (currentEvent === "description_complete" || currentEvent === "reanalyze_complete") {
+                receivedDoneOrError = true;
+              }
               processSSEEvent(currentEvent, data, callbacks);
             } catch {
               // skip malformed
@@ -218,6 +222,10 @@ function streamSSE(
             try {
               const data = JSON.parse(line.slice(6));
               if (currentEvent === "done" || currentEvent === "error") {
+                receivedDoneOrError = true;
+              }
+              // Vision streams use description_complete/reanalyze_complete instead of "done"
+              if (currentEvent === "description_complete" || currentEvent === "reanalyze_complete") {
                 receivedDoneOrError = true;
               }
               processSSEEvent(currentEvent, data, callbacks);
