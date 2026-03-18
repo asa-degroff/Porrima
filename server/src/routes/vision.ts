@@ -106,6 +106,8 @@ router.post("/analyze-stream", async (req, res) => {
       }
     );
 
+    // Ensure the last event is flushed before ending
+    (res as any).flush?.();
     res.end();
   } catch (e: any) {
     console.error("Vision stream error:", e);
@@ -227,6 +229,7 @@ router.post("/images/:id/reanalyze", async (req, res) => {
 
       const { imageData: _, ...sanitized } = updated!;
       res.write(`event: reanalyze_complete\ndata: ${JSON.stringify(sanitized)}\n\n`);
+      (res as any).flush?.();
       res.end();
     } else {
       const result = await analyzeImage(image.imageData, preset || "detailed", image.model);

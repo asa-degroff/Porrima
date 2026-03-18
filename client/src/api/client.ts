@@ -196,6 +196,7 @@ function streamSSE(
               // Vision streams use description_complete/reanalyze_complete instead of "done"
               if (currentEvent === "description_complete" || currentEvent === "reanalyze_complete") {
                 receivedDoneOrError = true;
+                console.log("[SSE] Vision completion event received:", currentEvent);
               }
               processSSEEvent(currentEvent, data, callbacks);
             } catch {
@@ -227,6 +228,7 @@ function streamSSE(
               // Vision streams use description_complete/reanalyze_complete instead of "done"
               if (currentEvent === "description_complete" || currentEvent === "reanalyze_complete") {
                 receivedDoneOrError = true;
+                console.log("[SSE] Vision completion event received:", currentEvent);
               }
               processSSEEvent(currentEvent, data, callbacks);
             } catch {}
@@ -234,6 +236,8 @@ function streamSSE(
           }
         }
       }
+
+      console.log("[SSE] Stream ended, receivedDoneOrError:", receivedDoneOrError);
 
       // Safety net: if the stream ended without a done or error event,
       // the client would stay stuck in streaming state forever
