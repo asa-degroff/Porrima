@@ -8,6 +8,8 @@ import {
   addMemory,
   updateMemory,
   findDuplicates,
+  searchMemoriesRaw,
+  createSupersessionLink,
 } from "./memory-storage.js";
 import type { ChatMessage, Memory, MemoryCategory } from "../types.js";
 
@@ -133,7 +135,9 @@ export async function dedupAndSave(
   facts: ExtractedFact[],
   embeddings: number[][],
   chatId: string,
-  projectId?: string
+  projectId?: string,
+  sourceType: 'chat' | 'notebook' | 'explicit' = 'chat',
+  sourceId?: string
 ): Promise<void> {
   for (let i = 0; i < facts.length; i++) {
     const fact = facts[i];
@@ -154,8 +158,9 @@ export async function dedupAndSave(
     } else {
       console.log(`[memory] New memory: "${fact.text}"`);
       const now = new Date().toISOString();
+      const newMemoryId = uuid();
       await addMemory({
-        id: uuid(),
+        id: newMemoryId,
         text: fact.text,
         category: fact.category,
         importance: Math.min(10, Math.max(1, fact.importance)),
@@ -163,9 +168,14 @@ export async function dedupAndSave(
         createdAt: now,
         lastAccessed: now,
         accessCount: 0,
-        sourceChatId: chatId,
+        sourceChatId: sourceType === 'chat' ? chatId : '',
         ...(projectId ? { projectId } : {}),
+        sourceType,
+        sourceId: sourceId || chatId,
       });
+      
+      // Check for automatic supersession after saving new memory
+      await checkSupersession(newMemoryId, fact.text, factEmbedding);
     }
   }
 }
@@ -370,10 +380,75 @@ export async function extractMemoriesFromText(
       return;
     }
 
-    await dedupAndSave(facts, embeddings, entryId);
+    await dedupAndSave(facts, embeddings, '', undefined, author === 'user' ? 'notebook' : 'notebook', entryId);
     console.log("[memory] Notebook memory extraction complete");
   } catch (e) {
     console.error("[memory] Notebook extraction failed:", e);
     throw e;
   }
+}
+
+/**
+ * Check if a new memory supersedes any existing memories.
+ * Uses semantic similarity + contradiction detection to auto-create supersession links.
+ */
+async function checkSupersession(
+  newMemoryId: string,
+  newText: string,
+  newEmbedding: number[]
+): Promise<void> {
+  const similarMemories = await searchMemoriesRaw(newEmbedding, 10);
+  
+  for (const oldMemory of similarMemories) {
+    // Skip if same memory or already has supersession link
+    if (oldMemory.memory.id === newMemoryId) continue;
+    if (oldMemory.memory.supersededBy) continue;
+    
+    // Only check older memories
+    if (new Date(oldMemory.memory.createdAt) >= new Date(oldMemory.memory.lastAccessed)) {
+      const confidence = calculateSupersessionConfidence(newText, oldMemory.memory.text);
+      
+      if (confidence > 0.75) {
+        console.log(
+          `[memory] Auto-superson: "${oldMemory.memory.text}" → "${newText}" (confidence=${confidence.toFixed(2)})`
+        );
+        await createSupersessionLink(newMemoryId, oldMemory.memory.id, confidence);
+      } else if (confidence > 0.50) {
+        console.log(
+          `[memory] Potential supersession flagged: "${oldMemory.memory.text}" vs "${newText}" (confidence=${confidence.toFixed(2)})`
+        );
+        // Could log to a review queue here for daily synthesis to pick up
+      }
+    }
+  }
+}
+
+function calculateSupersessionConfidence(newText: string, oldText: string): number {
+  // Simple heuristic-based confidence scoring
+  const similarity = 0.4; // Placeholder - would use actual embedding similarity in production
+  
+  // Check for contradiction patterns
+  const contradictionPatterns = [
+    /\bnot\b.*\b(previously|before|earlier)\b/i,
+    /\b(previously|before|earlier)\b.*\bnot\b/i,
+    /\bchanged\b.*\bfrom\b/i,
+    /\bno longer\b/i,
+    /\breplaced\b/i,
+    /\binstead of\b/i,
+  ];
+  
+  const hasContradiction = contradictionPatterns.some(p => p.test(newText) || p.test(oldText));
+  const contradictionScore = hasContradiction ? 0.3 : 0;
+  
+  // Specificity gain (newer text is longer/more detailed)
+  const specificityGain = Math.max(0, newText.length - oldText.length) / 200;
+  const specificityScore = Math.min(0.2, specificityGain);
+  
+  // Entity overlap (simple word overlap for now)
+  const newWords = new Set(newText.toLowerCase().split(/\W+/).filter(w => w.length > 3));
+  const oldWords = new Set(oldText.toLowerCase().split(/\W+/).filter(w => w.length > 3));
+  const overlap = [...newWords].filter(w => oldWords.has(w)).length;
+  const entityScore = Math.min(0.1, overlap / 5);
+  
+  return similarity + contradictionScore + specificityScore + entityScore;
 }

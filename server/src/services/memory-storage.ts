@@ -4,6 +4,7 @@ import { writeFile, mkdir } from "fs/promises";
 import { existsSync, mkdirSync, readFileSync, renameSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { v4 as uuid } from "uuid";
 import type { Memory, MemoryStore } from "../types.js";
 
 const BASE_DIR = join(homedir(), ".quje-agent");
@@ -98,6 +99,37 @@ function getDb(): Database.Database {
     db.exec(`ALTER TABLE memories ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`);
     console.log("[memory] Added project_id column to memories table");
   }
+
+  // Temporal layering migrations
+  if (!cols.some((c) => c.name === "source_type")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN source_type TEXT NOT NULL DEFAULT 'chat'`);
+    console.log("[memory] Added source_type column for temporal tracking");
+  }
+  if (!cols.some((c) => c.name === "source_id")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN source_id TEXT NOT NULL DEFAULT ''`);
+    console.log("[memory] Added source_id column for temporal tracking");
+  }
+  if (!cols.some((c) => c.name === "superseded_by")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN superseded_by TEXT`);
+    console.log("[memory] Added superseded_by column for lineage tracking");
+  }
+  if (!cols.some((c) => c.name === "supersedes")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN supersedes TEXT`);
+    console.log("[memory] Added supersedes column for lineage tracking");
+  }
+
+  // Create memory_supersession_history table for audit trail
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_supersession_history (
+      id TEXT PRIMARY KEY,
+      older_memory_id TEXT NOT NULL,
+      newer_memory_id TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      created_at TEXT NOT NULL,
+      removed_at TEXT,
+      removal_reason TEXT
+    );
+  `);
 
   // Auto-migrate from JSON if needed
   if (needsMigration) {
@@ -267,8 +299,8 @@ export async function addMemory(memory: Memory): Promise<void> {
 
   const add = db.transaction(() => {
     db.prepare(`
-      INSERT INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       memory.id,
       memory.text,
@@ -278,7 +310,11 @@ export async function addMemory(memory: Memory): Promise<void> {
       memory.lastAccessed,
       memory.accessCount,
       memory.sourceChatId || "",
-      memory.projectId || ""
+      memory.projectId || "",
+      memory.sourceType || 'chat',
+      memory.sourceId || '',
+      memory.supersededBy || null,
+      memory.supersedes || null
     );
     db.prepare("INSERT INTO vec_memories (id, embedding) VALUES (?, ?)").run(
       memory.id,
@@ -324,6 +360,22 @@ export async function updateMemory(
   if (updates.projectId !== undefined) {
     setClauses.push("project_id = ?");
     values.push(updates.projectId);
+  }
+  if (updates.sourceType !== undefined) {
+    setClauses.push("source_type = ?");
+    values.push(updates.sourceType);
+  }
+  if (updates.sourceId !== undefined) {
+    setClauses.push("source_id = ?");
+    values.push(updates.sourceId);
+  }
+  if (updates.supersededBy !== undefined) {
+    setClauses.push("superseded_by = ?");
+    values.push(updates.supersededBy);
+  }
+  if (updates.supersedes !== undefined) {
+    setClauses.push("supersedes = ?");
+    values.push(updates.supersedes);
   }
 
   if (setClauses.length === 0 && !updates.embedding) return true;
@@ -580,7 +632,7 @@ export async function getAllMemories(): Promise<
   const db = getDb();
   const rows = db
     .prepare(
-      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id FROM memories"
+      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories"
     )
     .all() as Array<{
     id: string;
@@ -592,6 +644,10 @@ export async function getAllMemories(): Promise<
     access_count: number;
     source_chat_id: string;
     project_id: string;
+    source_type: string;
+    source_id: string;
+    superseded_by: string | null;
+    supersedes: string | null;
   }>;
 
   return rows.map((r) => ({
@@ -604,7 +660,201 @@ export async function getAllMemories(): Promise<
     accessCount: r.access_count,
     sourceChatId: r.source_chat_id,
     ...(r.project_id ? { projectId: r.project_id } : {}),
+    sourceType: r.source_type as Memory['sourceType'],
+    sourceId: r.source_id || undefined,
+    supersededBy: r.superseded_by || undefined,
+    supersedes: r.supersedes || undefined,
   }));
+}
+
+/**
+ * Raw semantic search without scoring/reranking - returns memories as-is.
+ * Used for supersession detection.
+ */
+export async function searchMemoriesRaw(
+  queryEmbedding: number[],
+  topK: number
+): Promise<ScoredMemory[]> {
+  const db = getDb();
+  
+  const vecRows = db
+    .prepare(
+      `SELECT id, distance FROM vec_memories WHERE embedding MATCH ? ORDER BY distance LIMIT ?`
+    )
+    .all(new Float32Array(queryEmbedding), topK) as Array<{
+    id: string;
+    distance: number;
+  }>;
+
+  if (vecRows.length === 0) return [];
+
+  const ids = vecRows.map(r => r.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const metaRows = db
+    .prepare(
+      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories WHERE id IN (${placeholders})`
+    )
+    .all(...ids) as Array<{
+    id: string;
+    text: string;
+    category: string;
+    importance: number;
+    created_at: string;
+    last_accessed: string;
+    access_count: number;
+    source_chat_id: string;
+    project_id: string;
+    source_type: string;
+    source_id: string;
+    superseded_by: string | null;
+    supersedes: string | null;
+  }>;
+
+  return metaRows.map(r => {
+    const vecMatch = vecRows.find(v => v.id === r.id);
+    const distance = vecMatch ? vecMatch.distance : 0;
+    return {
+      memory: {
+        id: r.id,
+        text: r.text,
+        category: r.category as Memory["category"],
+        importance: r.importance,
+        embedding: [],
+        createdAt: r.created_at,
+        lastAccessed: r.last_accessed,
+        accessCount: r.access_count,
+        sourceChatId: r.source_chat_id,
+        ...(r.project_id ? { projectId: r.project_id } : {}),
+        sourceType: r.source_type as Memory['sourceType'],
+        sourceId: r.source_id || undefined,
+        supersededBy: r.superseded_by || undefined,
+        supersedes: r.supersedes || undefined,
+      },
+      score: 1 - distance,
+    };
+  });
+}
+
+/**
+ * Create a supersession link between two memories.
+ * newerMemoryId supersedes olderMemoryId.
+ */
+export async function createSupersessionLink(
+  newerMemoryId: string,
+  olderMemoryId: string,
+  confidence: number
+): Promise<void> {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const linkId = uuid();
+  
+  const insert = db.transaction(() => {
+    // Insert audit record
+    db.prepare(`
+      INSERT INTO memory_supersession_history (id, older_memory_id, newer_memory_id, confidence, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(linkId, olderMemoryId, newerMemoryId, confidence, now);
+    
+    // Update newer memory to point to older
+    db.prepare(`
+      UPDATE memories SET supersedes = ? WHERE id = ?
+    `).run(olderMemoryId, newerMemoryId);
+    
+    // Update older memory to point to newer
+    db.prepare(`
+      UPDATE memories SET superseded_by = ? WHERE id = ?
+    `).run(newerMemoryId, olderMemoryId);
+  });
+  
+  insert();
+  console.log(`[memory] Created supersession link: ${olderMemoryId} → ${newerMemoryId}`);
+}
+
+/**
+ * Remove a supersession link (e.g., if it was a false positive).
+ */
+export async function removeSupersessionLink(
+  newerMemoryId: string,
+  olderMemoryId: string,
+  reason?: string
+): Promise<void> {
+  const db = getDb();
+  const now = new Date().toISOString();
+  
+  const remove = db.transaction(() => {
+    // Mark the audit record as removed
+    db.prepare(`
+      UPDATE memory_supersession_history 
+      SET removed_at = ?, removal_reason = ?
+      WHERE older_memory_id = ? AND newer_memory_id = ? AND removed_at IS NULL
+    `).run(now, reason || '', olderMemoryId, newerMemoryId);
+    
+    // Clear the links
+    db.prepare(`
+      UPDATE memories SET supersedes = NULL WHERE id = ? AND supersedes = ?
+    `).run(newerMemoryId, olderMemoryId);
+    
+    db.prepare(`
+      UPDATE memories SET superseded_by = NULL WHERE id = ? AND superseded_by = ?
+    `).run(olderMemoryId, newerMemoryId);
+  });
+  
+  remove();
+  console.log(`[memory] Removed supersession link: ${olderMemoryId} → ${newerMemoryId}`);
+}
+
+/**
+ * Get the supersession lineage for a memory.
+ * Follows the chain in either direction.
+ */
+export async function getMemoryLineage(memoryId: string): Promise<{
+  older: Array<{ id: string; text: string; createdAt: string }>;
+  newer: Array<{ id: string; text: string; createdAt: string }>;
+}> {
+  const db = getDb();
+  
+  const older: Array<{ id: string; text: string; createdAt: string }> = [];
+  const newer: Array<{ id: string; text: string; createdAt: string }> = [];
+  
+  // Walk backwards (older memories this one supersedes)
+  let currentId = memoryId;
+  while (true) {
+    const row = db.prepare(`
+      SELECT supersedes FROM memories WHERE id = ?
+    `).get(currentId) as { supersedes: string | null } | undefined;
+    
+    if (!row || !row.supersedes) break;
+    
+    const olderRow = db.prepare(`
+      SELECT id, text, created_at FROM memories WHERE id = ?
+    `).get(row.supersedes) as { id: string; text: string; created_at: string } | undefined;
+    
+    if (!olderRow) break;
+    
+    older.push({ id: olderRow.id, text: olderRow.text, createdAt: olderRow.created_at });
+    currentId = olderRow.id;
+  }
+  
+  // Walk forwards (newer memories that supersede this one)
+  currentId = memoryId;
+  while (true) {
+    const row = db.prepare(`
+      SELECT superseded_by FROM memories WHERE id = ?
+    `).get(currentId) as { superseded_by: string | null } | undefined;
+    
+    if (!row || !row.superseded_by) break;
+    
+    const newerRow = db.prepare(`
+      SELECT id, text, created_at FROM memories WHERE id = ?
+    `).get(row.superseded_by) as { id: string; text: string; created_at: string } | undefined;
+    
+    if (!newerRow) break;
+    
+    newer.push({ id: newerRow.id, text: newerRow.text, createdAt: newerRow.created_at });
+    currentId = newerRow.id;
+  }
+  
+  return { older, newer };
 }
 
 export interface DuplicateMatch {

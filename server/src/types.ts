@@ -127,6 +127,11 @@ export interface Memory {
   accessCount: number;
   sourceChatId: string;
   projectId?: string;
+  // Temporal layering fields
+  sourceType?: 'chat' | 'notebook' | 'explicit';
+  sourceId?: string;  // chatId or notebookEntryId
+  supersededBy?: string;  // ID of newer memory that supersedes this one
+  supersedes?: string;  // ID of older memory that this one supersedes
 }
 
 export interface MemoryStore {
