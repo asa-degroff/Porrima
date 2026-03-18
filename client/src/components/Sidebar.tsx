@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { ChatListItem as ChatListItemType, ChatType, Project } from "../types";
 import { ChatListItem } from "./ChatListItem";
 import { OctahedronLogo } from "./OctahedronLogo";
+import { useSidebarState } from "../hooks/useSidebarState";
 
 interface Props {
   chats: ChatListItemType[];
@@ -47,6 +48,8 @@ function ProjectSection({
   project,
   chats,
   activeChatId,
+  expanded,
+  onToggleExpanded,
   onSelectChat,
   onNewChat,
   onDeleteChat,
@@ -56,20 +59,21 @@ function ProjectSection({
   project: Project;
   chats: ChatListItemType[];
   activeChatId: string | null;
+  expanded: boolean;
+  onToggleExpanded: () => void;
   onSelectChat: (id: string) => void;
   onNewChat: (type: ChatType, projectId?: string) => void;
   onDeleteChat: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
     <div className="rounded-lg bg-white/[0.03] border border-white/[0.06]">
       <div className="flex items-center gap-1.5 px-2 py-1.5 group">
         <button
-          onClick={() => setExpanded(!expanded)}
+          onClick={onToggleExpanded}
           className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
         >
           <span className="text-emerald-400/50">
@@ -169,9 +173,16 @@ export function Sidebar({
   hasUnreadNotebooks = false,
   ttsBarVisible = false,
 }: Props) {
-  const [projectsExpanded, setProjectsExpanded] = useState(true);
-  const [agentExpanded, setAgentExpanded] = useState(true);
-  const [quickExpanded, setQuickExpanded] = useState(true);
+  const {
+    projectsExpanded,
+    setProjectsExpanded,
+    agentExpanded,
+    setAgentExpanded,
+    quickExpanded,
+    setQuickExpanded,
+    getProjectExpanded,
+    setProjectExpanded,
+  } = useSidebarState();
 
   const agentChats = useMemo(
     () => chats.filter((c) => c.type === "agent" && !c.projectId),
@@ -283,6 +294,8 @@ export function Sidebar({
                       key={project.id}
                       project={project}
                       chats={chatsByProject[project.id] || []}
+                      expanded={getProjectExpanded(project.id)}
+                      onToggleExpanded={() => setProjectExpanded(project.id, !getProjectExpanded(project.id))}
                       activeChatId={activeChatId}
                       onSelectChat={(id) => { onSelectChat(id); onClose(); }}
                       onNewChat={onNewChat}
