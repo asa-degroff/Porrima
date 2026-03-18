@@ -53,6 +53,7 @@ export function useImageSandbox() {
         } else if (state.status === "completed" && state.imageUrl) {
           setGenerating(false);
           setProgress(null);
+          setError(null); // Clear error on success
           subscribedGenerationIds.current.delete(generationId);
           // The image will appear in the list after refresh
         } else if (state.status === "error") {
@@ -130,6 +131,9 @@ export function useImageSandbox() {
   }, []);
 
   const enqueue = useCallback(async (params: ImageGenerationParams, batchCount: number = 1) => {
+    // Clear any previous error state when starting new generation
+    setError(null);
+    
     // Enqueue by creating generation states on the server
     // Each batch item becomes a separate generation
     for (let i = 0; i < batchCount; i++) {
@@ -146,10 +150,27 @@ export function useImageSandbox() {
           setProgress({ step, total: totalSteps });
         },
         onDone: (image) => {
-          setImages((prev) => [image, ...prev]);
-          setSelectedImage(image);
+          // Refresh from server to ensure authoritative list
+          fetchGeneratedImages().then((fresh) => {
+            setImages(fresh);
+            // Ensure the newly generated image is selected
+            const justCreated = fresh.find((img) => img.id === image.id);
+            if (justCreated) {
+              setSelectedImage(justCreated);
+            }
+          }).catch(() => {
+            // Fallback to local state update
+            setImages((prev) => {
+              if (prev.some((img) => img.id === image.id)) {
+                return prev;
+              }
+              return [image, ...prev];
+            });
+            setSelectedImage(image);
+          });
           setGenerating(false);
           setProgress(null);
+          setError(null); // Clear error on success
           if (currentGenerationId) {
             subscribedGenerationIds.current.delete(currentGenerationId);
           }
