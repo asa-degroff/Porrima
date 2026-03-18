@@ -1,12 +1,13 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
-import type { Message, ToolCall, ToolResultMessage, AssistantMessage } from "@mariozechner/pi-ai";
+import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import { streamSimple, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
 import type { AgentContext, AgentLoopConfig, StreamFn } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat, getSettings } from "../services/storage.js";
 import { chatMessagesToPiMessages } from "../services/agent.js";
 import { createPiModel, discoverOllamaModels } from "../services/models.js";
+import type { OllamaModel } from "../types.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
 import { generateTitle } from "../services/title-generation.js";
 import { truncateChatHistory, truncateBeforeSend } from "../services/compaction.js";
@@ -76,6 +77,9 @@ async function persistImages(images: ImageAttachment[]): Promise<ImageAttachment
  * returns an event stream that immediately emits an abort error
  * instead of letting the fetch call throw.
  */
+/** Inactivity timeout for LLM streaming (60s with no events = model likely stuck loading) */
+const STREAM_INACTIVITY_TIMEOUT_MS = 60_000;
+
 function createSafeStreamFn(): StreamFn {
   return (model, ctx, options) => {
     if (options?.signal?.aborted) {
@@ -97,7 +101,60 @@ function createSafeStreamFn(): StreamFn {
       stream.push({ type: "error", reason: "aborted", error: msg });
       return stream;
     }
-    return streamSimple(model, ctx, options);
+
+    // Wrap the raw stream with an inactivity timeout.
+    // If Ollama is stuck loading a model, the stream hangs indefinitely —
+    // this detects that and aborts with a clear error.
+    const rawStream = streamSimple(model, ctx, options);
+    const wrappedStream = createAssistantMessageEventStream();
+
+    (async () => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let ended = false;
+
+      const endStream = () => {
+        if (!ended) {
+          ended = true;
+          wrappedStream.end();
+        }
+      };
+
+      const resetTimer = () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          console.error(`[stream] inactivity timeout (${STREAM_INACTIVITY_TIMEOUT_MS}ms) — model may be stuck loading: ${model.id}`);
+          // Push an error event so the consumer gets a clear message
+          wrappedStream.push({
+            type: "error",
+            reason: "timeout",
+            error: `Model unresponsive for ${STREAM_INACTIVITY_TIMEOUT_MS / 1000}s — it may be stuck loading. Try again or use a different model.`,
+          } as any);
+          endStream();
+        }, STREAM_INACTIVITY_TIMEOUT_MS);
+      };
+
+      resetTimer();
+
+      try {
+        for await (const event of rawStream) {
+          if (ended) break;
+          resetTimer();
+          wrappedStream.push(event);
+        }
+      } catch (err) {
+        console.error(`[stream] error from LLM stream:`, err);
+        wrappedStream.push({
+          type: "error",
+          reason: "stream_error",
+          error: err instanceof Error ? err.message : String(err),
+        } as any);
+      } finally {
+        if (timer) clearTimeout(timer);
+        endStream();
+      }
+    })();
+
+    return wrappedStream;
   };
 }
 
@@ -131,7 +188,11 @@ async function handleChatStream(
   res.socket?.setNoDelay(true);
 
   const connectionAbortController = new AbortController();
-  req.on("close", () => connectionAbortController.abort());
+  let connectionClosed = false;
+  req.on("close", () => {
+    connectionClosed = true;
+    connectionAbortController.abort();
+  });
 
   const MAX_ITERATIONS = 500;
 
@@ -210,8 +271,11 @@ async function handleChatStream(
   }
 
   // Create a turn-level abort controller to prevent signal bleeding across iterations
-  // This is separate from connectionAbortController which handles SSE disconnect
+  // Also abort the turn when the client disconnects (SSE close)
   const turnAbortController = new AbortController();
+  connectionAbortController.signal.addEventListener("abort", () => {
+    turnAbortController.abort();
+  });
 
   // ask_user state — owned by the route, set via callback.
   // Uses a ref object so TypeScript can track mutations through closures.
@@ -259,11 +323,23 @@ async function handleChatStream(
   console.log(`[chat] type=${chat.type} tools=${agentTools ? agentTools.map(t => t.name).join(",") : "none"} tts=${ttsEnabled}`);
 
   try {
-    // Discover model
-    const ollamaModels = await discoverOllamaModels();
-    const ollamaModel = ollamaModels.find(m => m.id === chat.modelId);
-    if (!ollamaModel) throw new Error(`Model not found: ${chat.modelId}`);
-    const piModel = createPiModel(ollamaModel);
+    // Discover model with timeout protection
+    let ollamaModels: OllamaModel[];
+    let ollamaModel: OllamaModel | undefined;
+    let piModel: Model<"openai-completions">;
+    
+    try {
+      ollamaModels = await discoverOllamaModels();
+      ollamaModel = ollamaModels.find(m => m.id === chat.modelId);
+      if (!ollamaModel) throw new Error(`Model not found: ${chat.modelId}`);
+      piModel = createPiModel(ollamaModel);
+    } catch (modelError: any) {
+      console.error("[chat] model discovery failed:", modelError.message);
+      // Send error event and end response cleanly
+      res.write(`event: error\ndata: ${JSON.stringify({ error: `Model unavailable: ${modelError.message}` })}\n\n`);
+      res.end();
+      return;
+    }
 
     // Build agent context
     const context: AgentContext = {
@@ -753,10 +829,16 @@ async function handleChatStream(
       res.write(
         `event: done\ndata: ${JSON.stringify({ message: assistantMsg, waitingForInput: true, iterations })}\n\n`
       );
-    } else if (e.name !== "AbortError") {
-      res.write(
-        `event: error\ndata: ${JSON.stringify({ error: e.message })}\n\n`
-      );
+    } else if (e.name === "AbortError") {
+      // AbortError from client disconnect or inactivity timeout — don't write to closed connection
+      console.log(`[chat] stream aborted: ${connectionClosed ? "client disconnected" : "signal aborted"}`);
+    } else {
+      // Only write error if the connection is still open
+      if (!connectionClosed) {
+        res.write(
+          `event: error\ndata: ${JSON.stringify({ error: e.message })}\n\n`
+        );
+      }
     }
   } finally {
     res.end();
@@ -867,8 +949,14 @@ router.post("/", async (req, res) => {
     await saveChat(chat);
 
     // Discover model for pre-send truncation
-    const ollamaModels = await discoverOllamaModels();
-    const model = ollamaModels.find((m) => m.id === chat.modelId);
+    let model: OllamaModel | undefined;
+    try {
+      const ollamaModels = await discoverOllamaModels();
+      model = ollamaModels.find((m) => m.id === chat.modelId);
+    } catch (err: any) {
+      console.error("[compaction] model discovery failed (resume):", err.message);
+      model = undefined; // Skip truncation if Ollama is unreachable
+    }
     
     // Pre-send context protection for resume path
     if (model) {
@@ -934,8 +1022,14 @@ router.post("/", async (req, res) => {
     }
     
     // Discover model for pre-send truncation
-    const ollamaModels = await discoverOllamaModels();
-    const model = ollamaModels.find((m) => m.id === chat.modelId);
+    let model: OllamaModel | undefined;
+    try {
+      const ollamaModels = await discoverOllamaModels();
+      model = ollamaModels.find((m) => m.id === chat.modelId);
+    } catch (err: any) {
+      console.error("[compaction] model discovery failed:", err.message);
+      model = undefined; // Skip truncation if Ollama is unreachable
+    }
     
     // Pre-send context protection: truncate BEFORE sending if >75% of context window
     if (model) {
@@ -1061,8 +1155,14 @@ router.post("/edit", async (req, res) => {
   }
   
   // Discover model for pre-send truncation
-  const ollamaModels = await discoverOllamaModels();
-  const model = ollamaModels.find((m) => m.id === chat.modelId);
+  let model: OllamaModel | undefined;
+  try {
+    const ollamaModels = await discoverOllamaModels();
+    model = ollamaModels.find((m) => m.id === chat.modelId);
+  } catch (err: any) {
+    console.error("[compaction] model discovery failed (edit):", err.message);
+    model = undefined; // Skip truncation if Ollama is unreachable
+  }
   
   // Pre-send context protection for edit path
   if (model) {

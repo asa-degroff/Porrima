@@ -16,11 +16,15 @@ interface OllamaTagResponse {
 
 async function getContextWindow(modelName: string): Promise<number> {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
     const res = await fetch(`${OLLAMA_BASE}/api/show`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: modelName }),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
     if (!res.ok) return 32768;
     const data = await res.json();
     const modelInfo = data.model_info as Record<string, unknown> | undefined;
@@ -31,7 +35,9 @@ async function getContextWindow(modelName: string): Promise<number> {
         }
       }
     }
-  } catch {}
+  } catch {
+    // Timeout or network error - return default
+  }
   return 32768;
 }
 
@@ -44,24 +50,53 @@ export async function discoverOllamaModels(): Promise<OllamaModel[]> {
     return modelCache.models;
   }
 
-  const res = await fetch(`${OLLAMA_BASE}/api/tags`);
-  if (!res.ok) throw new Error(`Ollama not reachable: ${res.status}`);
-  const data = (await res.json()) as OllamaTagResponse;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout for discovery
 
-  const filtered = data.models.filter((m) => !m.name.includes("embedding"));
+  try {
+    const res = await fetch(`${OLLAMA_BASE}/api/tags`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error(`Ollama not reachable: ${res.status}`);
+    const data = (await res.json()) as OllamaTagResponse;
 
-  const models = await Promise.all(
-    filtered.map(async (m) => ({
-      id: m.name,
-      name: formatModelName(m.name, m.details.parameter_size),
-      parameterSize: m.details.parameter_size,
-      family: m.details.family,
-      contextWindow: await getContextWindow(m.name),
-    }))
-  );
+    const filtered = data.models.filter((m) => !m.name.includes("embedding"));
 
-  modelCache = { models, timestamp: Date.now() };
-  return models;
+    // Use Promise.allSettled to isolate individual model failures
+    // A single broken model shouldn't take down all model discovery
+    const results = await Promise.allSettled(
+      filtered.map(async (m) => ({
+        id: m.name,
+        name: formatModelName(m.name, m.details.parameter_size),
+        parameterSize: m.details.parameter_size,
+        family: m.details.family,
+        contextWindow: await getContextWindow(m.name),
+      }))
+    );
+
+    const fulfilled = results.filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled");
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    
+    if (rejected.length > 0) {
+      console.warn(`[models] ${rejected.length} model(s) failed to load:`);
+      rejected.forEach((r, idx) => {
+        const modelName = filtered[idx]?.name ?? "unknown";
+        console.warn(`  - ${modelName}: ${r.reason?.message || String(r.reason)}`);
+      });
+    }
+    
+    const models = fulfilled.map(r => r.value);
+    modelCache = { models, timestamp: Date.now() };
+    return models;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    console.error("[models] discoverOllamaModels failed:", error);
+    // Return cached models on failure if available (graceful degradation)
+    if (modelCache) {
+      console.warn("[models] returning stale cache due to Ollama failure");
+      return modelCache.models;
+    }
+    throw error;
+  }
 }
 
 function supportsReasoning(family: string): boolean {

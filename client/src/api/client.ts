@@ -118,6 +118,9 @@ export interface StreamCallbacks {
   onFollowUpStart?: (data: any) => void;
 }
 
+/** Inactivity timeout for SSE streams (65s — slightly longer than server-side 60s) */
+const SSE_INACTIVITY_TIMEOUT_MS = 65_000;
+
 function streamSSE(
   url: string,
   body: Record<string, unknown>,
@@ -155,11 +158,26 @@ function streamSSE(
       const decoder = new TextDecoder();
       let buffer = "";
       let currentEvent = "";
+      let receivedDoneOrError = false;
+
+      // Inactivity timeout — abort if no data received for too long
+      // (e.g., Ollama stuck loading a model)
+      let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+      const resetInactivityTimer = () => {
+        if (inactivityTimer) clearTimeout(inactivityTimer);
+        inactivityTimer = setTimeout(() => {
+          console.warn("[SSE] inactivity timeout — aborting stream");
+          controller.abort();
+          callbacks.onError("Model appears unresponsive — try again or switch models");
+        }, SSE_INACTIVITY_TIMEOUT_MS);
+      };
+      resetInactivityTimer();
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
+        resetInactivityTimer();
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
@@ -172,6 +190,9 @@ function streamSSE(
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
+              if (currentEvent === "done" || currentEvent === "error") {
+                receivedDoneOrError = true;
+              }
               processSSEEvent(currentEvent, data, callbacks);
             } catch {
               // skip malformed
@@ -186,6 +207,8 @@ function streamSSE(
         }
       }
 
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+
       // Process remaining buffer
       if (buffer.trim()) {
         for (const line of buffer.split("\n")) {
@@ -194,11 +217,20 @@ function streamSSE(
           } else if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
+              if (currentEvent === "done" || currentEvent === "error") {
+                receivedDoneOrError = true;
+              }
               processSSEEvent(currentEvent, data, callbacks);
             } catch {}
             currentEvent = "";
           }
         }
+      }
+
+      // Safety net: if the stream ended without a done or error event,
+      // the client would stay stuck in streaming state forever
+      if (!receivedDoneOrError) {
+        callbacks.onError("Connection lost — no response received from model");
       }
     })
     .catch((e) => {
