@@ -176,6 +176,11 @@ async function handleChatStream(
   req: Request,
   res: Response
 ) {
+  // Safety check: log if context is unexpectedly empty for non-first messages
+  if (contextMessages.length === 0 && chat.messages.length > 1) {
+    console.error(`[chat] CRITICAL: context is empty but chat has ${chat.messages.length} messages - agent will respond without conversation history`);
+  }
+  
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -701,6 +706,12 @@ async function handleChatStream(
       
       // Build new context for follow-up (all messages including the queued one)
       const followUpContextMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
+      
+      // Safety check: ensure context is not empty
+      if (followUpContextMessages.length === 0 && chat.messages.length > 1) {
+        console.error(`[chat] follow-up context is empty despite ${chat.messages.length} messages - this indicates a conversion bug`);
+      }
+      
       const followUpSystemPrompt = chat.type === "agent"
         ? await buildMemoryAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages)
         : chat.systemPrompt || "You are a helpful assistant.";
@@ -717,15 +728,24 @@ async function handleChatStream(
       // everything through the assistant message with ask_user, but drop
       // the placeholder tool result and any aborted assistant message.
       const savedMessages = [...context.messages];
+      let foundAskUser = false;
       while (savedMessages.length > 0) {
         const last = savedMessages[savedMessages.length - 1] as any;
         if (
           last.role === "assistant" &&
           last.content?.some?.((c: any) => c.type === "toolCall" && c.name === "ask_user")
         ) {
+          foundAskUser = true;
           break; // Keep this assistant message
         }
         savedMessages.pop();
+      }
+      
+      // Safety: if no ask_user message was found, keep the original context
+      // to avoid losing all conversation history due to malformed message structure
+      if (!foundAskUser && context.messages.length > 0) {
+        console.warn(`[chat] ask_user message not found in context, preserving full context (${context.messages.length} messages)`);
+        savedMessages.push(...context.messages);
       }
 
       await savePendingState(chat.id, {
@@ -927,6 +947,15 @@ router.post("/", async (req, res) => {
     }
     
     const contextMessages = pendingState.agentMessages as Message[];
+    
+    // Safety check: if context is empty, rebuild from chat.messages to avoid
+    // losing conversation history due to corrupted or empty pending state
+    if (contextMessages.length === 0 && chat.messages.length > 0) {
+      console.warn(`[chat] pending state has empty context, rebuilding from chat.messages (${chat.messages.length} messages)`);
+      // Exclude the last message (current user message) from context
+      const rebuiltContext = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
+      contextMessages.push(...rebuiltContext);
+    }
 
     // Inject the user's answer as a ToolResultMessage for the pending ask_user call
     const toolResultMsg: ToolResultMessage = {
@@ -981,6 +1010,11 @@ router.post("/", async (req, res) => {
       } catch (err) {
         console.error("[compaction] pre-send truncation failed (resume):", err);
       }
+    }
+    
+    // Safety check: warn if context is empty for resume
+    if (contextMessages.length === 0 && chat.messages.length > 1) {
+      console.error(`[chat] CRITICAL: resume context is empty despite ${chat.messages.length} messages in chat`);
     }
 
     // Resume: userPiMessage=null triggers agentLoopContinue
@@ -1060,6 +1094,12 @@ router.post("/", async (req, res) => {
 
     // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
     const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
+    
+    // Safety check: warn if context is empty for non-first messages
+    if (contextMessages.length === 0 && chat.messages.length > 1) {
+      console.error(`[chat] CRITICAL: context conversion produced empty array for chat with ${chat.messages.length} messages`);
+    }
+    
     const userPiMessage = buildUserPiMessage(message, images);
 
     await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
@@ -1193,6 +1233,12 @@ router.post("/edit", async (req, res) => {
 
   // Context = all messages EXCEPT the one we just added
   const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
+  
+  // Safety check: warn if context is empty for non-first messages
+  if (contextMessages.length === 0 && chat.messages.length > 1) {
+    console.error(`[chat] CRITICAL: context conversion produced empty array for edit with ${chat.messages.length} messages`);
+  }
+  
   const userPiMessage = buildUserPiMessage(message);
 
   await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
