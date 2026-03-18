@@ -3,6 +3,7 @@ import type { InlineVisual as InlineVisualType } from "../types";
 
 const MIN_HEIGHT = 80;
 const MAX_HEIGHT = 1000;
+const DEFAULT_HEIGHT = 450;
 
 interface Props {
   visual: InlineVisualType;
@@ -11,7 +12,7 @@ interface Props {
 export function InlineVisual({ visual }: Props) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [iframeLoaded, setIframeLoaded] = useState(false);
-  const [height, setHeight] = useState(200);
+  const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const updateHeight = useCallback(() => {
