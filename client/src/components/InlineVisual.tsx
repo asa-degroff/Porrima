@@ -44,9 +44,29 @@ export function InlineVisual({ visual }: Props) {
     }
   }, [updateHeight]);
 
-  // Create blob URL from inline HTML
+  // Inject scrollbar styling into visual HTML to match app aesthetic
+  const injectScrollbarStyles = (html: string): string => {
+    const scrollbarStyles = `<style>
+html, body { background: transparent !important; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.15) transparent; }
+</style>`;
+    
+    if (html.includes("</head>")) {
+      return html.replace("</head>", `${scrollbarStyles}\n</head>`);
+    } else if (html.includes("<body")) {
+      return html.replace("<body", `${scrollbarStyles}\n<body`);
+    }
+    return scrollbarStyles + "\n" + html;
+  };
+
+  // Create blob URL from inline HTML with scrollbar styles injected
   useEffect(() => {
-    const blob = new Blob([visual.html], { type: "text/html" });
+    const styledHtml = injectScrollbarStyles(visual.html);
+    const blob = new Blob([styledHtml], { type: "text/html" });
     const url = URL.createObjectURL(blob);
     setBlobUrl(url);
     return () => URL.revokeObjectURL(url);
@@ -105,7 +125,7 @@ export function InlineVisual({ visual }: Props) {
       </div>
 
       {/* Iframe content */}
-      <div className={`transition-colors duration-150 ${iframeLoaded ? "bg-white" : "bg-black/10"}`}>
+      <div className={`transition-colors duration-150 ${iframeLoaded ? "bg-transparent" : "bg-black/10"}`}>
         {blobUrl ? (
           <iframe
             ref={iframeRef}
