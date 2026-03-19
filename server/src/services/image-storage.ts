@@ -2,6 +2,7 @@ import { writeFile, mkdir, readFile, readdir, access, rm } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import sharp from "sharp";
+import { jxl } from "icodec/node";
 import type { ImageGenerationParams } from "../types.js";
 
 const IMAGES_DIR = join(homedir(), ".quje-agent", "images");
@@ -22,13 +23,27 @@ export async function saveGeneratedImage(
   const imageDir = join(IMAGES_DIR, id);
   await mkdir(imageDir, { recursive: true });
 
+  // Generate thumbnail from PNG
   const thumbBuffer = await sharp(imageBuffer)
     .resize(THUMB_WIDTH, undefined, { fit: "inside", withoutEnlargement: true })
     .webp({ quality: 80 })
     .toBuffer();
 
+  // Convert PNG to JPEG XL (quality 92 = perceptually lossless, effort 8 = good compression/speed balance)
+  // icodec requires raw RGBA buffer
+  const rawBuffer = await sharp(imageBuffer).ensureAlpha().raw().toBuffer();
+  const image = await sharp(imageBuffer).ensureAlpha().toBuffer({ resolveWithObject: true });
+  const imageData = {
+    width: image.info.width,
+    height: image.info.height,
+    data: new Uint8ClampedArray(rawBuffer.buffer, rawBuffer.byteOffset, rawBuffer.byteLength),
+    depth: 8
+  };
+  await jxl.loadEncoder();
+  const jxlBuffer = jxl.encode(imageData, { quality: 92, effort: 8 });
+
   await Promise.all([
-    writeFile(join(imageDir, "image.png"), imageBuffer),
+    writeFile(join(imageDir, "image.jxl"), jxlBuffer),
     writeFile(join(imageDir, "thumb.webp"), thumbBuffer),
     writeFile(join(imageDir, "metadata.json"), JSON.stringify(metadata, null, 2)),
   ]);
@@ -37,6 +52,10 @@ export async function saveGeneratedImage(
 }
 
 export function getImagePath(id: string): string {
+  return join(IMAGES_DIR, id, "image.jxl");
+}
+
+export function getImagePathPNG(id: string): string {
   return join(IMAGES_DIR, id, "image.png");
 }
 
@@ -57,8 +76,13 @@ export async function ensureThumbnail(id: string): Promise<boolean> {
     // generate it
   }
   try {
-    const imagePath = getImagePath(id);
-    const imageBuffer = await readFile(imagePath);
+    // Try JXL first, fall back to PNG for older images
+    let imageBuffer: Buffer;
+    try {
+      imageBuffer = await readFile(getImagePath(id));
+    } catch {
+      imageBuffer = await readFile(getImagePathPNG(id));
+    }
     const thumbBuffer = await sharp(imageBuffer)
       .resize(THUMB_WIDTH, undefined, { fit: "inside", withoutEnlargement: true })
       .webp({ quality: 80 })

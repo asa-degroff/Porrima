@@ -28,7 +28,7 @@ export function ImageDetails({ image, onUseParams, onOpenLightbox }: Props) {
   const handleDownload = () => {
     const a = document.createElement("a");
     a.href = image.url;
-    a.download = `quje-${image.resolvedSeed}.png`;
+    a.download = `quje-${image.resolvedSeed}.jxl`;
     a.click();
   };
 

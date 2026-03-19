@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { getComfyUIStatus, getComfyUIModels, generateImageWithState } from "../services/comfyui.js";
-import { saveGeneratedImage, getImagePath, getThumbPath, ensureThumbnail, getImageMetadata, listImages, deleteImage } from "../services/image-storage.js";
+import { saveGeneratedImage, getImagePath, getImagePathPNG, getThumbPath, ensureThumbnail, getImageMetadata, listImages, deleteImage } from "../services/image-storage.js";
 import {
   loadGenerations,
   createGeneration,
@@ -211,11 +211,26 @@ router.get("/:id/thumb", async (req, res) => {
 
 router.get("/:id", async (req, res) => {
   const imagePath = getImagePath(req.params.id);
+  const imagePathPNG = getImagePathPNG(req.params.id);
+  
   try {
-    await access(imagePath);
-    res.setHeader("Content-Type", "image/png");
+    // Try JXL first (new format), fall back to PNG for older images
+    let filePath: string;
+    let contentType: string;
+    
+    try {
+      await access(imagePath);
+      filePath = imagePath;
+      contentType = "image/jxl";
+    } catch {
+      await access(imagePathPNG);
+      filePath = imagePathPNG;
+      contentType = "image/png";
+    }
+    
+    res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-    createReadStream(imagePath).pipe(res);
+    createReadStream(filePath).pipe(res);
   } catch {
     res.status(404).json({ error: "Image not found" });
   }
