@@ -584,6 +584,18 @@ async function handleChatStream(
             turnAbortController.abort();
           }
 
+          // Incremental persistence: save progress after each iteration
+          // This ensures tool calls and partial responses survive server restarts
+          try {
+            const partialMsg = buildCurrentAssistantMessage();
+            // Don't push to chat.messages yet - we're still accumulating
+            // Instead, save the current state of the chat with progress
+            await saveChat(chat);
+            console.log(`[chat] iteration ${iterations}: saved progress (${partialMsg.toolCalls?.length || 0} tools, ${partialMsg.content.length}ch)`);
+          } catch (saveErr) {
+            console.error(`[chat] failed to save iteration ${iterations}:`, saveErr);
+          }
+
           break;
         }
       }
@@ -645,6 +657,15 @@ async function handleChatStream(
             state.fullText = state.thinkingText;
             state.thinkingText = "";
             console.log(`[chat] continuation: promoted thinking to content (${state.fullText.length}ch)`);
+          }
+          
+          // Incremental persistence in continuation loop
+          try {
+            const partialMsg = buildCurrentAssistantMessage();
+            await saveChat(chat);
+            console.log(`[chat] continuation: saved progress (${partialMsg.content.length}ch)`);
+          } catch (saveErr) {
+            console.error(`[chat] continuation save failed:`, saveErr);
           }
           
           if (stopReason !== "toolUse") {
@@ -789,6 +810,7 @@ async function handleChatStream(
       }
 
       // Fire-and-forget memory extraction for agent chats
+      // Message is already persisted, so extraction can fail safely
       if (chat.type === "agent") {
         extractMemories(chat.modelId, chat.id, lastUserMessage, assistantMsg.content)
           .catch((err) => console.error("[memory] extraction failed:", err));
@@ -825,6 +847,18 @@ async function handleChatStream(
     if (askUserRef.current) {
       waitingForInput = true;
 
+      // Build partial assistant message with whatever we accumulated
+      const assistantMsg = buildCurrentAssistantMessage();
+      chat.messages.push(assistantMsg);
+      
+      // Save immediately - this is critical for durability
+      try {
+        await saveChat(chat);
+        console.log(`[chat] error path: saved partial message before ask_user`);
+      } catch (saveErr) {
+        console.error(`[chat] failed to save on ask_user error path:`, saveErr);
+      }
+
       // Best-effort save of pending state
       try {
         const savedMessages = [...(contextMessages as any[])];
@@ -840,19 +874,36 @@ async function handleChatStream(
       }
 
       res.write(`event: ask_user\ndata: ${JSON.stringify({ question: askUserRef.current.question })}\n\n`);
-
-      // Build partial assistant message
-      const assistantMsg = buildCurrentAssistantMessage();
-      chat.messages.push(assistantMsg);
-      await saveChat(chat);
-
       res.write(
         `event: done\ndata: ${JSON.stringify({ message: assistantMsg, waitingForInput: true, iterations })}\n\n`
       );
     } else if (e.name === "AbortError") {
-      // AbortError from client disconnect or inactivity timeout — don't write to closed connection
+      // AbortError from client disconnect or inactivity timeout
+      // Save whatever we've accumulated before the connection dropped
+      if (state.fullText.trim() || state.allToolCalls.length > 0) {
+        const assistantMsg = buildCurrentAssistantMessage();
+        chat.messages.push(assistantMsg);
+        try {
+          await saveChat(chat);
+          console.log(`[chat] abort: saved partial response (${assistantMsg.content.length}ch, ${assistantMsg.toolCalls?.length || 0} tools)`);
+        } catch (saveErr) {
+          console.error(`[chat] abort: failed to save partial response:`, saveErr);
+        }
+      }
       console.log(`[chat] stream aborted: ${connectionClosed ? "client disconnected" : "signal aborted"}`);
     } else {
+      // Unexpected error - save what we have before reporting
+      if (state.fullText.trim() || state.allToolCalls.length > 0 || state.allToolResults.length > 0) {
+        const assistantMsg = buildCurrentAssistantMessage();
+        chat.messages.push(assistantMsg);
+        try {
+          await saveChat(chat);
+          console.log(`[chat] error: saved partial state before error (${assistantMsg.content.length}ch)`);
+        } catch (saveErr) {
+          console.error(`[chat] error: failed to save partial state:`, saveErr);
+        }
+      }
+      
       // Only write error if the connection is still open
       if (!connectionClosed) {
         res.write(
