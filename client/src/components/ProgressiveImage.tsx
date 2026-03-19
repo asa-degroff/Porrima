@@ -59,8 +59,9 @@ export function ProgressiveImage({ src, thumbSrc, alt, className, onClick }: Pro
         // Let className control sizing (max-w-full max-h-full object-contain)
         // This ensures shadow is applied to actual image bounds, not container
         display: 'block',
-        maxWidth: '100%',
-        maxHeight: '100%'
+        width: '100%',
+        height: '100%',
+        objectFit: 'contain'
       }}
     />
   );
