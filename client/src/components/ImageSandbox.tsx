@@ -5,6 +5,7 @@ import { ImageControls } from "./ImageControls";
 import { ImageGallery } from "./ImageGallery";
 import { ImageDetails } from "./ImageDetails";
 import { ImageCarousel } from "./ImageCarousel";
+import { ProgressiveImage } from "./ProgressiveImage";
 import { VisionControls } from "./VisionControls";
 import { VisionChat } from "./VisionChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -405,8 +406,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   </button>
                   {selectedImage ? (
                     <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
-                      <img
+                      <ProgressiveImage
                         src={selectedImage.url}
+                        thumbSrc={`${selectedImage.url}/thumb`}
                         alt={selectedImage.params.positivePrompt.slice(0, 80)}
                         className="max-w-full max-h-full object-contain rounded-lg shadow-2xl cursor-pointer"
                         onClick={() => setLightboxImage(selectedImage)}
@@ -532,11 +534,12 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                     <path d="M9 18l6-6-6-6" />
                   </svg>
                 </button>
-                <img
+                <ProgressiveImage
                   src={lightboxCachedUrl}
+                  thumbSrc={`${lightboxImage.url}/thumb`}
                   alt={lightboxImage.params.positivePrompt.slice(0, 50)}
                   className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={() => {}}
                 />
                 <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-black/60 text-xs text-white/60 font-mono">
                   {lightboxImage.params.width}x{lightboxImage.params.height} &middot; seed: {lightboxImage.resolvedSeed} &middot; {lightboxImage.params.model}
