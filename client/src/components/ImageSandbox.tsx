@@ -4,6 +4,7 @@ import { useVisionSandbox } from "../hooks/useVisionSandbox";
 import { ImageControls } from "./ImageControls";
 import { ImageGallery } from "./ImageGallery";
 import { ImageDetails } from "./ImageDetails";
+import { ImageCarousel } from "./ImageCarousel";
 import { VisionControls } from "./VisionControls";
 import { VisionChat } from "./VisionChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -19,6 +20,7 @@ interface Props {
 }
 
 type SandboxMode = "generate" | "analyze";
+type ViewMode = "gallery" | "detail";
 
 function isVisionCapable(family: string): boolean {
   return family.includes("vl") || family.startsWith("qwen35");
@@ -44,6 +46,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   const closeLightbox = useCallback(() => setLightboxImage(null), []);
   const lightboxCachedUrl = useCachedImage(lightboxImage?.id ?? "", lightboxImage?.url ?? "");
 
+  // View mode: gallery (grid) or detail (large image + carousel)
+  const [viewMode, setViewMode] = useState<ViewMode>('gallery');
+
   // Navigation index for selected image in the detail pane
   const selectedIndex = useMemo(
     () => (selectedImage ? images.findIndex((img) => img.url === selectedImage.url) : -1),
@@ -62,12 +67,15 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     }
   }, [images, selectedImage, lightboxImage, setSelectedImage]);
 
-  // Keyboard: Escape closes lightbox, arrows navigate (detail pane or lightbox)
+  // Keyboard: Escape closes lightbox or exits detail mode, arrows navigate (detail pane or lightbox)
   // Skip when focus is in a text input to avoid breaking cursor movement
   useEffect(() => {
     if (!selectedImage && !lightboxImage) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && lightboxImage) { closeLightbox(); return; }
+      if (e.key === "Escape") {
+        if (lightboxImage) { closeLightbox(); return; }
+        if (viewMode === 'detail') { setViewMode('gallery'); return; }
+      }
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target as HTMLElement)?.isContentEditable) return;
       if (e.key === "ArrowLeft") { e.preventDefault(); navigateImage(-1); }
@@ -75,7 +83,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectedImage, lightboxImage, closeLightbox, navigateImage]);
+  }, [selectedImage, lightboxImage, viewMode, closeLightbox, navigateImage]);
 
   const {
     presets,
@@ -375,12 +383,47 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
 
             {/* Gallery / Preview */}
             <div className="flex-1 flex flex-col min-w-0">
-              <ImageGallery
-                images={images}
-                selectedImage={selectedImage}
-                onSelect={setSelectedImage}
-                onDelete={deleteGeneratedImage}
-              />
+              {viewMode === 'gallery' ? (
+                <ImageGallery
+                  images={images}
+                  selectedImage={selectedImage}
+                  onSelect={(image) => { setSelectedImage(image); setViewMode('detail'); }}
+                  onDelete={deleteGeneratedImage}
+                />
+              ) : (
+                /* Detail view: large image + carousel */
+                <div className="flex-1 flex flex-col min-h-0 relative">
+                  {/* Close button - returns to gallery */}
+                  <button
+                    onClick={() => setViewMode('gallery')}
+                    className="absolute top-4 left-4 z-10 p-2 rounded-lg bg-black/40 text-white/60 hover:text-white/90 hover:bg-black/60 transition-all"
+                    title="Back to gallery"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M15 18l-6-6 6-6" />
+                    </svg>
+                  </button>
+                  {selectedImage ? (
+                    <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
+                      <img
+                        src={selectedImage.url}
+                        alt={selectedImage.params.positivePrompt.slice(0, 80)}
+                        className="max-w-full max-h-full object-contain rounded-lg shadow-2xl cursor-pointer"
+                        onClick={() => setLightboxImage(selectedImage)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center text-white/30">
+                      <p className="text-sm">No image selected</p>
+                    </div>
+                  )}
+                  <ImageCarousel
+                    images={images}
+                    selectedImage={selectedImage}
+                    onSelect={(image) => setSelectedImage(image)}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Details panel - desktop sidebar */}
@@ -390,10 +433,6 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   image={selectedImage}
                   onUseParams={handleUseParams}
                   onOpenLightbox={setLightboxImage}
-                  onPrev={() => navigateImage(-1)}
-                  onNext={() => navigateImage(1)}
-                  hasPrev={hasPrevImage}
-                  hasNext={hasNextImage}
                 />
               </div>
             )}
@@ -452,10 +491,6 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                       image={selectedImage}
                       onUseParams={handleUseParams}
                       onOpenLightbox={setLightboxImage}
-                      onPrev={() => navigateImage(-1)}
-                      onNext={() => navigateImage(1)}
-                      hasPrev={hasPrevImage}
-                      hasNext={hasNextImage}
                     />
                   </div>
                 </div>
