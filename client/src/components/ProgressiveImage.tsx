@@ -56,10 +56,11 @@ export function ProgressiveImage({ src, thumbSrc, alt, className, onClick }: Pro
         filter: isInitial ? 'blur(4px)' : (loaded ? 'none' : 'blur(4px)'),
         // Only animate when switching from thumbnail to full image
         transition: isInitial ? 'none' : 'filter 0.2s ease-out',
-        // Force thumbnail to scale up to container size (matches full image dimensions)
-        width: '100%',
-        height: '100%',
-        objectFit: 'contain'
+        // Let className control sizing (max-w-full max-h-full object-contain)
+        // This ensures shadow is applied to actual image bounds, not container
+        display: 'block',
+        maxWidth: '100%',
+        maxHeight: '100%'
       }}
     />
   );
