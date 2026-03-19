@@ -369,11 +369,38 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
       addFiles(imageFiles);
       return;
     }
-    e.preventDefault();
+    
+    // Handle text paste
     const text = e.clipboardData.getData("text/plain");
-    if (text) {
-      document.execCommand("insertText", false, text);
-    }
+    if (!text) return;
+    
+    e.preventDefault();
+    
+    // Use Selection/Range API instead of deprecated execCommand (iOS Safari compatible)
+    const el = editorRef.current;
+    if (!el) return;
+    
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    
+    // Insert text node at cursor position
+    const textNode = document.createTextNode(text);
+    range.insertNode(textNode);
+    
+    // Move cursor to end of inserted text
+    range.setStartAfter(textNode);
+    range.setEndAfter(textNode);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    
+    // Trigger input handler to update state
+    textRef.current = el.innerText;
+    setHasContent(!!textRef.current.trim());
+    if (chatId) setDraft(chatId, textRef.current, images);
+    updateLayout();
   };
 
   return (
