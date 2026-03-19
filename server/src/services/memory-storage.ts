@@ -19,7 +19,7 @@ const DAILY_DIR = join(MEMORY_DIR, "daily");
 
 let _db: Database.Database | null = null;
 
-function getDb(): Database.Database {
+export function getDb(): Database.Database {
   if (_db) return _db;
 
   // Ensure directory exists (sync — only runs once)

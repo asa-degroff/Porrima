@@ -10,6 +10,8 @@ import {
   findDuplicates,
   searchMemoriesRaw,
   createSupersessionLink,
+  getAllMemories,
+  getDb,
 } from "./memory-storage.js";
 import type { ChatMessage, Memory, MemoryCategory } from "../types.js";
 
@@ -404,28 +406,29 @@ async function checkSupersession(
     if (oldMemory.memory.id === newMemoryId) continue;
     if (oldMemory.memory.supersededBy) continue;
     
-    // Only check older memories
-    if (new Date(oldMemory.memory.createdAt) >= new Date(oldMemory.memory.lastAccessed)) {
-      const confidence = calculateSupersessionConfidence(newText, oldMemory.memory.text);
-      
-      if (confidence > 0.75) {
-        console.log(
-          `[memory] Auto-superson: "${oldMemory.memory.text}" → "${newText}" (confidence=${confidence.toFixed(2)})`
-        );
-        await createSupersessionLink(newMemoryId, oldMemory.memory.id, confidence);
-      } else if (confidence > 0.50) {
-        console.log(
-          `[memory] Potential supersession flagged: "${oldMemory.memory.text}" vs "${newText}" (confidence=${confidence.toFixed(2)})`
-        );
-        // Could log to a review queue here for daily synthesis to pick up
-      }
+    // Only check older memories (by creation date)
+    if (new Date(oldMemory.memory.createdAt) >= new Date()) continue;
+    
+    const similarity = 1 - oldMemory.score; // Convert distance to similarity
+    const confidence = calculateSupersessionConfidence(newText, oldMemory.memory.text, similarity);
+    
+    if (confidence > 0.75) {
+      console.log(
+        `[memory] Auto-superson: "${oldMemory.memory.text}" → "${newText}" (confidence=${confidence.toFixed(2)}, similarity=${similarity.toFixed(2)})`
+      );
+      await createSupersessionLink(newMemoryId, oldMemory.memory.id, confidence);
+    } else if (confidence > 0.50) {
+      console.log(
+        `[memory] Potential supersession flagged: "${oldMemory.memory.text}" vs "${newText}" (confidence=${confidence.toFixed(2)})`
+      );
+      // Could log to a review queue here for daily synthesis to pick up
     }
   }
 }
 
-function calculateSupersessionConfidence(newText: string, oldText: string): number {
-  // Simple heuristic-based confidence scoring
-  const similarity = 0.4; // Placeholder - would use actual embedding similarity in production
+function calculateSupersessionConfidence(newText: string, oldText: string, similarity: number): number {
+  // Weighted confidence scoring based on multiple signals
+  const similarityWeight = similarity * 0.4;
   
   // Check for contradiction patterns
   const contradictionPatterns = [
@@ -435,6 +438,8 @@ function calculateSupersessionConfidence(newText: string, oldText: string): numb
     /\bno longer\b/i,
     /\breplaced\b/i,
     /\binstead of\b/i,
+    /\bupdated\b/i,
+    /\bcorrected\b/i,
   ];
   
   const hasContradiction = contradictionPatterns.some(p => p.test(newText) || p.test(oldText));
@@ -450,5 +455,63 @@ function calculateSupersessionConfidence(newText: string, oldText: string): numb
   const overlap = [...newWords].filter(w => oldWords.has(w)).length;
   const entityScore = Math.min(0.1, overlap / 5);
   
-  return similarity + contradictionScore + specificityScore + entityScore;
+  return similarityWeight + contradictionScore + specificityScore + entityScore;
+}
+
+/**
+ * Backfill scan: check all existing memories for potential supersessions.
+ * Uses embedding-based similarity for accurate detection.
+ */
+export async function backfillSupersessions(): Promise<void> {
+  console.log("[memory] Starting backfill supersession scan...");
+  
+  const db = getDb();
+  const allMemories = await getAllMemories();
+  
+  // Sort by creation date descending (newest first)
+  const sorted = allMemories.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  
+  let processed = 0;
+  let linked = 0;
+  
+  for (let i = 0; i < sorted.length; i++) {
+    const newMemory = sorted[i];
+    
+    // Skip if already has supersession links
+    if (newMemory.supersededBy || newMemory.supersedes) continue;
+    
+    // Get embedding for this memory
+    const vecRow = db.prepare("SELECT embedding FROM vec_memories WHERE id = ?").get(newMemory.id) as { embedding: Buffer } | undefined;
+    if (!vecRow) continue;
+    
+    const embedding = Array.from(new Float32Array(vecRow.embedding.buffer, vecRow.embedding.byteOffset, vecRow.embedding.byteLength / 4));
+    
+    // Search for similar older memories
+    const similarMemories = await searchMemoriesRaw(embedding, 10);
+    
+    for (const match of similarMemories) {
+      const oldMemory = match.memory;
+      
+      // Skip if not actually older
+      if (new Date(oldMemory.createdAt).getTime() >= new Date(newMemory.createdAt).getTime()) continue;
+      
+      // Skip if already superseded
+      if (oldMemory.supersededBy) continue;
+      
+      const similarity = 1 - match.score;
+      const confidence = calculateSupersessionConfidence(newMemory.text, oldMemory.text, similarity);
+      
+      if (confidence > 0.75) {
+        console.log(
+          `[memory] Backfill: "${oldMemory.text}" → "${newMemory.text}" (confidence=${confidence.toFixed(2)}, similarity=${similarity.toFixed(2)})`
+        );
+        await createSupersessionLink(newMemory.id, oldMemory.id, confidence);
+        linked++;
+      }
+    }
+    
+    processed++;
+  }
+  
+  console.log(`[memory] Backfill complete: processed ${processed} memories, created ${linked} supersession links`);
 }

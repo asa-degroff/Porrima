@@ -15,7 +15,7 @@ import {
   getMemoryLineage,
 } from "../services/memory-storage.js";
 import { runDailySynthesis } from "../services/synthesis.js";
-import { getExtractionMetrics } from "../services/memory-extraction.js";
+import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
 import type { Memory, MemorySummary } from "../types.js";
 
 const router = Router();
@@ -219,6 +219,16 @@ router.get("/timeline", async (req, res) => {
   filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   
   res.json(filtered);
+});
+
+// Trigger backfill supersession scan (admin operation)
+router.post("/backfill-supersessions", async (_req, res) => {
+  try {
+    await backfillSupersessions();
+    res.json({ success: true, message: "Backfill supersession scan complete" });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Detect potential contradictions (for synthesis review)
