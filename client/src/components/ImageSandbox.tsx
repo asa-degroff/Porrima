@@ -259,7 +259,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                 ? comfyuiStatus === null
                   ? "Checking..."
                   : activeGenerations.length > 0
-                    ? `${activeGenerations.length} active`
+                    ? `${activeGenerations.length} generating`
                     : isAvailable
                       ? "ComfyUI Connected"
                       : "ComfyUI Unavailable"
@@ -390,6 +390,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   selectedImage={selectedImage}
                   onSelect={(image) => { setSelectedImage(image); setViewMode('detail'); }}
                   onDelete={deleteGeneratedImage}
+                  activeGenerations={activeGenerations}
                 />
               ) : (
                 /* Detail view: large image + carousel */

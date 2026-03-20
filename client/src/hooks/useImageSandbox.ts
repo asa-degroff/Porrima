@@ -141,6 +141,22 @@ export function useImageSandbox() {
     // Each batch item becomes a separate generation
     for (let i = 0; i < batchCount; i++) {
       const genParams: ImageGenerationParams = { ...params, seed: undefined };
+      
+      // Create optimistic generation state for immediate visual feedback
+      const optimisticId = `optimistic-${Date.now()}-${i}`;
+      const optimisticGen: GenerationState = {
+        id: optimisticId,
+        clientId: "",
+        params: genParams,
+        status: "queued",
+        progress: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      
+      // Add to active generations immediately for visual feedback
+      setActiveGenerations((prev) => [...prev, optimisticGen]);
+      
       // This will create a new generation and start it immediately
       // The server handles queuing via generations.json state
       let currentGenerationId: string | null = null;
@@ -148,6 +164,18 @@ export function useImageSandbox() {
         onStarted: (generationId) => {
           currentGenerationId = generationId;
           subscribeToGenerationEvents(generationId);
+          
+          // Replace optimistic entry with real generation state
+          setActiveGenerations((prev) => {
+            const idx = prev.findIndex((g) => g.id === optimisticId);
+            if (idx >= 0) {
+              const copy = [...prev];
+              // Remove optimistic, will be replaced by real one from SSE
+              copy.splice(idx, 1);
+              return copy;
+            }
+            return prev;
+          });
         },
         onProgress: (step, totalSteps) => {
           setProgress({ step, total: totalSteps });
@@ -182,6 +210,8 @@ export function useImageSandbox() {
           setError(err);
           setGenerating(false);
           setProgress(null);
+          // Remove optimistic entry on error
+          setActiveGenerations((prev) => prev.filter((g) => g.id !== optimisticId));
           if (currentGenerationId) {
             subscribedGenerationIds.current.delete(currentGenerationId);
           }

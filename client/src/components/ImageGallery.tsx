@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import type { GeneratedImage } from "../types";
+import type { GeneratedImage, GenerationState } from "../types";
 import { precacheImages } from "../utils/imageCache";
 
 interface Props {
@@ -7,9 +7,10 @@ interface Props {
   selectedImage: GeneratedImage | null;
   onSelect: (image: GeneratedImage) => void;
   onDelete?: (id: string) => void;
+  activeGenerations?: GenerationState[];
 }
 
-export function ImageGallery({ images, selectedImage, onSelect, onDelete }: Props) {
+export function ImageGallery({ images, selectedImage, onSelect, onDelete, activeGenerations = [] }: Props) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Pre-cache full images in background so detail view is instant
@@ -66,6 +67,80 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete }: Prop
   return (
     <div className="flex-1 overflow-y-auto p-4">
       <div className="columns-2 md:columns-3 lg:columns-4 gap-3 space-y-3">
+        {/* Active generations (queued/processing) */}
+        {activeGenerations.map((gen) => (
+          <div
+            key={gen.id}
+            className="group relative w-full rounded-xl overflow-hidden border-2 border-purple-400/40 bg-purple-500/5 break-inside-avoid"
+          >
+            {/* Placeholder with loading animation */}
+            <div className="aspect-square w-full flex flex-col items-center justify-center gap-3 p-4">
+              {gen.status === "queued" ? (
+                <>
+                  <div className="relative">
+                    <div className="w-10 h-10 rounded-full border-2 border-purple-400/30 border-t-purple-400 animate-spin" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-purple-400/60">
+                        <circle cx="12" cy="12" r="10" />
+                        <polyline points="12 6 12 12 16 14" />
+                      </svg>
+                    </div>
+                  </div>
+                  <span className="text-xs text-purple-300/70 font-medium">Queued</span>
+                </>
+              ) : gen.status === "processing" && gen.progress ? (
+                <>
+                  <div className="relative">
+                    <svg width="60" height="60" viewBox="0 0 100 100" className="rotate-[-90deg]">
+                      <circle
+                        cx="50"
+                        cy="50"
+                        r="40"
+                        stroke="currentColor"
+                        strokeWidth="8"
+                        fill="none"
+                        className="text-purple-500/20"
+                      />
+                      <circle
+                        cx="50"
+                        cy="50"
+                        r="40"
+                        stroke="currentColor"
+                        strokeWidth="8"
+                        fill="none"
+                        strokeDasharray={`${(gen.progress.step / gen.progress.total) * 251.2} 251.2`}
+                        className="text-purple-400 transition-all duration-300"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-xs font-mono text-purple-300">
+                        {Math.round((gen.progress.step / gen.progress.total) * 100)}%
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-xs text-purple-300/70 font-medium">
+                    Step {gen.progress.step}/{gen.progress.total}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <div className="w-10 h-10 rounded-full border-2 border-purple-400/30 border-t-purple-400 animate-spin" />
+                  <span className="text-xs text-purple-300/70 font-medium">Starting...</span>
+                </>
+              )}
+            </div>
+            {/* Prompt preview */}
+            <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent">
+              <p className="text-[10px] text-white/60 line-clamp-2 leading-tight">
+                {gen.params.positivePrompt.slice(0, 60)}
+                {gen.params.positivePrompt.length > 60 ? "..." : ""}
+              </p>
+            </div>
+          </div>
+        ))}
+
+        {/* Completed images */}
         {images.map((image) => (
           <button
             key={image.id}
