@@ -26,6 +26,15 @@ export function useImageSandbox() {
   const abortRef = useRef<AbortController | null>(null);
   const subscribedGenerationIds = useRef<Set<string>>(new Set());
   const statusPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const errorDismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-dismiss error after 5 seconds of successful operations
+  const scheduleErrorDismiss = useCallback(() => {
+    if (errorDismissTimer.current) clearTimeout(errorDismissTimer.current);
+    errorDismissTimer.current = setTimeout(() => {
+      setError(null);
+    }, 5000);
+  }, []);
 
   // Subscribe to a generation's SSE stream
   const subscribeToGenerationEvents = useCallback((generationId: string) => {
@@ -55,6 +64,8 @@ export function useImageSandbox() {
           setProgress(null);
           setError(null);
           subscribedGenerationIds.current.delete(generationId);
+          // Schedule error dismiss to clear any transient errors
+          scheduleErrorDismiss();
           // Refresh image list so newly completed images appear in gallery
           fetchGeneratedImages().then((fresh) => {
             if (fresh.length > 0) setImages(fresh);
@@ -85,6 +96,10 @@ export function useImageSandbox() {
         if (status.models.length > 0) {
           setModels(status.models);
         }
+        // Clear error if ComfyUI is available and we're not actively generating
+        if (status.available && !generating) {
+          setError(null);
+        }
       } catch {
         setComfyuiStatus({ available: false, queueSize: 0, models: [] });
       }
@@ -101,7 +116,7 @@ export function useImageSandbox() {
         clearInterval(statusPollingRef.current);
       }
     };
-  }, []);
+  }, [generating]);
 
   // Load images and recover active generations on mount
   useEffect(() => {
@@ -115,8 +130,13 @@ export function useImageSandbox() {
       if (active.length > 0) {
         console.log(`[image-sandbox] recovering ${active.length} active generation(s)`);
         setActiveGenerations(active);
-        // Subscribe to all active generations
-        active.forEach((gen) => subscribeToGenerationEvents(gen.id));
+        // Subscribe to all active generations, but validate they still exist first
+        active.forEach((gen) => {
+          // Only subscribe if generation is truly active (not stale from server restart)
+          if (gen.status === "queued" || gen.status === "processing") {
+            subscribeToGenerationEvents(gen.id);
+          }
+        });
       }
     }).catch(() => {});
   }, [subscribeToGenerationEvents]);
@@ -179,6 +199,8 @@ export function useImageSandbox() {
         },
         onProgress: (step, totalSteps) => {
           setProgress({ step, total: totalSteps });
+          // Clear error on progress - generation is actively running
+          setError(null);
         },
         onDone: (image) => {
           // Refresh from server to ensure authoritative list
@@ -202,6 +224,7 @@ export function useImageSandbox() {
           setGenerating(false);
           setProgress(null);
           setError(null); // Clear error on success
+          scheduleErrorDismiss(); // Ensure error stays cleared
           if (currentGenerationId) {
             subscribedGenerationIds.current.delete(currentGenerationId);
           }
@@ -218,12 +241,14 @@ export function useImageSandbox() {
         },
       });
     }
-  }, [subscribeToGenerationEvents]);
+  }, [subscribeToGenerationEvents, scheduleErrorDismiss]);
 
   const abort = useCallback(() => {
     abortRef.current?.abort();
     setGenerating(false);
     setProgress(null);
+    // Clear error on manual abort - user initiated the cancellation
+    setError(null);
   }, []);
 
   const deleteImage = useCallback(async (id: string) => {
@@ -233,15 +258,32 @@ export function useImageSandbox() {
       if (selectedImage?.id === id) {
         setSelectedImage(null);
       }
+      // Clear error on successful delete
+      setError(null);
     } catch (e: any) {
       setError(e.message);
     }
   }, [selectedImage]);
 
+  // Clear error when selecting a different image
+  const handleSetSelectedImage = useCallback((image: GeneratedImage | null) => {
+    setSelectedImage(image);
+    if (image) {
+      setError(null);
+    }
+  }, []);
+
+  // Clear error dismiss timer on unmount
+  useEffect(() => {
+    return () => {
+      if (errorDismissTimer.current) clearTimeout(errorDismissTimer.current);
+    };
+  }, []);
+
   return {
     images,
     selectedImage,
-    setSelectedImage,
+    setSelectedImage: handleSetSelectedImage,
     generating,
     progress,
     comfyuiStatus,

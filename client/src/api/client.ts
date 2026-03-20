@@ -420,11 +420,24 @@ export interface GenerationCallbacks {
   onError: (error: string) => void;
 }
 
+/** Inactivity timeout for generation SSE streams (65s — matches chat stream timeout) */
+const GENERATION_SSE_INACTIVITY_TIMEOUT_MS = 65_000;
+
 export function subscribeToGeneration(
   generationId: string,
   callbacks: GenerationCallbacks
 ): AbortController {
   const controller = new AbortController();
+  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const resetInactivityTimer = () => {
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+      console.warn(`[generation-sse] inactivity timeout for ${generationId}`);
+      controller.abort();
+      callbacks.onError("Generation stream timed out — try again");
+    }, GENERATION_SSE_INACTIVITY_TIMEOUT_MS);
+  };
 
   fetch(`${BASE}/images/generation/${generationId}/events`, {
     signal: controller.signal,
@@ -446,11 +459,15 @@ export function subscribeToGeneration(
       const decoder = new TextDecoder();
       let buffer = "";
       let currentEvent = "";
+      let receivedState = false;
+
+      resetInactivityTimer();
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
+        resetInactivityTimer();
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
@@ -462,6 +479,7 @@ export function subscribeToGeneration(
             try {
               const data = JSON.parse(line.slice(6));
               if (currentEvent === "state") {
+                receivedState = true;
                 callbacks.onState(data);
               }
             } catch {}
@@ -469,8 +487,18 @@ export function subscribeToGeneration(
           }
         }
       }
+
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+
+      // Stream ended naturally — only report error if we never received any state
+      // (indicates the generation doesn't exist or is already complete)
+      if (!receivedState) {
+        console.warn(`[generation-sse] stream ended without state for ${generationId}`);
+        callbacks.onError("Generation not found or already completed");
+      }
     })
     .catch((e) => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
       if (e.name === "AbortError") return;
       callbacks.onError(e.message);
     });
