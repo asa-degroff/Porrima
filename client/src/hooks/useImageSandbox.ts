@@ -53,9 +53,12 @@ export function useImageSandbox() {
         } else if (state.status === "completed" && state.imageUrl) {
           setGenerating(false);
           setProgress(null);
-          setError(null); // Clear error on success
+          setError(null);
           subscribedGenerationIds.current.delete(generationId);
-          // The image will appear in the list after refresh
+          // Refresh image list so newly completed images appear in gallery
+          fetchGeneratedImages().then((fresh) => {
+            if (fresh.length > 0) setImages(fresh);
+          }).catch(() => {});
         } else if (state.status === "error") {
           setGenerating(false);
           setProgress(null);
