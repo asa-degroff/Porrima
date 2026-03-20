@@ -377,7 +377,7 @@ export function ChatView({
 
       {/* Messages */}
       <div className="flex-1 relative min-h-0">
-        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-3 md:px-6 py-3 md:py-4">
+        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-3 md:px-6 py-3 md:py-4" style={{ paddingBottom: ttsBarVisible ? "180px" : "140px" }}>
           <div ref={contentRef}>
             {messages.length === 0 && (
               <div className="flex items-center justify-center h-full">

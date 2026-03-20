@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 interface Props {
   src: string;
@@ -6,18 +6,44 @@ interface Props {
   alt: string;
   className?: string;
   onClick?: () => void;
+  /** Full image dimensions — used to calculate rendered size for consistent thumbnail/full display */
+  width?: number;
+  height?: number;
 }
 
 /**
- * Progressive image loader that shows thumbnail first, then replaces with full image.
- * Provides instant visual feedback while the full image loads.
+ * Progressive image loader: shows a blurred thumbnail instantly,
+ * then cross-fades to the sharp full image when it finishes loading.
+ *
+ * Structure: outer container (fills parent, measures available space) →
+ * inner wrapper (calculated object-contain size, has rounded corners + shadow) →
+ * img (fills wrapper, blur during loading).
  */
-export function ProgressiveImage({ src, thumbSrc, alt, className, onClick }: Props) {
+export function ProgressiveImage({ src, thumbSrc, alt, className, onClick, width, height }: Props) {
   const [displaySrc, setDisplaySrc] = useState(thumbSrc);
   const [loaded, setLoaded] = useState(false);
   const [isInitial, setIsInitial] = useState(true);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [renderSize, setRenderSize] = useState<{ w: number; h: number } | null>(null);
 
-  // Preload full image, then swap when ready
+  // Measure available space and calculate object-contain dimensions
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !width || !height) return;
+
+    const update = () => {
+      const { width: cw, height: ch } = el.getBoundingClientRect();
+      if (cw === 0 || ch === 0) return;
+      const scale = Math.min(cw / width, ch / height, 1);
+      setRenderSize({ w: Math.round(width * scale), h: Math.round(height * scale) });
+    };
+
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [width, height]);
+
+  // Preload full image, swap when ready
   useEffect(() => {
     setLoaded(false);
     setDisplaySrc(thumbSrc);
@@ -27,14 +53,12 @@ export function ProgressiveImage({ src, thumbSrc, alt, className, onClick }: Pro
     img.src = src;
     img.onload = () => {
       setDisplaySrc(src);
-      // Delay adding blur removal slightly to ensure thumbnail is rendered first
       requestAnimationFrame(() => {
         setIsInitial(false);
         setLoaded(true);
       });
     };
     img.onerror = () => {
-      // Keep thumbnail if full image fails
       console.warn("[progressive-image] failed to load full image:", src);
       setIsInitial(false);
     };
@@ -45,24 +69,56 @@ export function ProgressiveImage({ src, thumbSrc, alt, className, onClick }: Pro
     };
   }, [src, thumbSrc]);
 
+  const blurring = isInitial || !loaded;
+
+  // Fallback: no dimensions provided, render a plain img
+  if (!width || !height) {
+    return (
+      <img
+        src={displaySrc}
+        alt={alt}
+        className={className}
+        onClick={onClick}
+        style={{
+          filter: blurring ? 'blur(4px)' : 'none',
+          transition: isInitial ? 'none' : 'filter 0.3s ease-out',
+        }}
+      />
+    );
+  }
+
   return (
-    <img
-      src={displaySrc}
-      alt={alt}
+    // Outer: fills parent, provides measurement rect
+    <div
+      ref={containerRef}
       className={className}
-      onClick={onClick}
-      style={{
-        // Only apply blur during transition, not on initial thumbnail render
-        filter: isInitial ? 'blur(4px)' : (loaded ? 'none' : 'blur(4px)'),
-        // Only animate when switching from thumbnail to full image
-        transition: isInitial ? 'none' : 'filter 0.2s ease-out',
-        // Let className control sizing (max-w-full max-h-full object-contain)
-        // This ensures shadow is applied to actual image bounds, not container
-        display: 'block',
-        width: '100%',
-        height: '100%',
-        objectFit: 'contain'
-      }}
-    />
+      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+    >
+      {/* Inner: exact image dimensions, visual styling */}
+      <div
+        onClick={onClick}
+        style={{
+          width: renderSize?.w,
+          height: renderSize?.h,
+          overflow: 'hidden',
+          borderRadius: '0.5rem',
+          boxShadow: '0 25px 50px -12px rgb(0 0 0 / 0.35)',
+          cursor: onClick ? 'pointer' : undefined,
+        }}
+      >
+        <img
+          src={displaySrc}
+          alt={alt}
+          style={{
+            display: 'block',
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            filter: blurring ? 'blur(4px)' : 'none',
+            transition: isInitial ? 'none' : 'filter 0.3s ease-out, transform 0.3s ease-out',
+          }}
+        />
+      </div>
+    </div>
   );
 }

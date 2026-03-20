@@ -410,7 +410,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                         src={selectedImage.url}
                         thumbSrc={`${selectedImage.url}/thumb`}
                         alt={selectedImage.params.positivePrompt.slice(0, 80)}
-                        className="max-w-full max-h-full object-contain rounded-lg shadow-2xl cursor-pointer"
+                        className="w-full h-full"
+                        width={selectedImage.params.width}
+                        height={selectedImage.params.height}
                         onClick={() => setLightboxImage(selectedImage)}
                       />
                     </div>
@@ -538,7 +540,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   src={lightboxCachedUrl}
                   thumbSrc={`${lightboxImage.url}/thumb`}
                   alt={lightboxImage.params.positivePrompt.slice(0, 50)}
-                  className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
+                  className="max-w-[90vw] max-h-[90vh]"
+                  width={lightboxImage.params.width}
+                  height={lightboxImage.params.height}
                   onClick={() => {}}
                 />
                 <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-black/60 text-xs text-white/60 font-mono">
