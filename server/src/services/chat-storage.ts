@@ -207,6 +207,19 @@ export async function saveChat(chat: Chat): Promise<void> {
   );
 }
 
+export async function updateChatExtractionState(
+  chatId: string,
+  extractionAt: string,
+  messageIndex: number
+): Promise<void> {
+  const db = getDb();
+  db.prepare(`
+    UPDATE chats
+    SET lastDelayedExtractionAt = ?, lastDelayedExtractionMessageIndex = ?
+    WHERE id = ?
+  `).run(extractionAt, messageIndex, chatId);
+}
+
 export async function deleteChat(id: string): Promise<boolean> {
   const db = getDb();
   const result = db.prepare("DELETE FROM chats WHERE id = ?").run(id);

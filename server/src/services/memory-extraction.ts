@@ -14,7 +14,7 @@ import {
   getDb,
   getMemoriesByChatId,
 } from "./memory-storage.js";
-import { getChat, saveChat } from "./chat-storage.js";
+import { getChat, updateChatExtractionState } from "./chat-storage.js";
 import type { ChatMessage, Memory, MemoryCategory, Chat } from "../types.js";
 
 const LOG_DIR = join(homedir(), ".quje-agent", "logs");
@@ -662,9 +662,7 @@ export async function extractDelayedMemories(
   if (facts.length === 0) {
     console.log(`[memory-delayed] No new memories extracted from chat ${chatId}`);
     // Still update tracking fields to mark extraction as run
-    chat.lastDelayedExtractionAt = new Date().toISOString();
-    chat.lastDelayedExtractionMessageIndex = chat.messages.length - 1;
-    await saveChat(chat);
+    await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
     return;
   }
   
@@ -717,10 +715,8 @@ export async function extractDelayedMemories(
     }
   }
   
-  // Update chat tracking fields
-  chat.lastDelayedExtractionAt = new Date().toISOString();
-  chat.lastDelayedExtractionMessageIndex = chat.messages.length - 1;
-  await saveChat(chat);
-  
+  // Update chat tracking fields without touching lastModified
+  await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
+
   console.log(`[memory-delayed] Extraction complete for chat ${chatId}`);
 }
