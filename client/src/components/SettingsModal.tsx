@@ -63,6 +63,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
   const [synthesisRunning, setSynthesisRunning] = useState(false);
   const [memoryBrowserOpen, setMemoryBrowserOpen] = useState(false);
+  // Delayed extraction settings
+  const [delayedExtractionEnabled, setDelayedExtractionEnabled] = useState(settings.delayedExtractionEnabled ?? true);
+  const [delayedExtractionThreshold, setDelayedExtractionThreshold] = useState(settings.delayedExtractionThresholdMinutes ?? 30);
+  const [delayedExtractionCap, setDelayedExtractionCap] = useState(settings.delayedExtractionMessageCap ?? 50);
+  const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
+  const [extractionFallbackEnabled, setExtractionFallbackEnabled] = useState(settings.extractionFallbackEnabled ?? true);
   const [memorySearchQuery, setMemorySearchQuery] = useState("");
   const [memoryResults, setMemoryResults] = useState<(MemorySummary & { score?: number })[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
@@ -80,17 +86,20 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [voiceDropdownOpen, setVoiceDropdownOpen] = useState(false);
   const [backendDropdownOpen, setBackendDropdownOpen] = useState(false);
   const [boundaryTierDropdownOpen, setBoundaryTierDropdownOpen] = useState(false);
+  const [extractionModelDropdownOpen, setExtractionModelDropdownOpen] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const visionModelDropdownRef = useRef<HTMLDivElement>(null);
   const voiceDropdownRef = useRef<HTMLDivElement>(null);
   const backendDropdownRef = useRef<HTMLDivElement>(null);
   const boundaryTierDropdownRef = useRef<HTMLDivElement>(null);
+  const extractionModelDropdownRef = useRef<HTMLDivElement>(null);
 
   useClickOutside(modelDropdownRef, () => setModelDropdownOpen(false), modelDropdownOpen);
   useClickOutside(visionModelDropdownRef, () => setVisionModelDropdownOpen(false), visionModelDropdownOpen);
   useClickOutside(voiceDropdownRef, () => setVoiceDropdownOpen(false), voiceDropdownOpen);
   useClickOutside(backendDropdownRef, () => setBackendDropdownOpen(false), backendDropdownOpen);
   useClickOutside(boundaryTierDropdownRef, () => setBoundaryTierDropdownOpen(false), boundaryTierDropdownOpen);
+  useClickOutside(extractionModelDropdownRef, () => setExtractionModelDropdownOpen(false), extractionModelDropdownOpen);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -159,6 +168,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       systemPromptPresets: presets.length > 0 ? presets : undefined,
       hapticsEnabled,
       modelContextWindows: Object.keys(modelContextWindows).length > 0 ? modelContextWindows : undefined,
+      delayedExtractionEnabled,
+      delayedExtractionThresholdMinutes: delayedExtractionThreshold,
+      delayedExtractionMessageCap: delayedExtractionCap,
+      extractionModelId,
+      extractionFallbackEnabled,
     });
     
     // Emit TTS settings update event for useTTS hook
@@ -900,6 +914,150 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             ) : (
               <p className="text-white/30 text-sm">Loading memory status...</p>
             )}
+          </div>
+
+          {/* Delayed Extraction Settings */}
+          <div className="border-t border-white/10 pt-6">
+            <h3 className="text-sm font-semibold text-white/80 mb-4">Delayed Memory Extraction</h3>
+            
+            <div className="space-y-4">
+              {/* Enable toggle */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="block text-sm font-medium text-white/60">Enable delayed extraction</label>
+                  <p className="text-xs text-white/30 mt-0.5">Extract memories from chats after inactivity</p>
+                </div>
+                <button
+                  onClick={() => setDelayedExtractionEnabled(!delayedExtractionEnabled)}
+                  className={`relative w-12 h-6 rounded-full transition-colors ${
+                    delayedExtractionEnabled ? "bg-purple-500/30" : "bg-white/10"
+                  }`}
+                >
+                  <div
+                    className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                      delayedExtractionEnabled ? "left-7" : "left-1"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Inactivity threshold slider */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-white/60">Inactivity threshold</label>
+                  <span className="text-xs text-white/40">{delayedExtractionThreshold} minutes</span>
+                </div>
+                <input
+                  type="range"
+                  min={15}
+                  max={60}
+                  step={5}
+                  value={delayedExtractionThreshold}
+                  onChange={(e) => setDelayedExtractionThreshold(Number(e.target.value))}
+                  disabled={!delayedExtractionEnabled}
+                  className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer disabled:opacity-50 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                />
+                <p className="text-xs text-white/30">How long to wait after chat inactivity before extracting</p>
+              </div>
+
+              {/* Message cap slider */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-white/60">Message cap</label>
+                  <span className="text-xs text-white/40">{delayedExtractionCap} messages</span>
+                </div>
+                <input
+                  type="range"
+                  min={20}
+                  max={100}
+                  step={5}
+                  value={delayedExtractionCap}
+                  onChange={(e) => setDelayedExtractionCap(Number(e.target.value))}
+                  disabled={!delayedExtractionEnabled}
+                  className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer disabled:opacity-50 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                />
+                <p className="text-xs text-white/30">Maximum messages to include in extraction context</p>
+              </div>
+
+              {/* Extraction model configuration */}
+              <div className="border-t border-white/5 pt-4 mt-4">
+                <h4 className="text-xs font-medium text-white/60 uppercase tracking-wider mb-3">Extraction Model</h4>
+                
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs text-white/70 mb-1.5">Model</label>
+                    <div className="relative" ref={extractionModelDropdownRef}>
+                      <button
+                        onClick={() => setExtractionModelDropdownOpen((o) => !o)}
+                        disabled={!delayedExtractionEnabled}
+                        className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <span className="truncate flex-1 text-left">
+                          {(() => {
+                            const selected = models.find((m) => m.id === extractionModelId);
+                            if (!selected) return extractionModelId;
+                            return selected.parameterSize ? `${selected.name} (${selected.parameterSize})` : selected.name;
+                          })()}
+                        </span>
+                        {chevronSvg(extractionModelDropdownOpen)}
+                      </button>
+                      {extractionModelDropdownOpen && (
+                        <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                          style={{
+                            backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                            borderColor: `rgba(var(--theme-primary-border))`,
+                          }}>
+                          {models.map((model) => (
+                            <button
+                              key={model.id}
+                              onClick={() => {
+                                setExtractionModelId(model.id);
+                                setExtractionModelDropdownOpen(false);
+                              }}
+                              disabled={!delayedExtractionEnabled}
+                              className={`w-full text-left px-3 py-2 text-xs transition-all disabled:opacity-50 ${
+                                model.id === extractionModelId
+                                  ? "text-white"
+                                  : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                              }`}
+                              style={{
+                                backgroundColor: model.id === extractionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                color: model.id === extractionModelId ? `rgba(var(--theme-secondary-text))` : '',
+                              }}
+                            >
+                              {model.parameterSize ? `${model.name} (${model.parameterSize})` : model.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-xs text-white/40 mt-1.5">
+                      Model used for memory extraction. Defaults to chat model if not set.
+                    </p>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-sm font-medium text-white/60">Fallback to available model</label>
+                      <p className="text-xs text-white/30 mt-0.5">Use first available model if selected model is not loaded</p>
+                    </div>
+                    <button
+                      onClick={() => setExtractionFallbackEnabled(!extractionFallbackEnabled)}
+                      className={`relative w-12 h-6 rounded-full transition-colors ${
+                        extractionFallbackEnabled ? "bg-purple-500/30" : "bg-white/10"
+                      }`}
+                      disabled={!delayedExtractionEnabled}
+                    >
+                      <div
+                        className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                          extractionFallbackEnabled ? "left-7" : "left-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* TTS Section */}

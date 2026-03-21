@@ -72,6 +72,29 @@ async function checkAndRunDelayedExtractions() {
       return;
     }
     
+    // Determine extraction model from settings
+    const configuredExtractionModelId = settings.extractionModelId || settings.defaultModelId;
+    const fallbackEnabled = settings.extractionFallbackEnabled ?? true;
+    
+    // Discover available models once per run
+    const { discoverOllamaModels } = await import("./models.js");
+    const availableModels = await discoverOllamaModels();
+    const availableModelIds = new Set(availableModels.map(m => m.id));
+    
+    // Resolve extraction model
+    let extractionModelId = configuredExtractionModelId;
+    if (!availableModelIds.has(extractionModelId)) {
+      if (fallbackEnabled && availableModels.length > 0) {
+        console.log(`[scheduler] Configured extraction model "${extractionModelId}" not available, falling back to ${availableModels[0].id}`);
+        extractionModelId = availableModels[0].id;
+      } else {
+        console.error(`[scheduler] Extraction model "${extractionModelId}" not available and fallback disabled, aborting`);
+        return;
+      }
+    }
+    
+    console.log(`[scheduler] Using extraction model: ${extractionModelId}`);
+    
     const chatIds = await findChatsNeedingDelayedExtraction(thresholdMs);
     if (chatIds.length === 0) {
       return; // No chats need extraction
@@ -85,28 +108,9 @@ async function checkAndRunDelayedExtractions() {
       const batch = chatIds.slice(i, i + BATCH_SIZE);
       console.log(`[scheduler] Processing batch ${Math.floor(i / BATCH_SIZE) + 1}: ${batch.join(", ")}`);
       
-      // Discover available models once per batch
-      const { discoverOllamaModels } = await import("./models.js");
-      const availableModels = await discoverOllamaModels();
-      const availableModelIds = new Set(availableModels.map(m => m.id));
-      
       await Promise.all(
         batch.map(async (chatId) => {
           try {
-            const db = getDb();
-            const modelRow = db.prepare("SELECT modelId FROM chats WHERE id = ?").get(chatId) as { modelId: string } | undefined;
-            if (!modelRow) {
-              console.warn(`[scheduler] Chat ${chatId} has no modelId, skipping`);
-              return;
-            }
-            
-            // Check if the chat's model is available; fall back to first available if not
-            let extractionModelId = modelRow.modelId;
-            if (!availableModelIds.has(extractionModelId)) {
-              console.warn(`[scheduler] Chat ${chatId} model "${extractionModelId}" not available, falling back to ${availableModels[0]?.id}`);
-              extractionModelId = availableModels[0]?.id || "qwen3:8b";
-            }
-            
             console.log(`[scheduler] Running delayed extraction for chat ${chatId} with model ${extractionModelId}...`);
             await extractDelayedMemories(chatId, extractionModelId);
             console.log(`[scheduler] Delayed extraction complete for chat ${chatId}`);

@@ -119,6 +119,9 @@ export interface Settings {
   delayedExtractionEnabled?: boolean;
   delayedExtractionThresholdMinutes?: number;
   delayedExtractionMessageCap?: number;
+  // Extraction model configuration
+  extractionModelId?: string;
+  extractionFallbackEnabled?: boolean;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
