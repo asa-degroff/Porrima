@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { createProject, updateProject, deleteProject, listProjects, getProject, readAgentsMd } from "../services/project-storage.js";
+import { createProject, updateProject, deleteProject, listProjects, getProject } from "../services/chat-storage.js";
+import { readAgentsMd } from "../services/project-storage.js";
 import type { Project } from "../types.js";
 
 const router = Router();
@@ -32,7 +33,14 @@ router.post("/", async (req, res) => {
   if (!name || !path) {
     return res.status(400).json({ error: "name and path are required" });
   }
-  const project = await createProject(name, path);
+  const project: Project = {
+    id: crypto.randomUUID(),
+    name,
+    path,
+    createdAt: new Date().toISOString(),
+    lastModified: new Date().toISOString(),
+  };
+  await createProject(project);
   res.status(201).json(project);
 });
 
@@ -45,7 +53,10 @@ router.patch("/:id", async (req, res) => {
   if (req.body.name !== undefined) updates.name = req.body.name;
   if (req.body.path !== undefined) updates.path = req.body.path;
 
-  const updated = await updateProject(req.params.id, updates);
+  const success = await updateProject(req.params.id, updates);
+  if (!success) return res.status(404).json({ error: "Project not found" });
+  
+  const updated = await getProject(req.params.id);
   res.json(updated);
 });
 

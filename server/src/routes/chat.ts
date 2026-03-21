@@ -4,7 +4,7 @@ import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } fr
 import { streamSimple, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
 import type { AgentContext, AgentLoopConfig, StreamFn } from "@mariozechner/pi-agent-core";
-import { getChat, saveChat, getSettings } from "../services/storage.js";
+import { getChat, saveChat, getSettings, loadPendingState, savePendingState } from "../services/chat-storage.js";
 import { chatMessagesToPiMessages } from "../services/agent.js";
 import { createPiModel, discoverOllamaModels } from "../services/models.js";
 import type { OllamaModel } from "../types.js";
@@ -16,10 +16,6 @@ import { getAgentTools } from "../services/agent-tools.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
 import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
 import type { Skill } from "../services/skills.js";
-import {
-  loadPendingState,
-  savePendingState,
-} from "../services/agent-state.js";
 import * as messageQueue from "../services/message-queue.js";
 import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment, InlineVisual } from "../types.js";
 import { saveUserImage } from "../services/user-image-storage.js";

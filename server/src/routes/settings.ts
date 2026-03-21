@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getSettings, saveSettings } from "../services/storage.js";
+import { getSettings, saveSettings } from "../services/chat-storage.js";
 
 const router = Router();
 

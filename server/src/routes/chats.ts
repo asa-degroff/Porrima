@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
-import { listChats, getChat, saveChat, deleteChat, getSettings } from "../services/storage.js";
-import { getProject, readAgentsMd } from "../services/project-storage.js";
+import { listChats, getChat, saveChat, deleteChat, getSettings, createChat, getProject } from "../services/chat-storage.js";
+import { readAgentsMd } from "../services/project-storage.js";
 import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import type { Chat } from "../types.js";
@@ -74,7 +74,7 @@ ${systemPrompt}`;
     lastModified: new Date().toISOString(),
     ...(projectId ? { projectId } : {}),
   };
-  await saveChat(chat);
+  await createChat(chat);
   res.status(201).json(chat);
 });
 

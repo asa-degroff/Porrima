@@ -5,7 +5,7 @@ import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
 import { parseHTML } from "linkedom";
 import { existsSync } from "fs";
-import { getSettings } from "./storage.js";
+import { getSettings } from "./chat-storage.js";
 
 const MAX_CONTENT_LENGTH = 50_000;
 

@@ -11,8 +11,8 @@ import {
 } from "./memory-storage.js";
 import { discoverOllamaModels } from "./models.js";
 // persona-store used by analyzeAndPromotePersonaPatterns (suggestions only, no auto-apply yet)
-import { getSettings, listChats, getChat } from "./storage.js";
-import { getProject, readAgentsMd } from "./project-storage.js";
+import { getSettings, listChats, getChat, getProject } from "./chat-storage.js";
+import { readAgentsMd } from "./project-storage.js";
 import {
   getUserEntriesToday,
   listNotebookEntries,

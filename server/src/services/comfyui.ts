@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { getSettings } from "./storage.js";
+import { getSettings } from "./chat-storage.js";
 import type { ImageGenerationParams, ComfyUIStatus } from "../types.js";
 
 export const MODEL_PRESETS: Record<string, Partial<ImageGenerationParams>> = {

@@ -11,7 +11,7 @@ import {
 import { streamChat, chatMessagesToPiMessages } from "../services/agent.js";
 import { getAgentTools, executeTool } from "../services/agent-tools.js";
 import { extractMemoriesFromText } from "../services/memory-extraction.js";
-import { getSettings } from "../services/storage.js";
+import { getSettings } from "../services/chat-storage.js";
 import { saveUserImage } from "../services/user-image-storage.js";
 import type { Artifact, ChatToolCall, ChatToolResult, ImageAttachment } from "../types.js";
 

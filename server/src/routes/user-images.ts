@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { deleteUserImage, getUserImageDir } from "../services/user-image-storage.js";
-import { getChat, saveChat } from "../services/storage.js";
+import { getChat, saveChat } from "../services/chat-storage.js";
 import { access } from "fs/promises";
 import { createReadStream } from "fs";
 import { join } from "path";
