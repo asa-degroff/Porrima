@@ -918,6 +918,96 @@ export async function findDuplicates(
 }
 
 // ---------------------------------------------------------------------------
+// Chat-scoped memory queries (for delayed extraction)
+// ---------------------------------------------------------------------------
+
+/**
+ * Get all memories extracted from a specific chat.
+ * Used by delayed extraction to provide context about what was already captured.
+ */
+export async function getMemoriesByChatId(chatId: string): Promise<Omit<Memory, "embedding">[]> {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories WHERE source_chat_id = ? ORDER BY created_at ASC"
+    )
+    .all(chatId) as Array<{
+    id: string;
+    text: string;
+    category: string;
+    importance: number;
+    created_at: string;
+    last_accessed: string;
+    access_count: number;
+    source_chat_id: string;
+    project_id: string;
+    source_type: string;
+    source_id: string;
+    superseded_by: string | null;
+    supersedes: string | null;
+  }>;
+
+  return rows.map((r) => ({
+    id: r.id,
+    text: r.text,
+    category: r.category as Memory["category"],
+    importance: r.importance,
+    createdAt: r.created_at,
+    lastAccessed: r.last_accessed,
+    accessCount: r.access_count,
+    sourceChatId: r.source_chat_id,
+    ...(r.project_id ? { projectId: r.project_id } : {}),
+    sourceType: r.source_type as Memory['sourceType'],
+    sourceId: r.source_id || undefined,
+    supersededBy: r.superseded_by || undefined,
+    supersedes: r.supersedes || undefined,
+  }));
+}
+
+/**
+ * Get memories from a chat created by delayed extraction.
+ * Filters by sourceType = 'chat_delayed'.
+ */
+export async function getDelayedMemoriesByChatId(chatId: string): Promise<Omit<Memory, "embedding">[]> {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories WHERE source_chat_id = ? AND source_type = 'chat_delayed' ORDER BY created_at ASC"
+    )
+    .all(chatId) as Array<{
+    id: string;
+    text: string;
+    category: string;
+    importance: number;
+    created_at: string;
+    last_accessed: string;
+    access_count: number;
+    source_chat_id: string;
+    project_id: string;
+    source_type: string;
+    source_id: string;
+    superseded_by: string | null;
+    supersedes: string | null;
+  }>;
+
+  return rows.map((r) => ({
+    id: r.id,
+    text: r.text,
+    category: r.category as Memory["category"],
+    importance: r.importance,
+    createdAt: r.created_at,
+    lastAccessed: r.last_accessed,
+    accessCount: r.access_count,
+    sourceChatId: r.source_chat_id,
+    ...(r.project_id ? { projectId: r.project_id } : {}),
+    sourceType: r.source_type as Memory['sourceType'],
+    sourceId: r.source_id || undefined,
+    supersededBy: r.superseded_by || undefined,
+    supersedes: r.supersedes || undefined,
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Daily log (unchanged — still writes markdown files)
 // ---------------------------------------------------------------------------
 

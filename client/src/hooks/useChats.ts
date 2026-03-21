@@ -9,6 +9,7 @@ import {
   setCachedChatList,
   getCachedChatList,
   clearCachedChat,
+  clearCachedChatList,
 } from "../lib/db";
 import type { ChatListItem, ChatType } from "../types";
 
@@ -17,7 +18,12 @@ export function useChats() {
   const [loading, setLoading] = useState(true);
   const [isFromCache, setIsFromCache] = useState(false);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (forceFresh: boolean = false) => {
+    if (forceFresh) {
+      // Clear cache and force fresh fetch (e.g., after schema change)
+      await clearCachedChatList().catch(() => {});
+    }
+    
     try {
       const list = await fetchChats();
       setChats(list);
@@ -31,13 +37,14 @@ export function useChats() {
           setIsFromCache(true);
         }
       }
-      // else silently fail
+      // else silently fail - cache may still be usable
     }
     setLoading(false);
   }, []);
 
   useEffect(() => {
-    refresh();
+    // Force fresh fetch on initial load to ensure correct ordering after server restarts
+    refresh(true);
   }, [refresh]);
 
   const createChat = useCallback(

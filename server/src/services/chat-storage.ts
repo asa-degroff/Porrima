@@ -85,6 +85,14 @@ export function getDb(): Database.Database {
     db.exec("ALTER TABLE chats ADD COLUMN activeSkills TEXT");
   }
 
+  // Auto-add delayed extraction tracking columns
+  if (!cols.some((c) => c.name === "lastDelayedExtractionAt")) {
+    db.exec("ALTER TABLE chats ADD COLUMN lastDelayedExtractionAt TEXT");
+  }
+  if (!cols.some((c) => c.name === "lastDelayedExtractionMessageIndex")) {
+    db.exec("ALTER TABLE chats ADD COLUMN lastDelayedExtractionMessageIndex INTEGER");
+  }
+
   // Auto-migrate from JSON files if needed
   if (needsChatMigration) {
     migrateChatsFromJson(db);
@@ -145,6 +153,8 @@ export async function getChat(id: string): Promise<Chat | null> {
         messages: string;
         createdAt: string;
         lastModified: string;
+        lastDelayedExtractionAt: string | null;
+        lastDelayedExtractionMessageIndex: number | null;
       }
     | undefined;
 
@@ -162,6 +172,8 @@ export async function getChat(id: string): Promise<Chat | null> {
     lastModified: row.lastModified,
     ...(row.projectId ? { projectId: row.projectId } : {}),
     ...(row.activeSkills ? { activeSkills: JSON.parse(row.activeSkills) } : {}),
+    ...(row.lastDelayedExtractionAt ? { lastDelayedExtractionAt: row.lastDelayedExtractionAt } : {}),
+    ...(row.lastDelayedExtractionMessageIndex !== null && row.lastDelayedExtractionMessageIndex !== undefined ? { lastDelayedExtractionMessageIndex: row.lastDelayedExtractionMessageIndex } : {}),
   };
 
   return chat;
@@ -175,9 +187,9 @@ export async function saveChat(chat: Chat): Promise<void> {
     INSERT OR REPLACE INTO chats (
       id, title, type, modelId, systemPrompt,
       contextWindow, projectId, activeSkills, messages,
-      createdAt, lastModified
+      createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     chat.id,
     chat.title,
@@ -189,7 +201,9 @@ export async function saveChat(chat: Chat): Promise<void> {
     chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
     JSON.stringify(chat.messages),
     chat.createdAt,
-    chat.lastModified
+    chat.lastModified,
+    chat.lastDelayedExtractionAt ?? null,
+    chat.lastDelayedExtractionMessageIndex ?? null
   );
 }
 
@@ -205,9 +219,9 @@ export async function createChat(chat: Chat): Promise<void> {
     INSERT INTO chats (
       id, title, type, modelId, systemPrompt,
       contextWindow, projectId, activeSkills, messages,
-      createdAt, lastModified
+      createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     chat.id,
     chat.title,
@@ -219,7 +233,9 @@ export async function createChat(chat: Chat): Promise<void> {
     chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
     JSON.stringify(chat.messages),
     chat.createdAt,
-    chat.lastModified
+    chat.lastModified,
+    chat.lastDelayedExtractionAt ?? null,
+    chat.lastDelayedExtractionMessageIndex ?? null
   );
 }
 
@@ -368,9 +384,9 @@ function migrateChatsFromJson(db: Database.Database): void {
       INSERT OR REPLACE INTO chats (
         id, title, type, modelId, systemPrompt,
         contextWindow, projectId, activeSkills, messages,
-        createdAt, lastModified
+        createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const migrate = db.transaction(() => {
@@ -393,7 +409,9 @@ function migrateChatsFromJson(db: Database.Database): void {
             chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
             JSON.stringify(chat.messages),
             chat.createdAt,
-            chat.lastModified
+            chat.lastModified,
+            chat.lastDelayedExtractionAt ?? null,
+            chat.lastDelayedExtractionMessageIndex ?? null
           );
           count++;
         } catch (e) {

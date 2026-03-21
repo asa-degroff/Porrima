@@ -56,6 +56,15 @@ export async function setCachedChatList(items: ChatListItem[]): Promise<void> {
   await db.put("chatList", { key: "list", items }, "list");
 }
 
+/**
+ * Clear the cached chat list - forces fresh fetch on next refresh.
+ * Call this when schema changes or to force re-sync with server.
+ */
+export async function clearCachedChatList(): Promise<void> {
+  const db = await getDB();
+  await db.delete("chatList", "list");
+}
+
 // Individual chat cache
 export async function getCachedChat(id: string): Promise<Chat | null> {
   const db = await getDB();

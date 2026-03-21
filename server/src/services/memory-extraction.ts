@@ -12,8 +12,10 @@ import {
   createSupersessionLink,
   getAllMemories,
   getDb,
+  getMemoriesByChatId,
 } from "./memory-storage.js";
-import type { ChatMessage, Memory, MemoryCategory } from "../types.js";
+import { getChat, saveChat } from "./chat-storage.js";
+import type { ChatMessage, Memory, MemoryCategory, Chat } from "../types.js";
 
 const LOG_DIR = join(homedir(), ".quje-agent", "logs");
 
@@ -91,6 +93,28 @@ Categories:
 - "note" — general observations, curiosities, personal details, or anything worth remembering that doesn't fit the above categories
 
 If nothing is worth remembering, output: []
+
+IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
+
+const DELAYED_EXTRACTION_SYSTEM_PROMPT = `You are a delayed memory extraction system analyzing a full conversation thread. Your task is to extract patterns, decisions, and context that emerged across the entire conversation.
+
+PREVIOUSLY CAPTURED MEMORIES from this chat:
+{{PREVIOUS_MEMORIES}}
+
+These memories are already saved. Do NOT duplicate them. Instead, focus on:
+1. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
+2. **Evolutions or contradictions** — if the user changed their mind or refined a previous position
+3. **Thematic context** — higher-level insights that connect multiple exchanges
+4. **Unresolved threads** — ongoing work, open questions, or pending decisions
+
+Each extracted memory should be self-contained and meaningful without the original conversation (1-3 sentences).
+
+Output a JSON array. Each item:
+- "text": A standalone statement with sufficient context (1-3 sentences)
+- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
+- "importance": 1-10 (10 = critical, 1 = trivial)
+
+If nothing new is worth remembering, output: []
 
 IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 
@@ -514,4 +538,189 @@ export async function backfillSupersessions(): Promise<void> {
   }
   
   console.log(`[memory] Backfill complete: processed ${processed} memories, created ${linked} supersession links`);
+}
+
+// ---------------------------------------------------------------------------
+// Delayed Full-Chat Extraction
+// ---------------------------------------------------------------------------
+
+const DEFAULT_MESSAGE_CAP = 50;
+
+/**
+ * Build context for delayed extraction: recent messages + previous memories.
+ * For long chats, caps the message window but includes all previous memories
+ * to provide semantic compression of earlier conversation.
+ */
+async function buildDelayedExtractionContext(
+  chat: Chat,
+  messageCap: number = DEFAULT_MESSAGE_CAP
+): Promise<{
+  messages: ChatMessage[];
+  previousMemories: Omit<Memory, "embedding">[];
+}> {
+  const previousMemories = await getMemoriesByChatId(chat.id);
+  
+  if (chat.messages.length <= messageCap) {
+    // Short chat: send everything
+    return { messages: chat.messages, previousMemories };
+  }
+  
+  // Long chat: send last N messages + all previous memories
+  const recentMessages = chat.messages.slice(-messageCap);
+  return { messages: recentMessages, previousMemories };
+}
+
+/**
+ * Delayed extraction system prompt builder.
+ * Injects previous memories to avoid duplication and provide context.
+ */
+function buildDelayedExtractionPrompt(
+  previousMemories: Omit<Memory, "embedding">[],
+  messageCount: number,
+  startIndex: number
+): string {
+  const memoriesList = previousMemories.length > 0
+    ? previousMemories.map((m, i) => `[${i + 1}]: "${m.text}" (${m.category}, importance: ${m.importance})`).join("\n")
+    : "(none)";
+  
+  return DELAYED_EXTRACTION_SYSTEM_PROMPT
+    .replace("{{PREVIOUS_MEMORIES}}", memoriesList)
+    .replace("{{MESSAGE_COUNT}}", String(messageCount))
+    .replace("{{START_INDEX}}", String(startIndex));
+}
+
+/**
+ * Extract memories from a full chat after a period of inactivity.
+ * This is the delayed extraction layer — runs once per chat when inactive,
+ * capturing patterns and context that immediate extraction missed.
+ * 
+ * @param chatId - The chat to extract from
+ * @param modelId - The model to use for extraction
+ * @param messageCap - Max messages to include (default 50)
+ */
+export async function extractDelayedMemories(
+  chatId: string,
+  modelId: string,
+  messageCap: number = DEFAULT_MESSAGE_CAP
+): Promise<void> {
+  console.log(`[memory-delayed] Starting delayed extraction for chat ${chatId}`);
+  
+  const chat = await getChat(chatId);
+  if (!chat) {
+    console.error(`[memory-delayed] Chat ${chatId} not found`);
+    return;
+  }
+  
+  if (chat.type !== "agent") {
+    console.log(`[memory-delayed] Skipping quick chat ${chatId}`);
+    return;
+  }
+  
+  // Build context: recent messages + previous memories
+  const context = await buildDelayedExtractionContext(chat, messageCap);
+  const startIndex = Math.max(0, chat.messages.length - context.messages.length);
+  
+  console.log(
+    `[memory-delayed] Processing ${context.messages.length} messages (${startIndex}-${chat.messages.length}) with ${context.previousMemories.length} previous memories`
+  );
+  
+  // Build prompt with previous memories injected
+  const prompt = buildDelayedExtractionPrompt(context.previousMemories, context.messages.length, startIndex);
+  
+  // Serialize messages for LLM input
+  const conversationText = context.messages
+    .map((m, i) => `${m.role} (${startIndex + i + 1}): ${m.content}`)
+    .join("\n\n");
+  
+  const extractionPrompt = `${prompt}\n\nCONVERSATION:\n${conversationText}`;
+  
+  // Call LLM to extract memories
+  let responseText = "";
+  try {
+    await withRetry(
+      async () => {
+        responseText = "";
+        await streamChat(
+          modelId,
+          [{ role: "user", content: extractionPrompt, timestamp: Date.now() }],
+          DELAYED_EXTRACTION_SYSTEM_PROMPT,
+          (event) => {
+            if (event.type === "text_delta") {
+              responseText += event.delta;
+            }
+          }
+        );
+      },
+      `extractDelayedMemories LLM call (chat ${chatId})`
+    );
+  } catch (e) {
+    console.error(`[memory-delayed] LLM extraction failed:`, e);
+    throw e;
+  }
+  
+  const facts = parseExtractionResponse(responseText);
+  if (facts.length === 0) {
+    console.log(`[memory-delayed] No new memories extracted from chat ${chatId}`);
+    // Still update tracking fields to mark extraction as run
+    chat.lastDelayedExtractionAt = new Date().toISOString();
+    chat.lastDelayedExtractionMessageIndex = chat.messages.length - 1;
+    await saveChat(chat);
+    return;
+  }
+  
+  console.log(`[memory-delayed] Extracted ${facts.length} new memory(ies), embedding batch...`);
+  
+  // Batch-embed all facts
+  let embeddings: number[][];
+  try {
+    embeddings = await withRetry(
+      () => embedBatch(facts.map((f) => f.text)),
+      `embedBatch for ${facts.length} delayed memories (chat ${chatId})`
+    );
+  } catch (e) {
+    console.error("[memory-delayed] Batch embedding failed:", e);
+    throw e;
+  }
+  
+  // Save with sourceType = 'chat_delayed'
+  for (let i = 0; i < facts.length; i++) {
+    const fact = facts[i];
+    const factEmbedding = embeddings[i];
+    
+    // Check for duplicates against existing memories
+    const match = await findDuplicates(factEmbedding, DEDUP_THRESHOLD);
+    
+    if (match) {
+      console.log(
+        `[memory-delayed] Skipping duplicate (sim=${match.similarity.toFixed(3)}): "${fact.text}"`
+      );
+    } else {
+      const now = new Date().toISOString();
+      const newMemoryId = uuid();
+      await addMemory({
+        id: newMemoryId,
+        text: fact.text,
+        category: fact.category,
+        importance: Math.min(10, Math.max(1, fact.importance)),
+        embedding: factEmbedding,
+        createdAt: now,
+        lastAccessed: now,
+        accessCount: 0,
+        sourceChatId: chatId,
+        ...(chat.projectId ? { projectId: chat.projectId } : {}),
+        sourceType: 'chat_delayed',
+        sourceId: chatId,
+      });
+      
+      // Check for automatic supersession
+      await checkSupersession(newMemoryId, fact.text, factEmbedding);
+    }
+  }
+  
+  // Update chat tracking fields
+  chat.lastDelayedExtractionAt = new Date().toISOString();
+  chat.lastDelayedExtractionMessageIndex = chat.messages.length - 1;
+  await saveChat(chat);
+  
+  console.log(`[memory-delayed] Extraction complete for chat ${chatId}`);
 }

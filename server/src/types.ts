@@ -66,6 +66,9 @@ export interface Chat {
   lastModified: string;
   activeSkills?: string[]; // List of active skill names
   projectId?: string; // Optional project association
+  // Delayed extraction tracking
+  lastDelayedExtractionAt?: string;
+  lastDelayedExtractionMessageIndex?: number;
 }
 
 export interface Project {
@@ -112,9 +115,15 @@ export interface Settings {
   theme?: Theme;
   systemPromptPresets?: SystemPromptPreset[];
   defaultVisionPreset?: string;
+  // Delayed memory extraction settings
+  delayedExtractionEnabled?: boolean;
+  delayedExtractionThresholdMinutes?: number;
+  delayedExtractionMessageCap?: number;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
+
+export type MemorySourceType = 'chat' | 'chat_delayed' | 'chat_immediate' | 'notebook' | 'explicit';
 
 export interface Memory {
   id: string;
@@ -128,7 +137,7 @@ export interface Memory {
   sourceChatId: string;
   projectId?: string;
   // Temporal layering fields
-  sourceType?: 'chat' | 'notebook' | 'explicit';
+  sourceType?: MemorySourceType;
   sourceId?: string;  // chatId or notebookEntryId
   supersededBy?: string;  // ID of newer memory that supersedes this one
   supersedes?: string;  // ID of older memory that this one supersedes

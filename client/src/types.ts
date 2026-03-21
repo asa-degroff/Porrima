@@ -71,6 +71,9 @@ export interface Chat {
   lastModified: string;
   activeSkills?: string[]; // List of active skill names
   projectId?: string; // Optional project association
+  // Delayed extraction tracking
+  lastDelayedExtractionAt?: string;
+  lastDelayedExtractionMessageIndex?: number;
 }
 
 export interface ChatListItem {
@@ -120,6 +123,10 @@ export interface Settings {
   systemPromptPresets?: SystemPromptPreset[];
   hapticsEnabled?: boolean;
   defaultVisionPreset?: string;
+  // Delayed memory extraction settings
+  delayedExtractionEnabled?: boolean;
+  delayedExtractionThresholdMinutes?: number;
+  delayedExtractionMessageCap?: number;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
