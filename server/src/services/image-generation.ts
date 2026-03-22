@@ -3,6 +3,7 @@ import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import type { ImageGenerationParams, GeneratedImage } from "../types.js";
+import { addCorpusEntry, enrichCorpusEntry } from "./image-corpus.js";
 
 const IMAGES_DIR = join(homedir(), ".quje-agent", "images");
 const GENERATIONS_FILE = join(IMAGES_DIR, "generations.json");
@@ -144,15 +145,40 @@ export function updateProgress(
   return updateGeneration(id, { progress: { step, total } });
 }
 
-export function completeGeneration(
+export async function completeGeneration(
   id: string,
   imageUrl: string
-): GenerationState | undefined {
-  return updateGeneration(id, {
+): Promise<GenerationState | undefined> {
+  const updated = updateGeneration(id, {
     status: "completed",
     imageUrl,
     progress: null,
   });
+  
+  if (updated) {
+    // Add to image corpus
+    const corpusEntry = {
+      id: crypto.randomUUID(),
+      type: "generated" as const,
+      imagePath: imageUrl.replace("/api/images/", ""),
+      thumbnailPath: undefined, // Will be generated if needed
+      prompt: updated.params.positivePrompt,
+      description: "", // Will be enriched later
+      elements: {},
+      promptEmbedding: undefined, // Will be enriched
+      createdAt: updated.createdAt,
+      updatedAt: Date.now(),
+      chatId: updated.chatId,
+      generationId: updated.id,
+    };
+    
+    // Enrich with embedding and elements (async, non-blocking)
+    enrichCorpusEntry(corpusEntry.id, updated.params.positivePrompt, undefined).catch(console.error);
+    
+    await addCorpusEntry(corpusEntry);
+  }
+  
+  return updated;
 }
 
 export function failGeneration(

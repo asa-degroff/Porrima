@@ -120,11 +120,13 @@ router.post("/analyze-stream", async (req, res) => {
 // Save an already-analyzed image (used after streaming analysis completes)
 router.post("/save", async (req, res) => {
   try {
-    const { imageData, description, preset, model } = req.body as {
+    const { imageData, description, preset, model, chatId, projectId } = req.body as {
       imageData: string;
       description: string;
       preset: string;
       model: string;
+      chatId?: string;
+      projectId?: string;
     };
 
     if (!imageData || !description) {
@@ -132,7 +134,7 @@ router.post("/save", async (req, res) => {
     }
 
     const filename = `image-${Date.now()}.png`;
-    const saved = await saveAnalyzedImage(filename, imageData, description, preset, model);
+    const saved = await saveAnalyzedImage(filename, imageData, description, preset, model, chatId, projectId);
     const { imageData: _, ...sanitized } = saved;
     res.json(sanitized);
   } catch (e: any) {

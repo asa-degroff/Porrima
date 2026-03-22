@@ -3,6 +3,7 @@ import { mkdir, writeFile, readFile, readdir, access } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
 import sharp from "sharp";
+import { addCorpusEntry, enrichCorpusEntry } from "./image-corpus.js";
 
 const VISION_DIR = join(process.env.HOME || process.env.USERPROFILE || ".", ".quje-agent", "vision");
 const OLLAMA_BASE = process.env.OLLAMA_URL || "http://localhost:11434";
@@ -473,7 +474,9 @@ export async function saveAnalyzedImage(
   imageData: string,
   description: string,
   preset: string,
-  model: string
+  model: string,
+  chatId?: string,
+  projectId?: string
 ): Promise<AnalyzedImage> {
   await ensureVisionDir();
 
@@ -508,6 +511,27 @@ export async function saveAnalyzedImage(
 
   const metadataPath = join(imageDir, "metadata.json");
   await writeFile(metadataPath, JSON.stringify(analyzedImage, null, 2));
+
+  // Add to image corpus
+  const corpusEntry = {
+    id: uuid(), // Separate corpus ID
+    type: "analyzed" as const,
+    imagePath: join("vision", "images", id, filename),
+    thumbnailPath: join("vision", "images", id, "thumb.webp"),
+    description,
+    elements: {}, // Will be enriched
+    promptEmbedding: undefined, // No prompt for analyzed images
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    chatId,
+    projectId,
+    visionId: id,
+  };
+
+  // Enrich with elements (async, non-blocking)
+  enrichCorpusEntry(corpusEntry.id, undefined, description).catch(console.error);
+  
+  await addCorpusEntry(corpusEntry);
 
   return analyzedImage;
 }
