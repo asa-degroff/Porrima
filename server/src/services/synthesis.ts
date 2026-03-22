@@ -78,7 +78,11 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           );
 
           // Create supersession link (persisted to DB with audit trail)
-          await createSupersessionLink(survivor.id, old.id, sim);
+          const linkCreated = await createSupersessionLink(survivor.id, old.id, sim);
+          if (!linkCreated) {
+            console.log(`[synthesis] Supersession link rejected (cycle detected): ${old.id} ↛ ${survivor.id}`);
+            continue; // Skip the rest of the merge for this pair
+          }
 
           // Transfer importance and access count to survivor
           survivor.importance = Math.max(survivor.importance, old.importance);

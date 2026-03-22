@@ -162,7 +162,10 @@ router.patch("/:id", async (req, res) => {
     };
 
     await addMemory(newMemory);
-    await createSupersessionLink(newMemory.id, existing.id, 1.0);
+    const linked = await createSupersessionLink(newMemory.id, existing.id, 1.0);
+    if (!linked) {
+      console.log(`[memory] Manual supersession link rejected (cycle detected): ${existing.id} ↛ ${newMemory.id}`);
+    }
     return res.json(stripEmbedding(newMemory));
   }
 
@@ -203,8 +206,28 @@ router.post("/:id/supersede", async (req, res) => {
   const newerMemoryId = req.params.id;
   const conf = confidence ?? 0.75;
   
+  // Fetch both memories to validate temporal ordering
+  const newerMemory = await getMemoryById(newerMemoryId);
+  const olderMemory = await getMemoryById(olderMemoryId);
+  
+  if (!newerMemory || !olderMemory) {
+    return res.status(404).json({ error: "Memory not found" });
+  }
+  
+  // Validate that newer memory was actually created after older memory
+  if (new Date(newerMemory.createdAt) <= new Date(olderMemory.createdAt)) {
+    return res.status(400).json({ 
+      error: "Newer memory must be created after older memory",
+      newerCreatedAt: newerMemory.createdAt,
+      olderCreatedAt: olderMemory.createdAt,
+    });
+  }
+  
   try {
-    await createSupersessionLink(newerMemoryId, olderMemoryId, conf);
+    const linked = await createSupersessionLink(newerMemoryId, olderMemoryId, conf);
+    if (!linked) {
+      return res.status(400).json({ error: "Supersession link rejected (cycle detected)" });
+    }
     res.status(201).json({ success: true, newerMemoryId, olderMemoryId });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

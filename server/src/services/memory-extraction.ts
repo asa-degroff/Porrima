@@ -204,7 +204,10 @@ export async function dedupAndSave(
           sourceType,
           sourceId: sourceId || chatId,
         });
-        await createSupersessionLink(newMemoryId, match.memory.id, match.similarity);
+        const linked = await createSupersessionLink(newMemoryId, match.memory.id, match.similarity);
+        if (!linked) {
+          console.log(`[memory] Supersession link rejected (cycle detected): ${match.memory.id} ↛ ${newMemoryId}`);
+        }
       }
     } else {
       console.log(`[memory] New memory: "${fact.text}"`);
@@ -468,7 +471,10 @@ async function checkSupersession(
       console.log(
         `[memory] Auto-superson: "${oldMemory.memory.text}" → "${newText}" (confidence=${confidence.toFixed(2)}, similarity=${similarity.toFixed(2)})`
       );
-      await createSupersessionLink(newMemoryId, oldMemory.memory.id, confidence);
+      const linked = await createSupersessionLink(newMemoryId, oldMemory.memory.id, confidence);
+      if (!linked) {
+        console.log(`[memory] Supersession link rejected (cycle detected): ${oldMemory.memory.id} ↛ ${newMemoryId}`);
+      }
     } else if (confidence > 0.50) {
       console.log(
         `[memory] Potential supersession flagged: "${oldMemory.memory.text}" vs "${newText}" (confidence=${confidence.toFixed(2)})`
@@ -557,8 +563,12 @@ export async function backfillSupersessions(): Promise<void> {
         console.log(
           `[memory] Backfill: "${oldMemory.text}" → "${newMemory.text}" (confidence=${confidence.toFixed(2)}, similarity=${similarity.toFixed(2)})`
         );
-        await createSupersessionLink(newMemory.id, oldMemory.id, confidence);
-        linked++;
+        const linkCreated = await createSupersessionLink(newMemory.id, oldMemory.id, confidence);
+        if (linkCreated) {
+          linked++;
+        } else {
+          console.log(`[memory] Backfill supersession link rejected (cycle detected): ${oldMemory.id} ↛ ${newMemory.id}`);
+        }
       }
     }
     
