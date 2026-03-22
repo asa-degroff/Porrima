@@ -40,6 +40,15 @@ Projects provide persistent context for agent chats through AGENTS.md files:
 
 Memory services are in `server/src/services/memory-*.ts`. They share the pi-ai `streamChat` function for LLM calls (extraction, synthesis, tool execution all use it with different system prompts).
 
+### Chat Storage
+
+Chat storage migrated from JSON files to SQLite (`server/src/services/chat-storage.ts`). The `app.db` database stores:
+- **Chats** — metadata + JSON `messages` column (hybrid approach: normalized metadata, JSON for nested arrays)
+- **Chat messages** — denormalized `chat_messages` table with FTS5 virtual table for full-text search
+- **Projects, settings, pending states** — migrated from JSON to SQLite tables
+
+**FTS5 search**: `chat_messages_fts` uses `content` + `chat_id UNINDEXED` columns. Triggers auto-sync on insert/update/delete. `searchChatMessages()` supports phrase match fallback to term search, scoped to single chat or global. The `search_conversation` tool exposes this to the agent.
+
 ## Tool System (Agent Chats)
 
 Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMessage`) with TypeBox schemas — NOT fenced code blocks.
@@ -48,9 +57,10 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 
 - `getAgentTools()` returns all tools; `executeTool(toolCall, chatId, onEvent?)` dispatches by name.
 - **Memory tools** (from `memory-tools.ts`): `save_memory`, `search_memory`, `forget_memory`
+- **Conversation search**: `search_conversation` — FTS5 search on chat history, scoped to single chat or global
 - **Filesystem tools**: `read_file`, `write_file`, `edit_file`, `list_files`, `bash`
 - **Sandbox tools**: `run_python`, `create_artifact`
-- **Flow control**: `ask_user` (pauses tool loop, saves pending state to `~/.quje-agent/pending/{chatId}.json`, resumes on next user message)
+- **Flow control**: `ask_user` (pauses tool loop, saves pending state to `pending_states` table in SQLite, resumes on next user message)
 
 ### Tool Loop (`server/src/routes/chat.ts`)
 
@@ -80,7 +90,10 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 
 **Project scoping**: memories have an optional `projectId` field for project-scoped context. The DB auto-migrates the `project_id` column.
 
-- **Automatic extraction**: after each agent response, a background LLM call extracts memories (1-3 sentences each with context and rationale, not just atomic one-liners) and deduplicates them against existing memories using cosine similarity.
+**Source tracking**: memories track `sourceType` ('chat_immediate', 'chat_delayed', 'synthesis', 'supersession') and `sourceId` for lineage. Supersession links (`superseded_by`, `supersedes`) track when memories are updated/contradicted.
+
+- **Immediate extraction**: after each agent response, a background LLM call extracts memories (1-3 sentences each with context and rationale) and deduplicates them against existing memories using cosine similarity (>0.85 triggers UPDATE). Runs fire-and-forget via `memory-extraction.ts`.
+- **Delayed extraction**: time-based trigger (configurable threshold, default 30 min) runs on inactive chats. Extracts the full conversation context, injects previously-extracted memories for density, and focuses on new patterns/decisions. Tracks `lastDelayedExtractionAt` and `lastDelayedExtractionMessageIndex` per chat. Uses `updateChatExtractionState()` to avoid touching `lastModified` (preserves chat ordering).
 - **Context augmentation**: relevant memories are retrieved via RRF (Reciprocal Rank Fusion) combining vector search + FTS5 full-text search, then injected into the system prompt so the agent naturally references what it knows.
 - **Agent tools**: the agent can explicitly save, search, and forget memories when asked.
 - **Daily synthesis** (`synthesis.ts`): only runs when agent chats occurred that day (inactive days skipped). Groups today's chats by project, loads AGENTS.md for each active project. Loads today's notebook entries (user + agent, excluding prior synthesis entries). Uses `defaultModelId` from settings (not first Ollama model); captures `thinking_delta` as fallback for qwen3 reasoning mode. Generates reflections (1-5 per day, saved as `reflection` memories with importance 7-9). Writes an agent notebook entry with the synthesis summary. Includes persona pattern analysis (suggestions logged, not auto-applied). System prompt uses first-person for agent actions, third-person for user.
@@ -254,7 +267,7 @@ quje-agent/
 │   │   ├── chat.ts                  # POST /api/chat — SSE streaming + tool loop
 │   │   ├── chats.ts                 # Chat CRUD
 │   │   ├── projects.ts              # Project CRUD + AGENTS.md injection
-│   │   ├── memory.ts                # Memory CRUD + search + synthesis trigger
+│   │   ├── memory.ts                # Memory CRUD + search + synthesis + conversation search
 │   │   ├── models.ts                # Ollama model discovery
 │   │   ├── settings.ts              # User preferences
 │   │   ├── tts.ts                   # TTS settings + voice info
@@ -268,15 +281,14 @@ quje-agent/
 │   └── services/
 │       ├── agent.ts                 # pi-ai streaming wrapper
 │       ├── agent-tools.ts           # Tool registry + execution
-│       ├── project-storage.ts       # Project JSON persistence
-│       ├── storage.ts               # Chat JSON persistence
+│       ├── chat-storage.ts          # SQLite storage for chats/projects/settings + FTS5
 │       ├── embeddings.ts            # Ollama embedding API wrapper
 │       ├── memory-storage.ts        # Memory SQLite + sqlite-vec persistence + KNN search
-│       ├── memory-extraction.ts     # Background fact extraction + pre-compaction flush
+│       ├── memory-extraction.ts     # Immediate + delayed extraction + supersession tracking
 │       ├── memory-context.ts        # System prompt augmentation with memories
 │       ├── memory-tools.ts          # Agent tool definitions, parsing, execution
 │       ├── synthesis.ts             # Daily memory consolidation
-│       ├── scheduler.ts             # Hourly synthesis check + startup catch-up
+│       ├── scheduler.ts             # Hourly synthesis check + delayed extraction queue
 │       ├── compaction.ts            # Message compaction when near context limit
 │       ├── tts.ts                   # Kokoro TTS integration
 │       ├── comfyui.ts               # ComfyUI API client
@@ -307,18 +319,27 @@ All data is stored in `~/.quje-agent/`:
 
 ```
 ~/.quje-agent/
-├── chats/              # One JSON file per chat
-├── projects/           # One JSON file per project
+├── app.db              # SQLite database (chats, projects, settings, pending states, chat_messages FTS5)
+├── chats/              # Legacy JSON files (migrated to app.db on startup)
+├── projects/           # Legacy JSON files (migrated to app.db on startup)
 ├── artifacts/          # One folder per artifact (contains index.html + assets)
 ├── images/             # Generated images from ComfyUI
 ├── user-images/        # Uploaded user images (originals + thumbnails)
 ├── vision/             # Analyzed images
-├── pending/            # Pending tool loop state (for ask_user)
-├── settings.json       # User preferences
+├── pending/            # Legacy JSON files (migrated to app.db on startup)
+├── settings.json       # Legacy JSON file (migrated to app.db on startup)
 └── memory/
     ├── memories.db     # SQLite database (memories + vector embeddings via sqlite-vec)
     └── daily/          # Daily synthesis logs (YYYY-MM-DD.md)
 ```
+
+**SQLite schemas:**
+- `chats` — chat metadata with JSON `messages` column, delayed extraction tracking (`lastDelayedExtractionAt`, `lastDelayedExtractionMessageIndex`)
+- `chat_messages` — denormalized message table for FTS5 (chat_id, message_index, role, content, timestamp)
+- `chat_messages_fts` — FTS5 virtual table with automatic triggers for full-text search
+- `projects` — project metadata
+- `settings` — key-value settings (single 'settings' key)
+- `pending_states` — ask_user tool loop state for resume after server restart
 
 ## API Reference
 
@@ -336,8 +357,10 @@ All data is stored in `~/.quje-agent/`:
 | GET | `/api/memory` | List memories (without embeddings) |
 | POST | `/api/memory` | Create memory |
 | POST | `/api/memory/search` | Semantic search (`{ query, topK? }`) |
-| GET | `/api/memory/status` | Embedding model status + memory count |
+| GET | `/api/memory/status` | Embedding model status + memory count + extraction metrics |
+| GET | `/api/memory/synthesis/status` | Last synthesis timestamp + memory count |
 | POST | `/api/memory/synthesis/run` | Manually trigger synthesis |
+| POST | `/api/memory/conversations/search` | Conversation search (`{ query, chatId?, limit? }`) — FTS5 on chat history |
 | GET | `/api/projects` | List all projects |
 | POST | `/api/projects` | Create project (`{ name, path }`) |
 | PATCH | `/api/projects/:id` | Update project |
@@ -369,13 +392,15 @@ All data is stored in `~/.quje-agent/`:
 
 - **Streaming**: SSE with event types `text_delta`, `thinking_delta`, `tool_status`, `artifact`, `ask_user`, `done`, `error`, `iteration`, `warning`, `compaction`, `title_update`, `message_complete`, `follow_up_start`
 - **Types**: Shared interfaces in `server/src/types.ts` and `client/src/types.ts` (kept in sync manually)
-- **Storage**: Chat/project persistence uses JSON files (`storage.ts`, `project-storage.ts`), memory persistence uses SQLite + sqlite-vec (`memory-storage.ts` → `~/.quje-agent/memory/memories.db`), notebooks via `notebook-storage.ts` → `~/.quje-agent/notebooks/`. All use `~/.quje-agent/` as the base directory.
+- **Storage**: SQLite for chats/projects/settings/pending (`chat-storage.ts` → `~/.quje-agent/app.db`), SQLite + sqlite-vec for memories (`memory-storage.ts` → `~/.quje-agent/memory/memories.db`), notebooks via `notebook-storage.ts` → `~/.quje-agent/notebooks/`. All use `~/.quje-agent/` as the base directory.
 - **Context window**: Fetched per-model from Ollama `/api/show` (`model_info.*.context_length`). Per-chat override via `chat.contextWindow`; effective value is `chat.contextWindow ?? model.contextWindow`.
 - **Embeddings**: Ollama `qwen3-embedding:0.6b` via `POST http://localhost:11434/api/embed` (supports 32k context). Vectors are L2-normalized, so cosine similarity = dot product.
 - **Memory scoring**: `rrf_score * recency_decay * (importance / 10)` with RRF combining vector search and FTS5 full-text search rankings; 30-day half-life on recency.
 - **Memory dedup**: cosine > 0.85 between a new fact and existing memory triggers UPDATE instead of ADD. Uses sqlite-vec KNN MATCH for nearest-neighbor lookup.
+- **Supersession tracking**: memories can be linked via `superseded_by` / `supersedes` columns when contradicted or updated. Confidence threshold (default 0.75) determines automatic linking; manual override via API.
+- **Delayed extraction**: time-based trigger (configurable, default 30 min) extracts memories from inactive chats. Uses `updateChatExtractionState()` to avoid modifying `lastModified` (preserves chat ordering).
 - **Project scoping**: memories have optional `projectId`; synthesis groups chats and memories by project, loading each project's AGENTS.md for context.
-- **Backward compat**: `getChat()` and `listChats()` default missing `type` to "quick". Memory DB auto-migrates `project_id` column.
+- **Backward compat**: `getChat()` and `listChats()` default missing `type` to "quick". Memory DB auto-migrates `project_id` column. Chat/project/settings JSON files auto-migrate to SQLite on startup.
 
 ## Style
 
