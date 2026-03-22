@@ -94,9 +94,23 @@ export function getDb(): Database.Database {
     );
   `);
 
+  // FTS5 with chat_id as UNINDEXED column — allows filtering by chat during MATCH phase
+  // Migration: if old FTS table exists without chat_id column, drop and recreate
+  const ftsInfo = db.prepare("PRAGMA table_info(chat_messages_fts)").all() as Array<{ name: string }>;
+  if (ftsInfo.length > 0 && !ftsInfo.some((c) => c.name === "chat_id")) {
+    db.exec("DROP TABLE IF EXISTS chat_messages_fts");
+    db.exec("DROP TRIGGER IF EXISTS chat_messages_ai");
+    db.exec("DROP TRIGGER IF EXISTS chat_messages_ad");
+    db.exec("DROP TRIGGER IF EXISTS chat_messages_au");
+    // Also clear chat_messages so backfill rebuilds everything
+    db.exec("DELETE FROM chat_messages");
+    console.log("[chat-storage] Rebuilt chat_messages_fts with chat_id UNINDEXED column");
+  }
+
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS chat_messages_fts USING fts5(
       content,
+      chat_id UNINDEXED,
       content='chat_messages',
       content_rowid='rowid'
     );
@@ -105,14 +119,14 @@ export function getDb(): Database.Database {
   // Triggers to keep chat_messages_fts in sync
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS chat_messages_ai AFTER INSERT ON chat_messages BEGIN
-      INSERT INTO chat_messages_fts(rowid, content) VALUES (new.rowid, new.content);
+      INSERT INTO chat_messages_fts(rowid, content, chat_id) VALUES (new.rowid, new.content, new.chat_id);
     END;
     CREATE TRIGGER IF NOT EXISTS chat_messages_ad AFTER DELETE ON chat_messages BEGIN
-      INSERT INTO chat_messages_fts(chat_messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+      INSERT INTO chat_messages_fts(chat_messages_fts, rowid, content, chat_id) VALUES('delete', old.rowid, old.content, old.chat_id);
     END;
     CREATE TRIGGER IF NOT EXISTS chat_messages_au AFTER UPDATE ON chat_messages BEGIN
-      INSERT INTO chat_messages_fts(chat_messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-      INSERT INTO chat_messages_fts(rowid, content) VALUES (new.rowid, new.content);
+      INSERT INTO chat_messages_fts(chat_messages_fts, rowid, content, chat_id) VALUES('delete', old.rowid, old.content, old.chat_id);
+      INSERT INTO chat_messages_fts(rowid, content, chat_id) VALUES (new.rowid, new.content, new.chat_id);
     END;
   `);
 
@@ -514,12 +528,13 @@ export function searchChatMessages(
 
   const runSearch = (matchExpr: string) => {
     if (opts.chatId) {
+      // chat_id is UNINDEXED in FTS5 — filter on f.chat_id avoids full JOIN scan
       return db.prepare(`
-        SELECT cm.chat_id, cm.message_index, cm.role, cm.content, f.rank
+        SELECT f.chat_id, cm.message_index, cm.role, cm.content, f.rank
         FROM chat_messages_fts f
         JOIN chat_messages cm ON cm.rowid = f.rowid
         WHERE f.chat_messages_fts MATCH ?
-          AND cm.chat_id = ?
+          AND f.chat_id = ?
         ORDER BY f.rank
         LIMIT ?
       `).all(matchExpr, opts.chatId, limit) as Array<{
@@ -527,7 +542,7 @@ export function searchChatMessages(
       }>;
     } else {
       return db.prepare(`
-        SELECT cm.chat_id, cm.message_index, cm.role, cm.content, f.rank
+        SELECT f.chat_id, cm.message_index, cm.role, cm.content, f.rank
         FROM chat_messages_fts f
         JOIN chat_messages cm ON cm.rowid = f.rowid
         WHERE f.chat_messages_fts MATCH ?
@@ -579,6 +594,15 @@ export function getChatMessageRange(
   `).all(chatId, startIndex, endIndex) as Array<{
     messageIndex: number; role: string; content: string;
   }>;
+}
+
+/**
+ * Get chat title by ID. Returns the title or null if not found.
+ */
+export function getChatTitle(chatId: string): string | null {
+  const db = getDb();
+  const row = db.prepare("SELECT title FROM chats WHERE id = ?").get(chatId) as { title: string } | undefined;
+  return row?.title ?? null;
 }
 
 /**

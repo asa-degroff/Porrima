@@ -5,7 +5,7 @@ import {
   getMemoryById,
   searchMemories,
 } from "./memory-storage.js";
-import { searchChatMessages, getChatMessageRange } from "./chat-storage.js";
+import { searchChatMessages, getChatMessageRange, getChatTitle } from "./chat-storage.js";
 import { dedupAndSave } from "./memory-extraction.js";
 import type { Tool, ToolCall } from "@mariozechner/pi-ai";
 import type { MemoryCategory } from "../types.js";
@@ -78,6 +78,9 @@ export const MEMORY_TOOLS: Tool[] = [
       ),
       chat_id: Type.Optional(
         Type.String({ description: "Chat ID to search within a specific conversation" })
+      ),
+      limit: Type.Optional(
+        Type.Number({ description: "Max matches to return (default 5)", minimum: 1, maximum: 50 })
       ),
     }),
   },
@@ -206,7 +209,7 @@ export async function executeMemoryTool(
     }
 
     case "search_conversation": {
-      const { query, memory_id, chat_id } = toolCall.arguments;
+      const { query, memory_id, chat_id, limit: maxResults } = toolCall.arguments;
       if (!query) return { content: "Missing query", isError: true };
 
       // Resolve chat_id from memory if provided
@@ -229,14 +232,17 @@ export async function executeMemoryTool(
         }
       }
 
+      const resultLimit = Math.min(50, Math.max(1, maxResults || 5));
       const CONTEXT_RADIUS = 2; // messages before/after each match
       const matches = searchChatMessages(query, {
         chatId: targetChatId,
-        limit: 10,
+        limit: resultLimit,
       });
 
       if (matches.length === 0) {
-        const scope = targetChatId ? `conversation ${targetChatId}` : "any conversation";
+        const scope = targetChatId
+          ? `conversation "${getChatTitle(targetChatId) || targetChatId}"`
+          : "any conversation";
         return {
           content: `${memoryContext}No matching messages found in ${scope} for query: "${query}"`,
           isError: false,
@@ -255,7 +261,9 @@ export async function executeMemoryTool(
       if (memoryContext) sections.push(memoryContext.trim());
 
       for (const [cid, indices] of byChatId) {
-        const chatLabel = targetChatId ? "" : `\n--- Chat: ${cid} ---\n`;
+        // Show chat title for global searches; skip for single-chat scoped searches
+        const title = getChatTitle(cid);
+        const chatLabel = targetChatId ? "" : `\n--- ${title || "Untitled"} (${cid}) ---\n`;
         const messageGroups: string[] = [];
 
         // Merge overlapping context windows
