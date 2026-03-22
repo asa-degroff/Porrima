@@ -730,7 +730,7 @@ async function handleChatStream(
       }
       
       const followUpSystemPrompt = chat.type === "agent"
-        ? await buildMemoryAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages)
+        ? await buildMemoryAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId)
         : chat.systemPrompt || "You are a helpful assistant.";
       
       // Recursively handle the follow-up with a fresh turn abort controller
@@ -1045,7 +1045,9 @@ router.post("/", async (req, res) => {
           if (chat.type === "agent") {
             systemPrompt = await buildMemoryAugmentedPrompt(
               chat.systemPrompt || "You are a helpful assistant.",
-              chat.messages
+              chat.messages,
+              chat.id,
+              chat.projectId
             );
           }
           // Emit compaction event for UI indicator
@@ -1088,7 +1090,9 @@ router.post("/", async (req, res) => {
     if (chat.type === "agent") {
       systemPrompt = await buildMemoryAugmentedPrompt(
         systemPrompt,
-        chat.messages
+        chat.messages,
+        chat.id,
+        chat.projectId
       );
     }
     
@@ -1123,7 +1127,9 @@ router.post("/", async (req, res) => {
           if (chat.type === "agent") {
             systemPrompt = await buildMemoryAugmentedPrompt(
               chat.systemPrompt || "You are a helpful assistant.",
-              chat.messages
+              chat.messages,
+              chat.id,
+              chat.projectId
             );
           }
           // Emit compaction event for UI indicator
@@ -1228,7 +1234,7 @@ router.post("/edit", async (req, res) => {
   // Build context with skills
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
   if (chat.type === "agent") {
-    systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages);
+    systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages, chat.id, chat.projectId);
   }
   
   // Inject active skills into system prompt
@@ -1262,7 +1268,9 @@ router.post("/edit", async (req, res) => {
         if (chat.type === "agent") {
           systemPrompt = await buildMemoryAugmentedPrompt(
             chat.systemPrompt || "You are a helpful assistant.",
-            chat.messages
+            chat.messages,
+            chat.id,
+            chat.projectId
           );
         }
         // Emit compaction event for UI indicator

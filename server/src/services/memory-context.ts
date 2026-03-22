@@ -17,7 +17,9 @@ export function setCachedAugmentedPrompt(chatId: string, prompt: string): void {
 
 export async function buildMemoryAugmentedPrompt(
   baseSystemPrompt: string,
-  recentMessages: ChatMessage[]
+  recentMessages: ChatMessage[],
+  chatId?: string,
+  projectId?: string
 ): Promise<string> {
   try {
     // Load persona and inject it first
@@ -40,25 +42,70 @@ export async function buildMemoryAugmentedPrompt(
 
     if (userMessages) {
       const queryEmbedding = await embed(userMessages);
-      const results = await searchMemories(queryEmbedding, 5, new Date(), userMessages);
-      // RRF scores are much smaller than raw cosine — max ~0.033 before decay/importance
-      const relevant = results.filter((r) => r.score > 0.0003);
+      // Fetch more candidates to allow filtering/diversity selection
+      const results = await searchMemories(queryEmbedding, 15, new Date(), userMessages);
+      
+      // Separate current and superseded memories
+      const currentMemories = results.filter((r) => !r.memory.supersededBy);
+      const supersededMemories = results.filter((r) => r.memory.supersededBy);
+      
+      // Select top current memories (prioritize these)
+      const topCurrent = currentMemories
+        .filter((r) => r.score > 0.0002) // Lower threshold for current memories
+        .slice(0, 8);
+      
+      // Select relevant superseded memories as "historical context"
+      const topSuperseded = supersededMemories
+        .filter((r) => r.score > 0.0001) // Even lower threshold - these provide context
+        .slice(0, 4);
+      
+      // Try to ensure category diversity (at most 3 of any one category)
+      const categoryCount: Record<string, number> = {};
+      const diverseMemories: Array<typeof topCurrent[0]> = [];
+      for (const m of topCurrent) {
+        const cat = m.memory.category;
+        categoryCount[cat] = (categoryCount[cat] || 0) + 1;
+        if (categoryCount[cat] <= 3) {
+          diverseMemories.push(m);
+        }
+      }
+      
+      // Apply project scoping: boost project-matching memories to the top
+      if (projectId) {
+        diverseMemories.sort((a, b) => {
+          const aMatch = a.memory.projectId === projectId ? 1 : 0;
+          const bMatch = b.memory.projectId === projectId ? 1 : 0;
+          if (aMatch !== bMatch) return bMatch - aMatch;
+          return b.score - a.score; // Fall back to score
+        });
+      }
+      
+      const selected = diverseMemories.slice(0, 15);
+      
+      // Add superseded memories if they provide useful historical context
+      const finalMemories = [...selected];
+      if (topSuperseded.length > 0) {
+        finalMemories.push(...topSuperseded.slice(0, 5));
+      }
 
-      if (relevant.length > 0) {
-        const memoriesBlock = relevant
+      if (finalMemories.length > 0) {
+        const memoriesBlock = finalMemories
           .map(
             (r) => {
               const supersededNote = r.memory.supersededBy
                 ? " ⚠️ SUPERSEDED — a newer version of this memory exists"
                 : "";
-              return `- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10]${supersededNote}`;
+              const projectNote = r.memory.projectId && projectId && r.memory.projectId !== projectId
+                ? ` [project: ${r.memory.projectId}]`
+                : "";
+              return `- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10]${supersededNote}${projectNote}`;
             }
           )
           .join("\n");
 
         // Update access metadata (fire-and-forget)
         const now = new Date().toISOString();
-        for (const r of relevant) {
+        for (const r of finalMemories) {
           updateMemory(r.memory.id, {
             lastAccessed: now,
             accessCount: r.memory.accessCount + 1,
