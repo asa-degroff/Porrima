@@ -173,15 +173,39 @@ export async function dedupAndSave(
     const match = await findDuplicates(factEmbedding, DEDUP_THRESHOLD);
 
     if (match) {
-      console.log(
-        `[memory] Updating existing memory (sim=${match.similarity.toFixed(3)}): "${match.memory.text}" -> "${fact.text}"`
-      );
-      await updateMemory(match.memory.id, {
-        text: fact.text,
-        embedding: factEmbedding,
-        importance: Math.max(match.memory.importance, fact.importance),
-        lastAccessed: new Date().toISOString(),
-      });
+      // If the text is effectively identical (very high similarity), just bump metadata
+      // without creating a new memory in the chain
+      if (match.similarity > 0.95) {
+        console.log(
+          `[memory] Near-identical match (sim=${match.similarity.toFixed(3)}), bumping metadata: "${match.memory.text}"`
+        );
+        await updateMemory(match.memory.id, {
+          importance: Math.max(match.memory.importance, fact.importance),
+          lastAccessed: new Date().toISOString(),
+        });
+      } else {
+        // Text has meaningfully changed — create a new memory that supersedes the old one
+        console.log(
+          `[memory] Superseding memory (sim=${match.similarity.toFixed(3)}): "${match.memory.text}" → "${fact.text}"`
+        );
+        const now = new Date().toISOString();
+        const newMemoryId = uuid();
+        await addMemory({
+          id: newMemoryId,
+          text: fact.text,
+          category: fact.category || match.memory.category,
+          importance: Math.min(10, Math.max(1, Math.max(match.memory.importance, fact.importance))),
+          embedding: factEmbedding,
+          createdAt: now,
+          lastAccessed: now,
+          accessCount: 0,
+          sourceChatId: sourceType === 'chat' ? chatId : '',
+          ...(projectId ? { projectId } : {}),
+          sourceType,
+          sourceId: sourceId || chatId,
+        });
+        await createSupersessionLink(newMemoryId, match.memory.id, match.similarity);
+      }
     } else {
       console.log(`[memory] New memory: "${fact.text}"`);
       const now = new Date().toISOString();

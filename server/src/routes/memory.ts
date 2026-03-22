@@ -132,22 +132,49 @@ router.get("/:id", async (req, res) => {
 // Update memory (re-embeds if text changes)
 router.patch("/:id", async (req, res) => {
   const { text, category, importance } = req.body;
-  const updates: Partial<Memory> = {};
 
-  if (text !== undefined) {
-    updates.text = text;
+  const existing = await getMemoryById(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Memory not found" });
+
+  // Text change → create a new memory that supersedes the old one (preserves lineage)
+  if (text !== undefined && text !== existing.text) {
+    let embedding: number[];
     try {
-      updates.embedding = await embed(text);
+      embedding = await embed(text);
     } catch (e: any) {
       return res.status(503).json({ error: `Embedding unavailable: ${e.message}` });
     }
+
+    const now = new Date().toISOString();
+    const newMemory: Memory = {
+      id: uuid(),
+      text,
+      category: category ?? existing.category,
+      importance: importance !== undefined
+        ? Math.min(10, Math.max(1, importance))
+        : existing.importance,
+      embedding,
+      createdAt: now,
+      lastAccessed: now,
+      accessCount: 0,
+      sourceChatId: existing.sourceChatId,
+      ...(existing.projectId ? { projectId: existing.projectId } : {}),
+    };
+
+    await addMemory(newMemory);
+    await createSupersessionLink(newMemory.id, existing.id, 1.0);
+    return res.json(stripEmbedding(newMemory));
   }
+
+  // Non-text updates (category, importance) — edit in place
+  const updates: Partial<Memory> = {};
   if (category !== undefined) updates.category = category;
   if (importance !== undefined)
     updates.importance = Math.min(10, Math.max(1, importance));
 
-  const updated = await updateMemory(req.params.id, updates);
-  if (!updated) return res.status(404).json({ error: "Memory not found" });
+  if (Object.keys(updates).length > 0) {
+    await updateMemory(req.params.id, updates);
+  }
 
   const memory = await getMemoryById(req.params.id);
   res.json(stripEmbedding(memory!));
