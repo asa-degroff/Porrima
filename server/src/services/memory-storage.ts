@@ -744,36 +744,82 @@ export async function searchMemoriesRaw(
 /**
  * Create a supersession link between two memories.
  * newerMemoryId supersedes olderMemoryId.
+ * Returns false if the link would create a cycle or is a self-link.
  */
 export async function createSupersessionLink(
   newerMemoryId: string,
   olderMemoryId: string,
   confidence: number
-): Promise<void> {
+): Promise<boolean> {
+  if (newerMemoryId === olderMemoryId) {
+    console.warn(`[memory] Rejected self-supersession: ${newerMemoryId}`);
+    return false;
+  }
+
   const db = getDb();
+
+  // Walk the chain from newerMemoryId forward (via superseded_by) to check if
+  // olderMemoryId is already an ancestor — if so, linking would create a cycle.
+  // Also walk backward (via supersedes) from olderMemoryId for the same reason.
+  const visited = new Set<string>([newerMemoryId]);
+
+  // Walk forward from newer: if we reach older, it's already "above" newer → cycle
+  let currentId: string | null = newerMemoryId;
+  while (currentId) {
+    const row = db.prepare(
+      "SELECT superseded_by FROM memories WHERE id = ?"
+    ).get(currentId) as { superseded_by: string | null } | undefined;
+    currentId = row?.superseded_by || null;
+    if (!currentId) break;
+    if (currentId === olderMemoryId) {
+      console.warn(`[memory] Rejected supersession cycle: ${olderMemoryId} is already newer than ${newerMemoryId}`);
+      return false;
+    }
+    if (visited.has(currentId)) break; // existing cycle in data — don't extend it
+    visited.add(currentId);
+  }
+
+  // Walk backward from older: if we reach newer, it's already "below" older → cycle
+  currentId = olderMemoryId;
+  visited.add(olderMemoryId);
+  while (currentId) {
+    const row = db.prepare(
+      "SELECT supersedes FROM memories WHERE id = ?"
+    ).get(currentId) as { supersedes: string | null } | undefined;
+    currentId = row?.supersedes || null;
+    if (!currentId) break;
+    if (currentId === newerMemoryId) {
+      console.warn(`[memory] Rejected supersession cycle: ${newerMemoryId} is already older than ${olderMemoryId}`);
+      return false;
+    }
+    if (visited.has(currentId)) break;
+    visited.add(currentId);
+  }
+
   const now = new Date().toISOString();
   const linkId = uuid();
-  
+
   const insert = db.transaction(() => {
     // Insert audit record
     db.prepare(`
       INSERT INTO memory_supersession_history (id, older_memory_id, newer_memory_id, confidence, created_at)
       VALUES (?, ?, ?, ?, ?)
     `).run(linkId, olderMemoryId, newerMemoryId, confidence, now);
-    
+
     // Update newer memory to point to older
     db.prepare(`
       UPDATE memories SET supersedes = ? WHERE id = ?
     `).run(olderMemoryId, newerMemoryId);
-    
+
     // Update older memory to point to newer
     db.prepare(`
       UPDATE memories SET superseded_by = ? WHERE id = ?
     `).run(newerMemoryId, olderMemoryId);
   });
-  
+
   insert();
   console.log(`[memory] Created supersession link: ${olderMemoryId} → ${newerMemoryId}`);
+  return true;
 }
 
 /**
@@ -818,48 +864,51 @@ export async function getMemoryLineage(memoryId: string): Promise<{
   newer: Array<{ id: string; text: string; createdAt: string }>;
 }> {
   const db = getDb();
-  
+
   const older: Array<{ id: string; text: string; createdAt: string }> = [];
   const newer: Array<{ id: string; text: string; createdAt: string }> = [];
-  
+  const visited = new Set<string>([memoryId]);
+
   // Walk backwards (older memories this one supersedes)
   let currentId = memoryId;
   while (true) {
     const row = db.prepare(`
       SELECT supersedes FROM memories WHERE id = ?
     `).get(currentId) as { supersedes: string | null } | undefined;
-    
-    if (!row || !row.supersedes) break;
-    
+
+    if (!row || !row.supersedes || visited.has(row.supersedes)) break;
+    visited.add(row.supersedes);
+
     const olderRow = db.prepare(`
       SELECT id, text, created_at FROM memories WHERE id = ?
     `).get(row.supersedes) as { id: string; text: string; created_at: string } | undefined;
-    
+
     if (!olderRow) break;
-    
+
     older.push({ id: olderRow.id, text: olderRow.text, createdAt: olderRow.created_at });
     currentId = olderRow.id;
   }
-  
+
   // Walk forwards (newer memories that supersede this one)
   currentId = memoryId;
   while (true) {
     const row = db.prepare(`
       SELECT superseded_by FROM memories WHERE id = ?
     `).get(currentId) as { superseded_by: string | null } | undefined;
-    
-    if (!row || !row.superseded_by) break;
-    
+
+    if (!row || !row.superseded_by || visited.has(row.superseded_by)) break;
+    visited.add(row.superseded_by);
+
     const newerRow = db.prepare(`
       SELECT id, text, created_at FROM memories WHERE id = ?
     `).get(row.superseded_by) as { id: string; text: string; created_at: string } | undefined;
-    
+
     if (!newerRow) break;
-    
+
     newer.push({ id: newerRow.id, text: newerRow.text, createdAt: newerRow.created_at });
     currentId = newerRow.id;
   }
-  
+
   return { older, newer };
 }
 
