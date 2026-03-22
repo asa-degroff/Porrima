@@ -66,12 +66,12 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
 
   return (
     <div className="flex-1 overflow-y-auto p-4">
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 h-fit content-start">
+      <div className="columns-2 md:columns-3 lg:columns-4 gap-3 space-y-3">
         {/* Active generations (queued/processing) */}
         {activeGenerations.map((gen) => (
           <div
             key={gen.id}
-            className="group relative w-full rounded-xl overflow-hidden border-2 border-purple-400/40 bg-purple-500/5"
+            className="group relative w-full rounded-xl overflow-hidden border-2 border-purple-400/40 bg-purple-500/5 break-inside-avoid"
             style={{ contain: 'content' }}
           >
             {/* Placeholder with loading animation */}
@@ -146,7 +146,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
           <button
             key={image.id}
             onClick={() => onSelect(image)}
-            className={`group relative w-full rounded-xl overflow-hidden border-2 transition-all hover:scale-[1.02] ${
+            className={`group relative w-full rounded-xl overflow-hidden border-2 transition-all hover:scale-[1.02] break-inside-avoid ${
               selectedImage?.id === image.id
                 ? "border-amber-400/60 ring-2 ring-amber-400/20"
                 : "border-white/10 hover:border-white/20"
