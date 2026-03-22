@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { searchMemories, fetchAllMemories, deleteMemory } from "../api/client";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary } from "../types";
+import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage } from "../api/client";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 
 function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
@@ -74,6 +74,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryDeleting, setMemoryDeleting] = useState<string | null>(null);
   const [memoryCategoryFilter, setMemoryCategoryFilter] = useState<string>("all");
+  const [expandedLineage, setExpandedLineage] = useState<string | null>(null);
+  const [lineageData, setLineageData] = useState<Record<string, MemoryLineage>>({});
+  const [lineageLoading, setLineageLoading] = useState<string | null>(null);
   const memorySearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
   const [passkeyMessage, setPasskeyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -307,6 +310,24 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     } catch {}
     setMemoryDeleting(null);
   }, []);
+
+  const handleToggleLineage = useCallback(async (id: string) => {
+    if (expandedLineage === id) {
+      setExpandedLineage(null);
+      return;
+    }
+    setExpandedLineage(id);
+    if (!lineageData[id]) {
+      setLineageLoading(id);
+      try {
+        const lineage = await fetchMemoryLineage(id);
+        setLineageData((prev) => ({ ...prev, [id]: lineage }));
+      } catch {
+        setLineageData((prev) => ({ ...prev, [id]: { older: [], newer: [] } }));
+      }
+      setLineageLoading(null);
+    }
+  }, [expandedLineage, lineageData]);
 
   return (
     <div
@@ -855,13 +876,28 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       ) : (
                         memoryResults
                           .filter((m) => memoryCategoryFilter === "all" || m.category === memoryCategoryFilter)
-                          .map((memory) => (
+                          .map((memory) => {
+                            const isSuperseded = !!memory.supersededBy;
+                            const hasLineage = !!(memory.supersededBy || memory.supersedes);
+                            const lineage = lineageData[memory.id];
+                            const isExpanded = expandedLineage === memory.id;
+
+                            return (
                             <div
                               key={memory.id}
-                              className="group p-2.5 rounded-lg bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.07] transition-all"
+                              className={`group p-2.5 rounded-lg border transition-all ${
+                                isSuperseded
+                                  ? "bg-white/[0.02] border-white/[0.04] opacity-60"
+                                  : "bg-white/[0.04] border-white/[0.06] hover:bg-white/[0.07]"
+                              }`}
                             >
                               <div className="flex items-start justify-between gap-2">
-                                <p className="text-xs text-white/70 leading-relaxed flex-1">{memory.text}</p>
+                                <p className="text-xs text-white/70 leading-relaxed flex-1">
+                                  {isSuperseded && (
+                                    <span className="text-amber-400/70 text-[9px] font-medium mr-1.5" title="This memory has been superseded by a newer version">SUPERSEDED</span>
+                                  )}
+                                  {memory.text}
+                                </p>
                                 <button
                                   onClick={() => handleDeleteMemory(memory.id)}
                                   disabled={memoryDeleting === memory.id}
@@ -900,12 +936,54 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                                     relevance: {(memory.score * 100).toFixed(0)}%
                                   </span>
                                 )}
+                                {hasLineage && (
+                                  <button
+                                    onClick={() => handleToggleLineage(memory.id)}
+                                    className="text-[9px] text-purple-400/60 hover:text-purple-300 transition-colors"
+                                    title="View memory lineage"
+                                  >
+                                    {isExpanded ? "hide lineage" : "lineage"}
+                                  </button>
+                                )}
                                 <span className="text-[9px] text-white/25 ml-auto">
                                   {new Date(memory.createdAt).toLocaleDateString()}
                                 </span>
                               </div>
+
+                              {/* Lineage panel */}
+                              {isExpanded && (
+                                <div className="mt-2 pt-2 border-t border-white/[0.06]">
+                                  {lineageLoading === memory.id ? (
+                                    <p className="text-[10px] text-white/30">Loading lineage...</p>
+                                  ) : lineage && (lineage.older.length > 0 || lineage.newer.length > 0) ? (
+                                    <div className="space-y-1">
+                                      {lineage.newer.map((entry) => (
+                                        <div key={entry.id} className="flex items-start gap-1.5 text-[10px]">
+                                          <span className="text-green-400/60 shrink-0 mt-px" title="Newer version">&#x25B2;</span>
+                                          <span className="text-white/50">{entry.text}</span>
+                                          <span className="text-white/20 shrink-0 ml-auto">{new Date(entry.createdAt).toLocaleDateString()}</span>
+                                        </div>
+                                      ))}
+                                      <div className="flex items-start gap-1.5 text-[10px]">
+                                        <span className="text-purple-400/80 shrink-0 mt-px">&#x25CF;</span>
+                                        <span className="text-white/70 font-medium">Current</span>
+                                      </div>
+                                      {lineage.older.map((entry) => (
+                                        <div key={entry.id} className="flex items-start gap-1.5 text-[10px]">
+                                          <span className="text-amber-400/60 shrink-0 mt-px" title="Older version">&#x25BC;</span>
+                                          <span className="text-white/40">{entry.text}</span>
+                                          <span className="text-white/20 shrink-0 ml-auto">{new Date(entry.createdAt).toLocaleDateString()}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="text-[10px] text-white/30">No lineage chain found</p>
+                                  )}
+                                </div>
+                              )}
                             </div>
-                          ))
+                          );
+                          })
                       )}
                     </div>
                   </div>

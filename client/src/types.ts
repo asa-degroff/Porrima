@@ -143,6 +143,8 @@ export interface Settings {
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
 
+export type MemorySourceType = "chat" | "chat_delayed" | "chat_immediate" | "notebook" | "explicit";
+
 export interface MemorySummary {
   id: string;
   text: string;
@@ -153,6 +155,21 @@ export interface MemorySummary {
   accessCount: number;
   sourceChatId: string;
   projectId?: string;
+  sourceType?: MemorySourceType;
+  sourceId?: string;
+  supersededBy?: string;
+  supersedes?: string;
+}
+
+export interface MemoryLineageEntry {
+  id: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface MemoryLineage {
+  older: MemoryLineageEntry[];
+  newer: MemoryLineageEntry[];
 }
 
 export interface Artifact {
