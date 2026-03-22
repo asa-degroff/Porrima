@@ -13,6 +13,7 @@ import {
   getAllMemories,
   getDb,
   getMemoriesByChatId,
+  getMemoryById,
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
 import type { ChatMessage, Memory, MemoryCategory, Chat } from "../types.js";
@@ -423,15 +424,18 @@ async function checkSupersession(
   newText: string,
   newEmbedding: number[]
 ): Promise<void> {
+  const newMemory = await getMemoryById(newMemoryId);
+  if (!newMemory) return;
+
   const similarMemories = await searchMemoriesRaw(newEmbedding, 10);
-  
+
   for (const oldMemory of similarMemories) {
     // Skip if same memory or already has supersession link
     if (oldMemory.memory.id === newMemoryId) continue;
     if (oldMemory.memory.supersededBy) continue;
-    
-    // Only check older memories (by creation date)
-    if (new Date(oldMemory.memory.createdAt) >= new Date()) continue;
+
+    // Only check memories older than the new one
+    if (new Date(oldMemory.memory.createdAt) >= new Date(newMemory.createdAt)) continue;
     
     const similarity = 1 - oldMemory.score; // Convert distance to similarity
     const confidence = calculateSupersessionConfidence(newText, oldMemory.memory.text, similarity);
