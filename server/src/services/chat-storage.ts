@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { readdirSync, readFileSync, existsSync, renameSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import type { Chat, ChatListItem, Project, Settings } from "../types.js";
+import type { Chat, ChatListItem, ChatMessage, Project, Settings } from "../types.js";
 
 const BASE_DIR = join(homedir(), ".quje-agent");
 const CHATS_DIR = join(BASE_DIR, "chats");
@@ -79,6 +79,48 @@ export function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_projects_lastModified ON projects(lastModified DESC);
   `);
 
+  // ---------------------------------------------------------------------------
+  // Chat messages FTS5 (denormalized for full-text search over conversations)
+  // ---------------------------------------------------------------------------
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      chat_id TEXT NOT NULL,
+      message_index INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      timestamp INTEGER,
+      PRIMARY KEY (chat_id, message_index)
+    );
+  `);
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS chat_messages_fts USING fts5(
+      content,
+      content='chat_messages',
+      content_rowid='rowid'
+    );
+  `);
+
+  // Triggers to keep chat_messages_fts in sync
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS chat_messages_ai AFTER INSERT ON chat_messages BEGIN
+      INSERT INTO chat_messages_fts(rowid, content) VALUES (new.rowid, new.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS chat_messages_ad AFTER DELETE ON chat_messages BEGIN
+      INSERT INTO chat_messages_fts(chat_messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS chat_messages_au AFTER UPDATE ON chat_messages BEGIN
+      INSERT INTO chat_messages_fts(chat_messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+      INSERT INTO chat_messages_fts(rowid, content) VALUES (new.rowid, new.content);
+    END;
+  `);
+
+  // Index for scoped searches within a single chat
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id);
+  `);
+
   // Auto-add activeSkills column if upgrading from earlier schema
   const cols = db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === "activeSkills")) {
@@ -105,6 +147,10 @@ export function getDb(): Database.Database {
   }
 
   _db = db;
+
+  // Backfill chat_messages FTS index for existing chats (one-time on first upgrade)
+  backfillChatMessages();
+
   return db;
 }
 
@@ -205,6 +251,9 @@ export async function saveChat(chat: Chat): Promise<void> {
     chat.lastDelayedExtractionAt ?? null,
     chat.lastDelayedExtractionMessageIndex ?? null
   );
+
+  // Sync messages to FTS index (append-only, only inserts new messages)
+  syncChatMessages(db, chat.id, chat.messages);
 }
 
 export async function updateChatExtractionState(
@@ -222,8 +271,13 @@ export async function updateChatExtractionState(
 
 export async function deleteChat(id: string): Promise<boolean> {
   const db = getDb();
-  const result = db.prepare("DELETE FROM chats WHERE id = ?").run(id);
-  return result.changes > 0;
+  const del = db.transaction(() => {
+    const result = db.prepare("DELETE FROM chats WHERE id = ?").run(id);
+    // Clean up denormalized messages (triggers handle FTS cleanup)
+    db.prepare("DELETE FROM chat_messages WHERE chat_id = ?").run(id);
+    return result.changes > 0;
+  });
+  return del();
 }
 
 export async function createChat(chat: Chat): Promise<void> {
@@ -250,6 +304,9 @@ export async function createChat(chat: Chat): Promise<void> {
     chat.lastDelayedExtractionAt ?? null,
     chat.lastDelayedExtractionMessageIndex ?? null
   );
+
+  // Sync messages to FTS index
+  syncChatMessages(db, chat.id, chat.messages);
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +442,176 @@ export async function hasPendingState(chatId: string): Promise<boolean> {
   const db = getDb();
   const row = db.prepare("SELECT 1 FROM pending_states WHERE chatId = ?").get(chatId);
   return row !== undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Chat message FTS sync
+// ---------------------------------------------------------------------------
+
+/**
+ * Sync chat messages to the denormalized chat_messages table for FTS search.
+ * Only inserts new messages (append-only — messages are never edited/removed).
+ */
+function syncChatMessages(db: Database.Database, chatId: string, messages: ChatMessage[]): void {
+  // How many messages are already indexed for this chat?
+  const row = db.prepare(
+    "SELECT MAX(message_index) as maxIdx FROM chat_messages WHERE chat_id = ?"
+  ).get(chatId) as { maxIdx: number | null } | undefined;
+
+  const existingCount = row?.maxIdx !== null && row?.maxIdx !== undefined ? row.maxIdx + 1 : 0;
+  if (existingCount >= messages.length) return; // nothing new
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO chat_messages (chat_id, message_index, role, content, timestamp)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+
+  const sync = db.transaction(() => {
+    for (let i = existingCount; i < messages.length; i++) {
+      const msg = messages[i];
+      // Build searchable content: main text + tool call arguments + tool results
+      const parts: string[] = [];
+      if (msg.content) parts.push(msg.content);
+      if (msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          // Include tool name and stringified arguments for searchability
+          parts.push(`[tool:${tc.name}] ${JSON.stringify(tc.arguments)}`);
+        }
+      }
+      if (msg.toolResults) {
+        for (const tr of msg.toolResults) {
+          parts.push(`[result:${tr.toolName}] ${tr.content}`);
+        }
+      }
+      const content = parts.join("\n");
+      if (!content.trim()) continue; // skip empty messages
+
+      insert.run(chatId, i, msg.role, content, msg.timestamp || null);
+    }
+  });
+  sync();
+}
+
+/**
+ * Search chat messages using FTS5.
+ * If chatId is provided, scopes to that conversation. Otherwise searches all chats.
+ * Returns matching messages with surrounding context.
+ */
+export function searchChatMessages(
+  query: string,
+  opts: { chatId?: string; limit?: number; contextMessages?: number } = {}
+): Array<{ chatId: string; messageIndex: number; role: string; content: string; rank: number }> {
+  const db = getDb();
+  const limit = opts.limit || 10;
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  // Escape double quotes for FTS5
+  const escaped = trimmed.replace(/"/g, '""');
+
+  // Try phrase match first, then fall back to individual terms
+  let ftsQuery = `"${escaped}"`;
+
+  const runSearch = (matchExpr: string) => {
+    if (opts.chatId) {
+      return db.prepare(`
+        SELECT cm.chat_id, cm.message_index, cm.role, cm.content, f.rank
+        FROM chat_messages_fts f
+        JOIN chat_messages cm ON cm.rowid = f.rowid
+        WHERE f.chat_messages_fts MATCH ?
+          AND cm.chat_id = ?
+        ORDER BY f.rank
+        LIMIT ?
+      `).all(matchExpr, opts.chatId, limit) as Array<{
+        chat_id: string; message_index: number; role: string; content: string; rank: number;
+      }>;
+    } else {
+      return db.prepare(`
+        SELECT cm.chat_id, cm.message_index, cm.role, cm.content, f.rank
+        FROM chat_messages_fts f
+        JOIN chat_messages cm ON cm.rowid = f.rowid
+        WHERE f.chat_messages_fts MATCH ?
+        ORDER BY f.rank
+        LIMIT ?
+      `).all(matchExpr, limit) as Array<{
+        chat_id: string; message_index: number; role: string; content: string; rank: number;
+      }>;
+    }
+  };
+
+  let rows = runSearch(ftsQuery);
+
+  // Fall back to individual terms if phrase match yields nothing
+  if (rows.length === 0) {
+    const terms = trimmed
+      .split(/\s+/)
+      .filter((t) => t.length > 0)
+      .map((t) => `"${t.replace(/"/g, '""')}"`)
+      .join(" OR ");
+    if (terms) {
+      rows = runSearch(terms);
+    }
+  }
+
+  return rows.map((r) => ({
+    chatId: r.chat_id,
+    messageIndex: r.message_index,
+    role: r.role,
+    content: r.content,
+    rank: r.rank,
+  }));
+}
+
+/**
+ * Get messages from a chat by index range (for fetching context around a match).
+ */
+export function getChatMessageRange(
+  chatId: string,
+  startIndex: number,
+  endIndex: number
+): Array<{ messageIndex: number; role: string; content: string }> {
+  const db = getDb();
+  return db.prepare(`
+    SELECT message_index, role, content
+    FROM chat_messages
+    WHERE chat_id = ? AND message_index >= ? AND message_index <= ?
+    ORDER BY message_index ASC
+  `).all(chatId, startIndex, endIndex) as Array<{
+    messageIndex: number; role: string; content: string;
+  }>;
+}
+
+/**
+ * Backfill chat_messages table for all existing chats that haven't been indexed yet.
+ * Called once on startup if needed.
+ */
+export function backfillChatMessages(): void {
+  const db = getDb();
+
+  // Check if we've already backfilled
+  const meta = db.prepare("SELECT 1 FROM chat_messages LIMIT 1").get();
+  const chatCount = (db.prepare("SELECT COUNT(*) as cnt FROM chats").get() as { cnt: number }).cnt;
+
+  if (meta || chatCount === 0) return; // already has data or no chats to index
+
+  console.log("[chat-storage] Backfilling chat_messages FTS index...");
+
+  const chats = db.prepare("SELECT id, messages FROM chats").all() as Array<{
+    id: string; messages: string;
+  }>;
+
+  let totalMessages = 0;
+  for (const chat of chats) {
+    try {
+      const messages = JSON.parse(chat.messages) as ChatMessage[];
+      syncChatMessages(db, chat.id, messages);
+      totalMessages += messages.length;
+    } catch (e) {
+      console.warn(`[chat-storage] Skipping chat ${chat.id} during backfill: ${(e as Error).message}`);
+    }
+  }
+
+  console.log(`[chat-storage] Backfilled ${totalMessages} messages from ${chats.length} chats`);
 }
 
 // ---------------------------------------------------------------------------
