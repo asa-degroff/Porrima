@@ -284,10 +284,7 @@ export async function executeMemoryTool(
           const formatted = contextMsgs
             .map((m) => {
               const marker = sorted.includes(m.messageIndex) ? " <<<" : "";
-              // Truncate very long messages to keep output manageable
-              const text = m.content.length > 800
-                ? m.content.slice(0, 800) + "... [truncated]"
-                : m.content;
+              const text = truncateAroundMatch(m.content, query, 800);
               return `  [${m.messageIndex}] ${m.role}: ${text}${marker}`;
             })
             .join("\n");
@@ -344,4 +341,45 @@ function updatePersonaSection(
   const before = lines.slice(0, sectionIndex + 1).join("\n");
   const after = lines.slice(nextSectionIndex).join("\n");
   return `${before}\n${newContent}\n${after}`;
+}
+
+/**
+ * Truncate a long message to a window centered on the first occurrence of any
+ * query term. If the message is short enough, return it as-is.
+ */
+function truncateAroundMatch(text: string, query: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+
+  // Find the earliest position where any query term appears (case-insensitive)
+  const lowerText = text.toLowerCase();
+  const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 0);
+
+  let matchPos = -1;
+  for (const term of terms) {
+    const idx = lowerText.indexOf(term);
+    if (idx !== -1 && (matchPos === -1 || idx < matchPos)) {
+      matchPos = idx;
+    }
+  }
+
+  // No term found in this message (it's a context neighbor, not the match itself)
+  if (matchPos === -1) {
+    return text.slice(0, maxLen) + "... [truncated]";
+  }
+
+  // Center a window of maxLen around the match position
+  const half = Math.floor(maxLen / 2);
+  let start = Math.max(0, matchPos - half);
+  let end = start + maxLen;
+
+  // Clamp to text bounds
+  if (end > text.length) {
+    end = text.length;
+    start = Math.max(0, end - maxLen);
+  }
+
+  const slice = text.slice(start, end);
+  const prefix = start > 0 ? "... " : "";
+  const suffix = end < text.length ? " ... [truncated]" : "";
+  return prefix + slice + suffix;
 }
