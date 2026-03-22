@@ -782,6 +782,16 @@ export async function deleteMemory(id: string): Promise<void> {
   if (!res.ok) throw new Error("Failed to delete memory");
 }
 
+export async function searchConversations(query: string, chatId?: string, limit?: number): Promise<import("../types").ConversationSearchResult[]> {
+  const res = await apiFetch(`${BASE}/memory/conversations/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, chatId, limit }),
+  });
+  if (!res.ok) throw new Error("Failed to search conversations");
+  return res.json();
+}
+
 // --- Skills API ---
 
 export interface SkillInfo {

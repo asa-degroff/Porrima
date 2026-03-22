@@ -282,6 +282,27 @@ router.get("/contradictions", async (_req, res) => {
   res.json(contradictions);
 });
 
+// Conversation search (FTS5 over chat history)
+router.post("/conversations/search", async (req, res) => {
+  const { query, chatId, limit } = req.body;
+  if (!query) return res.status(400).json({ error: "query is required" });
+  
+  const { searchChatMessages, getChatTitle } = await import("../services/chat-storage.js");
+  
+  const matches = searchChatMessages(query, { chatId, limit: limit || 10 });
+  
+  const results = matches.map(m => ({
+    chatId: m.chatId,
+    chatTitle: getChatTitle(m.chatId),
+    messageIndex: m.messageIndex,
+    role: m.role,
+    content: m.content,
+    rank: m.rank,
+  }));
+  
+  res.json(results);
+});
+
 function calculateContradictionConfidence(text1: string, text2: string): number {
   // Simple heuristic for contradiction detection
   const contradictionPatterns = [

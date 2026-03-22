@@ -101,6 +101,15 @@ export interface OllamaModel {
   contextWindow: number;
 }
 
+export interface ConversationSearchResult {
+  chatId: string;
+  chatTitle: string | null;
+  messageIndex: number;
+  role: string;
+  content: string;
+  rank: number;
+}
+
 export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono";
 export type BackgroundEffect = "static" | "ripple-grid";
 
