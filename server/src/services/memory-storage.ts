@@ -518,7 +518,7 @@ export async function searchMemories(
   const placeholders = ids.map(() => "?").join(",");
   const metaRows = db
     .prepare(
-      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id FROM memories WHERE id IN (${placeholders})`
+      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, superseded_by, supersedes FROM memories WHERE id IN (${placeholders})`
     )
     .all(...ids) as Array<{
     id: string;
@@ -530,6 +530,8 @@ export async function searchMemories(
     access_count: number;
     source_chat_id: string;
     project_id: string;
+    superseded_by: string | null;
+    supersedes: string | null;
   }>;
 
   const nowMs = now.getTime();
@@ -538,7 +540,9 @@ export async function searchMemories(
     const ageMs = nowMs - new Date(r.last_accessed).getTime();
     const recencyDecay = Math.pow(0.5, ageMs / HALF_LIFE_MS);
     const importanceWeight = r.importance / 10;
-    const score = rrf * recencyDecay * importanceWeight;
+    // Heavily penalize superseded memories so current versions rank first
+    const supersessionPenalty = r.superseded_by ? 0.1 : 1.0;
+    const score = rrf * recencyDecay * importanceWeight * supersessionPenalty;
 
     return {
       memory: {
@@ -552,6 +556,8 @@ export async function searchMemories(
         accessCount: r.access_count,
         sourceChatId: r.source_chat_id,
         ...(r.project_id ? { projectId: r.project_id } : {}),
+        supersededBy: r.superseded_by || undefined,
+        supersedes: r.supersedes || undefined,
       },
       score,
     };

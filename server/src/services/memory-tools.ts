@@ -137,7 +137,13 @@ export async function executeMemoryTool(
         .map(
           (r) => {
             const source = r.memory.sourceChatId ? `, source: ${r.memory.sourceChatId}` : "";
-            return `- [${r.memory.id}] ${r.memory.text} (${r.memory.category}, importance: ${r.memory.importance}/10, score: ${r.score.toFixed(3)}${source})`;
+            const superseded = r.memory.supersededBy
+              ? ` [SUPERSEDED by ${r.memory.supersededBy}]`
+              : "";
+            const supersedes = r.memory.supersedes
+              ? `, supersedes: ${r.memory.supersedes}`
+              : "";
+            return `- [${r.memory.id}] ${r.memory.text} (${r.memory.category}, importance: ${r.memory.importance}/10, score: ${r.score.toFixed(3)}${source}${supersedes})${superseded}`;
           }
         )
         .join("\n");

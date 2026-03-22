@@ -47,8 +47,12 @@ export async function buildMemoryAugmentedPrompt(
       if (relevant.length > 0) {
         const memoriesBlock = relevant
           .map(
-            (r) =>
-              `- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10]`
+            (r) => {
+              const supersededNote = r.memory.supersededBy
+                ? " ⚠️ SUPERSEDED — a newer version of this memory exists"
+                : "";
+              return `- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10]${supersededNote}`;
+            }
           )
           .join("\n");
 

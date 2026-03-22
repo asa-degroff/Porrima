@@ -8,6 +8,8 @@ import {
   withWriteLock,
   getMemoryCount,
   getLastSynthesis,
+  createSupersessionLink,
+  updateMemory,
 } from "./memory-storage.js";
 import { discoverOllamaModels } from "./models.js";
 // persona-store used by analyzeAndPromotePersonaPatterns (suggestions only, no auto-apply yet)
@@ -50,33 +52,55 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
     }
 
     // Step 1: Consolidate near-duplicate memories (cosine > 0.90)
-    const merged = new Set<string>();
+    // Creates supersession links so the lineage is preserved, then updates
+    // the surviving memory's importance/access count.
+    const superseded = new Set<string>();
     for (let i = 0; i < store.memories.length; i++) {
-      if (merged.has(store.memories[i].id)) continue;
+      if (superseded.has(store.memories[i].id)) continue;
+      // Skip memories already superseded by something else
+      if (store.memories[i].supersededBy) continue;
       for (let j = i + 1; j < store.memories.length; j++) {
-        if (merged.has(store.memories[j].id)) continue;
+        if (superseded.has(store.memories[j].id)) continue;
+        if (store.memories[j].supersededBy) continue;
         const sim = cosineSimilarity(
           store.memories[i].embedding,
           store.memories[j].embedding
         );
         if (sim > MERGE_THRESHOLD) {
+          // Determine which is newer (survivor) and which is older (superseded).
+          // Keep the newer one as the survivor since it likely has more current info.
+          const iIsNewer = new Date(store.memories[i].createdAt) >= new Date(store.memories[j].createdAt);
+          const survivor = iIsNewer ? store.memories[i] : store.memories[j];
+          const old = iIsNewer ? store.memories[j] : store.memories[i];
+
           console.log(
-            `[synthesis] Merging: "${store.memories[j].text}" into "${store.memories[i].text}" (sim=${sim.toFixed(3)})`
+            `[synthesis] Superseding: "${old.text}" → "${survivor.text}" (sim=${sim.toFixed(3)})`
           );
-          store.memories[i].importance = Math.max(
-            store.memories[i].importance,
-            store.memories[j].importance
-          );
-          store.memories[i].accessCount +=
-            store.memories[j].accessCount;
-          merged.add(store.memories[j].id);
+
+          // Create supersession link (persisted to DB with audit trail)
+          await createSupersessionLink(survivor.id, old.id, sim);
+
+          // Transfer importance and access count to survivor
+          survivor.importance = Math.max(survivor.importance, old.importance);
+          survivor.accessCount += old.accessCount;
+
+          // Update survivor in DB
+          await updateMemory(survivor.id, {
+            importance: survivor.importance,
+            accessCount: survivor.accessCount,
+          });
+
+          superseded.add(old.id);
+          // Update in-memory representation for the rest of synthesis
+          old.supersededBy = survivor.id;
         }
       }
     }
 
-    if (merged.size > 0) {
-      store.memories = store.memories.filter((m) => !merged.has(m.id));
-      console.log(`[synthesis] Consolidated ${merged.size} duplicate memories`);
+    if (superseded.size > 0) {
+      // Filter superseded memories from the working set (they remain in DB with links)
+      store.memories = store.memories.filter((m) => !superseded.has(m.id));
+      console.log(`[synthesis] Superseded ${superseded.size} duplicate memories (links preserved)`);
     }
 
     // Step 2: Apply importance decay for old, unused memories + purge stale ones
@@ -182,7 +206,7 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
         if (finalSummary) {
           await saveDailyLog(
             today,
-            `# Daily Synthesis - ${today}\n\n**Memories: ${store.memories.length}** | Merged: ${merged.size}\n\n${finalSummary}`
+            `# Daily Synthesis - ${today}\n\n**Memories: ${store.memories.length}** | Superseded: ${superseded.size}\n\n${finalSummary}`
           );
           console.log(`[synthesis] Daily log saved for ${today} (${finalSummary.length} chars)`);
         } else {
