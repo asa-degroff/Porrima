@@ -8,6 +8,8 @@ import { getClusters } from "./cluster-storage.js";
 import { getAllCorpusEntries } from "./image-corpus.js";
 import { proposeDirections } from "./creative-engine.js";
 import { addMemory } from "./memory-storage.js";
+import { createDirectionJob, processPendingJobs } from "./job-queue.js";
+import { clearCache } from "./direction-cache.js";
 
 const SYNTHESIS_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes

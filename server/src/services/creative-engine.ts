@@ -123,7 +123,7 @@ Be specific and evocative.`;
   const userPrompt = `Generate a ${gap.theme} image prompt. Make it novel and distinct from existing ${gap.theme} images if any exist.`;
 
   const result = await streamChat(
-    "qwen3.5:9b",
+    "qwen3.5:4b",
     [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
     systemPrompt,
     () => {}
@@ -194,7 +194,7 @@ The combination should feel intentional, not random.`;
     const userPrompt = `Generate a prompt combining ${themeA} themes with ${settingB} settings and ${styleB} styles.`;
 
     const result = await streamChat(
-      "qwen3.5:9b",
+      "qwen3.5:4b",
       [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
       systemPrompt,
       () => {}
@@ -253,7 +253,7 @@ Make the prompt more complex and layered while staying coherent.`;
     const userPrompt = `Generate a detailed variation of ${primaryTheme} in ${primarySetting}. Add intricate visual details.`;
 
     const result = await streamChat(
-      "qwen3.5:9b",
+      "qwen3.5:4b",
       [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
       systemPrompt,
       () => {}
@@ -335,7 +335,7 @@ Make it visually striking and thematically coherent.`;
   const userPrompt = `Generate a ${oppositeTheme} prompt with ${oppositeMood} mood that contrasts with the dominant ${topTheme} theme.`;
 
   const result = await streamChat(
-    "qwen3.5:9b",
+    "qwen3.5:4b",
     [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
     systemPrompt,
     () => {}
