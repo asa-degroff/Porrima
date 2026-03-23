@@ -1,8 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import {
+  fetchDirections,
+  executeCorpusDirection,
+  type CorpusDirection,
+} from "../api/client";
 
 interface CorpusViewProps {
   onOpenCluster?: (clusterId: string) => void;
 }
+
+const TYPE_COLORS: Record<string, string> = {
+  remix: "bg-purple-500/20 text-purple-300",
+  explore: "bg-blue-500/20 text-blue-300",
+  deepen: "bg-emerald-500/20 text-emerald-300",
+  contrast: "bg-amber-500/20 text-amber-300",
+  "gap-fill": "bg-rose-500/20 text-rose-300",
+};
 
 export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -14,6 +27,15 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
     clusters: number;
     topThemes: Array<{ theme: string; count: number }>;
   } | null>(null);
+
+  // Directions state
+  const [directionsOpen, setDirectionsOpen] = useState(false);
+  const [directions, setDirections] = useState<CorpusDirection[]>([]);
+  const [loadingDirections, setLoadingDirections] = useState(false);
+  const [executingId, setExecutingId] = useState<string | null>(null);
+  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
+  const resultTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fetch stats
   useEffect(() => {
@@ -59,6 +81,54 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
     };
   }, []);
 
+  // Fetch directions
+  const loadDirections = useCallback(async (refresh = false) => {
+    setLoadingDirections(true);
+    try {
+      const data = await fetchDirections(refresh);
+      setDirections(data.directions);
+    } catch (err: any) {
+      console.error("[corpus] directions error:", err);
+    } finally {
+      setLoadingDirections(false);
+    }
+  }, []);
+
+  // Load directions when panel opens
+  useEffect(() => {
+    if (directionsOpen && directions.length === 0 && !loadingDirections) {
+      loadDirections();
+    }
+  }, [directionsOpen, directions.length, loadingDirections, loadDirections]);
+
+  // Execute a direction
+  const handleExecute = useCallback(async (directionId: string) => {
+    setExecutingId(directionId);
+    setResult(null);
+    if (resultTimeout.current) clearTimeout(resultTimeout.current);
+
+    try {
+      const res = await executeCorpusDirection(directionId);
+      if (res.success) {
+        setResult({ success: true, message: `Image generated: ${res.imageId?.slice(0, 8)}...` });
+      } else {
+        setResult({ success: false, message: res.error || "Generation failed" });
+      }
+    } catch (err: any) {
+      setResult({ success: false, message: err.message });
+    } finally {
+      setExecutingId(null);
+      resultTimeout.current = setTimeout(() => setResult(null), 8000);
+    }
+  }, []);
+
+  // Cleanup timeout
+  useEffect(() => {
+    return () => {
+      if (resultTimeout.current) clearTimeout(resultTimeout.current);
+    };
+  }, []);
+
   if (error) {
     return (
       <div className="w-full p-8 text-center text-red-400">
@@ -94,7 +164,7 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
             <span className="text-blue-400 font-semibold">{stats.enriched}/{stats.total}</span>
           </div>
           {stats.topThemes?.length > 0 && (
-            <div className="flex items-center gap-3 ml-auto">
+            <div className="hidden lg:flex items-center gap-3">
               <span className="text-slate-400 text-sm">Top themes:</span>
               {stats.topThemes.slice(0, 5).map(({ theme, count }) => (
                 <span
@@ -106,6 +176,125 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
               ))}
             </div>
           )}
+          <button
+            onClick={() => setDirectionsOpen(!directionsOpen)}
+            className="ml-auto px-3 py-1.5 text-xs rounded-md bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 transition-colors flex items-center gap-1.5"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+            </svg>
+            Directions
+            <span className="text-[10px] opacity-60">{directionsOpen ? "\u25B2" : "\u25BC"}</span>
+          </button>
+        </div>
+      )}
+
+      {/* Directions panel */}
+      {directionsOpen && (
+        <div className="shrink-0 border-b border-purple-500/20 bg-slate-900/70 backdrop-blur-sm">
+          {/* Result banner */}
+          {result && (
+            <div
+              className={`px-4 py-2 text-sm ${
+                result.success
+                  ? "bg-emerald-500/10 text-emerald-300 border-b border-emerald-500/20"
+                  : "bg-red-500/10 text-red-300 border-b border-red-500/20"
+              }`}
+            >
+              {result.message}
+            </div>
+          )}
+
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-2 border-b border-white/5">
+            <span className="text-xs text-slate-400">
+              {loadingDirections
+                ? "Generating directions..."
+                : `${directions.length} direction${directions.length !== 1 ? "s" : ""}`}
+            </span>
+            <button
+              onClick={() => loadDirections(true)}
+              disabled={loadingDirections}
+              className="text-xs text-purple-400 hover:text-purple-300 disabled:opacity-40 transition-colors"
+            >
+              Refresh
+            </button>
+          </div>
+
+          {/* Direction cards */}
+          <div className="max-h-64 overflow-y-auto p-2 space-y-2">
+            {loadingDirections && directions.length === 0 ? (
+              <div className="py-6 text-center text-slate-500 text-sm animate-pulse">
+                Generating creative directions...
+              </div>
+            ) : directions.length === 0 ? (
+              <div className="py-6 text-center text-slate-500 text-sm">
+                No directions available. Try rebuilding clusters first.
+              </div>
+            ) : (
+              directions.map((dir) => (
+                <div
+                  key={dir.id}
+                  className="rounded-lg bg-white/[0.03] border border-white/5 p-3 hover:border-purple-500/20 transition-colors"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex-1 min-w-0">
+                      {/* Type badge + novelty */}
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider ${
+                            TYPE_COLORS[dir.type] || "bg-slate-500/20 text-slate-300"
+                          }`}
+                        >
+                          {dir.type}
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          {(dir.noveltyScore * 100).toFixed(0)}% novel
+                        </span>
+                      </div>
+
+                      {/* Description */}
+                      <p className="text-sm text-slate-300 mb-1.5 line-clamp-1">
+                        {dir.description}
+                      </p>
+
+                      {/* Prompt (expandable) */}
+                      <button
+                        onClick={() =>
+                          setExpandedPrompt(expandedPrompt === dir.id ? null : dir.id)
+                        }
+                        className="text-left w-full"
+                      >
+                        <p
+                          className={`text-xs text-slate-500 ${
+                            expandedPrompt === dir.id ? "" : "line-clamp-2"
+                          }`}
+                        >
+                          {dir.proposedPrompt}
+                        </p>
+                      </button>
+                    </div>
+
+                    {/* Generate button */}
+                    <button
+                      onClick={() => handleExecute(dir.id)}
+                      disabled={executingId !== null}
+                      className="shrink-0 px-3 py-1.5 rounded-md text-xs font-medium bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {executingId === dir.id ? (
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-3 h-3 border-2 border-purple-300/30 border-t-purple-300 rounded-full animate-spin" />
+                          Generating...
+                        </span>
+                      ) : (
+                        "Generate"
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
 
