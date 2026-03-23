@@ -258,6 +258,151 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects): AgentTo
     },
   });
 
+  // Corpus exploration tools
+  tools.push({
+    name: "explore_corpus",
+    description: "Browse image clusters to discover patterns, gaps, and creative opportunities. Returns cluster summary and theme distribution.",
+    parameters: Type.Object({
+      theme: Type.Optional(Type.String({ description: "Filter by theme (e.g., 'sci-fi', 'cyberpunk')" })),
+      minClusterSize: Type.Optional(Type.Number({ description: "Minimum cluster size to include (default 1)" })),
+    }),
+    label: "explore_corpus",
+    execute: async (_id, params) => {
+      const args = params as Record<string, any>;
+      try {
+        const { getClusters } = await import("./cluster-storage.js");
+        const { getClusterStats } = await import("./cluster-engine.js");
+        const clusterMap = await getClusters();
+        
+        if (!clusterMap) {
+          return { content: [{ type: "text", text: "No clusters available. Run cluster rebuild first." }], details: {} };
+        }
+        
+        let clusters = clusterMap.clusters;
+        if (args.theme) {
+          clusters = clusters.filter(c => 
+            c.dominantElements.themes.some(t => t.toLowerCase().includes(args.theme.toLowerCase()))
+          );
+        }
+        if (args.minClusterSize) {
+          clusters = clusters.filter(c => c.size >= args.minClusterSize);
+        }
+        
+        const stats = getClusterStats(clusters);
+        const summary = `
+**Corpus Exploration**
+- ${stats.totalClusters} clusters (${stats.totalImages} images)
+- Average size: ${stats.avgSize.toFixed(1)} images
+- Largest: ${stats.largestSize} images
+- Singletons: ${stats.singletonCount}
+
+**Top Clusters:**
+${clusters.slice(0, 5).map((c, i) => `${i + 1}. ${c.name} (${c.size} images) - ${c.dominantElements.themes.slice(0, 3).join(", ")}`).join("\n")}
+`;
+        return { content: [{ type: "text", text: summary }], details: {} };
+      } catch (e: any) {
+        return { content: [{ type: "text", text: `Error exploring corpus: ${e.message}` }], details: {} };
+      }
+    },
+  });
+
+  tools.push({
+    name: "remix_elements",
+    description: "Generate a novel image prompt by combining elements from different clusters. Use for creative remixing and exploration.",
+    parameters: Type.Object({
+      sourceClusters: Type.Optional(Type.Array(Type.String(), { description: "Cluster IDs to combine (default: picks distant clusters)" })),
+      directionType: Type.Optional(Type.String({ 
+        enum: ["remix", "explore", "deepen", "contrast", "gap-fill"],
+        description: "Type of creative direction (default: remix)" 
+      })),
+    }),
+    label: "remix_elements",
+    execute: async (_id, params) => {
+      const args = params as Record<string, any>;
+      try {
+        const { getClusters } = await import("./cluster-storage.js");
+        const { proposeDirections } = await import("./creative-engine.js");
+        const { getAllCorpusEntries } = await import("./image-corpus.js");
+        
+        const clusterMap = await getClusters();
+        const corpus = await getAllCorpusEntries();
+        
+        if (!clusterMap) {
+          return { content: [{ type: "text", text: "No clusters available for remixing." }], details: {} };
+        }
+        
+        const selectedClusters = args.sourceClusters?.length 
+          ? clusterMap.clusters.filter(c => args.sourceClusters.includes(c.id))
+          : clusterMap.clusters;
+        
+        const directions = await proposeDirections(selectedClusters, corpus, { limit: 1, minNovelty: 0.6 });
+        
+        if (directions.length === 0) {
+          return { content: [{ type: "text", text: "Could not generate novel direction. Corpus may be too homogeneous." }], details: {} };
+        }
+        
+        const dir = directions[0];
+        const result = `
+**Creative Direction: ${dir.type.toUpperCase()}**
+${dir.description}
+
+**Proposed Prompt:**
+${dir.proposedPrompt}
+
+**Novelty Score:** ${(dir.noveltyScore * 100).toFixed(0)}% new
+
+**Element Combination:**
+${Object.entries(dir.elementCombination).map(([k, v]) => v ? `${k}: ${v}` : "").filter(Boolean).join("\n")}
+`;
+        return { content: [{ type: "text", text: result }], details: { direction: dir } };
+      } catch (e: any) {
+        return { content: [{ type: "text", text: `Error generating remix: ${e.message}` }], details: {} };
+      }
+    },
+  });
+
+  tools.push({
+    name: "analyze_gaps",
+    description: "Find underrepresented themes or elements in the image corpus. Returns gap analysis with suggestions.",
+    parameters: Type.Object({
+      limit: Type.Optional(Type.Number({ description: "Max gaps to return (default 5)" })),
+    }),
+    label: "analyze_gaps",
+    execute: async (_id, params) => {
+      const args = params as Record<string, any>;
+      try {
+        const { getClusters } = await import("./cluster-storage.js");
+        const { analyzeGaps } = await import("./creative-engine.js");
+        const { getAllCorpusEntries } = await import("./image-corpus.js");
+        
+        const clusterMap = await getClusters();
+        const corpus = await getAllCorpusEntries();
+        
+        if (!clusterMap) {
+          return { content: [{ type: "text", text: "No clusters available for gap analysis." }], details: {} };
+        }
+        
+        const gaps = analyzeGaps(clusterMap.clusters, corpus);
+        const limited = gaps.slice(0, args.limit || 5);
+        
+        if (limited.length === 0) {
+          return { content: [{ type: "text", text: "No significant gaps found. Corpus is well-balanced." }], details: {} };
+        }
+        
+        const result = `
+**Corpus Gap Analysis**
+Found ${limited.length} underrepresented themes:
+
+${limited.map((g, i) => `${i + 1}. **${g.theme}** (${g.count} images)
+   ${g.suggestion}`).join("\n\n")}
+`;
+        return { content: [{ type: "text", text: result }], details: { gaps: limited } };
+      } catch (e: any) {
+        return { content: [{ type: "text", text: `Error analyzing gaps: ${e.message}` }], details: {} };
+      }
+    },
+  });
+
   return tools;
 }
 

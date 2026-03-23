@@ -5,6 +5,11 @@ import {
 } from "../services/cluster-storage.js";
 import { buildClusters } from "../services/cluster-engine.js";
 import { getAllCorpusEntries } from "../services/image-corpus.js";
+import {
+  proposeDirections,
+  analyzeGaps,
+  executeDirection,
+} from "../services/creative-engine.js";
 
 const router = Router();
 
@@ -76,7 +81,7 @@ router.get("/visualization", async (req, res) => {
   }
 });
 
-// GET /api/corpus/stats - Corpus statistics (public, no auth required)
+// GET /api/corpus/stats-public - Corpus statistics (public, no auth required)
 router.get("/stats-public", async (req, res) => {
   try {
     const corpus = await getAllCorpusEntries();
@@ -137,6 +142,98 @@ router.get("/stats", async (req, res) => {
   } catch (err) {
     console.error("[corpus] stats error:", err);
     res.status(500).json({ error: "Failed to get corpus stats" });
+  }
+});
+
+// GET /api/corpus/directions - Get creative direction suggestions
+router.get("/directions", async (req, res) => {
+  try {
+    const clusterMap = await getClusters();
+    const corpus = await getAllCorpusEntries();
+    
+    if (!clusterMap || clusterMap.clusters.length === 0) {
+      return res.json({ directions: [], message: "No clusters available" });
+    }
+
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : 5;
+    const minNovelty = req.query.minNovelty ? parseFloat(req.query.minNovelty as string) : 0.6;
+
+    const directions = await proposeDirections(clusterMap.clusters, corpus, { limit, minNovelty });
+    
+    res.json({ directions, generated: directions.length });
+  } catch (err) {
+    console.error("[corpus] directions error:", err);
+    res.status(500).json({ error: "Failed to generate directions" });
+  }
+});
+
+// GET /api/corpus/gaps - Analyze underrepresented themes
+router.get("/gaps", async (req, res) => {
+  try {
+    const clusterMap = await getClusters();
+    const corpus = await getAllCorpusEntries();
+    
+    if (!clusterMap) {
+      return res.json({ gaps: [], message: "No clusters available" });
+    }
+
+    const gaps = analyzeGaps(clusterMap.clusters, corpus);
+    res.json({ gaps });
+  } catch (err) {
+    console.error("[corpus] gaps error:", err);
+    res.status(500).json({ error: "Failed to analyze gaps" });
+  }
+});
+
+// POST /api/corpus/remix - Generate remix from specific clusters
+router.post("/remix", async (req, res) => {
+  try {
+    const { sourceClusters, directionType }: { sourceClusters: string[]; directionType?: string } = req.body;
+    const clusterMap = await getClusters();
+    const corpus = await getAllCorpusEntries();
+    
+    if (!clusterMap) {
+      return res.status(400).json({ error: "No clusters available" });
+    }
+
+    const selectedClusters = clusterMap.clusters.filter(c => sourceClusters.includes(c.id));
+    if (sourceClusters.length >= 2 || directionType !== "remix") {
+      // Generate a single direction based on the request
+      const directions = await proposeDirections(selectedClusters.length ? selectedClusters : clusterMap.clusters, corpus, { limit: 1, minNovelty: 0.6 });
+      
+      if (directions.length === 0) {
+        return res.status(400).json({ error: "Could not generate novel direction" });
+      }
+
+      res.json({ direction: directions[0] });
+    } else {
+      return res.status(400).json({ error: "Need at least 2 clusters for remix" });
+    }
+  } catch (err) {
+    console.error("[corpus] remix error:", err);
+    res.status(500).json({ error: "Failed to generate remix" });
+  }
+});
+
+// POST /api/corpus/execute - Execute a creative direction (generate image)
+// Note: Full implementation requires integration with routes/images.ts queue system
+router.post("/execute", async (req, res) => {
+  try {
+    const { directionId, prompt }: { directionId?: string; prompt?: string } = req.body;
+    
+    const promptToUse = prompt || "Creative generation";
+    
+    console.log("[corpus] execute requested:", { directionId, prompt: promptToUse });
+    
+    res.json({ 
+      success: true,
+      message: "Direction execution queued (integration pending)",
+      directionId,
+      prompt: promptToUse,
+    });
+  } catch (err: any) {
+    console.error("[corpus] execute error:", err);
+    res.status(500).json({ error: "Failed to execute direction", details: err.message });
   }
 });
 

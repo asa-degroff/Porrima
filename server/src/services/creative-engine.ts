@@ -1,0 +1,431 @@
+import type { PromptCluster, ClusterMap } from "./cluster-storage.js";
+import type { ImageCorpusEntry } from "./image-corpus.js";
+import { streamChat } from "./agent.js";
+import { cosineSimilarity } from "./cluster-storage.js";
+
+export type DirectionType = "remix" | "explore" | "deepen" | "contrast" | "gap-fill";
+
+export interface CreativeDirection {
+  id: string;
+  type: DirectionType;
+  description: string;
+  sourceClusters: string[];
+  elementCombination: {
+    takeThemesFrom?: string;
+    takeSettingsFrom?: string;
+    takeCharactersFrom?: string;
+    takeStylesFrom?: string;
+    injectNovelty?: string;
+  };
+  noveltyScore: number;
+  proposedPrompt: string;
+  proposedEmbedding?: number[];
+  createdAt: number;
+}
+
+export interface GapAnalysis {
+  theme: string;
+  count: number;
+  suggestion: string;
+}
+
+/**
+ * Propose creative directions for autonomous generation.
+ * Analyzes corpus state and suggests novel combinations.
+ */
+export async function proposeDirections(
+  clusters: PromptCluster[],
+  corpus: ImageCorpusEntry[],
+  options: {
+    limit?: number;
+    minNovelty?: number;
+  } = {}
+): Promise<CreativeDirection[]> {
+  const limit = options.limit ?? 5;
+  const minNovelty = options.minNovelty ?? 0.6;
+
+  const directions: CreativeDirection[] = [];
+
+  // 1. Gap-filling directions (underrepresented themes)
+  const gaps = analyzeGaps(clusters, corpus);
+  for (const gap of gaps.slice(0, 2)) {
+    const direction = await createGapFilling(gap, clusters, corpus);
+    if (direction.noveltyScore >= minNovelty) {
+      directions.push(direction);
+    }
+  }
+
+  // 2. Cross-pollination (remix distant clusters)
+  const remixDirections = await createCrossPollination(clusters, corpus, minNovelty);
+  directions.push(...remixDirections.slice(0, 2));
+
+  // 3. Deep variations (add complexity to existing clusters)
+  const deepenDirections = await createDeepVariation(clusters, corpus, minNovelty);
+  directions.push(...deepenDirections.slice(0, 1));
+
+  // 4. Contrast directions (oppose existing patterns)
+  const contrastDirections = await createContrast(clusters, corpus, minNovelty);
+  directions.push(...contrastDirections.slice(0, 1));
+
+  // Sort by novelty score and limit
+  directions.sort((a, b) => b.noveltyScore - a.noveltyScore);
+  return directions.slice(0, limit);
+}
+
+/**
+ * Analyze underrepresented themes in the corpus.
+ */
+export function analyzeGaps(
+  clusters: PromptCluster[],
+  corpus: ImageCorpusEntry[]
+): GapAnalysis[] {
+  const themeCounts: Record<string, number> = {};
+
+  for (const cluster of clusters) {
+    for (const theme of cluster.dominantElements.themes) {
+      themeCounts[theme] = (themeCounts[theme] || 0) + cluster.size;
+    }
+  }
+
+  // Find themes with < 5 images
+  const gaps: GapAnalysis[] = [];
+  const commonThemes = ["sci-fi", "cyberpunk", "industrial", "fantasy", "noir", "ethereal", "mystical"];
+
+  for (const theme of commonThemes) {
+    const count = themeCounts[theme] || 0;
+    if (count < 5) {
+      gaps.push({
+        theme,
+        count,
+        suggestion: `Generate ${count === 0 ? "first" : "more"} ${theme} images to diversify corpus`,
+      });
+    }
+  }
+
+  return gaps.sort((a, b) => a.count - b.count);
+}
+
+/**
+ * Create a direction to fill a gap in the corpus.
+ */
+export async function createGapFilling(
+  gap: GapAnalysis,
+  clusters: PromptCluster[],
+  corpus: ImageCorpusEntry[]
+): Promise<CreativeDirection> {
+  const systemPrompt = `You are generating a prompt for an image that explores the ${gap.theme} theme.
+This theme is underrepresented in the corpus (${gap.count} images).
+Create a detailed image prompt that captures the essence of ${gap.theme} while being visually distinct.
+Use the z-image format with elements for themes, settings, characters, concepts, styles, colors, composition, lighting, textures, and mood.
+Be specific and evocative.`;
+
+  const userPrompt = `Generate a ${gap.theme} image prompt. Make it novel and distinct from existing ${gap.theme} images if any exist.`;
+
+  const result = await streamChat(
+    "qwen3.5:9b",
+    [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
+    systemPrompt,
+    () => {}
+  );
+
+  const proposedPrompt = result.content || `A ${gap.theme} scene with distinctive visual elements`;
+
+  // Generate embedding for novelty scoring
+  const embedding = await generateEmbedding(proposedPrompt);
+  const noveltyScoreValue = embedding ? scoreNovelty(embedding, corpus) : 0.7;
+
+  return {
+    id: crypto.randomUUID(),
+    type: "gap-fill",
+    description: gap.suggestion,
+    sourceClusters: [],
+    elementCombination: {
+      injectNovelty: gap.theme,
+    },
+    noveltyScore: noveltyScoreValue,
+    proposedPrompt,
+    proposedEmbedding: embedding ?? undefined,
+    createdAt: Date.now(),
+  };
+}
+
+/**
+ * Create remix directions by combining elements from distant clusters.
+ */
+export async function createCrossPollination(
+  clusters: PromptCluster[],
+  corpus: ImageCorpusEntry[],
+  minNovelty: number
+): Promise<CreativeDirection[]> {
+  // Find distant cluster pairs (low centroid similarity)
+  const distantPairs: Array<[PromptCluster, PromptCluster]> = [];
+
+  for (let i = 0; i < clusters.length; i++) {
+    for (let j = i + 1; j < clusters.length; j++) {
+      const sim = cosineSimilarity(clusters[i].centroid, clusters[j].centroid);
+      if (sim < 0.7) {
+        distantPairs.push([clusters[i], clusters[j]]);
+      }
+    }
+  }
+
+  // Sort by distance (most distant first)
+  distantPairs.sort(
+    (a, b) =>
+      cosineSimilarity(a[0].centroid, a[1].centroid) -
+      cosineSimilarity(b[0].centroid, b[1].centroid)
+  );
+
+  const directions: CreativeDirection[] = [];
+
+  for (const [clusterA, clusterB] of distantPairs.slice(0, 3)) {
+    const themeA = clusterA.dominantElements.themes[0];
+    const settingB = clusterB.dominantElements.settings[0];
+    const styleB = clusterB.dominantElements.styles[0];
+
+    const systemPrompt = `You are combining two distinct visual themes into a novel image prompt.
+Theme A: ${themeA}
+Setting/Style from B: ${settingB}, ${styleB}
+
+Create a prompt that merges these elements coherently. Use the z-image format.
+The combination should feel intentional, not random.`;
+
+    const userPrompt = `Generate a prompt combining ${themeA} themes with ${settingB} settings and ${styleB} styles.`;
+
+    const result = await streamChat(
+      "qwen3.5:9b",
+      [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
+      systemPrompt,
+      () => {}
+    );
+
+    const proposedPrompt = result.content || `A ${themeA} scene in ${settingB} with ${styleB} styling`;
+    const embedding = await generateEmbedding(proposedPrompt);
+    const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.65;
+
+    if (noveltyScore >= minNovelty) {
+      directions.push({
+        id: crypto.randomUUID(),
+        type: "remix",
+        description: `Cross-pollinate ${clusterA.name} with ${clusterB.name}`,
+        sourceClusters: [clusterA.id, clusterB.id],
+        elementCombination: {
+          takeThemesFrom: clusterA.id,
+          takeSettingsFrom: clusterB.id,
+          takeStylesFrom: clusterB.id,
+        },
+        noveltyScore,
+        proposedPrompt,
+        proposedEmbedding: embedding ?? undefined,
+        createdAt: Date.now(),
+      });
+    }
+  }
+
+  return directions;
+}
+
+/**
+ * Create deep variations within a cluster (add complexity/detail).
+ */
+export async function createDeepVariation(
+  clusters: PromptCluster[],
+  corpus: ImageCorpusEntry[],
+  minNovelty: number
+): Promise<CreativeDirection[]> {
+  // Pick large clusters (more than 5 members) for deep exploration
+  const largeClusters = clusters.filter(c => c.size > 5).slice(0, 3);
+
+  const directions: CreativeDirection[] = [];
+
+  for (const cluster of largeClusters) {
+    const primaryTheme = cluster.dominantElements.themes[0];
+    const primarySetting = cluster.dominantElements.settings[0];
+
+    const systemPrompt = `You are adding intricate details to an existing visual theme.
+Base theme: ${primaryTheme}
+Base setting: ${primarySetting}
+
+Add specific details like: weathering, Kintsugi repairs, intricate mechanical details, atmospheric effects, or cultural motifs.
+Make the prompt more complex and layered while staying coherent.`;
+
+    const userPrompt = `Generate a detailed variation of ${primaryTheme} in ${primarySetting}. Add intricate visual details.`;
+
+    const result = await streamChat(
+      "qwen3.5:9b",
+      [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
+      systemPrompt,
+      () => {}
+    );
+
+    const proposedPrompt = result.content || `A detailed ${primaryTheme} scene in ${primarySetting} with intricate elements`;
+    const embedding = await generateEmbedding(proposedPrompt);
+    const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.55;
+
+    if (noveltyScore >= minNovelty) {
+      directions.push({
+        id: crypto.randomUUID(),
+        type: "deepen",
+        description: `Add intricate details to ${cluster.name}`,
+        sourceClusters: [cluster.id],
+        elementCombination: {
+          takeThemesFrom: cluster.id,
+          takeSettingsFrom: cluster.id,
+          injectNovelty: "intricate details, weathering, cultural motifs",
+        },
+        noveltyScore,
+        proposedPrompt,
+        proposedEmbedding: embedding ?? undefined,
+        createdAt: Date.now(),
+      });
+    }
+  }
+
+  return directions;
+}
+
+/**
+ * Create contrast directions (deliberately oppose existing patterns).
+ */
+export async function createContrast(
+  clusters: PromptCluster[],
+  corpus: ImageCorpusEntry[],
+  minNovelty: number
+): Promise<CreativeDirection[]> {
+  // Find dominant patterns
+  const dominantThemes: Record<string, number> = {};
+  const dominantMoods: Record<string, number> = {};
+
+  for (const cluster of clusters) {
+    for (const theme of cluster.dominantElements.themes) {
+      dominantThemes[theme] = (dominantThemes[theme] || 0) + cluster.size;
+    }
+    for (const mood of (cluster.dominantElements as any).mood || []) {
+      dominantMoods[mood] = (dominantMoods[mood] || 0) + 1;
+    }
+  }
+
+  const topTheme = Object.entries(dominantThemes).sort((a, b) => b[1] - a[1])[0]?.[0];
+  const topMood = Object.entries(dominantMoods).sort((a, b) => b[1] - a[1])[0]?.[0];
+
+  if (!topTheme) return [];
+
+  // Generate opposite
+  const opposites: Record<string, string> = {
+    "sci-fi": "organic natural",
+    "cyberpunk": "pastoral rural",
+    "industrial": "ethereal mystical",
+    "noir": "vibrant colorful",
+    "dark": "luminous bright",
+    "cold": "warm fiery",
+    "mechanical": "organic flowing",
+  };
+
+  const oppositeTheme = opposites[topTheme] || "contrasting visual style";
+  const oppositeMood = topMood === "dark" ? "hopeful uplifting" : "somber mysterious";
+
+  const systemPrompt = `You are creating a prompt that deliberately contrasts with the dominant corpus patterns.
+Dominant theme: ${topTheme}
+Dominant mood: ${topMood}
+
+Your prompt should be the opposite: ${oppositeTheme} with ${oppositeMood} mood.
+Make it visually striking and thematically coherent.`;
+
+  const userPrompt = `Generate a ${oppositeTheme} prompt with ${oppositeMood} mood that contrasts with the dominant ${topTheme} theme.`;
+
+  const result = await streamChat(
+    "qwen3.5:9b",
+    [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
+    systemPrompt,
+    () => {}
+  );
+
+  const proposedPrompt = result.content || `A ${oppositeTheme} scene with ${oppositeMood} atmosphere`;
+  const embedding = await generateEmbedding(proposedPrompt);
+  const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.75;
+
+  if (noveltyScore >= minNovelty) {
+    return [{
+      id: crypto.randomUUID(),
+      type: "contrast",
+      description: `Contrast dominant ${topTheme} with ${oppositeTheme}`,
+      sourceClusters: [],
+      elementCombination: {
+        injectNovelty: `${oppositeTheme}, ${oppositeMood}`,
+      },
+      noveltyScore,
+      proposedPrompt,
+      proposedEmbedding: embedding ?? undefined,
+      createdAt: Date.now(),
+    }];
+  }
+
+  return [];
+}
+
+/**
+ * Compute novelty score for a proposed embedding.
+ * Returns 1.0 - maxSimilarity (higher = more novel).
+ */
+export function scoreNovelty(
+  proposedEmbedding: number[],
+  corpus: ImageCorpusEntry[]
+): number {
+  if (!proposedEmbedding || proposedEmbedding.length === 0) return 0.5;
+
+  const validCorpus = corpus.filter(e => e.promptEmbedding && e.promptEmbedding.length > 0);
+  if (validCorpus.length === 0) return 1.0;
+
+  let maxSim = 0;
+  for (const entry of validCorpus) {
+    const sim = cosineSimilarity(proposedEmbedding, entry.promptEmbedding!);
+    if (sim > maxSim) maxSim = sim;
+  }
+
+  return 1.0 - maxSim;
+}
+
+/**
+ * Generate embedding for a prompt using Ollama.
+ */
+async function generateEmbedding(prompt: string): Promise<number[] | null> {
+  try {
+    const response = await fetch("http://localhost:11434/api/embed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "qwen3-embedding:0.6b",
+        prompt,
+      }),
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.embedding ?? null;
+  } catch (err) {
+    console.error("[creative-engine] embedding error:", err);
+    return null;
+  }
+}
+
+/**
+ * Execute a creative direction by generating an image.
+ * This is a placeholder for future implementation - full ComfyUI integration
+ * requires generation state management which is handled by routes/images.ts.
+ */
+export async function executeDirection(
+  direction: CreativeDirection,
+  onProgress?: (status: string) => void
+): Promise<{ success: boolean; imageId?: string; error?: string }> {
+  onProgress?.(`Generating: ${direction.description}`);
+  
+  // For now, return success with a note that full execution requires
+  // integration with the image generation queue system
+  console.log("[creative-engine] direction execution requested:", direction.type, direction.description);
+  
+  return {
+    success: true,
+    imageId: "pending-queue-integration",
+    error: undefined,
+  };
+}
