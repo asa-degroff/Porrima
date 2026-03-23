@@ -98,7 +98,7 @@ export async function processNextJob(): Promise<DirectionJob | null> {
     );
     
     // Cache the results
-    const cacheId = cacheDirections(
+    const cacheId = await cacheDirections(
       directions,
       corpus.length,
       clusterMap.clusters.length,

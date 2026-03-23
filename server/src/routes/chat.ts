@@ -475,6 +475,42 @@ async function handleChatStream(
               ttsPauseController?.abort();
               ttsPauseController = new AbortController();
             }
+            
+            // CRITICAL: Pre-execution checkpoint for tools that can restart the server
+            // If the agent modifies its own source code, tsx watch will restart the server
+            // We must flush accumulators to disk BEFORE execution to survive the restart
+            const isSelfModifyingTool = 
+              event.toolName === "write_file" || 
+              event.toolName === "edit_file" ||
+              (event.toolName === "bash" && typeof event.args?.command === "string" && (
+                event.args.command.includes("npm run") || 
+                event.args.command.includes("tsx") ||
+                event.args.command.includes("node") ||
+                event.args.command.includes("/server/")
+              ));
+            
+            if (isSelfModifyingTool) {
+              console.log(`[tool] Pre-execution checkpoint for self-modifying tool: ${event.toolName}`);
+              try {
+                const partialMsg = buildCurrentAssistantMessage();
+                await saveChat(chat);
+                await savePendingState(chat.id, {
+                  agentMessages: context.messages as any[],
+                  systemPrompt,
+                  askToolCallId: askUserRef.current?.toolCallId || "",
+                  fullText: state.fullText,
+                  thinkingText: state.thinkingText,
+                  toolCalls: state.allToolCalls,
+                  toolResults: state.allToolResults,
+                  iterations,
+                  lastUserMessage,
+                });
+                console.log(`[tool] Checkpoint saved: ${partialMsg.toolCalls?.length || 0} tools, ${partialMsg.content.length}ch`);
+              } catch (saveErr) {
+                console.error(`[tool] Failed to save pre-execution checkpoint:`, saveErr);
+                // Continue anyway - better to execute the tool than to block
+              }
+            }
           }
           break;
         }

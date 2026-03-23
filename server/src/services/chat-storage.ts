@@ -67,9 +67,42 @@ export function getDb(): Database.Database {
       chatId TEXT PRIMARY KEY,
       agentMessages JSON NOT NULL,
       systemPrompt TEXT NOT NULL,
-      askToolCallId TEXT NOT NULL
+      askToolCallId TEXT NOT NULL,
+      fullText TEXT,
+      thinkingText TEXT,
+      toolCalls JSON,
+      toolResults JSON,
+      iterations INTEGER,
+      lastUserMessage TEXT
     );
   `);
+
+  // Migration: add mid-turn recovery columns if upgrading from earlier schema
+  const pendingCols = db.prepare("PRAGMA table_info(pending_states)").all() as Array<{ name: string }>;
+  if (!pendingCols.some((c) => c.name === "fullText")) {
+    db.exec("ALTER TABLE pending_states ADD COLUMN fullText TEXT");
+    console.log("[chat-storage] Added fullText column to pending_states");
+  }
+  if (!pendingCols.some((c) => c.name === "thinkingText")) {
+    db.exec("ALTER TABLE pending_states ADD COLUMN thinkingText TEXT");
+    console.log("[chat-storage] Added thinkingText column to pending_states");
+  }
+  if (!pendingCols.some((c) => c.name === "toolCalls")) {
+    db.exec("ALTER TABLE pending_states ADD COLUMN toolCalls JSON");
+    console.log("[chat-storage] Added toolCalls column to pending_states");
+  }
+  if (!pendingCols.some((c) => c.name === "toolResults")) {
+    db.exec("ALTER TABLE pending_states ADD COLUMN toolResults JSON");
+    console.log("[chat-storage] Added toolResults column to pending_states");
+  }
+  if (!pendingCols.some((c) => c.name === "iterations")) {
+    db.exec("ALTER TABLE pending_states ADD COLUMN iterations INTEGER");
+    console.log("[chat-storage] Added iterations column to pending_states");
+  }
+  if (!pendingCols.some((c) => c.name === "lastUserMessage")) {
+    db.exec("ALTER TABLE pending_states ADD COLUMN lastUserMessage TEXT");
+    console.log("[chat-storage] Added lastUserMessage column to pending_states");
+  }
 
   // Indexes for common queries
   db.exec(`
@@ -426,9 +459,23 @@ export interface PendingAgentState {
 export async function savePendingState(chatId: string, state: PendingAgentState): Promise<void> {
   const db = getDb();
   db.prepare(`
-    INSERT OR REPLACE INTO pending_states (chatId, agentMessages, systemPrompt, askToolCallId)
-    VALUES (?, ?, ?, ?)
-  `).run(chatId, JSON.stringify(state.agentMessages), state.systemPrompt, state.askToolCallId);
+    INSERT OR REPLACE INTO pending_states (
+      chatId, agentMessages, systemPrompt, askToolCallId,
+      fullText, thinkingText, toolCalls, toolResults, iterations, lastUserMessage
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    chatId,
+    JSON.stringify(state.agentMessages),
+    state.systemPrompt,
+    state.askToolCallId,
+    state.fullText || null,
+    state.thinkingText || null,
+    state.toolCalls ? JSON.stringify(state.toolCalls) : null,
+    state.toolResults ? JSON.stringify(state.toolResults) : null,
+    state.iterations || null,
+    state.lastUserMessage || null
+  );
 }
 
 export async function loadPendingState(chatId: string): Promise<PendingAgentState | null> {
@@ -441,6 +488,12 @@ export async function loadPendingState(chatId: string): Promise<PendingAgentStat
           agentMessages: string;
           systemPrompt: string;
           askToolCallId: string;
+          fullText: string | null;
+          thinkingText: string | null;
+          toolCalls: string | null;
+          toolResults: string | null;
+          iterations: number | null;
+          lastUserMessage: string | null;
         }
       | undefined;
 
@@ -453,6 +506,12 @@ export async function loadPendingState(chatId: string): Promise<PendingAgentStat
       agentMessages: JSON.parse(row.agentMessages),
       systemPrompt: row.systemPrompt,
       askToolCallId: row.askToolCallId,
+      fullText: row.fullText || undefined,
+      thinkingText: row.thinkingText || undefined,
+      toolCalls: row.toolCalls ? JSON.parse(row.toolCalls) : undefined,
+      toolResults: row.toolResults ? JSON.parse(row.toolResults) : undefined,
+      iterations: row.iterations || undefined,
+      lastUserMessage: row.lastUserMessage || undefined,
     };
   });
 
