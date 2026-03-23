@@ -195,12 +195,16 @@ export async function enrichCorpusEntry(
     }
   }
   
-  // Extract elements from prompt (for generated) or description (for analyzed)
-  // Generated images have z-image formatted prompts that work as descriptions
-  const textForElements = description || prompt;
-  if (textForElements && Object.keys(entry.elements).length === 0) {
+  // Extract elements from description or prompt
+  if (description && Object.keys(entry.elements).length === 0) {
     const { extractElements } = await import("./element-extraction.js");
     const elements = await extractElements(description, prompt);
+    if (Object.keys(elements).length > 0) {
+      updates.elements = elements;
+    }
+  } else if (prompt && Object.keys(entry.elements).length === 0) {
+    const { extractElements } = await import("./element-extraction.js");
+    const elements = await extractElements("", prompt);
     if (Object.keys(elements).length > 0) {
       updates.elements = elements;
     }
