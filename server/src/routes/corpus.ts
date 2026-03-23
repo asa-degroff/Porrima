@@ -197,7 +197,7 @@ router.post("/remix", async (req, res) => {
     }
 
     const selectedClusters = clusterMap.clusters.filter(c => sourceClusters.includes(c.id));
-    if (sourceClusters.length >= 2 || directionType !== "remix") {
+    if (selectedClusters.length >= 2 || directionType !== "remix") {
       // Generate a single direction based on the request
       const directions = await proposeDirections(selectedClusters.length ? selectedClusters : clusterMap.clusters, corpus, { limit: 1, minNovelty: 0.6 });
       

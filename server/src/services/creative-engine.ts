@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import type { PromptCluster, ClusterMap } from "./cluster-storage.js";
 import type { ImageCorpusEntry } from "./image-corpus.js";
 import { streamChat } from "./agent.js";
@@ -395,13 +396,13 @@ async function generateEmbedding(prompt: string): Promise<number[] | null> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "qwen3-embedding:0.6b",
-        prompt,
+        input: prompt,
       }),
     });
 
     if (!response.ok) return null;
-    const data = await response.json();
-    return data.embedding ?? null;
+    const data = (await response.json()) as { embeddings: number[][] };
+    return data.embeddings?.[0] ?? null;
   } catch (err) {
     console.error("[creative-engine] embedding error:", err);
     return null;
