@@ -42,13 +42,18 @@ export interface CachedDirections {
   generatedAt: number;
   corpusSize: number;
   clusterCount: number;
+  modelId: string;
 }
 
 /**
  * Load cached directions from disk.
- * Returns null if cache is expired or doesn't exist.
+ * Returns null if cache is expired, corpus changed, or doesn't exist.
  */
-export async function loadCachedDirections(): Promise<CachedDirections | null> {
+export async function loadCachedDirections(
+  currentCorpusSize: number,
+  currentClusterCount: number,
+  currentModelId: string
+): Promise<CachedDirections | null> {
   try {
     if (!existsSync(DIRECTION_CACHE_FILE)) {
       return null;
@@ -60,11 +65,31 @@ export async function loadCachedDirections(): Promise<CachedDirections | null> {
     // Check if cache is still valid (24 hour TTL)
     const age = Date.now() - cached.generatedAt;
     if (age > DIRECTION_CACHE_TTL_MS) {
-      console.log("[creative-engine] Cache expired, regenerating");
+      console.log("[creative-engine] Cache expired (24h TTL), regenerating");
       return null;
     }
     
-    console.log(`[creative-engine] Loaded ${cached.directions.length} cached directions (${Math.round(age / 60000)}min old)`);
+    // Invalidate if corpus size changed significantly (>10%)
+    const sizeDiff = Math.abs(currentCorpusSize - cached.corpusSize);
+    const sizeThreshold = Math.max(10, Math.round(currentCorpusSize * 0.1));
+    if (sizeDiff > sizeThreshold) {
+      console.log(`[creative-engine] Corpus size changed by ${sizeDiff} (threshold: ${sizeThreshold}), regenerating`);
+      return null;
+    }
+    
+    // Invalidate if cluster count changed
+    if (currentClusterCount !== cached.clusterCount) {
+      console.log(`[creative-engine] Cluster count changed (${cached.clusterCount} → ${currentClusterCount}), regenerating`);
+      return null;
+    }
+    
+    // Invalidate if model changed
+    if (currentModelId && cached.modelId && currentModelId !== cached.modelId) {
+      console.log(`[creative-engine] Model changed (${cached.modelId} → ${currentModelId}), regenerating`);
+      return null;
+    }
+    
+    console.log(`[creative-engine] Loaded ${cached.directions.length} cached directions (${Math.round(age / 60000)}min old, ${cached.modelId})`);
     return cached;
   } catch (err) {
     console.error("[creative-engine] Cache load error:", err);
@@ -75,19 +100,20 @@ export async function loadCachedDirections(): Promise<CachedDirections | null> {
 /**
  * Save directions to disk cache.
  */
-export async function saveCachedDirections(directions: CreativeDirection[], corpusSize: number, clusterCount: number): Promise<void> {
+export async function saveCachedDirections(directions: CreativeDirection[], corpusSize: number, clusterCount: number, modelId: string): Promise<void> {
   try {
     const cache: CachedDirections = {
       directions,
       generatedAt: Date.now(),
       corpusSize,
       clusterCount,
+      modelId,
     };
     
     await mkdir(DIRECTION_CACHE_FILE.substring(0, DIRECTION_CACHE_FILE.lastIndexOf("/")), { recursive: true });
     await writeFile(DIRECTION_CACHE_FILE, JSON.stringify(cache, null, 2));
     
-    console.log(`[creative-engine] Cached ${directions.length} directions to disk`);
+    console.log(`[creative-engine] Cached ${directions.length} directions to disk (${modelId})`);
   } catch (err) {
     console.error("[creative-engine] Cache save error:", err);
   }
@@ -105,16 +131,19 @@ export async function proposeDirections(
     limit?: number;
     minNovelty?: number;
     useCache?: boolean;
+    modelId?: string;
   } = {}
 ): Promise<CreativeDirection[]> {
   const limit = options.limit ?? 5;
   const minNovelty = options.minNovelty ?? 0.6;
   const useCache = options.useCache ?? true;
+  const modelId = options.modelId ?? "qwen3.5:9b";
 
   // Try to load from cache first
   if (useCache) {
-    const cached = await loadCachedDirections();
-    if (cached && cached.corpusSize === corpus.length && cached.clusterCount === clusters.length) {
+    const cached = await loadCachedDirections(corpus.length, clusters.length, modelId);
+    if (cached) {
+      console.log(`[creative-engine] Returning ${cached.directions.length} cached directions`);
       return cached.directions.slice(0, limit);
     }
   }
@@ -126,30 +155,29 @@ export async function proposeDirections(
   // 1. Gap-filling directions (underrepresented themes) - parallel
   const gaps = analyzeGaps(clusters, corpus);
   const gapDirections = await Promise.all(
-    gaps.slice(0, 2).map(gap => createGapFilling(gap, clusters, corpus))
+    gaps.slice(0, 2).map(gap => createGapFilling(gap, clusters, corpus, modelId))
   );
   directions.push(...gapDirections.filter(d => d.noveltyScore >= minNovelty));
 
   // 2. Cross-pollination (remix distant clusters) - parallel
-  const remixDirections = await createCrossPollination(clusters, corpus, minNovelty);
+  const remixDirections = await createCrossPollination(clusters, corpus, minNovelty, modelId);
   directions.push(...remixDirections.slice(0, 2));
 
   // 3. Deep variations (add complexity to existing clusters) - parallel
-  const deepenDirections = await createDeepVariation(clusters, corpus, minNovelty);
+  const deepenDirections = await createDeepVariation(clusters, corpus, minNovelty, modelId);
   directions.push(...deepenDirections.slice(0, 1));
 
   // 4. Contrast directions (oppose existing patterns) - parallel
-  const contrastDirections = await createContrast(clusters, corpus, minNovelty);
+  const contrastDirections = await createContrast(clusters, corpus, minNovelty, modelId);
   directions.push(...contrastDirections.slice(0, 1));
 
   // Sort by novelty score and limit
   directions.sort((a, b) => b.noveltyScore - a.noveltyScore);
-  const result = directions.slice(0, limit);
-
+  
   // Cache the results
-  await saveCachedDirections(result, corpus.length, clusters.length);
-
-  return result;
+  await saveCachedDirections(directions.slice(0, limit), corpus.length, clusters.length, modelId);
+  
+  return directions.slice(0, limit);
 }
 
 /**
@@ -237,7 +265,8 @@ Be specific and evocative.`;
 export async function createCrossPollination(
   clusters: PromptCluster[],
   corpus: ImageCorpusEntry[],
-  minNovelty: number
+  minNovelty: number,
+  modelId: string = "qwen3.5:9b"
 ): Promise<CreativeDirection[]> {
   // Find distant cluster pairs (low centroid similarity)
   const distantPairs: Array<[PromptCluster, PromptCluster]> = [];
@@ -274,7 +303,7 @@ The combination should feel intentional, not random.`;
     const userPrompt = `Generate a prompt combining ${themeA} themes with ${settingB} settings and ${styleB} styles.`;
 
     const result = await streamChat(
-      "qwen3.5:9b",
+      modelId,
       [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
       systemPrompt,
       () => {}
@@ -312,7 +341,8 @@ The combination should feel intentional, not random.`;
 export async function createDeepVariation(
   clusters: PromptCluster[],
   corpus: ImageCorpusEntry[],
-  minNovelty: number
+  minNovelty: number,
+  modelId: string = "qwen3.5:9b"
 ): Promise<CreativeDirection[]> {
   // Pick large clusters (more than 5 members) for deep exploration
   const largeClusters = clusters.filter(c => c.size > 5).slice(0, 3);
@@ -332,7 +362,7 @@ Make the prompt more complex and layered while staying coherent.`;
     const userPrompt = `Generate a detailed variation of ${primaryTheme} in ${primarySetting}. Add intricate visual details.`;
 
     const result = await streamChat(
-      "qwen3.5:9b",
+      modelId,
       [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
       systemPrompt,
       () => {}

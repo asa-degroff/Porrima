@@ -178,7 +178,7 @@ router.get("/directions", async (req, res) => {
     // Check cache first
     if (useCache && !forceRefresh) {
       if (isCacheValid(corpus.length, clusterMap.clusters.length)) {
-        const cached = getCachedDirections();
+        const cached = await getCachedDirections();
         if (cached) {
           console.log(`[corpus] Returning cached directions (${cached.directions.length})`);
           return res.json({
