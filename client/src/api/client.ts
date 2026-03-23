@@ -884,6 +884,16 @@ export async function fetchNotebookEntry(author: 'user' | 'agent', id: string): 
   return res.json();
 }
 
+export async function fetchNotebookEntriesBulk(entries: { author: 'user' | 'agent'; id: string }[]): Promise<Record<string, NotebookEntry | null>> {
+  const res = await apiFetch(`${BASE}/notebooks/bulk`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ entries }),
+  });
+  if (!res.ok) throw new Error("Failed to fetch notebook entries");
+  return res.json();
+}
+
 export async function createNotebookEntry(author: 'user' | 'agent', content: string, images?: ImageAttachment[]): Promise<NotebookEntry> {
   const res = await apiFetch(`${BASE}/notebooks/${author}`, {
     method: "POST",

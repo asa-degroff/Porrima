@@ -13,7 +13,7 @@ import { getAgentTools, executeTool } from "../services/agent-tools.js";
 import { extractMemoriesFromText } from "../services/memory-extraction.js";
 import { getSettings } from "../services/chat-storage.js";
 import { saveUserImage } from "../services/user-image-storage.js";
-import type { Artifact, ChatToolCall, ChatToolResult, ImageAttachment } from "../types.js";
+import type { Artifact, ChatToolCall, ChatToolResult, ImageAttachment, NotebookEntry } from "../types.js";
 
 const router = Router();
 
@@ -27,6 +27,24 @@ router.get("/user", async (_req, res) => {
 router.get("/agent", async (_req, res) => {
   const index = await listNotebookEntries('agent');
   res.json(index);
+});
+
+// Bulk fetch entries (accepts POST with { entries: [{ author, id }] })
+router.post("/bulk", async (req, res) => {
+  const { entries } = req.body;
+  if (!Array.isArray(entries)) {
+    return res.status(400).json({ error: "entries array required" });
+  }
+  
+  const results: Record<string, NotebookEntry | null> = {};
+  for (const entry of entries) {
+    if (!entry.author || !entry.id) continue;
+    if (entry.author !== 'user' && entry.author !== 'agent') continue;
+    const fullEntry = await getNotebookEntry(entry.author as 'user' | 'agent', entry.id);
+    results[entry.id] = fullEntry;
+  }
+  
+  res.json(results);
 });
 
 // Get single entry

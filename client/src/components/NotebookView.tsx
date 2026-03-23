@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import type { NotebookEntry, NotebookIndex, NotebookLink, ChatListItem, ImageAttachment } from "../types";
-import { fetchNotebookEntry } from "../api/client";
+import { fetchNotebookEntry, fetchNotebookEntriesBulk } from "../api/client";
 import { NotebookEntryComposer } from "./NotebookEntryComposer";
 import { NotebookEntryDisplay } from "./NotebookEntryDisplay";
 import { ChatLinkPicker } from "./ChatLinkPicker";
@@ -42,6 +42,7 @@ export function NotebookView({
   const [fullEntries, setFullEntries] = useState<Record<string, NotebookEntry>>({});
   const [editingEntry, setEditingEntry] = useState<{ author: 'user' | 'agent'; id: string; content: string } | null>(null);
   const [composerLinks, setComposerLinks] = useState<NotebookLink>({});
+  const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
 
   // Link picker state
   const [linkPickerOpen, setLinkPickerOpen] = useState(false);
@@ -50,35 +51,78 @@ export function NotebookView({
   const [pendingLink, setPendingLink] = useState<{ entryId: string; author: 'user' | 'agent' } | null>(null);
   const [filterText, setFilterText] = useState('');
 
+  // Track entry refs for IntersectionObserver
+  const entryRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
   // Mark as seen when view becomes visible
   useEffect(() => {
     onVisible?.();
   }, [onVisible]);
 
-  // Fetch full entry content for all index entries
+  // Lazy load entries when they become visible
   useEffect(() => {
     const allIndexEntries = [...userNotebooks.entries, ...agentNotebooks.entries];
-    const missing = allIndexEntries.filter(e => !fullEntries[e.id]);
+    const missing = allIndexEntries.filter(e => !fullEntries[e.id] && visibleIds.has(e.id));
     if (missing.length === 0) return;
 
-    Promise.all(
-      missing.map(async (e) => {
-        try {
-          return await fetchNotebookEntry(e.author, e.id);
-        } catch {
-          return null;
-        }
+    // Batch fetch missing visible entries
+    fetchNotebookEntriesBulk(missing.map(e => ({ author: e.author, id: e.id })))
+      .then((results) => {
+        setFullEntries(prev => {
+          const next = { ...prev };
+          for (const [id, entry] of Object.entries(results)) {
+            if (entry) next[id] = entry;
+          }
+          return next;
+        });
       })
-    ).then((results) => {
-      setFullEntries(prev => {
-        const next = { ...prev };
-        for (const entry of results) {
-          if (entry) next[entry.id] = entry;
-        }
-        return next;
+      .catch(() => {
+        // Fallback to individual fetches if bulk fails
+        missing.forEach(async (e) => {
+          try {
+            const entry = await fetchNotebookEntry(e.author, e.id);
+            if (entry) {
+              setFullEntries(prev => ({ ...prev, [e.id]: entry }));
+            }
+          } catch {
+            // ignore
+          }
+        });
       });
+  }, [visibleIds, userNotebooks.entries, agentNotebooks.entries]);
+
+  // IntersectionObserver to track which entries are visible
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const newlyVisible = new Set<string>();
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && entry.target.id) {
+            const id = entry.target.id.replace('entry-', '');
+            newlyVisible.add(id);
+          }
+        });
+        setVisibleIds(prev => {
+          const next = new Set(prev);
+          newlyVisible.forEach(id => next.add(id));
+          return next;
+        });
+      },
+      { rootMargin: '100px', threshold: 0 }
+    );
+
+    // Observe all entry elements
+    Object.values(entryRefs.current).forEach((el) => {
+      if (el) observer.observe(el);
     });
+
+    return () => observer.disconnect();
   }, [userNotebooks.entries, agentNotebooks.entries]);
+
+  // Register entry ref callback
+  const registerEntryRef = useCallback((id: string, el: HTMLDivElement | null) => {
+    entryRefs.current[id] = el;
+  }, []);
 
   // --- Composer handlers ---
 
@@ -261,7 +305,12 @@ export function NotebookView({
       };
 
       return (
-        <div key={entry.id} id={`entry-${entry.id}`} className="mb-4">
+        <div
+          key={entry.id}
+          id={`entry-${entry.id}`}
+          ref={(el) => registerEntryRef(entry.id, el)}
+          className="mb-4"
+        >
           {editingEntry?.id === entry.id ? (
             <NotebookEntryComposer
               initialContent={editingEntry.content}
@@ -283,7 +332,7 @@ export function NotebookView({
         </div>
       );
     });
-  }, [fullEntries, editingEntry, handleEdit, handleSaveEdit, handleDelete, handleEntryLinkClick, handleChatLinkClick, openLinkPicker, handleRemoveLink]);
+  }, [fullEntries, editingEntry, handleEdit, handleSaveEdit, handleDelete, handleEntryLinkClick, handleChatLinkClick, openLinkPicker, handleRemoveLink, registerEntryRef]);
 
   if (loading) {
     return (
