@@ -1,9 +1,9 @@
-import { readFile, readdir, stat } from "fs/promises";
+import { readFile, readdir, stat, access } from "fs/promises";
 import { resolve, join } from "path";
 import { homedir } from "os";
 
 const HOME = homedir();
-const SKILLS_DIR = resolve(HOME, ".quje-agent", "skills");
+const GLOBAL_SKILLS_DIR = resolve(HOME, ".quje-agent", "skills");
 
 export interface Skill {
   name: string;
@@ -12,6 +12,8 @@ export interface Skill {
   examples?: string[];
   guidelines?: string[];
   folderPath: string;
+  source: "global" | "project";
+  projectId?: string;
 }
 
 interface SkillFrontmatter {
@@ -70,7 +72,7 @@ function extractSections(markdown: string): { examples?: string[]; guidelines?: 
 /**
  * Load a single skill from its folder.
  */
-async function loadSkill(folderPath: string): Promise<Skill | null> {
+async function loadSkill(folderPath: string, source: "global" | "project" = "global", projectId?: string): Promise<Skill | null> {
   try {
     const skillMdPath = join(folderPath, "SKILL.md");
     const content = await readFile(skillMdPath, "utf-8");
@@ -91,6 +93,8 @@ async function loadSkill(folderPath: string): Promise<Skill | null> {
       examples: sections.examples,
       guidelines: sections.guidelines,
       folderPath,
+      source,
+      projectId,
     };
   } catch (err: any) {
     console.warn(`[skills] Failed to load skill from ${folderPath}:`, err.message);
@@ -99,38 +103,67 @@ async function loadSkill(folderPath: string): Promise<Skill | null> {
 }
 
 /**
- * Discover all skills from the skills directory.
+ * Discover all skills from global and project directories.
  */
-export async function discoverSkills(): Promise<Skill[]> {
+export async function discoverSkills(projectId?: string): Promise<Skill[]> {
+  const skills: Skill[] = [];
+  
+  // Load global skills
   try {
-    await stat(SKILLS_DIR); // will throw if doesn't exist
+    await stat(GLOBAL_SKILLS_DIR);
+    const entries = await readdir(GLOBAL_SKILLS_DIR, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      
+      const skill = await loadSkill(join(GLOBAL_SKILLS_DIR, entry.name), "global");
+      if (skill) {
+        skills.push(skill);
+      }
+    }
   } catch {
-    console.log(`[skills] Skills directory not found: ${SKILLS_DIR}`);
-    return [];
+    console.log(`[skills] Global skills directory not found: ${GLOBAL_SKILLS_DIR}`);
   }
   
-  const skills: Skill[] = [];
-  const entries = await readdir(SKILLS_DIR, { withFileTypes: true });
-  
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    
-    const skill = await loadSkill(join(SKILLS_DIR, entry.name));
-    if (skill) {
-      skills.push(skill);
+  // Load project-specific skills if projectId provided
+  if (projectId) {
+    try {
+      const { getProject } = await import("./chat-storage.js");
+      const project = await getProject(projectId);
+      if (project) {
+        const projectSkillsDir = join(project.path, ".agents", "skills");
+        try {
+          await stat(projectSkillsDir);
+          const entries = await readdir(projectSkillsDir, { withFileTypes: true });
+          
+          for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            
+            const skill = await loadSkill(join(projectSkillsDir, entry.name), "project", project.id);
+            if (skill) {
+              skills.push(skill);
+            }
+          }
+          console.log(`[skills] Loaded project skills from ${projectSkillsDir}`);
+        } catch {
+          console.log(`[skills] No project skills directory at ${projectSkillsDir}`);
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[skills] Failed to load project skills:`, err.message);
     }
   }
   
   skills.sort((a, b) => a.name.localeCompare(b.name));
-  console.log(`[skills] Discovered ${skills.length} skills`);
+  console.log(`[skills] Discovered ${skills.length} skills total`);
   return skills;
 }
 
 /**
  * Get a skill by name.
  */
-export async function getSkillByName(name: string): Promise<Skill | null> {
-  const skills = await discoverSkills();
+export async function getSkillByName(name: string, projectId?: string): Promise<Skill | null> {
+  const skills = await discoverSkills(projectId);
   return skills.find(s => s.name.toLowerCase() === name.toLowerCase()) || null;
 }
 

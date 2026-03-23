@@ -100,6 +100,20 @@ export function SkillSelector({ skills, filterText, onSelect, onClose, inputRect
         >
           <div style={{ fontWeight: 500, color: i === selectedIndex ? "white" : "rgba(255,255,255,0.9)" }}>
             /{skill.name}
+            {skill.source === "project" && (
+              <span style={{ 
+                fontSize: "9px", 
+                marginLeft: "6px", 
+                padding: "1px 4px", 
+                background: "rgba(16, 185, 129, 0.2)", 
+                border: "1px solid rgba(16, 185, 129, 0.4)",
+                borderRadius: "4px",
+                color: "rgb(110, 231, 183)",
+                fontWeight: "400",
+              }}>
+                project
+              </span>
+            )}
           </div>
           {skill.description && (
             <div style={{ 

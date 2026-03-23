@@ -1013,7 +1013,7 @@ router.post("/", async (req, res) => {
   const activatedSkillNames: string[] = [];
   
   if (invokedSkills.length > 0) {
-    const allSkills = await discoverSkills();
+    const allSkills = await discoverSkills(chat.projectId);
     
     for (const invokedSkill of invokedSkills) {
       const skill = allSkills.find(s => s.name.toLowerCase() === invokedSkill.toLowerCase());
@@ -1073,7 +1073,7 @@ router.post("/", async (req, res) => {
     // Check for new skill invocations in resume message
     const invokedSkills = parseSkillInvocations(message);
     if (invokedSkills.length > 0) {
-      const allSkills = await discoverSkills();
+      const allSkills = await discoverSkills(chat.projectId);
       for (const invokedSkill of invokedSkills) {
         const skill = allSkills.find(s => s.name.toLowerCase() === invokedSkill.toLowerCase());
         if (skill && chat.activeSkills && !chat.activeSkills.includes(skill.name)) {
@@ -1087,7 +1087,7 @@ router.post("/", async (req, res) => {
     // Inject active skills into the resumed system prompt
     if (chat.activeSkills?.length) {
       const skillsCache = new Map<string, Skill>();
-      const allSkills = await discoverSkills();
+      const allSkills = await discoverSkills(chat.projectId);
       for (const s of allSkills) {
         skillsCache.set(s.name, s);
       }
@@ -1205,7 +1205,7 @@ router.post("/", async (req, res) => {
     // Inject active skills into system prompt
     if (chat.activeSkills?.length) {
       const skillsCache = new Map<string, Skill>();
-      const allSkills = await discoverSkills();
+      const allSkills = await discoverSkills(chat.projectId);
       for (const s of allSkills) {
         skillsCache.set(s.name, s);
       }
@@ -1351,7 +1351,7 @@ router.post("/edit", async (req, res) => {
   // Inject active skills into system prompt
   if (chat.activeSkills?.length) {
     const skillsCache = new Map<string, Skill>();
-    const allSkills = await discoverSkills();
+    const allSkills = await discoverSkills(chat.projectId);
     for (const s of allSkills) {
       skillsCache.set(s.name, s);
     }

@@ -803,10 +803,13 @@ export async function searchConversations(query: string, chatId?: string, limit?
 export interface SkillInfo {
   name: string;
   description: string;
+  source?: "global" | "project";
+  projectId?: string;
 }
 
-export async function fetchSkills(): Promise<SkillInfo[]> {
-  const res = await apiFetch(`${BASE}/skills`);
+export async function fetchSkills(projectId?: string): Promise<SkillInfo[]> {
+  const url = `${BASE}/skills` + (projectId ? `?projectId=${encodeURIComponent(projectId)}` : "");
+  const res = await apiFetch(url);
   if (!res.ok) throw new Error("Failed to fetch skills");
   return res.json();
 }

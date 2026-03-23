@@ -68,6 +68,7 @@ interface Props {
   isOnline?: boolean;
   queueProcessing?: boolean;
   activeSkills?: string[];
+  projectId?: string;
   streamingSegmentIndex: number | null;
 }
 
@@ -107,6 +108,7 @@ export function ChatView({
   isOnline = true,
   queueProcessing = false,
   activeSkills,
+  projectId,
   streamingSegmentIndex,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -125,8 +127,8 @@ export function ChatView({
   const [inputRect, setInputRect] = useState<DOMRect | null>(null);
   
   useEffect(() => {
-    fetchSkills().then(setSkills).catch(() => setSkills([]));
-  }, []);
+    fetchSkills(projectId).then(setSkills).catch(() => setSkills([]));
+  }, [projectId]);
   
   const handleSlashTyping = useCallback((filterText: string = "", cursorRect?: DOMRect) => {
     if (!inputRef.current) return;

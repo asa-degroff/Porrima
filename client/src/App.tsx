@@ -466,6 +466,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         isOnline={isOnline}
         queueProcessing={queueProcessing}
         activeSkills={activeChat?.activeSkills}
+        projectId={activeChat?.projectId}
         streamingSegmentIndex={streamingSegmentIndex}
       />
       )}
