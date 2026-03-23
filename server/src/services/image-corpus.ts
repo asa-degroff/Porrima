@@ -6,8 +6,6 @@ import { homedir } from "os";
 
 const CORPUS_DIR = join(homedir(), ".quje-agent", "image-corpus");
 const CORPUS_FILE = join(CORPUS_DIR, "corpus.json");
-const OLLAMA_BASE = process.env.OLLAMA_URL || "http://localhost:11434";
-
 export interface ImageCorpusEntry {
   id: string;
   type: "generated" | "analyzed" | "uploaded";
@@ -155,22 +153,8 @@ export async function getCorpusStats(): Promise<CorpusStats> {
 
 export async function embedPrompt(prompt: string): Promise<number[]> {
   try {
-    const res = await fetch(`${OLLAMA_BASE}/api/embed`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: process.env.EMBEDDING_MODEL || "qwen3-embedding:0.6b",  // Same as memory system
-        input: prompt,
-      }),
-    });
-    
-    if (!res.ok) {
-      throw new Error(`Embedding failed: ${res.status}`);
-    }
-    
-    const data = await res.json();
-    const embeddings = data.embeddings || [];
-    return embeddings[0] || [];
+    const { embed } = await import("./embeddings.js");
+    return await embed(prompt);
   } catch (err) {
     console.error("[image-corpus] embedding error:", err);
     return [];

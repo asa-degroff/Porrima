@@ -8,7 +8,7 @@ export async function embed(text: string): Promise<number[]> {
     body: JSON.stringify({
       model: EMBEDDING_MODEL,
       input: text,
-      keep_alive: 0,
+      keep_alive: "0s",
       options: { num_gpu: 0 },
     }),
   });

@@ -150,25 +150,20 @@ export async function proposeDirections(
 
   console.log("[creative-engine] Generating fresh directions (parallel execution)");
 
-  const directions: CreativeDirection[] = [];
-
-  // 1. Gap-filling directions (underrepresented themes) - parallel
   const gaps = analyzeGaps(clusters, corpus);
-  const gapDirections = await Promise.all(
-    gaps.slice(0, 2).map(gap => createGapFilling(gap, clusters, corpus, modelId))
-  );
+
+  // Run all direction types in parallel — they're independent
+  const [gapDirections, remixDirections, deepenDirections, contrastDirections] = await Promise.all([
+    Promise.all(gaps.slice(0, 2).map(gap => createGapFilling(gap, clusters, corpus, modelId))),
+    createCrossPollination(clusters, corpus, minNovelty, modelId),
+    createDeepVariation(clusters, corpus, minNovelty, modelId),
+    createContrast(clusters, corpus, minNovelty, modelId),
+  ]);
+
+  const directions: CreativeDirection[] = [];
   directions.push(...gapDirections.filter(d => d.noveltyScore >= minNovelty));
-
-  // 2. Cross-pollination (remix distant clusters) - parallel
-  const remixDirections = await createCrossPollination(clusters, corpus, minNovelty, modelId);
   directions.push(...remixDirections.slice(0, 2));
-
-  // 3. Deep variations (add complexity to existing clusters) - parallel
-  const deepenDirections = await createDeepVariation(clusters, corpus, minNovelty, modelId);
   directions.push(...deepenDirections.slice(0, 1));
-
-  // 4. Contrast directions (oppose existing patterns) - parallel
-  const contrastDirections = await createContrast(clusters, corpus, minNovelty, modelId);
   directions.push(...contrastDirections.slice(0, 1));
 
   // Sort by novelty score and limit
@@ -495,22 +490,13 @@ export function scoreNovelty(
 }
 
 /**
- * Generate embedding for a prompt using Ollama.
+ * Generate embedding for a prompt using the shared embeddings service.
+ * Uses CPU-only inference with immediate unload to keep GPUs free.
  */
 async function generateEmbedding(prompt: string): Promise<number[] | null> {
   try {
-    const response = await fetch("http://localhost:11434/api/embed", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "qwen3-embedding:0.6b",
-        input: prompt,
-      }),
-    });
-
-    if (!response.ok) return null;
-    const data = (await response.json()) as { embeddings: number[][] };
-    return data.embeddings?.[0] ?? null;
+    const { embed } = await import("./embeddings.js");
+    return await embed(prompt);
   } catch (err) {
     console.error("[creative-engine] embedding error:", err);
     return null;
