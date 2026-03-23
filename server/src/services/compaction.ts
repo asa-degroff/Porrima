@@ -92,19 +92,31 @@ export async function truncateBeforeSend(
   // Keep first message (title context) + most RECENT messages that fit in budget.
   // Iterate backwards from end to prioritize recent context.
   let runningTotal = estimateTokens(systemPrompt) + messageTokenEstimates[0];
-  let keepFromIndex = messages.length; // start assuming we keep nothing after first
+  let keepFromIndex = 1; // start assuming we keep only the first message
 
+  // Build a list of recent messages that fit within threshold
+  const recentIndices: number[] = [];
   for (let i = messages.length - 1; i >= 1; i--) {
     if (runningTotal + messageTokenEstimates[i] <= threshold) {
       runningTotal += messageTokenEstimates[i];
-      keepFromIndex = i;
+      recentIndices.push(i);
     } else {
+      // Stop adding messages, but don't break - we need to find the boundary
       break;
     }
   }
 
-  // Ensure we keep at least 2 messages (first + last)
-  keepFromIndex = Math.min(keepFromIndex, messages.length - 1);
+  // If no recent messages fit, we're in a dangerous state - keep at least the last 2 messages
+  // even if it slightly exceeds threshold. Better to have context than lose it entirely.
+  if (recentIndices.length === 0) {
+    console.warn(`[compaction] No recent messages fit within threshold (${runningTotal} > ${threshold}), keeping last 2 messages`);
+    keepFromIndex = Math.max(1, messages.length - 2);
+  } else {
+    // Sort indices ascending to get the boundary
+    recentIndices.sort((a, b) => a - b);
+    keepFromIndex = recentIndices[0];
+  }
+
   const messagesToRemove = keepFromIndex - 1; // messages between first and keepFromIndex
 
   if (messagesToRemove <= 0) return noOp;
@@ -117,10 +129,20 @@ export async function truncateBeforeSend(
   const firstMessage = messages[0];
   const recentMessages = messages.slice(keepFromIndex);
   
+  // Preserve usage from the last removed message if available
+  const lastRemovedUsage = removedMessages.length > 0 
+    ? removedMessages[removedMessages.length - 1].usage 
+    : undefined;
+  
   const summaryMessage: typeof firstMessage = {
     role: "assistant",
     content: `[Conversation Summary] ${summary}`,
     thinking: undefined,
+    usage: lastRemovedUsage ? {
+      input: lastRemovedUsage.input,
+      output: lastRemovedUsage.output,
+      totalTokens: lastRemovedUsage.totalTokens,
+    } : undefined,
     timestamp: Date.now(),
   };
 
@@ -262,9 +284,20 @@ export async function truncateChatHistory(
 
   // Generate summary of removed messages to preserve continuity
   const summary = await generateCompactionSummary(removedMessages, chat.modelId);
+  
+  // Preserve usage from the last removed message if available
+  const lastRemovedUsage = removedMessages.length > 0 
+    ? removedMessages[removedMessages.length - 1].usage 
+    : undefined;
+  
   const summaryMessage: ChatMessage = {
     role: "assistant",
     content: `[Conversation Summary] ${summary}`,
+    usage: lastRemovedUsage ? {
+      input: lastRemovedUsage.input,
+      output: lastRemovedUsage.output,
+      totalTokens: lastRemovedUsage.totalTokens,
+    } : undefined,
     timestamp: Date.now(),
   };
 

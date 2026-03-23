@@ -17,9 +17,11 @@ function formatNumber(n: number): string {
 }
 
 export function TokenIndicator({ usage, contextWindow, compaction }: Props) {
-  if (usage.totalTokens === 0 && !compaction) return null;
-
-  const pct = Math.min((usage.totalTokens / contextWindow) * 100, 100);
+  // Always show the indicator - even with 0 tokens, show the context window
+  // This prevents the "blank" appearance when usage data is missing
+  const pct = usage.totalTokens > 0 
+    ? Math.min((usage.totalTokens / contextWindow) * 100, 100)
+    : 0;
 
   return (
     <div className="flex items-center gap-2 text-xs text-white/40">
@@ -28,7 +30,9 @@ export function TokenIndicator({ usage, contextWindow, compaction }: Props) {
         <span title="Generated tokens (output)">&#8595;{formatNumber(usage.output)}</span>
         <span className="text-white/20">&middot;</span>
         <span>
-          {formatNumber(usage.totalTokens)} / {formatNumber(contextWindow)}
+          {usage.totalTokens > 0 
+            ? `${formatNumber(usage.totalTokens)} / ${formatNumber(contextWindow)}`
+            : `${formatNumber(contextWindow)} max`}
         </span>
       </div>
       <div className="w-16 h-1.5 rounded-full bg-white/10 overflow-hidden">
