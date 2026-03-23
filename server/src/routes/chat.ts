@@ -631,15 +631,20 @@ async function handleChatStream(
       const continueAbortController = new AbortController();
       const continueEventStream = agentLoopContinue(context, config, continueAbortController.signal, safeStreamFn);
       
+      // Track if continuation produces any content
+      let continuationProducedContent = false;
+      
       // Process the continuation events
       for await (const event of continueEventStream) {
         if (event.type === "message_update") {
           const ame = event.assistantMessageEvent;
           if (ame.type === "text_delta") {
+            continuationProducedContent = true;
             state.fullText += ame.delta;
             state.pendingText += ame.delta;
             res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
           } else if (ame.type === "thinking_delta") {
+            continuationProducedContent = true;
             state.thinkingText += ame.delta;
             res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
           }
@@ -652,6 +657,7 @@ async function handleChatStream(
           if (stopReason === "stop" && !state.fullText.trim() && state.thinkingText.trim().length > 0) {
             state.fullText = state.thinkingText;
             state.thinkingText = "";
+            continuationProducedContent = true;
             console.log(`[chat] continuation: promoted thinking to content (${state.fullText.length}ch)`);
           }
           
@@ -671,6 +677,13 @@ async function handleChatStream(
       }
       
       continueAbortController.abort(); // Clean up
+      
+      // If continuation produced nothing, log a warning and don't persist empty message
+      if (!continuationProducedContent && !state.fullText.trim() && !state.thinkingText.trim()) {
+        console.error(`[chat] continuation produced NO CONTENT - model may have failed silently. Not persisting empty message.`);
+        // Don't continue to message persistence - we'll handle this below
+        state.finalUsage = { input: 0, output: 0, totalTokens: 0 }; // Mark as failed
+      }
     }
 
     // Check for queued follow-up messages even if loop exited early (e.g., due to abort)
@@ -776,11 +789,19 @@ async function handleChatStream(
 
     // Build the final assistant message
     const assistantMsg = buildCurrentAssistantMessage();
-
-    chat.messages.push(assistantMsg);
-    await saveChat(chat);
-
-    console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput}`);
+    
+    // Check if the message has any actual content
+    const hasContent = assistantMsg.content.trim() || assistantMsg.thinking || assistantMsg.toolCalls?.length;
+    
+    if (hasContent) {
+      chat.messages.push(assistantMsg);
+      await saveChat(chat);
+      console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput} content=${assistantMsg.content.length}ch`);
+    } else {
+      console.error(`[chat] NO CONTENT produced after ${iterations} iterations - model failure or context issue. Not persisting empty message.`);
+      // Don't save an empty message - this prevents the "empty chat" bug
+      // The user can retry, and we've logged the failure for debugging
+    }
 
     if (waitingForInput) {
       res.write(
@@ -792,7 +813,8 @@ async function handleChatStream(
       );
 
       // Generate LLM title after the first exchange (2 messages = 1 user + 1 assistant)
-      if (chat.messages.length === 2) {
+      // Only generate title if we have actual content
+      if (chat.messages.length === 2 && hasContent) {
         try {
           const title = await generateTitle(lastUserMessage, assistantMsg.content);
           if (title) {
@@ -806,8 +828,8 @@ async function handleChatStream(
       }
 
       // Fire-and-forget memory extraction for agent chats
-      // Message is already persisted, so extraction can fail safely
-      if (chat.type === "agent") {
+      // Only extract if we have actual content
+      if (chat.type === "agent" && hasContent) {
         extractMemories(chat.modelId, chat.id, lastUserMessage, assistantMsg.content)
           .catch((err) => console.error("[memory] extraction failed:", err));
       }
@@ -1065,6 +1087,11 @@ router.post("/", async (req, res) => {
     if (contextMessages.length === 0 && chat.messages.length > 1) {
       console.error(`[chat] CRITICAL: resume context is empty despite ${chat.messages.length} messages in chat`);
     }
+    
+    // Safety check: detect catastrophic context loss from compaction
+    if (chat.messages.length <= 3 && chat.messages.length > 1) {
+      console.warn(`[chat] WARNING: resume chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
+    }
 
     // Resume: userPiMessage=null triggers agentLoopContinue
     await handleChatStream(chat, message, contextMessages, systemPrompt, null, req, res);
@@ -1151,6 +1178,11 @@ router.post("/", async (req, res) => {
     // Safety check: warn if context is empty for non-first messages
     if (contextMessages.length === 0 && chat.messages.length > 1) {
       console.error(`[chat] CRITICAL: context conversion produced empty array for chat with ${chat.messages.length} messages`);
+    }
+    
+    // Safety check: detect catastrophic context loss from compaction
+    if (chat.messages.length <= 3 && chat.messages.length > 1) {
+      console.warn(`[chat] WARNING: chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
     }
     
     const userPiMessage = buildUserPiMessage(message, images);
@@ -1292,6 +1324,11 @@ router.post("/edit", async (req, res) => {
   // Safety check: warn if context is empty for non-first messages
   if (contextMessages.length === 0 && chat.messages.length > 1) {
     console.error(`[chat] CRITICAL: context conversion produced empty array for edit with ${chat.messages.length} messages`);
+  }
+  
+  // Safety check: detect catastrophic context loss from compaction
+  if (chat.messages.length <= 3 && chat.messages.length > 1) {
+    console.warn(`[chat] WARNING: edit chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
   }
   
   const userPiMessage = buildUserPiMessage(message);
