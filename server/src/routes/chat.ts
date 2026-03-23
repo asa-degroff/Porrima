@@ -587,6 +587,21 @@ async function handleChatStream(
             // Don't push to chat.messages yet - we're still accumulating
             // Instead, save the current state of the chat with progress
             await saveChat(chat);
+            
+            // ALSO save in-flight accumulators to pending_states for crash recovery
+            // This allows resume from mid-turn, not just ask_user
+            await savePendingState(chat.id, {
+              agentMessages: context.messages as any[],
+              systemPrompt,
+              askToolCallId: askUserRef.current?.toolCallId || "",
+              fullText: state.fullText,
+              thinkingText: state.thinkingText,
+              toolCalls: state.allToolCalls,
+              toolResults: state.allToolResults,
+              iterations,
+              lastUserMessage,
+            });
+            
             console.log(`[chat] iteration ${iterations}: saved progress (${partialMsg.toolCalls?.length || 0} tools, ${partialMsg.content.length}ch)`);
           } catch (saveErr) {
             console.error(`[chat] failed to save iteration ${iterations}:`, saveErr);
@@ -984,12 +999,40 @@ router.post("/", async (req, res) => {
     // No need to strip them - they serve as visual indicators of activated skills
   }
   
-  // Check for pending agent state (ask_user resume flow)
+  // Check for pending state (ask_user OR mid-turn crash recovery)
   const pendingState = await loadPendingState(chatId);
 
   if (pendingState) {
-    // RESUME: the user's message is the answer to ask_user
+    // RESUME: the user's message is the answer to ask_user (or mid-turn continuation)
     let systemPrompt = pendingState.systemPrompt;
+    
+    // Check if this is a mid-turn crash recovery (has accumulators but no ask_user)
+    const isMidTurnRecovery = !pendingState.askToolCallId && pendingState.fullText !== undefined;
+    
+    if (isMidTurnRecovery) {
+      console.log(`[chat] resuming mid-turn from crash: ${pendingState.iterations} iterations, ${pendingState.fullText?.length || 0}ch text, ${pendingState.toolCalls?.length || 0} tools`);
+      
+      // Reconstruct the partial assistant message from saved accumulators
+      const partialMsg: ChatMessage = {
+        role: "assistant",
+        content: pendingState.fullText || "",
+        thinking: pendingState.thinkingText || undefined,
+        toolCalls: pendingState.toolCalls?.length ? pendingState.toolCalls : undefined,
+        toolResults: pendingState.toolResults?.length ? pendingState.toolResults : undefined,
+        timestamp: Date.now(),
+      };
+      
+      // Replace or append the partial message to chat.messages
+      if (chat.messages.length && chat.messages[chat.messages.length - 1].role === "assistant") {
+        chat.messages[chat.messages.length - 1] = partialMsg;
+      } else {
+        chat.messages.push(partialMsg);
+      }
+      await saveChat(chat);
+      
+      // Continue: user's message is treated as a follow-up prompt
+      // The handler will pick up the partial message from chat.messages
+    }
     
     // Check for new skill invocations in resume message
     const invokedSkills = parseSkillInvocations(message);
