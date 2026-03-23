@@ -186,6 +186,8 @@ export interface GeneratedImage {
   resolvedSeed: number;
   createdAt: string;
   chatId?: string;
+  generatedBy?: 'user' | 'agent';  // Track generation source
+  directionId?: string;  // For agent generations: which creative direction was used
 }
 
 export interface ComfyUIStatus {

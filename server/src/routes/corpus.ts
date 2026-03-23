@@ -363,21 +363,46 @@ router.post("/cache/clear", async (_req, res) => {
 });
 
 // POST /api/corpus/execute - Execute a creative direction (generate image)
-// Note: Full implementation requires integration with routes/images.ts queue system
 router.post("/execute", async (req, res) => {
   try {
-    const { directionId, prompt }: { directionId?: string; prompt?: string } = req.body;
+    const { directionId, chatId }: { directionId: string; chatId: string } = req.body;
     
-    const promptToUse = prompt || "Creative generation";
+    if (!directionId || !chatId) {
+      return res.status(400).json({ error: "directionId and chatId required" });
+    }
     
-    console.log("[corpus] execute requested:", { directionId, prompt: promptToUse });
+    // Get the direction from cache
+    const { getCachedDirections } = await import("../services/direction-cache.js");
+    const cached = await getCachedDirections();
     
-    res.json({ 
-      success: true,
-      message: "Direction execution queued (integration pending)",
-      directionId,
-      prompt: promptToUse,
-    });
+    let direction;
+    if (cached) {
+      direction = cached.directions.find((d: any) => d.id === directionId);
+    }
+    
+    if (!direction) {
+      return res.status(404).json({ error: "Direction not found" });
+    }
+    
+    // Execute generation with z-image base defaults
+    const { executeDirection, DEFAULT_AUTONOMOUS_CONFIG } = await import("../services/autonomous-generation.js");
+    
+    const result = await executeDirection(direction, chatId, DEFAULT_AUTONOMOUS_CONFIG);
+    
+    if (result.success) {
+      res.json({ 
+        success: true,
+        imageId: result.imageId,
+        imageUrl: result.imageUrl,
+        directionId,
+        generatedBy: 'agent',
+      });
+    } else {
+      res.status(400).json({ 
+        success: false,
+        error: result.error,
+      });
+    }
   } catch (err: any) {
     console.error("[corpus] execute error:", err);
     res.status(500).json({ error: "Failed to execute direction", details: err.message });

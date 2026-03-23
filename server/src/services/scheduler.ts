@@ -50,7 +50,21 @@ async function runCorpusCreativeCycle() {
     const directions = await proposeDirections(clusterMap.clusters, corpus, { limit: 5, minNovelty: 0.6 });
     console.log(`[scheduler] Generated ${directions.length} creative directions`);
     
-    // 3. Save directions as context memories for future reference
+    // 3. Execute top 4 directions autonomously
+    const { executeDirection, DEFAULT_AUTONOMOUS_CONFIG } = await import("./autonomous-generation.js");
+    const systemChatId = "autonomous-system"; // System chat for agent generations
+    
+    for (const dir of directions.slice(0, 4)) {
+      console.log(`[scheduler] Executing direction: ${dir.type} - ${dir.description}`);
+      const result = await executeDirection(dir, systemChatId, DEFAULT_AUTONOMOUS_CONFIG);
+      if (result.success) {
+        console.log(`[scheduler] Generated: ${result.imageId}`);
+      } else {
+        console.log(`[scheduler] Failed: ${result.error}`);
+      }
+    }
+    
+    // 4. Save directions as context memories for future reference
     for (const dir of directions.slice(0, 3)) {
       await addMemory({
         id: crypto.randomUUID(),

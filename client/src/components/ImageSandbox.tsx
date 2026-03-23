@@ -50,6 +50,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
 
   // View mode: gallery (grid) or detail (large image + carousel)
   const [viewMode, setViewMode] = useState<ViewMode>('gallery');
+  
+  // Filter: show all or agent generations only
+  const [showAgentOnly, setShowAgentOnly] = useState(false);
 
   // Navigation index for selected image in the detail pane
   const selectedIndex = useMemo(
@@ -113,6 +116,13 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     } catch {}
     return "analyze";
   });
+  
+  // Persist filter preference
+  useEffect(() => {
+    try {
+      localStorage.setItem("quje-sandbox-agent-filter", showAgentOnly ? "true" : "false");
+    } catch {}
+  }, [showAgentOnly]);
   const [controlParams, setControlParams] = useState<Partial<ImageGenerationParams> | undefined>();
 
   // Persist mode to localStorage
@@ -406,13 +416,31 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             {/* Gallery / Preview */}
             <div className="flex-1 flex flex-col min-w-0">
               {viewMode === 'gallery' ? (
-                <ImageGallery
-                  images={images}
-                  selectedImage={selectedImage}
-                  onSelect={(image) => { setSelectedImage(image); setViewMode('detail'); }}
-                  onDelete={deleteGeneratedImage}
-                  activeGenerations={activeGenerations}
-                />
+                <div className="flex-1 flex flex-col min-h-0">
+                  {/* Filter toggle */}
+                  <div className="shrink-0 px-4 py-2 flex items-center justify-between border-b border-white/10">
+                    <span className="text-xs text-white/40">
+                      {showAgentOnly ? 'Showing agent generations' : 'Showing all generations'}
+                    </span>
+                    <button
+                      onClick={() => setShowAgentOnly(!showAgentOnly)}
+                      className={`px-3 py-1 text-xs rounded transition-colors ${
+                        showAgentOnly
+                          ? 'bg-purple-500/80 text-white'
+                          : 'bg-white/10 text-white/60 hover:text-white/90'
+                      }`}
+                    >
+                      Agent only
+                    </button>
+                  </div>
+                  <ImageGallery
+                    images={showAgentOnly ? images.filter(i => i.generatedBy === 'agent') : images}
+                    selectedImage={selectedImage}
+                    onSelect={(image) => { setSelectedImage(image); setViewMode('detail'); }}
+                    onDelete={deleteGeneratedImage}
+                    activeGenerations={activeGenerations}
+                  />
+                </div>
               ) : (
                 /* Detail view: large image + carousel */
                 <div className="flex-1 flex flex-col min-h-0 relative">

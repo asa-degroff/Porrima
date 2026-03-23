@@ -356,8 +356,7 @@ export async function createDeepVariation(
 Base theme: ${primaryTheme}
 Base setting: ${primarySetting}
 
-Add specific details like: weathering, Kintsugi repairs, intricate mechanical details, atmospheric effects, or cultural motifs.
-Make the prompt more complex and layered while staying coherent.`;
+Make the prompt more complex and layered while staying coherent. Think in terms of visual details, textures, lighting.`;
 
     const userPrompt = `Generate a detailed variation of ${primaryTheme} in ${primarySetting}. Add intricate visual details.`;
 
@@ -380,7 +379,7 @@ Make the prompt more complex and layered while staying coherent.`;
       elementCombination: {
         takeThemesFrom: cluster.id,
         takeSettingsFrom: cluster.id,
-        injectNovelty: "intricate details, weathering, cultural motifs",
+        injectNovelty: "intricate details",
       },
       noveltyScore,
       proposedPrompt,

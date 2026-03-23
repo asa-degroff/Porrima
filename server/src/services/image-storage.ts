@@ -13,6 +13,8 @@ interface ImageMetadata {
   resolvedSeed: number;
   createdAt: string;
   chatId?: string;
+  generatedBy?: 'user' | 'agent';
+  directionId?: string;
 }
 
 export async function saveGeneratedImage(
