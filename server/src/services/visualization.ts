@@ -228,16 +228,27 @@ export function generateForceGraphHTML(
   <script>
     const nodes = ${JSON.stringify(nodes)};
     const links = ${JSON.stringify(links)};
-    
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-    
+
+    let width = window.innerWidth;
+    let height = window.innerHeight;
+
     // Create SVG
     const svg = d3.select("#graph")
       .attr("width", width)
-      .attr("height", height)
-      .attr("viewBox", [0, 0, width, height]);
-    
+      .attr("height", height);
+
+    // Zoomable container — all graph elements go here
+    const g = svg.append("g");
+
+    // Zoom behavior
+    const zoom = d3.zoom()
+      .scaleExtent([0.1, 8])
+      .on("zoom", (event) => {
+        g.attr("transform", event.transform);
+      });
+
+    svg.call(zoom);
+
     // Create force simulation
     const simulation = d3.forceSimulation(nodes)
       .force("charge", d3.forceManyBody().strength(-80))
@@ -247,9 +258,9 @@ export function generateForceGraphHTML(
         .id(d => d.id)
         .distance(80)
         .strength(0.1));
-    
+
     // Draw links
-    const link = svg.append("g")
+    const link = g.append("g")
       .attr("stroke", "#475569")
       .attr("stroke-opacity", 0.4)
       .selectAll("line")
@@ -257,9 +268,9 @@ export function generateForceGraphHTML(
       .join("line")
       .attr("class", "link")
       .attr("stroke-width", 1);
-    
+
     // Draw nodes
-    const node = svg.append("g")
+    const node = g.append("g")
       .attr("stroke", "#fff")
       .attr("stroke-width", 1.5)
       .selectAll("circle")
@@ -269,36 +280,36 @@ export function generateForceGraphHTML(
       .attr("r", d => d.size)
       .attr("fill", d => d.color)
       .call(drag(simulation));
-    
+
     // Add title for simple tooltip
     node.append("title")
       .text(d => d.clusterName);
-    
+
     // Interaction: hover tooltip
     const tooltip = d3.select("#tooltip");
-    
+
     node.on("mouseover", (event, d) => {
       tooltip.classed("visible", true);
-      
+
       let html = '<div class="tooltip-title">Image</div>';
       html += '<div class="tooltip-cluster">' + d.clusterName + '</div>';
       html += '<div class="tooltip-elements">' + d.prompt + '...</div>';
-      
+
       if (d.elements.themes?.length) {
         html += '<div class="tooltip-element-label">Themes</div>';
         html += '<div class="tooltip-element-value">' + d.elements.themes.slice(0, 3).join(", ") + '</div>';
       }
-      
+
       if (d.elements.settings?.length) {
         html += '<div class="tooltip-element-label">Settings</div>';
         html += '<div class="tooltip-element-value">' + d.elements.settings.slice(0, 2).join(", ") + '</div>';
       }
-      
+
       if (d.elements.colors?.length) {
         html += '<div class="tooltip-element-label">Colors</div>';
         html += '<div class="tooltip-element-value">' + d.elements.colors.slice(0, 3).join(", ") + '</div>';
       }
-      
+
       tooltip.html(html);
       updateTooltipPosition(event);
     })
@@ -308,30 +319,30 @@ export function generateForceGraphHTML(
     .on("mouseout", () => {
       tooltip.classed("visible", false);
     });
-    
+
     function updateTooltipPosition(event) {
-      const tooltipWidth = 300;
-      const tooltipHeight = 200;
-      
+      const el = tooltip.node();
+      const tooltipRect = el.getBoundingClientRect();
+
       let x = event.pageX + 10;
       let y = event.pageY + 10;
-      
-      if (x + tooltipWidth > width) {
-        x = event.pageX - tooltipWidth - 10;
+
+      if (x + tooltipRect.width > window.innerWidth) {
+        x = event.pageX - tooltipRect.width - 10;
       }
-      
-      if (y + tooltipHeight > height) {
-        y = event.pageY - tooltipHeight - 10;
+
+      if (y + tooltipRect.height > window.innerHeight) {
+        y = event.pageY - tooltipRect.height - 10;
       }
-      
+
       tooltip.style("left", x + "px")
         .style("top", y + "px");
     }
-    
+
     // Build legend
     const legend = d3.select("#legend");
     legend.append("div").attr("class", "legend-title").text("Themes");
-    
+
     const themes = {};
     nodes.forEach(d => {
       const theme = d.theme;
@@ -340,7 +351,7 @@ export function generateForceGraphHTML(
       }
       themes[theme].count++;
     });
-    
+
     Object.entries(themes).sort((a, b) => b[1].count - a[1].count).forEach(([theme, data]) => {
       const item = legend.append("div").attr("class", "legend-item");
       item.append("div")
@@ -349,32 +360,32 @@ export function generateForceGraphHTML(
       item.append("span")
         .text(theme + " (" + data.count + ")");
     });
-    
-    // Drag behavior
+
+    // Drag behavior — works correctly with zoom transform
     function drag(simulation) {
       function dragstarted(event, d) {
         if (!event.active) simulation.alphaTarget(0.3).restart();
         d.fx = d.x;
         d.fy = d.y;
       }
-      
+
       function dragged(event, d) {
         d.fx = event.x;
         d.fy = event.y;
       }
-      
+
       function dragended(event, d) {
         if (!event.active) simulation.alphaTarget(0);
         d.fx = null;
         d.fy = null;
       }
-      
+
       return d3.drag()
         .on("start", dragstarted)
         .on("drag", dragged)
         .on("end", dragended);
     }
-    
+
     // Update positions on tick
     simulation.on("tick", () => {
       link
@@ -382,19 +393,19 @@ export function generateForceGraphHTML(
         .attr("y1", d => d.source.y)
         .attr("x2", d => d.target.x)
         .attr("y2", d => d.target.y);
-      
+
       node
         .attr("cx", d => d.x)
         .attr("cy", d => d.y);
     });
-    
+
     // Handle window resize
     window.addEventListener("resize", () => {
-      const newWidth = window.innerWidth;
-      const newHeight = window.innerHeight;
-      
-      svg.attr("width", newWidth).attr("height", newHeight);
-      simulation.force("center", d3.forceCenter(newWidth / 2, newHeight / 2));
+      width = window.innerWidth;
+      height = window.innerHeight;
+
+      svg.attr("width", width).attr("height", height);
+      simulation.force("center", d3.forceCenter(width / 2, height / 2));
       simulation.alpha(0.3).restart();
     });
   </script>
