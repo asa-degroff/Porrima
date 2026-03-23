@@ -62,7 +62,7 @@ router.post("/rebuild-clusters", async (req, res) => {
     const clusterMap = await buildClusters(corpus);
     
     // Clear direction cache after rebuild
-    clearCache();
+    await clearCache();
     
     res.json({
       clusters: clusterMap.clusters.length,
@@ -177,7 +177,7 @@ router.get("/directions", async (req, res) => {
     
     // Check cache first
     if (useCache && !forceRefresh) {
-      if (isCacheValid(corpus.length, clusterMap.clusters.length)) {
+      if (await isCacheValid(corpus.length, clusterMap.clusters.length)) {
         const cached = await getCachedDirections();
         if (cached) {
           console.log(`[corpus] Returning cached directions (${cached.directions.length})`);
@@ -218,7 +218,7 @@ router.get("/directions", async (req, res) => {
     console.log(`[corpus] Generated ${directions.length} directions in ${elapsed}ms`);
     
     // Cache the results
-    const cacheId = cacheDirections(
+    const cacheId = await cacheDirections(
       directions,
       corpus.length,
       clusterMap.clusters.length,
@@ -354,7 +354,7 @@ router.get("/cache", async (_req, res) => {
 // POST /api/corpus/cache/clear - Clear direction cache
 router.post("/cache/clear", async (_req, res) => {
   try {
-    clearCache();
+    await clearCache();
     res.json({ message: "Cache cleared" });
   } catch (err) {
     console.error("[corpus] cache clear error:", err);

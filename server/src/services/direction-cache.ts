@@ -62,15 +62,25 @@ async function saveCacheToDisk(data: CachedDirections): Promise<void> {
  * Check if cached directions are still valid.
  * Invalidates if corpus has changed significantly.
  */
-export function isCacheValid(currentCorpusSize: number, currentClusterCount: number): boolean {
-  if (!cache) return false;
-  
+export async function isCacheValid(currentCorpusSize: number, currentClusterCount: number): Promise<boolean> {
+  // Hydrate from disk if in-memory cache is empty
+  if (!cache) {
+    const diskCache = await loadCacheFromDisk();
+    if (diskCache) {
+      cache = diskCache;
+      cacheGenerationId = `directions-${diskCache.generatedAt}`;
+      console.log(`[direction-cache] Loaded ${diskCache.directions.length} directions from disk`);
+    } else {
+      return false;
+    }
+  }
+
   const age = Date.now() - cache.generatedAt;
   if (age > CACHE_TTL_MS) {
     console.log("[direction-cache] Cache expired (24h TTL)");
     return false;
   }
-  
+
   // Invalidate if corpus changed by >10%
   const sizeDiff = Math.abs(currentCorpusSize - cache.corpusSize);
   const sizeThreshold = Math.max(10, currentCorpusSize * 0.1);
@@ -78,13 +88,13 @@ export function isCacheValid(currentCorpusSize: number, currentClusterCount: num
     console.log(`[direction-cache] Corpus size changed by ${sizeDiff} (threshold: ${sizeThreshold})`);
     return false;
   }
-  
+
   // Invalidate if cluster count changed
   if (currentClusterCount !== cache.clusterCount) {
     console.log(`[direction-cache] Cluster count changed: ${cache.clusterCount} → ${currentClusterCount}`);
     return false;
   }
-  
+
   return true;
 }
 
