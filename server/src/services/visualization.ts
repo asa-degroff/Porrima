@@ -41,18 +41,29 @@ export function generateForceGraphHTML(
     };
   });
   
-  // Build links between similar images (similarity > 0.85)
+  // Build embedding lookup for cosine similarity computation
+  const embeddingMap = new Map<string, number[]>();
+  for (const entry of corpus) {
+    if (entry.promptEmbedding?.length) {
+      embeddingMap.set(entry.id, entry.promptEmbedding);
+    }
+  }
+
+  // Build links between similar images using real cosine similarity
   const links: Array<{ source: string; target: string; similarity: number }> = [];
-  
-  // Add links within clusters
+
   for (const cluster of clusterMap.clusters) {
     const members = cluster.memberIds;
     for (let i = 0; i < members.length; i++) {
       for (let j = i + 1; j < members.length; j++) {
+        const embA = embeddingMap.get(members[i]);
+        const embB = embeddingMap.get(members[j]);
+        // Embeddings are L2-normalized, so dot product = cosine similarity
+        const similarity = embA && embB ? dotProduct(embA, embB) : 0.85;
         links.push({
           source: members[i],
           target: members[j],
-          similarity: 0.85 + Math.random() * 0.15,  // Approximate (real similarity computed client-side if needed)
+          similarity,
         });
       }
     }
@@ -435,6 +446,18 @@ function getThemeColor(theme: string): string {
   
   // Default grey
   return "#9ca3af";
+}
+
+/**
+ * Dot product of two vectors (cosine similarity for L2-normalized vectors).
+ */
+function dotProduct(a: number[], b: number[]): number {
+  let sum = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    sum += a[i] * b[i];
+  }
+  return sum;
 }
 
 /**
