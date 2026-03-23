@@ -115,6 +115,17 @@ router.get("/:id/rendered-prompt", async (req, res) => {
     }
   }
 
+  // Inject active skills into the rendered prompt (matches chat.ts behavior)
+  if (chat.activeSkills?.length) {
+    const { buildSkillAugmentedPrompt, discoverSkills } = await import("../services/skills.js");
+    const skillsCache = new Map<string, import("../services/skills.js").Skill>();
+    const allSkills = await discoverSkills(chat.projectId);
+    for (const s of allSkills) {
+      skillsCache.set(s.name, s);
+    }
+    systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+  }
+
   const tools = chat.type === "agent"
     ? getAgentToolDefinitions()
     : [];

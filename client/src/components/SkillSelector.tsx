@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type { SkillInfo } from "../api/client";
 
 interface Props {
@@ -13,8 +13,12 @@ export function SkillSelector({ skills, filterText, onSelect, onClose, inputRect
   const [selectedIndex, setSelectedIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   
-  const filteredSkills = skills.filter(s => 
-    s.name.toLowerCase().includes(filterText.toLowerCase())
+  // Memoize filtered skills to avoid recalculation on every render
+  const filteredSkills = useMemo(() => 
+    skills.filter(s => 
+      s.name.toLowerCase().includes(filterText.toLowerCase())
+    ),
+    [skills, filterText]
   );
   
   // Reset selection when filter changes
