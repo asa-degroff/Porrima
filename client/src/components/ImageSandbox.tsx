@@ -11,6 +11,7 @@ import { VisionChat } from "./VisionChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { OctahedronLogo } from "./OctahedronLogo";
 import { useCachedImage } from "../utils/imageCache";
+import CorpusView from "./CorpusView";
 import type { GeneratedImage, ImageGenerationParams, OllamaModel } from "../types";
 
 interface Props {
@@ -20,7 +21,7 @@ interface Props {
   onClose: () => void;
 }
 
-type SandboxMode = "generate" | "analyze";
+type SandboxMode = "generate" | "analyze" | "corpus";
 type ViewMode = "gallery" | "detail";
 
 function isVisionCapable(family: string): boolean {
@@ -245,6 +246,16 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             >
               Generate
             </button>
+            <button
+              onClick={() => setMode("corpus")}
+              className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                mode === "corpus"
+                  ? "bg-white/10 text-white/90"
+                  : "text-white/50 hover:text-white/70"
+              }`}
+            >
+              Corpus
+            </button>
           </div>
 
           {/* Status indicator - hidden on mobile, shown desktop */}
@@ -343,6 +354,16 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               }`}
             >
               G
+            </button>
+            <button
+              onClick={() => setMode("corpus")}
+              className={`px-2 py-1 text-xs rounded-md transition-colors ${
+                mode === "corpus"
+                  ? "bg-white/10 text-white/90"
+                  : "text-white/50 hover:text-white/70"
+              }`}
+            >
+              C
             </button>
           </div>
 
@@ -552,6 +573,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               </div>
             )}
           </>
+        ) : mode === "corpus" ? (
+          /* Corpus mode: force-directed graph visualization */
+          <CorpusView />
         ) : (
           <>
             {/* Vision Controls - desktop sidebar */}

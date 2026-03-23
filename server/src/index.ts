@@ -68,6 +68,9 @@ app.use(express.json({ limit: "50mb" }));
 // Auth routes (unprotected)
 app.use("/api/auth", authRouter);
 
+// Public corpus routes (must be mounted BEFORE requireAuth middleware)
+app.use("/api/corpus", corpusRouter);
+
 // Auth middleware (protects all other /api/* routes)
 app.use("/api", requireAuth);
 
@@ -83,7 +86,7 @@ app.use("/api/visuals", visualsRouter);
 app.use("/api/images", imagesRouter);
 app.use("/api/vision", visionRouter);
 app.use("/api/image-corpus", imageCorpusRouter);
-app.use("/api/corpus", corpusRouter);
+// corpusRouter already mounted above
 app.use("/api/tts", ttsRouter);
 app.use("/api/skills", skillsRouter);
 app.use("/api/user-images", userImagesRouter);

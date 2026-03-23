@@ -414,6 +414,13 @@ export interface PendingAgentState {
   agentMessages: any[];
   systemPrompt: string;
   askToolCallId: string;
+  // In-flight accumulators for mid-turn resume
+  fullText?: string;
+  thinkingText?: string;
+  toolCalls?: any[];
+  toolResults?: any[];
+  iterations?: number;
+  lastUserMessage?: string;
 }
 
 export async function savePendingState(chatId: string, state: PendingAgentState): Promise<void> {

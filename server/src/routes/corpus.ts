@@ -59,6 +59,41 @@ router.post("/rebuild-clusters", async (req, res) => {
   }
 });
 
+// GET /api/corpus/visualization - Get force-graph HTML (public, no auth required for iframe)
+router.get("/visualization", async (req, res) => {
+  try {
+    const { generateForceGraphHTML } = await import("../services/visualization.js");
+    const clusterMap = await getClusters();
+    const corpus = await getAllCorpusEntries();
+    
+    const html = generateForceGraphHTML(clusterMap || { clusters: [], similarityThreshold: 0.85, lastRebuilt: 0, corpusSize: 0 }, corpus);
+    
+    res.setHeader("Content-Type", "text/html");
+    res.send(html);
+  } catch (err) {
+    console.error("[corpus] visualization error:", err);
+    res.status(500).json({ error: "Failed to generate visualization" });
+  }
+});
+
+// GET /api/corpus/stats - Corpus statistics (public, no auth required)
+router.get("/stats-public", async (req, res) => {
+  try {
+    const corpus = await getAllCorpusEntries();
+    const clusterMap = await getClusters();
+    
+    res.json({
+      total: corpus.length,
+      enriched: corpus.filter(e => e.elements && Object.keys(e.elements).length > 0).length,
+      clusters: clusterMap?.clusters.length || 0,
+      lastRebuilt: clusterMap?.lastRebuilt || 0,
+    });
+  } catch (err) {
+    console.error("[corpus] stats error:", err);
+    res.status(500).json({ error: "Failed to get corpus stats" });
+  }
+});
+
 // GET /api/corpus/stats - Corpus statistics
 router.get("/stats", async (req, res) => {
   try {
