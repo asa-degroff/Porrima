@@ -1,9 +1,12 @@
+import { writeFile, readFile, mkdir } from "fs/promises";
+import { join } from "path";
+import { homedir } from "os";
+import { existsSync } from "fs";
 import type { CreativeDirection } from "./creative-engine.js";
-import type { PromptCluster } from "./cluster-storage.js";
-import type { ImageCorpusEntry } from "./image-corpus.js";
 
+const CACHE_DIR = join(homedir(), ".quje-agent", "directions");
+const CACHE_FILE = join(CACHE_DIR, "cache.json");
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const MAX_CACHE_ENTRIES = 10;
 
 interface CachedDirections {
   directions: CreativeDirection[];
@@ -13,9 +16,47 @@ interface CachedDirections {
   modelId: string;
 }
 
-// In-memory cache
+// In-memory cache (fast access)
 let cache: CachedDirections | null = null;
 let cacheGenerationId: string | null = null;
+
+/**
+ * Ensure cache directory exists.
+ */
+async function ensureCacheDir(): Promise<void> {
+  if (!existsSync(CACHE_DIR)) {
+    await mkdir(CACHE_DIR, { recursive: true });
+  }
+}
+
+/**
+ * Load cache from disk.
+ */
+async function loadCacheFromDisk(): Promise<CachedDirections | null> {
+  try {
+    await ensureCacheDir();
+    if (existsSync(CACHE_FILE)) {
+      const data = await readFile(CACHE_FILE, "utf-8");
+      return JSON.parse(data) as CachedDirections;
+    }
+  } catch (err) {
+    console.error("[direction-cache] Load error:", err);
+  }
+  return null;
+}
+
+/**
+ * Save cache to disk.
+ */
+async function saveCacheToDisk(data: CachedDirections): Promise<void> {
+  try {
+    await ensureCacheDir();
+    await writeFile(CACHE_FILE, JSON.stringify(data, null, 2));
+    console.log("[direction-cache] Persisted to disk");
+  } catch (err) {
+    console.error("[direction-cache] Save error:", err);
+  }
+}
 
 /**
  * Check if cached directions are still valid.
@@ -49,23 +90,35 @@ export function isCacheValid(currentCorpusSize: number, currentClusterCount: num
 
 /**
  * Get cached directions if valid.
+ * Loads from disk if in-memory cache is empty.
  */
-export function getCachedDirections(): CachedDirections | null {
-  return cache;
+export async function getCachedDirections(): Promise<CachedDirections | null> {
+  if (cache) return cache;
+  
+  // Try loading from disk
+  const diskCache = await loadCacheFromDisk();
+  if (diskCache) {
+    cache = diskCache;
+    cacheGenerationId = `directions-${diskCache.generatedAt}`;
+    console.log(`[direction-cache] Loaded ${diskCache.directions.length} directions from disk`);
+    return diskCache;
+  }
+  
+  return null;
 }
 
 /**
- * Store directions in cache.
+ * Store directions in cache (memory + disk).
  */
-export function cacheDirections(
+export async function cacheDirections(
   directions: CreativeDirection[],
   corpusSize: number,
   clusterCount: number,
   modelId: string
-): string {
+): Promise<string> {
   const generationId = `directions-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   
-  cache = {
+  const cacheData: CachedDirections = {
     directions,
     generatedAt: Date.now(),
     corpusSize,
@@ -73,19 +126,40 @@ export function cacheDirections(
     modelId,
   };
   
+  // Update in-memory cache
+  cache = cacheData;
   cacheGenerationId = generationId;
+  
+  // Persist to disk
+  await saveCacheToDisk(cacheData);
   
   console.log(`[direction-cache] Cached ${directions.length} directions (ID: ${generationId})`);
   return generationId;
 }
 
 /**
- * Clear the cache (e.g., after corpus rebuild).
+ * Clear the cache (memory + disk).
  */
-export function clearCache(): void {
+export async function clearCache(): Promise<void> {
   console.log(`[direction-cache] Clearing cache (${cache?.directions.length ?? 0} directions)`);
   cache = null;
   cacheGenerationId = null;
+  
+  try {
+    await ensureCacheDir();
+    if (existsSync(CACHE_FILE)) {
+      await writeFile(CACHE_FILE, JSON.stringify({
+        directions: [],
+        generatedAt: Date.now(),
+        corpusSize: 0,
+        clusterCount: 0,
+        modelId: "",
+      } as CachedDirections));
+      console.log("[direction-cache] Cleared disk cache");
+    }
+  } catch (err) {
+    console.error("[direction-cache] Clear error:", err);
+  }
 }
 
 /**
@@ -98,6 +172,7 @@ export function getCacheMetadata(): {
   clusterCount: number | null;
   directionCount: number | null;
   generationId: string | null;
+  persistedToDisk: boolean;
 } {
   if (!cache) {
     return {
@@ -107,6 +182,7 @@ export function getCacheMetadata(): {
       clusterCount: null,
       directionCount: null,
       generationId: null,
+      persistedToDisk: false,
     };
   }
   
@@ -117,5 +193,6 @@ export function getCacheMetadata(): {
     clusterCount: cache.clusterCount,
     directionCount: cache.directions.length,
     generationId: cacheGenerationId,
+    persistedToDisk: existsSync(CACHE_FILE),
   };
 }

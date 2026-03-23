@@ -3,6 +3,13 @@ import type { PromptCluster, ClusterMap } from "./cluster-storage.js";
 import type { ImageCorpusEntry } from "./image-corpus.js";
 import { streamChat } from "./agent.js";
 import { cosineSimilarity } from "./cluster-storage.js";
+import { join } from "path";
+import { homedir } from "os";
+import { readFile, writeFile, mkdir, access } from "fs/promises";
+import { existsSync } from "fs";
+
+const DIRECTION_CACHE_FILE = join(homedir(), ".quje-agent", "directions.json");
+const DIRECTION_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export type DirectionType = "remix" | "explore" | "deepen" | "contrast" | "gap-fill";
 
@@ -30,9 +37,66 @@ export interface GapAnalysis {
   suggestion: string;
 }
 
+export interface CachedDirections {
+  directions: CreativeDirection[];
+  generatedAt: number;
+  corpusSize: number;
+  clusterCount: number;
+}
+
+/**
+ * Load cached directions from disk.
+ * Returns null if cache is expired or doesn't exist.
+ */
+export async function loadCachedDirections(): Promise<CachedDirections | null> {
+  try {
+    if (!existsSync(DIRECTION_CACHE_FILE)) {
+      return null;
+    }
+    
+    const data = await readFile(DIRECTION_CACHE_FILE, "utf-8");
+    const cached = JSON.parse(data) as CachedDirections;
+    
+    // Check if cache is still valid (24 hour TTL)
+    const age = Date.now() - cached.generatedAt;
+    if (age > DIRECTION_CACHE_TTL_MS) {
+      console.log("[creative-engine] Cache expired, regenerating");
+      return null;
+    }
+    
+    console.log(`[creative-engine] Loaded ${cached.directions.length} cached directions (${Math.round(age / 60000)}min old)`);
+    return cached;
+  } catch (err) {
+    console.error("[creative-engine] Cache load error:", err);
+    return null;
+  }
+}
+
+/**
+ * Save directions to disk cache.
+ */
+export async function saveCachedDirections(directions: CreativeDirection[], corpusSize: number, clusterCount: number): Promise<void> {
+  try {
+    const cache: CachedDirections = {
+      directions,
+      generatedAt: Date.now(),
+      corpusSize,
+      clusterCount,
+    };
+    
+    await mkdir(DIRECTION_CACHE_FILE.substring(0, DIRECTION_CACHE_FILE.lastIndexOf("/")), { recursive: true });
+    await writeFile(DIRECTION_CACHE_FILE, JSON.stringify(cache, null, 2));
+    
+    console.log(`[creative-engine] Cached ${directions.length} directions to disk`);
+  } catch (err) {
+    console.error("[creative-engine] Cache save error:", err);
+  }
+}
+
 /**
  * Propose creative directions for autonomous generation.
  * Analyzes corpus state and suggests novel combinations.
+ * Uses parallel execution for direction generation to reduce latency.
  */
 export async function proposeDirections(
   clusters: PromptCluster[],
@@ -40,37 +104,52 @@ export async function proposeDirections(
   options: {
     limit?: number;
     minNovelty?: number;
+    useCache?: boolean;
   } = {}
 ): Promise<CreativeDirection[]> {
   const limit = options.limit ?? 5;
   const minNovelty = options.minNovelty ?? 0.6;
+  const useCache = options.useCache ?? true;
 
-  const directions: CreativeDirection[] = [];
-
-  // 1. Gap-filling directions (underrepresented themes)
-  const gaps = analyzeGaps(clusters, corpus);
-  for (const gap of gaps.slice(0, 2)) {
-    const direction = await createGapFilling(gap, clusters, corpus);
-    if (direction.noveltyScore >= minNovelty) {
-      directions.push(direction);
+  // Try to load from cache first
+  if (useCache) {
+    const cached = await loadCachedDirections();
+    if (cached && cached.corpusSize === corpus.length && cached.clusterCount === clusters.length) {
+      return cached.directions.slice(0, limit);
     }
   }
 
-  // 2. Cross-pollination (remix distant clusters)
+  console.log("[creative-engine] Generating fresh directions (parallel execution)");
+
+  const directions: CreativeDirection[] = [];
+
+  // 1. Gap-filling directions (underrepresented themes) - parallel
+  const gaps = analyzeGaps(clusters, corpus);
+  const gapDirections = await Promise.all(
+    gaps.slice(0, 2).map(gap => createGapFilling(gap, clusters, corpus))
+  );
+  directions.push(...gapDirections.filter(d => d.noveltyScore >= minNovelty));
+
+  // 2. Cross-pollination (remix distant clusters) - parallel
   const remixDirections = await createCrossPollination(clusters, corpus, minNovelty);
   directions.push(...remixDirections.slice(0, 2));
 
-  // 3. Deep variations (add complexity to existing clusters)
+  // 3. Deep variations (add complexity to existing clusters) - parallel
   const deepenDirections = await createDeepVariation(clusters, corpus, minNovelty);
   directions.push(...deepenDirections.slice(0, 1));
 
-  // 4. Contrast directions (oppose existing patterns)
+  // 4. Contrast directions (oppose existing patterns) - parallel
   const contrastDirections = await createContrast(clusters, corpus, minNovelty);
   directions.push(...contrastDirections.slice(0, 1));
 
   // Sort by novelty score and limit
   directions.sort((a, b) => b.noveltyScore - a.noveltyScore);
-  return directions.slice(0, limit);
+  const result = directions.slice(0, limit);
+
+  // Cache the results
+  await saveCachedDirections(result, corpus.length, clusters.length);
+
+  return result;
 }
 
 /**
@@ -112,7 +191,8 @@ export function analyzeGaps(
 export async function createGapFilling(
   gap: GapAnalysis,
   clusters: PromptCluster[],
-  corpus: ImageCorpusEntry[]
+  corpus: ImageCorpusEntry[],
+  modelId: string = "qwen3.5:9b"
 ): Promise<CreativeDirection> {
   const systemPrompt = `You are generating a prompt for an image that explores the ${gap.theme} theme.
 This theme is underrepresented in the corpus (${gap.count} images).
@@ -123,7 +203,7 @@ Be specific and evocative.`;
   const userPrompt = `Generate a ${gap.theme} image prompt. Make it novel and distinct from existing ${gap.theme} images if any exist.`;
 
   const result = await streamChat(
-    "qwen3.5:9b",
+    modelId,
     [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
     systemPrompt,
     () => {}
@@ -152,6 +232,7 @@ Be specific and evocative.`;
 
 /**
  * Create remix directions by combining elements from distant clusters.
+ * Executes in parallel for multiple cluster pairs.
  */
 export async function createCrossPollination(
   clusters: PromptCluster[],
@@ -170,16 +251,15 @@ export async function createCrossPollination(
     }
   }
 
-  // Sort by distance (most distant first)
+  // Sort by distance (most distant first) and take top 3
   distantPairs.sort(
     (a, b) =>
       cosineSimilarity(a[0].centroid, a[1].centroid) -
       cosineSimilarity(b[0].centroid, b[1].centroid)
   );
 
-  const directions: CreativeDirection[] = [];
-
-  for (const [clusterA, clusterB] of distantPairs.slice(0, 3)) {
+  // Generate directions in parallel
+  const directionPromises = distantPairs.slice(0, 3).map(async ([clusterA, clusterB]) => {
     const themeA = clusterA.dominantElements.themes[0];
     const settingB = clusterB.dominantElements.settings[0];
     const styleB = clusterB.dominantElements.styles[0];
@@ -204,30 +284,30 @@ The combination should feel intentional, not random.`;
     const embedding = await generateEmbedding(proposedPrompt);
     const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.65;
 
-    if (noveltyScore >= minNovelty) {
-      directions.push({
-        id: crypto.randomUUID(),
-        type: "remix",
-        description: `Cross-pollinate ${clusterA.name} with ${clusterB.name}`,
-        sourceClusters: [clusterA.id, clusterB.id],
-        elementCombination: {
-          takeThemesFrom: clusterA.id,
-          takeSettingsFrom: clusterB.id,
-          takeStylesFrom: clusterB.id,
-        },
-        noveltyScore,
-        proposedPrompt,
-        proposedEmbedding: embedding ?? undefined,
-        createdAt: Date.now(),
-      });
-    }
-  }
+    return {
+      id: crypto.randomUUID(),
+      type: "remix" as DirectionType,
+      description: `Cross-pollinate ${clusterA.name} with ${clusterB.name}`,
+      sourceClusters: [clusterA.id, clusterB.id],
+      elementCombination: {
+        takeThemesFrom: clusterA.id,
+        takeSettingsFrom: clusterB.id,
+        takeStylesFrom: clusterB.id,
+      },
+      noveltyScore,
+      proposedPrompt,
+      proposedEmbedding: embedding ?? undefined,
+      createdAt: Date.now(),
+    };
+  });
 
-  return directions;
+  const directions = await Promise.all(directionPromises);
+  return directions.filter(d => d.noveltyScore >= minNovelty);
 }
 
 /**
  * Create deep variations within a cluster (add complexity/detail).
+ * Executes in parallel for multiple clusters.
  */
 export async function createDeepVariation(
   clusters: PromptCluster[],
@@ -237,9 +317,8 @@ export async function createDeepVariation(
   // Pick large clusters (more than 5 members) for deep exploration
   const largeClusters = clusters.filter(c => c.size > 5).slice(0, 3);
 
-  const directions: CreativeDirection[] = [];
-
-  for (const cluster of largeClusters) {
+  // Generate directions in parallel
+  const directionPromises = largeClusters.map(async (cluster) => {
     const primaryTheme = cluster.dominantElements.themes[0];
     const primarySetting = cluster.dominantElements.settings[0];
 
@@ -263,26 +342,25 @@ Make the prompt more complex and layered while staying coherent.`;
     const embedding = await generateEmbedding(proposedPrompt);
     const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.55;
 
-    if (noveltyScore >= minNovelty) {
-      directions.push({
-        id: crypto.randomUUID(),
-        type: "deepen",
-        description: `Add intricate details to ${cluster.name}`,
-        sourceClusters: [cluster.id],
-        elementCombination: {
-          takeThemesFrom: cluster.id,
-          takeSettingsFrom: cluster.id,
-          injectNovelty: "intricate details, weathering, cultural motifs",
-        },
-        noveltyScore,
-        proposedPrompt,
-        proposedEmbedding: embedding ?? undefined,
-        createdAt: Date.now(),
-      });
-    }
-  }
+    return {
+      id: crypto.randomUUID(),
+      type: "deepen" as DirectionType,
+      description: `Add intricate details to ${cluster.name}`,
+      sourceClusters: [cluster.id],
+      elementCombination: {
+        takeThemesFrom: cluster.id,
+        takeSettingsFrom: cluster.id,
+        injectNovelty: "intricate details, weathering, cultural motifs",
+      },
+      noveltyScore,
+      proposedPrompt,
+      proposedEmbedding: embedding ?? undefined,
+      createdAt: Date.now(),
+    };
+  });
 
-  return directions;
+  const directions = await Promise.all(directionPromises);
+  return directions.filter(d => d.noveltyScore >= minNovelty);
 }
 
 /**
@@ -291,7 +369,8 @@ Make the prompt more complex and layered while staying coherent.`;
 export async function createContrast(
   clusters: PromptCluster[],
   corpus: ImageCorpusEntry[],
-  minNovelty: number
+  minNovelty: number,
+  modelId: string = "qwen3.5:9b"
 ): Promise<CreativeDirection[]> {
   // Find dominant patterns
   const dominantThemes: Record<string, number> = {};
@@ -335,7 +414,7 @@ Make it visually striking and thematically coherent.`;
   const userPrompt = `Generate a ${oppositeTheme} prompt with ${oppositeMood} mood that contrasts with the dominant ${topTheme} theme.`;
 
   const result = await streamChat(
-    "qwen3.5:9b",
+    modelId,
     [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
     systemPrompt,
     () => {}
