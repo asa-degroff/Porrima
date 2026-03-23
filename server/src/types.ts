@@ -126,7 +126,7 @@ export interface Settings {
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
 
-export type MemorySourceType = 'chat' | 'chat_delayed' | 'chat_immediate' | 'notebook' | 'explicit';
+export type MemorySourceType = 'chat' | 'chat_delayed' | 'chat_immediate' | 'notebook' | 'explicit' | 'synthesis';
 
 export interface Memory {
   id: string;
@@ -137,7 +137,7 @@ export interface Memory {
   createdAt: string;
   lastAccessed: string;
   accessCount: number;
-  sourceChatId: string;
+  sourceChatId?: string;  // Optional for synthesis/explicit memories
   projectId?: string;
   // Temporal layering fields
   sourceType?: MemorySourceType;

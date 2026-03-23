@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import type { ImageCorpusEntry } from "./image-corpus.js";
 import {
   PromptCluster,

@@ -1,7 +1,13 @@
+import crypto from "crypto";
 import { shouldRunSynthesis, runDailySynthesis } from "./synthesis.js";
 import { getDb } from "./chat-storage.js";
 import { getSettings } from "./chat-storage.js";
 import { extractDelayedMemories } from "./memory-extraction.js";
+import { buildClusters } from "./cluster-engine.js";
+import { getClusters } from "./cluster-storage.js";
+import { getAllCorpusEntries } from "./image-corpus.js";
+import { proposeDirections } from "./creative-engine.js";
+import { addMemory } from "./memory-storage.js";
 
 const SYNTHESIS_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -16,9 +22,55 @@ async function checkAndRunSynthesis() {
     if (await shouldRunSynthesis()) {
       console.log("[scheduler] Synthesis due, starting...");
       await runDailySynthesis();
+      
+      // After synthesis, rebuild clusters and generate creative directions
+      await runCorpusCreativeCycle();
     }
   } catch (e) {
     console.error("[scheduler] Synthesis check failed:", e);
+  }
+}
+
+/**
+ * Run the corpus creative cycle: rebuild clusters, generate directions, save as memories.
+ * Called during daily synthesis to keep the creative engine fresh.
+ */
+async function runCorpusCreativeCycle() {
+  try {
+    console.log("[scheduler] Running corpus creative cycle...");
+    
+    // 1. Rebuild clusters with current corpus
+    const corpus = await getAllCorpusEntries();
+    const clusterMap = await buildClusters(corpus);
+    console.log(`[scheduler] Rebuilt ${clusterMap.clusters.length} clusters from ${corpus.length} images`);
+    
+    // 2. Generate creative directions
+    const directions = await proposeDirections(clusterMap.clusters, corpus, { limit: 5, minNovelty: 0.6 });
+    console.log(`[scheduler] Generated ${directions.length} creative directions`);
+    
+    // 3. Save directions as context memories for future reference
+    for (const dir of directions.slice(0, 3)) {
+      await addMemory({
+        id: crypto.randomUUID(),
+        text: `Creative direction proposed: ${dir.type} - ${dir.description}. Prompt: ${dir.proposedPrompt.substring(0, 200)}...`,
+        category: "context",
+        importance: 6,
+        embedding: dir.proposedEmbedding ?? [],
+        createdAt: new Date().toISOString(),
+        lastAccessed: new Date().toISOString(),
+        accessCount: 0,
+        sourceChatId: undefined,
+        projectId: undefined,
+        sourceType: "synthesis",
+        sourceId: `creative-cycle-${Date.now()}`,
+        supersededBy: undefined,
+        supersedes: undefined,
+      });
+    }
+    
+    console.log("[scheduler] Corpus creative cycle complete");
+  } catch (e) {
+    console.error("[scheduler] Corpus creative cycle failed:", e);
   }
 }
 
