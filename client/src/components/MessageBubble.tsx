@@ -16,6 +16,23 @@ const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
 );
 
+// Hoisted static skill chip style - avoids new object on every render
+const skillChipStyle: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '2px 8px',
+  margin: '0 4px',
+  background: 'rgba(59,130,246,0.25)',
+  border: '1px solid rgba(59,130,246,0.4)',
+  borderRadius: '12px',
+  fontSize: '12px',
+  color: 'rgb(147,197,253)',
+  fontWeight: 500,
+  verticalAlign: 'middle',
+};
+
+// Stable empty array for availableSkills default prop
+const emptySkillsList: string[] = [];
+
 interface Props {
   message: ChatMessage;
   isStreaming: boolean;
@@ -33,6 +50,44 @@ interface Props {
   streamingSegmentIndex?: number | null;
 }
 
+/**
+ * Render skill chips for /skill-name patterns in message content.
+ * Only applies to user messages (assistant messages have skills stripped server-side).
+ * Only formats recognized skill names from the availableSkills list.
+ */
+function renderSkillChips(text: string, availableSkills?: string[]): React.ReactNode {
+  const skillPattern = /\/([a-zA-Z0-9\-_]+)/g;
+  const parts = text.split(skillPattern);
+  
+  // parts array alternates: [text, skillName, text, skillName, ...]
+  const result: React.ReactNode[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 0) {
+      // Text segment
+      if (parts[i]) result.push(parts[i]);
+    } else {
+      // Skill name (odd indices) - only format if it's a recognized skill
+      const skillName = parts[i];
+      if (skillName && availableSkills?.includes(skillName)) {
+        result.push(
+          <span
+            key={`skill-${skillName}`}
+            className="skill-chip"
+            style={skillChipStyle}
+          >
+            /{skillName}
+          </span>
+        );
+      } else if (skillName) {
+        // Not a recognized skill - render as plain text
+        result.push(`/${skillName}`);
+      }
+    }
+  }
+  
+  return result.length > 0 ? result : text;
+}
+
 export const MessageBubble = memo(function MessageBubble({
   message,
   isStreaming,
@@ -46,62 +101,11 @@ export const MessageBubble = memo(function MessageBubble({
   editable,
   onReadAloud,
   isPlayingTts,
-  availableSkills,
+  availableSkills = emptySkillsList,
   streamingSegmentIndex,
 }: Props) {
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;
-
-  /**
-   * Render skill chips for /skill-name patterns in message content.
-   * Only applies to user messages (assistant messages have skills stripped server-side).
-   * Only formats recognized skill names from the availableSkills list.
-   */
-  const renderSkillChips = (text: string) => {
-    if (!isUser) return text;
-    
-    const skillPattern = /\/([a-zA-Z0-9\-_]+)/g;
-    const parts = text.split(skillPattern);
-    
-    // parts array alternates: [text, skillName, text, skillName, ...]
-    const result = [];
-    for (let i = 0; i < parts.length; i++) {
-      if (i % 2 === 0) {
-        // Text segment
-        if (parts[i]) result.push(parts[i]);
-      } else {
-        // Skill name (odd indices) - only format if it's a recognized skill
-        const skillName = parts[i];
-        if (skillName && availableSkills?.includes(skillName)) {
-          result.push(
-            <span
-              key={`skill-${skillName}`}
-              className="skill-chip"
-              style={{
-                display: 'inline-block',
-                padding: '2px 8px',
-                margin: '0 4px',
-                background: 'rgba(59,130,246,0.25)',
-                border: '1px solid rgba(59,130,246,0.4)',
-                borderRadius: '12px',
-                fontSize: '12px',
-                color: 'rgb(147,197,253)',
-                fontWeight: 500,
-                verticalAlign: 'middle',
-              }}
-            >
-              /{skillName}
-            </span>
-          );
-        } else if (skillName) {
-          // Not a recognized skill - render as plain text
-          result.push(`/${skillName}`);
-        }
-      }
-    }
-    
-    return result.length > 0 ? result : text;
-  };
 
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
@@ -249,7 +253,7 @@ export const MessageBubble = memo(function MessageBubble({
               )}
               {message.content && (
                 <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                  {renderSkillChips(message.content)}
+                  {renderSkillChips(message.content, availableSkills)}
                 </p>
               )}
               {message.queued && (

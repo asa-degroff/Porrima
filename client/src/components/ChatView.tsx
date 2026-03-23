@@ -26,11 +26,15 @@ const hamburgerIconSm = (
   </svg>
 );
 
+// Hoisted static function - avoids recreation on every render
 function formatCtxWindow(n: number): string {
   if (n >= 1000000) return (n / 1000000).toFixed(n % 1000000 === 0 ? 0 : 1) + "M";
   if (n >= 1000) return (n / 1000).toFixed(n % 1000 === 0 ? 0 : 1) + "K";
   return n.toString();
 }
+
+// Stable empty array reference for skills - avoids new [] on every render
+const emptySkills: string[] = [];
 
 interface Props {
   chatId: string | null;
@@ -126,8 +130,29 @@ export function ChatView({
   const [skillFilter, setSkillFilter] = useState("");
   const [inputRect, setInputRect] = useState<DOMRect | null>(null);
   
+  // Cache skills by projectId to avoid refetching on every render
+  const skillsCache = useRef<Map<string, SkillInfo[]>>(new Map());
+  
   useEffect(() => {
-    fetchSkills(projectId).then(setSkills).catch(() => setSkills([]));
+    if (!projectId) {
+      setSkills([]);
+      return;
+    }
+    
+    // Check cache first
+    const cached = skillsCache.current.get(projectId);
+    if (cached) {
+      setSkills(cached);
+      return;
+    }
+    
+    // Fetch and cache
+    fetchSkills(projectId).then((fetched) => {
+      skillsCache.current.set(projectId, fetched);
+      setSkills(fetched);
+    }).catch(() => {
+      setSkills([]);
+    });
   }, [projectId]);
   
   const handleSlashTyping = useCallback((filterText: string = "", cursorRect?: DOMRect) => {
@@ -379,7 +404,7 @@ export function ChatView({
 
       {/* Messages */}
       <div className="flex-1 relative min-h-0">
-        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-3 md:px-6 py-3 md:py-4" style={{ paddingBottom: ttsBarVisible ? "180px" : "140px" }}>
+        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-3 md:px-6 py-3 md:py-4" style={{ paddingBottom: ttsBarVisible ? "180px" : "140px", contentVisibility: "auto" }}>
           <div ref={contentRef}>
             {messages.length === 0 && (
               <div className="flex items-center justify-center h-full">
@@ -390,8 +415,10 @@ export function ChatView({
             )}
             {messages.map((msg, i) => {
               const isLast = i === messages.length - 1;
+              // Use stable key based on timestamp - index changes cause remounts
+              const stableKey = `${msg.timestamp}-${msg.role}`;
               return (
-                <div key={`${msg.timestamp}-${i}`} className={!isLast ? "message-item" : undefined}>
+                <div key={stableKey} className={!isLast ? "message-item" : undefined}>
                   <MessageBubble
                     message={msg}
                     isStreaming={streaming}
@@ -403,7 +430,7 @@ export function ChatView({
                     editable={msg.role === "user" && !streaming && isOnline}
                     onEditMessage={msg.role === "user" ? onEditMessage : undefined}
                     messageIndex={i}
-                    availableSkills={skills.map(s => s.name)}
+                    availableSkills={skills.length > 0 ? skills.map(s => s.name) : emptySkills}
                     streamingSegmentIndex={streamingSegmentIndex}
                   />
                 </div>
