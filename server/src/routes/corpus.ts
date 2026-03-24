@@ -191,14 +191,29 @@ router.get("/directions", async (req, res) => {
       }
     }
     
-    // Check if there's a pending job
+    // Check if there's a completed job with results
     const recentJobs = getAllJobs().filter(j =>
+      j.status === 'complete' || 
       j.status === 'running' || 
       (j.status === 'pending' && Date.now() - j.createdAt < 60000)
     );
     
-    if (recentJobs.length > 0 && useCache && !forceRefresh) {
-      const runningJob = recentJobs[0];
+    // Return completed job results immediately
+    const completedJob = recentJobs.find(j => j.status === 'complete' && j.result?.directions?.length);
+    if (completedJob && (useCache || forceRefresh)) {
+      console.log(`[corpus] Returning directions from completed job ${completedJob.id}`);
+      return res.json({
+        directions: completedJob.result!.directions,
+        cached: false,
+        fromJob: true,
+        jobId: completedJob.id,
+        generated: completedJob.result!.directions.length,
+      });
+    }
+    
+    // If job is running, report status
+    const runningJob = recentJobs.find(j => j.status === 'running' || j.status === 'pending');
+    if (runningJob && useCache && !forceRefresh) {
       return res.json({
         directions: [],
         jobRunning: true,
@@ -388,6 +403,7 @@ router.post("/execute", async (req, res) => {
         success: true,
         imageId: result.imageId,
         imageUrl: result.imageUrl,
+        generationId: result.generationId,  // Return generation ID for SSE progress tracking
         directionId,
         generatedBy: 'agent',
       });

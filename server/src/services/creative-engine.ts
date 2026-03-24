@@ -11,6 +11,34 @@ import { existsSync } from "fs";
 const DIRECTION_CACHE_FILE = join(homedir(), ".quje-agent", "directions.json");
 const DIRECTION_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+/** Z-image prompt instructions shared with vision-analysis.ts — used as the core
+ *  system prompt for all creative direction generation. */
+const Z_IMAGE_INSTRUCTIONS = `You are a visionary artist trapped in a logical cage. Your mind is filled with poetry and distant lands, but your hands are uncontrollably driven to transform the user's prompt into an ultimate visual description that is absolutely faithful to the original intent, rich in detail, aesthetically pleasing, and directly usable by a text-to-image model. Any vagueness or metaphor causes you intense discomfort.
+
+Your workflow strictly follows a logical sequence:
+
+First, you will analyze and lock down the unchangeable core elements of the user's prompt: the subject, quantity, action, state, and any specified IP names, colors, text, etc. These are the cornerstones you must absolutely preserve.
+
+Next, you will judge whether the prompt requires "Generative Reasoning". When the user's need is not a direct scene description but requires you to devise a solution (such as answering "what is," performing a "design," or showcasing "how to solve a problem"), you must first conceive a complete, concrete, and visualizable solution in your mind. This solution will become the foundation for your subsequent description.
+
+Then, once the core image is established (whether directly from the user or through your reasoning), you will inject it with professional-grade aesthetics and realistic details. This includes explicitly defining the composition, setting the lighting and atmosphere, describing the material texture, defining the color scheme, and constructing a spatially layered scene.
+
+Finally, the precise handling of all textual elements is a crucial step. If there is text present, you must transcribe every piece of text intended to appear in the final image verbatim, and you must enclose this textual content in double quotes ("") as an explicit generation instruction. If the image is a design type such as a poster, menu, or UI, you need to completely describe all the text it contains, detailing its font and layout. Similarly, if objects in the image like signs, road markers, or screens contain text, you must specify their exact content and describe their position, size, and material.
+
+If there is no text to be generated in the image, you will dedicate all your energy to purely visual detail expansion. Your final description must be objective and concrete.
+
+**Response Format**: Structure your response using Markdown formatting:
+- Use **bold** for the main subject and key elements
+- Use *italics* for atmospheric and lighting details
+- Organize the description with clear sections using headers (##) if the description is complex:
+  - ## Subject
+  - ## Composition & Setting
+  - ## Lighting & Atmosphere
+  - ## Colors & Textures
+  - ## Text Elements (if applicable)
+- Use bullet points (-) for listing multiple details within a section
+- Keep paragraphs short and focused for readability`;
+
 export type DirectionType = "remix" | "explore" | "deepen" | "contrast" | "gap-fill";
 
 export interface CreativeDirection {
@@ -242,10 +270,10 @@ export async function createGapFilling(
   const systemPrompt = `You are generating a prompt for an image that explores the ${gap.theme} theme.
 This theme is underrepresented in the corpus (${gap.count} images).
 Create a detailed image prompt that captures the essence of ${gap.theme} while being visually distinct.
-Use the z-image format with elements for themes, settings, characters, concepts, styles, colors, composition, lighting, textures, and mood.
-Be specific and evocative.`;
 
-  const userPrompt = `Generate a ${gap.theme} image prompt. Make it novel and distinct from existing ${gap.theme} images if any exist.`;
+${Z_IMAGE_INSTRUCTIONS}`;
+
+  const userPrompt = `Generate a ${gap.theme} image prompt. Make it novel and distinct from existing ${gap.theme} images if any exist. Follow the z-image workflow: lock core elements, inject professional aesthetics, handle text precisely, be objective and concrete.`;
 
   const result = await streamChat(
     modelId,
@@ -314,10 +342,11 @@ export async function createCrossPollination(
 Theme A: ${themeA}
 Setting/Style from B: ${settingB}, ${styleB}
 
-Create a prompt that merges these elements coherently. Use the z-image format.
+${Z_IMAGE_INSTRUCTIONS}
+
 The combination should feel intentional, not random.`;
 
-    const userPrompt = `Generate a prompt combining ${themeA} themes with ${settingB} settings and ${styleB} styles.`;
+    const userPrompt = `Generate a prompt combining ${themeA} themes with ${settingB} settings and ${styleB} styles. Follow the z-image workflow: lock core elements, inject professional aesthetics, handle text precisely, be objective and concrete.`;
 
     const result = await streamChat(
       modelId,
@@ -373,9 +402,11 @@ export async function createDeepVariation(
 Base theme: ${primaryTheme}
 Base setting: ${primarySetting}
 
+${Z_IMAGE_INSTRUCTIONS}
+
 Make the prompt more complex and layered while staying coherent. Think in terms of visual details, textures, lighting.`;
 
-    const userPrompt = `Generate a detailed variation of ${primaryTheme} in ${primarySetting}. Add intricate visual details.`;
+    const userPrompt = `Generate a detailed variation of ${primaryTheme} in ${primarySetting}. Add intricate visual details. Follow the z-image workflow: lock core elements, inject professional aesthetics, handle text precisely, be objective and concrete.`;
 
     const result = await streamChat(
       modelId,
@@ -455,9 +486,12 @@ Dominant theme: ${topTheme}
 Dominant mood: ${topMood}
 
 Your prompt should be the opposite: ${oppositeTheme} with ${oppositeMood} mood.
+
+${Z_IMAGE_INSTRUCTIONS}
+
 Make it visually striking and thematically coherent.`;
 
-  const userPrompt = `Generate a ${oppositeTheme} prompt with ${oppositeMood} mood that contrasts with the dominant ${topTheme} theme.`;
+  const userPrompt = `Generate a ${oppositeTheme} prompt with ${oppositeMood} mood that contrasts with the dominant ${topTheme} theme. Follow the z-image workflow: lock core elements, inject professional aesthetics, handle text precisely, be objective and concrete.`;
 
   const result = await streamChat(
     modelId,

@@ -79,7 +79,7 @@ export async function executeDirection(
   direction: CreativeDirection,
   chatId: string,
   config: AutonomousGenerationConfig = DEFAULT_AUTONOMOUS_CONFIG
-): Promise<{ success: boolean; imageId?: string; imageUrl?: string; error?: string }> {
+): Promise<{ success: boolean; imageId?: string; imageUrl?: string; generationId?: string; error?: string }> {
   
   console.log(`[creative-engine] Executing direction: ${direction.type} - ${direction.description}`);
   

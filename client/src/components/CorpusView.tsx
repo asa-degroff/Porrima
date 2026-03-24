@@ -147,6 +147,15 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
       const res = await executeCorpusDirection(directionId);
       if (res.success) {
         setResult({ success: true, message: `Image generated: ${res.imageId?.slice(0, 8)}...` });
+        // Trigger image gallery refresh
+        window.dispatchEvent(new CustomEvent('corpus-image-generated'));
+        
+        // Subscribe to generation progress if generationId is returned
+        if (res.generationId) {
+          console.log(`[corpus] Subscribing to generation ${res.generationId} for progress`);
+          // Client can subscribe via useImageSandbox or direct SSE subscription
+          // For now, the event dispatch will trigger gallery refresh on completion
+        }
       } else {
         setResult({ success: false, message: res.error || "Generation failed" });
       }

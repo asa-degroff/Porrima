@@ -87,6 +87,19 @@ export function useImageSandbox() {
     abortRef.current = abortController;
   }, []);
 
+  // Listen for corpus image generation events and refresh gallery
+  useEffect(() => {
+    const handleCorpusGeneration = () => {
+      console.log("[useImageSandbox] Corpus image generated, refreshing gallery");
+      fetchGeneratedImages().then((fresh) => {
+        if (fresh.length > 0) setImages(fresh);
+      }).catch(() => {});
+    };
+
+    window.addEventListener('corpus-image-generated', handleCorpusGeneration);
+    return () => window.removeEventListener('corpus-image-generated', handleCorpusGeneration);
+  }, []);
+
   // Poll ComfyUI status continuously (every 10 seconds)
   useEffect(() => {
     const pollStatus = async () => {
