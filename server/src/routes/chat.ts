@@ -926,7 +926,8 @@ async function handleChatStream(
           }
 
           if (needsCompaction) {
-            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction));
+            const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
+            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting);
             if (compaction.truncated) {
               // Extract memories from removed messages (agent chats only)
               if (chat.type === "agent" && compaction.removedMessages?.length) {
@@ -1172,7 +1173,7 @@ router.post("/", async (req, res) => {
     if (model) {
       try {
         const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
+        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`));
         if (compaction && compaction.truncated) {
           await saveChat(chat);
           // Rebuild system prompt after truncation
@@ -1259,7 +1260,7 @@ router.post("/", async (req, res) => {
     if (model) {
       try {
         const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
+        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`));
         if (compaction && compaction.truncated) {
           await saveChat(chat);
           // Rebuild system prompt after truncation (memories may have changed)
@@ -1405,7 +1406,7 @@ router.post("/edit", async (req, res) => {
   if (model) {
     try {
       const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-      const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt);
+      const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`));
       if (compaction && compaction.truncated) {
         await saveChat(chat);
         // Rebuild system prompt after truncation

@@ -113,6 +113,7 @@ export interface StreamCallbacks {
   onAskUser?: (question: string) => void;
   onIteration?: (info: IterationInfo) => void;
   onWarning?: (warning: StreamWarning) => void;
+  onCompacting?: () => void;
   onCompaction?: (info: { removedCount: number; remainingCount: number }) => void;
   onTitleUpdate?: (chatId: string, title: string) => void;
   onMessageComplete?: (message: any) => void;
@@ -344,6 +345,9 @@ function processSSEEvent(
       break;
     case "warning":
       callbacks.onWarning?.(data);
+      break;
+    case "compacting":
+      callbacks.onCompacting?.();
       break;
     case "compaction":
       callbacks.onCompaction?.(data);

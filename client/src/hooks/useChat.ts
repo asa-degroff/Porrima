@@ -24,6 +24,7 @@ interface BackgroundStream {
   waitingForInput: boolean;
   error: string | null;
   warning: StreamWarning | null;
+  compacting: boolean;
   compaction: { removedCount: number; remainingCount: number } | null;
   doneCalled: boolean;
   abortController: AbortController | null;
@@ -84,6 +85,7 @@ function createBgStream(chatRef: Chat | null): BackgroundStream {
     waitingForInput: false,
     error: null,
     warning: null,
+    compacting: false,
     compaction: null,
     doneCalled: false,
     abortController: null,
@@ -103,6 +105,7 @@ export function useChat(chatId: string | null) {
   const [waitingForInput, setWaitingForInput] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<StreamWarning | null>(null);
+  const [compacting, setCompacting] = useState(false);
   const [compaction, setCompaction] = useState<{ removedCount: number; remainingCount: number } | null>(null);
   const [queueProcessing, setQueueProcessing] = useState(false);
   const [titleUpdate, setTitleUpdate] = useState<{ chatId: string; title: string } | null>(null);
@@ -139,6 +142,7 @@ export function useChat(chatId: string | null) {
       setWaitingForInput(bg.waitingForInput);
       setError(bg.error);
       setWarning(bg.warning);
+      setCompacting(bg.compacting);
       setCompaction(bg.compaction);
       doneCalledRef.current = bg.doneCalled;
       abortRef.current = bg.abortController;
@@ -158,6 +162,7 @@ export function useChat(chatId: string | null) {
       setWaitingForInput(false);
       setError(null);
       setWarning(null);
+      setCompacting(false);
       setCompaction(null);
       setStreamingSegmentIndex(null);
       setStreamingUsage(null);
@@ -412,12 +417,23 @@ export function useChat(chatId: string | null) {
           setWarning(w);
         }
       },
+      onCompacting: () => {
+        console.log(`[chat] compaction started`);
+        const bg = bgStreams.get(streamChatId);
+        if (bg) bg.compacting = true;
+        if (activeChatIdRef.current === streamChatId) {
+          setCompacting(true);
+        }
+      },
       onCompaction: (info) => {
         console.log(`[chat] compaction: removed ${info.removedCount} messages, ${info.remainingCount} remaining`);
         const bg = bgStreams.get(streamChatId);
-        if (bg) bg.compaction = info;
-
+        if (bg) {
+          bg.compacting = false;
+          bg.compaction = info;
+        }
         if (activeChatIdRef.current === streamChatId) {
+          setCompacting(false);
           setCompaction(info);
         }
       },
@@ -729,6 +745,7 @@ export function useChat(chatId: string | null) {
     generatedImages,
     waitingForInput,
     totalUsage,
+    compacting,
     compaction,
     error,
     warning,

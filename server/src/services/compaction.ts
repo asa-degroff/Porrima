@@ -56,7 +56,8 @@ function estimateContextSize(messages: Chat["messages"], systemPrompt: string): 
 export async function truncateBeforeSend(
   chat: Chat,
   contextWindow: number,
-  systemPrompt: string
+  systemPrompt: string,
+  onCompacting?: () => void
 ): Promise<CompactionResult | null> {
   const noOp = null;
   const messages = chat.messages;
@@ -64,8 +65,10 @@ export async function truncateBeforeSend(
 
   const estimatedTokens = estimateContextSize(messages, systemPrompt);
   const threshold = contextWindow * 0.75;
-  
+
   if (estimatedTokens <= threshold) return noOp;
+
+  onCompacting?.();
 
   console.log(
     `[compaction] Pre-send truncation triggered: ${estimatedTokens} tokens > ${threshold} threshold`
@@ -222,7 +225,8 @@ Output ONLY the summary, no introduction or formatting.`;
 export async function truncateChatHistory(
   chat: Chat,
   contextWindow: number,
-  forceCompact: boolean = false
+  forceCompact: boolean = false,
+  onCompacting?: () => void
 ): Promise<CompactionResult> {
   const noOp: CompactionResult = { truncated: false, removedCount: 0 };
   const messages = chat.messages;
@@ -279,6 +283,8 @@ export async function truncateChatHistory(
   const messagesToRemove = keepFromIndex - 1;
 
   if (messagesToRemove <= 0) return noOp;
+
+  onCompacting?.();
 
   const firstMessage = messages[0];
   const removedMessages = messages.slice(1, keepFromIndex);

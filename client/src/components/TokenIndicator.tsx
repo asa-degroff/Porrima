@@ -8,6 +8,7 @@ interface CompactionInfo {
 interface Props {
   usage: MessageUsage;
   contextWindow: number;
+  compacting?: boolean;
   compaction?: CompactionInfo | null;
 }
 
@@ -16,10 +17,10 @@ function formatNumber(n: number): string {
   return n.toString();
 }
 
-export function TokenIndicator({ usage, contextWindow, compaction }: Props) {
+export function TokenIndicator({ usage, contextWindow, compacting, compaction }: Props) {
   // Always show the indicator - even with 0 tokens, show the context window
   // This prevents the "blank" appearance when usage data is missing
-  const pct = usage.totalTokens > 0 
+  const pct = usage.totalTokens > 0
     ? Math.min((usage.totalTokens / contextWindow) * 100, 100)
     : 0;
 
@@ -30,7 +31,7 @@ export function TokenIndicator({ usage, contextWindow, compaction }: Props) {
         <span title="Generated tokens (output)">&#8595;{formatNumber(usage.output)}</span>
         <span className="text-white/20">&middot;</span>
         <span>
-          {usage.totalTokens > 0 
+          {usage.totalTokens > 0
             ? `${formatNumber(usage.totalTokens)} / ${formatNumber(contextWindow)}`
             : `${formatNumber(contextWindow)} max`}
         </span>
@@ -49,14 +50,21 @@ export function TokenIndicator({ usage, contextWindow, compaction }: Props) {
           }}
         />
       </div>
-      {compaction && (
+      {compacting ? (
+        <span
+          className="text-purple-300/80 animate-pulse cursor-default"
+          title="Summarizing older messages to free context space"
+        >
+          compacting...
+        </span>
+      ) : compaction ? (
         <span
           className="text-purple-300/60 cursor-default"
           title={`${compaction.removedCount} messages compacted, ${compaction.remainingCount} remaining`}
         >
           compacted
         </span>
-      )}
+      ) : null}
     </div>
   );
 }

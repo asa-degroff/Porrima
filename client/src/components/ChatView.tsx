@@ -46,6 +46,7 @@ interface Props {
   artifacts: Artifact[];
   generatedImages: GeneratedImage[];
   totalUsage: MessageUsage;
+  compacting?: boolean;
   compaction?: { removedCount: number; remainingCount: number } | null;
   contextWindow: number;
   error: string | null;
@@ -86,6 +87,7 @@ export function ChatView({
   artifacts,
   generatedImages,
   totalUsage,
+  compacting,
   compaction,
   contextWindow,
   error,
@@ -295,7 +297,7 @@ export function ChatView({
         <div className="flex items-center gap-3 shrink-0">
           <OfflineIndicator isOnline={isOnline} queueProcessing={queueProcessing} />
           <span className="hidden md:contents">
-            <TokenIndicator usage={totalUsage} contextWindow={contextWindow} compaction={compaction} />
+            <TokenIndicator usage={totalUsage} contextWindow={contextWindow} compacting={compacting} compaction={compaction} />
           </span>
           {/* Context window editor — hidden on mobile alongside token indicator */}
           <span className="hidden md:contents">
@@ -456,7 +458,7 @@ export function ChatView({
         <MessageInput
           chatId={chatId}
           onSend={onSend}
-          disabled={!chatId}
+          disabled={!chatId || !!compacting}
           onAbort={onAbort}
           streaming={streaming}
           waitingForInput={waitingForInput}
