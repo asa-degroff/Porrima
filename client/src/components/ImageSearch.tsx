@@ -71,7 +71,8 @@ export function ImageSearch({ onResults, onClear, placeholder = "Search images..
         placeholder={placeholder}
         className="w-full px-3 py-2 pr-10 text-sm bg-white/5 border border-white/10 rounded-lg text-white/80 placeholder-white/30 focus:outline-none focus:border-purple-400/40 focus:bg-white/10 transition-colors"
       />
-      {query && (
+      {/* Right-side actions - cancel button or spinner, mutually exclusive */}
+      {query && !searching && (
         <button
           onClick={handleClear}
           className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-white/40 hover:text-white/70 transition-colors"

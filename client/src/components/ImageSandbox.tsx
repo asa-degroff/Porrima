@@ -257,7 +257,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     <div className="flex-1 flex flex-col h-full min-w-0">
       {/* Header */}
       <div className="shrink-0 px-4 py-3 border-b border-white/10 flex items-center justify-between backdrop-blur-xl bg-white/[0.03]">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-1 min-w-0">
           <h2 className="text-lg font-semibold text-white/90">Image Sandbox</h2>
 
           {/* Mode switcher - hidden on mobile, shown desktop */}
@@ -314,6 +314,17 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               }
             </span>
           </div>
+
+          {/* Desktop search bar - hidden on mobile */}
+          {mode === "generate" && (
+            <div className="hidden md:block w-64 lg:w-80 flex-1 max-w-md">
+              <ImageSearch
+                onResults={(results) => { setSearchResults(results); setIsSearching(false); }}
+                onClear={() => { setSearchResults(undefined); setIsSearching(false); }}
+                placeholder="Search images..."
+              />
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -446,39 +457,58 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                 className="absolute inset-0 flex flex-col min-h-0"
                 style={{ opacity: viewMode === 'gallery' ? 1 : 0, pointerEvents: viewMode === 'gallery' ? 'auto' : 'none', zIndex: viewMode === 'gallery' ? 1 : 0 }}
               >
-                {/* Filter toggle + Search bar */}
-                <div className="shrink-0 px-4 py-2 flex items-center justify-between gap-3 border-b border-white/10">
-                  <div className="flex-1 min-w-0">
+                {/* Filter toggle + Mobile search bar */}
+                <div className="shrink-0 px-4 py-2 flex flex-col gap-2 border-b border-white/10">
+                  {/* Desktop: just the filter toggle and status */}
+                  <div className="hidden md:flex items-center justify-between">
+                    <span className="text-xs text-white/40">
+                      {searchResults !== undefined
+                        ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
+                        : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'
+                      }
+                    </span>
+                    <button
+                      onClick={() => setShowAgentOnly(!showAgentOnly)}
+                      className={`px-3 py-1 text-xs rounded transition-colors ${
+                        showAgentOnly
+                          ? 'bg-purple-500/80 text-white'
+                          : 'bg-white/10 text-white/60 hover:text-white/90'
+                      }`}
+                    >
+                      Agent only
+                    </button>
+                  </div>
+                  {/* Mobile: search bar + filter toggle */}
+                  <div className="md:hidden flex flex-col gap-2">
                     <ImageSearch
                       onResults={handleSearchResults}
                       onClear={handleSearchClear}
-                      placeholder="Search images by prompt or description..."
+                      placeholder="Search images..."
                     />
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-white/40">
+                        {searchResults !== undefined
+                          ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
+                          : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'
+                        }
+                      </span>
+                      <button
+                        onClick={() => setShowAgentOnly(!showAgentOnly)}
+                        className={`px-3 py-1 text-xs rounded transition-colors ${
+                          showAgentOnly
+                            ? 'bg-purple-500/80 text-white'
+                            : 'bg-white/10 text-white/60 hover:text-white/90'
+                        }`}
+                      >
+                        Agent only
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => setShowAgentOnly(!showAgentOnly)}
-                    className={`px-3 py-1 text-xs rounded transition-colors shrink-0 ${
-                      showAgentOnly
-                        ? 'bg-purple-500/80 text-white'
-                        : 'bg-white/10 text-white/60 hover:text-white/90'
-                    }`}
-                  >
-                    Agent only
-                  </button>
-                </div>
-                {/* Status line */}
-                <div className="shrink-0 px-4 py-1 flex items-center justify-between">
-                  <span className="text-xs text-white/40">
-                    {searchResults !== undefined
-                      ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
-                      : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'
-                    }
-                  </span>
                 </div>
                 <ImageGallery
                   images={showAgentOnly ? images.filter(i => i.generatedBy === 'agent') : images}
                   selectedImage={selectedImage}
-                  onSelect={(image) => { setSelectedImage(image); setViewMode('detail'); }}
+                  onSelect={(image) => { setSelectedImage(image as GeneratedImage); setViewMode('detail'); }}
                   onDelete={deleteGeneratedImage}
                   activeGenerations={activeGenerations}
                   searchResults={searchResults}
