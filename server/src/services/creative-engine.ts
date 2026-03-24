@@ -1,12 +1,14 @@
 import crypto from "crypto";
 import type { PromptCluster, ClusterMap } from "./cluster-storage.js";
 import type { ImageCorpusEntry } from "./image-corpus.js";
+import { getCorpusEntriesByIds } from "./image-corpus.js";
 import { streamChat } from "./agent.js";
 import { cosineSimilarity } from "./cluster-storage.js";
 import { join } from "path";
 import { homedir } from "os";
 import { readFile, writeFile, mkdir, access } from "fs/promises";
 import { existsSync } from "fs";
+import type { Message } from "@mariozechner/pi-ai";
 
 const DIRECTION_CACHE_FILE = join(homedir(), ".quje-agent", "directions.json");
 const DIRECTION_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -63,6 +65,103 @@ export interface GapAnalysis {
   theme: string;
   count: number;
   suggestion: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers: gather representative cluster context (prompts + images)
+// ---------------------------------------------------------------------------
+
+const IMAGES_DIR = join(homedir(), ".quje-agent", "images");
+const MAX_CONTEXT_MEMBERS = 5;
+
+/** Pick the most representative members of a cluster (closest to centroid). */
+function pickRepresentativeMembers(
+  cluster: PromptCluster,
+  corpus: ImageCorpusEntry[],
+  limit = MAX_CONTEXT_MEMBERS
+): ImageCorpusEntry[] {
+  const memberSet = new Set(cluster.memberIds);
+  const members = corpus.filter(e => memberSet.has(e.id) && e.promptEmbedding);
+  if (members.length === 0) return corpus.filter(e => memberSet.has(e.id)).slice(0, limit);
+
+  // Sort by similarity to centroid (most representative first)
+  return members
+    .map(m => ({ entry: m, sim: cosineSimilarity(m.promptEmbedding!, cluster.centroid) }))
+    .sort((a, b) => b.sim - a.sim)
+    .slice(0, limit)
+    .map(m => m.entry);
+}
+
+/** Build a text block of existing prompts from representative members. */
+function buildPromptContext(members: ImageCorpusEntry[]): string {
+  const promptLines = members
+    .filter(m => m.prompt)
+    .map((m, i) => `[Image ${i + 1}]: ${m.prompt}`);
+  if (promptLines.length === 0) return "";
+  return `\n\nExisting images in this part of the corpus:\n${promptLines.join("\n")}`;
+}
+
+/** Load thumbnail as base64 for a corpus entry. Returns null if unavailable. */
+async function loadThumbnail(entry: ImageCorpusEntry): Promise<{ data: string; mimeType: string } | null> {
+  try {
+    // imagePath is like "uuid" or "uuid/image.jxl" — extract the image ID
+    const imageId = entry.imagePath.split("/")[0];
+    const thumbPath = join(IMAGES_DIR, imageId, "thumb.webp");
+    if (!existsSync(thumbPath)) return null;
+    const buf = await readFile(thumbPath);
+    return { data: buf.toString("base64"), mimeType: "image/webp" };
+  } catch {
+    return null;
+  }
+}
+
+/** Build a user message with text + optional image thumbnails for cluster context. */
+async function buildContextMessage(
+  textPrompt: string,
+  members: ImageCorpusEntry[],
+  includeImages = true
+): Promise<Message> {
+  if (!includeImages) {
+    return { role: "user" as const, content: textPrompt, timestamp: Date.now() };
+  }
+
+  const content: any[] = [{ type: "text", text: textPrompt }];
+
+  // Load up to MAX_CONTEXT_MEMBERS thumbnails
+  const loadPromises = members.slice(0, MAX_CONTEXT_MEMBERS).map(m => loadThumbnail(m));
+  const thumbs = await Promise.all(loadPromises);
+
+  for (const thumb of thumbs) {
+    if (thumb) {
+      content.push({ type: "image", data: thumb.data, mimeType: thumb.mimeType });
+    }
+  }
+
+  return { role: "user" as const, content, timestamp: Date.now() };
+}
+
+/** Fetch representative members for a cluster using the new batch API. */
+async function getClusterMembers(
+  cluster: PromptCluster,
+  corpus: ImageCorpusEntry[],
+  limit = MAX_CONTEXT_MEMBERS
+): Promise<ImageCorpusEntry[]> {
+  // Try batch fetch from SQLite first (more efficient)
+  try {
+    const members = await getCorpusEntriesByIds(cluster.memberIds);
+    const withEmbeddings = members.filter(m => m.promptEmbedding);
+    if (withEmbeddings.length > 0) {
+      return withEmbeddings
+        .map(m => ({ entry: m, sim: cosineSimilarity(m.promptEmbedding!, cluster.centroid) }))
+        .sort((a, b) => b.sim - a.sim)
+        .slice(0, limit)
+        .map(m => m.entry);
+    }
+    return members.slice(0, limit);
+  } catch {
+    // Fallback to filtering from corpus array
+    return pickRepresentativeMembers(cluster, corpus, limit);
+  }
 }
 
 export interface CachedDirections {
@@ -267,17 +366,27 @@ export async function createGapFilling(
   corpus: ImageCorpusEntry[],
   modelId: string = "qwen3.5:9b"
 ): Promise<CreativeDirection> {
+  // Find existing images with this theme to show the model what already exists
+  const existingWithTheme = corpus.filter(
+    e => e.elements?.themes?.some(t => t.toLowerCase().includes(gap.theme.toLowerCase()))
+  ).slice(0, MAX_CONTEXT_MEMBERS);
+
+  const promptContext = buildPromptContext(existingWithTheme);
+
   const systemPrompt = `You are generating a prompt for an image that explores the ${gap.theme} theme.
 This theme is underrepresented in the corpus (${gap.count} images).
-Create a detailed image prompt that captures the essence of ${gap.theme} while being visually distinct.
+Create a detailed image prompt that captures the essence of ${gap.theme} while being visually distinct from the existing images shown below.
+${promptContext}
 
 ${Z_IMAGE_INSTRUCTIONS}`;
 
-  const userPrompt = `Generate a ${gap.theme} image prompt. Make it novel and distinct from existing ${gap.theme} images if any exist. Follow the z-image workflow: lock core elements, inject professional aesthetics, handle text precisely, be objective and concrete.`;
+  const userPrompt = `Generate a ${gap.theme} image prompt. Make it novel and distinct from the existing ${gap.theme} images. Follow the z-image workflow: lock core elements, inject professional aesthetics, handle text precisely, be objective and concrete.`;
+
+  const userMsg = await buildContextMessage(userPrompt, existingWithTheme);
 
   const result = await streamChat(
     modelId,
-    [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
+    [userMsg],
     systemPrompt,
     () => {}
   );
@@ -338,19 +447,32 @@ export async function createCrossPollination(
     const settingB = clusterB.dominantElements.settings[0];
     const styleB = clusterB.dominantElements.styles[0];
 
+    // Gather representative members from both clusters
+    const membersA = await getClusterMembers(clusterA, corpus, 3);
+    const membersB = await getClusterMembers(clusterB, corpus, 3);
+    const allMembers = [...membersA, ...membersB];
+    const promptContextA = buildPromptContext(membersA);
+    const promptContextB = buildPromptContext(membersB);
+
     const systemPrompt = `You are combining two distinct visual themes into a novel image prompt.
 Theme A: ${themeA}
 Setting/Style from B: ${settingB}, ${styleB}
 
+Existing images from Theme A's cluster:${promptContextA}
+
+Existing images from Setting/Style B's cluster:${promptContextB}
+
 ${Z_IMAGE_INSTRUCTIONS}
 
-The combination should feel intentional, not random.`;
+The combination should feel intentional, not random. Draw specific visual elements from the existing images above but recombine them in a fresh way.`;
 
-    const userPrompt = `Generate a prompt combining ${themeA} themes with ${settingB} settings and ${styleB} styles. Follow the z-image workflow: lock core elements, inject professional aesthetics, handle text precisely, be objective and concrete.`;
+    const userPrompt = `Generate a prompt combining ${themeA} themes with ${settingB} settings and ${styleB} styles. Reference the visual elements you see in the attached images. Follow the z-image workflow.`;
+
+    const userMsg = await buildContextMessage(userPrompt, allMembers);
 
     const result = await streamChat(
       modelId,
-      [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
+      [userMsg],
       systemPrompt,
       () => {}
     );
@@ -398,19 +520,27 @@ export async function createDeepVariation(
     const primaryTheme = cluster.dominantElements.themes[0];
     const primarySetting = cluster.dominantElements.settings[0];
 
+    // Get representative members so the model can see what exists
+    const members = await getClusterMembers(cluster, corpus);
+    const promptContext = buildPromptContext(members);
+
     const systemPrompt = `You are adding intricate details to an existing visual theme.
 Base theme: ${primaryTheme}
 Base setting: ${primarySetting}
 
+Here are the existing images in this cluster:${promptContext}
+
 ${Z_IMAGE_INSTRUCTIONS}
 
-Make the prompt more complex and layered while staying coherent. Think in terms of visual details, textures, lighting.`;
+Study the existing images carefully. Make the new prompt more complex and layered while staying coherent with the cluster's visual identity. Add details that complement but don't duplicate what exists.`;
 
-    const userPrompt = `Generate a detailed variation of ${primaryTheme} in ${primarySetting}. Add intricate visual details. Follow the z-image workflow: lock core elements, inject professional aesthetics, handle text precisely, be objective and concrete.`;
+    const userPrompt = `Generate a detailed variation of ${primaryTheme} in ${primarySetting}. Look at the attached images and add intricate visual details that build on what's already there. Follow the z-image workflow.`;
+
+    const userMsg = await buildContextMessage(userPrompt, members);
 
     const result = await streamChat(
       modelId,
-      [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
+      [userMsg],
       systemPrompt,
       () => {}
     );
@@ -481,21 +611,30 @@ export async function createContrast(
   const oppositeTheme = opposites[topTheme] || "contrasting visual style";
   const oppositeMood = topMood === "dark" ? "hopeful uplifting" : "somber mysterious";
 
+  // Show the model examples of the dominant theme so it knows what to contrast against
+  const dominantCluster = clusters.sort((a, b) => b.size - a.size)[0];
+  const dominantMembers = dominantCluster ? await getClusterMembers(dominantCluster, corpus) : [];
+  const promptContext = buildPromptContext(dominantMembers);
+
   const systemPrompt = `You are creating a prompt that deliberately contrasts with the dominant corpus patterns.
 Dominant theme: ${topTheme}
 Dominant mood: ${topMood}
+
+Here are examples of the dominant style you should contrast against:${promptContext}
 
 Your prompt should be the opposite: ${oppositeTheme} with ${oppositeMood} mood.
 
 ${Z_IMAGE_INSTRUCTIONS}
 
-Make it visually striking and thematically coherent.`;
+Study the attached images to understand the dominant visual language, then create something that deliberately inverts it. Make it visually striking and thematically coherent.`;
 
-  const userPrompt = `Generate a ${oppositeTheme} prompt with ${oppositeMood} mood that contrasts with the dominant ${topTheme} theme. Follow the z-image workflow: lock core elements, inject professional aesthetics, handle text precisely, be objective and concrete.`;
+  const userPrompt = `Generate a ${oppositeTheme} prompt with ${oppositeMood} mood. Look at the attached images showing the dominant ${topTheme} style, then create a prompt that deliberately contrasts with it. Follow the z-image workflow.`;
+
+  const userMsg = await buildContextMessage(userPrompt, dominantMembers);
 
   const result = await streamChat(
     modelId,
-    [{ role: "user" as const, content: userPrompt, timestamp: Date.now() }],
+    [userMsg],
     systemPrompt,
     () => {}
   );
