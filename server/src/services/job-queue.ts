@@ -94,8 +94,17 @@ export async function processNextJob(): Promise<DirectionJob | null> {
     const directions = await proposeDirections(
       clusterMap.clusters,
       corpus,
-      { limit: job.params.limit, minNovelty: job.params.minNovelty, useCache: false }
+      { limit: job.params.limit, minNovelty: job.params.minNovelty, useCache: false, modelId: job.params.modelId }
     );
+
+    // Unload Ollama model after LLM work to free VRAM for any subsequent ComfyUI work
+    try {
+      await fetch("http://localhost:11434/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: job.params.modelId, prompt: "", keep_alive: "0s" }),
+      });
+    } catch {}
 
     // Cache the results (only if non-empty)
     let cacheId = "";

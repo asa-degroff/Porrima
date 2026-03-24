@@ -34,37 +34,52 @@ async function checkAndRunSynthesis() {
 }
 
 /**
+ * Unload the Ollama model to free VRAM for ComfyUI.
+ * Uses keep_alive: "0s" to immediately release GPU memory.
+ */
+async function unloadOllamaModel(modelId: string): Promise<void> {
+  try {
+    await fetch("http://localhost:11434/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: modelId, prompt: "", keep_alive: "0s" }),
+    });
+    console.log(`[scheduler] Unloaded Ollama model ${modelId} to free VRAM`);
+  } catch {
+    // Non-critical — model may already be unloaded
+  }
+}
+
+/**
  * Run the corpus creative cycle: rebuild clusters, generate directions, save as memories.
  * Called during daily synthesis to keep the creative engine fresh.
+ *
+ * GPU coordination: direction generation (Ollama LLM) and image execution (ComfyUI)
+ * cannot run concurrently on a single GPU. This function runs them sequentially:
+ * 1. Generate directions (LLM)
+ * 2. Unload Ollama model (free VRAM)
+ * 3. Execute image generation (ComfyUI)
  */
 async function runCorpusCreativeCycle() {
   try {
     console.log("[scheduler] Running corpus creative cycle...");
-    
+
     // 1. Rebuild clusters with current corpus
     const corpus = await getAllCorpusEntries();
     const clusterMap = await buildClusters(corpus);
     console.log(`[scheduler] Rebuilt ${clusterMap.clusters.length} clusters from ${corpus.length} images`);
-    
-    // 2. Generate creative directions
-    const directions = await proposeDirections(clusterMap.clusters, corpus, { limit: 5, minNovelty: 0.3 });
+
+    // 2. Generate creative directions (LLM phase — uses Ollama GPU)
+    const modelId = "qwen3.5:9b";
+    const directions = await proposeDirections(clusterMap.clusters, corpus, {
+      limit: 5,
+      minNovelty: 0.3,
+      useCache: false,
+      modelId,
+    });
     console.log(`[scheduler] Generated ${directions.length} creative directions`);
-    
-    // 3. Execute top 4 directions autonomously
-    const { executeDirection, DEFAULT_AUTONOMOUS_CONFIG } = await import("./autonomous-generation.js");
-    const systemChatId = "autonomous-system"; // System chat for agent generations
-    
-    for (const dir of directions.slice(0, 4)) {
-      console.log(`[scheduler] Executing direction: ${dir.type} - ${dir.description}`);
-      const result = await executeDirection(dir, systemChatId, DEFAULT_AUTONOMOUS_CONFIG);
-      if (result.success) {
-        console.log(`[scheduler] Generated: ${result.imageId}`);
-      } else {
-        console.log(`[scheduler] Failed: ${result.error}`);
-      }
-    }
-    
-    // 4. Save directions as context memories for future reference
+
+    // 3. Save directions as context memories
     for (const dir of directions.slice(0, 3)) {
       await addMemory({
         id: crypto.randomUUID(),
@@ -83,7 +98,26 @@ async function runCorpusCreativeCycle() {
         supersedes: undefined,
       });
     }
-    
+
+    // 4. Unload Ollama model to free VRAM for ComfyUI
+    await unloadOllamaModel(modelId);
+    // Brief pause to let VRAM fully release
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // 5. Execute top 4 directions autonomously (ComfyUI phase — uses GPU for image gen)
+    const { executeDirection, DEFAULT_AUTONOMOUS_CONFIG } = await import("./autonomous-generation.js");
+    const systemChatId = "autonomous-system";
+
+    for (const dir of directions.slice(0, 4)) {
+      console.log(`[scheduler] Executing direction: ${dir.type} - ${dir.description}`);
+      const result = await executeDirection(dir, systemChatId, DEFAULT_AUTONOMOUS_CONFIG);
+      if (result.success) {
+        console.log(`[scheduler] Generated: ${result.imageId}`);
+      } else {
+        console.log(`[scheduler] Failed: ${result.error}`);
+      }
+    }
+
     console.log("[scheduler] Corpus creative cycle complete");
   } catch (e) {
     console.error("[scheduler] Corpus creative cycle failed:", e);

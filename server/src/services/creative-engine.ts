@@ -72,7 +72,7 @@ export interface GapAnalysis {
 // ---------------------------------------------------------------------------
 
 const IMAGES_DIR = join(homedir(), ".quje-agent", "images");
-const MAX_CONTEXT_MEMBERS = 5;
+const MAX_CONTEXT_MEMBERS = 3;
 
 /** Pick the most representative members of a cluster (closest to centroid). */
 function pickRepresentativeMembers(
@@ -268,7 +268,7 @@ export async function proposeDirections(
   } = {}
 ): Promise<CreativeDirection[]> {
   const limit = options.limit ?? 5;
-  const minNovelty = options.minNovelty ?? 0.3;
+  const minNovelty = options.minNovelty ?? 0.15;
   const useCache = options.useCache ?? true;
   const modelId = options.modelId ?? "qwen3.5:9b";
 
@@ -281,28 +281,46 @@ export async function proposeDirections(
     }
   }
 
-  console.log("[creative-engine] Generating fresh directions (parallel execution)");
+  console.log(`[creative-engine] Generating fresh directions (parallel execution) — ${clusters.length} clusters, ${corpus.length} corpus entries`);
 
   const gaps = analyzeGaps(clusters, corpus);
+  console.log(`[creative-engine] Gaps found: ${gaps.length} — ${gaps.map(g => `${g.theme}(${g.count})`).join(", ") || "none"}`);
 
-  // Run all direction types in parallel — use allSettled so one failure doesn't kill the rest
-  const results = await Promise.allSettled([
-    Promise.all(gaps.slice(0, 2).map(gap => createGapFilling(gap, clusters, corpus, modelId))),
-    createCrossPollination(clusters, corpus, minNovelty, modelId),
-    createDeepVariation(clusters, corpus, minNovelty, modelId),
-    createContrast(clusters, corpus, minNovelty, modelId),
-  ]);
+  // Run direction types sequentially — each call loads images into LLM context,
+  // so concurrent requests would overload a single-GPU setup.
+  let gapDirections: CreativeDirection[] = [];
+  let remixDirections: CreativeDirection[] = [];
+  let deepenDirections: CreativeDirection[] = [];
+  let contrastDirections: CreativeDirection[] = [];
 
-  const gapDirections = results[0].status === "fulfilled" ? results[0].value : [];
-  const remixDirections = results[1].status === "fulfilled" ? results[1].value : [];
-  const deepenDirections = results[2].status === "fulfilled" ? results[2].value : [];
-  const contrastDirections = results[3].status === "fulfilled" ? results[3].value : [];
-
-  // Log any failures
-  for (const [i, label] of ["gap-fill", "remix", "deepen", "contrast"].entries()) {
-    if (results[i].status === "rejected") {
-      console.error(`[creative-engine] ${label} generation failed:`, (results[i] as PromiseRejectedResult).reason?.message);
+  try {
+    for (const gap of gaps.slice(0, 2)) {
+      gapDirections.push(await createGapFilling(gap, clusters, corpus, modelId));
     }
+  } catch (err: any) {
+    console.error(`[creative-engine] gap-fill generation failed:`, err.message);
+  }
+
+  try {
+    remixDirections = await createCrossPollination(clusters, corpus, minNovelty, modelId);
+  } catch (err: any) {
+    console.error(`[creative-engine] remix generation failed:`, err.message);
+  }
+
+  try {
+    deepenDirections = await createDeepVariation(clusters, corpus, minNovelty, modelId);
+  } catch (err: any) {
+    console.error(`[creative-engine] deepen generation failed:`, err.message);
+  }
+
+  try {
+    contrastDirections = await createContrast(clusters, corpus, minNovelty, modelId);
+  } catch (err: any) {
+    console.error(`[creative-engine] contrast generation failed:`, err.message);
+  }
+
+  for (const [label, dirs] of [["gap-fill", gapDirections], ["remix", remixDirections], ["deepen", deepenDirections], ["contrast", contrastDirections]] as [string, CreativeDirection[]][]) {
+    console.log(`[creative-engine] ${label}: ${dirs.length} directions${dirs.length > 0 ? ` (novelty: ${dirs.map(d => d.noveltyScore.toFixed(3)).join(", ")})` : ""}`);
   }
 
   const directions: CreativeDirection[] = [];
@@ -310,6 +328,8 @@ export async function proposeDirections(
   directions.push(...remixDirections.slice(0, 2));
   directions.push(...deepenDirections.slice(0, 1));
   directions.push(...contrastDirections.slice(0, 1));
+
+  console.log(`[creative-engine] Total before limit: ${directions.length}, limit: ${limit}`);
 
   // Sort by novelty score and limit
   directions.sort((a, b) => b.noveltyScore - a.noveltyScore);
@@ -434,27 +454,36 @@ export async function createCrossPollination(
     }
   }
 
-  // Sort by distance (most distant first) and take top 3
+  // Sort by distance (most distant first), then randomly sample 3 from the top 10
+  // to avoid always picking the same pairs on every regeneration.
   distantPairs.sort(
     (a, b) =>
       cosineSimilarity(a[0].centroid, a[1].centroid) -
       cosineSimilarity(b[0].centroid, b[1].centroid)
   );
+  const candidatePairs = distantPairs.slice(0, 10);
+  for (let i = candidatePairs.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [candidatePairs[i], candidatePairs[j]] = [candidatePairs[j], candidatePairs[i]];
+  }
+  const selectedPairs = candidatePairs.slice(0, 3);
 
-  // Generate directions in parallel
-  const directionPromises = distantPairs.slice(0, 3).map(async ([clusterA, clusterB]) => {
-    const themeA = clusterA.dominantElements.themes[0];
-    const settingB = clusterB.dominantElements.settings[0];
-    const styleB = clusterB.dominantElements.styles[0];
+  // Generate directions sequentially — each call includes images in context,
+  // so concurrent requests would overload Ollama on a single GPU.
+  const directions: CreativeDirection[] = [];
+  for (const [clusterA, clusterB] of selectedPairs) {
+    try {
+      const themeA = clusterA.dominantElements.themes[0];
+      const settingB = clusterB.dominantElements.settings[0];
+      const styleB = clusterB.dominantElements.styles[0];
 
-    // Gather representative members from both clusters
-    const membersA = await getClusterMembers(clusterA, corpus, 3);
-    const membersB = await getClusterMembers(clusterB, corpus, 3);
-    const allMembers = [...membersA, ...membersB];
-    const promptContextA = buildPromptContext(membersA);
-    const promptContextB = buildPromptContext(membersB);
+      const membersA = await getClusterMembers(clusterA, corpus, 2);
+      const membersB = await getClusterMembers(clusterB, corpus, 2);
+      const allMembers = [...membersA, ...membersB];
+      const promptContextA = buildPromptContext(membersA);
+      const promptContextB = buildPromptContext(membersB);
 
-    const systemPrompt = `You are combining two distinct visual themes into a novel image prompt.
+      const systemPrompt = `You are combining two distinct visual themes into a novel image prompt.
 Theme A: ${themeA}
 Setting/Style from B: ${settingB}, ${styleB}
 
@@ -466,39 +495,41 @@ ${Z_IMAGE_INSTRUCTIONS}
 
 The combination should feel intentional, not random. Draw specific visual elements from the existing images above but recombine them in a fresh way.`;
 
-    const userPrompt = `Generate a prompt combining ${themeA} themes with ${settingB} settings and ${styleB} styles. Reference the visual elements you see in the attached images. Follow the z-image workflow.`;
+      const userPrompt = `Generate a prompt combining ${themeA} themes with ${settingB} settings and ${styleB} styles. Reference the visual elements you see in the attached images. Follow the z-image workflow.`;
 
-    const userMsg = await buildContextMessage(userPrompt, allMembers);
+      const userMsg = await buildContextMessage(userPrompt, allMembers);
 
-    const result = await streamChat(
-      modelId,
-      [userMsg],
-      systemPrompt,
-      () => {}
-    );
+      const result = await streamChat(
+        modelId,
+        [userMsg],
+        systemPrompt,
+        () => {}
+      );
 
-    const proposedPrompt = result.content || `A ${themeA} scene in ${settingB} with ${styleB} styling`;
-    const embedding = await generateEmbedding(proposedPrompt);
-    const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.65;
+      const proposedPrompt = result.content || `A ${themeA} scene in ${settingB} with ${styleB} styling`;
+      const embedding = await generateEmbedding(proposedPrompt);
+      const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.65;
 
-    return {
-      id: crypto.randomUUID(),
-      type: "remix" as DirectionType,
-      description: `Cross-pollinate ${clusterA.name} with ${clusterB.name}`,
-      sourceClusters: [clusterA.id, clusterB.id],
-      elementCombination: {
-        takeThemesFrom: clusterA.id,
-        takeSettingsFrom: clusterB.id,
-        takeStylesFrom: clusterB.id,
-      },
-      noveltyScore,
-      proposedPrompt,
-      proposedEmbedding: embedding ?? undefined,
-      createdAt: Date.now(),
-    };
-  });
+      directions.push({
+        id: crypto.randomUUID(),
+        type: "remix" as DirectionType,
+        description: `Cross-pollinate ${clusterA.name} with ${clusterB.name}`,
+        sourceClusters: [clusterA.id, clusterB.id],
+        elementCombination: {
+          takeThemesFrom: clusterA.id,
+          takeSettingsFrom: clusterB.id,
+          takeStylesFrom: clusterB.id,
+        },
+        noveltyScore,
+        proposedPrompt,
+        proposedEmbedding: embedding ?? undefined,
+        createdAt: Date.now(),
+      });
+    } catch (err: any) {
+      console.error(`[creative-engine] Cross-pollination failed for pair:`, err.message);
+    }
+  }
 
-  const directions = await Promise.all(directionPromises);
   return directions.filter(d => d.noveltyScore >= minNovelty);
 }
 
@@ -515,16 +546,17 @@ export async function createDeepVariation(
   // Pick large clusters (more than 5 members) for deep exploration
   const largeClusters = clusters.filter(c => c.size > 5).slice(0, 3);
 
-  // Generate directions in parallel
-  const directionPromises = largeClusters.map(async (cluster) => {
-    const primaryTheme = cluster.dominantElements.themes[0];
-    const primarySetting = cluster.dominantElements.settings[0];
+  // Generate directions sequentially to avoid GPU contention
+  const directions: CreativeDirection[] = [];
+  for (const cluster of largeClusters) {
+    try {
+      const primaryTheme = cluster.dominantElements.themes[0];
+      const primarySetting = cluster.dominantElements.settings[0];
 
-    // Get representative members so the model can see what exists
-    const members = await getClusterMembers(cluster, corpus);
-    const promptContext = buildPromptContext(members);
+      const members = await getClusterMembers(cluster, corpus);
+      const promptContext = buildPromptContext(members);
 
-    const systemPrompt = `You are adding intricate details to an existing visual theme.
+      const systemPrompt = `You are adding intricate details to an existing visual theme.
 Base theme: ${primaryTheme}
 Base setting: ${primarySetting}
 
@@ -534,39 +566,41 @@ ${Z_IMAGE_INSTRUCTIONS}
 
 Study the existing images carefully. Make the new prompt more complex and layered while staying coherent with the cluster's visual identity. Add details that complement but don't duplicate what exists.`;
 
-    const userPrompt = `Generate a detailed variation of ${primaryTheme} in ${primarySetting}. Look at the attached images and add intricate visual details that build on what's already there. Follow the z-image workflow.`;
+      const userPrompt = `Generate a detailed variation of ${primaryTheme} in ${primarySetting}. Look at the attached images and add intricate visual details that build on what's already there. Follow the z-image workflow.`;
 
-    const userMsg = await buildContextMessage(userPrompt, members);
+      const userMsg = await buildContextMessage(userPrompt, members);
 
-    const result = await streamChat(
-      modelId,
-      [userMsg],
-      systemPrompt,
-      () => {}
-    );
+      const result = await streamChat(
+        modelId,
+        [userMsg],
+        systemPrompt,
+        () => {}
+      );
 
-    const proposedPrompt = result.content || `A detailed ${primaryTheme} scene in ${primarySetting} with intricate elements`;
-    const embedding = await generateEmbedding(proposedPrompt);
-    const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.55;
+      const proposedPrompt = result.content || `A detailed ${primaryTheme} scene in ${primarySetting} with intricate elements`;
+      const embedding = await generateEmbedding(proposedPrompt);
+      const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.55;
 
-    return {
-      id: crypto.randomUUID(),
-      type: "deepen" as DirectionType,
-      description: `Add intricate details to ${cluster.name}`,
-      sourceClusters: [cluster.id],
-      elementCombination: {
-        takeThemesFrom: cluster.id,
-        takeSettingsFrom: cluster.id,
-        injectNovelty: "intricate details",
-      },
-      noveltyScore,
-      proposedPrompt,
-      proposedEmbedding: embedding ?? undefined,
-      createdAt: Date.now(),
-    };
-  });
+      directions.push({
+        id: crypto.randomUUID(),
+        type: "deepen" as DirectionType,
+        description: `Add intricate details to ${cluster.name}`,
+        sourceClusters: [cluster.id],
+        elementCombination: {
+          takeThemesFrom: cluster.id,
+          takeSettingsFrom: cluster.id,
+          injectNovelty: "intricate details",
+        },
+        noveltyScore,
+        proposedPrompt,
+        proposedEmbedding: embedding ?? undefined,
+        createdAt: Date.now(),
+      });
+    } catch (err: any) {
+      console.error(`[creative-engine] Deep variation failed:`, err.message);
+    }
+  }
 
-  const directions = await Promise.all(directionPromises);
   return directions.filter(d => d.noveltyScore >= minNovelty);
 }
 
@@ -664,7 +698,13 @@ Study the attached images to understand the dominant visual language, then creat
 
 /**
  * Compute novelty score for a proposed embedding.
- * Returns 1.0 - maxSimilarity (higher = more novel).
+ *
+ * Uses average similarity to the top-5 nearest neighbors rather than just the
+ * single nearest. This prevents a themed corpus (e.g. mostly sci-fi) from
+ * penalizing every new sci-fi direction to near-zero. A direction that shares
+ * the broad theme but differs in specific details will score reasonably.
+ *
+ * Returns 1.0 - avgTopKSimilarity (higher = more novel).
  */
 export function scoreNovelty(
   proposedEmbedding: number[],
@@ -675,13 +715,12 @@ export function scoreNovelty(
   const validCorpus = corpus.filter(e => e.promptEmbedding && e.promptEmbedding.length > 0);
   if (validCorpus.length === 0) return 1.0;
 
-  let maxSim = 0;
-  for (const entry of validCorpus) {
-    const sim = cosineSimilarity(proposedEmbedding, entry.promptEmbedding!);
-    if (sim > maxSim) maxSim = sim;
-  }
+  const K = Math.min(5, validCorpus.length);
+  const sims = validCorpus.map(e => cosineSimilarity(proposedEmbedding, e.promptEmbedding!));
+  sims.sort((a, b) => b - a); // highest first
+  const avgTopK = sims.slice(0, K).reduce((s, v) => s + v, 0) / K;
 
-  return 1.0 - maxSim;
+  return 1.0 - avgTopK;
 }
 
 /**
