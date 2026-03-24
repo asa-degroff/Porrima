@@ -153,8 +153,38 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
         // Subscribe to generation progress if generationId is returned
         if (res.generationId) {
           console.log(`[corpus] Subscribing to generation ${res.generationId} for progress`);
-          // Client can subscribe via useImageSandbox or direct SSE subscription
-          // For now, the event dispatch will trigger gallery refresh on completion
+          // Subscribe to SSE stream for progress tracking
+          const abortController = new AbortController();
+          fetch(`/api/images/generation/${res.generationId}/events`, {
+            signal: abortController.signal,
+            credentials: "include",
+          })
+            .then(async (streamRes) => {
+              if (!streamRes.ok) return;
+              const reader = streamRes.body?.getReader();
+              if (!reader) return;
+              
+              const decoder = new TextDecoder();
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                const text = decoder.decode(value);
+                for (const line of text.split('\n')) {
+                  if (line.startsWith('data: ')) {
+                    try {
+                      const state = JSON.parse(line.substring(6));
+                      // Update active generations if needed
+                      console.log(`[corpus] Generation ${state.id}: ${state.status}`);
+                      if (state.status === 'completed') {
+                        // Refresh gallery when complete
+                        window.dispatchEvent(new CustomEvent('corpus-image-generated'));
+                      }
+                    } catch {}
+                  }
+                }
+              }
+            })
+            .catch(() => {});
         }
       } else {
         setResult({ success: false, message: res.error || "Generation failed" });
