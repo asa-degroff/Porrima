@@ -440,85 +440,90 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             </div>
 
             {/* Gallery / Preview */}
-            <div className="flex-1 flex flex-col min-w-0">
-              {viewMode === 'gallery' ? (
-                <div className="flex-1 flex flex-col min-h-0">
-                  {/* Filter toggle + Search bar */}
-                  <div className="shrink-0 px-4 py-2 flex items-center justify-between gap-3 border-b border-white/10">
-                    <div className="flex-1 min-w-0">
-                      <ImageSearch
-                        onResults={handleSearchResults}
-                        onClear={handleSearchClear}
-                        placeholder="Search images by prompt or description..."
-                      />
-                    </div>
-                    <button
-                      onClick={() => setShowAgentOnly(!showAgentOnly)}
-                      className={`px-3 py-1 text-xs rounded transition-colors shrink-0 ${
-                        showAgentOnly
-                          ? 'bg-purple-500/80 text-white'
-                          : 'bg-white/10 text-white/60 hover:text-white/90'
-                      }`}
-                    >
-                      Agent only
-                    </button>
+            <div className="flex-1 flex flex-col min-w-0 relative">
+              {/* Gallery layer — always mounted, hidden behind detail view */}
+              <div
+                className="absolute inset-0 flex flex-col min-h-0"
+                style={{ opacity: viewMode === 'gallery' ? 1 : 0, pointerEvents: viewMode === 'gallery' ? 'auto' : 'none', zIndex: viewMode === 'gallery' ? 1 : 0 }}
+              >
+                {/* Filter toggle + Search bar */}
+                <div className="shrink-0 px-4 py-2 flex items-center justify-between gap-3 border-b border-white/10">
+                  <div className="flex-1 min-w-0">
+                    <ImageSearch
+                      onResults={handleSearchResults}
+                      onClear={handleSearchClear}
+                      placeholder="Search images by prompt or description..."
+                    />
                   </div>
-                  {/* Status line */}
-                  <div className="shrink-0 px-4 py-1 flex items-center justify-between">
-                    <span className="text-xs text-white/40">
-                      {searchResults !== undefined
-                        ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
-                        : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'
-                      }
-                    </span>
-                  </div>
-                  <ImageGallery
-                    images={showAgentOnly ? images.filter(i => i.generatedBy === 'agent') : images}
-                    selectedImage={selectedImage}
-                    onSelect={(image) => { setSelectedImage(image); setViewMode('detail'); }}
-                    onDelete={deleteGeneratedImage}
-                    activeGenerations={activeGenerations}
-                    searchResults={searchResults}
-                    isSearching={isSearching}
-                  />
-                </div>
-              ) : (
-                /* Detail view: large image + carousel */
-                <div className="flex-1 flex flex-col min-h-0 relative">
-                  {/* Close button - returns to gallery */}
                   <button
-                    onClick={() => setViewMode('gallery')}
-                    className="absolute top-4 left-4 z-10 p-2 rounded-lg bg-black/40 text-white/60 hover:text-white/90 hover:bg-black/60 transition-all"
-                    title="Back to gallery"
+                    onClick={() => setShowAgentOnly(!showAgentOnly)}
+                    className={`px-3 py-1 text-xs rounded transition-colors shrink-0 ${
+                      showAgentOnly
+                        ? 'bg-purple-500/80 text-white'
+                        : 'bg-white/10 text-white/60 hover:text-white/90'
+                    }`}
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M15 18l-6-6 6-6" />
-                    </svg>
+                    Agent only
                   </button>
-                  {selectedImage ? (
-                    <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
-                      <ProgressiveImage
-                        src={selectedImage.url}
-                        thumbSrc={`${selectedImage.url}/thumb`}
-                        alt={selectedImage.description || selectedImage.params?.positivePrompt?.slice(0, 80) || "Image"}
-                        className="w-full h-full"
-                        width={selectedImage.params?.width || undefined}
-                        height={selectedImage.params?.height || undefined}
-                        onClick={() => setLightboxImage(selectedImage)}
-                      />
-                    </div>
-                  ) : (
-                    <div className="flex-1 flex items-center justify-center text-white/30">
-                      <p className="text-sm">No image selected</p>
-                    </div>
-                  )}
-                  <ImageCarousel
-                    images={images}
-                    selectedImage={selectedImage}
-                    onSelect={(image) => setSelectedImage(image)}
-                  />
                 </div>
-              )}
+                {/* Status line */}
+                <div className="shrink-0 px-4 py-1 flex items-center justify-between">
+                  <span className="text-xs text-white/40">
+                    {searchResults !== undefined
+                      ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
+                      : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'
+                    }
+                  </span>
+                </div>
+                <ImageGallery
+                  images={showAgentOnly ? images.filter(i => i.generatedBy === 'agent') : images}
+                  selectedImage={selectedImage}
+                  onSelect={(image) => { setSelectedImage(image); setViewMode('detail'); }}
+                  onDelete={deleteGeneratedImage}
+                  activeGenerations={activeGenerations}
+                  searchResults={searchResults}
+                  isSearching={isSearching}
+                />
+              </div>
+
+              {/* Detail layer — always mounted, hidden behind gallery */}
+              <div
+                className="absolute inset-0 flex flex-col min-h-0"
+                style={{ opacity: viewMode === 'detail' ? 1 : 0, pointerEvents: viewMode === 'detail' ? 'auto' : 'none', zIndex: viewMode === 'detail' ? 1 : 0 }}
+              >
+                {/* Close button - returns to gallery */}
+                <button
+                  onClick={() => setViewMode('gallery')}
+                  className="absolute top-4 left-4 z-10 p-2 rounded-lg bg-black/40 text-white/60 hover:text-white/90 hover:bg-black/60 transition-all"
+                  title="Back to gallery"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                </button>
+                {selectedImage ? (
+                  <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
+                    <ProgressiveImage
+                      src={selectedImage.url}
+                      thumbSrc={`${selectedImage.url}/thumb`}
+                      alt={selectedImage.description || selectedImage.params?.positivePrompt?.slice(0, 80) || "Image"}
+                      className="w-full h-full"
+                      width={selectedImage.params?.width || undefined}
+                      height={selectedImage.params?.height || undefined}
+                      onClick={() => setLightboxImage(selectedImage)}
+                    />
+                  </div>
+                ) : (
+                  <div className="flex-1 flex items-center justify-center text-white/30">
+                    <p className="text-sm">No image selected</p>
+                  </div>
+                )}
+                <ImageCarousel
+                  images={images}
+                  selectedImage={selectedImage}
+                  onSelect={(image) => setSelectedImage(image)}
+                />
+              </div>
             </div>
 
             {/* Details panel - desktop sidebar */}

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { getCachedImage } from "../utils/imageCache";
 
 interface Props {
   src: string;
@@ -15,6 +16,8 @@ interface Props {
  * Progressive image loader: shows a blurred thumbnail instantly,
  * then cross-fades to the sharp full image when it finishes loading.
  *
+ * Uses the Cache API so images precached by the gallery load instantly.
+ *
  * Structure: outer container (fills parent, measures available space) →
  * inner wrapper (calculated object-contain size, has rounded corners + shadow) →
  * img (fills wrapper, blur during loading).
@@ -25,6 +28,7 @@ export function ProgressiveImage({ src, thumbSrc, alt, className, onClick, width
   const [isInitial, setIsInitial] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
   const [renderSize, setRenderSize] = useState<{ w: number; h: number } | null>(null);
+  const blobUrlRef = useRef<string | null>(null);
 
   // Measure available space and calculate object-contain dimensions
   useEffect(() => {
@@ -43,29 +47,54 @@ export function ProgressiveImage({ src, thumbSrc, alt, className, onClick, width
     return () => ro.disconnect();
   }, [width, height]);
 
-  // Preload full image, swap when ready
+  // Preload full image via Cache API, swap when ready
   useEffect(() => {
+    let cancelled = false;
     setLoaded(false);
     setDisplaySrc(thumbSrc);
     setIsInitial(true);
 
-    const img = new Image();
-    img.src = src;
-    img.onload = () => {
-      setDisplaySrc(src);
-      requestAnimationFrame(() => {
+    // Revoke previous blob URL
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+
+    getCachedImage(src, src).then((resolvedUrl) => {
+      if (cancelled) {
+        // Clean up blob if we were cancelled
+        if (resolvedUrl !== src) URL.revokeObjectURL(resolvedUrl);
+        return;
+      }
+
+      // If getCachedImage returned a blob URL, track it for cleanup
+      if (resolvedUrl !== src) blobUrlRef.current = resolvedUrl;
+
+      // Decode the image before swapping to avoid a paint flash
+      const img = new Image();
+      img.src = resolvedUrl;
+      img.onload = () => {
+        if (cancelled) return;
+        setDisplaySrc(resolvedUrl);
+        requestAnimationFrame(() => {
+          if (cancelled) return;
+          setIsInitial(false);
+          setLoaded(true);
+        });
+      };
+      img.onerror = () => {
+        if (cancelled) return;
+        console.warn("[progressive-image] failed to load full image:", src);
         setIsInitial(false);
-        setLoaded(true);
-      });
-    };
-    img.onerror = () => {
-      console.warn("[progressive-image] failed to load full image:", src);
-      setIsInitial(false);
-    };
+      };
+    });
 
     return () => {
-      img.onload = null;
-      img.onerror = null;
+      cancelled = true;
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
     };
   }, [src, thumbSrc]);
 
