@@ -207,6 +207,9 @@ export interface GeneratedImage {
   chatId?: string;
   generatedBy?: 'user' | 'agent';  // Track generation source
   directionId?: string;  // For agent generations: which creative direction was used
+  description?: string;  // For analyzed images (search results may include these)
+  type?: 'generated' | 'analyzed' | 'uploaded';  // For search results
+  score?: number;  // For search results (relevance score)
 }
 
 export interface ComfyUIStatus {

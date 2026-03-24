@@ -603,6 +603,123 @@ export async function searchCorpusByText(
 }
 
 /**
+ * Hybrid search combining FTS5 full-text + vector similarity with RRF ranking.
+ * Returns entries sorted by combined relevance score.
+ */
+export async function searchCorpusHybrid(
+  query: string,
+  limit = 10
+): Promise<Array<ImageCorpusEntry & { score: number }>> {
+  console.log("[image-corpus] hybrid search starting for:", query);
+  const startTime = Date.now();
+  const db = getDb();
+  const RRF_K = 60; // standard RRF constant
+
+  // Get query embedding with timeout
+  let queryEmbedding: number[] = [];
+  try {
+    console.log("[image-corpus] fetching embedding...");
+    const { embed } = await import("./embeddings.js");
+    const embedPromise = embed(query);
+    const timeoutPromise = new Promise<number[]>((_, reject) => 
+      setTimeout(() => reject(new Error("Embedding timeout")), 5000)
+    );
+    queryEmbedding = await Promise.race([embedPromise, timeoutPromise]);
+    console.log("[image-corpus] embedding received, length:", queryEmbedding.length);
+  } catch (err: any) {
+    console.warn("[image-corpus] hybrid search embedding error (will use FTS-only):", err.message || err);
+    // Fall back to FTS-only if embedding fails
+  }
+
+  // FTS search (phrase match first, then term match)
+  const trimmed = query.trim();
+  const escaped = trimmed.replace(/"/g, '""');
+  console.log("[image-corpus] FTS phrase search for:", `"${escaped}"`);
+  
+  let ftsRows = db.prepare(`
+    SELECT ce.*, fts.rank FROM fts_corpus fts
+    JOIN corpus_entries ce ON ce.id = fts.id
+    WHERE fts_corpus MATCH ?
+    ORDER BY rank
+    LIMIT ?
+  `).all(`"${escaped}"`, Math.max(20, limit * 3)) as Array<CorpusRow & { rank: number }>;
+  console.log("[image-corpus] FTS phrase results:", ftsRows.length);
+
+  // Fall back to term search if phrase match yields nothing
+  if (ftsRows.length === 0) {
+    const terms = trimmed
+      .split(/\s+/)
+      .filter((t) => t.length > 0)
+      .map((t) => `"${t.replace(/"/g, '""')}"`)
+      .join(" OR ");
+    if (terms) {
+      console.log("[image-corpus] FTS term search for:", terms);
+      ftsRows = db.prepare(`
+        SELECT ce.*, fts.rank FROM fts_corpus fts
+        JOIN corpus_entries ce ON ce.id = fts.id
+        WHERE fts_corpus MATCH ?
+        ORDER BY rank
+        LIMIT ?
+      `).all(terms, Math.max(20, limit * 3)) as Array<CorpusRow & { rank: number }>;
+      console.log("[image-corpus] FTS term results:", ftsRows.length);
+    }
+  }
+
+  // Vector search if embedding succeeded
+  let vecRows: Array<{ id: string; distance: number }> = [];
+  if (queryEmbedding.length > 0) {
+    console.log("[image-corpus] running vector search...");
+    vecRows = db.prepare(
+      "SELECT id, distance FROM vec_corpus WHERE embedding MATCH ? ORDER BY distance LIMIT ?"
+    ).all(new Float32Array(queryEmbedding), Math.max(20, limit * 3)) as Array<{ id: string; distance: number }>;
+    console.log("[image-corpus] vector results:", vecRows.length);
+  }
+
+  // Collect all candidate IDs
+  const allIds = new Set<string>();
+  for (const r of ftsRows) allIds.add(r.id);
+  for (const r of vecRows) allIds.add(r.id);
+
+  if (allIds.size === 0) return [];
+
+  // Build rank maps (1-based ranks)
+  const ftsRank = new Map<string, number>();
+  ftsRows.forEach((r, i) => ftsRank.set(r.id, i + 1));
+
+  const vecRank = new Map<string, number>();
+  vecRows.forEach((r, i) => vecRank.set(r.id, i + 1));
+
+  // Compute RRF score for each candidate
+  const rrfScores = new Map<string, number>();
+  for (const id of allIds) {
+    let score = 0;
+    const fr = ftsRank.get(id);
+    if (fr !== undefined) score += 1 / (RRF_K + fr);
+    const vr = vecRank.get(id);
+    if (vr !== undefined) score += 1 / (RRF_K + vr);
+    rrfScores.set(id, score);
+  }
+
+  // Fetch full entries for all candidates
+  const ids = Array.from(allIds);
+  const results: Array<ImageCorpusEntry & { score: number }> = [];
+  
+  for (const id of ids) {
+    const entry = await getCorpusEntry(id);
+    if (entry) {
+      results.push({
+        ...entry,
+        score: rrfScores.get(id) ?? 0,
+      });
+    }
+  }
+
+  // Sort by RRF score descending
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, limit);
+}
+
+/**
  * Compute novelty of an embedding against the entire corpus.
  * Returns 1.0 - maxSimilarity (higher = more novel).
  */

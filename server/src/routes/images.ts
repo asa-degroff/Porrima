@@ -13,6 +13,7 @@ import {
   subscribeToGeneration,
   cleanupOldGenerations,
 } from "../services/image-generation.js";
+import { searchCorpusHybrid } from "../services/image-corpus.js";
 import { access } from "fs/promises";
 import { createReadStream } from "fs";
 import type { ImageGenerationParams } from "../types.js";
@@ -39,6 +40,59 @@ router.get("/list", async (_req, res) => {
     res.json(images);
   } catch {
     res.json([]);
+  }
+});
+
+router.post("/search", async (req, res) => {
+  try {
+    const { query, limit } = req.body as { query: string; limit?: number };
+    console.log("[images] search request:", { query, limit });
+    if (!query) {
+      return res.status(400).json({ error: "query is required" });
+    }
+    const corpusResults = await searchCorpusHybrid(query, limit || 20);
+    console.log("[images] search results:", corpusResults.length);
+
+    // Transform corpus entries into GeneratedImage-compatible shape.
+    // Generated images: imagePath is the storage ID, served at /api/images/{id}
+    // Analyzed images: imagePath is "vision/images/{visionId}/{filename}", served at /api/vision/images/{visionId}
+    const results = await Promise.all(corpusResults.map(async (entry) => {
+      // Analyzed images: visionId is the canonical key, but fall back to parsing imagePath
+      const visionId = entry.visionId || (entry.type === "analyzed" ? entry.imagePath.split("/")[2] : null);
+      if (entry.type === "analyzed" && visionId) {
+        return {
+          id: visionId,
+          url: `/api/vision/images/${visionId}`,
+          params: { positivePrompt: entry.description || "", negativePrompt: "", model: "", steps: 0, cfg: 0, width: 0, height: 0 },
+          resolvedSeed: 0,
+          createdAt: new Date(entry.createdAt).toISOString(),
+          chatId: entry.chatId,
+          description: entry.description,
+          type: entry.type,
+          score: entry.score,
+        };
+      }
+
+      // Generated images — imagePath is the image storage ID
+      const imageId = entry.imagePath;
+      const metadata = await getImageMetadata(imageId);
+      return {
+        id: imageId,
+        url: `/api/images/${imageId}`,
+        params: metadata?.params ?? { positivePrompt: entry.prompt ?? "", negativePrompt: "", model: "", steps: 0, cfg: 0, width: 0, height: 0 },
+        resolvedSeed: metadata?.resolvedSeed ?? 0,
+        createdAt: metadata?.createdAt ?? new Date(entry.createdAt).toISOString(),
+        chatId: entry.chatId,
+        description: entry.description,
+        type: entry.type,
+        score: entry.score,
+      };
+    }));
+
+    res.json(results);
+  } catch (e: any) {
+    console.error("[images] search error:", e);
+    res.status(500).json({ error: e.message });
   }
 });
 

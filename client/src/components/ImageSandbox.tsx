@@ -11,6 +11,7 @@ import { VisionChat } from "./VisionChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { OctahedronLogo } from "./OctahedronLogo";
 import { useCachedImage } from "../utils/imageCache";
+import { ImageSearch } from "./ImageSearch";
 import CorpusView from "./CorpusView";
 import type { GeneratedImage, ImageGenerationParams, OllamaModel } from "../types";
 
@@ -53,6 +54,31 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   
   // Filter: show all or agent generations only
   const [showAgentOnly, setShowAgentOnly] = useState(false);
+  
+  // Search
+  const [searchResults, setSearchResults] = useState<Array<GeneratedImage & { score: number }> | undefined>(undefined);
+  const [isSearching, setIsSearching] = useState(false);
+
+  // Debug: log when search state changes
+  useEffect(() => {
+    if (searchResults !== undefined) {
+      console.log("[ImageSandbox] search results updated:", searchResults.length, "items");
+    }
+    console.log("[ImageSandbox] search state:", { searchResults: searchResults?.length, isSearching });
+  }, [searchResults, isSearching]);
+
+  // Handler for search results
+  const handleSearchResults = useCallback((results: Array<GeneratedImage & { score: number }>) => {
+    console.log("[ImageSandbox] handleSearchResults called with", results.length, "items");
+    setSearchResults(results);
+    setIsSearching(false);
+  }, []);
+
+  const handleSearchClear = useCallback(() => {
+    console.log("[ImageSandbox] handleSearchClear called");
+    setSearchResults(undefined);
+    setIsSearching(false);
+  }, []);
 
   // Navigation index for selected image in the detail pane
   const selectedIndex = useMemo(
@@ -417,14 +443,18 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             <div className="flex-1 flex flex-col min-w-0">
               {viewMode === 'gallery' ? (
                 <div className="flex-1 flex flex-col min-h-0">
-                  {/* Filter toggle */}
-                  <div className="shrink-0 px-4 py-2 flex items-center justify-between border-b border-white/10">
-                    <span className="text-xs text-white/40">
-                      {showAgentOnly ? 'Showing agent generations' : 'Showing all generations'}
-                    </span>
+                  {/* Filter toggle + Search bar */}
+                  <div className="shrink-0 px-4 py-2 flex items-center justify-between gap-3 border-b border-white/10">
+                    <div className="flex-1 min-w-0">
+                      <ImageSearch
+                        onResults={handleSearchResults}
+                        onClear={handleSearchClear}
+                        placeholder="Search images by prompt or description..."
+                      />
+                    </div>
                     <button
                       onClick={() => setShowAgentOnly(!showAgentOnly)}
-                      className={`px-3 py-1 text-xs rounded transition-colors ${
+                      className={`px-3 py-1 text-xs rounded transition-colors shrink-0 ${
                         showAgentOnly
                           ? 'bg-purple-500/80 text-white'
                           : 'bg-white/10 text-white/60 hover:text-white/90'
@@ -433,12 +463,23 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                       Agent only
                     </button>
                   </div>
+                  {/* Status line */}
+                  <div className="shrink-0 px-4 py-1 flex items-center justify-between">
+                    <span className="text-xs text-white/40">
+                      {searchResults !== undefined
+                        ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
+                        : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'
+                      }
+                    </span>
+                  </div>
                   <ImageGallery
                     images={showAgentOnly ? images.filter(i => i.generatedBy === 'agent') : images}
                     selectedImage={selectedImage}
                     onSelect={(image) => { setSelectedImage(image); setViewMode('detail'); }}
                     onDelete={deleteGeneratedImage}
                     activeGenerations={activeGenerations}
+                    searchResults={searchResults}
+                    isSearching={isSearching}
                   />
                 </div>
               ) : (
@@ -459,10 +500,10 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                       <ProgressiveImage
                         src={selectedImage.url}
                         thumbSrc={`${selectedImage.url}/thumb`}
-                        alt={selectedImage.params.positivePrompt.slice(0, 80)}
+                        alt={selectedImage.description || selectedImage.params?.positivePrompt?.slice(0, 80) || "Image"}
                         className="w-full h-full"
-                        width={selectedImage.params.width}
-                        height={selectedImage.params.height}
+                        width={selectedImage.params?.width || undefined}
+                        height={selectedImage.params?.height || undefined}
                         onClick={() => setLightboxImage(selectedImage)}
                       />
                     </div>
@@ -589,14 +630,19 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                 <ProgressiveImage
                   src={lightboxCachedUrl}
                   thumbSrc={`${lightboxImage.url}/thumb`}
-                  alt={lightboxImage.params.positivePrompt.slice(0, 50)}
+                  alt={lightboxImage.description || lightboxImage.params?.positivePrompt?.slice(0, 50) || "Image"}
                   className="max-w-[90vw] max-h-[90vh]"
-                  width={lightboxImage.params.width}
-                  height={lightboxImage.params.height}
+                  width={lightboxImage.params?.width || undefined}
+                  height={lightboxImage.params?.height || undefined}
                   onClick={() => {}}
                 />
                 <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-black/60 text-xs text-white/60 font-mono">
-                  {lightboxImage.params.width}x{lightboxImage.params.height} &middot; seed: {lightboxImage.resolvedSeed} &middot; {lightboxImage.params.model}
+                  {lightboxImage.params?.width && lightboxImage.params?.height
+                    ? `${lightboxImage.params.width}x${lightboxImage.params.height} · `
+                    : ""
+                  }
+                  {lightboxImage.resolvedSeed ? `seed: ${lightboxImage.resolvedSeed} · ` : ""}
+                  {lightboxImage.params?.model || lightboxImage.type || "image"}
                 </div>
               </div>
             )}

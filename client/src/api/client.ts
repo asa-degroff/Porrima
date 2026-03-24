@@ -406,6 +406,19 @@ export async function fetchGeneratedImages(): Promise<GeneratedImage[]> {
   return res.json();
 }
 
+export async function searchImages(query: string, limit?: number): Promise<Array<GeneratedImage & { score: number }>> {
+  const res = await apiFetch(`${BASE}/images/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, limit }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to search images");
+  }
+  return res.json();
+}
+
 export async function deleteGeneratedImage(id: string): Promise<void> {
   const res = await apiFetch(`${BASE}/images/${id}`, { method: "DELETE" });
   if (!res.ok) {

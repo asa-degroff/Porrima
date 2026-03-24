@@ -8,15 +8,21 @@ interface Props {
   onSelect: (image: GeneratedImage) => void;
   onDelete?: (id: string) => void;
   activeGenerations?: GenerationState[];
+  searchResults?: GeneratedImage[];
+  isSearching?: boolean;
 }
 
-export function ImageGallery({ images, selectedImage, onSelect, onDelete, activeGenerations = [] }: Props) {
+export function ImageGallery({ images, selectedImage, onSelect, onDelete, activeGenerations = [], searchResults, isSearching }: Props) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Pre-cache full images in background so detail view is instant
   useEffect(() => {
-    precacheImages(images.map((img) => img.url));
-  }, [images]);
+    const toCache = searchResults || images;
+    precacheImages(toCache.map((img) => img.url));
+  }, [images, searchResults]);
+
+  // Use search results if provided, otherwise show all images
+  const displayImages = searchResults !== undefined ? searchResults : images;
 
   // Close confirmation on Escape
   useEffect(() => {
@@ -46,7 +52,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
     setConfirmDeleteId(null);
   }, []);
 
-  if (images.length === 0) {
+  if (displayImages.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center space-y-3 px-6">
@@ -57,8 +63,17 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
               <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
             </svg>
           </div>
-          <p className="text-white/30 text-sm">No images generated yet</p>
-          <p className="text-white/20 text-xs">Enter a prompt and click Generate</p>
+          {isSearching ? (
+            <>
+              <p className="text-white/30 text-sm">No images match your search</p>
+              <p className="text-white/20 text-xs">Try different keywords</p>
+            </>
+          ) : (
+            <>
+              <p className="text-white/30 text-sm">No images generated yet</p>
+              <p className="text-white/20 text-xs">Enter a prompt and click Generate</p>
+            </>
+          )}
         </div>
       </div>
     );
@@ -142,7 +157,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
         ))}
 
         {/* Completed images */}
-        {images.map((image) => (
+        {displayImages.map((image) => (
           <button
             key={image.id}
             onClick={() => onSelect(image)}
@@ -155,7 +170,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
           >
             <img
               src={`${image.url}/thumb`}
-              alt={image.params.positivePrompt.slice(0, 50)}
+              alt={image.params?.positivePrompt?.slice(0, 50) || image.description?.slice(0, 50) || "Image"}
               loading="lazy"
               decoding="async"
               className="w-full h-auto block"
@@ -163,8 +178,16 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
             {/* Hover overlay */}
             <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
               <div className="absolute bottom-0 left-0 right-0 p-2 space-y-0.5">
-                <p className="text-[10px] text-white/70 font-mono">seed: {image.resolvedSeed}</p>
-                <p className="text-[10px] text-white/50 truncate">{image.params.model}</p>
+                {('resolvedSeed' in image) && (
+                  <p className="text-[10px] text-white/70 font-mono">seed: {(image as any).resolvedSeed}</p>
+                )}
+                {('params' in image) && (image as any).params?.model && (
+                  <p className="text-[10px] text-white/50 truncate">{(image as any).params.model}</p>
+                )}
+                {/* Relevance score for search results */}
+                {'score' in image && typeof image.score === 'number' && (
+                  <p className="text-[10px] text-purple-300/70">relevance: {(image.score * 100).toFixed(1)}%</p>
+                )}
               </div>
             </div>
             {/* Delete button */}
