@@ -92,6 +92,7 @@ export interface IterationInfo {
   iteration: number;
   stopReason: string;
   toolCount: number;
+  usage?: { input: number; output: number; totalTokens: number };
 }
 
 export interface StreamWarning {
@@ -976,6 +977,7 @@ export async function executeCorpusDirection(directionId: string): Promise<{
   success: boolean;
   imageId?: string;
   imageUrl?: string;
+  generationId?: string;
   error?: string;
 }> {
   const res = await apiFetch(`${BASE}/corpus/execute`, {

@@ -16,7 +16,9 @@ function estimateTokens(text: string): number {
 
 /**
  * Estimate total context size including system prompt and all messages.
+ * Exported as `estimateContextTokens` for use in chat route fallback compaction.
  */
+export { estimateContextSize as estimateContextTokens };
 function estimateContextSize(messages: Chat["messages"], systemPrompt: string): number {
   let total = estimateTokens(systemPrompt);
   for (const m of messages) {

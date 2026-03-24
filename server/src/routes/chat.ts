@@ -583,12 +583,6 @@ async function handleChatStream(
             ` tokens=${msg.usage?.totalTokens || "?"} incomplete=${state.incompleteToolTurn}`,
           );
 
-          res.write(`event: iteration\ndata: ${JSON.stringify({
-            iteration: iterations,
-            stopReason,
-            toolCount: event.toolResults?.length || 0,
-          })}\n\n`);
-
           if (msg.usage) {
             state.finalUsage = {
               input: msg.usage.input,
@@ -597,6 +591,14 @@ async function handleChatStream(
             };
           }
 
+          // Send iteration event with usage data so client can update token indicators mid-loop
+          res.write(`event: iteration\ndata: ${JSON.stringify({
+            iteration: iterations,
+            stopReason,
+            toolCount: event.toolResults?.length || 0,
+            usage: state.finalUsage || undefined,
+          })}\n\n`);
+
           if (stopReason === "length") {
             hitContextLimit = true;
             console.warn(`[chat] stopped due to context length at iteration ${iterations}`);
@@ -604,6 +606,23 @@ async function handleChatStream(
               type: "context_length",
               message: "Response stopped — context window full",
             })}\n\n`);
+          }
+
+          // Detect implicit context overflow: model errored without usage data.
+          // Ollama often returns a stream error (not "length") when the context is exhausted.
+          // If we have prior usage near the limit or high iteration count with no usage, treat as context limit.
+          if (!hitContextLimit && !msg.usage && (stopReason as string) !== "stop" && (stopReason as string) !== "toolUse" && (stopReason as string) !== "length") {
+            // Check if the last known usage was already high
+            const lastKnown = state.finalUsage?.totalTokens ?? 0;
+            const effectiveCW = ollamaModel ? (chat.contextWindow ?? ollamaModel.contextWindow) : 0;
+            if (effectiveCW > 0 && (lastKnown / effectiveCW > 0.8 || iterations > 3)) {
+              hitContextLimit = true;
+              console.warn(`[chat] model error with no usage data at iteration ${iterations} (last known: ${lastKnown}/${effectiveCW}) — treating as context overflow`);
+              res.write(`event: warning\ndata: ${JSON.stringify({
+                type: "context_length",
+                message: "Response may have been cut short — context window likely full",
+              })}\n\n`);
+            }
           }
 
           // Guard against runaway tool loops
@@ -891,9 +910,23 @@ async function handleChatStream(
         if (model) {
           const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
           const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
-          const usageRatio = lastUsage / effectiveContextWindow;
-          if (hitContextLimit || usageRatio > 0.75) {
-            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit);
+          const usageRatio = lastUsage > 0 ? lastUsage / effectiveContextWindow : 0;
+
+          // If usage data is missing (tokens=?), fall back to character-based estimation.
+          // This commonly happens when Ollama errors out at context limits without reporting usage.
+          let needsCompaction = hitContextLimit || usageRatio > 0.75;
+          if (!needsCompaction && lastUsage === 0 && chat.messages.length > 4) {
+            const { estimateContextTokens } = await import("../services/compaction.js");
+            const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt);
+            const estimatedRatio = estimatedTokens / effectiveContextWindow;
+            if (estimatedRatio > 0.75) {
+              console.log(`[compaction] Usage missing but char estimation shows ${estimatedTokens} tokens (${(estimatedRatio * 100).toFixed(0)}% of ${effectiveContextWindow}) — forcing compaction`);
+              needsCompaction = true;
+            }
+          }
+
+          if (needsCompaction) {
+            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction));
             if (compaction.truncated) {
               // Extract memories from removed messages (agent chats only)
               if (chat.type === "agent" && compaction.removedMessages?.length) {

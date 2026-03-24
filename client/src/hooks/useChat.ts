@@ -107,6 +107,7 @@ export function useChat(chatId: string | null) {
   const [queueProcessing, setQueueProcessing] = useState(false);
   const [titleUpdate, setTitleUpdate] = useState<{ chatId: string; title: string } | null>(null);
   const [streamingSegmentIndex, setStreamingSegmentIndex] = useState<number | null>(null);
+  const [streamingUsage, setStreamingUsage] = useState<MessageUsage | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
   const streamingContentRef = useRef("");
@@ -159,6 +160,7 @@ export function useChat(chatId: string | null) {
       setWarning(null);
       setCompaction(null);
       setStreamingSegmentIndex(null);
+      setStreamingUsage(null);
     }
   }, [chatId]);
 
@@ -307,6 +309,7 @@ export function useChat(chatId: string | null) {
           setStreamingThinking("");
           setStreaming(false);
           setStreamingSegmentIndex(null);
+          setStreamingUsage(null);
           if (wfi) setWaitingForInput(true);
           bgStreams.delete(streamChatId);
         }
@@ -395,6 +398,10 @@ export function useChat(chatId: string | null) {
       },
       onIteration: (info) => {
         console.log(`[chat] iteration ${info.iteration}: stopReason=${info.stopReason} tools=${info.toolCount}`);
+        // Update live usage from iteration events so token indicator stays current during tool loops
+        if (info.usage && activeChatIdRef.current === streamChatId) {
+          setStreamingUsage(info.usage);
+        }
       },
       onWarning: (w) => {
         console.warn(`[chat] warning: ${w.type} — ${w.message}`);
@@ -702,13 +709,16 @@ export function useChat(chatId: string | null) {
     setQueueProcessing(false);
   }, [chatId, streaming, queueProcessing, prepareStream, makeStreamCallbacks]);
 
-  // Use the last assistant message's usage as the actual context fill
+  // Use live streaming usage (from iteration events) when available,
+  // otherwise fall back to the last assistant message's usage.
+  // This keeps the token indicator accurate during multi-iteration tool loops.
   const totalUsage: MessageUsage = useMemo(() => {
+    if (streamingUsage) return streamingUsage;
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].usage) return messages[i].usage!;
     }
     return { input: 0, output: 0, totalTokens: 0 };
-  }, [messages]);
+  }, [messages, streamingUsage]);
 
   return {
     messages,
