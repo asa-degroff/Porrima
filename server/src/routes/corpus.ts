@@ -266,7 +266,7 @@ router.post("/directions/generate", async (req, res) => {
       corpus,
       limit,
       minNovelty,
-      "qwen3.5:4b"
+      "qwen3.5:9b"
     );
     
     // Start processing
