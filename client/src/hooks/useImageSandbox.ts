@@ -273,6 +273,9 @@ export function useImageSandbox() {
       }
       // Clear error on successful delete
       setError(null);
+      
+      // Trigger corpus stats refresh (if CorpusView is listening)
+      window.dispatchEvent(new CustomEvent('corpus-image-deleted'));
     } catch (e: any) {
       setError(e.message);
     }

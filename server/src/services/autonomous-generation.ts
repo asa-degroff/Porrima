@@ -1,7 +1,13 @@
 import type { CreativeDirection } from "./creative-engine.js";
 import { generateImageWithState } from "./comfyui.js";
 import { saveGeneratedImage } from "./image-storage.js";
-import { addCorpusEntry, enrichCorpusEntry } from "./image-corpus.js";
+import {
+  createGeneration,
+  linkComfyUIIds,
+  updateProgress,
+  completeGeneration,
+  failGeneration,
+} from "./image-generation.js";
 import crypto from "crypto";
 
 /**
@@ -42,9 +48,9 @@ export function analyzeDimensions(prompt: string, config: AutonomousGenerationCo
   if (!config.allowDimensionOverride) {
     return { width: config.baseWidth, height: config.baseHeight };
   }
-  
+
   const lowerPrompt = prompt.toLowerCase();
-  
+
   // Explicit dimension keywords
   if (lowerPrompt.includes('portrait') || lowerPrompt.includes('vertical') || lowerPrompt.includes('tall')) {
     return { width: 1024, height: 1365 };
@@ -55,7 +61,7 @@ export function analyzeDimensions(prompt: string, config: AutonomousGenerationCo
   if (lowerPrompt.includes('square') || lowerPrompt.includes('1:1')) {
     return { width: 1024, height: 1024 };
   }
-  
+
   // Subject matter analysis
   if (lowerPrompt.includes('person') || lowerPrompt.includes('face') || lowerPrompt.includes('portrait of') || lowerPrompt.includes('character')) {
     return { width: 1024, height: 1365 }; // Portrait for people/characters
@@ -66,101 +72,108 @@ export function analyzeDimensions(prompt: string, config: AutonomousGenerationCo
   if (lowerPrompt.includes('vehicle') || lowerPrompt.includes('ship') || lowerPrompt.includes('mech')) {
     return { width: 1365, height: 1024 }; // Landscape for vehicles
   }
-  
+
   // Default to portrait (better for most creative generations)
   return { width: config.baseWidth, height: config.baseHeight };
 }
 
 /**
  * Execute a creative direction by generating an image.
- * Integrates with the ComfyUI queue system and tracks agent generations.
+ * Integrates with the generation state tracking system so progress
+ * is visible via SSE subscriptions (same as manual generations).
+ */
+/**
+ * @param existingGenerationId - If provided, reuse a pre-created GenerationState
+ *   instead of creating a new one. Used by the corpus execute endpoint to return
+ *   the generationId to the client immediately before generation starts.
  */
 export async function executeDirection(
   direction: CreativeDirection,
   chatId: string,
-  config: AutonomousGenerationConfig = DEFAULT_AUTONOMOUS_CONFIG
+  config: AutonomousGenerationConfig = DEFAULT_AUTONOMOUS_CONFIG,
+  existingGenerationId?: string
 ): Promise<{ success: boolean; imageId?: string; imageUrl?: string; generationId?: string; error?: string }> {
-  
+
   console.log(`[creative-engine] Executing direction: ${direction.type} - ${direction.description}`);
-  
+
   // Analyze dimensions based on prompt
   const dims = analyzeDimensions(direction.proposedPrompt, config);
   console.log(`[creative-engine] Dimensions: ${dims.width}x${dims.height}`);
-  
-  // Generate with state tracking
-  const generationId = crypto.randomUUID();
-  const clientId = crypto.randomUUID();
-  
+
+  // Register with the generation state tracker so SSE subscribers can follow progress.
+  // This is the same system used by manual generations in routes/images.ts.
+  const generationParams = {
+    positivePrompt: direction.proposedPrompt,
+    model: config.modelId,
+    steps: config.steps,
+    cfgScale: config.cfgScale,
+    width: dims.width,
+    height: dims.height,
+    sampler: config.sampler,
+    scheduler: config.scheduler,
+  };
+
+  let generationId: string;
+  let clientId: string;
+
+  if (existingGenerationId) {
+    // Reuse pre-created generation state (from corpus endpoint)
+    const { getGeneration } = await import("./image-generation.js");
+    const existing = getGeneration(existingGenerationId);
+    if (existing) {
+      generationId = existing.id;
+      clientId = existing.clientId;
+    } else {
+      // Fallback: create new if pre-created state was lost
+      const genState = createGeneration(generationParams, chatId);
+      generationId = genState.id;
+      clientId = genState.clientId;
+    }
+  } else {
+    const genState = createGeneration(generationParams, chatId);
+    generationId = genState.id;
+    clientId = genState.clientId;
+  }
+
+  console.log(`[creative-engine] Generation ${generationId} registered (direction: ${direction.id})`);
+
   try {
     const result = await generateImageWithState(
       generationId,
       clientId,
-      {
-        positivePrompt: direction.proposedPrompt,
-        model: config.modelId,
-        steps: config.steps,
-        cfgScale: config.cfgScale,
-        width: dims.width,
-        height: dims.height,
-        sampler: config.sampler,
-        scheduler: config.scheduler,
-      },
+      generationParams,
       (promptId) => {
+        linkComfyUIIds(generationId, promptId);
         console.log(`[creative-engine] Linked ComfyUI prompt ID: ${promptId}`);
       },
       (progress) => {
+        updateProgress(generationId, progress.step, progress.totalSteps);
         if (progress.step % 5 === 0 || progress.step === progress.totalSteps) {
           console.log(`[creative-engine] Generation progress: ${progress.step}/${progress.totalSteps}`);
         }
       }
     );
-    
-    // Save with agent tracking
+
+    // Save image to disk
     const imageId = crypto.randomUUID();
     const imageUrl = await saveGeneratedImage(imageId, result.imageData, {
-      params: {
-        positivePrompt: direction.proposedPrompt,
-        model: config.modelId,
-        steps: config.steps,
-        cfgScale: config.cfgScale,
-        width: dims.width,
-        height: dims.height,
-        sampler: config.sampler,
-        scheduler: config.scheduler,
-      },
+      params: generationParams,
       resolvedSeed: result.resolvedSeed,
       createdAt: new Date().toISOString(),
       chatId,
       generatedBy: 'agent',
       directionId: direction.id,
     });
-    
-    // Add to image corpus so future clustering/directions can see this generation
-    const corpusEntry = {
-      id: crypto.randomUUID(),
-      type: "generated" as const,
-      imagePath: imageUrl.replace("/api/images/", ""),
-      prompt: direction.proposedPrompt,
-      description: "",
-      elements: {},
-      promptEmbedding: undefined as number[] | undefined,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      chatId,
-      generationId,
-      directionId: direction.id,
-    };
 
-    // Enrich with embedding and elements (async, non-blocking)
-    enrichCorpusEntry(corpusEntry.id, direction.proposedPrompt, undefined).catch(console.error);
-    await addCorpusEntry(corpusEntry);
+    // Mark complete — this also adds to corpus and emits SSE events
+    await completeGeneration(generationId, imageUrl);
 
-    console.log(`[creative-engine] Generation complete: ${imageId} (${imageUrl}), added to corpus`);
-    return { success: true, imageId, imageUrl };
-    
+    console.log(`[creative-engine] Generation complete: ${imageId} (${imageUrl})`);
+    return { success: true, imageId, imageUrl, generationId };
+
   } catch (err: any) {
+    failGeneration(generationId, err.message || "Generation failed");
     console.error("[creative-engine] Generation failed:", err.message);
-    return { success: false, error: err.message || "Generation failed" };
+    return { success: false, generationId, error: err.message || "Generation failed" };
   }
 }
-

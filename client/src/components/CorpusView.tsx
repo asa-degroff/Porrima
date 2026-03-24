@@ -2,8 +2,39 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import {
   fetchDirections,
   executeCorpusDirection,
+  subscribeToGeneration,
   type CorpusDirection,
 } from "../api/client";
+
+// ── Module-level generation state ──────────────────────────────────
+// Survives component unmount/remount so progress isn't lost on navigation.
+interface ActiveGeneration {
+  directionId: string;
+  generationId: string;
+  progress: { step: number; total: number } | null;
+  result: { success: boolean; message: string } | null;
+  controller: AbortController;
+}
+
+let activeGen: ActiveGeneration | null = null;
+const genListeners = new Set<() => void>();
+
+function notifyGenListeners() {
+  for (const fn of genListeners) fn();
+}
+
+/** Hook that subscribes to the module-level generation state. */
+function useActiveGeneration() {
+  const [, forceUpdate] = useState(0);
+  useEffect(() => {
+    const listener = () => forceUpdate((n) => n + 1);
+    genListeners.add(listener);
+    return () => { genListeners.delete(listener); };
+  }, []);
+  return activeGen;
+}
+
+// ── Component ──────────────────────────────────────────────────────
 
 interface CorpusViewProps {
   onOpenCluster?: (clusterId: string) => void;
@@ -33,13 +64,17 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
   const [directions, setDirections] = useState<CorpusDirection[]>([]);
   const [loadingDirections, setLoadingDirections] = useState(false);
   const [directionsFetched, setDirectionsFetched] = useState(false);
-  const [executingId, setExecutingId] = useState<string | null>(null);
-  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
   const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
   const resultTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Generation state lives in module scope — survives unmount
+  const gen = useActiveGeneration();
+  const executingId = gen?.directionId ?? null;
+  const genProgress = gen?.progress ?? null;
+  const result = gen?.result ?? null;
+
   // Fetch stats
-  useEffect(() => {
+  const loadStats = useCallback(() => {
     fetch("/api/corpus/stats", { credentials: "include" })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch stats");
@@ -54,6 +89,19 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
         setLoading(false);
       });
   }, []);
+
+  useEffect(() => {
+    loadStats();
+    
+    // Listen for image deletion events to refresh stats
+    const handleImageDeleted = () => {
+      console.log("[corpus] Image deleted, refreshing stats");
+      loadStats();
+    };
+    
+    window.addEventListener('corpus-image-deleted', handleImageDeleted);
+    return () => window.removeEventListener('corpus-image-deleted', handleImageDeleted);
+  }, [loadStats]);
 
   // Load visualization in iframe
   useEffect(() => {
@@ -137,67 +185,68 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
     }
   }, [directionsOpen, directionsFetched, loadingDirections, loadDirections]);
 
-  // Execute a direction
+  // Execute a direction — fires off generation and subscribes to SSE progress.
+  // State is stored at module level so it persists across unmount/remount.
   const handleExecute = useCallback(async (directionId: string) => {
-    setExecutingId(directionId);
-    setResult(null);
+    // Abort any previous generation subscription
+    if (activeGen?.controller) activeGen.controller.abort();
     if (resultTimeout.current) clearTimeout(resultTimeout.current);
+
+    // Optimistic state
+    const controller = new AbortController();
+    activeGen = { directionId, generationId: "", progress: null, result: null, controller };
+    notifyGenListeners();
 
     try {
       const res = await executeCorpusDirection(directionId);
-      if (res.success) {
-        setResult({ success: true, message: `Image generated: ${res.imageId?.slice(0, 8)}...` });
-        // Trigger image gallery refresh
-        window.dispatchEvent(new CustomEvent('corpus-image-generated'));
-        
-        // Subscribe to generation progress if generationId is returned
-        if (res.generationId) {
-          console.log(`[corpus] Subscribing to generation ${res.generationId} for progress`);
-          // Subscribe to SSE stream for progress tracking
-          const abortController = new AbortController();
-          fetch(`/api/images/generation/${res.generationId}/events`, {
-            signal: abortController.signal,
-            credentials: "include",
-          })
-            .then(async (streamRes) => {
-              if (!streamRes.ok) return;
-              const reader = streamRes.body?.getReader();
-              if (!reader) return;
-              
-              const decoder = new TextDecoder();
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                const text = decoder.decode(value);
-                for (const line of text.split('\n')) {
-                  if (line.startsWith('data: ')) {
-                    try {
-                      const state = JSON.parse(line.substring(6));
-                      // Update active generations if needed
-                      console.log(`[corpus] Generation ${state.id}: ${state.status}`);
-                      if (state.status === 'completed') {
-                        // Refresh gallery when complete
-                        window.dispatchEvent(new CustomEvent('corpus-image-generated'));
-                      }
-                    } catch {}
-                  }
-                }
-              }
-            })
-            .catch(() => {});
-        }
-      } else {
-        setResult({ success: false, message: res.error || "Generation failed" });
+      if (!res.success || !res.generationId) {
+        activeGen = { directionId, generationId: "", progress: null, result: { success: false, message: res.error || "Failed to start generation" }, controller };
+        notifyGenListeners();
+        resultTimeout.current = setTimeout(() => { activeGen = null; notifyGenListeners(); }, 8000);
+        return;
       }
+
+      activeGen.generationId = res.generationId;
+      notifyGenListeners();
+
+      // Subscribe to SSE progress — runs even if component unmounts
+      const sub = subscribeToGeneration(res.generationId, {
+        onState: (state) => {
+          if (!activeGen || activeGen.generationId !== res.generationId) return;
+          if (state.progress) {
+            activeGen = { ...activeGen, progress: { step: state.progress.step, total: state.progress.total } };
+            notifyGenListeners();
+          }
+          if (state.status === "completed") {
+            activeGen = { ...activeGen, progress: null, result: { success: true, message: "Image generated successfully" } };
+            notifyGenListeners();
+            window.dispatchEvent(new CustomEvent('corpus-image-generated'));
+            setTimeout(() => { activeGen = null; notifyGenListeners(); }, 8000);
+            sub.abort();
+          } else if (state.status === "error") {
+            activeGen = { ...activeGen, progress: null, result: { success: false, message: state.error || "Generation failed" } };
+            notifyGenListeners();
+            setTimeout(() => { activeGen = null; notifyGenListeners(); }, 8000);
+            sub.abort();
+          }
+        },
+        onError: (err) => {
+          if (!activeGen || activeGen.generationId !== res.generationId) return;
+          activeGen = { ...activeGen, progress: null, result: { success: false, message: err } };
+          notifyGenListeners();
+          setTimeout(() => { activeGen = null; notifyGenListeners(); }, 8000);
+        },
+      });
+      activeGen.controller = sub;
+      notifyGenListeners();
     } catch (err: any) {
-      setResult({ success: false, message: err.message });
-    } finally {
-      setExecutingId(null);
-      resultTimeout.current = setTimeout(() => setResult(null), 8000);
+      activeGen = { directionId, generationId: "", progress: null, result: { success: false, message: err.message }, controller };
+      notifyGenListeners();
+      resultTimeout.current = setTimeout(() => { activeGen = null; notifyGenListeners(); }, 8000);
     }
   }, []);
 
-  // Cleanup timeout
+  // Cleanup component-level timers (SSE subscription intentionally survives unmount)
   useEffect(() => {
     return () => {
       if (resultTimeout.current) clearTimeout(resultTimeout.current);
@@ -350,21 +399,33 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
                       </button>
                     </div>
 
-                    {/* Generate button */}
-                    <button
-                      onClick={() => handleExecute(dir.id)}
-                      disabled={executingId !== null}
-                      className="shrink-0 px-3 py-1.5 rounded-md text-xs font-medium bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    >
-                      {executingId === dir.id ? (
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-3 h-3 border-2 border-purple-300/30 border-t-purple-300 rounded-full animate-spin" />
-                          Generating...
-                        </span>
-                      ) : (
-                        "Generate"
+                    {/* Generate button + progress */}
+                    <div className="shrink-0 flex flex-col items-end gap-1.5">
+                      <button
+                        onClick={() => handleExecute(dir.id)}
+                        disabled={executingId !== null}
+                        className="px-3 py-1.5 rounded-md text-xs font-medium bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {executingId === dir.id ? (
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-3 h-3 border-2 border-purple-300/30 border-t-purple-300 rounded-full animate-spin" />
+                            {genProgress
+                              ? `Step ${genProgress.step}/${genProgress.total}`
+                              : "Queued..."}
+                          </span>
+                        ) : (
+                          "Generate"
+                        )}
+                      </button>
+                      {executingId === dir.id && genProgress && (
+                        <div className="w-24 h-1 rounded-full bg-white/10 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-purple-400/60 transition-all duration-300"
+                            style={{ width: `${(genProgress.step / genProgress.total) * 100}%` }}
+                          />
+                        </div>
                       )}
-                    </button>
+                    </div>
                   </div>
                 </div>
               ))

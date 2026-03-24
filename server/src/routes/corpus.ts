@@ -372,47 +372,53 @@ router.post("/cache/clear", async (_req, res) => {
 });
 
 // POST /api/corpus/execute - Execute a creative direction (generate image)
+// Returns immediately with generationId; client subscribes to SSE for progress.
 router.post("/execute", async (req, res) => {
   try {
     const { directionId, chatId }: { directionId: string; chatId: string } = req.body;
-    
+
     if (!directionId || !chatId) {
       return res.status(400).json({ error: "directionId and chatId required" });
     }
-    
+
     // Get the direction from cache
     const { getCachedDirections } = await import("../services/direction-cache.js");
     const cached = await getCachedDirections();
-    
+
     let direction;
     if (cached) {
       direction = cached.directions.find((d: any) => d.id === directionId);
     }
-    
+
     if (!direction) {
       return res.status(404).json({ error: "Direction not found" });
     }
-    
-    // Execute generation with z-image base defaults
+
+    // Create generation state immediately so client can subscribe to progress.
+    // executeDirection will detect the existing state and use it.
+    const { createGeneration } = await import("../services/image-generation.js");
+    const genState = createGeneration({
+      positivePrompt: direction.proposedPrompt,
+      model: "z-image-BF16.gguf",
+      steps: 35,
+      cfgScale: 4.0,
+      width: 1024,
+      height: 1365,
+    }, chatId);
+
+    // Return immediately with the generationId so client can subscribe to SSE progress
+    res.json({
+      success: true,
+      generationId: genState.id,
+      directionId,
+      generatedBy: 'agent',
+    });
+
+    // Execute generation in the background
     const { executeDirection, DEFAULT_AUTONOMOUS_CONFIG } = await import("../services/autonomous-generation.js");
-    
-    const result = await executeDirection(direction, chatId, DEFAULT_AUTONOMOUS_CONFIG);
-    
-    if (result.success) {
-      res.json({ 
-        success: true,
-        imageId: result.imageId,
-        imageUrl: result.imageUrl,
-        generationId: result.generationId,  // Return generation ID for SSE progress tracking
-        directionId,
-        generatedBy: 'agent',
-      });
-    } else {
-      res.status(400).json({ 
-        success: false,
-        error: result.error,
-      });
-    }
+    executeDirection(direction, chatId, DEFAULT_AUTONOMOUS_CONFIG, genState.id).catch((err: any) => {
+      console.error("[corpus] background execute error:", err);
+    });
   } catch (err: any) {
     console.error("[corpus] execute error:", err);
     res.status(500).json({ error: "Failed to execute direction", details: err.message });
