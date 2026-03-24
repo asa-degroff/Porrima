@@ -57,7 +57,8 @@ export async function truncateBeforeSend(
   chat: Chat,
   contextWindow: number,
   systemPrompt: string,
-  onCompacting?: () => void
+  onCompacting?: () => void,
+  onKeepalive?: () => void
 ): Promise<CompactionResult | null> {
   const noOp = null;
   const messages = chat.messages;
@@ -128,7 +129,7 @@ export async function truncateBeforeSend(
 
   // Generate summary of removed messages before truncation
   const removedMessages = messages.slice(1, keepFromIndex);
-  const summary = await generateCompactionSummary(removedMessages, chat.modelId);
+  const summary = await generateCompactionSummary(removedMessages, chat.modelId, onKeepalive);
 
   // Keep first message, insert summary, then recent messages
   const firstMessage = messages[0];
@@ -167,12 +168,13 @@ export async function truncateBeforeSend(
  */
 async function generateCompactionSummary(
   messages: Chat["messages"],
-  modelId: string
+  modelId: string,
+  onKeepalive?: () => void
 ): Promise<string> {
   if (messages.length === 0) return "";
 
   const { streamChat } = await import("./agent.js");
-  
+
   // Build summary input with enough content for meaningful summarization.
   // Cap total input to ~8k chars (~2k tokens) to avoid overloading the summarizer.
   // Distribute budget evenly across all messages so later ones aren't excluded.
@@ -196,6 +198,12 @@ Example: "The user asked for help debugging a TypeScript type error. The assista
 
 Output ONLY the summary, no introduction or formatting.`;
 
+  // Send keepalives every 10s so the client SSE inactivity timer doesn't fire
+  // while the summary model is generating
+  const keepaliveInterval = onKeepalive
+    ? setInterval(onKeepalive, 10_000)
+    : null;
+
   try {
     const result = await streamChat(
       modelId,
@@ -207,6 +215,8 @@ Output ONLY the summary, no introduction or formatting.`;
   } catch (err) {
     console.error("[compaction] Summary generation failed:", err);
     return "Previous conversation context was truncated.";
+  } finally {
+    if (keepaliveInterval) clearInterval(keepaliveInterval);
   }
 }
 
@@ -226,7 +236,8 @@ export async function truncateChatHistory(
   chat: Chat,
   contextWindow: number,
   forceCompact: boolean = false,
-  onCompacting?: () => void
+  onCompacting?: () => void,
+  onKeepalive?: () => void
 ): Promise<CompactionResult> {
   const noOp: CompactionResult = { truncated: false, removedCount: 0 };
   const messages = chat.messages;
@@ -291,13 +302,13 @@ export async function truncateChatHistory(
   const recentMessages = messages.slice(keepFromIndex);
 
   // Generate summary of removed messages to preserve continuity
-  const summary = await generateCompactionSummary(removedMessages, chat.modelId);
-  
+  const summary = await generateCompactionSummary(removedMessages, chat.modelId, onKeepalive);
+
   // Preserve usage from the last removed message if available
-  const lastRemovedUsage = removedMessages.length > 0 
-    ? removedMessages[removedMessages.length - 1].usage 
+  const lastRemovedUsage = removedMessages.length > 0
+    ? removedMessages[removedMessages.length - 1].usage
     : undefined;
-  
+
   const summaryMessage: ChatMessage = {
     role: "assistant",
     content: `[Conversation Summary] ${summary}`,

@@ -927,7 +927,8 @@ async function handleChatStream(
 
           if (needsCompaction) {
             const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
-            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting);
+            const emitKeepalive = () => res.write(`: keepalive\n\n`);
+            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive);
             if (compaction.truncated) {
               // Extract memories from removed messages (agent chats only)
               if (chat.type === "agent" && compaction.removedMessages?.length) {
@@ -1173,7 +1174,8 @@ router.post("/", async (req, res) => {
     if (model) {
       try {
         const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`));
+        const emitKeepalive = () => res.write(`: keepalive\n\n`);
+        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
           await saveChat(chat);
           // Rebuild system prompt after truncation
@@ -1260,7 +1262,8 @@ router.post("/", async (req, res) => {
     if (model) {
       try {
         const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`));
+        const emitKeepalive = () => res.write(`: keepalive\n\n`);
+        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
           await saveChat(chat);
           // Rebuild system prompt after truncation (memories may have changed)
@@ -1282,17 +1285,17 @@ router.post("/", async (req, res) => {
         console.error("[compaction] pre-send truncation failed:", err);
       }
     }
-    
+
     setCachedAugmentedPrompt(chat.id, systemPrompt);
 
     // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
     const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
-    
+
     // Safety check: warn if context is empty for non-first messages
     if (contextMessages.length === 0 && chat.messages.length > 1) {
       console.error(`[chat] CRITICAL: context conversion produced empty array for chat with ${chat.messages.length} messages`);
     }
-    
+
     // Safety check: detect catastrophic context loss from compaction
     if (chat.messages.length <= 3 && chat.messages.length > 1) {
       console.warn(`[chat] WARNING: chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
@@ -1406,7 +1409,8 @@ router.post("/edit", async (req, res) => {
   if (model) {
     try {
       const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
-      const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`));
+      const emitKeepalive = () => res.write(`: keepalive\n\n`);
+      const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
       if (compaction && compaction.truncated) {
         await saveChat(chat);
         // Rebuild system prompt after truncation
