@@ -47,7 +47,7 @@ async function runCorpusCreativeCycle() {
     console.log(`[scheduler] Rebuilt ${clusterMap.clusters.length} clusters from ${corpus.length} images`);
     
     // 2. Generate creative directions
-    const directions = await proposeDirections(clusterMap.clusters, corpus, { limit: 5, minNovelty: 0.6 });
+    const directions = await proposeDirections(clusterMap.clusters, corpus, { limit: 5, minNovelty: 0.3 });
     console.log(`[scheduler] Generated ${directions.length} creative directions`);
     
     // 3. Execute top 4 directions autonomously

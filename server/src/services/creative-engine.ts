@@ -89,6 +89,12 @@ export async function loadCachedDirections(
       return null;
     }
     
+    // Don't return empty cached results
+    if (cached.directions.length === 0) {
+      console.log("[creative-engine] Ignoring empty cached directions");
+      return null;
+    }
+
     console.log(`[creative-engine] Loaded ${cached.directions.length} cached directions (${Math.round(age / 60000)}min old, ${cached.modelId})`);
     return cached;
   } catch (err) {
@@ -135,7 +141,7 @@ export async function proposeDirections(
   } = {}
 ): Promise<CreativeDirection[]> {
   const limit = options.limit ?? 5;
-  const minNovelty = options.minNovelty ?? 0.6;
+  const minNovelty = options.minNovelty ?? 0.3;
   const useCache = options.useCache ?? true;
   const modelId = options.modelId ?? "qwen3.5:9b";
 
@@ -152,13 +158,25 @@ export async function proposeDirections(
 
   const gaps = analyzeGaps(clusters, corpus);
 
-  // Run all direction types in parallel — they're independent
-  const [gapDirections, remixDirections, deepenDirections, contrastDirections] = await Promise.all([
+  // Run all direction types in parallel — use allSettled so one failure doesn't kill the rest
+  const results = await Promise.allSettled([
     Promise.all(gaps.slice(0, 2).map(gap => createGapFilling(gap, clusters, corpus, modelId))),
     createCrossPollination(clusters, corpus, minNovelty, modelId),
     createDeepVariation(clusters, corpus, minNovelty, modelId),
     createContrast(clusters, corpus, minNovelty, modelId),
   ]);
+
+  const gapDirections = results[0].status === "fulfilled" ? results[0].value : [];
+  const remixDirections = results[1].status === "fulfilled" ? results[1].value : [];
+  const deepenDirections = results[2].status === "fulfilled" ? results[2].value : [];
+  const contrastDirections = results[3].status === "fulfilled" ? results[3].value : [];
+
+  // Log any failures
+  for (const [i, label] of ["gap-fill", "remix", "deepen", "contrast"].entries()) {
+    if (results[i].status === "rejected") {
+      console.error(`[creative-engine] ${label} generation failed:`, (results[i] as PromiseRejectedResult).reason?.message);
+    }
+  }
 
   const directions: CreativeDirection[] = [];
   directions.push(...gapDirections.filter(d => d.noveltyScore >= minNovelty));
@@ -168,11 +186,15 @@ export async function proposeDirections(
 
   // Sort by novelty score and limit
   directions.sort((a, b) => b.noveltyScore - a.noveltyScore);
-  
-  // Cache the results
-  await saveCachedDirections(directions.slice(0, limit), corpus.length, clusters.length, modelId);
-  
-  return directions.slice(0, limit);
+
+  const finalDirections = directions.slice(0, limit);
+
+  // Only cache if we got results — don't cache empty sets
+  if (finalDirections.length > 0) {
+    await saveCachedDirections(finalDirections, corpus.length, clusters.length, modelId);
+  }
+
+  return finalDirections;
 }
 
 /**

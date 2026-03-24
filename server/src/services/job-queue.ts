@@ -90,20 +90,23 @@ export async function processNextJob(): Promise<DirectionJob | null> {
       throw new Error("No clusters available");
     }
     
-    // Generate directions
+    // Generate directions (bypass internal cache — this is a fresh generation)
     const directions = await proposeDirections(
       clusterMap.clusters,
       corpus,
-      { limit: job.params.limit, minNovelty: job.params.minNovelty }
+      { limit: job.params.limit, minNovelty: job.params.minNovelty, useCache: false }
     );
-    
-    // Cache the results
-    const cacheId = await cacheDirections(
-      directions,
-      corpus.length,
-      clusterMap.clusters.length,
-      job.params.modelId
-    );
+
+    // Cache the results (only if non-empty)
+    let cacheId = "";
+    if (directions.length > 0) {
+      cacheId = await cacheDirections(
+        directions,
+        corpus.length,
+        clusterMap.clusters.length,
+        job.params.modelId
+      );
+    }
     
     job.status = 'complete';
     job.completedAt = Date.now();

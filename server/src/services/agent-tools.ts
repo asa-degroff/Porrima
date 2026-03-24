@@ -335,7 +335,7 @@ ${clusters.slice(0, 5).map((c, i) => `${i + 1}. ${c.name} (${c.size} images) - $
           ? clusterMap.clusters.filter(c => args.sourceClusters.includes(c.id))
           : clusterMap.clusters;
         
-        const directions = await proposeDirections(selectedClusters, corpus, { limit: 1, minNovelty: 0.6 });
+        const directions = await proposeDirections(selectedClusters, corpus, { limit: 1, minNovelty: 0.3 });
         
         if (directions.length === 0) {
           return { content: [{ type: "text", text: "Could not generate novel direction. Corpus may be too homogeneous." }], details: {} };

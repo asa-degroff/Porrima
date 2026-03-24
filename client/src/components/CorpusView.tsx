@@ -32,6 +32,7 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
   const [directionsOpen, setDirectionsOpen] = useState(false);
   const [directions, setDirections] = useState<CorpusDirection[]>([]);
   const [loadingDirections, setLoadingDirections] = useState(false);
+  const [directionsFetched, setDirectionsFetched] = useState(false);
   const [executingId, setExecutingId] = useState<string | null>(null);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
   const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
@@ -81,25 +82,60 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
     };
   }, []);
 
-  // Fetch directions
+  // Fetch directions, polling if a background job is running
   const loadDirections = useCallback(async (refresh = false) => {
     setLoadingDirections(true);
     try {
       const data = await fetchDirections(refresh);
-      setDirections(data.directions);
+
+      if (data.directions.length > 0) {
+        setDirections(data.directions);
+        setDirectionsFetched(true);
+        setLoadingDirections(false);
+        return;
+      }
+
+      // If a job is running, poll every 5s until it completes
+      if (data.jobRunning) {
+        const poll = async () => {
+          try {
+            const check = await fetchDirections(false);
+            if (check.directions.length > 0) {
+              setDirections(check.directions);
+              setLoadingDirections(false);
+              setDirectionsFetched(true);
+            } else if (check.jobRunning) {
+              setTimeout(poll, 5000);
+            } else {
+              // Job finished but no directions
+              setLoadingDirections(false);
+              setDirectionsFetched(true);
+            }
+          } catch {
+            setLoadingDirections(false);
+            setDirectionsFetched(true);
+          }
+        };
+        setTimeout(poll, 5000);
+        return;
+      }
+
+      // No directions and no job — nothing to do
+      setDirectionsFetched(true);
+      setLoadingDirections(false);
     } catch (err: any) {
       console.error("[corpus] directions error:", err);
-    } finally {
       setLoadingDirections(false);
+      setDirectionsFetched(true);
     }
   }, []);
 
-  // Load directions when panel opens
+  // Load directions once when panel opens
   useEffect(() => {
-    if (directionsOpen && directions.length === 0 && !loadingDirections) {
+    if (directionsOpen && !directionsFetched && !loadingDirections) {
       loadDirections();
     }
-  }, [directionsOpen, directions.length, loadingDirections, loadDirections]);
+  }, [directionsOpen, directionsFetched, loadingDirections, loadDirections]);
 
   // Execute a direction
   const handleExecute = useCallback(async (directionId: string) => {
@@ -229,7 +265,7 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
               </div>
             ) : directions.length === 0 ? (
               <div className="py-6 text-center text-slate-500 text-sm">
-                No directions available. Try rebuilding clusters first.
+                No directions generated. Try clicking Refresh to generate new ones.
               </div>
             ) : (
               directions.map((dir) => (

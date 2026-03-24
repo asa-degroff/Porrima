@@ -171,7 +171,7 @@ router.get("/directions", async (req, res) => {
     }
 
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 5;
-    const minNovelty = req.query.minNovelty ? parseFloat(req.query.minNovelty as string) : 0.6;
+    const minNovelty = req.query.minNovelty ? parseFloat(req.query.minNovelty as string) : 0.3;
     const useCache = req.query.cached !== 'false'; // Default to using cache
     const forceRefresh = req.query.refresh === 'true';
     
@@ -208,29 +208,23 @@ router.get("/directions", async (req, res) => {
       });
     }
     
-    // Generate fresh directions
-    console.log(`[corpus] Generating ${limit} directions (minNovelty: ${minNovelty})...`);
-    const startTime = Date.now();
-    
-    const directions = await proposeDirections(clusterMap.clusters, corpus, { limit, minNovelty });
-    
-    const elapsed = Date.now() - startTime;
-    console.log(`[corpus] Generated ${directions.length} directions in ${elapsed}ms`);
-    
-    // Cache the results
-    const cacheId = await cacheDirections(
-      directions,
-      corpus.length,
-      clusterMap.clusters.length,
-      "qwen3.5:4b"
+    // Queue background generation instead of blocking the request
+    const jobId = createDirectionJob(
+      clusterMap.clusters,
+      corpus,
+      limit,
+      minNovelty,
+      "qwen3.5:9b"
     );
-    
+
+    processNextJob().catch((err: unknown) => console.error("[corpus] Job processing failed:", err));
+
     res.json({
-      directions,
-      cached: false,
-      cacheId,
-      generated: directions.length,
-      elapsed,
+      directions: [],
+      jobRunning: true,
+      jobId,
+      jobStatus: "pending",
+      message: "Direction generation started",
     });
   } catch (err) {
     console.error("[corpus] directions error:", err);
@@ -249,7 +243,7 @@ router.post("/directions/generate", async (req, res) => {
     }
     
     const limit = req.body.limit || 5;
-    const minNovelty = req.body.minNovelty || 0.6;
+    const minNovelty = req.body.minNovelty || 0.3;
     
     // Create background job
     const jobId = createDirectionJob(
@@ -324,7 +318,7 @@ router.post("/remix", async (req, res) => {
     if (selectedClusters.length >= 2 || directionType !== "remix") {
       // Generate a single direction based on the request
       const { proposeDirections } = await import("../services/creative-engine.js");
-      const directions = await proposeDirections(selectedClusters.length ? selectedClusters : clusterMap.clusters, corpus, { limit: 1, minNovelty: 0.6 });
+      const directions = await proposeDirections(selectedClusters.length ? selectedClusters : clusterMap.clusters, corpus, { limit: 1, minNovelty: 0.3 });
       
       if (directions.length === 0) {
         return res.status(400).json({ error: "Could not generate novel direction" });
