@@ -122,6 +122,27 @@ export interface Settings {
   // Extraction model configuration
   extractionModelId?: string;
   extractionFallbackEnabled?: boolean;
+  // Creative direction settings
+  creativeDirections?: CreativeDirectionSettings;
+}
+
+export interface CreativeDirectionSettings {
+  /** Enable automatic direction generation during synthesis */
+  enabled?: boolean;
+  /** LLM model used to generate direction prompts */
+  modelId?: string;
+  /** Maximum directions to generate per cycle */
+  limit?: number;
+  /** Minimum novelty score (0-1) for a direction to be kept. Lower = more permissive */
+  minNovelty?: number;
+  /** Maximum directions to auto-execute per cycle */
+  maxExecutions?: number;
+  /** Image generation model override (ComfyUI checkpoint) */
+  imageModelId?: string;
+  /** Default CFG scale for autonomous generations */
+  cfgScale?: number;
+  /** Default step count for autonomous generations */
+  steps?: number;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";

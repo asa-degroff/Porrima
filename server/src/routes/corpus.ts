@@ -22,6 +22,7 @@ import {
   getAllJobs,
   processNextJob,
 } from "../services/job-queue.js";
+import { getSettings } from "../services/chat-storage.js";
 
 const router = Router();
 
@@ -170,8 +171,11 @@ router.get("/directions", async (req, res) => {
       return res.json({ directions: [], message: "No clusters available" });
     }
 
-    const limit = req.query.limit ? parseInt(req.query.limit as string) : 5;
-    const minNovelty = req.query.minNovelty ? parseFloat(req.query.minNovelty as string) : 0.3;
+    const settings = await getSettings();
+    const cdSettings = settings.creativeDirections ?? {};
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : (cdSettings.limit ?? 5);
+    const minNovelty = req.query.minNovelty ? parseFloat(req.query.minNovelty as string) : (cdSettings.minNovelty ?? 0.15);
+    const dirModelId = cdSettings.modelId || "qwen3.5:9b";
     const useCache = req.query.cached !== 'false'; // Default to using cache
     const forceRefresh = req.query.refresh === 'true';
     
@@ -229,7 +233,7 @@ router.get("/directions", async (req, res) => {
       corpus,
       limit,
       minNovelty,
-      "qwen3.5:9b"
+      dirModelId
     );
 
     processNextJob().catch((err: unknown) => console.error("[corpus] Job processing failed:", err));
@@ -257,16 +261,19 @@ router.post("/directions/generate", async (req, res) => {
       return res.status(400).json({ error: "No clusters available" });
     }
     
-    const limit = req.body.limit || 5;
-    const minNovelty = req.body.minNovelty || 0.3;
-    
+    const settings = await getSettings();
+    const cdSettings = settings.creativeDirections ?? {};
+    const limit = req.body.limit || (cdSettings.limit ?? 5);
+    const minNovelty = req.body.minNovelty || (cdSettings.minNovelty ?? 0.15);
+    const dirModelId = cdSettings.modelId || "qwen3.5:9b";
+
     // Create background job
     const jobId = createDirectionJob(
       clusterMap.clusters,
       corpus,
       limit,
       minNovelty,
-      "qwen3.5:9b"
+      dirModelId
     );
     
     // Start processing
@@ -333,7 +340,9 @@ router.post("/remix", async (req, res) => {
     if (selectedClusters.length >= 2 || directionType !== "remix") {
       // Generate a single direction based on the request
       const { proposeDirections } = await import("../services/creative-engine.js");
-      const directions = await proposeDirections(selectedClusters.length ? selectedClusters : clusterMap.clusters, corpus, { limit: 1, minNovelty: 0.3 });
+      const s = await getSettings();
+      const cd = s.creativeDirections ?? {};
+      const directions = await proposeDirections(selectedClusters.length ? selectedClusters : clusterMap.clusters, corpus, { limit: 1, minNovelty: cd.minNovelty ?? 0.15 });
       
       if (directions.length === 0) {
         return res.status(400).json({ error: "Could not generate novel direction" });

@@ -139,6 +139,19 @@ export interface Settings {
   // Extraction model configuration
   extractionModelId?: string;
   extractionFallbackEnabled?: boolean;
+  // Creative direction settings
+  creativeDirections?: CreativeDirectionSettings;
+}
+
+export interface CreativeDirectionSettings {
+  enabled?: boolean;
+  modelId?: string;
+  limit?: number;
+  minNovelty?: number;
+  maxExecutions?: number;
+  imageModelId?: string;
+  cfgScale?: number;
+  steps?: number;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";

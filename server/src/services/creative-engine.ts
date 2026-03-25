@@ -323,13 +323,18 @@ export async function proposeDirections(
     console.log(`[creative-engine] ${label}: ${dirs.length} directions${dirs.length > 0 ? ` (novelty: ${dirs.map(d => d.noveltyScore.toFixed(3)).join(", ")})` : ""}`);
   }
 
-  const directions: CreativeDirection[] = [];
-  directions.push(...gapDirections.filter(d => d.noveltyScore >= minNovelty));
-  directions.push(...remixDirections.slice(0, 2));
-  directions.push(...deepenDirections.slice(0, 1));
-  directions.push(...contrastDirections.slice(0, 1));
+  // Merge all directions, then apply novelty filter once at the end
+  const allDirections = [
+    ...gapDirections,
+    ...remixDirections,
+    ...deepenDirections,
+    ...contrastDirections,
+  ];
 
-  console.log(`[creative-engine] Total before limit: ${directions.length}, limit: ${limit}`);
+  // Single novelty filter — the individual generators no longer pre-filter
+  const directions = allDirections.filter(d => d.noveltyScore >= minNovelty);
+
+  console.log(`[creative-engine] Total candidates: ${allDirections.length}, passed novelty (>=${minNovelty}): ${directions.length}, limit: ${limit}`);
 
   // Sort by novelty score and limit
   directions.sort((a, b) => b.noveltyScore - a.noveltyScore);
@@ -530,7 +535,7 @@ The combination should feel intentional, not random. Draw specific visual elemen
     }
   }
 
-  return directions.filter(d => d.noveltyScore >= minNovelty);
+  return directions;
 }
 
 /**
@@ -601,7 +606,7 @@ Study the existing images carefully. Make the new prompt more complex and layere
     }
   }
 
-  return directions.filter(d => d.noveltyScore >= minNovelty);
+  return directions;
 }
 
 /**
@@ -677,21 +682,19 @@ Study the attached images to understand the dominant visual language, then creat
   const embedding = await generateEmbedding(proposedPrompt);
   const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.75;
 
-  if (noveltyScore >= minNovelty) {
-    return [{
-      id: crypto.randomUUID(),
-      type: "contrast",
-      description: `Contrast dominant ${topTheme} with ${oppositeTheme}`,
-      sourceClusters: [],
-      elementCombination: {
-        injectNovelty: `${oppositeTheme}, ${oppositeMood}`,
-      },
-      noveltyScore,
-      proposedPrompt,
-      proposedEmbedding: embedding ?? undefined,
-      createdAt: Date.now(),
-    }];
-  }
+  return [{
+    id: crypto.randomUUID(),
+    type: "contrast",
+    description: `Contrast dominant ${topTheme} with ${oppositeTheme}`,
+    sourceClusters: [],
+    elementCombination: {
+      injectNovelty: `${oppositeTheme}, ${oppositeMood}`,
+    },
+    noveltyScore,
+    proposedPrompt,
+    proposedEmbedding: embedding ?? undefined,
+    createdAt: Date.now(),
+  }];
 
   return [];
 }

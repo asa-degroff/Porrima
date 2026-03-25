@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage } from "../api/client";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage } from "../types";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, CreativeDirectionSettings } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 
 function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
@@ -84,6 +84,15 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [ttsVoices, setTtsVoices] = useState<Array<{ label: string; voices: Array<{ id: string; name: string }> }>>([]);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsError, setTtsError] = useState<string | null>(null);
+  // Creative direction settings
+  const cdDefaults = settings.creativeDirections ?? {};
+  const [cdEnabled, setCdEnabled] = useState(cdDefaults.enabled ?? true);
+  const [cdModelId, setCdModelId] = useState(cdDefaults.modelId || "");
+  const [cdLimit, setCdLimit] = useState(cdDefaults.limit ?? 5);
+  const [cdMinNovelty, setCdMinNovelty] = useState(cdDefaults.minNovelty ?? 0.15);
+  const [cdMaxExecutions, setCdMaxExecutions] = useState(cdDefaults.maxExecutions ?? 4);
+  const [cdSteps, setCdSteps] = useState(cdDefaults.steps ?? 35);
+  const [cdCfgScale, setCdCfgScale] = useState(cdDefaults.cfgScale ?? 4.0);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [visionModelDropdownOpen, setVisionModelDropdownOpen] = useState(false);
   const [voiceDropdownOpen, setVoiceDropdownOpen] = useState(false);
@@ -176,6 +185,15 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       delayedExtractionMessageCap: delayedExtractionCap,
       extractionModelId,
       extractionFallbackEnabled,
+      creativeDirections: {
+        enabled: cdEnabled,
+        modelId: cdModelId || undefined,
+        limit: cdLimit,
+        minNovelty: cdMinNovelty,
+        maxExecutions: cdMaxExecutions,
+        steps: cdSteps,
+        cfgScale: cdCfgScale,
+      },
     });
     
     // Emit TTS settings update event for useTTS hook
@@ -1468,6 +1486,124 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <div className="flex justify-between text-xs text-white/30">
                     <span>0.5x</span>
                     <span>2.0x</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Creative Directions Section */}
+          <div className="space-y-3 pt-2 border-t border-white/10">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium text-white/70">Creative Directions</h3>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cdEnabled}
+                  onChange={(e) => setCdEnabled(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white/60 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-500/40" />
+              </label>
+            </div>
+            <p className="text-white/30 text-xs">
+              Autonomous creative direction generation and image creation during daily synthesis.
+            </p>
+
+            {cdEnabled && (
+              <div className="space-y-3 pl-1">
+                {/* Direction Model */}
+                <div>
+                  <label className="block text-sm text-white/50 mb-1">Direction Model</label>
+                  <input
+                    type="text"
+                    value={cdModelId}
+                    onChange={(e) => setCdModelId(e.target.value)}
+                    placeholder="qwen3.5:9b"
+                    className="w-full px-3 py-1.5 text-sm rounded-lg bg-white/5 border border-white/10 text-white/80 placeholder-white/30 focus:outline-none focus:border-purple-400/40"
+                  />
+                  <p className="text-white/25 text-xs mt-0.5">Ollama model used to generate direction prompts</p>
+                </div>
+
+                {/* Min Novelty */}
+                <div>
+                  <label className="block text-sm text-white/50">Min Novelty: {cdMinNovelty.toFixed(2)}</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="0.5"
+                    step="0.01"
+                    value={cdMinNovelty}
+                    onChange={(e) => setCdMinNovelty(parseFloat(e.target.value))}
+                    className="w-full accent-purple-400"
+                  />
+                  <div className="flex justify-between text-[10px] text-white/25">
+                    <span>0 (all)</span>
+                    <span>0.5 (strict)</span>
+                  </div>
+                </div>
+
+                {/* Direction Limit */}
+                <div>
+                  <label className="block text-sm text-white/50">Directions per cycle: {cdLimit}</label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="10"
+                    step="1"
+                    value={cdLimit}
+                    onChange={(e) => setCdLimit(parseInt(e.target.value))}
+                    className="w-full accent-purple-400"
+                  />
+                  <div className="flex justify-between text-[10px] text-white/25">
+                    <span>1</span>
+                    <span>10</span>
+                  </div>
+                </div>
+
+                {/* Max Executions */}
+                <div>
+                  <label className="block text-sm text-white/50">Max auto-generated images: {cdMaxExecutions}</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="10"
+                    step="1"
+                    value={cdMaxExecutions}
+                    onChange={(e) => setCdMaxExecutions(parseInt(e.target.value))}
+                    className="w-full accent-purple-400"
+                  />
+                  <div className="flex justify-between text-[10px] text-white/25">
+                    <span>0 (none)</span>
+                    <span>10</span>
+                  </div>
+                </div>
+
+                {/* Generation params */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm text-white/50">Steps: {cdSteps}</label>
+                    <input
+                      type="range"
+                      min="10"
+                      max="60"
+                      step="5"
+                      value={cdSteps}
+                      onChange={(e) => setCdSteps(parseInt(e.target.value))}
+                      className="w-full accent-purple-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-white/50">CFG: {cdCfgScale.toFixed(1)}</label>
+                    <input
+                      type="range"
+                      min="1"
+                      max="10"
+                      step="0.5"
+                      value={cdCfgScale}
+                      onChange={(e) => setCdCfgScale(parseFloat(e.target.value))}
+                      className="w-full accent-purple-400"
+                    />
                   </div>
                 </div>
               </div>
