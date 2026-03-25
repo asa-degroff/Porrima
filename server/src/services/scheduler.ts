@@ -11,7 +11,7 @@ import { addMemory } from "./memory-storage.js";
 import { createDirectionJob, processPendingJobs } from "./job-queue.js";
 import { clearCache } from "./direction-cache.js";
 
-const SYNTHESIS_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const SYNTHESIS_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -275,5 +275,5 @@ export function startScheduler(): void {
   // Check every 5 minutes for delayed extractions
   setInterval(checkAndRunDelayedExtractions, DELAYED_EXTRACTION_CHECK_INTERVAL_MS);
   
-  console.log("[scheduler] Started (synthesis hourly, delayed extraction every 5 minutes)");
+  console.log("[scheduler] Started (synthesis every 15min, delayed extraction every 5 minutes)");
 }
