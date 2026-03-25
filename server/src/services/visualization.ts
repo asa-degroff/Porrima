@@ -28,7 +28,15 @@ export function generateForceGraphHTML(
     const cluster = findClusterForImage(entry.id, clusterMap);
     const primaryTheme = entry.elements?.themes?.[0]?.toLowerCase() || "unknown";
     const clusterSize = cluster?.memberIds.length || 1;
-    
+
+    // Build thumbnail URL based on entry type
+    let thumbUrl: string;
+    if (entry.type === "analyzed" && entry.visionId) {
+      thumbUrl = `/api/vision/images/${entry.visionId}/thumb`;
+    } else {
+      thumbUrl = `/api/images/${entry.imagePath || entry.id}/thumb`;
+    }
+
     return {
       id: entry.id,
       clusterId: cluster?.id || null,
@@ -37,6 +45,8 @@ export function generateForceGraphHTML(
       color: getThemeColor(primaryTheme),
       size: Math.min(15, 5 + clusterSize * 0.5),  // Scale node size by cluster density
       prompt: (entry.prompt || entry.description || "").substring(0, 100),
+      description: entry.description || entry.prompt || "",
+      thumbUrl,
       elements: entry.elements || {},
     };
   });
@@ -71,13 +81,109 @@ export function generateForceGraphHTML(
   
   const html = `
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="default">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Image Corpus Visualization</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
+    :root {
+      /* Default theme (purple/amber) - overridden by data-theme attributes */
+      --theme-primary: 162, 74, 255;
+      --theme-primary-muted: 162, 74, 255, 0.2;
+      --theme-primary-border: 162, 74, 255, 0.3;
+      --theme-primary-text: 216, 180, 254;
+      --theme-accent: 251, 191, 36;
+      --theme-accent-muted: 251, 191, 36, 0.15;
+      --theme-accent-border: 251, 191, 36, 0.2;
+      --theme-accent-text: 251, 191, 36, 0.8;
+      --theme-secondary: 59, 132, 250;
+      --theme-secondary-muted: 59, 132, 250, 0.2;
+      --theme-secondary-border: 59, 132, 250, 0.25;
+      --theme-secondary-text: 147, 197, 253;
+      --theme-grid: 139, 92, 246;
+      --theme-grid-opacity: 0.12;
+      --theme-bg-gradient: linear-gradient(135deg, #0f172a 0%, #181845 25%, #1c1a49 38%, #1e1b4b 50%, #1c1a49 62%, #181845 75%, #0f172a 100%);
+      --theme-glow: rgba(162, 74, 255, 0.15);
+    }
+    
+    [data-theme="ocean"] {
+      --theme-primary: 56, 189, 248;
+      --theme-primary-muted: 56, 189, 248, 0.2;
+      --theme-primary-border: 56, 189, 248, 0.3;
+      --theme-primary-text: 125, 211, 252;
+      --theme-accent: 45, 212, 191;
+      --theme-accent-muted: 45, 212, 191, 0.15;
+      --theme-accent-border: 45, 212, 191, 0.2;
+      --theme-accent-text: 45, 212, 191, 0.8;
+      --theme-secondary: 129, 140, 248;
+      --theme-secondary-muted: 129, 140, 248, 0.2;
+      --theme-secondary-border: 129, 140, 248, 0.25;
+      --theme-secondary-text: 167, 139, 250;
+      --theme-grid: 56, 189, 248;
+      --theme-grid-opacity: 0.12;
+      --theme-bg-gradient: linear-gradient(135deg, #0c1929 0%, #172d4e 25%, #1b3458 38%, #1e3a5f 50%, #1b3458 62%, #172d4e 75%, #0c1929 100%);
+      --theme-glow: rgba(56, 189, 248, 0.15);
+    }
+    
+    [data-theme="forest"] {
+      --theme-primary: 134, 239, 172;
+      --theme-primary-muted: 134, 239, 172, 0.2;
+      --theme-primary-border: 134, 239, 172, 0.3;
+      --theme-primary-text: 134, 239, 172, 0.9;
+      --theme-accent: 254, 202, 87;
+      --theme-accent-muted: 254, 202, 87, 0.15;
+      --theme-accent-border: 254, 202, 87, 0.2;
+      --theme-accent-text: 254, 202, 87, 0.8;
+      --theme-secondary: 167, 139, 250;
+      --theme-secondary-muted: 167, 139, 250, 0.2;
+      --theme-secondary-border: 167, 139, 250, 0.25;
+      --theme-secondary-text: 192, 132, 252;
+      --theme-grid: 134, 239, 172;
+      --theme-grid-opacity: 0.12;
+      --theme-bg-gradient: linear-gradient(135deg, #0a1a0f 0%, #132d20 25%, #173427 38%, #1a3a2a 50%, #173427 62%, #132d20 75%, #0a1a0f 100%);
+      --theme-glow: rgba(134, 239, 172, 0.15);
+    }
+    
+    [data-theme="crimson"] {
+      --theme-primary: 244, 63, 94;
+      --theme-primary-muted: 244, 63, 94, 0.2;
+      --theme-primary-border: 244, 63, 94, 0.3;
+      --theme-primary-text: 253, 121, 168;
+      --theme-accent: 251, 191, 36;
+      --theme-accent-muted: 251, 191, 36, 0.15;
+      --theme-accent-border: 251, 191, 36, 0.2;
+      --theme-accent-text: 251, 191, 36, 0.8;
+      --theme-secondary: 253, 121, 168;
+      --theme-secondary-muted: 253, 121, 168, 0.2;
+      --theme-secondary-border: 253, 121, 168, 0.25;
+      --theme-secondary-text: 253, 121, 168, 0.9;
+      --theme-grid: 244, 63, 94;
+      --theme-grid-opacity: 0.12;
+      --theme-bg-gradient: linear-gradient(135deg, #1a0a0f 0%, #2e1220 25%, #351727 38%, #3a1a2a 50%, #351727 62%, #2e1220 75%, #1a0a0f 100%);
+      --theme-glow: rgba(244, 63, 94, 0.15);
+    }
+    
+    [data-theme="mono"] {
+      --theme-primary: 148, 163, 184;
+      --theme-primary-muted: 148, 163, 184, 0.2;
+      --theme-primary-border: 148, 163, 184, 0.3;
+      --theme-primary-text: 148, 163, 184, 0.9;
+      --theme-accent: 203, 213, 225;
+      --theme-accent-muted: 203, 213, 225, 0.15;
+      --theme-accent-border: 203, 213, 225, 0.2;
+      --theme-accent-text: 203, 213, 225, 0.8;
+      --theme-secondary: 100, 116, 139;
+      --theme-secondary-muted: 100, 116, 139, 0.2;
+      --theme-secondary-border: 100, 116, 139, 0.25;
+      --theme-secondary-text: 148, 163, 184, 0.8;
+      --theme-grid: 148, 163, 184;
+      --theme-grid-opacity: 0.1;
+      --theme-bg-gradient: linear-gradient(135deg, #0a0a0a 0%, #151515 25%, #181818 38%, #1a1a1a 50%, #181818 62%, #151515 75%, #0a0a0a 100%);
+      --theme-glow: rgba(148, 163, 184, 0.1);
+    }
+    
     * {
       margin: 0;
       padding: 0;
@@ -86,9 +192,10 @@ export function generateForceGraphHTML(
     
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
+      background: var(--theme-bg-gradient);
+      color: rgba(226, 232, 240, 0.9);
       overflow: hidden;
+      transition: background 0.3s ease;
     }
     
     #graph-container {
@@ -128,7 +235,7 @@ export function generateForceGraphHTML(
     .tooltip {
       position: absolute;
       background: rgba(15, 23, 42, 0.95);
-      border: 1px solid #334155;
+      border: 1px solid rgba(var(--theme-primary-border, 51, 65, 85));
       border-radius: 8px;
       padding: 12px;
       font-size: 12px;
@@ -146,50 +253,161 @@ export function generateForceGraphHTML(
     
     .tooltip-title {
       font-weight: 600;
-      color: #60a5fa;
+      color: rgba(var(--theme-primary-text, 96, 165, 250));
       margin-bottom: 6px;
       font-size: 13px;
     }
     
     .tooltip-cluster {
-      color: #94a3b8;
+      color: rgba(148, 163, 184, 0.9);
       font-size: 11px;
       margin-bottom: 8px;
     }
     
     .tooltip-elements {
-      color: #cbd5e1;
+      color: rgba(203, 213, 225, 0.9);
       line-height: 1.4;
     }
     
     .tooltip-element-label {
-      color: #64748b;
+      color: rgba(100, 116, 139, 0.9);
       font-size: 10px;
       text-transform: uppercase;
       margin-top: 6px;
     }
     
     .tooltip-element-value {
-      color: #e2e8f0;
+      color: rgba(226, 232, 240, 0.9);
       font-size: 11px;
     }
-    
+
+    /* Thin styled scrollbar — shared by legend and detail panel */
+    .styled-scroll::-webkit-scrollbar {
+      width: 5px;
+    }
+    .styled-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .styled-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+    }
+    .styled-scroll::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+    .styled-scroll {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+    }
+
+    .tooltip-thumb {
+      width: 100%;
+      max-height: 160px;
+      object-fit: contain;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      background: rgba(0, 0, 0, 0.3);
+    }
+
+    #detail-panel {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      width: 320px;
+      max-height: calc(100vh - 40px);
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(var(--theme-primary-border, 51, 65, 85));
+      border-radius: 10px;
+      overflow: hidden;
+      display: none;
+      flex-direction: column;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      z-index: 1100;
+    }
+
+    #detail-panel.visible {
+      display: flex;
+    }
+
+    /* When detail panel is visible, shift the legend to the left */
+    #detail-panel.visible ~ #legend {
+      right: 360px;
+    }
+
+    #detail-panel .detail-close {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 24px;
+      height: 24px;
+      border: none;
+      background: rgba(0,0,0,0.4);
+      color: rgba(226, 232, 240, 0.7);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 24px;
+      text-align: center;
+      z-index: 2;
+    }
+
+    #detail-panel .detail-close:hover {
+      background: rgba(0,0,0,0.6);
+      color: rgba(226, 232, 240, 0.95);
+    }
+
+    #detail-panel .detail-thumb {
+      width: 100%;
+      max-height: 240px;
+      object-fit: contain;
+      background: rgba(0, 0, 0, 0.3);
+      flex-shrink: 0;
+    }
+
+    #detail-panel .detail-body {
+      padding: 12px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    #detail-panel .detail-cluster {
+      font-size: 11px;
+      color: rgba(148, 163, 184, 0.9);
+      margin-bottom: 4px;
+    }
+
+    #detail-panel .detail-theme {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: rgba(var(--theme-primary-text, 96, 165, 250));
+      margin-bottom: 8px;
+    }
+
+    #detail-panel .detail-description {
+      font-size: 12px;
+      color: rgba(226, 232, 240, 0.85);
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
     #legend {
       position: absolute;
       top: 20px;
       right: 20px;
       background: rgba(15, 23, 42, 0.9);
-      border: 1px solid #334155;
+      border: 1px solid rgba(var(--theme-primary-border, 33, 65, 85));
       border-radius: 8px;
       padding: 12px;
       max-height: 80vh;
       overflow-y: auto;
       font-size: 11px;
+      transition: right 0.2s ease;
     }
     
     .legend-title {
       font-weight: 600;
-      color: #e2e8f0;
+      color: rgba(226, 232, 240, 0.9);
       margin-bottom: 8px;
       font-size: 12px;
     }
@@ -212,15 +430,15 @@ export function generateForceGraphHTML(
       bottom: 20px;
       left: 20px;
       background: rgba(15, 23, 42, 0.9);
-      border: 1px solid #334155;
+      border: 1px solid rgba(var(--theme-primary-border, 51, 65, 85));
       border-radius: 8px;
       padding: 12px;
       font-size: 11px;
-      color: #94a3b8;
+      color: rgba(148, 163, 184, 0.9);
     }
     
     #stats strong {
-      color: #e2e8f0;
+      color: rgba(226, 232, 240, 0.9);
     }
   </style>
 </head>
@@ -228,7 +446,16 @@ export function generateForceGraphHTML(
   <div id="graph-container">
     <svg id="graph"></svg>
     <div class="tooltip" id="tooltip"></div>
-    <div id="legend"></div>
+    <div id="detail-panel">
+      <button class="detail-close" id="detail-close">&times;</button>
+      <img id="detail-thumb" class="detail-thumb" src="" alt="" />
+      <div class="detail-body styled-scroll">
+        <div class="detail-cluster" id="detail-cluster"></div>
+        <div class="detail-theme" id="detail-theme"></div>
+        <div class="detail-description" id="detail-description"></div>
+      </div>
+    </div>
+    <div id="legend" class="styled-scroll"></div>
     <div id="stats">
       <div><strong>${nodes.length}</strong> images</div>
       <div><strong>${clusterMap.clusters.length}</strong> clusters</div>
@@ -243,6 +470,14 @@ export function generateForceGraphHTML(
     let width = window.innerWidth;
     let height = window.innerHeight;
 
+    // Get theme colors from CSS variables
+    const rootStyles = getComputedStyle(document.documentElement);
+    const themePrimary = rootStyles.getPropertyValue('--theme-primary').trim() || '162, 74, 255';
+    const themeSecondary = rootStyles.getPropertyValue('--theme-secondary').trim() || '59, 132, 250';
+    const themeAccent = rootStyles.getPropertyValue('--theme-accent').trim() || '251, 191, 36';
+    const themeGrid = rootStyles.getPropertyValue('--theme-grid').trim() || '139, 92, 246';
+    const themeGridOpacity = parseFloat(rootStyles.getPropertyValue('--theme-grid-opacity').trim()) || 0.12;
+    
     // Create SVG
     const svg = d3.select("#graph")
       .attr("width", width)
@@ -270,10 +505,10 @@ export function generateForceGraphHTML(
         .distance(80)
         .strength(0.1));
 
-    // Draw links
+    // Draw links with theme color
     const link = g.append("g")
-      .attr("stroke", "#475569")
-      .attr("stroke-opacity", 0.4)
+      .attr("stroke", \`rgba(\${themeGrid}, \${themeGridOpacity})\`)
+      .attr("stroke-opacity", 0.6)
       .selectAll("line")
       .data(links)
       .join("line")
@@ -282,7 +517,7 @@ export function generateForceGraphHTML(
 
     // Draw nodes
     const node = g.append("g")
-      .attr("stroke", "#fff")
+      .attr("stroke", \`rgba(\${themePrimary}, 0.5)\`)
       .attr("stroke-width", 1.5)
       .selectAll("circle")
       .data(nodes)
@@ -299,12 +534,24 @@ export function generateForceGraphHTML(
     // Interaction: hover tooltip
     const tooltip = d3.select("#tooltip");
 
+    // Detail panel references
+    const detailPanel = document.getElementById("detail-panel");
+    const detailClose = document.getElementById("detail-close");
+    const detailThumb = document.getElementById("detail-thumb");
+    const detailCluster = document.getElementById("detail-cluster");
+    const detailTheme = document.getElementById("detail-theme");
+    const detailDesc = document.getElementById("detail-description");
+
+    detailClose.addEventListener("click", () => {
+      detailPanel.classList.remove("visible");
+    });
+
     node.on("mouseover", (event, d) => {
       tooltip.classed("visible", true);
 
-      let html = '<div class="tooltip-title">Image</div>';
-      html += '<div class="tooltip-cluster">' + d.clusterName + '</div>';
-      html += '<div class="tooltip-elements">' + d.prompt + '...</div>';
+      let html = '<img class="tooltip-thumb" src="' + d.thumbUrl + '" alt="" onerror="this.style.display=\\'none\\'" />';
+      html += '<div class="tooltip-title">' + d.clusterName + '</div>';
+      html += '<div class="tooltip-elements">' + d.prompt + (d.prompt.length >= 100 ? '...' : '') + '</div>';
 
       if (d.elements.themes?.length) {
         html += '<div class="tooltip-element-label">Themes</div>';
@@ -329,6 +576,24 @@ export function generateForceGraphHTML(
     })
     .on("mouseout", () => {
       tooltip.classed("visible", false);
+    })
+    .on("click", (event, d) => {
+      // Prevent drag from triggering click
+      if (event.defaultPrevented) return;
+
+      detailThumb.src = d.thumbUrl;
+      detailThumb.style.display = "";
+      detailThumb.onerror = function() { this.style.display = "none"; };
+      detailCluster.textContent = d.clusterName;
+      detailTheme.textContent = d.theme;
+      detailDesc.textContent = d.description || d.prompt || "(no description)";
+      detailPanel.classList.add("visible");
+
+      // Notify parent window
+      window.parent.postMessage({
+        type: "corpus-node-click",
+        payload: { clusterId: d.clusterId, imageId: d.id },
+      }, "*");
     });
 
     function updateTooltipPosition(event) {
@@ -352,7 +617,10 @@ export function generateForceGraphHTML(
 
     // Build legend
     const legend = d3.select("#legend");
-    legend.append("div").attr("class", "legend-title").text("Themes");
+    legend.append("div")
+      .attr("class", "legend-title")
+      .style("color", \`rgba(\${themePrimary}, 0.9)\`)
+      .text("Themes");
 
     const themes = {};
     nodes.forEach(d => {
@@ -369,6 +637,7 @@ export function generateForceGraphHTML(
         .attr("class", "legend-color")
         .style("background-color", data.color);
       item.append("span")
+        .style("color", \`rgba(\${themePrimary}, 0.8)\`)
         .text(theme + " (" + data.count + ")");
     });
 
@@ -418,6 +687,41 @@ export function generateForceGraphHTML(
       svg.attr("width", width).attr("height", height);
       simulation.force("center", d3.forceCenter(width / 2, height / 2));
       simulation.alpha(0.3).restart();
+    });
+    
+    // Listen for theme changes from parent window
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === "theme-change") {
+        const newTheme = event.data.theme || "default";
+        document.documentElement.setAttribute("data-theme", newTheme);
+        
+        // Re-read theme colors from CSS variables
+        const rootStyles = getComputedStyle(document.documentElement);
+        const newThemeGrid = rootStyles.getPropertyValue("--theme-grid").trim() || "139, 92, 246";
+        const newThemeGridOpacity = parseFloat(rootStyles.getPropertyValue("--theme-grid-opacity").trim()) || 0.12;
+        const newThemePrimary = rootStyles.getPropertyValue("--theme-primary").trim() || "162, 74, 255";
+        
+        // Update link colors
+        link.attr("stroke", \`rgba(\${newThemeGrid}, \${newThemeGridOpacity})\`);
+        
+        // Update node stroke
+        node.attr("stroke", \`rgba(\${newThemePrimary}, 0.5)\`);
+        
+        // Update legend title color
+        legend.select(".legend-title")
+          .style("color", \`rgba(\${newThemePrimary}, 0.9)\`);
+        
+        // Update legend item colors
+        legend.selectAll(".legend-item span")
+          .style("color", \`rgba(\${newThemePrimary}, 0.8)\`);
+        
+        // Update tooltip border
+        tooltip.style("border-color", \`rgba(\${newThemePrimary}, 0.3)\`);
+        
+        // Update tooltip title color
+        tooltip.select(".tooltip-title")
+          .style("color", \`rgba(\${newThemePrimary}, 0.9)\`);
+      }
     });
   </script>
 </body>

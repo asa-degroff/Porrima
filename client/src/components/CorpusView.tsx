@@ -40,10 +40,11 @@ interface CorpusViewProps {
   onOpenCluster?: (clusterId: string) => void;
 }
 
+// Type colors use theme CSS variables for consistency
 const TYPE_COLORS: Record<string, string> = {
-  remix: "bg-purple-500/20 text-purple-300",
-  explore: "bg-blue-500/20 text-blue-300",
-  deepen: "bg-emerald-500/20 text-emerald-300",
+  remix: "theme-primary-bg theme-primary-text",
+  explore: "theme-secondary-bg theme-secondary-text",
+  deepen: "theme-accent-bg theme-accent-text",
   contrast: "bg-amber-500/20 text-amber-300",
   "gap-fill": "bg-rose-500/20 text-rose-300",
 };
@@ -103,7 +104,7 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
     return () => window.removeEventListener('corpus-image-deleted', handleImageDeleted);
   }, [loadStats]);
 
-  // Load visualization in iframe
+  // Load visualization in iframe and sync theme
   useEffect(() => {
     if (!iframeRef.current) return;
 
@@ -112,6 +113,9 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
 
     const handleLoad = () => {
       setLoading(false);
+      // Send initial theme to iframe
+      const theme = document.documentElement.getAttribute('data-theme') || 'default';
+      iframe.contentWindow?.postMessage({ type: 'theme-change', theme }, window.location.origin);
     };
     iframe.addEventListener("load", handleLoad);
 
@@ -124,9 +128,22 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
     };
 
     window.addEventListener("message", handleMessage);
+    
+    // Listen for theme changes and sync to iframe
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+          const theme = document.documentElement.getAttribute('data-theme') || 'default';
+          iframe.contentWindow?.postMessage({ type: 'theme-change', theme }, window.location.origin);
+        }
+      }
+    });
+    observer.observe(document.documentElement, { attributes: true });
+    
     return () => {
       iframe.removeEventListener("load", handleLoad);
       window.removeEventListener("message", handleMessage);
+      observer.disconnect();
     };
   }, []);
 
@@ -262,7 +279,7 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
             setLoading(true);
             setError(null);
           }}
-          className="mt-4 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded"
+          className="mt-4 px-4 py-2 bg-white/[0.05] hover:bg-white/[0.08] text-white/80 rounded transition-colors"
         >
           Retry
         </button>
@@ -274,26 +291,26 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
     <div className="w-full h-full flex flex-col">
       {/* Stats bar */}
       {stats && (
-        <div className="flex items-center gap-6 px-4 py-3 bg-slate-900/50 border-b border-slate-700/50">
+        <div className="flex items-center gap-6 px-4 py-3 bg-white/[0.05] border-b border-white/10">
           <div className="flex items-center gap-2">
-            <span className="text-slate-400 text-sm">Images:</span>
-            <span className="text-emerald-400 font-semibold">{stats.total}</span>
+            <span className="text-white/50 text-sm">Images:</span>
+            <span className="theme-accent-text font-semibold">{stats.total}</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-slate-400 text-sm">Clusters:</span>
-            <span className="text-purple-400 font-semibold">{stats.clusters}</span>
+            <span className="text-white/50 text-sm">Clusters:</span>
+            <span className="theme-primary-text font-semibold">{stats.clusters}</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-slate-400 text-sm">Enriched:</span>
-            <span className="text-blue-400 font-semibold">{stats.enriched}/{stats.total}</span>
+            <span className="text-white/50 text-sm">Enriched:</span>
+            <span className="theme-secondary-text font-semibold">{stats.enriched}/{stats.total}</span>
           </div>
           {stats.topThemes?.length > 0 && (
             <div className="hidden lg:flex items-center gap-3">
-              <span className="text-slate-400 text-sm">Top themes:</span>
+              <span className="text-white/50 text-sm">Top themes:</span>
               {stats.topThemes.slice(0, 5).map(({ theme, count }) => (
                 <span
                   key={theme}
-                  className="px-2 py-1 bg-slate-800 rounded text-xs text-slate-300"
+                  className="px-2 py-1 bg-white/[0.05] rounded text-xs text-white/70"
                 >
                   {theme} ({count})
                 </span>
@@ -302,7 +319,7 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
           )}
           <button
             onClick={() => setDirectionsOpen(!directionsOpen)}
-            className="ml-auto px-3 py-1.5 text-xs rounded-md bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 transition-colors flex items-center gap-1.5"
+            className="ml-auto px-3 py-1.5 text-xs rounded-md theme-primary-bg theme-primary-text hover:theme-primary-border transition-colors flex items-center gap-1.5"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
@@ -315,7 +332,7 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
 
       {/* Directions panel */}
       {directionsOpen && (
-        <div className="shrink-0 border-b border-purple-500/20 bg-slate-900/70 backdrop-blur-sm">
+        <div className="shrink-0 border-b theme-primary-border bg-white/[0.05] backdrop-blur-sm">
           {/* Result banner */}
           {result && (
             <div
@@ -331,7 +348,7 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
 
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-2 border-b border-white/5">
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-white/50">
               {loadingDirections
                 ? "Generating directions..."
                 : `${directions.length} direction${directions.length !== 1 ? "s" : ""}`}
@@ -339,7 +356,7 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
             <button
               onClick={() => loadDirections(true)}
               disabled={loadingDirections}
-              className="text-xs text-purple-400 hover:text-purple-300 disabled:opacity-40 transition-colors"
+              className="text-xs theme-primary-text hover:theme-primary-text disabled:opacity-40 transition-colors"
             >
               Refresh
             </button>
@@ -348,18 +365,18 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
           {/* Direction cards */}
           <div className="max-h-64 overflow-y-auto p-2 space-y-2">
             {loadingDirections && directions.length === 0 ? (
-              <div className="py-6 text-center text-slate-500 text-sm animate-pulse">
+              <div className="py-6 text-center text-white/40 text-sm animate-pulse">
                 Generating creative directions...
               </div>
             ) : directions.length === 0 ? (
-              <div className="py-6 text-center text-slate-500 text-sm">
+              <div className="py-6 text-center text-white/40 text-sm">
                 No directions generated. Try clicking Refresh to generate new ones.
               </div>
             ) : (
               directions.map((dir) => (
                 <div
                   key={dir.id}
-                  className="rounded-lg bg-white/[0.03] border border-white/5 p-3 hover:border-purple-500/20 transition-colors"
+                  className="rounded-lg bg-white/[0.03] border border-white/5 p-3 hover:theme-primary-border transition-colors"
                 >
                   <div className="flex items-start gap-3">
                     <div className="flex-1 min-w-0">
@@ -367,18 +384,18 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
                       <div className="flex items-center gap-2 mb-1.5">
                         <span
                           className={`px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider ${
-                            TYPE_COLORS[dir.type] || "bg-slate-500/20 text-slate-300"
+                            TYPE_COLORS[dir.type] || "bg-white/[0.05] text-white/60"
                           }`}
                         >
                           {dir.type}
                         </span>
-                        <span className="text-[10px] text-slate-500">
+                        <span className="text-[10px] text-white/40">
                           {(dir.noveltyScore * 100).toFixed(0)}% novel
                         </span>
                       </div>
 
                       {/* Description */}
-                      <p className="text-sm text-slate-300 mb-1.5 line-clamp-1">
+                      <p className="text-sm text-white/80 mb-1.5 line-clamp-1">
                         {dir.description}
                       </p>
 
@@ -390,7 +407,7 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
                         className="text-left w-full"
                       >
                         <p
-                          className={`text-xs text-slate-500 ${
+                          className={`text-xs text-white/50 ${
                             expandedPrompt === dir.id ? "" : "line-clamp-2"
                           }`}
                         >
@@ -404,11 +421,11 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
                       <button
                         onClick={() => handleExecute(dir.id)}
                         disabled={executingId !== null}
-                        className="px-3 py-1.5 rounded-md text-xs font-medium bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        className="px-3 py-1.5 rounded-md text-xs font-medium theme-primary-bg theme-primary-text hover:theme-primary-border disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                       >
                         {executingId === dir.id ? (
                           <span className="flex items-center gap-1.5">
-                            <span className="w-3 h-3 border-2 border-purple-300/30 border-t-purple-300 rounded-full animate-spin" />
+                            <span className="w-3 h-3 border-2 theme-primary-border border-t-theme-primary-text rounded-full animate-spin" />
                             {genProgress
                               ? `Step ${genProgress.step}/${genProgress.total}`
                               : "Queued..."}
@@ -420,7 +437,7 @@ export default function CorpusView({ onOpenCluster }: CorpusViewProps) {
                       {executingId === dir.id && genProgress && (
                         <div className="w-24 h-1 rounded-full bg-white/10 overflow-hidden">
                           <div
-                            className="h-full rounded-full bg-purple-400/60 transition-all duration-300"
+                            className="h-full rounded-full theme-primary-text/60 transition-all duration-300"
                             style={{ width: `${(genProgress.step / genProgress.total) * 100}%` }}
                           />
                         </div>
