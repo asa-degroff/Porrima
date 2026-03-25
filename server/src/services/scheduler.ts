@@ -62,6 +62,15 @@ async function unloadOllamaModel(modelId: string): Promise<void> {
  */
 async function runCorpusCreativeCycle() {
   try {
+    const settings = await getSettings();
+    const cdSettings = settings.creativeDirections ?? {};
+
+    // Check if creative directions are disabled
+    if (cdSettings.enabled === false) {
+      console.log("[scheduler] Creative directions disabled in settings, skipping cycle");
+      return;
+    }
+
     console.log("[scheduler] Running corpus creative cycle...");
 
     // 1. Rebuild clusters with current corpus
@@ -70,10 +79,12 @@ async function runCorpusCreativeCycle() {
     console.log(`[scheduler] Rebuilt ${clusterMap.clusters.length} clusters from ${corpus.length} images`);
 
     // 2. Generate creative directions (LLM phase — uses Ollama GPU)
-    const modelId = "qwen3.5:9b";
+    const modelId = cdSettings.modelId || "qwen3.5:9b";
+    const limit = cdSettings.limit ?? 5;
+    const minNovelty = cdSettings.minNovelty ?? 0.15;
     const directions = await proposeDirections(clusterMap.clusters, corpus, {
-      limit: 5,
-      minNovelty: 0.3,
+      limit,
+      minNovelty,
       useCache: false,
       modelId,
     });
@@ -104,13 +115,22 @@ async function runCorpusCreativeCycle() {
     // Brief pause to let VRAM fully release
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // 5. Execute top 4 directions autonomously (ComfyUI phase — uses GPU for image gen)
+    // 5. Execute top directions autonomously (ComfyUI phase — uses GPU for image gen)
     const { executeDirection, DEFAULT_AUTONOMOUS_CONFIG } = await import("./autonomous-generation.js");
     const systemChatId = "autonomous-system";
+    const maxExecutions = cdSettings.maxExecutions ?? 4;
 
-    for (const dir of directions.slice(0, 4)) {
+    // Build config overrides from settings
+    const genConfig = {
+      ...DEFAULT_AUTONOMOUS_CONFIG,
+      ...(cdSettings.imageModelId ? { modelId: cdSettings.imageModelId } : {}),
+      ...(cdSettings.cfgScale != null ? { cfgScale: cdSettings.cfgScale } : {}),
+      ...(cdSettings.steps != null ? { steps: cdSettings.steps } : {}),
+    };
+
+    for (const dir of directions.slice(0, maxExecutions)) {
       console.log(`[scheduler] Executing direction: ${dir.type} - ${dir.description}`);
-      const result = await executeDirection(dir, systemChatId, DEFAULT_AUTONOMOUS_CONFIG);
+      const result = await executeDirection(dir, systemChatId, genConfig);
       if (result.success) {
         console.log(`[scheduler] Generated: ${result.imageId}`);
       } else {

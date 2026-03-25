@@ -72,6 +72,17 @@ const RUN_PYTHON_TOOL: Tool = {
   }),
 };
 
+const READ_PDF_TOOL: Tool = {
+  name: "read_pdf",
+  description: "Read a PDF file and extract text, images, and metadata. Supports local files and URLs. Can use OCR for scanned PDFs.",
+  parameters: Type.Object({
+    path: Type.String({ description: "PDF path (local file path or URL starting with http/https)" }),
+    extractImages: Type.Optional(Type.Boolean({ description: "Extract embedded images from PDF (default false)" })),
+    ocr: Type.Optional(Type.Boolean({ description: "Use OCR for scanned PDFs (default false). Requires Tesseract installed." })),
+    pages: Type.Optional(Type.String({ description: "Page range to process, e.g. '1-5' or 'all' (default 'all')" })),
+  }),
+};
+
 const CREATE_ARTIFACT_TOOL: Tool = {
   name: "create_artifact",
   description: "Create an HTML/JS artifact that will be rendered in a sandboxed iframe. Use for interactive demos, visualizations, or web pages.",
@@ -128,6 +139,7 @@ const FILESYSTEM_TOOLS: Tool[] = [
   LIST_FILES_TOOL,
   BASH_TOOL,
   RUN_PYTHON_TOOL,
+  READ_PDF_TOOL,
   CREATE_ARTIFACT_TOOL,
   CREATE_VISUAL_TOOL,
   ASK_USER_TOOL,
@@ -218,6 +230,12 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects): AgentTo
     ...RUN_PYTHON_TOOL,
     label: "run_python",
     execute: async (_id, params) => wrapResult(await executeRunPython(params as Record<string, any>)),
+  });
+
+  tools.push({
+    ...READ_PDF_TOOL,
+    label: "read_pdf",
+    execute: async (_id, params) => wrapResult(await executeReadPdf(params as Record<string, any>)),
   });
 
   // create_artifact — uses effects.onArtifact callback
@@ -567,4 +585,255 @@ async function executeBash(args: Record<string, any>): Promise<{ content: string
       }
     );
   });
+}
+
+// --- read_pdf implementation ---
+
+/**
+ * Fetch a PDF from a URL and return the buffer.
+ */
+async function fetchPdfFromUrl(url: string, timeoutMs: number = 30000): Promise<Buffer> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; quje-agent/1.0)",
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Execute the read_pdf tool using PyMuPDF via Python sandbox.
+ */
+async function executeReadPdf(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+  const pathOrUrl = args.path;
+  if (!pathOrUrl) {
+    return { content: "Missing required parameter: path", isError: true };
+  }
+  
+  const extractImages = args.extractImages === true;
+  const ocr = args.ocr === true;
+  const pages = args.pages || "all";
+  
+  let pdfBuffer: Buffer | null = null;
+  let filePath: string | null = null;
+  
+  try {
+    // Handle URL vs local path
+    if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+      pdfBuffer = await fetchPdfFromUrl(pathOrUrl);
+    } else {
+      // Local path - resolve and validate
+      filePath = resolvePath(pathOrUrl);
+      try {
+        pdfBuffer = await readFile(filePath);
+      } catch (e: any) {
+        return { content: `Cannot read PDF file: ${e.message}`, isError: true };
+      }
+    }
+    
+    // Build Python script for PyMuPDF processing
+    const pythonCode = `
+import fitz  # PyMuPDF
+import base64
+import json
+import sys
+
+def process_pdf(pdf_bytes, extract_images=False, ocr=False, pages="all"):
+    # Open PDF from bytes
+    doc = fitz.open("pdf", pdf_bytes)
+    
+    result = {
+        "text": "",
+        "pages": [],
+        "images": [],
+        "metadata": {
+            "title": "",
+            "author": "",
+            "subject": "",
+            "pages": len(doc),
+        }
+    }
+    
+    # Extract metadata
+    metadata = doc.metadata
+    result["metadata"]["title"] = metadata.get("title", "")
+    result["metadata"]["author"] = metadata.get("author", "")
+    result["metadata"]["subject"] = metadata.get("subject", "")
+    
+    # Determine page range
+    if pages == "all":
+        page_range = range(len(doc))
+    else:
+        try:
+            if "-" in pages:
+                start, end = pages.split("-")
+                page_range = range(int(start) - 1, int(end))
+            else:
+                page_range = [int(pages) - 1]
+        except:
+            page_range = range(len(doc))
+    
+    for page_num in page_range:
+        if page_num >= len(doc):
+            continue
+        
+        page = doc[page_num]
+        
+        # Extract text
+        if ocr:
+            textpage = page.get_textpage_ocr(dpi=300, full=True)
+            text = page.get_text(textpage=textpage)
+        else:
+            text = page.get_text()
+        
+        result["text"] += text + "\\n\\n"
+        result["pages"].append({
+            "page": page_num + 1,
+            "text": text,
+            "width": page.rect.width,
+            "height": page.rect.height,
+        })
+        
+        # Extract images if requested
+        if extract_images:
+            image_list = page.get_images(full=True)
+            for img_idx, img in enumerate(image_list):
+                xref = img[0]
+                try:
+                    base_image = doc.extract_image(xref)
+                    if base_image:
+                        img_data = base64.b64encode(base_image["image"]).decode("ascii")
+                        result["images"].append({
+                            "page": page_num + 1,
+                            "index": img_idx,
+                            "width": base_image["width"],
+                            "height": base_image["height"],
+                            "ext": base_image["ext"],
+                            "data": img_data,
+                        })
+                except Exception as e:
+                    pass
+    
+    doc.close()
+    return result
+
+# Read PDF bytes from stdin
+pdf_bytes = sys.stdin.buffer.read()
+extract_images = sys.argv[1] == "true" if len(sys.argv) > 1 else False
+ocr = sys.argv[2] == "true" if len(sys.argv) > 2 else False
+pages = sys.argv[3] if len(sys.argv) > 3 else "all"
+
+result = process_pdf(pdf_bytes, extract_images, ocr, pages)
+print(json.dumps(result))
+`.trim();
+    
+    // Execute Python with PDF buffer as stdin
+    const { execFile } = await import("child_process");
+    const { tmpdir } = await import("os");
+    const { writeFile, mkdir, rm } = await import("fs/promises");
+    const { join } = await import("path");
+    const { v4: uuid } = await import("uuid");
+    
+    const sandboxId = uuid();
+    const sandboxDir = join(tmpdir(), `quje-pdf-${sandboxId}`);
+    await mkdir(sandboxDir, { recursive: true });
+    
+    const scriptPath = join(sandboxDir, "process_pdf.py");
+    await writeFile(scriptPath, pythonCode, "utf-8");
+    
+    return new Promise((resolve) => {
+      const proc = execFile("python3", [scriptPath, String(extractImages), String(ocr), pages], {
+        timeout: 30000,
+        maxBuffer: 10 * 1024 * 1024, // 10MB for large PDFs with images
+        env: { ...process.env, HOME: sandboxDir },
+      }, (error, stdout, stderr) => {
+        rm(sandboxDir, { recursive: true, force: true }).catch(() => {});
+        
+        if (error) {
+          if (error.killed) {
+            resolve({ content: "PDF processing timed out after 30s", isError: true });
+          } else if (stderr && stderr.includes("No module named fitz")) {
+            resolve({
+              content: `PyMuPDF (fitz) is not installed. Install it with: pip install PyMuPDF\n\nFor OCR support, also install Tesseract: sudo apt install tesseract-ocr`,
+              isError: true,
+            });
+          } else {
+            resolve({ content: `PDF processing failed: ${stderr || error.message}`, isError: true });
+          }
+          return;
+        }
+        
+        try {
+          const result = JSON.parse(stdout);
+          
+          // Check for empty text (possible scanned PDF without OCR)
+          if (!ocr && result.text.trim().length < 10 && result.metadata.pages > 0) {
+            resolve({
+              content: `⚠️ This PDF appears to be scanned (no extractable text found). Try again with ocr=true to enable OCR processing.\n\n${formatPdfResult(result)}`,
+              isError: false,
+            });
+            return;
+          }
+          
+          resolve({ content: formatPdfResult(result), isError: false });
+        } catch (e: any) {
+          resolve({ content: `Failed to parse PDF result: ${e.message}\n${stdout.slice(0, 500)}`, isError: true });
+        }
+      });
+      
+      // Send PDF buffer to stdin
+      if (pdfBuffer) {
+        proc.stdin?.write(pdfBuffer);
+        proc.stdin?.end();
+      }
+    });
+    
+  } catch (e: any) {
+    return { content: `PDF processing failed: ${e.message}`, isError: true };
+  }
+}
+
+/**
+ * Format the PDF extraction result as markdown.
+ */
+function formatPdfResult(result: { text: string; pages: any[]; images: any[]; metadata: any }): string {
+  const parts: string[] = [];
+  
+  // Metadata section
+  parts.push("## PDF Metadata");
+  parts.push(`- **Pages**: ${result.metadata.pages}`);
+  if (result.metadata.title) parts.push(`- **Title**: ${result.metadata.title}`);
+  if (result.metadata.author) parts.push(`- **Author**: ${result.metadata.author}`);
+  if (result.metadata.subject) parts.push(`- **Subject**: ${result.metadata.subject}`);
+  parts.push("");
+  
+  // Images summary
+  if (result.images.length > 0) {
+    parts.push("## Extracted Images");
+    parts.push(`Found ${result.images.length} image(s):`);
+    result.images.forEach((img, i) => {
+      parts.push(`- Page ${img.page}: ${img.width}x${img.height} ${img.ext.toUpperCase()} (${(img.data.length / 1024).toFixed(1)} KB)`);
+    });
+    parts.push("");
+  }
+  
+  // Text content
+  parts.push("## Text Content");
+  parts.push(result.text || "(no text extracted)");
+  
+  return parts.join("\n");
 }
