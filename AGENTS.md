@@ -98,6 +98,7 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 - **Agent tools**: the agent can explicitly save, search, and forget memories when asked.
 - **Daily synthesis** (`synthesis.ts`): only runs when agent chats occurred that day (inactive days skipped). Groups today's chats by project, loads AGENTS.md for each active project. Loads today's notebook entries (user + agent, excluding prior synthesis entries). Uses `defaultModelId` from settings (not first Ollama model); captures `thinking_delta` as fallback for qwen3 reasoning mode. Generates reflections (1-5 per day, saved as `reflection` memories with importance 7-9). Writes an agent notebook entry with the synthesis summary. Includes persona pattern analysis (suggestions logged, not auto-applied). System prompt uses first-person for agent actions, third-person for user.
 - **Pre-compaction flush**: when a conversation approaches the context window limit (>75% usage), all important facts are extracted and preserved before truncation.
+- **Creative cycle integration**: After daily synthesis, scheduler runs `runCorpusCreativeCycle()` — rebuilds clusters, generates creative directions via LLM, saves top directions as `context` memories, then executes top directions as autonomous image generations.
 
 ### Artifact System
 
@@ -115,12 +116,67 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 - "Code" tab shows the fetched source; "Open" link opens the raw `/api/artifacts/{id}` URL in a new tab.
 - In `MessageBubble.tsx`, artifacts render via `(artifacts || message.artifacts)?.map(...)` — live streaming prop takes precedence, falls back to persisted `message.artifacts`.
 
+### Image Corpus & Clustering
+
+**Corpus Storage** (`server/src/services/image-corpus.ts`):
+- Migrated from JSON to SQLite (`~/.quje-agent/image-corpus/corpus.db`) with sqlite-vec for vector search
+- Stores all images: generated (ComfyUI), analyzed (vision), uploaded (user)
+- **Schema**: `corpus_entries` table with JSON `elements` column (themes, settings, characters, concepts, styles, mood)
+- **Vector search**: `vec_corpus` virtual table with 1024-dim prompt embeddings, cosine distance
+- **FTS5**: `fts_corpus` on prompt + description with auto-sync triggers
+- **Hybrid search**: `searchCorpusHybrid()` combines FTS5 + vector similarity via RRF (Reciprocal Rank Fusion)
+- **Novelty scoring**: `computeNovelty(embedding)` returns 1.0 - maxSimilarity against corpus
+
+**Clustering** (`server/src/services/cluster-engine.ts`, `cluster-storage.ts`):
+- Density-based clustering using pairwise cosine similarity matrix
+- Threshold: 0.85 similarity (configurable); images above threshold grouped together
+- **Cluster properties**: centroid (average embedding), dominantElements (top 5 themes/settings/etc.), variance, size
+- **Singletons**: unclustered images become single-member clusters
+- **Persistence**: clusters saved to `~/.quje-agent/clusters/clusters.json`
+- **UI**: CorpusView with force-directed graph visualization (D3), cluster detail panels
+
+### Creative Engine
+
+**Direction Generation** (`server/src/services/creative-engine.ts`):
+- Analyzes corpus to propose novel creative directions for autonomous generation
+- **5 direction types**:
+  - `gap-fill` — fills underrepresented themes (e.g., "first cyberpunk image")
+  - `remix` — cross-pollinates distant clusters (similarity < 0.7)
+  - `deepen` — adds intricate details to large clusters (>5 members)
+  - `contrast` — opposes dominant corpus patterns (e.g., dark → luminous)
+  - `explore` — variations within a cluster theme
+- **LLM integration**: Uses qwen3.5:9b with Z_IMAGE_INSTRUCTIONS prompt for detailed image descriptions
+- **Image context**: Loads representative cluster member thumbnails (up to 3) as vision input to LLM
+- **Novelty scoring**: `scoreNovelty(embedding, corpus)` computes 1.0 - avgTop5Similarity; default threshold 0.15
+- **Degenerate output detection**: Validates LLM output for token repetition, n-gram loops, malformed markdown
+
+**Direction Cache** (`server/src/services/direction-cache.ts`):
+- 24-hour TTL with invalidation on corpus size change (>10%) or cluster count change
+- Persists to `~/.quje-agent/directions/cache.json`
+- In-memory cache + disk fallback for fast access
+
+**Job Queue** (`server/src/services/job-queue.ts`):
+- Async direction generation to avoid blocking UI requests
+- Job statuses: `pending` → `running` → `complete` | `failed`
+- Processes pending jobs sequentially with 1s delay between jobs
+- Auto-unloads Ollama model after LLM work to free VRAM
+
 ### Image Generation
 
-- Uses ComfyUI (local diffusion via `server/src/services/comfyui.ts`)
-- Queue-based generation with progress tracking
-- Stored in `~/.quje-agent/images/`
-- UI: `ImageSandbox`, `ImageGallery`, `GeneratedImagePanel`
+**ComfyUI Integration** (`server/src/services/comfyui.ts`, `image-generation.ts`):
+- Queue-based generation with progress tracking via SSE
+- Generation state tracked in-memory with clientId for SSE subscriptions
+- Links ComfyUI promptId to internal generationId for progress correlation
+- Stored in `~/.quje-agent/images/{uuid}/` with metadata JSON
+
+**Autonomous Generation** (`server/src/services/autonomous-generation.ts`):
+- Executes creative directions automatically during synthesis cycle
+- **Dimension analysis**: Detects portrait/landscape/square from prompt keywords (person, landscape, vehicle, etc.)
+- **GPU coordination**: Unloads Ollama model (keep_alive: "0s") before ComfyUI execution to avoid VRAM contention
+- **Config**: CFG scale, steps, model override via `creativeDirections` settings
+- Tracks `generatedBy: 'agent'` and `directionId` on GeneratedImage metadata
+
+**UI**: `ImageSandbox`, `ImageGallery`, `GeneratedImagePanel`, `CorpusView`
 
 ### Vision Analysis
 
@@ -187,6 +243,7 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 - [Ollama](https://ollama.ai/) running locally on port 11434
 - A chat model pulled in Ollama (e.g. `ollama pull qwen3:8b`)
 - The embedding model for memory: `ollama pull qwen3-embedding:0.6b`
+- **Creative Engine**: `ollama pull qwen3.5:9b` (recommended for direction generation with vision context)
 - (Optional) ComfyUI for image generation
 - (Optional) Kokoro TTS voices
 
@@ -288,11 +345,21 @@ quje-agent/
 │       ├── memory-context.ts        # System prompt augmentation with memories
 │       ├── memory-tools.ts          # Agent tool definitions, parsing, execution
 │       ├── synthesis.ts             # Daily memory consolidation
-│       ├── scheduler.ts             # Hourly synthesis check + delayed extraction queue
+│       ├── scheduler.ts             # Synthesis check + delayed extraction + creative cycle
 │       ├── compaction.ts            # Message compaction when near context limit
 │       ├── tts.ts                   # Kokoro TTS integration
 │       ├── comfyui.ts               # ComfyUI API client
-│       ├── image-generation.ts      # Diffusion image generation
+│       ├── image-generation.ts      # Generation state tracking + ComfyUI integration
+│       ├── image-storage.ts         # Generated image persistence + metadata
+│       ├── image-corpus.ts          # SQLite corpus + FTS5 + vector search + hybrid RRF
+│       ├── image-tools.ts           # Image analysis + element extraction
+│       ├── cluster-engine.ts        # Density-based clustering with cosine similarity
+│       ├── cluster-storage.ts       # Cluster persistence + centroid/element computation
+│       ├── creative-engine.ts       # Direction generation (remix/gap-fill/deepen/contrast)
+│       ├── direction-cache.ts       # 24h direction cache with corpus invalidation
+│       ├── job-queue.ts             # Async direction generation job queue
+│       ├── autonomous-generation.ts # Execute creative directions with GPU coordination
+│       ├── visualization.ts         # D3 force-directed graph HTML generation
 │       ├── vision-analysis.ts       # Vision model analysis
 │       ├── user-image-storage.ts    # User image upload + thumb generation
 │       ├── artifact-storage.ts      # Artifact HTML file management
@@ -323,11 +390,16 @@ All data is stored in `~/.quje-agent/`:
 ├── chats/              # Legacy JSON files (migrated to app.db on startup)
 ├── projects/           # Legacy JSON files (migrated to app.db on startup)
 ├── artifacts/          # One folder per artifact (contains index.html + assets)
-├── images/             # Generated images from ComfyUI
+├── images/             # Generated images from ComfyUI ({uuid}/image.jxl + metadata.json)
 ├── user-images/        # Uploaded user images (originals + thumbnails)
 ├── vision/             # Analyzed images
 ├── pending/            # Legacy JSON files (migrated to app.db on startup)
 ├── settings.json       # Legacy JSON file (migrated to app.db on startup)
+├── clusters/           # Cluster data (clusters.json with centroids, dominant elements)
+├── directions/         # Creative direction cache (cache.json)
+├── image-corpus/       # Image corpus SQLite database
+│   ├── corpus.db       # SQLite: corpus_entries + vec_corpus (sqlite-vec) + fts_corpus (FTS5)
+│   └── corpus.json.bak # Legacy JSON (migrated on first startup)
 └── memory/
     ├── memories.db     # SQLite database (memories + vector embeddings via sqlite-vec)
     └── daily/          # Daily synthesis logs (YYYY-MM-DD.md)
@@ -340,6 +412,9 @@ All data is stored in `~/.quje-agent/`:
 - `projects` — project metadata
 - `settings` — key-value settings (single 'settings' key)
 - `pending_states` — ask_user tool loop state for resume after server restart
+- `corpus_entries` — image corpus metadata (type, imagePath, prompt, description, elements JSON, chat/project/direction IDs)
+- `vec_corpus` — sqlite-vec virtual table (id, embedding float[1024] with cosine distance)
+- `fts_corpus` — FTS5 virtual table (id, prompt, description) with auto-sync triggers
 
 ## API Reference
 
@@ -384,6 +459,20 @@ All data is stored in `~/.quje-agent/`:
 | GET | `/api/artifacts/:id/*` | Serve artifact assets |
 | GET | `/api/skills` | List available skills |
 | GET | `/api/persona` | Get current persona |
+| GET | `/api/corpus/clusters` | Get all clusters |
+| GET | `/api/corpus/clusters/:id` | Get single cluster with members |
+| POST | `/api/corpus/rebuild-clusters` | Rebuild clusters from current corpus |
+| GET | `/api/corpus/visualization` | Get D3 force-directed graph HTML |
+| GET | `/api/corpus/stats` | Get corpus statistics (auth required) |
+| GET | `/api/corpus/stats-public` | Get corpus statistics (public) |
+| GET | `/api/corpus/directions` | Get creative directions (with caching) |
+| POST | `/api/corpus/directions/generate` | Queue direction generation job |
+| GET | `/api/corpus/directions/job/:id` | Get job status |
+| GET | `/api/corpus/gaps` | Analyze underrepresented themes |
+| POST | `/api/corpus/remix` | Generate remix from specific clusters |
+| POST | `/api/corpus/execute` | Execute creative direction (generate image) |
+| GET | `/api/corpus/cache` | Get cache metadata (debugging) |
+| POST | `/api/corpus/cache/clear` | Clear direction cache |
 | POST | `/api/auth/register` | Register passkey |
 | POST | `/api/auth/login` | Login with passkey |
 | POST | `/api/auth/logout` | Logout |
@@ -392,7 +481,7 @@ All data is stored in `~/.quje-agent/`:
 
 - **Streaming**: SSE with event types `text_delta`, `thinking_delta`, `tool_status`, `artifact`, `ask_user`, `done`, `error`, `iteration`, `warning`, `compaction`, `title_update`, `message_complete`, `follow_up_start`
 - **Types**: Shared interfaces in `server/src/types.ts` and `client/src/types.ts` (kept in sync manually)
-- **Storage**: SQLite for chats/projects/settings/pending (`chat-storage.ts` → `~/.quje-agent/app.db`), SQLite + sqlite-vec for memories (`memory-storage.ts` → `~/.quje-agent/memory/memories.db`), notebooks via `notebook-storage.ts` → `~/.quje-agent/notebooks/`. All use `~/.quje-agent/` as the base directory.
+- **Storage**: SQLite for chats/projects/settings/pending (`chat-storage.ts` → `~/.quje-agent/app.db`), SQLite + sqlite-vec for memories (`memory-storage.ts` → `~/.quje-agent/memory/memories.db`), SQLite + sqlite-vec for image corpus (`image-corpus.ts` → `~/.quje-agent/image-corpus/corpus.db`), notebooks via `notebook-storage.ts` → `~/.quje-agent/notebooks/`. All use `~/.quje-agent/` as the base directory.
 - **Context window**: Fetched per-model from Ollama `/api/show` (`model_info.*.context_length`). Per-chat override via `chat.contextWindow`; effective value is `chat.contextWindow ?? model.contextWindow`.
 - **Embeddings**: Ollama `qwen3-embedding:0.6b` via `POST http://localhost:11434/api/embed` (supports 32k context). Vectors are L2-normalized, so cosine similarity = dot product.
 - **Memory scoring**: `rrf_score * recency_decay * (importance / 10)` with RRF combining vector search and FTS5 full-text search rankings; 30-day half-life on recency.
@@ -400,7 +489,12 @@ All data is stored in `~/.quje-agent/`:
 - **Supersession tracking**: memories can be linked via `superseded_by` / `supersedes` columns when contradicted or updated. Confidence threshold (default 0.75) determines automatic linking; manual override via API.
 - **Delayed extraction**: time-based trigger (configurable, default 30 min) extracts memories from inactive chats. Uses `updateChatExtractionState()` to avoid modifying `lastModified` (preserves chat ordering).
 - **Project scoping**: memories have optional `projectId`; synthesis groups chats and memories by project, loading each project's AGENTS.md for context.
-- **Backward compat**: `getChat()` and `listChats()` default missing `type` to "quick". Memory DB auto-migrates `project_id` column. Chat/project/settings JSON files auto-migrate to SQLite on startup.
+- **GPU coordination**: Ollama LLM and ComfyUI cannot run concurrently on single GPU. Scheduler unloads Ollama model (`keep_alive: "0s"`) with 3s pause before ComfyUI execution. Direction generation jobs also unload after LLM work.
+- **Creative direction caching**: 24h TTL, invalidates on corpus size change (>10%) or cluster count change. Prevents redundant LLM calls on page refresh.
+- **Job queue**: Async direction generation avoids blocking UI; jobs processed sequentially with 1s delay between runs.
+- **Novelty scoring**: `1.0 - avgTop5Similarity` against corpus embeddings; default threshold 0.15 (more permissive than original 0.6).
+- **Clustering**: Density-based with 0.85 cosine similarity threshold; O(n²) pairwise matrix acceptable for n<500 images.
+- **Backward compat**: `getChat()` and `listChats()` default missing `type` to "quick". Memory DB auto-migrates `project_id` column. Chat/project/settings JSON files auto-migrate to SQLite on startup. Corpus JSON auto-migrates to SQLite on first startup.
 
 ## Style
 
@@ -413,7 +507,12 @@ All data is stored in `~/.quje-agent/`:
 
 - The `memory.ts` routes must define `/status`, `/synthesis/*`, and `/search` **before** the `/:id` param routes to avoid Express matching those paths as IDs.
 - `streamChat` from `agent.ts` is reused by extraction, synthesis, and tool execution — it's the single LLM call interface.
-- The scheduler (`scheduler.ts`) runs a synthesis check on startup and then hourly via `setInterval`.
+- The scheduler (`scheduler.ts`) runs a synthesis check on startup and then every 15 minutes via `setInterval`. Delayed extraction checks run every 5 minutes.
+- **Creative cycle**: After successful synthesis, scheduler runs `runCorpusCreativeCycle()` — rebuilds clusters, generates directions, saves as memories, executes top directions. GPU coordination unloads Ollama before ComfyUI.
+- **Direction cache**: Cached in `~/.quje-agent/directions/cache.json` with 24h TTL. Invalidates on corpus size change (>10%) or cluster count change. API returns cached results immediately while queuing background refresh.
+- **Job queue**: Direction generation jobs are queued and processed sequentially to avoid GPU contention. Client polls `/api/corpus/directions/job/:id` for completion.
+- **Cluster persistence**: Clusters saved to JSON (`~/.quje-agent/clusters/clusters.json`), not SQLite. Rebuilt on demand via `/api/corpus/rebuild-clusters`.
+- **Corpus migration**: On first startup, `corpus.json` auto-migrates to `corpus.db` with FTS5 + sqlite-vec indexes. Original renamed to `corpus.json.bak`.
 - When editing types, update both `server/src/types.ts` and `client/src/types.ts`.
 - The server may run compiled `dist/index.js` (via `npm start` / systemd) rather than tsx dev mode — source changes require `npm run build` + restart to take effect.
 - Blob URLs for artifacts are critical for Chrome animation performance — do not use cross-origin iframe src.

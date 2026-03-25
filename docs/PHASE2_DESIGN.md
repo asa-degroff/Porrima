@@ -1,8 +1,15 @@
-# Phase 2: Creative Image System Design
+# Phase 2: Creative Image System — Implementation Summary
 
-**Status**: Design approved, implementation in progress  
-**Date**: March 22, 2026  
-**Corpus**: 252 enriched images (177 generated, 75 analyzed)
+**Status**: ✅ **Complete** — All sprints implemented and deployed  
+**Date**: March 22, 2026 (design) → December 2026 (implementation complete)  
+**Corpus**: SQLite-based with FTS5 + sqlite-vec vector search
+
+**Note**: This design document was the blueprint for Phase 2. The implementation is complete and documented in [`AGENTS.md`](../AGENTS.md). Key deviations from the original design:
+- Corpus migrated from JSON to SQLite during implementation
+- Direction caching added (24h TTL with corpus invalidation)
+- Job queue for async direction generation
+- GPU coordination (Ollama unload before ComfyUI execution)
+- Novelty scoring changed to `1.0 - avgTop5Similarity` (more permissive than original `1.0 - maxSimilarity`)
 
 ---
 
