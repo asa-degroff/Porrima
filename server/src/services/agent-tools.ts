@@ -756,10 +756,16 @@ print(json.dumps(result))
     await writeFile(scriptPath, pythonCode, "utf-8");
     
     return new Promise((resolve) => {
+      // Ensure user's local Python packages are in path (for --break-system-packages installs)
+      const env: Record<string, string> = { ...process.env as Record<string, string>, HOME: sandboxDir };
+      const homeDir = homedir();
+      const userSitePackages = join(homeDir, ".local", "lib", "python3.13", "site-packages");
+      env.PYTHONPATH = userSitePackages + (process.env.PYTHONPATH ? ":" + process.env.PYTHONPATH : "");
+      
       const proc = execFile("python3", [scriptPath, String(extractImages), String(ocr), pages], {
         timeout: 30000,
         maxBuffer: 10 * 1024 * 1024, // 10MB for large PDFs with images
-        env: { ...process.env, HOME: sandboxDir },
+        env,
       }, (error, stdout, stderr) => {
         rm(sandboxDir, { recursive: true, force: true }).catch(() => {});
         
@@ -795,10 +801,13 @@ print(json.dumps(result))
         }
       });
       
-      // Send PDF buffer to stdin
-      if (pdfBuffer) {
-        proc.stdin?.write(pdfBuffer);
-        proc.stdin?.end();
+      // Send PDF buffer to stdin.
+      // Attach an error handler BEFORE writing to prevent EPIPE from crashing
+      // the process if the child exits before we finish writing (e.g. missing fitz).
+      if (pdfBuffer && proc.stdin) {
+        proc.stdin.on("error", () => {}); // swallow — the execFile callback handles exit errors
+        proc.stdin.write(pdfBuffer);
+        proc.stdin.end();
       }
     });
     
