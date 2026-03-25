@@ -3,6 +3,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { NotebookView } from "./components/NotebookView";
 import { SettingsModal } from "./components/SettingsModal";
+import { CreateProjectModal } from "./components/CreateProjectModal";
 import { LoginPage } from "./components/LoginPage";
 
 const ImageSandbox = lazy(() => import("./components/ImageSandbox").then((m) => ({ default: m.ImageSandbox })));
@@ -58,6 +59,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [imageSandboxOpen, setImageSandboxOpen] = useState(() => {
     return localStorage.getItem("quje-active-view") === "image-sandbox";
   });
+  const [projectModalOpen, setProjectModalOpen] = useState(false);
   const {
     messages,
     streaming,
@@ -246,17 +248,14 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     [activeChatId, removeChat, loadMessages]
   );
 
-  const handleNewProject = useCallback(async () => {
-    const name = prompt("Project name:");
-    if (!name) return;
-    const path = prompt("Project path (absolute):");
-    if (!path) return;
-    try {
-      await createProject(name, path);
-    } catch (e: any) {
-      console.error("[projects] create failed:", e);
-    }
-  }, [createProject]);
+  const handleNewProject = useCallback(() => {
+    setProjectModalOpen(true);
+  }, []);
+
+  const handleCreateProject = useCallback(async (name: string, path: string) => {
+    await createProject(name, path);
+    await refresh();
+  }, [createProject, refresh]);
 
   const handleDeleteProject = useCallback(async (id: string) => {
     try {
@@ -479,6 +478,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           onSave={handleSaveSettings}
           onClose={handleCloseSettings}
           onLogout={onLogout}
+        />
+      )}
+      {projectModalOpen && (
+        <CreateProjectModal
+          onClose={() => setProjectModalOpen(false)}
+          onCreate={handleCreateProject}
         />
       )}
       

@@ -1,9 +1,28 @@
 import { Router } from "express";
+import { homedir } from "os";
 import { createProject, updateProject, deleteProject, listProjects, getProject } from "../services/chat-storage.js";
 import { readAgentsMd } from "../services/project-storage.js";
+import { existsSync, statSync, accessSync, constants } from "fs";
+import { expandTilde, validatePath } from "../utils/path.js";
 import type { Project } from "../types.js";
 
 const router = Router();
+
+// Get default path suggestions
+router.get("/defaults", async (_req, res) => {
+  const home = homedir();
+  res.json({ defaultPath: home });
+});
+
+// Validate a path
+router.post("/validate", async (req, res) => {
+  const { path } = req.body;
+  if (!path) {
+    return res.status(400).json({ valid: false, exists: false, isDirectory: false, isReadable: false, error: "Path is required" });
+  }
+  const result = validatePath(path);
+  res.json(result);
+});
 
 // List all projects
 router.get("/", async (_req, res) => {
