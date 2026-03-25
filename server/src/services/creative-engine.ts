@@ -68,6 +68,59 @@ export interface GapAnalysis {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers: detect degenerate / repetitive LLM output
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if LLM output is degenerate (repetition loops, garbled tokens).
+ * Returns the cleaned content if usable, or null if it should be discarded.
+ */
+function validateLLMOutput(content: string | undefined): string | null {
+  if (!content || content.trim().length < 20) return null;
+
+  const text = content.trim();
+
+  // Detect token-level repetition: split into words, check if any single token
+  // makes up more than 40% of the output (e.g. "[the] [the] [the] ...")
+  const words = text.split(/\s+/);
+  if (words.length > 20) {
+    const freq: Record<string, number> = {};
+    for (const w of words) {
+      const lower = w.toLowerCase();
+      freq[lower] = (freq[lower] || 0) + 1;
+    }
+    const maxFreq = Math.max(...Object.values(freq));
+    if (maxFreq / words.length > 0.4) {
+      console.warn(`[creative-engine] Detected repetitive output: most common token appears ${maxFreq}/${words.length} times`);
+      return null;
+    }
+  }
+
+  // Detect n-gram repetition: check if any 4-gram repeats more than 5 times
+  if (words.length > 30) {
+    const ngrams: Record<string, number> = {};
+    for (let i = 0; i <= words.length - 4; i++) {
+      const gram = words.slice(i, i + 4).join(" ").toLowerCase();
+      ngrams[gram] = (ngrams[gram] || 0) + 1;
+    }
+    const maxNgram = Math.max(...Object.values(ngrams));
+    if (maxNgram > 5) {
+      console.warn(`[creative-engine] Detected n-gram repetition: 4-gram repeated ${maxNgram} times`);
+      return null;
+    }
+  }
+
+  // Detect bracket/markdown garbage: if more than 30% of content is brackets
+  const bracketCount = (text.match(/[\[\](){}\|]/g) || []).length;
+  if (bracketCount / text.length > 0.3) {
+    console.warn(`[creative-engine] Detected malformed output: ${bracketCount}/${text.length} bracket characters`);
+    return null;
+  }
+
+  return text;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers: gather representative cluster context (prompts + images)
 // ---------------------------------------------------------------------------
 
@@ -416,7 +469,7 @@ ${Z_IMAGE_INSTRUCTIONS}`;
     () => {}
   );
 
-  const proposedPrompt = result.content || `A ${gap.theme} scene with distinctive visual elements`;
+  const proposedPrompt = validateLLMOutput(result.content) ?? `A ${gap.theme} scene with distinctive visual elements`;
 
   // Generate embedding for novelty scoring
   const embedding = await generateEmbedding(proposedPrompt);
@@ -511,7 +564,7 @@ The combination should feel intentional, not random. Draw specific visual elemen
         () => {}
       );
 
-      const proposedPrompt = result.content || `A ${themeA} scene in ${settingB} with ${styleB} styling`;
+      const proposedPrompt = validateLLMOutput(result.content) ?? `A ${themeA} scene in ${settingB} with ${styleB} styling`;
       const embedding = await generateEmbedding(proposedPrompt);
       const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.65;
 
@@ -582,7 +635,7 @@ Study the existing images carefully. Make the new prompt more complex and layere
         () => {}
       );
 
-      const proposedPrompt = result.content || `A detailed ${primaryTheme} scene in ${primarySetting} with intricate elements`;
+      const proposedPrompt = validateLLMOutput(result.content) ?? `A detailed ${primaryTheme} scene in ${primarySetting} with intricate elements`;
       const embedding = await generateEmbedding(proposedPrompt);
       const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.55;
 
@@ -678,7 +731,7 @@ Study the attached images to understand the dominant visual language, then creat
     () => {}
   );
 
-  const proposedPrompt = result.content || `A ${oppositeTheme} scene with ${oppositeMood} atmosphere`;
+  const proposedPrompt = validateLLMOutput(result.content) ?? `A ${oppositeTheme} scene with ${oppositeMood} atmosphere`;
   const embedding = await generateEmbedding(proposedPrompt);
   const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.75;
 
