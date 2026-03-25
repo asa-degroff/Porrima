@@ -111,6 +111,7 @@ export interface StoredImage {
   params: ImageGenerationParams;
   resolvedSeed: number;
   createdAt: string;
+  generatedBy?: 'user' | 'agent';
 }
 
 export async function listImages(): Promise<StoredImage[]> {
@@ -131,6 +132,7 @@ export async function listImages(): Promise<StoredImage[]> {
         params: metadata.params,
         resolvedSeed: metadata.resolvedSeed,
         createdAt: metadata.createdAt,
+        generatedBy: metadata.generatedBy,
       };
     })
   );

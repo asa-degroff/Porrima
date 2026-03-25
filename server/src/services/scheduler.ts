@@ -91,13 +91,17 @@ async function runCorpusCreativeCycle() {
     console.log(`[scheduler] Generated ${directions.length} creative directions`);
 
     // 3. Save directions as context memories
+    // Store full prompts—they're valuable artifacts for learning creative patterns
+    const { embed } = await import("./embeddings.js");
     for (const dir of directions.slice(0, 3)) {
+      const memoryText = `Creative direction proposed: ${dir.type} - ${dir.description}. Prompt: ${dir.proposedPrompt}`;
+      const embedding = await embed(memoryText);
       await addMemory({
         id: crypto.randomUUID(),
-        text: `Creative direction proposed: ${dir.type} - ${dir.description}. Prompt: ${dir.proposedPrompt.substring(0, 200)}...`,
+        text: memoryText,
         category: "context",
         importance: 6,
-        embedding: dir.proposedEmbedding ?? [],
+        embedding,
         createdAt: new Date().toISOString(),
         lastAccessed: new Date().toISOString(),
         accessCount: 0,

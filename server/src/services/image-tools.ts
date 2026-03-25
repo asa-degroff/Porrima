@@ -102,6 +102,7 @@ export async function executeImageTool(
       resolvedSeed: result.resolvedSeed,
       createdAt: new Date().toISOString(),
       chatId,
+      generatedBy: 'agent',
     });
 
     // Mark generation as complete
@@ -114,6 +115,7 @@ export async function executeImageTool(
       resolvedSeed: result.resolvedSeed,
       createdAt: new Date().toISOString(),
       chatId,
+      generatedBy: 'agent',
     };
 
     onEvent?.({ type: "generated_image", data: generatedImage });

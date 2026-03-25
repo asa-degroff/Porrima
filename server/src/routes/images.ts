@@ -86,6 +86,7 @@ router.post("/search", async (req, res) => {
         description: entry.description,
         type: entry.type,
         score: entry.score,
+        generatedBy: metadata?.generatedBy ?? 'user',
       };
     }));
 
@@ -197,6 +198,7 @@ router.post("/generate", async (req, res) => {
       resolvedSeed: result.resolvedSeed,
       createdAt: new Date().toISOString(),
       chatId,
+      generatedBy: 'user',
     });
 
     const image = {
@@ -206,6 +208,7 @@ router.post("/generate", async (req, res) => {
       resolvedSeed: result.resolvedSeed,
       createdAt: new Date().toISOString(),
       chatId,
+      generatedBy: 'user',
     };
 
     // Mark generation as complete with the image URL
