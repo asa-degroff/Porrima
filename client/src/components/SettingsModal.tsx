@@ -93,6 +93,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [cdMaxExecutions, setCdMaxExecutions] = useState(cdDefaults.maxExecutions ?? 4);
   const [cdSteps, setCdSteps] = useState(cdDefaults.steps ?? 35);
   const [cdCfgScale, setCdCfgScale] = useState(cdDefaults.cfgScale ?? 4.0);
+  const [cdModelDropdownOpen, setCdModelDropdownOpen] = useState(false);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [visionModelDropdownOpen, setVisionModelDropdownOpen] = useState(false);
   const [voiceDropdownOpen, setVoiceDropdownOpen] = useState(false);
@@ -105,6 +106,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const backendDropdownRef = useRef<HTMLDivElement>(null);
   const boundaryTierDropdownRef = useRef<HTMLDivElement>(null);
   const extractionModelDropdownRef = useRef<HTMLDivElement>(null);
+  const cdModelDropdownRef = useRef<HTMLDivElement>(null);
 
   useClickOutside(modelDropdownRef, () => setModelDropdownOpen(false), modelDropdownOpen);
   useClickOutside(visionModelDropdownRef, () => setVisionModelDropdownOpen(false), visionModelDropdownOpen);
@@ -112,6 +114,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useClickOutside(backendDropdownRef, () => setBackendDropdownOpen(false), backendDropdownOpen);
   useClickOutside(boundaryTierDropdownRef, () => setBoundaryTierDropdownOpen(false), boundaryTierDropdownOpen);
   useClickOutside(extractionModelDropdownRef, () => setExtractionModelDropdownOpen(false), extractionModelDropdownOpen);
+  useClickOutside(cdModelDropdownRef, () => setCdModelDropdownOpen(false), cdModelDropdownOpen);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -1515,13 +1518,49 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 {/* Direction Model */}
                 <div>
                   <label className="block text-sm text-white/50 mb-1">Direction Model</label>
-                  <input
-                    type="text"
-                    value={cdModelId}
-                    onChange={(e) => setCdModelId(e.target.value)}
-                    placeholder="qwen3.5:9b"
-                    className="w-full px-3 py-1.5 text-sm rounded-lg bg-white/5 border border-white/10 text-white/80 placeholder-white/30 focus:outline-none focus:border-purple-400/40"
-                  />
+                  <div className="relative" ref={cdModelDropdownRef}>
+                    <button
+                      onClick={() => setCdModelDropdownOpen((o) => !o)}
+                      className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+                    >
+                      <span className="truncate flex-1 text-left">
+                        {(() => {
+                          const selected = models.find((m) => m.id === cdModelId);
+                          if (!selected) return cdModelId || "Default (qwen3.5:9b)";
+                          return selected.parameterSize ? `${selected.name} (${selected.parameterSize})` : selected.name;
+                        })()}
+                      </span>
+                      {chevronSvg(cdModelDropdownOpen)}
+                    </button>
+                    {cdModelDropdownOpen && (
+                      <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                        style={{
+                          backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                          borderColor: `rgba(var(--theme-primary-border))`,
+                        }}>
+                        {models.map((model) => (
+                          <button
+                            key={model.id}
+                            onClick={() => {
+                              setCdModelId(model.id);
+                              setCdModelDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                              model.id === cdModelId
+                                ? "text-white"
+                                : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                            }`}
+                            style={{
+                              backgroundColor: model.id === cdModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                              color: model.id === cdModelId ? `rgba(var(--theme-secondary-text))` : '',
+                            }}
+                          >
+                            {model.parameterSize ? `${model.name} (${model.parameterSize})` : model.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <p className="text-white/25 text-xs mt-0.5">Ollama model used to generate direction prompts</p>
                 </div>
 
