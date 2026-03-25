@@ -39,7 +39,9 @@ If there is no text to be generated in the image, you will dedicate all your ene
   - ## Colors & Textures
   - ## Text Elements (if applicable)
 - Use bullet points (-) for listing multiple details within a section
-- Keep paragraphs short and focused for readability`;
+- Keep paragraphs short and focused for readability
+
+Output ONLY the structured prompt content. Do not include any introductory text, explanations, or meta-commentary.`;
 
 export type DirectionType = "remix" | "explore" | "deepen" | "contrast" | "gap-fill";
 
