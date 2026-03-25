@@ -696,58 +696,66 @@ async function handleChatStream(
     // This handles cases where the LLM signaled tool use but didn't produce the final text response
     if (state.incompleteToolTurn && !askUserRef.current && iterations < MAX_ITERATIONS) {
       console.log(`[chat] incomplete tool turn detected - continuing loop for final text`);
-      
+
       // Continue the agent loop from current context (no new user message, just resume)
       const continueAbortController = new AbortController();
-      const continueEventStream = agentLoopContinue(context, config, continueAbortController.signal, safeStreamFn);
-      
+
       // Track if continuation produces any content
       let continuationProducedContent = false;
-      
-      // Process the continuation events
-      for await (const event of continueEventStream) {
-        if (event.type === "message_update") {
-          const ame = event.assistantMessageEvent;
-          if (ame.type === "text_delta") {
-            continuationProducedContent = true;
-            state.fullText += ame.delta;
-            state.pendingText += ame.delta;
-            res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
-          } else if (ame.type === "thinking_delta") {
-            continuationProducedContent = true;
-            state.thinkingText += ame.delta;
-            res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
-          }
-        } else if (event.type === "turn_end") {
-          const msg = event.message as AssistantMessage;
-          const stopReason = msg.stopReason || "stop";
-          console.log(`[chat] continuation turn_end: stop=${stopReason} content=${state.fullText.length}ch`);
-          
-          // Also handle thinking-only in continuation
-          if (stopReason === "stop" && !state.fullText.trim() && state.thinkingText.trim().length > 0) {
-            state.fullText = state.thinkingText;
-            state.thinkingText = "";
-            continuationProducedContent = true;
-            console.log(`[chat] continuation: promoted thinking to content (${state.fullText.length}ch)`);
-          }
-          
-          // Incremental persistence in continuation loop
-          try {
-            const partialMsg = buildCurrentAssistantMessage();
-            await saveChat(chat);
-            console.log(`[chat] continuation: saved progress (${partialMsg.content.length}ch)`);
-          } catch (saveErr) {
-            console.error(`[chat] continuation save failed:`, saveErr);
-          }
-          
-          if (stopReason !== "toolUse") {
-            break; // Got final text, exit continuation loop
+
+      try {
+        const continueEventStream = agentLoopContinue(context, config, continueAbortController.signal, safeStreamFn);
+
+        // Process the continuation events
+        for await (const event of continueEventStream) {
+          if (event.type === "message_update") {
+            const ame = event.assistantMessageEvent;
+            if (ame.type === "text_delta") {
+              continuationProducedContent = true;
+              state.fullText += ame.delta;
+              state.pendingText += ame.delta;
+              res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+            } else if (ame.type === "thinking_delta") {
+              continuationProducedContent = true;
+              state.thinkingText += ame.delta;
+              res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+            }
+          } else if (event.type === "turn_end") {
+            const msg = event.message as AssistantMessage;
+            const stopReason = msg.stopReason || "stop";
+            console.log(`[chat] continuation turn_end: stop=${stopReason} content=${state.fullText.length}ch`);
+
+            // Also handle thinking-only in continuation
+            if (stopReason === "stop" && !state.fullText.trim() && state.thinkingText.trim().length > 0) {
+              state.fullText = state.thinkingText;
+              state.thinkingText = "";
+              continuationProducedContent = true;
+              console.log(`[chat] continuation: promoted thinking to content (${state.fullText.length}ch)`);
+            }
+
+            // Incremental persistence in continuation loop
+            try {
+              const partialMsg = buildCurrentAssistantMessage();
+              await saveChat(chat);
+              console.log(`[chat] continuation: saved progress (${partialMsg.content.length}ch)`);
+            } catch (saveErr) {
+              console.error(`[chat] continuation save failed:`, saveErr);
+            }
+
+            if (stopReason !== "toolUse") {
+              break; // Got final text, exit continuation loop
+            }
           }
         }
+      } catch (contErr: any) {
+        console.error(`[chat] continuation loop crashed: ${contErr.message}`);
+        // Don't let a crash in the continuation loop take down the server.
+        // The partial state from the main loop is still valid — we'll persist
+        // whatever was accumulated before the crash.
       }
-      
+
       continueAbortController.abort(); // Clean up
-      
+
       // If continuation produced nothing, log a warning and don't persist empty message
       if (!continuationProducedContent && !state.fullText.trim() && !state.thinkingText.trim()) {
         console.error(`[chat] continuation produced NO CONTENT - model may have failed silently. Not persisting empty message.`);
