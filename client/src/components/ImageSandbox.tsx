@@ -256,7 +256,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   return (
     <div className="flex-1 flex flex-col h-full min-w-0">
       {/* Header */}
-      <div className="shrink-0 px-4 py-3 border-b border-white/10 flex items-center justify-between backdrop-blur-xl bg-white/[0.03]">
+      <div className="shrink-0 px-4 py-3 border-b border-white/10 flex items-center justify-between backdrop-blur-xl bg-white/[0.03] h-[57px]">
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <h2 className="text-lg font-semibold text-white/90">Image Sandbox</h2>
 

@@ -8,11 +8,18 @@ import { useState, useEffect } from "react";
 const CACHE_VERSION = "v1";
 const CACHE_NAME = `quje-images-${CACHE_VERSION}`;
 
+// Track in-flight requests to avoid duplicates
+const inFlightRequests = new Map<string, Promise<Response>>();
+
 /**
  * Get an image from cache, falling back to network.
  * Returns a Blob URL that can be used as an image src.
+ * 
+ * @param imageId - Unique identifier for the image
+ * @param imageUrl - Full URL to fetch
+ * @param priority - If true, this request takes precedence over others
  */
-export async function getCachedImage(imageId: string, imageUrl: string): Promise<string> {
+export async function getCachedImage(imageId: string, imageUrl: string, priority = false): Promise<string> {
   try {
     const cache = await caches.open(CACHE_NAME);
     const cachedResponse = await cache.match(imageUrl);
@@ -23,8 +30,27 @@ export async function getCachedImage(imageId: string, imageUrl: string): Promise
       return URL.createObjectURL(blob);
     }
 
-    // Fetch from network
-    const response = await fetch(imageUrl, { credentials: "include" });
+    // Check if there's already an in-flight request for this URL
+    let response: Response;
+    if (inFlightRequests.has(imageUrl)) {
+      // Wait for the existing request
+      response = await inFlightRequests.get(imageUrl)!;
+    } else {
+      // Start a new fetch request
+      const fetchPromise = fetch(imageUrl, { 
+        credentials: "include",
+        priority: priority ? 'high' : 'auto' as RequestPriority,
+      });
+      inFlightRequests.set(imageUrl, fetchPromise);
+      
+      try {
+        response = await fetchPromise;
+      } finally {
+        // Clean up the in-flight tracking
+        inFlightRequests.delete(imageUrl);
+      }
+    }
+
     if (!response.ok) throw new Error(`Failed to fetch image: ${response.status}`);
 
     // Clone the response so we can cache it and return it
@@ -41,29 +67,44 @@ export async function getCachedImage(imageId: string, imageUrl: string): Promise
 }
 
 /**
- * Pre-cache multiple images in the background.
+ * Pre-cache multiple images in the background with low priority.
  * Does not return blob URLs - just ensures they're in cache.
  */
 export async function precacheImages(imageUrls: string[]): Promise<void> {
   try {
     const cache = await caches.open(CACHE_NAME);
 
-    await Promise.all(
-      imageUrls.map(async (url) => {
-        // Check if already cached
-        const cached = await cache.match(url);
-        if (cached) return;
+    // Process in batches to avoid overwhelming the network
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < imageUrls.length; i += BATCH_SIZE) {
+      const batch = imageUrls.slice(i, i + BATCH_SIZE);
+      
+      await Promise.all(
+        batch.map(async (url) => {
+          // Check if already cached
+          const cached = await cache.match(url);
+          if (cached) return;
 
-        try {
-          const response = await fetch(url, { credentials: "include" });
-          if (response.ok) {
-            await cache.put(url, response.clone());
+          try {
+            // Use low priority for background pre-caching
+            const response = await fetch(url, { 
+              credentials: "include",
+              priority: 'low' as RequestPriority,
+            });
+            if (response.ok) {
+              await cache.put(url, response.clone());
+            }
+          } catch {
+            // Ignore individual fetch errors
           }
-        } catch {
-          // Ignore individual fetch errors
-        }
-      })
-    );
+        })
+      );
+      
+      // Small delay between batches to yield to higher-priority requests
+      if (i + BATCH_SIZE < imageUrls.length) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
   } catch (error) {
     console.warn("[image-cache] precache error:", error);
   }

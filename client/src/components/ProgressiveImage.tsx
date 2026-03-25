@@ -50,6 +50,8 @@ export function ProgressiveImage({ src, thumbSrc, alt, className, onClick, width
   // Preload full image via Cache API, swap when ready
   useEffect(() => {
     let cancelled = false;
+    let blobUrl: string | null = null;
+    
     setLoaded(false);
     setDisplaySrc(thumbSrc);
     setIsInitial(true);
@@ -60,43 +62,79 @@ export function ProgressiveImage({ src, thumbSrc, alt, className, onClick, width
       blobUrlRef.current = null;
     }
 
-    getCachedImage(src, src).then((resolvedUrl) => {
+    // Load with high priority since this is the visible image
+    getCachedImage(src, src, true).then((resolvedUrl) => {
       if (cancelled) {
         // Clean up blob if we were cancelled
-        if (resolvedUrl !== src) URL.revokeObjectURL(resolvedUrl);
+        if (resolvedUrl !== src) {
+          URL.revokeObjectURL(resolvedUrl);
+        }
         return;
       }
 
-      // If getCachedImage returned a blob URL, track it for cleanup
-      if (resolvedUrl !== src) blobUrlRef.current = resolvedUrl;
+      // Track blob URL for cleanup
+      if (resolvedUrl !== src) {
+        blobUrl = resolvedUrl;
+        blobUrlRef.current = resolvedUrl;
+      }
 
       // Decode the image before swapping to avoid a paint flash
       const img = new Image();
+      img.decoding = 'async';
+      img.fetchPriority = 'high';
       img.src = resolvedUrl;
+      
       img.onload = () => {
         if (cancelled) return;
-        setDisplaySrc(resolvedUrl);
-        requestAnimationFrame(() => {
-          if (cancelled) return;
+        // Double-check the image actually decoded
+        if (img.complete && img.naturalWidth > 0) {
+          setDisplaySrc(resolvedUrl);
+          requestAnimationFrame(() => {
+            if (cancelled) return;
+            setIsInitial(false);
+            setLoaded(true);
+          });
+        } else {
+          // Image didn't decode properly, fall back to thumb
+          console.warn("[progressive-image] image decoded but has no dimensions:", src);
           setIsInitial(false);
-          setLoaded(true);
-        });
+        }
       };
+      
       img.onerror = () => {
         if (cancelled) return;
         console.warn("[progressive-image] failed to load full image:", src);
+        // Try direct URL as fallback
+        setDisplaySrc(src);
         setIsInitial(false);
+        setLoaded(true);
       };
+      
+      // Timeout fallback - if image takes too long, show what we have
+      const timeoutId = setTimeout(() => {
+        if (!cancelled && !loaded) {
+          console.warn("[progressive-image] load timeout, showing current state:", src);
+          setIsInitial(false);
+        }
+      }, 10000); // 10 second timeout
+      
+      return () => clearTimeout(timeoutId);
+    }).catch((err) => {
+      if (!cancelled) {
+        console.error("[progressive-image] cache error:", err);
+        // Fall back to direct URL
+        setDisplaySrc(src);
+        setIsInitial(false);
+        setLoaded(true);
+      }
     });
 
     return () => {
       cancelled = true;
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-        blobUrlRef.current = null;
-      }
+      // Don't revoke blobUrl immediately - it might still be in use
+      // The next render will handle cleanup via blobUrlRef
     };
-  }, [src, thumbSrc]);
+  }, [src, thumbSrc]); // Removed 'loaded' from dependencies - it was causing re-runs that reset the loaded state
 
   const blurring = isInitial || !loaded;
 

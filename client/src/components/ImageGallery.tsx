@@ -191,13 +191,29 @@ const ImageGrid = memo(function ImageGrid({
 
 export function ImageGallery({ images, selectedImage, onSelect, onDelete, activeGenerations = [], searchResults, isSearching }: Props) {
   const hasSearch = searchResults !== undefined;
+  const selectedImageUrl = selectedImage?.url;
 
-  // Pre-cache search result images in background
+  // Pre-cache search result images in background (low priority)
   useEffect(() => {
     if (searchResults) {
-      precacheImages(searchResults.map((img) => img.url));
+      // Filter out the currently selected image - it will be loaded with high priority
+      const toPrecache = searchResults
+        .map(img => img.url)
+        .filter(url => url !== selectedImageUrl);
+      precacheImages(toPrecache);
     }
-  }, [searchResults]);
+  }, [searchResults, selectedImageUrl]);
+  
+  // Pre-cache gallery images when not searching (low priority)
+  useEffect(() => {
+    if (!hasSearch && images.length > 0) {
+      // Filter out the currently selected image
+      const toPrecache = images
+        .map(img => img.url)
+        .filter(url => url !== selectedImageUrl);
+      precacheImages(toPrecache);
+    }
+  }, [images, hasSearch, selectedImageUrl]);
 
   const emptyState = (searching: boolean, message: string, sub: string) => (
     <div className="flex-1 flex items-center justify-center">
