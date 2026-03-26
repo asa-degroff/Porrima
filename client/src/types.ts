@@ -208,6 +208,7 @@ export interface InlineVisual {
   title: string;
   html: string;
   url: string;
+  version?: number;     // version number (defaults to 1 for backward compat)
 }
 
 export interface ImageGenerationParams {

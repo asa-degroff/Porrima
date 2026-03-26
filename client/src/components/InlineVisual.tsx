@@ -105,6 +105,9 @@ html, body { background: transparent !important; }
             <line x1="12" y1="22.08" x2="12" y2="12" />
           </svg>
           <span className="text-[11px] font-medium text-white/60">{visual.title}</span>
+          {visual.version && (
+            <span className="text-[9px] text-white/40 bg-white/5 px-1 rounded">v{visual.version}</span>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <button

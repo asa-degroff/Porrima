@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { Tool, ToolCall } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { execFile } from "child_process";
-import { readFile, writeFile, mkdir, readdir, stat } from "fs/promises";
+import { readFile, writeFile, mkdir, readdir, stat, access } from "fs/promises";
 import { resolve, dirname, join, relative } from "path";
 import { homedir } from "os";
 import { glob } from "fs/promises";
@@ -10,11 +10,12 @@ import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
 import { IMAGE_TOOLS, executeImageTool } from "./image-tools.js";
 import { BLUESKY_TOOLS, executeBlueskyTool } from "./bluesky-tools.js";
-import { executePython, createArtifact, createVisual, updateArtifact } from "./sandbox.js";
+import { executePython, createArtifact, createVisual, updateArtifact, updateVisual } from "./sandbox.js";
 import { v4 as uuid } from "uuid";
 import type { Artifact, GeneratedImage, InlineVisual } from "../types.js";
 
 const HOME = homedir();
+const VISUALS_DIR = join(homedir(), ".quje-agent", "visuals");
 
 // --- Filesystem tool definitions ---
 
@@ -302,9 +303,37 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects): AgentTo
     execute: async (_id, params) => {
       const args = params as Record<string, any>;
       const id = uuid();
-      const url = await createVisual(id, args.html);
-      effects.onVisual({ id, title: args.title, html: args.html, url });
-      return { content: [{ type: "text", text: `Visual created: ${args.title} (${url})` }], details: {} };
+      const result = await createVisual(id, args.html, args.title);
+      effects.onVisual({ id, title: args.title, html: args.html, url: result.url, version: result.version });
+      return { content: [{ type: "text", text: `Visual created: ${args.title} (${result.url})` }], details: {} };
+    },
+  });
+
+  // update_artifact can also update visuals (they share the same versioning structure now)
+  // Check if it's a visual first, then fall back to artifact
+  tools.push({
+    ...UPDATE_ARTIFACT_TOOL,
+    label: "update_artifact",
+    execute: async (_id, params) => {
+      const args = params as Record<string, any>;
+      
+      // Try visual first
+      try {
+        const visualPath = join(VISUALS_DIR, args.artifactId, "metadata.json");
+        await access(visualPath);
+        const result = await updateVisual(args.artifactId, args.html, args.changeSummary);
+        effects.onVisual({ id: args.artifactId, title: "Updated visual", html: args.html, url: result.url, version: result.version });
+        return { content: [{ type: "text", text: `Visual updated to version ${result.version} (${result.url})` }], details: {} };
+      } catch (e: any) {
+        // Not a visual, try artifact
+        try {
+          const result = await updateArtifact(args.artifactId, args.html, args.changeSummary);
+          effects.onArtifact({ id: args.artifactId, title: "Updated artifact", url: result.url, version: result.version });
+          return { content: [{ type: "text", text: `Artifact updated to version ${result.version} (${result.url})` }], details: {} };
+        } catch (e2: any) {
+          return { content: [{ type: "text", text: `Error updating: ${e2.message}. Make sure the ID is from a previously created artifact or visual.` }], details: {}, isError: true };
+        }
+      }
     },
   });
 

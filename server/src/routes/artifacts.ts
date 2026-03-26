@@ -6,6 +6,7 @@ import { lookup } from "../utils/mime.js";
 
 const router = Router();
 const ARTIFACTS_DIR = join(homedir(), ".quje-agent", "artifacts");
+const VISUALS_DIR = join(homedir(), ".quje-agent", "visuals");
 
 // Serve latest version of artifact (backward compat + convenience)
 router.get("/:id", async (req, res) => {
@@ -93,6 +94,57 @@ router.get("/:id/*subpath", async (req, res) => {
     res.send(content);
   } catch {
     res.status(404).json({ error: "File not found" });
+  }
+});
+
+// === Visuals routes (same structure as artifacts) ===
+
+// Serve latest version of visual
+router.get("/visuals/:id", async (req, res) => {
+  try {
+    const metadataPath = join(VISUALS_DIR, req.params.id, "metadata.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf-8"));
+    const latestVersion = metadata.currentVersion;
+    const filePath = join(VISUALS_DIR, req.params.id, "versions", String(latestVersion), "index.html");
+    const content = await readFile(filePath, "utf-8");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(content);
+  } catch {
+    res.status(404).json({ error: "Visual not found" });
+  }
+});
+
+// Serve specific visual version
+router.get("/visuals/:id/versions/:version", async (req, res) => {
+  try {
+    const filePath = join(VISUALS_DIR, req.params.id, "versions", req.params.version, "index.html");
+    const content = await readFile(filePath, "utf-8");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(content);
+  } catch {
+    res.status(404).json({ error: "Version not found" });
+  }
+});
+
+// Get visual metadata
+router.get("/visuals/:id/metadata", async (req, res) => {
+  try {
+    const metadataPath = join(VISUALS_DIR, req.params.id, "metadata.json");
+    const metadata = await readFile(metadataPath, "utf-8");
+    res.json(JSON.parse(metadata));
+  } catch {
+    res.status(404).json({ error: "Visual not found" });
+  }
+});
+
+// List all versions for a visual
+router.get("/visuals/:id/versions", async (req, res) => {
+  try {
+    const metadataPath = join(VISUALS_DIR, req.params.id, "metadata.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf-8"));
+    res.json(metadata.versions);
+  } catch {
+    res.status(404).json({ error: "Visual not found" });
   }
 });
 
