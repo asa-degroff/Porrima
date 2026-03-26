@@ -186,29 +186,35 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
   }, [initialParams]);
 
   // Handle width change - adjust height to maintain aspect ratio
-  const handleWidthChange = (value: number) => {
+  const handleWidthChange = (value: string | number) => {
     editingWidthRef.current = true;
     setWidth(value);
 
-    if (aspectRatio !== "Free") {
-      const ar = ASPECT_RATIOS.find((a) => a.label === aspectRatio);
-      if (ar && ar.ratio !== null) {
-        // Calculate exact height from ratio
-        setHeight(Math.round(value / ar.ratio));
+    if (aspectRatio !== "Free" && value !== "") {
+      const numValue = typeof value === "string" ? parseFloat(value) : value;
+      if (!isNaN(numValue)) {
+        const ar = ASPECT_RATIOS.find((a) => a.label === aspectRatio);
+        if (ar && ar.ratio !== null) {
+          // Calculate exact height from ratio
+          setHeight(Math.round(numValue / ar.ratio));
+        }
       }
     }
     setTimeout(() => { editingWidthRef.current = false; }, 100);
   };
 
   // Handle height change - adjust width to maintain aspect ratio
-  const handleHeightChange = (value: number) => {
+  const handleHeightChange = (value: string | number) => {
     editingHeightRef.current = true;
     setHeight(value);
 
-    if (aspectRatio !== "Free") {
-      const ar = ASPECT_RATIOS.find((a) => a.label === aspectRatio);
-      if (ar && ar.ratio !== null) {
-        setWidth(Math.round(value * ar.ratio));
+    if (aspectRatio !== "Free" && value !== "") {
+      const numValue = typeof value === "string" ? parseFloat(value) : value;
+      if (!isNaN(numValue)) {
+        const ar = ASPECT_RATIOS.find((a) => a.label === aspectRatio);
+        if (ar && ar.ratio !== null) {
+          setWidth(Math.round(numValue * ar.ratio));
+        }
       }
     }
     setTimeout(() => { editingHeightRef.current = false; }, 100);
@@ -422,31 +428,29 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
             </button>
           ))}
         </div>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center min-w-0">
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             value={width}
-            onChange={(e) => handleWidthChange(parseInt(e.target.value) || 1024)}
-            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 transition-all"
+            onChange={(e) => handleWidthChange(e.target.value)}
+            className="w-full min-w-0 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 transition-all"
             style={{
               '--tw-ring-color': `rgba(var(--theme-accent), 0.2)`,
             } as React.CSSProperties}
-            min={256}
-            max={2048}
-            step={64}
+            placeholder="1024"
           />
-          <span className="text-white/30 text-xs">x</span>
+          <span className="text-white/30 text-xs shrink-0">x</span>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             value={height}
-            onChange={(e) => handleHeightChange(parseInt(e.target.value) || 1024)}
-            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 transition-all"
+            onChange={(e) => handleHeightChange(e.target.value)}
+            className="w-full min-w-0 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 transition-all"
             style={{
               '--tw-ring-color': `rgba(var(--theme-accent), 0.2)`,
             } as React.CSSProperties}
-            min={256}
-            max={2048}
-            step={64}
+            placeholder="1024"
           />
         </div>
         {aspectRatio === "Free" ? (
