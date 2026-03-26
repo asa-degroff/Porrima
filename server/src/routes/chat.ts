@@ -76,7 +76,9 @@ async function persistImages(images: ImageAttachment[]): Promise<ImageAttachment
 /**
  * Inactivity timeouts for LLM streaming.
  *
- * Local models:  60s is enough — if Ollama hangs, the model is stuck loading.
+ * Local models:  15 min — complex tool chains (bash, python, file ops) can take
+ *                several minutes. SSE keepalive pings (every 30s) run throughout
+ *                the entire agent turn to prevent client-side timeout.
  * Cloud models:  The cloud provider may buffer large tool-call arguments (not
  *                streaming deltas token-by-token) or take a long time to begin
  *                generating after processing a large context.  Use a much more
@@ -87,9 +89,10 @@ async function persistImages(images: ImageAttachment[]): Promise<ImageAttachment
  * loading / processing context.  We allow extra time here, then switch to the
  * shorter "ongoing" timeout once streaming has started.
  */
-const LOCAL_INACTIVITY_TIMEOUT_MS  = 300_000;  
+const LOCAL_INACTIVITY_TIMEOUT_MS  = 900_000;  // 15 minutes for local
 const CLOUD_INACTIVITY_TIMEOUT_MS  = 300_000;  // 5 min between events (cloud)
 const CLOUD_FIRST_EVENT_TIMEOUT_MS = 300_000;  // 5 min for first event (cloud)
+const SSE_KEEPALIVE_INTERVAL_MS    = 30_000;   // 30s keepalive pings to prevent client timeout
 
 function isCloudModel(modelId: string): boolean {
   return modelId.includes(":cloud");
@@ -334,6 +337,28 @@ async function handleChatStream(
   // ask_user state — owned by the route, set via callback.
   // Uses a ref object so TypeScript can track mutations through closures.
   const askUserRef: { current: { question: string; toolCallId: string } | null } = { current: null };
+  
+  // SSE keepalive interval — prevents client timeout during gaps in SSE output
+  // (model loading, long tool execution, between tool results and next LLM call).
+  // Any real SSE event (text_delta, tool_status, etc.) also resets the client timer,
+  // so this only fires during silent gaps.
+  let sseKeepaliveInterval: ReturnType<typeof setInterval> | null = null;
+
+  const startSSEKeepalive = () => {
+    if (sseKeepaliveInterval) return;
+    sseKeepaliveInterval = setInterval(() => {
+      if (!connectionClosed) {
+        res.write(`: keepalive\n\n`);
+      }
+    }, SSE_KEEPALIVE_INTERVAL_MS);
+  };
+
+  const stopSSEKeepalive = () => {
+    if (sseKeepaliveInterval) {
+      clearInterval(sseKeepaliveInterval);
+      sseKeepaliveInterval = null;
+    }
+  };
 
   // Side-effects bridge between tool execution and SSE output
   const effects: ToolSideEffects = {
@@ -497,6 +522,10 @@ async function handleChatStream(
       boundaryTier: ttsSettings.streamingBoundaryTier ?? 'clause',
     }) : null;
 
+    // Start SSE keepalive to prevent client timeout during model loading,
+    // tool execution, or any other gap in SSE output
+    startSSEKeepalive();
+
     // Process LLM events → SSE (main loop)
     for await (const event of eventStream) {
       switch (event.type) {
@@ -574,6 +603,7 @@ async function handleChatStream(
         }
 
         case "tool_execution_end": {
+          
           // ask_user gets a dedicated SSE event, not tool_status
           if (event.toolName !== "ask_user") {
             const resultText = event.result?.content?.[0]?.text || "";
@@ -1126,6 +1156,7 @@ async function handleChatStream(
       }
     }
   } finally {
+    stopSSEKeepalive();
     res.end();
   }
 }
