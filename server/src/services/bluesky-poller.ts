@@ -168,7 +168,7 @@ export class BlueskyPoller extends EventEmitter {
         
         message += `- **${handle}** ${time}\n`;
         message += `  ${text}\n`;
-        message += `  \`URI: ${notif.uri}\`\n\n`;
+        message += `  \`URI: ${notif.uri}\` \`CID: ${notif.cid}\`\n\n`;
       }
     }
 
@@ -178,7 +178,7 @@ export class BlueskyPoller extends EventEmitter {
   }
 
   /**
-   * Send batched notifications to the Bluesky chat as a system message.
+   * Send batched notifications to the Bluesky chat as a user message and trigger agent response.
    */
   private async sendNotificationsToAgent(
     notifications: BlueskyNotification[],
@@ -193,18 +193,24 @@ export class BlueskyPoller extends EventEmitter {
         return;
       }
       
-      const message: ChatMessage = {
-        role: 'assistant',
+      // Add as USER message (notifications are incoming events)
+      const userMessage: ChatMessage = {
+        role: 'user',
         content,
         timestamp: Date.now(),
         _inProgress: false,
       };
       
-      chat.messages.push(message);
+      chat.messages.push(userMessage);
       chat.lastModified = new Date().toISOString();
       await saveChat(chat);
 
-      console.log(`[bluesky-poller] Sent ${notifications.length} notifications to chat ${chatId}`);
+      console.log(`[bluesky-poller] Sent ${notifications.length} notifications to chat ${chatId}, triggering agent response...`);
+      
+      // Trigger agent to respond
+      this.triggerAgentResponse(chatId).catch(err => {
+        console.error('[bluesky-poller] Failed to trigger agent response:', err.message);
+      });
       
       this.emit('sent_to_agent', {
         chatId,
@@ -214,6 +220,16 @@ export class BlueskyPoller extends EventEmitter {
     } catch (err: any) {
       console.error('[bluesky-poller] Failed to send notifications to agent:', err.message);
     }
+  }
+
+  /**
+   * Trigger the agent to respond to the latest message in a chat.
+   * For now, this is a no-op - the agent will respond when the user opens the chat.
+   * Auto-response would require refactoring the chat route to separate agent loop from SSE.
+   */
+  private async triggerAgentResponse(chatId: string): Promise<void> {
+    // Placeholder - agent responds when user interacts with chat
+    console.log(`[bluesky-poller] Notifications sent to chat ${chatId}, agent will respond when chat is opened`);
   }
 
   /**

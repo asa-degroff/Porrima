@@ -383,7 +383,7 @@ async function handleChatStream(
     },
   };
 
-  const isAgent = chat.type === "agent";
+  const isAgent = chat.type === "agent" || chat.type === "bluesky";
   const agentTools = isAgent ? getAgentTools(chat.id, effects) : undefined;
 
   // Load TTS settings
@@ -921,7 +921,7 @@ async function handleChatStream(
         console.error(`[chat] follow-up context is empty despite ${chat.messages.length} messages - this indicates a conversion bug`);
       }
       
-      const followUpSystemPrompt = chat.type === "agent"
+      const followUpSystemPrompt = (chat.type === "agent" || chat.type === "bluesky")
         ? await buildMemoryAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId)
         : chat.systemPrompt || "You are a helpful assistant.";
       
@@ -1384,7 +1384,7 @@ router.post("/", async (req, res) => {
 
     // Build system prompt with memories and active skills
     let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
-    if (chat.type === "agent") {
+    if (chat.type === "agent" || chat.type === "bluesky") {
       systemPrompt = await buildMemoryAugmentedPrompt(
         systemPrompt,
         chat.messages,

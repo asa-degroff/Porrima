@@ -177,6 +177,7 @@ export function Sidebar({
   isStreaming = false,
   hasUnreadNotebooks = false,
   ttsBarVisible = false,
+  blueskyChatId,
 }: Props) {
   const {
     projectsExpanded,
@@ -250,11 +251,11 @@ export function Sidebar({
   }
 
   const agentChats = useMemo(
-    () => chats.filter((c) => c.type === "agent" && !c.projectId),
-    [chats]
+    () => chats.filter((c) => (c.type === "agent" || c.type === "bluesky") && !c.projectId && c.id !== blueskyChatId),
+    [chats, blueskyChatId]
   );
   const quickChats = useMemo(
-    () => chats.filter((c) => c.type !== "agent" && !c.projectId),
+    () => chats.filter((c) => c.type === "quick" && !c.projectId),
     [chats]
   );
 
@@ -534,7 +535,7 @@ export function Sidebar({
         </div>
 
         {/* Bluesky Section */}
-        <BlueskySection onOpenSettings={onOpenSettings} onSelectChat={onSelectChat} />
+        <BlueskySection onOpenSettings={onOpenSettings} onSelectChat={(id) => { onSelectChat(id); onClose(); }} />
 
       {/* Image Sandbox */}
       <div className="px-3 pb-3 shrink-0">

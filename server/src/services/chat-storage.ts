@@ -392,6 +392,18 @@ export async function createChat(chat: Chat): Promise<void> {
   syncChatMessages(db, chat.id, chat.messages);
 }
 
+/**
+ * Find an existing bluesky-type chat, returning its ID (or null).
+ * Used by backfill logic to avoid creating duplicate bluesky chats.
+ */
+export async function findBlueskyChatId(): Promise<string | null> {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT id FROM chats WHERE type = 'bluesky' ORDER BY lastModified DESC LIMIT 1"
+  ).get() as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Project CRUD
 // ---------------------------------------------------------------------------

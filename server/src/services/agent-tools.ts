@@ -9,6 +9,7 @@ import { glob } from "fs/promises";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
 import { IMAGE_TOOLS, executeImageTool } from "./image-tools.js";
+import { BLUESKY_TOOLS, executeBlueskyTool } from "./bluesky-tools.js";
 import { executePython, createArtifact, createVisual } from "./sandbox.js";
 import { v4 as uuid } from "uuid";
 import type { Artifact, GeneratedImage, InlineVisual } from "../types.js";
@@ -147,7 +148,7 @@ const FILESYSTEM_TOOLS: Tool[] = [
 
 /** Get tool definitions (name + description) for display/metadata only */
 export function getAgentToolDefinitions(): { name: string; description: string }[] {
-  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS, ...IMAGE_TOOLS];
+  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS, ...IMAGE_TOOLS, ...BLUESKY_TOOLS];
   return allTools.map(t => ({ name: t.name, description: t.description }));
 }
 
@@ -191,6 +192,21 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects): AgentTo
           chatId,
           (event) => { if (event.type === "generated_image") effects.onGeneratedImage(event.data); }
         ));
+      },
+    });
+  }
+
+  // Bluesky tools
+  for (const tool of BLUESKY_TOOLS) {
+    tools.push({
+      name: tool.name,
+      description: tool.description,
+      parameters: (tool.schema as any),
+      label: tool.name,
+      execute: async (toolCallId, params) => {
+        const args = params as Record<string, any>;
+        const result = await executeBlueskyTool(tool.name, args);
+        return wrapResult({ content: result, isError: result.startsWith("Error:") });
       },
     });
   }

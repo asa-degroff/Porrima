@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getBlueskyAgent, BlueskyAgent } from '../services/bluesky-agent.js';
 import { getBlueskyPoller } from '../services/bluesky-poller.js';
-import { getSettings, saveSettings, createChat } from '../services/chat-storage.js';
+import { getSettings, saveSettings, createChat, findBlueskyChatId } from '../services/chat-storage.js';
 import { v4 as uuidv4 } from 'uuid';
 
 const router = Router();
@@ -83,16 +83,21 @@ router.post('/settings', async (req: Request, res: Response) => {
     const updated = { ...settings, bluesky: { ...settings.bluesky, ...blueskySettings } };
 
     if (blueskySettings.enabled && !updated.bluesky?.blueskyChatId) {
-      const chatId = uuidv4();
-      await createChat({
-        id: chatId, title: 'Bluesky', type: 'bluesky',
-        modelId: settings.defaultModelId,
-        systemPrompt: 'You are a social media assistant with access to Bluesky.',
-        messages: [],
-        createdAt: new Date().toISOString(),
-        lastModified: new Date().toISOString(),
-      });
-      updated.bluesky!.blueskyChatId = chatId;
+      const existing = await findBlueskyChatId();
+      if (existing) {
+        updated.bluesky!.blueskyChatId = existing;
+      } else {
+        const chatId = uuidv4();
+        await createChat({
+          id: chatId, title: 'Bluesky', type: 'bluesky',
+          modelId: settings.defaultModelId,
+          systemPrompt: 'You are a social media assistant with access to Bluesky.',
+          messages: [],
+          createdAt: new Date().toISOString(),
+          lastModified: new Date().toISOString(),
+        });
+        updated.bluesky!.blueskyChatId = chatId;
+      }
     }
 
     await saveSettings(updated);
@@ -112,8 +117,34 @@ router.post('/settings', async (req: Request, res: Response) => {
 
 router.get('/settings', async (req: Request, res: Response) => {
   try {
+    // Re-read settings fresh in case the scheduler already backfilled
     const settings = await getSettings();
-    res.json({ bluesky: settings.bluesky ?? { enabled: false } });
+    let bluesky = settings.bluesky ?? { enabled: false };
+
+    // Backfill: if Bluesky is enabled but the dedicated chat was never created
+    // (e.g. interrupted turn, direct settings edit), create it now.
+    // First check if a bluesky chat already exists (scheduler may have created one).
+    if (bluesky.enabled && !bluesky.blueskyChatId) {
+      const existing = await findBlueskyChatId();
+      if (existing) {
+        bluesky = { ...bluesky, blueskyChatId: existing };
+      } else {
+        const chatId = uuidv4();
+        await createChat({
+          id: chatId, title: 'Bluesky', type: 'bluesky',
+          modelId: settings.defaultModelId,
+          systemPrompt: 'You are a social media assistant with access to Bluesky.',
+          messages: [],
+          createdAt: new Date().toISOString(),
+          lastModified: new Date().toISOString(),
+        });
+        bluesky = { ...bluesky, blueskyChatId: chatId };
+      }
+      await saveSettings({ ...settings, bluesky });
+      console.log(`[bluesky] backfilled blueskyChatId: ${bluesky.blueskyChatId}`);
+    }
+
+    res.json({ bluesky });
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? 'Failed to get settings' });
   }

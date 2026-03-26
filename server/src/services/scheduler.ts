@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { shouldRunSynthesis, runDailySynthesis } from "./synthesis.js";
-import { getDb, getSettings } from "./chat-storage.js";
+import { getDb, getSettings, saveSettings, createChat, findBlueskyChatId } from "./chat-storage.js";
+import { v4 as uuidv4 } from "uuid";
 import { extractDelayedMemories } from "./memory-extraction.js";
 import { getBlueskyPoller } from "./bluesky-poller.js";
 import { buildClusters } from "./cluster-engine.js";
@@ -291,11 +292,32 @@ export function startScheduler(): void {
 async function startBlueskyPoller(): Promise<void> {
   try {
     const settings = await getSettings();
-    
+
     if (settings.bluesky?.enabled) {
+      // Backfill missing blueskyChatId (e.g. interrupted setup, direct settings edit)
+      if (!settings.bluesky.blueskyChatId) {
+        const existing = await findBlueskyChatId();
+        if (existing) {
+          settings.bluesky.blueskyChatId = existing;
+        } else {
+          const chatId = uuidv4();
+          await createChat({
+            id: chatId, title: 'Bluesky', type: 'bluesky' as any,
+            modelId: settings.defaultModelId,
+            systemPrompt: 'You are a social media assistant with access to Bluesky.',
+            messages: [],
+            createdAt: new Date().toISOString(),
+            lastModified: new Date().toISOString(),
+          });
+          settings.bluesky.blueskyChatId = chatId;
+        }
+        await saveSettings(settings);
+        console.log(`[scheduler] Backfilled Bluesky chat: ${settings.bluesky.blueskyChatId}`);
+      }
+
       const poller = getBlueskyPoller();
       const interval = settings.bluesky.pollingIntervalMinutes ?? 10;
-      
+
       // Restore session if we have one
       if (settings.bluesky.blueskyChatId) {
         // Try to restore the most recent session
