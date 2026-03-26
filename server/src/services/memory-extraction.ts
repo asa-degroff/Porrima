@@ -111,7 +111,7 @@ These memories are already saved. Do NOT duplicate them. Instead, focus on:
 Each extracted memory should be self-contained and meaningful without the original conversation (1-3 sentences).
 
 Output a JSON array. Each item:
-- "text": A standalone statement with sufficient context (1-3 sentences)
+- "text": A standalone statement with sufficient context (2-5 sentences)
 - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
 - "importance": 1-10 (10 = critical, 1 = trivial)
 
@@ -307,10 +307,10 @@ Review the messages below and extract everything the agent needs to continue eff
 3. User context — preferences, instructions, corrections, expertise revealed
 4. Decisions & rationale — why approaches were chosen, tradeoffs considered, alternatives rejected
 
-Each memory should be self-contained and meaningful without the original conversation (1-3 sentences).
+Each memory should be self-contained and meaningful (2-5 sentences).
 
 Output a JSON array. Each item:
-- "text": A standalone statement with sufficient context (1-3 sentences)
+- "text": A standalone statement with sufficient context (2-5 sentences)
 - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
 - "importance": 1-10
 
