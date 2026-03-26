@@ -1147,38 +1147,52 @@ router.post("/", async (req, res) => {
   // Check for pending state (ask_user OR mid-turn crash recovery)
   const pendingState = await loadPendingState(chatId);
 
-  if (pendingState) {
-    // RESUME: the user's message is the answer to ask_user (or mid-turn continuation)
-    let systemPrompt = pendingState.systemPrompt;
-    
-    // Check if this is a mid-turn crash recovery (has accumulators but no ask_user)
-    const isMidTurnRecovery = !pendingState.askToolCallId && pendingState.fullText !== undefined;
-    
-    if (isMidTurnRecovery) {
-      console.log(`[chat] resuming mid-turn from crash: ${pendingState.iterations} iterations, ${pendingState.fullText?.length || 0}ch text, ${pendingState.toolCalls?.length || 0} tools`);
-      
-      // Reconstruct the partial assistant message from saved accumulators
+  // Check if this is a mid-turn crash recovery (has accumulators but no ask_user)
+  const isMidTurnRecovery = pendingState && !pendingState.askToolCallId && pendingState.fullText !== undefined;
+
+  if (isMidTurnRecovery) {
+    // MID-TURN CRASH RECOVERY: The agent was mid-tool-loop when the process died.
+    // The in-progress assistant message (with tool calls and partial text) should
+    // already be in chat.messages from incremental persistence. If not, reconstruct
+    // it from the pending state accumulators. Then fall through to the normal path
+    // so the user's new message is sent as a fresh prompt with full context.
+    console.log(`[chat] mid-turn crash recovery: ${pendingState!.iterations} iterations, ${pendingState!.fullText?.length || 0}ch text, ${pendingState!.toolCalls?.length || 0} tools`);
+
+    const lastMsg = chat.messages[chat.messages.length - 1];
+    const hasInProgressMsg = lastMsg?.role === "assistant" && (lastMsg._inProgress || lastMsg.toolCalls?.length);
+
+    if (!hasInProgressMsg && pendingState!.toolCalls?.length) {
+      // No in-progress message saved (pre-fix crash) — reconstruct from accumulators
       const partialMsg: ChatMessage = {
         role: "assistant",
-        content: pendingState.fullText || "",
-        thinking: pendingState.thinkingText || undefined,
-        toolCalls: pendingState.toolCalls?.length ? pendingState.toolCalls : undefined,
-        toolResults: pendingState.toolResults?.length ? pendingState.toolResults : undefined,
+        content: pendingState!.fullText || "",
+        thinking: pendingState!.thinkingText || undefined,
+        toolCalls: pendingState!.toolCalls?.length ? pendingState!.toolCalls : undefined,
+        toolResults: pendingState!.toolResults?.length ? pendingState!.toolResults : undefined,
         timestamp: Date.now(),
       };
-      
-      // Replace or append the partial message to chat.messages
-      if (chat.messages.length && chat.messages[chat.messages.length - 1].role === "assistant") {
+      if (lastMsg?.role === "assistant") {
         chat.messages[chat.messages.length - 1] = partialMsg;
       } else {
         chat.messages.push(partialMsg);
       }
       await saveChat(chat);
-      
-      // Continue: user's message is treated as a follow-up prompt
-      // The handler will pick up the partial message from chat.messages
+      console.log(`[chat] reconstructed in-progress message from pending state accumulators`);
+    } else if (hasInProgressMsg) {
+      // Strip _inProgress flag — the message is now finalized (partial)
+      delete lastMsg._inProgress;
+      await saveChat(chat);
     }
-    
+
+    // Fall through to the normal path below — the in-progress assistant message
+    // is now part of chat.messages, so context will include it.
+    // pendingState is already consumed (deleted) by loadPendingState.
+  }
+
+  if (pendingState && !isMidTurnRecovery) {
+    // ASK_USER RESUME: the user's message is the answer to ask_user
+    let systemPrompt = pendingState.systemPrompt;
+
     // Check for new skill invocations in resume message
     const invokedSkills = parseSkillInvocations(message);
     if (invokedSkills.length > 0) {
@@ -1192,7 +1206,7 @@ router.post("/", async (req, res) => {
       }
       // Keep skill invocations in the message for display
     }
-    
+
     // Inject active skills into the resumed system prompt
     if (chat.activeSkills?.length) {
       const skillsCache = new Map<string, Skill>();
@@ -1202,9 +1216,9 @@ router.post("/", async (req, res) => {
       }
       systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
     }
-    
+
     const contextMessages = pendingState.agentMessages as Message[];
-    
+
     // Safety check: if context is empty, rebuild from chat.messages to avoid
     // losing conversation history due to corrupted or empty pending state
     if (contextMessages.length === 0 && chat.messages.length > 0) {
@@ -1243,7 +1257,7 @@ router.post("/", async (req, res) => {
       console.error("[compaction] model discovery failed (resume):", err.message);
       model = undefined; // Skip truncation if Ollama is unreachable
     }
-    
+
     // Pre-send context protection for resume path
     if (model) {
       try {
@@ -1271,12 +1285,12 @@ router.post("/", async (req, res) => {
         console.error("[compaction] pre-send truncation failed (resume):", err);
       }
     }
-    
+
     // Safety check: warn if context is empty for resume
     if (contextMessages.length === 0 && chat.messages.length > 1) {
       console.error(`[chat] CRITICAL: resume context is empty despite ${chat.messages.length} messages in chat`);
     }
-    
+
     // Safety check: detect catastrophic context loss from compaction
     if (chat.messages.length <= 3 && chat.messages.length > 1) {
       console.warn(`[chat] WARNING: resume chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
