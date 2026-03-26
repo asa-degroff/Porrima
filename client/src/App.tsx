@@ -393,6 +393,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         isStreaming={streaming}
         hasUnreadNotebooks={hasUnreadAgentEntries()}
         ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}
+        blueskyChatId={settings.bluesky?.blueskyChatId}
       />
       {sidebarOpen && (
         <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={handleCloseSidebar} />

@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import type { ChatListItem as ChatListItemType, ChatType, Project } from "../types";
 import { ChatListItem } from "./ChatListItem";
 import { OctahedronLogo } from "./OctahedronLogo";
+import { BlueskySection } from "./BlueskySection";
 import { useSidebarState } from "../hooks/useSidebarState";
 import { SidebarSearch, SearchResults } from "./SidebarSearch";
 import { searchConversations } from "../api/client";
@@ -26,6 +27,7 @@ interface Props {
   isStreaming?: boolean;
   hasUnreadNotebooks?: boolean;
   ttsBarVisible?: boolean;
+  blueskyChatId?: string;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -530,6 +532,9 @@ export function Sidebar({
             </div>
           )}
         </div>
+
+        {/* Bluesky Section */}
+        <BlueskySection onOpenSettings={onOpenSettings} onSelectChat={onSelectChat} />
 
       {/* Image Sandbox */}
       <div className="px-3 pb-3 shrink-0">

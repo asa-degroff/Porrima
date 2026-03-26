@@ -57,7 +57,7 @@ export interface ChatMessage {
   segments?: MessageSegment[];
 }
 
-export type ChatType = "agent" | "quick";
+export type ChatType = "agent" | "quick" | "bluesky";
 
 export interface Chat {
   id: string;
@@ -141,6 +141,7 @@ export interface Settings {
   extractionFallbackEnabled?: boolean;
   // Creative direction settings
   creativeDirections?: CreativeDirectionSettings;
+  bluesky?: BlueskySettings;
 }
 
 export interface CreativeDirectionSettings {
@@ -152,6 +153,16 @@ export interface CreativeDirectionSettings {
   imageModelId?: string;
   cfgScale?: number;
   steps?: number;
+}
+
+export interface BlueskySettings {
+  enabled: boolean;
+  username?: string;
+  appPassword?: string;
+  pollingIntervalMinutes?: number;
+  notificationTypes?: string[];
+  autoSendToAgent?: boolean;
+  blueskyChatId?: string;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";

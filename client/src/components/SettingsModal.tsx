@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage } from "../api/client";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, CreativeDirectionSettings } from "../types";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, CreativeDirectionSettings, BlueskySettings } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 
 function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
@@ -94,6 +94,18 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [cdSteps, setCdSteps] = useState(cdDefaults.steps ?? 35);
   const [cdCfgScale, setCdCfgScale] = useState(cdDefaults.cfgScale ?? 4.0);
   const [cdModelDropdownOpen, setCdModelDropdownOpen] = useState(false);
+
+  // Bluesky settings
+  const blueskyDefaults = settings.bluesky ?? ({} as Partial<BlueskySettings>);
+  const [blueskyEnabled, setBlueskyEnabled] = useState(blueskyDefaults.enabled ?? false);
+  const [blueskyUsername, setBlueskyUsername] = useState(blueskyDefaults.username ?? "");
+  const [blueskyAppPassword, setBlueskyAppPassword] = useState("");
+  const [blueskyPollingInterval, setBlueskyPollingInterval] = useState(blueskyDefaults.pollingIntervalMinutes ?? 10);
+  const [blueskyAutoSendToAgent, setBlueskyAutoSendToAgent] = useState(blueskyDefaults.autoSendToAgent ?? false);
+  const [blueskyConnecting, setBlueskyConnecting] = useState(false);
+  const [blueskyMessage, setBlueskyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [blueskyAuthenticated, setBlueskyAuthenticated] = useState(false);
+  const [blueskyHandle, setBlueskyHandle] = useState<string | null>(null);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [visionModelDropdownOpen, setVisionModelDropdownOpen] = useState(false);
   const [voiceDropdownOpen, setVoiceDropdownOpen] = useState(false);
@@ -169,6 +181,17 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     }
   }, [ttsSettings?.backend]);
 
+  // Fetch Bluesky status
+  useEffect(() => {
+    fetch("/api/bluesky/status", { credentials: "include" })
+      .then((r) => r.json())
+      .then((data) => {
+        setBlueskyAuthenticated(data.authenticated ?? false);
+        setBlueskyHandle(data.currentHandle ?? null);
+      })
+      .catch(() => {});
+  }, []);
+
   const handleSave = () => {
     const defaultPreset = presets.find((p) => p.isDefault);
     const effectivePrompt = defaultPreset ? defaultPreset.content.trim() : defaultSystemPrompt.trim();
@@ -196,6 +219,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
         maxExecutions: cdMaxExecutions,
         steps: cdSteps,
         cfgScale: cdCfgScale,
+      },
+      bluesky: {
+        enabled: blueskyEnabled,
+        username: blueskyAuthenticated ? blueskyUsername : undefined,
+        pollingIntervalMinutes: blueskyPollingInterval,
+        autoSendToAgent: blueskyAutoSendToAgent,
       },
     });
     
@@ -349,6 +378,45 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setLineageLoading(null);
     }
   }, [expandedLineage, lineageData]);
+
+  const handleBlueskyConnect = useCallback(async () => {
+    if (!blueskyUsername || !blueskyAppPassword) {
+      setBlueskyMessage({ type: "err", text: "Please enter both username and app password" });
+      return;
+    }
+    setBlueskyConnecting(true);
+    setBlueskyMessage(null);
+    try {
+      const res = await fetch("/api/bluesky/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifier: blueskyUsername, password: blueskyAppPassword }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setBlueskyMessage({ type: "ok", text: `Connected as @${data.handle}` });
+        setBlueskyAuthenticated(true);
+        setBlueskyHandle(data.handle);
+        setBlueskyAppPassword("");
+      } else {
+        setBlueskyMessage({ type: "err", text: data.error || "Failed to connect" });
+      }
+    } catch (err: any) {
+      setBlueskyMessage({ type: "err", text: err.message || "Failed to connect" });
+    }
+    setBlueskyConnecting(false);
+  }, [blueskyUsername, blueskyAppPassword]);
+
+  const handleBlueskyDisconnect = useCallback(async () => {
+    try {
+      await fetch("/api/bluesky/logout", { method: "POST" });
+      setBlueskyAuthenticated(false);
+      setBlueskyHandle(null);
+      setBlueskyMessage({ type: "ok", text: "Disconnected from Bluesky" });
+    } catch (err: any) {
+      setBlueskyMessage({ type: "err", text: err.message || "Failed to disconnect" });
+    }
+  }, []);
 
   return (
     <div
@@ -1157,6 +1225,159 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Bluesky Section */}
+          <div className="border-t border-white/10 pt-6">
+            <h3 className="text-sm font-semibold text-white/80 mb-4">Bluesky</h3>
+            
+            {blueskyMessage && (
+              <p className={`text-sm mb-3 ${blueskyMessage.type === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
+                {blueskyMessage.text}
+              </p>
+            )}
+
+            {blueskyAuthenticated ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-500/10 border border-emerald-400/20">
+                  <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-emerald-300 text-sm">Connected as @{blueskyHandle}</span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-sm font-medium text-white/60">Enable Bluesky integration</label>
+                    <p className="text-xs text-white/30 mt-0.5">Poll for notifications and send to agent</p>
+                  </div>
+                  <button
+                    onClick={() => setBlueskyEnabled(!blueskyEnabled)}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      blueskyEnabled ? "bg-emerald-500/30" : "bg-white/10"
+                    }`}
+                  >
+                    <div
+                      className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                        blueskyEnabled ? "left-7" : "left-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-sm font-medium text-white/60">Polling interval</label>
+                    <span className="text-xs text-white/40">{blueskyPollingInterval} minutes</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={5}
+                    max={30}
+                    step={5}
+                    value={blueskyPollingInterval}
+                    onChange={(e) => setBlueskyPollingInterval(Number(e.target.value))}
+                    disabled={!blueskyEnabled}
+                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer disabled:opacity-50 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-emerald-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                  />
+                  <p className="text-xs text-white/30">How often to check for new notifications</p>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-sm font-medium text-white/60">Auto-send to agent</label>
+                    <p className="text-xs text-white/30 mt-0.5">Automatically send notifications to Bluesky chat</p>
+                  </div>
+                  <button
+                    onClick={() => setBlueskyAutoSendToAgent(!blueskyAutoSendToAgent)}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      blueskyAutoSendToAgent ? "bg-emerald-500/30" : "bg-white/10"
+                    }`}
+                  >
+                    <div
+                      className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                        blueskyAutoSendToAgent ? "left-7" : "left-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <button
+                  onClick={handleBlueskyDisconnect}
+                  className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-red-500/10 border border-red-400/15 text-red-300/80 hover:bg-red-500/20 transition-all flex items-center justify-center gap-2"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                    <polyline points="16 17 21 12 16 7" />
+                    <line x1="21" y1="12" x2="9" y2="12" />
+                  </svg>
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-xs text-white/40">
+                  Connect your Bluesky account to receive notifications and interact with the platform.
+                  You'll need to create an app password in your Bluesky settings.
+                </p>
+                
+                <div className="space-y-2">
+                  <label className="block text-sm text-white/50">Username (handle)</label>
+                  <input
+                    type="text"
+                    value={blueskyUsername}
+                    onChange={(e) => setBlueskyUsername(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+                    placeholder="user.bsky.social"
+                    autoComplete="off"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-sm text-white/50">App Password</label>
+                  <input
+                    type="password"
+                    value={blueskyAppPassword}
+                    onChange={(e) => setBlueskyAppPassword(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+                    placeholder="xxxx-xxxx-xxxx-xxxx"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-white/30">
+                    Create one at{" "}
+                    <a href="https://bsky.app/settings/app-passwords" target="_blank" rel="noopener noreferrer" className="text-emerald-400/60 hover:text-emerald-400/80">
+                      bsky.app/settings/app-passwords
+                    </a>
+                  </p>
+                </div>
+
+                <button
+                  onClick={handleBlueskyConnect}
+                  disabled={blueskyConnecting}
+                  className="w-full px-3 py-2 rounded-lg text-sm font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  style={{
+                    backgroundColor: `rgba(var(--theme-secondary), 0.15)`,
+                    borderColor: `rgba(var(--theme-secondary-border))`,
+                    color: `rgba(var(--theme-secondary-text))`,
+                  }}
+                >
+                  {blueskyConnecting ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                      </svg>
+                      Connecting...
+                    </>
+                  ) : (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z" />
+                        <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+                      </svg>
+                      Connect to Bluesky
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* TTS Section */}
