@@ -258,7 +258,8 @@ export async function extractMemories(
           if (event.type === "text_delta") {
             responseText += event.delta;
           }
-        }
+        },
+        { signal: AbortSignal.timeout(90_000) }
       );
     },
     `extractMemories LLM call (chat ${chatId})`
@@ -351,7 +352,8 @@ export async function preCompactionFlush(
           if (event.type === "text_delta") {
             responseText += event.delta;
           }
-        }
+        },
+        { signal: AbortSignal.timeout(90_000) }
       );
     },
     `preCompactionFlush LLM call (chat ${chatId})`
@@ -409,7 +411,8 @@ export async function extractMemoriesFromText(
             if (event.type === "text_delta") {
               responseText += event.delta;
             }
-          }
+          },
+          { signal: AbortSignal.timeout(90_000) }
         );
       },
       `extractMemoriesFromText LLM call (entry ${entryId})`
@@ -686,7 +689,8 @@ export async function extractDelayedMemories(
             if (event.type === "text_delta") {
               responseText += event.delta;
             }
-          }
+          },
+          { signal: AbortSignal.timeout(90_000) }
         );
       },
       `extractDelayedMemories LLM call (chat ${chatId})`

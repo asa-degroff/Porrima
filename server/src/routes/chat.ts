@@ -156,10 +156,26 @@ function createSafeStreamFn(): StreamFn {
         }
       } catch (err) {
         console.error(`[stream] error from LLM stream:`, err);
+        // Push a proper AssistantMessage (not a string!) — EventStream.result()
+        // returns event.error directly, and the agent loop accesses message.content.
+        const errorMsg: AssistantMessage = {
+          role: "assistant",
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {
+            input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "error",
+          errorMessage: err instanceof Error ? err.message : String(err),
+          timestamp: Date.now(),
+        };
         wrappedStream.push({
           type: "error",
-          reason: "stream_error",
-          error: err instanceof Error ? err.message : String(err),
+          reason: "error",
+          error: errorMsg,
         } as any);
       } finally {
         if (timer) clearTimeout(timer);

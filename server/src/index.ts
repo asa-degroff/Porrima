@@ -27,6 +27,13 @@ import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
 import { initializePersona } from "./services/persona-store.js";
 
+// Prevent unhandled promise rejections from crashing the process.
+// pi-agent-core's agentLoop() runs an unawaited async IIFE — if the loop throws
+// (e.g. stream error with malformed message), it becomes an unhandled rejection.
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[process] unhandled rejection (caught, not crashing):", reason);
+});
+
 const isProd = process.env.NODE_ENV === "production";
 const PORT = parseInt(process.env.PORT || "3001");
 const sessionSecret = await getSessionSecret();

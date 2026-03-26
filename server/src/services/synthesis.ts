@@ -199,7 +199,8 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
             } else if (event.type === "thinking_delta") {
               thinkingText += event.delta;
             }
-          }
+          },
+          { signal: AbortSignal.timeout(180_000) }
         );
 
         // Use thinking content as fallback if text output is empty
@@ -339,7 +340,8 @@ async function generateReflections(
       } else if (event.type === "thinking_delta") {
         thinkingText += event.delta;
       }
-    }
+    },
+    { signal: AbortSignal.timeout(180_000) }
   );
 
   const finalResponse = responseText.trim() || thinkingText.trim();
@@ -491,7 +493,8 @@ async function analyzeAndPromotePersonaPatterns(
           } else if (event.type === "thinking_delta") {
             suggestedThinking += event.delta;
           }
-        }
+        },
+        { signal: AbortSignal.timeout(180_000) }
       );
 
       const finalSuggestion = suggestedUpdate.trim() || suggestedThinking.trim();
