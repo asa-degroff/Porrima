@@ -637,11 +637,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             <label className="block text-sm font-medium text-white/60">Color Theme</label>
             <div className="grid grid-cols-3 gap-2">
               {[
-                { value: "default" as Theme, label: "Default", preview: "from-purple-900" },
+                { value: "default" as Theme, label: "Lapis", preview: "from-purple-900" },
                 { value: "ocean" as Theme, label: "Ocean", preview: "from-sky-900" },
                 { value: "forest" as Theme, label: "Forest", preview: "from-green-900" },
                 { value: "crimson" as Theme, label: "Crimson", preview: "from-rose-900" },
-                { value: "mono" as Theme, label: "Mono", preview: "from-gray-900" },
+                { value: "mono" as Theme, label: "Asphalt", preview: "from-gray-900" },
               ].map((opt) => (
                 <button
                   key={opt.value}
