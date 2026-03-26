@@ -4,7 +4,7 @@ import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } fr
 import { streamSimple, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
 import type { AgentContext, AgentLoopConfig, StreamFn } from "@mariozechner/pi-agent-core";
-import { getChat, saveChat, getSettings, loadPendingState, savePendingState } from "../services/chat-storage.js";
+import { getChat, saveChat, getSettings, loadPendingState, savePendingState, clearPendingState } from "../services/chat-storage.js";
 import { chatMessagesToPiMessages } from "../services/agent.js";
 import { createPiModel, discoverOllamaModels } from "../services/models.js";
 import type { OllamaModel } from "../types.js";
@@ -879,6 +879,8 @@ async function handleChatStream(
       console.error(`[chat] NO CONTENT produced after ${iterations} iterations - model failure or context issue. Not persisting empty message.`);
       // Don't save an empty message - this prevents the "empty chat" bug
       // The user can retry, and we've logged the failure for debugging
+      // Clean up stale pending state so the next message doesn't trigger a spurious resume
+      await clearPendingState(chat.id);
     }
 
     if (waitingForInput) {
@@ -886,6 +888,9 @@ async function handleChatStream(
         `event: done\ndata: ${JSON.stringify({ message: assistantMsg, waitingForInput: true, iterations })}\n\n`
       );
     } else {
+      // Clean up pending state — turn completed normally, no need for crash recovery
+      await clearPendingState(chat.id);
+
       res.write(
         `event: done\ndata: ${JSON.stringify({ message: assistantMsg, iterations })}\n\n`
       );

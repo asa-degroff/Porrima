@@ -518,6 +518,11 @@ export async function loadPendingState(chatId: string): Promise<PendingAgentStat
   return txn();
 }
 
+export async function clearPendingState(chatId: string): Promise<void> {
+  const db = getDb();
+  db.prepare("DELETE FROM pending_states WHERE chatId = ?").run(chatId);
+}
+
 export async function hasPendingState(chatId: string): Promise<boolean> {
   const db = getDb();
   const row = db.prepare("SELECT 1 FROM pending_states WHERE chatId = ?").get(chatId);
