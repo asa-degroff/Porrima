@@ -72,10 +72,19 @@ export class BlueskyPoller extends EventEmitter {
         reasons: notificationTypes,
       });
 
+      // On first poll, just record the high-water mark so we don't
+      // re-send the entire notification history on every server restart.
+      if (!this.lastNotificationDate) {
+        if (notifications.length > 0) {
+          this.lastNotificationDate = notifications[0].indexedAt;
+          console.log(`[bluesky-poller] First poll — set baseline to ${this.lastNotificationDate} (${notifications.length} existing notifications skipped)`);
+        }
+        return;
+      }
+
       // Filter to new notifications since last poll
       const newNotifications = notifications.filter(n => {
-        if (!this.lastNotificationDate) return true;
-        return n.indexedAt > this.lastNotificationDate;
+        return n.indexedAt > this.lastNotificationDate!;
       });
 
       if (newNotifications.length === 0) {
