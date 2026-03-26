@@ -73,8 +73,27 @@ async function persistImages(images: ImageAttachment[]): Promise<ImageAttachment
  * returns an event stream that immediately emits an abort error
  * instead of letting the fetch call throw.
  */
-/** Inactivity timeout for LLM streaming (60s with no events = model likely stuck loading) */
-const STREAM_INACTIVITY_TIMEOUT_MS = 60_000;
+/**
+ * Inactivity timeouts for LLM streaming.
+ *
+ * Local models:  60s is enough — if Ollama hangs, the model is stuck loading.
+ * Cloud models:  The cloud provider may buffer large tool-call arguments (not
+ *                streaming deltas token-by-token) or take a long time to begin
+ *                generating after processing a large context.  Use a much more
+ *                generous timeout so that a single 200-line tool call doesn't
+ *                get killed mid-generation.
+ *
+ * "Pre-first-event" timeout: before ANY event arrives the model might be
+ * loading / processing context.  We allow extra time here, then switch to the
+ * shorter "ongoing" timeout once streaming has started.
+ */
+const LOCAL_INACTIVITY_TIMEOUT_MS  = 300_000;  
+const CLOUD_INACTIVITY_TIMEOUT_MS  = 300_000;  // 5 min between events (cloud)
+const CLOUD_FIRST_EVENT_TIMEOUT_MS = 300_000;  // 5 min for first event (cloud)
+
+function isCloudModel(modelId: string): boolean {
+  return modelId.includes(":cloud");
+}
 
 function createSafeStreamFn(): StreamFn {
   return (model, ctx, options) => {
@@ -104,9 +123,14 @@ function createSafeStreamFn(): StreamFn {
     const rawStream = streamSimple(model, ctx, options);
     const wrappedStream = createAssistantMessageEventStream();
 
+    const cloud = isCloudModel(model.id);
+    const ongoingTimeout = cloud ? CLOUD_INACTIVITY_TIMEOUT_MS : LOCAL_INACTIVITY_TIMEOUT_MS;
+    const firstEventTimeout = cloud ? CLOUD_FIRST_EVENT_TIMEOUT_MS : LOCAL_INACTIVITY_TIMEOUT_MS;
+
     (async () => {
       let timer: ReturnType<typeof setTimeout> | null = null;
       let ended = false;
+      let receivedFirstEvent = false;
 
       const endStream = () => {
         if (!ended) {
@@ -117,12 +141,9 @@ function createSafeStreamFn(): StreamFn {
 
       const resetTimer = () => {
         if (timer) clearTimeout(timer);
+        const timeout = receivedFirstEvent ? ongoingTimeout : firstEventTimeout;
         timer = setTimeout(() => {
-          console.error(`[stream] inactivity timeout (${STREAM_INACTIVITY_TIMEOUT_MS}ms) — model may be stuck loading: ${model.id}`);
-          // Push a proper AssistantMessage as the error so pi-agent-core can handle it.
-          // The error field must be a full AssistantMessage (with content[], stopReason, etc.)
-          // — not a string — because EventStream.result() returns event.error directly,
-          // and the agent loop accesses message.content.filter(...).
+          console.error(`[stream] inactivity timeout (${timeout}ms, cloud=${cloud}, firstEvent=${receivedFirstEvent}) — model may be stuck: ${model.id}`);
           const errorMsg: AssistantMessage = {
             role: "assistant",
             content: [],
@@ -134,7 +155,7 @@ function createSafeStreamFn(): StreamFn {
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
             },
             stopReason: "error",
-            errorMessage: `Model unresponsive for ${STREAM_INACTIVITY_TIMEOUT_MS / 1000}s — it may be stuck loading. Try again or use a different model.`,
+            errorMessage: `Model unresponsive for ${timeout / 1000}s — it may be stuck loading. Try again or use a different model.`,
             timestamp: Date.now(),
           };
           wrappedStream.push({
@@ -143,7 +164,7 @@ function createSafeStreamFn(): StreamFn {
             error: errorMsg,
           } as any);
           endStream();
-        }, STREAM_INACTIVITY_TIMEOUT_MS);
+        }, timeout);
       };
 
       resetTimer();
@@ -151,13 +172,12 @@ function createSafeStreamFn(): StreamFn {
       try {
         for await (const event of rawStream) {
           if (ended) break;
+          receivedFirstEvent = true;
           resetTimer();
           wrappedStream.push(event);
         }
       } catch (err) {
         console.error(`[stream] error from LLM stream:`, err);
-        // Push a proper AssistantMessage (not a string!) — EventStream.result()
-        // returns event.error directly, and the agent loop accesses message.content.
         const errorMsg: AssistantMessage = {
           role: "assistant",
           content: [],
