@@ -10,7 +10,7 @@ import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
 import { IMAGE_TOOLS, executeImageTool } from "./image-tools.js";
 import { BLUESKY_TOOLS, executeBlueskyTool } from "./bluesky-tools.js";
-import { executePython, createArtifact, createVisual } from "./sandbox.js";
+import { executePython, createArtifact, createVisual, updateArtifact } from "./sandbox.js";
 import { v4 as uuid } from "uuid";
 import type { Artifact, GeneratedImage, InlineVisual } from "../types.js";
 
@@ -93,6 +93,16 @@ const CREATE_ARTIFACT_TOOL: Tool = {
   }),
 };
 
+const UPDATE_ARTIFACT_TOOL: Tool = {
+  name: "update_artifact",
+  description: "Update an existing artifact with new HTML content. Use when the user asks to modify or improve a previously created artifact. The artifact ID should reference a previously created artifact.",
+  parameters: Type.Object({
+    artifactId: Type.String({ description: "The canonical ID of the artifact to update (from a previous create_artifact call)" }),
+    html: Type.String({ description: "Complete HTML document with the updated content" }),
+    changeSummary: Type.Optional(Type.String({ description: "Brief description of what changed (e.g., 'Made background blue, added reset button')" })),
+  }),
+};
+
 const CREATE_VISUAL_TOOL: Tool = {
   name: "create_visual",
   description: "Create an inline HTML/SVG visualization rendered directly in the chat. Use for charts, diagrams, flowcharts, data visualizations, comparisons, timelines, and other visual aids. You can use any web technology: SVG, Canvas, CSS animations, or libraries like D3.js, Chart.js, or Mermaid (loaded via CDN). The visual renders in an iframe so full HTML documents work. For complex multi-page interactive apps, use create_artifact instead.",
@@ -142,6 +152,7 @@ const FILESYSTEM_TOOLS: Tool[] = [
   RUN_PYTHON_TOOL,
   READ_PDF_TOOL,
   CREATE_ARTIFACT_TOOL,
+  UPDATE_ARTIFACT_TOOL,
   CREATE_VISUAL_TOOL,
   ASK_USER_TOOL,
 ];
@@ -261,9 +272,26 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects): AgentTo
     execute: async (_id, params) => {
       const args = params as Record<string, any>;
       const id = uuid();
-      const url = await createArtifact(id, args.html);
-      effects.onArtifact({ id, title: args.title, url });
-      return { content: [{ type: "text", text: `Artifact created: ${args.title} (${url})` }], details: {} };
+      const result = await createArtifact(id, args.html, args.title);
+      effects.onArtifact({ id, title: args.title, url: result.url, version: result.version });
+      return { content: [{ type: "text", text: `Artifact created: ${args.title} (${result.url})` }], details: {} };
+    },
+  });
+
+  // update_artifact — uses effects.onArtifact callback
+  tools.push({
+    ...UPDATE_ARTIFACT_TOOL,
+    label: "update_artifact",
+    execute: async (_id, params) => {
+      const args = params as Record<string, any>;
+      try {
+        const result = await updateArtifact(args.artifactId, args.html, args.changeSummary);
+        // Emit artifact event with new version - client will update the display
+        effects.onArtifact({ id: args.artifactId, title: "Updated artifact", url: result.url, version: result.version });
+        return { content: [{ type: "text", text: `Artifact updated to version ${result.version} (${result.url})` }], details: {} };
+      } catch (e: any) {
+        return { content: [{ type: "text", text: `Error updating artifact: ${e.message}` }], details: {}, isError: true };
+      }
     },
   });
 

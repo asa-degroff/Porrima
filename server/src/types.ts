@@ -189,9 +189,10 @@ export interface MemoryStore {
 export type MemorySummary = Omit<Memory, "embedding">;
 
 export interface Artifact {
-  id: string;
+  id: string;           // canonical ID (persists across versions)
   title: string;
-  url: string;
+  url: string;          // version-specific URL (e.g., /api/artifacts/:id/versions/:version)
+  version?: number;     // version number (defaults to 1 for backward compat)
 }
 
 export interface InlineVisual {
