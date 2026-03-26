@@ -50,6 +50,8 @@ export interface ChatMessage {
   images?: ImageAttachment[];
   segments?: MessageSegment[];
   timestamp: number;
+  /** Transient flag: message is still being generated (mid-tool-loop). Stripped on completion. */
+  _inProgress?: boolean;
 }
 
 export type ChatType = "agent" | "quick";

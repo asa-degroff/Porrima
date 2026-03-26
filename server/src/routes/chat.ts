@@ -119,11 +119,28 @@ function createSafeStreamFn(): StreamFn {
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
           console.error(`[stream] inactivity timeout (${STREAM_INACTIVITY_TIMEOUT_MS}ms) — model may be stuck loading: ${model.id}`);
-          // Push an error event so the consumer gets a clear message
+          // Push a proper AssistantMessage as the error so pi-agent-core can handle it.
+          // The error field must be a full AssistantMessage (with content[], stopReason, etc.)
+          // — not a string — because EventStream.result() returns event.error directly,
+          // and the agent loop accesses message.content.filter(...).
+          const errorMsg: AssistantMessage = {
+            role: "assistant",
+            content: [],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "error",
+            errorMessage: `Model unresponsive for ${STREAM_INACTIVITY_TIMEOUT_MS / 1000}s — it may be stuck loading. Try again or use a different model.`,
+            timestamp: Date.now(),
+          };
           wrappedStream.push({
             type: "error",
-            reason: "timeout",
-            error: `Model unresponsive for ${STREAM_INACTIVITY_TIMEOUT_MS / 1000}s — it may be stuck loading. Try again or use a different model.`,
+            reason: "error",
+            error: errorMsg,
           } as any);
           endStream();
         }, STREAM_INACTIVITY_TIMEOUT_MS);
@@ -370,7 +387,12 @@ async function handleChatStream(
 
         // Save the completed assistant message and the queued user message
         const assistantMsg = buildCurrentAssistantMessage();
-        chat.messages.push(assistantMsg);
+        const lastMsg = chat.messages[chat.messages.length - 1];
+        if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
+          chat.messages[chat.messages.length - 1] = assistantMsg;
+        } else {
+          chat.messages.push(assistantMsg);
+        }
         const queuedUserMsg: ChatMessage = {
           role: "user",
           content: queued.message,
@@ -637,10 +659,18 @@ async function handleChatStream(
 
           // Incremental persistence: save progress after each iteration
           // This ensures tool calls and partial responses survive server restarts
+          // and are visible in the UI after a page refresh during a long tool loop.
           try {
             const partialMsg = buildCurrentAssistantMessage();
-            // Don't push to chat.messages yet - we're still accumulating
-            // Instead, save the current state of the chat with progress
+            // Update chat.messages with the in-progress assistant message so it
+            // survives crashes and is visible on page refresh. We push on first
+            // iteration, then replace in subsequent iterations.
+            const lastMsg = chat.messages[chat.messages.length - 1];
+            if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
+              chat.messages[chat.messages.length - 1] = { ...partialMsg, _inProgress: true };
+            } else {
+              chat.messages.push({ ...partialMsg, _inProgress: true });
+            }
             await saveChat(chat);
             
             // ALSO save in-flight accumulators to pending_states for crash recovery
@@ -772,7 +802,12 @@ async function handleChatStream(
       
       // Build current message first
       const currentAssistantMsg = buildCurrentAssistantMessage();
-      chat.messages.push(currentAssistantMsg);
+      const lastMsg = chat.messages[chat.messages.length - 1];
+      if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
+        chat.messages[chat.messages.length - 1] = currentAssistantMsg;
+      } else {
+        chat.messages.push(currentAssistantMsg);
+      }
       
       // Add queued user message
       const queuedUserMsg: ChatMessage = {
@@ -872,13 +907,23 @@ async function handleChatStream(
     const hasContent = assistantMsg.content.trim() || assistantMsg.thinking || assistantMsg.toolCalls?.length;
     
     if (hasContent) {
-      chat.messages.push(assistantMsg);
+      // Replace the in-progress message if present, otherwise push
+      const lastMsg = chat.messages[chat.messages.length - 1];
+      if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
+        chat.messages[chat.messages.length - 1] = assistantMsg;
+      } else {
+        chat.messages.push(assistantMsg);
+      }
       await saveChat(chat);
       console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput} content=${assistantMsg.content.length}ch`);
     } else {
+      // Remove the in-progress placeholder if present
+      const lastMsg = chat.messages[chat.messages.length - 1];
+      if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
+        chat.messages.pop();
+        await saveChat(chat);
+      }
       console.error(`[chat] NO CONTENT produced after ${iterations} iterations - model failure or context issue. Not persisting empty message.`);
-      // Don't save an empty message - this prevents the "empty chat" bug
-      // The user can retry, and we've logged the failure for debugging
       // Clean up stale pending state so the next message doesn't trigger a spurious resume
       await clearPendingState(chat.id);
     }
@@ -966,8 +1011,14 @@ async function handleChatStream(
 
       // Build partial assistant message with whatever we accumulated
       const assistantMsg = buildCurrentAssistantMessage();
-      chat.messages.push(assistantMsg);
-      
+      // Replace in-progress message if present, otherwise push
+      const lastMsg = chat.messages[chat.messages.length - 1];
+      if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
+        chat.messages[chat.messages.length - 1] = assistantMsg;
+      } else {
+        chat.messages.push(assistantMsg);
+      }
+
       // Save immediately - this is critical for durability
       try {
         await saveChat(chat);
@@ -999,7 +1050,12 @@ async function handleChatStream(
       // Save whatever we've accumulated before the connection dropped
       if (state.fullText.trim() || state.allToolCalls.length > 0) {
         const assistantMsg = buildCurrentAssistantMessage();
-        chat.messages.push(assistantMsg);
+        const lastMsg = chat.messages[chat.messages.length - 1];
+        if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
+          chat.messages[chat.messages.length - 1] = assistantMsg;
+        } else {
+          chat.messages.push(assistantMsg);
+        }
         try {
           await saveChat(chat);
           console.log(`[chat] abort: saved partial response (${assistantMsg.content.length}ch, ${assistantMsg.toolCalls?.length || 0} tools)`);
@@ -1012,7 +1068,12 @@ async function handleChatStream(
       // Unexpected error - save what we have before reporting
       if (state.fullText.trim() || state.allToolCalls.length > 0 || state.allToolResults.length > 0) {
         const assistantMsg = buildCurrentAssistantMessage();
-        chat.messages.push(assistantMsg);
+        const lastMsg = chat.messages[chat.messages.length - 1];
+        if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
+          chat.messages[chat.messages.length - 1] = assistantMsg;
+        } else {
+          chat.messages.push(assistantMsg);
+        }
         try {
           await saveChat(chat);
           console.log(`[chat] error: saved partial state before error (${assistantMsg.content.length}ch)`);
