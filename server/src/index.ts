@@ -22,6 +22,7 @@ import skillsRouter from "./routes/skills.js";
 import userImagesRouter from "./routes/user-images.js";
 import projectsRouter from "./routes/projects.js";
 import notebooksRouter from "./routes/notebooks.js";
+import blueskyRouter from "./routes/bluesky.js";
 import { requireAuth } from "./middleware/auth.js";
 import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
@@ -99,6 +100,7 @@ app.use("/api/skills", skillsRouter);
 app.use("/api/user-images", userImagesRouter);
 app.use("/api/projects", projectsRouter);
 app.use("/api/notebooks", notebooksRouter);
+app.use("/api/bluesky", blueskyRouter);
 
 // Production static serving
 if (isProd) {

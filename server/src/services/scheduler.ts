@@ -1,8 +1,8 @@
 import crypto from "crypto";
 import { shouldRunSynthesis, runDailySynthesis } from "./synthesis.js";
-import { getDb } from "./chat-storage.js";
-import { getSettings } from "./chat-storage.js";
+import { getDb, getSettings } from "./chat-storage.js";
 import { extractDelayedMemories } from "./memory-extraction.js";
+import { getBlueskyPoller } from "./bluesky-poller.js";
 import { buildClusters } from "./cluster-engine.js";
 import { getClusters } from "./cluster-storage.js";
 import { getAllCorpusEntries } from "./image-corpus.js";
@@ -280,4 +280,44 @@ export function startScheduler(): void {
   setInterval(checkAndRunDelayedExtractions, DELAYED_EXTRACTION_CHECK_INTERVAL_MS);
   
   console.log("[scheduler] Started (synthesis every 15min, delayed extraction every 5 minutes)");
+
+  // Start Bluesky poller if enabled
+  startBlueskyPoller();
+}
+
+/**
+ * Start the Bluesky notification poller if enabled in settings.
+ */
+async function startBlueskyPoller(): Promise<void> {
+  try {
+    const settings = await getSettings();
+    
+    if (settings.bluesky?.enabled) {
+      const poller = getBlueskyPoller();
+      const interval = settings.bluesky.pollingIntervalMinutes ?? 10;
+      
+      // Restore session if we have one
+      if (settings.bluesky.blueskyChatId) {
+        // Try to restore the most recent session
+        const sessions = await import('./bluesky-agent.js').then(m => m.BlueskyAgent);
+        const sessionInfos = sessions.getAllSessionInfo();
+        
+        if (sessionInfos.length > 0) {
+          const agent = await import('./bluesky-agent.js').then(m => m.getBlueskyAgent());
+          const restored = await agent.restoreSession(sessionInfos[0].did);
+          
+          if (restored) {
+            console.log(`[scheduler] Restored Bluesky session for ${agent.getHandle()}`);
+          }
+        }
+      }
+      
+      poller.start(interval);
+      console.log(`[scheduler] Bluesky poller started (interval: ${interval}min)`);
+    } else {
+      console.log("[scheduler] Bluesky poller disabled in settings");
+    }
+  } catch (err: any) {
+    console.error("[scheduler] Failed to start Bluesky poller:", err.message);
+  }
 }

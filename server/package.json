@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@atproto/api": "^0.14.22",
     "@mariozechner/pi-agent-core": "^0.55.1",
     "@mariozechner/pi-ai": "^0.55.1",
     "@mozilla/readability": "^0.6.0",

@@ -54,7 +54,7 @@ export interface ChatMessage {
   _inProgress?: boolean;
 }
 
-export type ChatType = "agent" | "quick";
+export type ChatType = "agent" | "quick" | "bluesky";
 
 export interface Chat {
   id: string;
@@ -126,6 +126,18 @@ export interface Settings {
   extractionFallbackEnabled?: boolean;
   // Creative direction settings
   creativeDirections?: CreativeDirectionSettings;
+  // Bluesky integration settings
+  bluesky?: BlueskySettings;
+}
+
+export interface BlueskySettings {
+  enabled: boolean;
+  username?: string;  // Handle (e.g., "user.bsky.social")
+  appPassword?: string;  // Encrypted at rest
+  pollingIntervalMinutes?: number;  // Default: 10
+  notificationTypes?: string[];  // ['mention', 'reply', 'follow', 'like', 'repost']
+  autoSendToAgent?: boolean;  // Auto-send notifications to Bluesky chat
+  blueskyChatId?: string;  // Dedicated chat for Bluesky interactions
 }
 
 export interface CreativeDirectionSettings {
@@ -257,4 +269,85 @@ export interface NotebookEntry {
 export interface NotebookIndex {
   entries: { id: string; createdAt: string; author: 'user' | 'agent'; preview: string }[];
   lastActivityDate: string | null;  // ISO date of most recent entry
+}
+
+// Bluesky types
+export interface BlueskyNotification {
+  uri: string;
+  cid: string;
+  reason: 'mention' | 'reply' | 'follow' | 'like' | 'repost' | 'quote';
+  author: {
+    did: string;
+    handle: string;
+    displayName?: string;
+  };
+  record: {
+    text?: string;
+    createdAt?: string;
+    reply?: {
+      root?: { uri: string; cid: string };
+      parent?: { uri: string; cid: string };
+    };
+  };
+  indexedAt: string;
+  isRead: boolean;
+}
+
+export interface BlueskyThread {
+  uri: string;
+  cid: string;
+  author: {
+    did: string;
+    handle: string;
+    displayName?: string;
+  };
+  record: {
+    text: string;
+    createdAt: string;
+    reply?: {
+      root: { uri: string; cid: string };
+      parent: { uri: string; cid: string };
+    };
+  };
+  embed?: any;
+  replyCount: number;
+  likeCount: number;
+  repostCount: number;
+  parent?: BlueskyThreadPost;
+  replies?: BlueskyThreadPost[];
+}
+
+export interface BlueskyThreadPost {
+  uri: string;
+  cid: string;
+  author: {
+    did: string;
+    handle: string;
+    displayName?: string;
+  };
+  record: {
+    text: string;
+    createdAt: string;
+  };
+  embed?: any;
+  replyCount: number;
+  likeCount: number;
+  repostCount: number;
+}
+
+export interface BlueskyPostResult {
+  uri: string;
+  cid: string;
+  success: boolean;
+}
+
+export interface BlueskyProfile {
+  did: string;
+  handle: string;
+  displayName?: string;
+  description?: string;
+  avatar?: string;
+  followersCount: number;
+  followsCount: number;
+  postsCount: number;
 }
