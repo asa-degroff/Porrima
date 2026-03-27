@@ -43,6 +43,7 @@ export function NotebookView({
   const [editingEntry, setEditingEntry] = useState<{ author: 'user' | 'agent'; id: string; content: string } | null>(null);
   const [composerLinks, setComposerLinks] = useState<NotebookLink>({});
   const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
+  const [mobileNotebookTab, setMobileNotebookTab] = useState<'user' | 'agent'>('user');
 
   // Link picker state
   const [linkPickerOpen, setLinkPickerOpen] = useState(false);
@@ -351,7 +352,7 @@ export function NotebookView({
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className="flex-1 flex flex-col min-h-0 min-w-0">
       {/* Header */}
       <div className="px-3 md:px-6 py-3 border-b border-white/10 flex items-center justify-between gap-3 backdrop-blur-sm bg-white/[0.03]">
         <div className="flex items-center gap-2 min-w-0">
@@ -380,47 +381,114 @@ export function NotebookView({
         </button>
       </div>
 
-      {/* Content - Side by side on desktop, stacked on mobile */}
-      <div className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
-        {/* User Notebook (left) */}
-        <div className="flex-1 flex flex-col min-h-0 border-r md:border-r border-white/5 overflow-hidden">
-          <div className="px-3 py-2 border-b border-white/5 bg-white/[0.02]">
-            <h3 className="text-xs font-medium text-white/60 uppercase tracking-wider">Your Notebook</h3>
+      {/* Content - Tabbed on mobile, side-by-side on desktop */}
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden w-full">
+        {/* Mobile tab bar - compact rounded selector */}
+        <div className="md:hidden px-3 py-2 shrink-0">
+          <div className="flex rounded-lg bg-white/[0.05] p-0.5 w-full">
+            <button
+              onClick={() => setMobileNotebookTab('user')}
+              className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-all min-w-0 truncate ${
+                mobileNotebookTab === 'user'
+                  ? 'bg-white/10 text-white shadow-sm'
+                  : 'text-white/50 hover:text-white/70'
+              }`}
+            >
+              Your Notebook
+            </button>
+            <button
+              onClick={() => setMobileNotebookTab('agent')}
+              className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-all min-w-0 truncate ${
+                mobileNotebookTab === 'agent'
+                  ? 'bg-purple-500/20 text-white shadow-sm'
+                  : 'text-white/50 hover:text-white/70'
+              }`}
+            >
+              <span className="flex items-center justify-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                Agent
+              </span>
+            </button>
           </div>
-          <div className="flex-1 overflow-y-auto px-3 md:px-4 py-3">
-            <NotebookEntryComposer
-              onSubmit={handleCreateUserEntry}
-              placeholder="Write a note..."
-              onOpenLinkPicker={handleComposerOpenLinkPicker}
-              pendingLinks={composerLinks}
-              onRemovePendingLink={handleRemoveComposerLink}
-            />
-            <div className="mt-4 space-y-4">
-              {renderEntries(userNotebooks.entries, 'user')}
+        </div>
+
+        {/* Desktop: side-by-side columns */}
+        <div className="hidden md:flex flex-1 flex-row min-h-0 overflow-hidden">
+          {/* User Notebook (left) */}
+          <div className="flex-1 flex flex-col min-h-0 border-r border-white/5 overflow-hidden">
+            <div className="px-3 py-2 border-b border-white/5 bg-white/[0.02]">
+              <h3 className="text-xs font-medium text-white/60 uppercase tracking-wider">Your Notebook</h3>
+            </div>
+            <div className="flex-1 overflow-y-auto px-3 md:px-4 py-3">
+              <NotebookEntryComposer
+                onSubmit={handleCreateUserEntry}
+                placeholder="Write a note..."
+                onOpenLinkPicker={handleComposerOpenLinkPicker}
+                pendingLinks={composerLinks}
+                onRemovePendingLink={handleRemoveComposerLink}
+              />
+              <div className="mt-4 space-y-4">
+                {renderEntries(userNotebooks.entries, 'user')}
+              </div>
+            </div>
+          </div>
+
+          {/* Agent Notebook (right) */}
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-purple-500/[0.01]">
+            <div className="px-3 py-2 border-b border-white/5 bg-white/[0.02]">
+              <h3 className="text-xs font-medium text-white/60 uppercase tracking-wider flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-purple-400" />
+                Agent Notebook
+              </h3>
+            </div>
+            <div className="flex-1 overflow-y-auto px-3 md:px-4 py-3">
+              {agentNotebooks.entries.length === 0 ? (
+                <div className="text-center text-white/30 text-sm py-8">
+                  Agent hasn't written anything yet
+                  <div className="text-xs mt-1">Notes will appear here after review</div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {renderEntries(agentNotebooks.entries, 'agent')}
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Agent Notebook (right) */}
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-purple-500/[0.01]">
-          <div className="px-3 py-2 border-b border-white/5 bg-white/[0.02]">
-            <h3 className="text-xs font-medium text-white/60 uppercase tracking-wider flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-purple-400" />
-              Agent Notebook
-            </h3>
-          </div>
-          <div className="flex-1 overflow-y-auto px-3 md:px-4 py-3">
-            {agentNotebooks.entries.length === 0 ? (
-              <div className="text-center text-white/30 text-sm py-8">
-                Agent hasn't written anything yet
-                <div className="text-xs mt-1">Notes will appear here after review</div>
+        {/* Mobile: single column with tab switching */}
+        <div className="md:hidden flex-1 flex flex-col min-h-0 overflow-hidden w-full">
+          {mobileNotebookTab === 'user' ? (
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden w-full">
+              <div className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 w-full">
+                <NotebookEntryComposer
+                  onSubmit={handleCreateUserEntry}
+                  placeholder="Write a note..."
+                  onOpenLinkPicker={handleComposerOpenLinkPicker}
+                  pendingLinks={composerLinks}
+                  onRemovePendingLink={handleRemoveComposerLink}
+                />
+                <div className="mt-4 space-y-4">
+                  {renderEntries(userNotebooks.entries, 'user')}
+                </div>
               </div>
-            ) : (
-              <div className="space-y-4">
-                {renderEntries(agentNotebooks.entries, 'agent')}
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden w-full bg-purple-500/[0.01]">
+              <div className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 w-full">
+                {agentNotebooks.entries.length === 0 ? (
+                  <div className="text-center text-white/30 text-sm py-8">
+                    Agent hasn't written anything yet
+                    <div className="text-xs mt-1">Notes will appear here after review</div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {renderEntries(agentNotebooks.entries, 'agent')}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 

@@ -154,7 +154,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
       </div>
 
       {/* Content */}
-      <div className="p-4">
+      <div className="p-4 overflow-hidden">
         {entry.images && entry.images.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-3">
             {entry.images.map((img, i) => (
@@ -162,7 +162,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
                 key={i}
                 src={img.thumbUrl || img.url || `data:${img.mimeType};base64,${img.data}`}
                 alt={img.name}
-                className="max-h-40 rounded-lg border border-white/10 object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                className="max-h-40 max-w-full rounded-lg border border-white/10 object-cover cursor-pointer hover:opacity-90 transition-opacity"
                 onClick={() => setLightboxImage(img)}
               />
             ))}
