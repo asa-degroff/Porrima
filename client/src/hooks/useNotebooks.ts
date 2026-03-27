@@ -6,17 +6,37 @@ import {
   updateNotebookEntry,
   deleteNotebookEntry,
   triggerAgentNotebookReview,
+  fetchUserUIState,
+  saveUserUIState,
   OfflineError,
 } from "../api/client";
 import type { NotebookEntry, NotebookIndex, NotebookLink, ImageAttachment } from "../types";
-
-const LAST_SEEN_KEY = "quje-notebook-agent-last-seen";
 
 export function useNotebooks() {
   const [userNotebooks, setUserNotebooks] = useState<NotebookIndex>({ entries: [], lastActivityDate: null });
   const [agentNotebooks, setAgentNotebooks] = useState<NotebookIndex>({ entries: [], lastActivityDate: null });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notebookLastSeen, setNotebookLastSeen] = useState<string | null>(null);
+  const [synced, setSynced] = useState(false);
+
+  // Load last-seen from server on mount
+  useEffect(() => {
+    fetchUserUIState()
+      .then((state) => {
+        if (state.notebookLastSeen) {
+          setNotebookLastSeen(state.notebookLastSeen);
+        }
+        setSynced(true);
+      })
+      .catch((err) => {
+        console.warn("Failed to load notebook last-seen from server:", err);
+        // Fall back to localStorage for backward compatibility
+        const local = localStorage.getItem("quje-notebook-agent-last-seen");
+        if (local) setNotebookLastSeen(local);
+        setSynced(true);
+      });
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -84,13 +104,21 @@ export function useNotebooks() {
 
   const hasUnreadAgentEntries = useCallback(() => {
     if (!agentNotebooks.lastActivityDate) return false;
-    const lastSeen = localStorage.getItem(LAST_SEEN_KEY);
-    if (!lastSeen) return true;
-    return new Date(agentNotebooks.lastActivityDate) > new Date(lastSeen);
-  }, [agentNotebooks.lastActivityDate]);
+    if (!notebookLastSeen) return true;
+    return new Date(agentNotebooks.lastActivityDate) > new Date(notebookLastSeen);
+  }, [agentNotebooks.lastActivityDate, notebookLastSeen]);
 
   const markAgentEntriesSeen = useCallback(() => {
-    localStorage.setItem(LAST_SEEN_KEY, new Date().toISOString());
+    const now = new Date().toISOString();
+    setNotebookLastSeen(now);
+    
+    // Save to server
+    saveUserUIState({ notebookLastSeen: now }).catch((err) => {
+      console.warn("Failed to save notebook last-seen to server:", err);
+    });
+    
+    // Also save to localStorage for backward compatibility and offline support
+    localStorage.setItem("quje-notebook-agent-last-seen", now);
   }, []);
 
   return {

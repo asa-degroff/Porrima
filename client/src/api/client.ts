@@ -1020,6 +1020,38 @@ export async function createChat(modelId: string, type: ChatType = "quick", proj
   return res.json();
 }
 
+// ---------------------------------------------------------------------------
+// User UI State Persistence
+// ---------------------------------------------------------------------------
+
+export interface UserUIState {
+  sidebarState?: {
+    projectsExpanded: boolean;
+    agentExpanded: boolean;
+    quickExpanded: boolean;
+    projectStates: Record<string, boolean>;
+  };
+  notebookLastSeen?: string | null;
+  activeChatId?: string | null;
+  activeView?: 'chats' | 'notebooks' | 'image-sandbox';
+}
+
+export async function fetchUserUIState(): Promise<UserUIState> {
+  const res = await apiFetch(`${BASE}/ui-state`);
+  if (!res.ok) throw new Error("Failed to fetch UI state");
+  return res.json();
+}
+
+export async function saveUserUIState(state: Partial<UserUIState>): Promise<UserUIState> {
+  const res = await apiFetch(`${BASE}/ui-state`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(state),
+  });
+  if (!res.ok) throw new Error("Failed to save UI state");
+  return res.json();
+}
+
 export async function fetchChat(id: string): Promise<Chat> {
   const res = await apiFetch(`${BASE}/chats/${id}`);
   if (!res.ok) throw new Error("Failed to fetch chat");

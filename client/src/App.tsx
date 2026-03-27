@@ -25,6 +25,7 @@ import { HapticsProvider } from "./hooks/useHaptics";
 import { useTTS } from "./hooks/useTTS";
 import { TTSControlBar } from "./components/TTSControlBar";
 import { useNotebooks } from "./hooks/useNotebooks";
+import { fetchUserUIState, saveUserUIState } from "./api/client";
 import type { Chat, ChatType } from "./types";
 
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
@@ -50,16 +51,33 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     markAgentEntriesSeen,
   } = useNotebooks();
   const [activeView, setActiveView] = useState<'chats' | 'notebooks'>('chats');
-  const [activeChatId, setActiveChatId] = useState<string | null>(() => {
-    return localStorage.getItem("quje-active-chat-id");
-  });
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [imageSandboxOpen, setImageSandboxOpen] = useState(() => {
-    return localStorage.getItem("quje-active-view") === "image-sandbox";
-  });
+  const [imageSandboxOpen, setImageSandboxOpen] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [uiStateSynced, setUiStateSynced] = useState(false);
+
+  // Load UI state from server on mount
+  useEffect(() => {
+    fetchUserUIState()
+      .then((state) => {
+        if (state.activeChatId) setActiveChatId(state.activeChatId);
+        if (state.activeView) setActiveView(state.activeView as 'chats' | 'notebooks');
+        if (state.activeView === 'image-sandbox') setImageSandboxOpen(true);
+        setUiStateSynced(true);
+      })
+      .catch((err) => {
+        console.warn("Failed to load UI state from server, using localStorage:", err);
+        // Fall back to localStorage for backward compatibility
+        setActiveChatId(localStorage.getItem("quje-active-chat-id"));
+        if (localStorage.getItem("quje-active-view") === "image-sandbox") {
+          setImageSandboxOpen(true);
+        }
+        setUiStateSynced(true);
+      });
+  }, []);
   const {
     messages,
     streaming,
@@ -111,18 +129,40 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, [settings.backgroundEffect, imageSandboxOpen]);
 
-  // Persist active view across reloads
+  // Persist active view and chat ID to server with debounce
   useEffect(() => {
+    if (!uiStateSynced) return;
+
+    // Also save to localStorage for backward compatibility and offline support
     if (activeChatId) {
       localStorage.setItem("quje-active-chat-id", activeChatId);
     } else {
       localStorage.removeItem("quje-active-chat-id");
     }
-  }, [activeChatId]);
+
+    const timer = setTimeout(() => {
+      saveUserUIState({ activeChatId }).catch((err) => {
+        console.warn("Failed to save active chat ID to server:", err);
+      });
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [activeChatId, uiStateSynced]);
 
   useEffect(() => {
+    if (!uiStateSynced) return;
+
+    // Also save to localStorage for backward compatibility and offline support
     localStorage.setItem("quje-active-view", activeView);
-  }, [activeView]);
+
+    const timer = setTimeout(() => {
+      saveUserUIState({ activeView }).catch((err) => {
+        console.warn("Failed to save active view to server:", err);
+      });
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [activeView, uiStateSynced]);
 
   // Restore active chat on mount
   useEffect(() => {
@@ -331,8 +371,19 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
   const handleCloseSidebar = useCallback(() => setSidebarOpen(false), []);
   const handleOpenSidebar = useCallback(() => setSidebarOpen(true), []);
-  const handleOpenImageSandbox = useCallback(() => setImageSandboxOpen(true), []);
-  const handleCloseImageSandbox = useCallback(() => setImageSandboxOpen(false), []);
+  const handleOpenImageSandbox = useCallback(() => {
+    setImageSandboxOpen(true);
+    saveUserUIState({ activeView: 'image-sandbox' }).catch((err) => {
+      console.warn("Failed to save image sandbox state to server:", err);
+    });
+  }, []);
+
+  const handleCloseImageSandbox = useCallback(() => {
+    setImageSandboxOpen(false);
+    saveUserUIState({ activeView: activeView }).catch((err) => {
+      console.warn("Failed to save active view to server:", err);
+    });
+  }, [activeView]);
   const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
   const handleSaveSettings = useCallback(
     async (s: import("./types").Settings) => {

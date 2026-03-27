@@ -113,6 +113,15 @@ export function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_bluesky_notifications_author ON bluesky_notifications(authorHandle);
   `);
 
+  // User UI state persistence (sidebar state, notebook last-seen, etc.)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_ui_state (
+      key TEXT PRIMARY KEY,
+      value JSON NOT NULL,
+      updatedAt TEXT NOT NULL
+    );
+  `);
+
   // Migration: add mid-turn recovery columns if upgrading from earlier schema
   const pendingCols = db.prepare("PRAGMA table_info(pending_states)").all() as Array<{ name: string }>;
   if (!pendingCols.some((c) => c.name === "fullText")) {
@@ -1027,4 +1036,39 @@ export function getUnreadBlueskyNotificationCount(): number {
     SELECT COUNT(*) as count FROM bluesky_notifications WHERE isRead = 0
   `).get() as { count: number };
   return result.count;
+}
+
+// ---------------------------------------------------------------------------
+// User UI State Persistence
+// ---------------------------------------------------------------------------
+
+export interface UserUIState {
+  sidebarState?: {
+    projectsExpanded: boolean;
+    agentExpanded: boolean;
+    quickExpanded: boolean;
+    projectStates: Record<string, boolean>;
+  };
+  notebookLastSeen?: string | null;
+  activeChatId?: string | null;
+  activeView?: 'chats' | 'notebooks' | 'image-sandbox';
+}
+
+const UI_STATE_KEY = 'user_ui_state';
+
+export async function getUserUIState(): Promise<UserUIState> {
+  const db = getDb();
+  const row = db.prepare('SELECT value FROM user_ui_state WHERE key = ?').get(UI_STATE_KEY) as { value: string } | undefined;
+  if (!row) return {};
+  return JSON.parse(row.value);
+}
+
+export async function saveUserUIState(state: Partial<UserUIState>): Promise<void> {
+  const db = getDb();
+  const existing = await getUserUIState();
+  const merged = { ...existing, ...state };
+  db.prepare(`
+    INSERT OR REPLACE INTO user_ui_state (key, value, updatedAt)
+    VALUES (?, ?, ?)
+  `).run(UI_STATE_KEY, JSON.stringify(merged), new Date().toISOString());
 }
