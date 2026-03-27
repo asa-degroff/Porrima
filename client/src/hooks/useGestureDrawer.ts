@@ -32,6 +32,7 @@ const VELOCITY_THRESHOLD = 0.3; // px/ms — fast flicks snap even at short dist
 const DEFAULT_THRESHOLD = 0.3; // 30% of max offset to snap open/closed
 const DAMPING = 0.85; // velocity damping per frame
 const EDGE_RESISTANCE = 0.3; // resistance factor at boundaries
+const MD_BREAKPOINT = 768; // px — matches Tailwind's md: breakpoint
 
 export function useGestureDrawer({
   isOpen,
@@ -142,6 +143,7 @@ export function useGestureDrawer({
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length !== 1) return;
+    if (window.innerWidth >= MD_BREAKPOINT) return;
     startDrag(getTouchPos(e));
     e.preventDefault();
   }, [getTouchPos, startDrag]);
@@ -149,6 +151,7 @@ export function useGestureDrawer({
   // Edge swipe: starts drag from closed state (offset 0)
   const onEdgeTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length !== 1) return;
+    if (window.innerWidth >= MD_BREAKPOINT) return;
     if (isOpen || isDraggingRef.current) return;
     setCurrentOffset(0);
     startDrag(getTouchPos(e));
