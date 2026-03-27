@@ -154,7 +154,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
       </div>
 
       {/* Content */}
-      <div className="p-4 overflow-hidden">
+      <div className="p-4">
         {entry.images && entry.images.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-3">
             {entry.images.map((img, i) => (

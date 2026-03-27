@@ -166,7 +166,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
     // Reset height to auto to get the correct scrollHeight
     textarea.style.height = 'auto';
     const scrollHeight = textarea.scrollHeight;
-    const maxHeight = 240; // Max height in pixels (about 12 rows)
+    const maxHeight = 400; // Max height in pixels (about 20 rows)
     
     // Set height to scrollHeight, capped at maxHeight
     textarea.style.height = Math.min(scrollHeight, maxHeight) + 'px';
@@ -199,8 +199,8 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
         placeholder={placeholder || "Write a note..."}
         autoFocus={autoFocus}
         rows={3}
-        className="w-full px-4 py-3 bg-transparent text-sm text-white/80 placeholder-white/30 outline-none resize-none overflow-hidden"
-        style={{ minHeight: '80px', maxHeight: '240px' }}
+        className="w-full px-4 py-3 bg-transparent text-sm text-white/80 placeholder-white/30 outline-none resize-none overflow-y-auto"
+        style={{ minHeight: '80px', maxHeight: '400px' }}
       />
       {/* Drag overlay */}
       {dragging && (
