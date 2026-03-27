@@ -97,6 +97,18 @@ export interface Project {
   lastModified: string;
 }
 
+export interface PersonaStore {
+  content: string;
+  lastModified: string | null;
+  path?: string;
+}
+
+export interface UserDocument {
+  content: string;
+  lastModified: string | null;
+  path?: string;
+}
+
 export interface OllamaModel {
   id: string;
   name: string;

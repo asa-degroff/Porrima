@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage } from "../api/client";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, CreativeDirectionSettings, BlueskySettings } from "../types";
+import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
+import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, CreativeDirectionSettings, BlueskySettings, PersonaStore, UserDocument } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 
 function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
@@ -51,12 +53,26 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
   const [defaultVisionModelId, setDefaultVisionModelId] = useState(settings.defaultVisionModelId || "");
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
+  const [defaultSystemPromptExpanded, setDefaultSystemPromptExpanded] = useState(false);
+  const [persona, setPersona] = useState<PersonaStore | null>(null);
+  const [personaExpanded, setPersonaExpanded] = useState(false);
+  const [personaEditing, setPersonaEditing] = useState(false);
+  const [personaContent, setPersonaContent] = useState("");
+  const [personaSaving, setPersonaSaving] = useState(false);
+  const [personaMessage, setPersonaMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [userDoc, setUserDoc] = useState<UserDocument | null>(null);
+  const [userDocExpanded, setUserDocExpanded] = useState(false);
+  const [userDocEditing, setUserDocEditing] = useState(false);
+  const [userDocContent, setUserDocContent] = useState("");
+  const [userDocSaving, setUserDocSaving] = useState(false);
+  const [userDocMessage, setUserDocMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [comfyuiUrl, setComfyuiUrl] = useState(settings.comfyuiUrl || "http://127.0.0.1:8188");
   const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
+  const [expandedPresetIds, setExpandedPresetIds] = useState<Set<string>>(new Set());
   const [hapticsEnabled, setHapticsEnabled] = useState(settings.hapticsEnabled ?? true);
   const [modelContextWindows, setModelContextWindows] = useState<Record<string, number>>(settings.modelContextWindows || {});
   const [ctxWindowsExpanded, setCtxWindowsExpanded] = useState(false);
@@ -67,6 +83,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [delayedExtractionEnabled, setDelayedExtractionEnabled] = useState(settings.delayedExtractionEnabled ?? true);
   const [delayedExtractionThreshold, setDelayedExtractionThreshold] = useState(settings.delayedExtractionThresholdMinutes ?? 30);
   const [delayedExtractionCap, setDelayedExtractionCap] = useState(settings.delayedExtractionMessageCap ?? 50);
+  const [enrichmentBatchSize, setEnrichmentBatchSize] = useState(settings.enrichmentBatchSize ?? 5);
   const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
   const [extractionFallbackEnabled, setExtractionFallbackEnabled] = useState(settings.extractionFallbackEnabled ?? true);
   const [memorySearchQuery, setMemorySearchQuery] = useState("");
@@ -144,6 +161,26 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       .catch(() => {});
   }, []);
 
+  // Fetch persona
+  useEffect(() => {
+    getPersona()
+      .then((data) => {
+        setPersona(data);
+        setPersonaContent(data.content);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Fetch user document
+  useEffect(() => {
+    getUserDocument()
+      .then((data) => {
+        setUserDoc(data);
+        setUserDocContent(data?.content || "");
+      })
+      .catch(() => {});
+  }, []);
+
   // Fetch TTS settings and voices
   useEffect(() => {
     setTtsLoading(true);
@@ -209,6 +246,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       delayedExtractionEnabled,
       delayedExtractionThresholdMinutes: delayedExtractionThreshold,
       delayedExtractionMessageCap: delayedExtractionCap,
+      enrichmentBatchSize,
       extractionModelId,
       extractionFallbackEnabled,
       creativeDirections: {
@@ -267,6 +305,18 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
         remaining[0] = { ...remaining[0], isDefault: true };
       }
       return remaining;
+    });
+  };
+
+  const handleTogglePresetExpand = (id: string) => {
+    setExpandedPresetIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
     });
   };
 
@@ -416,6 +466,61 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     } catch (err: any) {
       setBlueskyMessage({ type: "err", text: err.message || "Failed to disconnect" });
     }
+  }, []);
+
+  const handleSavePersona = useCallback(async () => {
+    setPersonaSaving(true);
+    setPersonaMessage(null);
+    try {
+      const updated = await updatePersona(personaContent, "Manual edit via Settings");
+      setPersona(updated);
+      setPersonaMessage({ type: "ok", text: "Persona updated successfully" });
+      setPersonaEditing(false);
+    } catch (err: any) {
+      setPersonaMessage({ type: "err", text: err.message || "Failed to save persona" });
+    }
+    setPersonaSaving(false);
+  }, [personaContent]);
+
+  const handleCancelPersonaEdit = useCallback(() => {
+    setPersonaContent(persona?.content || "");
+    setPersonaEditing(false);
+    setPersonaMessage(null);
+  }, [persona]);
+
+  const handleSaveUserDoc = useCallback(async () => {
+    setUserDocSaving(true);
+    setUserDocMessage(null);
+    try {
+      const updated = await updateUserDocument(userDocContent);
+      setUserDoc(updated);
+      setUserDocMessage({ type: "ok", text: "User document saved" });
+      setUserDocEditing(false);
+    } catch (err: any) {
+      setUserDocMessage({ type: "err", text: err.message || "Failed to save" });
+    }
+    setUserDocSaving(false);
+  }, [userDocContent]);
+
+  const handleCancelUserDocEdit = useCallback(() => {
+    setUserDocContent(userDoc?.content || "");
+    setUserDocEditing(false);
+    setUserDocMessage(null);
+  }, [userDoc]);
+
+  const handleDeleteUserDoc = useCallback(async () => {
+    setUserDocSaving(true);
+    setUserDocMessage(null);
+    try {
+      await deleteUserDocument();
+      setUserDoc(null);
+      setUserDocContent("");
+      setUserDocEditing(false);
+      setUserDocMessage({ type: "ok", text: "User document deleted" });
+    } catch (err: any) {
+      setUserDocMessage({ type: "err", text: err.message || "Failed to delete" });
+    }
+    setUserDocSaving(false);
   }, []);
 
   return (
@@ -708,8 +813,209 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             </div>
           </div>
 
+          {/* Agent Persona */}
+          <div className="space-y-3 pt-2 border-t border-white/10">
+            <button
+              onClick={() => setPersonaExpanded(!personaExpanded)}
+              className="flex items-center gap-1.5 text-sm font-medium text-white/60 hover:text-white/80 transition-colors w-full text-left"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={`transition-transform ${personaExpanded ? "rotate-90" : ""}`}
+              >
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+              Agent Persona
+            </button>
+            <p className="text-white/30 text-xs -mt-2">
+              The agent's core identity, voice, and values. Loaded from <code className="text-white/40">~/.quje-agent/persona.md</code>.
+            </p>
+
+            {personaExpanded && (
+              <div className="space-y-2 pl-1">
+                {personaMessage && (
+                  <p className={`text-xs ${personaMessage.type === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
+                    {personaMessage.text}
+                  </p>
+                )}
+
+                {personaEditing ? (
+                  <div className="space-y-2">
+                    <textarea
+                      value={personaContent}
+                      onChange={(e) => setPersonaContent(e.target.value)}
+                      rows={12}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                      placeholder="# Who I Am..."
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleSavePersona}
+                        disabled={personaSaving}
+                        className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40"
+                        style={{
+                          backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
+                          borderColor: `rgba(var(--theme-primary-border))`,
+                          color: `rgba(var(--theme-primary-text))`,
+                        }}
+                      >
+                        {personaSaving ? "Saving..." : "Save"}
+                      </button>
+                      <button
+                        onClick={handleCancelPersonaEdit}
+                        disabled={personaSaving}
+                        className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : persona ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-white/50 truncate">
+                        {persona.content.split("\n")[0]?.replace(/^#+\s*/, "") || "Persona document"}
+                      </p>
+                      <p className="text-[10px] text-white/30">
+                        {persona.lastModified ? `Last modified: ${new Date(persona.lastModified).toLocaleDateString()}` : ""}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setPersonaEditing(true);
+                        setPersonaContent(persona.content);
+                      }}
+                      className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-white/30 text-xs">Loading persona...</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* User Document */}
+          <div className="space-y-3 pt-2 border-t border-white/10">
+            <button
+              onClick={() => setUserDocExpanded(!userDocExpanded)}
+              className="flex items-center gap-1.5 text-sm font-medium text-white/60 hover:text-white/80 transition-colors w-full text-left"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={`transition-transform ${userDocExpanded ? "rotate-90" : ""}`}
+              >
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+              About You
+            </button>
+            <p className="text-white/30 text-xs -mt-2">
+              Optional. Share your name, preferences, and context. Helps me understand you better.
+            </p>
+
+            {userDocExpanded && (
+              <div className="space-y-2 pl-1">
+                {userDocMessage && (
+                  <p className={`text-xs ${userDocMessage.type === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
+                    {userDocMessage.text}
+                  </p>
+                )}
+
+                {userDocEditing ? (
+                  <div className="space-y-2">
+                    <textarea
+                      value={userDocContent}
+                      onChange={(e) => setUserDocContent(e.target.value)}
+                      rows={10}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all font-mono"
+                      placeholder="# About Me&#10;&#10;**Name:** &#10;&#10;**Preferences:** "
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleSaveUserDoc}
+                        disabled={userDocSaving}
+                        className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40"
+                        style={{
+                          backgroundColor: `rgba(16, 185, 129, 0.15)`,
+                          borderColor: `rgba(16, 185, 129, 0.3)`,
+                          color: `rgb(110, 231, 183)`,
+                        }}
+                      >
+                        {userDocSaving ? "Saving..." : "Save"}
+                      </button>
+                      <button
+                        onClick={handleCancelUserDocEdit}
+                        disabled={userDocSaving}
+                        className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    {userDoc && (
+                      <button
+                        onClick={handleDeleteUserDoc}
+                        disabled={userDocSaving}
+                        className="w-full px-3 py-2 rounded-lg text-xs font-medium border border-red-400/20 text-red-300/70 hover:bg-red-500/10 transition-all disabled:opacity-40"
+                      >
+                        Delete document
+                      </button>
+                    )}
+                  </div>
+                ) : userDoc ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-white/50 truncate">
+                        {userDoc.content.split("\n")[0]?.replace(/^#+\s*/, "") || "User document"}
+                      </p>
+                      <p className="text-[10px] text-white/30">
+                        {userDoc.lastModified ? `Last modified: ${new Date(userDoc.lastModified).toLocaleDateString()}` : ""}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setUserDocEditing(true);
+                        setUserDocContent(userDoc.content);
+                      }}
+                      className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setUserDocEditing(true);
+                      setUserDocContent("# About Me\n\n**Name:** \n\n**Communication style:** \n\n**Technical background:** \n\n**Preferences:** \n\n---\n\n*Feel free to share as much or as little as you want.*\n");
+                    }}
+                    className="text-xs px-3 py-2 rounded-lg border border-emerald-400/20 text-emerald-300/70 hover:bg-emerald-500/10 transition-all"
+                  >
+                    + Create document
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* System Prompt Presets */}
-          <div className="space-y-3">
+          <div className="space-y-3 pt-2 border-t border-white/10">
             <div className="flex items-center justify-between">
               <label className="block text-sm font-medium text-white/60">System Prompt Presets</label>
               <button
@@ -719,76 +1025,97 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 + Add Preset
               </button>
             </div>
+            <p className="text-white/30 text-xs -mt-2">
+              Mode-specific prompts that append to the base agent prompt.
+            </p>
 
             {presets.length === 0 ? (
-              <div className="space-y-2">
-                <p className="text-white/30 text-xs">No presets. Using default prompt for new chats:</p>
-                <textarea
-                  value={defaultSystemPrompt}
-                  onChange={(e) => setDefaultSystemPrompt(e.target.value)}
-                  rows={3}
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
-                  placeholder="You are a helpful assistant."
-                />
-              </div>
+              <p className="text-white/30 text-xs italic">No presets configured. Add a preset to use mode-specific prompts.</p>
             ) : (
-              <div className="space-y-3">
-                {presets.map((preset) => (
-                  <div
-                    key={preset.id}
-                    className={`rounded-lg border p-3 space-y-2 transition-all ${
-                      preset.isDefault
-                        ? "border-white/15"
-                        : "border-white/10 bg-white/[0.02]"
-                    }`}
-                    style={{
-                      backgroundColor: preset.isDefault ? `rgba(var(--theme-primary-muted), 0.05)` : '',
-                    }}
-                  >
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={preset.name}
-                        onChange={(e) => handleUpdatePreset(preset.id, { name: e.target.value })}
-                        className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 transition-all"
-                        placeholder="Preset name..."
-                      />
-                      <button
-                        onClick={() => handleUpdatePreset(preset.id, { isDefault: true })}
-                        className={`text-xs px-2 py-1 rounded transition-all shrink-0 ${
-                          preset.isDefault
-                            ? "border"
-                            : "text-white/30 hover:text-white/50 border border-transparent hover:border-white/10"
-                        }`}
-                        style={{
-                          backgroundColor: preset.isDefault ? `rgba(var(--theme-primary-muted))` : '',
-                          color: preset.isDefault ? `rgba(var(--theme-primary-text))` : '',
-                          borderColor: preset.isDefault ? `rgba(var(--theme-primary-border))` : '',
-                        }}
-                        title={preset.isDefault ? "Default for new chats" : "Set as default"}
-                      >
-                        {preset.isDefault ? "Default" : "Set default"}
-                      </button>
-                      <button
-                        onClick={() => handleDeletePreset(preset.id)}
-                        className="text-white/20 hover:text-red-400/70 transition-colors p-0.5"
-                        title="Delete preset"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M18 6L6 18" />
-                          <path d="M6 6l12 12" />
-                        </svg>
-                      </button>
+              <div className="space-y-2">
+                {presets.map((preset) => {
+                  const isExpanded = expandedPresetIds.has(preset.id);
+                  return (
+                    <div
+                      key={preset.id}
+                      className={`rounded-lg border transition-all ${
+                        preset.isDefault
+                          ? "border-white/15"
+                          : "border-white/10 bg-white/[0.02]"
+                      }`}
+                      style={{
+                        backgroundColor: preset.isDefault ? `rgba(var(--theme-primary-muted), 0.05)` : '',
+                      }}
+                    >
+                      <div className="flex items-center gap-2 p-3">
+                        <button
+                          onClick={() => handleTogglePresetExpand(preset.id)}
+                          className="text-white/40 hover:text-white/70 transition-colors p-0.5"
+                          title={isExpanded ? "Collapse" : "Expand"}
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className={`transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                          >
+                            <polyline points="9 18 15 12 9 6" />
+                          </svg>
+                        </button>
+                        <input
+                          type="text"
+                          value={preset.name}
+                          onChange={(e) => handleUpdatePreset(preset.id, { name: e.target.value })}
+                          className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 transition-all"
+                          placeholder="Preset name..."
+                        />
+                        <button
+                          onClick={() => handleUpdatePreset(preset.id, { isDefault: true })}
+                          className={`text-xs px-2 py-1 rounded transition-all shrink-0 ${
+                            preset.isDefault
+                              ? "border"
+                              : "text-white/30 hover:text-white/50 border border-transparent hover:border-white/10"
+                          }`}
+                          style={{
+                            backgroundColor: preset.isDefault ? `rgba(var(--theme-primary-muted))` : '',
+                            color: preset.isDefault ? `rgba(var(--theme-primary-text))` : '',
+                            borderColor: preset.isDefault ? `rgba(var(--theme-primary-border))` : '',
+                          }}
+                          title={preset.isDefault ? "Default for new chats" : "Set as default"}
+                        >
+                          {preset.isDefault ? "Default" : "Set default"}
+                        </button>
+                        <button
+                          onClick={() => handleDeletePreset(preset.id)}
+                          className="text-white/20 hover:text-red-400/70 transition-colors p-0.5"
+                          title="Delete preset"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M18 6L6 18" />
+                            <path d="M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                      {isExpanded && (
+                        <div className="px-3 pb-3">
+                          <textarea
+                            value={preset.content}
+                            onChange={(e) => handleUpdatePreset(preset.id, { content: e.target.value })}
+                            rows={4}
+                            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-white/70 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-blue-400/30 transition-all"
+                            placeholder="Mode-specific instructions (appended to base prompt)..."
+                          />
+                        </div>
+                      )}
                     </div>
-                    <textarea
-                      value={preset.content}
-                      onChange={(e) => handleUpdatePreset(preset.id, { content: e.target.value })}
-                      rows={2}
-                      className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-white/70 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-blue-400/30 transition-all"
-                      placeholder="Prompt content..."
-                    />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1144,6 +1471,24 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer disabled:opacity-50 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                 />
                 <p className="text-xs text-white/30">Maximum messages to include in extraction context</p>
+              </div>
+
+              {/* Enrichment batch size */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-white/60">Enrichment batch size</label>
+                  <span className="text-xs text-white/40">{enrichmentBatchSize} entries</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={20}
+                  step={1}
+                  value={enrichmentBatchSize}
+                  onChange={(e) => setEnrichmentBatchSize(Number(e.target.value))}
+                  className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                />
+                <p className="text-xs text-white/30">How many unenriched images to process every 10 minutes</p>
               </div>
 
               {/* Extraction model configuration */}

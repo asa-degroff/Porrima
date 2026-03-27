@@ -1,6 +1,7 @@
 import { embed } from "./embeddings.js";
 import { searchMemories, updateMemory } from "./memory-storage.js";
 import { loadPersona } from "./persona-store.js";
+import { loadUserDocument } from "./user-store.js";
 import type { ChatMessage } from "../types.js";
 
 // Cache the last-built augmented prompt per chat so the prompt viewer
@@ -29,6 +30,17 @@ export async function buildMemoryAugmentedPrompt(
       personaSection = `\n\n## Your Persona\n${persona.content}\n\nRemember: This is your core identity.`;
     } catch (e) {
       console.error("[memory] Failed to load persona, continuing without:", e);
+    }
+
+    // Load user document (optional) and inject after persona
+    let userSection = "";
+    try {
+      const userDoc = await loadUserDocument();
+      if (userDoc && userDoc.content.trim()) {
+        userSection = `\n\n## About the User\n${userDoc.content}`;
+      }
+    } catch (e) {
+      // User document is optional - silently skip if not found
     }
 
     // Build a query from the last 3 user messages
@@ -116,7 +128,7 @@ export async function buildMemoryAugmentedPrompt(
       }
     }
 
-    return `${baseSystemPrompt}${personaSection}${memoriesSection}`;
+    return `${baseSystemPrompt}${personaSection}${userSection}${memoriesSection}`;
   } catch (e) {
     console.error("[memory] Context augmentation failed, using base prompt:", e);
     return baseSystemPrompt;
