@@ -298,10 +298,7 @@ export function ChatView({
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <OfflineIndicator isOnline={isOnline} queueProcessing={queueProcessing} />
-          <span className="hidden md:contents">
-            <TokenIndicator usage={totalUsage} contextWindow={contextWindow} compacting={compacting} compaction={compaction} hasCompactionSummary={hasCompactionSummary} />
-          </span>
-          {/* Context window editor — hidden on mobile alongside token indicator */}
+          {/* Context window editor — integrated into TokenIndicator */}
           <span className="hidden md:contents">
             {editingCtx ? (
               <form
@@ -312,6 +309,7 @@ export function ChatView({
                   if (val && val > 0) onContextWindowChange(val);
                   setEditingCtx(false);
                 }}
+                onClick={(e) => e.stopPropagation()}
               >
                 <input
                   type="number"
@@ -338,21 +336,17 @@ export function ChatView({
                 )}
               </form>
             ) : (
-              <button
-                className={`text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors ${
-                  hasContextWindowOverride ? "text-blue-300/70" : "text-white/30"
-                }`}
-                title={hasContextWindowOverride
-                  ? `Custom context window (model default: ${formatCtxWindow(modelContextWindow)})`
-                  : "Click to set custom context window"
-                }
+              <TokenIndicator 
+                usage={totalUsage} 
+                contextWindow={contextWindow} 
+                compacting={compacting} 
+                compaction={compaction} 
+                hasCompactionSummary={hasCompactionSummary}
                 onClick={() => {
                   setCtxInput(String(contextWindow));
                   setEditingCtx(true);
                 }}
-              >
-                {formatCtxWindow(contextWindow)}
-              </button>
+              />
             )}
           </span>
           <button

@@ -11,6 +11,7 @@ interface Props {
   compacting?: boolean;
   compaction?: CompactionInfo | null;
   hasCompactionSummary?: boolean;
+  onClick?: () => void;
 }
 
 function formatNumber(n: number): string {
@@ -23,7 +24,8 @@ export function TokenIndicator({
   contextWindow, 
   compacting, 
   compaction,
-  hasCompactionSummary 
+  hasCompactionSummary,
+  onClick
 }: Props) {
   // Determine if we have real usage data or are in a post-compaction state
   // Real usage comes from Ollama's prompt_eval_count on assistant messages
@@ -37,7 +39,12 @@ export function TokenIndicator({
     : 0;
 
   return (
-    <div className="flex items-center gap-2 text-xs text-white/40">
+    <div 
+      className="flex items-center gap-2 text-xs text-white/40"
+      onClick={onClick}
+      style={{ cursor: onClick ? 'pointer' : 'default' }}
+      title={onClick ? "Click to edit context window" : undefined}
+    >
       <div className="flex items-center gap-1.5">
         {hasRealUsage ? (
           <>
