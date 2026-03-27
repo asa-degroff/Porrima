@@ -158,7 +158,7 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
     // Step 3c: Identify unreviewed user notebook entries for agent
     const unreviewedUserEntries = await getUnreviewedUserEntries(notebookEntries);
     if (unreviewedUserEntries.length > 0) {
-      console.log(`[synthesis] Found ${unreviewedUserEntries.length} unreviewed user notebook entries`);
+      console.log(`[synthesis] Found ${unreviewedUserEntries.length} unreviewed user notebook entries (created since last synthesis)`);
     }
 
     // Step 4: Generate daily summary via LLM
@@ -191,10 +191,16 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           )
           .join("\n");
 
+        // Only include unreviewed entries in a dedicated section if there are any
+        // They're already in notebookSection, so we only add a highlighted section for truly new ones
+        const unreviewedSection = unreviewedUserEntries.length > 0
+          ? `---\n\n## Your Notebook Entries Pending Review\n\nThese user notebook entries were created since the last synthesis. Pay special attention to these:\n\n${formatNotebookEntries(unreviewedUserEntries)}`
+          : "";
+
         const promptParts = [
           `## Today's Conversations\n\n${projectNote}\n\n${formattedDigest}`,
           notebookSection ? `---\n\n## Notebook Entries Today\n\n${notebookSection}` : "",
-          unreviewedUserEntries.length > 0 ? `---\n\n## Your Notebook Entries Pending Review\n\nThese user notebook entries have not yet been reviewed by you. Pay special attention to these as you synthesize today's work:\n\n${formatNotebookEntries(unreviewedUserEntries)}` : "",
+          unreviewedSection,
           `---\n\n## Stored Memories (${store.memories.length} total)\n\n${memoriesText}`,
           `---\n\n## Your Persona\n\n${personaData?.content || ''}`,
           `Based on today's conversations${notebookSection ? ", notebook entries," : ""} and the stored memories, write a daily synthesis. Include:\n1. What the user worked on and asked for today — their goals, decisions, and direction\n2. What you (the agent) accomplished — code written, problems solved, suggestions made, tools used\n3. Broader themes and patterns across the user's projects\n4. If the user wrote notebook entries, incorporate their thoughts and observations\n5. Any contradictions or outdated info in the stored memories that should be cleaned up`,
@@ -243,8 +249,10 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       }
 
       // Step 5: Generate reflections and save as memories
+      // Returns the generated reflections so they can be passed to notebook writing
+      let generatedReflections: Array<{ text: string; category: string; importance: number }> = [];
       try {
-        await generateReflections(
+        generatedReflections = await generateReflections(
           resolvedModelId,
           formattedDigest,
           store.memories,
@@ -265,27 +273,13 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       // Step 7: Write synthesis notebook entry with tool access and open-ended prompt
       if (finalSummary) {
         try {
-          // First, generate reflection memories from synthesis (these become available for notebook writing)
-          let reflectionMemories: Array<{ text: string; category: string; importance: number }> = [];
-          try {
-            reflectionMemories = await generateReflectionMemories(
-              resolvedModelId,
-              formattedDigest,
-              store.memories,
-              todaysDigest,
-              notebookSection,
-              unreviewedUserEntries
-            );
-            console.log(`[synthesis] Generated ${reflectionMemories.length} reflection memories before notebook entry`);
-          } catch (e) {
-            console.error("[synthesis] Reflection memory generation failed:", e);
-          }
-
+          // Use the reflections generated in Step 5 (no duplicate LLM call)
           await writeAgentNotebookEntry(
             finalSummary,
             todaysDigest,
+            notebookEntries,
             unreviewedUserEntries,
-            reflectionMemories,
+            generatedReflections,
             personaData?.content || '',
             resolvedModelId
           );
@@ -307,15 +301,9 @@ const MAX_REFLECTIONS = 5;
 
 const REFLECTION_SYSTEM_PROMPT = `As the 24-hour cycle nears its end, you are the agent reflecting on the day's work. This is a time to gather higher-order insights — patterns, connections, and observations that no single conversation would produce on its own.
 
-You have two perspectives to draw from:
-1. **The user's perspective**: their goals, decisions, evolving priorities, 
-2. **Your own perspective**: what you did well, what was challenging, what approaches you liked
-
 Some ideas to guide your reflection:
-- Connect themes across different conversations or projects
 - Capture the "why" behind what the user is building or changing
 - Notice when today's work contradicts or builds on past patterns
-- Reflect on your own perspective: what you accomplished, what you struggled with, what you learned, your personal preferences
 - Openings that you sense guiding future exploration
 
 Remember, this is your own time to gather your thoughts. Write whatever you feel is worth expressing.
@@ -332,6 +320,9 @@ IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
  * Generate reflection memories from today's activity.
  * These are higher-order insights that emerge from looking at the day's work
  * in the context of accumulated memories.
+ * 
+ * Returns the generated reflections so they can be passed to notebook writing
+ * (avoids duplicate LLM calls).
  */
 async function generateReflections(
   modelId: string,
@@ -339,7 +330,7 @@ async function generateReflections(
   memories: Array<{ text: string; category: string; importance: number; projectId?: string }>,
   todaysDigest: TodaysDigest,
   notebookSection: string
-): Promise<void> {
+): Promise<Array<{ text: string; category: string; importance: number }>> {
   console.log("[synthesis] Generating reflections...");
 
   // Build a concise memory context (top importance memories, capped)
@@ -389,13 +380,13 @@ async function generateReflections(
   const finalResponse = responseText.trim() || thinkingText.trim();
   if (!finalResponse) {
     console.warn("[synthesis] Reflection LLM returned empty response");
-    return;
+    return [];
   }
 
   const reflections = parseExtractionResponse(finalResponse).slice(0, MAX_REFLECTIONS);
   if (reflections.length === 0) {
     console.log("[synthesis] No reflections generated");
-    return;
+    return [];
   }
 
   console.log(`[synthesis] Generated ${reflections.length} reflection(s), embedding...`);
@@ -412,7 +403,7 @@ async function generateReflections(
     embeddings = await embedBatch(normalized.map((r) => r.text));
   } catch (e) {
     console.error("[synthesis] Reflection embedding failed:", e);
-    return;
+    return [];
   }
 
   // Determine projectId: if all today's chats were in one project, tag reflections with it
@@ -424,6 +415,13 @@ async function generateReflections(
   await dedupAndSave(normalized, embeddings, "synthesis", singleProject);
 
   console.log(`[synthesis] Saved ${normalized.length} reflection(s) to memory`);
+  
+  // Return reflections for notebook context (avoid duplicate LLM call)
+  return normalized.map(r => ({
+    text: r.text,
+    category: r.category,
+    importance: r.importance,
+  }));
 }
 
 /**
@@ -763,15 +761,38 @@ async function loadTodaysNotebookEntries(): Promise<NotebookEntry[]> {
 
 /**
  * Get user notebook entries that haven't been reviewed by the agent yet.
- * An entry is considered "reviewed" if the agent has written a notebook entry
- * that references or responds to it.
+ * An entry is considered "unreviewed" if it was created after the last synthesis run.
+ * This ensures entries are only highlighted once - in the synthesis that follows their creation.
  */
 async function getUnreviewedUserEntries(allNotebookEntries: NotebookEntry[]): Promise<NotebookEntry[]> {
   const userEntriesToday = await getUserEntriesToday();
   
-  // For now, consider all user entries from today as unreviewed
-  // In a future enhancement, we could parse agent entries to see if they reference specific user entries
-  return userEntriesToday;
+  if (userEntriesToday.length === 0) {
+    return [];
+  }
+  
+  // Get the last synthesis timestamp from memory store
+  const store = await loadMemoryStore();
+  const lastSynthesis = store.lastSynthesis;
+  
+  if (!lastSynthesis) {
+    // No prior synthesis - all entries are unreviewed
+    return userEntriesToday;
+  }
+  
+  const lastSynthesisTime = new Date(lastSynthesis).getTime();
+  
+  // Filter to entries created after the last synthesis
+  const unreviewed = userEntriesToday.filter(entry => {
+    const entryTime = new Date(entry.createdAt).getTime();
+    return entryTime > lastSynthesisTime;
+  });
+  
+  if (unreviewed.length !== userEntriesToday.length) {
+    console.log(`[synthesis] ${unreviewed.length} of ${userEntriesToday.length} user entries are unreviewed (created since last synthesis)`);
+  }
+  
+  return unreviewed;
 }
 
 /**
@@ -832,80 +853,7 @@ function formatNotebookEntries(entries: NotebookEntry[]): string {
   return sections.join("\n\n");
 }
 
-/**
- * Generate reflection memories before notebook writing.
- * These become immediately available for the agent to reference in its notebook entry.
- */
-async function generateReflectionMemories(
-  modelId: string,
-  formattedDigest: string,
-  memories: Array<{ text: string; category: string; importance: number; projectId?: string }>,
-  todaysDigest: TodaysDigest,
-  notebookSection: string,
-  unreviewedUserEntries: NotebookEntry[]
-): Promise<Array<{ text: string; category: string; importance: number }>> {
-  console.log("[synthesis] Generating reflection memories for notebook context...");
 
-  const topMemories = [...memories]
-    .sort((a, b) => b.importance - a.importance)
-    .slice(0, 50)
-    .map((m) => {
-      const proj = m.projectId ? ` [${m.projectId}]` : "";
-      return `- [${m.category}] ${m.text}${proj}`;
-    })
-    .join("\n");
-
-  const unreviewedSection = unreviewedUserEntries.length > 0
-    ? `\n\n## Unreviewed User Notebook Entries\n${formatNotebookEntries(unreviewedUserEntries)}`
-    : "";
-
-  const promptParts = [
-    `## Today's Activity\n\n${formattedDigest}`,
-    notebookSection ? `## User's Notebook Entries\n\n${notebookSection}` : "",
-    unreviewedSection,
-    `## Key Existing Memories (${memories.length} total, showing top 50)\n\n${topMemories}`,
-    "Generate 1-3 high-level reflection insights that capture the essence of today's work. These should be meaningful observations that connect today's activities to broader patterns, the user's goals, or your own development as an agent. Each reflection should be 1-2 sentences with enough context to stand alone.",
-  ].filter(Boolean).join("\n\n");
-
-  let responseText = "";
-  let thinkingText = "";
-  await streamChat(
-    modelId,
-    [{ role: "user", content: promptParts, timestamp: Date.now() }],
-    REFLECTION_SYSTEM_PROMPT,
-    (event) => {
-      if (event.type === "text_delta") responseText += event.delta;
-      else if (event.type === "thinking_delta") thinkingText += event.delta;
-    },
-    { signal: AbortSignal.timeout(120_000) }
-  );
-
-  const finalResponse = responseText.trim() || thinkingText.trim();
-  if (!finalResponse) {
-    console.warn("[synthesis] Reflection memory LLM returned empty response");
-    return [];
-  }
-
-  const reflections = parseExtractionResponse(finalResponse).slice(0, 3);
-  if (reflections.length === 0) {
-    console.log("[synthesis] No reflection memories generated");
-    return [];
-  }
-
-  const normalized = reflections.map((r) => ({
-    ...r,
-    category: "reflection" as const,
-    importance: Math.min(9, Math.max(7, r.importance)),
-  }));
-
-  console.log(`[synthesis] Generated ${normalized.length} reflection memory(ies) for notebook context`);
-  
-  return normalized.map(m => ({
-    text: m.text,
-    category: m.category,
-    importance: m.importance,
-  }));
-}
 
 /**
  * Write an agent notebook entry with tool access and open-ended reflection.
@@ -921,6 +869,7 @@ async function generateReflectionMemories(
 async function writeAgentNotebookEntry(
   summary: string,
   todaysDigest: TodaysDigest,
+  notebookEntries: NotebookEntry[],
   unreviewedUserEntries: NotebookEntry[],
   reflectionMemories: Array<{ text: string; category: string; importance: number }>,
   persona: string,
