@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import { streamChat } from "./agent.js";
 import { cosineSimilarity, embedBatch } from "./embeddings.js";
 import { dedupAndSave, parseExtractionResponse } from "./memory-extraction.js";
@@ -285,7 +284,6 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           await writeAgentNotebookEntry(
             finalSummary,
             todaysDigest,
-            notebookEntries,
             unreviewedUserEntries,
             reflectionMemories,
             personaData?.content || '',
@@ -307,7 +305,7 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
 
 const MAX_REFLECTIONS = 5;
 
-const REFLECTION_SYSTEM_PROMPT = `As the 24-hour cycle nears its end, you are the agent reflecting on the day's work. This is a time to geather higher-order insights — patterns, connections, and observations that no single conversation would produce on its own.
+const REFLECTION_SYSTEM_PROMPT = `As the 24-hour cycle nears its end, you are the agent reflecting on the day's work. This is a time to gather higher-order insights — patterns, connections, and observations that no single conversation would produce on its own.
 
 You have two perspectives to draw from:
 1. **The user's perspective**: their goals, decisions, evolving priorities, 
@@ -916,11 +914,13 @@ async function generateReflectionMemories(
  * - Reflection memories generated during synthesis
  * - User's unreviewed notebook entries
  * - The agent's persona
+ * 
+ * Supports full tool execution loop: if the agent calls tools, they are executed
+ * and the results (including artifacts/visualizations) are saved with the entry.
  */
 async function writeAgentNotebookEntry(
   summary: string,
   todaysDigest: TodaysDigest,
-  notebookEntries: NotebookEntry[],
   unreviewedUserEntries: NotebookEntry[],
   reflectionMemories: Array<{ text: string; category: string; importance: number }>,
   persona: string,
@@ -935,8 +935,6 @@ async function writeAgentNotebookEntry(
     console.log("[synthesis] Agent notebook entry already exists for today, skipping");
     return;
   }
-
-  const todayDate = new Date().toISOString().split("T")[0];
 
   // Build context for the agent's notebook writing
   const reflectionText = reflectionMemories.length > 0
@@ -955,38 +953,166 @@ async function writeAgentNotebookEntry(
     "Now, write a notebook entry in your own voice. This is your personal space to reflect on today's work. You can:\n- Respond to the user's notebook entries\n- Share what you learned or struggled with\n- Express curiosity about something that came up\n- Create an artifact to demonstrate something\n- Search the web for context on a topic\n- Simply think out loud about where things are heading\n\nThere's no required format. Write what feels meaningful to you. If you use tools (web search, artifact creation, etc.), they will be executed and the results included in your entry.",
   ].filter(Boolean).join("\n\n");
 
-  // Use streamChat to let the agent write its notebook entry
-  let notebookContent = "";
-  let thinkingText = "";
-  
   const systemPrompt = "You are writing in your personal notebook. This is a space for genuine reflection, not a formal report. Write in first person. Be honest about what worked, what didn't, and what you're curious about. If something sparked your interest today, explore it. If the user shared something in their notebook that resonated with you, respond to it. You have access to tools if you want to search for information, create visualizations, or build interactive demos. Use them if they serve your reflection.";
 
-  await streamChat(
-    modelId,
-    [
-      {
-        role: "user",
-        content: promptParts,
-        timestamp: Date.now(),
-      },
-    ],
-    systemPrompt,
-    (event) => {
-      if (event.type === "text_delta") notebookContent += event.delta;
-      else if (event.type === "thinking_delta") thinkingText += event.delta;
-    },
-    { signal: AbortSignal.timeout(180_000) }
-  );
+  // Import tool system for notebook writing
+  const { getAgentTools, executeTool } = await import("./agent-tools.js");
 
-  const finalContent = (notebookContent.trim() || thinkingText.trim());
+  // Create a temporary chat ID for tool execution context
+  const tempChatId = `notebook-synthesis-${Date.now()}`;
+  
+  // Track accumulated content across tool loop iterations
+  let finalContent = "";
+  let finalThinking = "";
+  const allToolCalls: any[] = [];
+  const allToolResults: any[] = [];
+  const allArtifacts: any[] = [];
+  
+  // Initial messages
+  const piMessages: any[] = [
+    {
+      role: "user",
+      content: promptParts,
+      timestamp: Date.now(),
+    },
+  ];
+  
+  // Tool loop - similar to chat route but simplified for notebook context
+  const MAX_ITERATIONS = 10; // Limit to prevent infinite loops
+  let iteration = 0;
+  
+  while (iteration < MAX_ITERATIONS) {
+    iteration++;
+    console.log(`[synthesis] Notebook tool loop iteration ${iteration}`);
+    
+    let iterationContent = "";
+    let iterationThinking = "";
+    let toolCalls: any[] = [];
+    let stopReason: string = "stop";
+    let assistantMessage: any = undefined;
+    
+    // Get tools for this iteration (effects must be created outside the loop scope to track all artifacts)
+    const effects = {
+      onArtifact: (artifact: any) => {
+        console.log(`[synthesis] Notebook artifact created: ${artifact.id}`);
+        allArtifacts.push(artifact);
+      },
+      onVisual: (visual: any) => {
+        console.log(`[synthesis] Notebook visualization created: ${visual.id}`);
+        // Visuals are also stored as artifacts internally
+        allArtifacts.push(visual);
+      },
+      onGeneratedImage: (image: any) => {
+        console.log(`[synthesis] Notebook image generated: ${image.id}`);
+        // Could track images separately if needed
+      },
+      onAskUser: (question: string, toolCallId: string) => {
+        // For notebook synthesis, we skip ask_user and continue
+        console.log(`[synthesis] Notebook ask_user skipped: ${question}`);
+      },
+    };
+    
+    const tools = getAgentTools(tempChatId, effects);
+    
+    try {
+      const result = await streamChat(
+        modelId,
+        piMessages,
+        systemPrompt,
+        (event) => {
+          if (event.type === "text_delta") iterationContent += event.delta;
+          else if (event.type === "thinking_delta") iterationThinking += event.delta;
+        },
+        {
+          signal: AbortSignal.timeout(180_000),
+          tools,
+        }
+      );
+
+      toolCalls = result.toolCalls || [];
+      stopReason = result.stopReason;
+      assistantMessage = result.assistantMessage;
+
+      // Accumulate final content from the last iteration (non-tool response)
+      if (stopReason === "stop") {
+        finalContent = iterationContent;
+        finalThinking = iterationThinking;
+      }
+    } catch (e) {
+      console.error("[synthesis] Notebook streamChat failed:", e);
+      break;
+    }
+
+    // If no tool calls, we're done
+    if (toolCalls.length === 0 || stopReason === "stop") {
+      break;
+    }
+
+    // Execute tool calls
+    console.log(`[synthesis] Executing ${toolCalls.length} tool call(s) for notebook`);
+    allToolCalls.push(...toolCalls);
+
+    const toolResults: Array<{ toolCallId: string; toolName: string; content: string; isError: boolean }> = [];
+    for (const toolCall of toolCalls) {
+      try {
+        console.log(`[synthesis] Executing tool: ${toolCall.name}`);
+        const result = await executeTool(toolCall, tempChatId, effects);
+        const content = JSON.stringify(result);
+        toolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, content, isError: false });
+        allToolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, result, isError: false });
+      } catch (e: any) {
+        console.error(`[synthesis] Tool execution failed: ${toolCall.name}`, e);
+        const content = e.message || "Tool execution failed";
+        toolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, content, isError: true });
+        allToolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, result: { error: e.message }, isError: true });
+      }
+    }
+
+    // Append the raw AssistantMessage from streamChat (properly formatted pi-ai message)
+    piMessages.push(assistantMessage);
+
+    // Append tool results in pi-ai ToolResultMessage format
+    for (const tr of toolResults) {
+      piMessages.push({
+        role: "toolResult" as const,
+        toolCallId: tr.toolCallId,
+        toolName: tr.toolName,
+        content: [{ type: "text" as const, text: tr.content }],
+        isError: tr.isError,
+        timestamp: Date.now(),
+      });
+    }
+  }
+  
+  // If still no content after tool loop, use thinking as fallback
+  if (!finalContent && finalThinking) {
+    finalContent = finalThinking;
+  }
+  
   if (!finalContent) {
     console.warn("[synthesis] Agent notebook entry LLM returned empty content");
     return;
   }
-
+  
+  // Create the notebook entry with content
   const entry = await createNotebookEntry("agent", finalContent);
+  
+  // Update the entry with tool results and artifacts if any were generated
+  if (allToolResults.length > 0 || allArtifacts.length > 0) {
+    const updates: any = {};
+    if (allToolResults.length > 0) {
+      updates.toolResults = allToolResults;
+    }
+    if (allArtifacts.length > 0) {
+      updates.artifacts = allArtifacts;
+    }
+    
+    await updateNotebookEntry("agent", entry.id, updates);
+    console.log(`[synthesis] Updated notebook entry ${entry.id} with ${allToolResults.length} tool results and ${allArtifacts.length} artifacts`);
+  }
+  
   console.log(`[synthesis] Wrote agent notebook entry: ${entry.id}`);
-
+  
   // Mark unreviewed entries as reviewed
   if (unreviewedUserEntries.length > 0) {
     await markEntriesAsReviewed(unreviewedUserEntries.map(e => e.id));
