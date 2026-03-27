@@ -56,12 +56,12 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
         className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.02] transition-colors"
       >
         {statusIcons[status]}
-        <span className="text-white/40 text-xs">{toolIcon}</span>
-        <span className="text-xs font-medium text-white/70 truncate">
+        <span className="text-white/40 text-xs shrink-0">{toolIcon}</span>
+        <span className="text-xs font-medium text-white/70 shrink-0 min-w-fit">
           {formatToolName(name)}
         </span>
         {argsDisplay && (
-          <span className="text-xs text-white/30 truncate ml-1">
+          <span className="text-xs text-white/30 truncate min-w-0 flex-1 ml-1">
             {argsDisplay}
           </span>
         )}
@@ -75,7 +75,8 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
           strokeWidth="2"
           strokeLinecap="round"
           strokeLinejoin="round"
-          className={`ml-auto shrink-0 text-white/20 transition-transform ${expanded ? "rotate-180" : ""}`}
+          className="shrink-0 text-white/20 transition-transform ml-auto"
+          style={{ transform: expanded ? "rotate(180deg)" : "rotate(0deg)" }}
         >
           <polyline points="6 9 12 15 18 9" />
         </svg>
