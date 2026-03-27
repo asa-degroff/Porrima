@@ -282,10 +282,13 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
   }, [updateLayout]);
 
   const addFiles = (files: FileList | File[]) => {
+    // Snapshot into a plain array immediately — iOS Safari's FileList is a live
+    // reference that becomes empty once the input's value is cleared.
+    const fileArray = Array.from(files);
     // Process images asynchronously with progress feedback
     const startIndex = images.length;
-    Promise.resolve(files).then(async (f) => {
-      const imageFiles = Array.from(f).filter((file) => file.type.startsWith("image/"));
+    Promise.resolve(fileArray).then(async (f) => {
+      const imageFiles = f.filter((file) => file.type.startsWith("image/"));
       
       // Mark all as processing
       setProcessingImages(prev => {
@@ -478,8 +481,20 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
               accept="image/*"
               multiple
               onChange={handleFileChange}
-              className="hidden"
-              tabIndex={-1}
+              // Mobile Safari requires file inputs to be in the render tree (not display:none)
+              // Use visual hiding with absolute positioning instead
+              style={{
+                position: 'absolute',
+                width: '1px',
+                height: '1px',
+                padding: '0',
+                margin: '-1px',
+                overflow: 'hidden',
+                clip: 'rect(0, 0, 0, 0)',
+                whiteSpace: 'nowrap',
+                border: '0',
+              }}
+              tabIndex={0}
             />
 
             {streaming && canSend ? (
