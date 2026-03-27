@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { NotebookLink, ImageAttachment } from "../types";
 import { useHaptics } from "../hooks/useHaptics";
 
@@ -171,6 +171,11 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
     // Set height to scrollHeight, capped at maxHeight
     textarea.style.height = Math.min(scrollHeight, maxHeight) + 'px';
   }, []);
+
+  // Size textarea to fit initial content on mount
+  useEffect(() => {
+    if (initialContent) autoResize();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOpenLinkPicker = useCallback(() => {
     if (onOpenLinkPicker && linkButtonRef.current) {
