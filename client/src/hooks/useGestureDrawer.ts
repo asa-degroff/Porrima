@@ -16,6 +16,11 @@ interface GestureDrawerReturn {
     onTouchMove: (e: React.TouchEvent) => void;
     onTouchEnd: (e: React.TouchEvent) => void;
   };
+  edgeHandlers: {
+    onTouchStart: (e: React.TouchEvent) => void;
+    onTouchMove: (e: React.TouchEvent) => void;
+    onTouchEnd: (e: React.TouchEvent) => void;
+  };
   containerRef: (el: HTMLElement | null) => void;
   style: React.CSSProperties;
   isDragging: boolean;
@@ -42,6 +47,7 @@ export function useGestureDrawer({
   const [currentOffset, setCurrentOffset] = useState(0);
   const [containerSize, setContainerSize] = useState(0);
 
+  const isDraggingRef = useRef(false);
   const touchStartRef = useRef<number>(0);
   const velocityRef = useRef<number>(0);
   const lastTouchRef = useRef<{ pos: number; time: number } | null>(null);
@@ -126,22 +132,31 @@ export function useGestureDrawer({
     rafRef.current = requestAnimationFrame(animate);
   }, [containerSize, currentOffset, onClose, onOpen, isOpen]);
 
-  const onTouchStart = useCallback((e: React.TouchEvent) => {
-    // Only respond to single touch
-    if (e.touches.length !== 1) return;
-
-    const pos = getTouchPos(e);
+  const startDrag = useCallback((pos: number) => {
     touchStartRef.current = pos;
     lastTouchRef.current = { pos, time: performance.now() };
     velocityRef.current = 0;
+    isDraggingRef.current = true;
     setIsDragging(true);
+  }, []);
 
-    // Prevent scroll on the drawer content while dragging
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length !== 1) return;
+    startDrag(getTouchPos(e));
     e.preventDefault();
-  }, [getTouchPos]);
+  }, [getTouchPos, startDrag]);
+
+  // Edge swipe: starts drag from closed state (offset 0)
+  const onEdgeTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length !== 1) return;
+    if (isOpen || isDraggingRef.current) return;
+    setCurrentOffset(0);
+    startDrag(getTouchPos(e));
+    e.preventDefault();
+  }, [getTouchPos, startDrag, isOpen]);
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
-    if (!isDragging) return;
+    if (!isDraggingRef.current) return;
     if (e.touches.length !== 1) return;
 
     const pos = getTouchPos(e);
@@ -182,8 +197,9 @@ export function useGestureDrawer({
   }, [isDragging, getTouchPos, isOpen, containerSize, direction]);
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (!isDragging) return;
+    if (!isDraggingRef.current) return;
 
+    isDraggingRef.current = false;
     setIsDragging(false);
     lastTouchRef.current = null;
 
@@ -223,24 +239,20 @@ export function useGestureDrawer({
     }
   }, [direction, maxOffset]);
 
-  // Apply transform style when actively dragging or animating the snap
-  // When idle, return empty style to let CSS classes control position
+  // Apply transform style only when actively dragging or animating the snap.
+  // When idle, return empty style so CSS classes control position (important for
+  // desktop where md:translate-x-0 must not be overridden by inline styles).
   const active = isDragging || isAnimating;
   const style: React.CSSProperties = active ? {
     transform: getTranslate(currentOffset),
     touchAction: "none",
     willChange: "transform",
     transition: "none",
-  } : {
-    // When not active but container is measured, ensure we're at the correct position
-    // This is needed for slide-up drawers that start open
-    ...(containerSize > 0 && !isDragging && !isAnimating ? {
-      transform: getTranslate(isOpen ? containerSize : 0),
-    } : {}),
-  };
+  } : {};
 
   return {
     handlers: { onTouchStart, onTouchMove, onTouchEnd },
+    edgeHandlers: { onTouchStart: onEdgeTouchStart, onTouchMove, onTouchEnd },
     containerRef: containerCallback,
     style,
     isDragging,

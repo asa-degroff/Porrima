@@ -391,14 +391,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onOpenImageSandbox={handleOpenImageSandbox}
         isOpen={sidebarOpen}
         onClose={handleCloseSidebar}
+        onOpen={handleOpenSidebar}
         isStreaming={streaming}
         hasUnreadNotebooks={hasUnreadAgentEntries()}
         ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}
         blueskyChatId={settings.bluesky?.blueskyChatId}
       />
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-20 bg-black/50 md:hidden" onClick={handleCloseSidebar} />
-      )}
+      {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}
       {imageSandboxOpen ? (
         <ImageSandbox
           models={models}

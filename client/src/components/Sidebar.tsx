@@ -25,6 +25,7 @@ interface Props {
   onOpenImageSandbox: () => void;
   isOpen: boolean;
   onClose: () => void;
+  onOpen: () => void;
   isStreaming?: boolean;
   hasUnreadNotebooks?: boolean;
   ttsBarVisible?: boolean;
@@ -175,6 +176,7 @@ export function Sidebar({
   onOpenImageSandbox,
   isOpen,
   onClose,
+  onOpen,
   isStreaming = false,
   hasUnreadNotebooks = false,
   ttsBarVisible = false,
@@ -270,17 +272,28 @@ export function Sidebar({
   }, [chats, projects]);
 
   // Gesture drawer hook for mobile slide-over
-  const { handlers: gestureHandlers, containerRef: gestureRef, style: gestureStyle, openProgress, isDragging, isAnimating } = useGestureDrawer({
+  const { handlers: gestureHandlers, edgeHandlers, containerRef: gestureRef, style: gestureStyle, openProgress, isDragging, isAnimating } = useGestureDrawer({
     isOpen,
     onClose,
+    onOpen,
     direction: "right",
     threshold: 0.4, // 40% of sidebar width to snap
   });
 
   return (
     <>
+      {/* Edge swipe zone — invisible touch target along left edge when sidebar is closed.
+           Stays mounted during drag so the touch sequence isn't interrupted. */}
+      {!isOpen && !isAnimating && (
+        <div
+          className="md:hidden fixed inset-y-0 left-0 w-5 z-20"
+          onTouchStart={edgeHandlers.onTouchStart}
+          onTouchMove={edgeHandlers.onTouchMove}
+          onTouchEnd={edgeHandlers.onTouchEnd}
+        />
+      )}
       {/* Backdrop for mobile — opacity tracks drag progress */}
-      {(isOpen || isAnimating) && (
+      {(isOpen || isDragging || isAnimating) && (
         <div
           className={`md:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-20 ${isDragging || isAnimating ? "" : "transition-opacity"}`}
           style={{ opacity: openProgress * 0.6 }}
@@ -289,7 +302,7 @@ export function Sidebar({
       )}
       {/* Sidebar container — desktop is static, mobile is fixed with gesture support */}
       <div
-        className={`w-72 h-full flex flex-col backdrop-blur-sm bg-white/[0.03] border-r border-white/10 fixed inset-y-0 left-0 z-30 md:static md:translate-x-0 md:z-auto ${isDragging || isAnimating ? "" : "transition-transform duration-300 ease-in-out"} ${!isDragging && !isAnimating ? (isOpen ? "translate-x-0" : "-translate-x-full") : ""}`}
+        className={`w-72 h-full flex flex-col backdrop-blur-sm bg-white/[0.03] border-r border-white/10 fixed inset-y-0 left-0 z-30 md:static md:translate-x-0 md:z-auto ${isDragging || isAnimating ? "" : "transition-transform duration-300 ease-in-out"} ${!isDragging && !isAnimating ? (isOpen ? "translate-x-0 md:translate-x-0" : "-translate-x-full md:translate-x-0") : ""}`}
         ref={gestureRef}
         onTouchStart={gestureHandlers.onTouchStart}
         onTouchMove={gestureHandlers.onTouchMove}
