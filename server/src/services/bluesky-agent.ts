@@ -73,6 +73,7 @@ export class BlueskyAgent {
       const session = this.sessionManager.session;
       if (!session) {
         console.warn('[bluesky-agent] Resumed session is invalid');
+        // Don't delete the stored session - it might be recoverable or the user can re-login
         return false;
       }
 
@@ -82,9 +83,10 @@ export class BlueskyAgent {
 
       updateBlueskySessionLastUsed(did);
       return true;
-    } catch (err) {
-      console.warn('[bluesky-agent] Failed to restore session:', err);
-      deleteBlueskySession(did);
+    } catch (err: any) {
+      // Session restoration failed (likely expired), but keep the stored credentials
+      // so the UI can show "session expired" rather than "not logged in"
+      console.warn('[bluesky-agent] Failed to restore session:', err.message);
       return false;
     }
   }
