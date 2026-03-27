@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage } from "../api/client";
+import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat } from "../api/client";
 import type { StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InlineVisual, MessageSegment, MessageUsage } from "../types";
 import { useStreamingTTS } from "./useStreamingTTS";
@@ -671,15 +671,24 @@ export function useChat(chatId: string | null) {
     [chatId, streaming, prepareStream, makeStreamCallbacks]
   );
 
-  const abort = useCallback(() => {
+  const abort = useCallback(async () => {
     if (chatId) {
       const bg = bgStreams.get(chatId);
       if (bg) {
+        // First, call the server-side stop endpoint to immediately abort the agent loop
+        try {
+          await apiStopChat(chatId);
+        } catch (err) {
+          console.error(`[chat] stop endpoint failed:`, err);
+        }
+        
+        // Then abort the client-side SSE connection
         bg.abortController?.abort();
         bg.streaming = false;
         bgStreams.delete(chatId);
       }
     }
+    // Also abort the local controller as a fallback
     abortRef.current?.abort();
     setStreaming(false);
   }, [chatId]);

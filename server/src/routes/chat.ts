@@ -246,9 +246,16 @@ async function handleChatStream(
 
   const connectionAbortController = new AbortController();
   let connectionClosed = false;
+  
+  // Store the abort controller in a map so it can be accessed by the stop endpoint
+  const activeStreams = (globalThis as any)._activeChatStreams || new Map<string, AbortController>();
+  (globalThis as any)._activeChatStreams = activeStreams;
+  activeStreams.set(chat.id, connectionAbortController);
+  
   req.on("close", () => {
     connectionClosed = true;
     connectionAbortController.abort();
+    activeStreams.delete(chat.id);
   });
 
   const MAX_ITERATIONS = 500;
@@ -1501,6 +1508,27 @@ router.post("/enqueue", async (req, res) => {
 
   console.log(`[chat] enqueued message for chat ${chatId}`);
   res.json({ queued: true });
+});
+
+// Stop an in-progress chat stream
+router.post("/stop", async (req, res) => {
+  const { chatId } = req.body as { chatId: string };
+  
+  if (!chatId) {
+    return res.status(400).json({ error: "chatId is required" });
+  }
+  
+  const activeStreams = (globalThis as any)._activeChatStreams as Map<string, AbortController> | undefined;
+  const controller = activeStreams?.get(chatId);
+  
+  if (controller) {
+    controller.abort();
+    console.log(`[chat] stop: aborted stream for chat ${chatId}`);
+    res.json({ stopped: true });
+  } else {
+    console.log(`[chat] stop: no active stream found for chat ${chatId}`);
+    res.json({ stopped: false, reason: "no_active_stream" });
+  }
 });
 
 // Edit message at index and regenerate response via SSE

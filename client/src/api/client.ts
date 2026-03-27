@@ -292,6 +292,16 @@ export function editMessage(
   return streamSSE(`${BASE}/chat/edit`, { chatId, messageIndex, message }, callbacks);
 }
 
+export async function stopChat(chatId: string): Promise<{ stopped: boolean; reason?: string }> {
+  const res = await apiFetch(`${BASE}/chat/stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId }),
+  });
+  if (!res.ok) throw new Error("Failed to stop chat");
+  return res.json();
+}
+
 function processSSEEvent(
   eventType: string,
   data: any,
