@@ -48,6 +48,7 @@ interface Props {
   totalUsage: MessageUsage;
   compacting?: boolean;
   compaction?: { removedCount: number; remainingCount: number } | null;
+  hasCompactionSummary?: boolean;
   contextWindow: number;
   error: string | null;
   warning: StreamWarning | null;
@@ -89,6 +90,7 @@ export function ChatView({
   totalUsage,
   compacting,
   compaction,
+  hasCompactionSummary,
   contextWindow,
   error,
   warning,
@@ -297,7 +299,7 @@ export function ChatView({
         <div className="flex items-center gap-3 shrink-0">
           <OfflineIndicator isOnline={isOnline} queueProcessing={queueProcessing} />
           <span className="hidden md:contents">
-            <TokenIndicator usage={totalUsage} contextWindow={contextWindow} compacting={compacting} compaction={compaction} />
+            <TokenIndicator usage={totalUsage} contextWindow={contextWindow} compacting={compacting} compaction={compaction} hasCompactionSummary={hasCompactionSummary} />
           </span>
           {/* Context window editor — hidden on mobile alongside token indicator */}
           <span className="hidden md:contents">

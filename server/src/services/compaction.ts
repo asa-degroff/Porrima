@@ -4,6 +4,8 @@ export interface CompactionResult {
   truncated: boolean;
   removedCount: number;
   removedMessages?: ChatMessage[];
+  /** Estimated token count of removed messages (chars/4 approximation) */
+  estimatedTokenCount?: number;
 }
 
 /**
@@ -142,24 +144,42 @@ export async function truncateBeforeSend(
   
   const summaryMessage: typeof firstMessage = {
     role: "assistant",
-    content: `[Conversation Summary] ${summary}`,
+    content: summary, // Strip the prefix - UI will handle rendering
     thinking: undefined,
-    usage: lastRemovedUsage ? {
-      input: lastRemovedUsage.input,
-      output: lastRemovedUsage.output,
-      totalTokens: lastRemovedUsage.totalTokens,
-    } : undefined,
+    // Note: Summary messages intentionally DON'T inherit usage from removed messages.
+    // This prevents confusion in the TokenIndicator. The next real assistant response
+    // will have accurate usage data from Ollama's prompt_eval_count.
     timestamp: Date.now(),
+    _isCompactionSummary: true,
+    _compactedMessageCount: messagesToRemove,
   };
 
   chat.messages = [firstMessage, summaryMessage, ...recentMessages];
 
+  // Calculate estimated token count of removed messages for tracking
+  const estimatedRemovedTokens = removedMessages.reduce((sum, m) => {
+    let tokens = estimateTokens(m.content);
+    if (m.role === "user" && m.images?.length) {
+      tokens += m.images.length * 256;
+    }
+    if (m.role === "assistant") {
+      if (m.thinking) tokens += estimateTokens(m.thinking);
+      if (m.toolCalls) tokens += m.toolCalls.length * 50;
+      if (m.toolResults) {
+        for (const r of m.toolResults) {
+          tokens += estimateTokens(r.content) + 20;
+        }
+      }
+    }
+    return sum + tokens;
+  }, 0);
+
   console.log(
-    `[compaction] Pre-send truncated chat ${chat.id}: removed ${messagesToRemove} messages, ` +
-    `inserted summary, ${messages.length} → ${chat.messages.length} messages`
+    `[compaction] Pre-send truncated chat ${chat.id}: removed ${messagesToRemove} messages ` +
+    `(~${estimatedRemovedTokens} est. tokens) → ${chat.messages.length} messages`
   );
 
-  return { truncated: true, removedCount: messagesToRemove };
+  return { truncated: true, removedCount: messagesToRemove, estimatedTokenCount: estimatedRemovedTokens };
 }
 
 /**
@@ -311,21 +331,39 @@ export async function truncateChatHistory(
 
   const summaryMessage: ChatMessage = {
     role: "assistant",
-    content: `[Conversation Summary] ${summary}`,
-    usage: lastRemovedUsage ? {
-      input: lastRemovedUsage.input,
-      output: lastRemovedUsage.output,
-      totalTokens: lastRemovedUsage.totalTokens,
-    } : undefined,
+    content: summary, // Strip the prefix - UI will handle rendering
+    // Note: Summary messages intentionally DON'T inherit usage from removed messages.
+    // This prevents confusion in the TokenIndicator. The next real assistant response
+    // will have accurate usage data from Ollama's prompt_eval_count.
     timestamp: Date.now(),
+    _isCompactionSummary: true,
+    _compactedMessageCount: messagesToRemove,
   };
 
   chat.messages = [firstMessage, summaryMessage, ...recentMessages];
 
+  // Calculate estimated token count of removed messages for tracking
+  const estimatedRemovedTokens = removedMessages.reduce((sum, m) => {
+    let tokens = estimateTokens(m.content);
+    if (m.role === "user" && m.images?.length) {
+      tokens += m.images.length * 256;
+    }
+    if (m.role === "assistant") {
+      if (m.thinking) tokens += estimateTokens(m.thinking);
+      if (m.toolCalls) tokens += m.toolCalls.length * 50;
+      if (m.toolResults) {
+        for (const r of m.toolResults) {
+          tokens += estimateTokens(r.content) + 20;
+        }
+      }
+    }
+    return sum + tokens;
+  }, 0);
+
   console.log(
-    `[compaction] Truncated chat ${chat.id}: removed ${messagesToRemove} messages, ` +
-    `inserted summary (${messages.length} → ${chat.messages.length})`
+    `[compaction] Truncated chat ${chat.id}: removed ${messagesToRemove} messages ` +
+    `(~${estimatedRemovedTokens} est. tokens) → ${chat.messages.length} messages`
   );
 
-  return { truncated: true, removedCount: messagesToRemove, removedMessages };
+  return { truncated: true, removedCount: messagesToRemove, removedMessages, estimatedTokenCount: estimatedRemovedTokens };
 }

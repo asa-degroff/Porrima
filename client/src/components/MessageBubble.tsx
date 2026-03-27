@@ -11,6 +11,7 @@ import { ToolCallDisplay } from "./ToolCallDisplay";
 import { SpeakerButton } from "./SpeakerButton";
 import { UserImage } from "./UserImage";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
+import { CompactionIndicator } from "./CompactionIndicator";
 
 const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -106,6 +107,20 @@ export const MessageBubble = memo(function MessageBubble({
 }: Props) {
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;
+
+  // Render compaction indicator for summary messages
+  if (message._isCompactionSummary && message._compactedMessageCount) {
+    return (
+      <CompactionIndicator
+        compaction={{
+          removedCount: message._compactedMessageCount,
+          summary: message.content,
+          messageIndex: messageIndex ?? 0,
+          timestamp: message.timestamp,
+        }}
+      />
+    );
+  }
 
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");

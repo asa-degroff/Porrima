@@ -1059,9 +1059,13 @@ async function handleChatStream(
                 await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages);
               }
               await saveChat(chat);
+              
+              // Find the summary message that was inserted
+              const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
               res.write(`event: compaction\ndata: ${JSON.stringify({
                 removedCount: compaction.removedCount,
                 remainingCount: chat.messages.length,
+                summaryMessage: summaryMsg || null,
               })}\n\n`);
             }
           }
@@ -1342,10 +1346,13 @@ router.post("/", async (req, res) => {
               chat.projectId
             );
           }
+          // Find the summary message that was inserted
+          const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
           // Emit compaction event for UI indicator
           res.write(`event: compaction\ndata: ${JSON.stringify({
             removedCount: compaction.removedCount,
             remainingCount: chat.messages.length,
+            summaryMessage: summaryMsg || null,
           })}\n\n`);
         }
       } catch (err) {
@@ -1430,10 +1437,13 @@ router.post("/", async (req, res) => {
               chat.projectId
             );
           }
+          // Find the summary message that was inserted
+          const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
           // Emit compaction event for UI indicator
           res.write(`event: compaction\ndata: ${JSON.stringify({
             removedCount: compaction.removedCount,
             remainingCount: chat.messages.length,
+            summaryMessage: summaryMsg || null,
           })}\n\n`);
         }
       } catch (err) {

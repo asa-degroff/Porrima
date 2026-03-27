@@ -82,6 +82,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     processQueue,
     queueProcessing,
     titleUpdate,
+    hasCompactionSummary,
   } = useChat(activeChatId);
 
   // Apply theme to document
@@ -435,6 +436,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         totalUsage={totalUsage}
         compacting={compacting}
         compaction={compaction}
+        hasCompactionSummary={hasCompactionSummary}
         contextWindow={contextWindow}
         error={error}
         warning={warning}

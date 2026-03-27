@@ -55,6 +55,10 @@ export interface ChatMessage {
   timestamp: number;
   /** Ordered segments for interleaved display - replaces toolCalls/toolResults/artifacts order */
   segments?: MessageSegment[];
+  /** Marks this message as a compaction summary (inserted when messages are removed due to context limits) */
+  _isCompactionSummary?: boolean;
+  /** Number of messages that were compacted to create this summary */
+  _compactedMessageCount?: number;
 }
 
 export type ChatType = "agent" | "quick" | "bluesky";

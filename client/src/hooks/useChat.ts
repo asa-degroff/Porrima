@@ -431,6 +431,30 @@ export function useChat(chatId: string | null) {
         if (bg) {
           bg.compacting = false;
           bg.compaction = info;
+          
+          // Insert the summary message into the messages array if provided
+          if (info.summaryMessage) {
+            const summaryMsg: ChatMessage = {
+              ...info.summaryMessage,
+              _isCompactionSummary: true,
+              _compactedMessageCount: info.removedCount,
+            };
+            // Insert after first message (index 1) - this matches server behavior
+            const newMessages = [...bg.messages];
+            // Remove any existing compaction summary to avoid duplicates
+            const existingSummaryIdx = newMessages.findIndex(m => m._isCompactionSummary);
+            if (existingSummaryIdx >= 0) {
+              newMessages.splice(existingSummaryIdx, 1);
+            }
+            // Insert at index 1 (after the first message)
+            newMessages.splice(1, 0, summaryMsg);
+            bg.messages = newMessages;
+            
+            // Sync to React state if this is the active chat
+            if (activeChatIdRef.current === streamChatId) {
+              setMessages(newMessages);
+            }
+          }
         }
         if (activeChatIdRef.current === streamChatId) {
           setCompacting(false);
@@ -728,13 +752,23 @@ export function useChat(chatId: string | null) {
   // Use live streaming usage (from iteration events) when available,
   // otherwise fall back to the last assistant message's usage.
   // This keeps the token indicator accurate during multi-iteration tool loops.
+  // IMPORTANT: Skips compaction summaries since they don't have real usage data.
   const totalUsage: MessageUsage = useMemo(() => {
     if (streamingUsage) return streamingUsage;
+    // Find the last REAL assistant message with usage (not compaction summaries)
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].usage) return messages[i].usage!;
+      const msg = messages[i];
+      if (msg.role === "assistant" && !msg._isCompactionSummary && msg.usage) {
+        return msg.usage;
+      }
     }
     return { input: 0, output: 0, totalTokens: 0 };
   }, [messages, streamingUsage]);
+
+  // Check if the chat has a compaction summary (for UI state)
+  const hasCompactionSummary = useMemo(() => {
+    return messages.some(m => m._isCompactionSummary);
+  }, [messages]);
 
   return {
     messages,
@@ -758,5 +792,6 @@ export function useChat(chatId: string | null) {
     processQueue,
     queueProcessing,
     titleUpdate,
+    hasCompactionSummary,
   };
 }

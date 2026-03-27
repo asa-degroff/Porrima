@@ -114,7 +114,7 @@ export interface StreamCallbacks {
   onIteration?: (info: IterationInfo) => void;
   onWarning?: (warning: StreamWarning) => void;
   onCompacting?: () => void;
-  onCompaction?: (info: { removedCount: number; remainingCount: number }) => void;
+  onCompaction?: (info: { removedCount: number; remainingCount: number; summaryMessage?: import("../types").ChatMessage | null }) => void;
   onTitleUpdate?: (chatId: string, title: string) => void;
   onMessageComplete?: (message: any) => void;
   onFollowUpStart?: (data: any) => void;

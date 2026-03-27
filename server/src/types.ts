@@ -52,6 +52,10 @@ export interface ChatMessage {
   timestamp: number;
   /** Transient flag: message is still being generated (mid-tool-loop). Stripped on completion. */
   _inProgress?: boolean;
+  /** Marks this message as a compaction summary (inserted when messages are removed due to context limits) */
+  _isCompactionSummary?: boolean;
+  /** Number of messages that were compacted to create this summary */
+  _compactedMessageCount?: number;
 }
 
 export type ChatType = "agent" | "quick" | "bluesky";
