@@ -3,7 +3,6 @@ import type { ChatListItem as ChatListItemType, ChatType, Project } from "../typ
 import { ChatListItem } from "./ChatListItem";
 import { OctahedronLogo } from "./OctahedronLogo";
 import { BlueskySection } from "./BlueskySection";
-import { DragHandle } from "./DragHandle";
 import { useSidebarState } from "../hooks/useSidebarState";
 import { useGestureDrawer } from "../hooks/useGestureDrawer";
 import { SidebarSearch, SearchResults } from "./SidebarSearch";
@@ -297,10 +296,6 @@ export function Sidebar({
         onTouchEnd={gestureHandlers.onTouchEnd}
         style={gestureStyle}
       >
-        {/* Drag handle for mobile — only visible on mobile */}
-        <div className="md:hidden">
-          <DragHandle onDoubleTap={onClose} />
-        </div>
         {/* Header */}
       <div ref={headerRef} className="px-3 pt-3 pb-0 shrink-0">
         {/* Search or Logo — mutually exclusive, same fixed height */}
