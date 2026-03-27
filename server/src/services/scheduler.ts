@@ -6,7 +6,7 @@ import { extractDelayedMemories } from "./memory-extraction.js";
 import { getBlueskyPoller } from "./bluesky-poller.js";
 import { buildClusters } from "./cluster-engine.js";
 import { getClusters } from "./cluster-storage.js";
-import { getAllCorpusEntries } from "./image-corpus.js";
+import { getAllCorpusEntries, enrichCorpusBatch } from "./image-corpus.js";
 import { proposeDirections } from "./creative-engine.js";
 import { addMemory } from "./memory-storage.js";
 import { createDirectionJob, processPendingJobs } from "./job-queue.js";
@@ -15,6 +15,8 @@ import { clearCache } from "./direction-cache.js";
 const SYNTHESIS_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+const ENRICHMENT_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const DEFAULT_ENRICHMENT_BATCH_SIZE = 5;
 
 // ---------------------------------------------------------------------------
 // Daily Synthesis Check
@@ -154,6 +156,27 @@ async function runCorpusCreativeCycle() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Check and run corpus enrichment for entries missing embeddings or elements.
+ * Called every 30 minutes to process backlog from failed fire-and-forget enrichments.
+ * Uses small batch size to avoid overwhelming the LLM API.
+ */
+async function checkAndRunEnrichment() {
+  try {
+    const settings = await getSettings();
+    const batchSize = settings.enrichmentBatchSize ?? DEFAULT_ENRICHMENT_BATCH_SIZE;
+    
+    console.log(`[scheduler] Running enrichment batch (size: ${batchSize})...`);
+    const enrichedCount = await enrichCorpusBatch(batchSize);
+    
+    if (enrichedCount > 0) {
+      console.log(`[scheduler] Enriched ${enrichedCount} corpus entries`);
+    }
+  } catch (e) {
+    console.error("[scheduler] Enrichment check failed:", e);
+  }
+}
+
+/**
  * Find agent chats that are inactive and need delayed extraction.
  * Criteria:
  * - Chat type is "agent"
@@ -273,6 +296,12 @@ export function startScheduler(): void {
     console.log("[scheduler] Running initial delayed extraction check (after 2min delay)...");
     checkAndRunDelayedExtractions();
   }, 2 * 60 * 1000);
+  
+  // Enrichment: wait 1 minute on startup before processing backlog
+  setTimeout(() => {
+    console.log("[scheduler] Running initial enrichment check (after 1min delay)...");
+    checkAndRunEnrichment();
+  }, 1 * 60 * 1000);
 
   // Then check hourly for synthesis
   setInterval(checkAndRunSynthesis, SYNTHESIS_CHECK_INTERVAL_MS);
@@ -280,7 +309,10 @@ export function startScheduler(): void {
   // Check every 5 minutes for delayed extractions
   setInterval(checkAndRunDelayedExtractions, DELAYED_EXTRACTION_CHECK_INTERVAL_MS);
   
-  console.log("[scheduler] Started (synthesis every 15min, delayed extraction every 5 minutes)");
+  // Check every 30 minutes for corpus enrichment
+  setInterval(checkAndRunEnrichment, ENRICHMENT_CHECK_INTERVAL_MS);
+  
+  console.log("[scheduler] Started (synthesis every 15min, delayed extraction every 5min, enrichment every 30min)");
 
   // Start Bluesky poller if enabled
   startBlueskyPoller();

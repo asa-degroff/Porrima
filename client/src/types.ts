@@ -152,6 +152,8 @@ export interface Settings {
   delayedExtractionEnabled?: boolean;
   delayedExtractionThresholdMinutes?: number;
   delayedExtractionMessageCap?: number;
+  // Corpus enrichment batch size (how many entries to process per check)
+  enrichmentBatchSize?: number;
   // Extraction model configuration
   extractionModelId?: string;
   extractionFallbackEnabled?: boolean;
