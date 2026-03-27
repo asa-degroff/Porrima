@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, memo } from "react";
+import { useState, useCallback, useEffect, memo, useMemo } from "react";
 import type { GeneratedImage, GenerationState } from "../types";
 import { precacheImages } from "../utils/imageCache";
 
@@ -10,6 +10,7 @@ interface Props {
   activeGenerations?: GenerationState[];
   searchResults?: GeneratedImage[];
   isSearching?: boolean;
+  showAgentOnly?: boolean;
 }
 
 /** A single image tile — memoized so it survives parent list changes. */
@@ -189,7 +190,7 @@ const ImageGrid = memo(function ImageGrid({
   );
 });
 
-export function ImageGallery({ images, selectedImage, onSelect, onDelete, activeGenerations = [], searchResults, isSearching }: Props) {
+export function ImageGallery({ images, selectedImage, onSelect, onDelete, activeGenerations = [], searchResults, isSearching, showAgentOnly = false }: Props) {
   const hasSearch = searchResults !== undefined;
   const selectedImageUrl = selectedImage?.url;
 
@@ -231,18 +232,43 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
     </div>
   );
 
+  // Filter images for agent-only view
+  const allImages = images;
+  const agentImages = useMemo(() => images.filter(i => i.generatedBy === 'agent'), [images]);
+  const filteredSearchResults = searchResults && showAgentOnly 
+    ? searchResults.filter(i => i.generatedBy === 'agent') 
+    : searchResults;
+
   return (
     <div className="flex-1 overflow-hidden relative">
-      {/* Gallery layer — always mounted, hidden behind search results when active */}
+      {/* All images grid — always mounted */}
       <div
         className="absolute inset-0 overflow-y-auto p-4"
-        style={{ visibility: hasSearch ? "hidden" : "visible" }}
+        style={{ opacity: !showAgentOnly && !hasSearch ? 1 : 0, pointerEvents: !showAgentOnly && !hasSearch ? 'auto' : 'none', zIndex: !showAgentOnly && !hasSearch ? 1 : 0 }}
       >
-        {images.length === 0 ? (
+        {allImages.length === 0 ? (
           emptyState(false, "No images generated yet", "Enter a prompt and click Generate")
         ) : (
           <ImageGrid
-            images={images}
+            images={allImages}
+            selectedImage={selectedImage}
+            onSelect={onSelect}
+            onDelete={onDelete}
+            activeGenerations={activeGenerations}
+          />
+        )}
+      </div>
+
+      {/* Agent-only grid — always mounted */}
+      <div
+        className="absolute inset-0 overflow-y-auto p-4"
+        style={{ opacity: showAgentOnly && !hasSearch ? 1 : 0, pointerEvents: showAgentOnly && !hasSearch ? 'auto' : 'none', zIndex: showAgentOnly && !hasSearch ? 1 : 0 }}
+      >
+        {agentImages.length === 0 ? (
+          emptyState(false, "No agent images", "Generate images with the agent to see them here")
+        ) : (
+          <ImageGrid
+            images={agentImages}
             selectedImage={selectedImage}
             onSelect={onSelect}
             onDelete={onDelete}
@@ -254,11 +280,11 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
       {/* Search results layer — mounted only while searching */}
       {hasSearch && (
         <div className="absolute inset-0 overflow-y-auto p-4">
-          {searchResults.length === 0 ? (
+          {(filteredSearchResults?.length ?? 0) === 0 ? (
             emptyState(true, "No images match your search", "Try different keywords")
           ) : (
             <ImageGrid
-              images={searchResults}
+              images={filteredSearchResults!}
               selectedImage={selectedImage}
               onSelect={onSelect}
               onDelete={onDelete}

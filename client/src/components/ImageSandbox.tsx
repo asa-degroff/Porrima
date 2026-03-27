@@ -506,13 +506,14 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   </div>
                 </div>
                 <ImageGallery
-                  images={showAgentOnly ? images.filter(i => i.generatedBy === 'agent') : images}
+                  images={images}
                   selectedImage={selectedImage}
                   onSelect={(image) => { setSelectedImage(image as GeneratedImage); setViewMode('detail'); }}
                   onDelete={deleteGeneratedImage}
                   activeGenerations={activeGenerations}
-                  searchResults={searchResults && showAgentOnly ? searchResults.filter(i => i.generatedBy === 'agent') : searchResults}
+                  searchResults={searchResults}
                   isSearching={isSearching}
+                  showAgentOnly={showAgentOnly}
                 />
               </div>
 
