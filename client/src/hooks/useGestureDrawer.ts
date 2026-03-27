@@ -161,7 +161,11 @@ export function useGestureDrawer({
     lastTouchRef.current = { pos, time: now };
 
     // Calculate offset with edge resistance
-    let rawOffset = pos - touchStartRef.current + (isOpen ? containerSize : 0);
+    // Invert the touch delta so dragging "toward open" increases offset
+    // For "up" direction: dragging up (pos decreases) should increase offset
+    // For "right" direction: dragging right (pos increases) should increase offset
+    const touchDelta = direction === "up" ? touchStartRef.current - pos : pos - touchStartRef.current;
+    let rawOffset = touchDelta + (isOpen ? containerSize : 0);
 
     // Apply resistance at boundaries
     if (rawOffset < 0) {
@@ -175,7 +179,7 @@ export function useGestureDrawer({
     setCurrentOffset(clampedOffset);
 
     e.preventDefault();
-  }, [isDragging, getTouchPos, isOpen, containerSize]);
+  }, [isDragging, getTouchPos, isOpen, containerSize, direction]);
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!isDragging) return;
@@ -220,13 +224,20 @@ export function useGestureDrawer({
   }, [direction, maxOffset]);
 
   // Apply transform style when actively dragging or animating the snap
+  // When idle, return empty style to let CSS classes control position
   const active = isDragging || isAnimating;
   const style: React.CSSProperties = active ? {
     transform: getTranslate(currentOffset),
     touchAction: "none",
     willChange: "transform",
     transition: "none",
-  } : {};
+  } : {
+    // When not active but container is measured, ensure we're at the correct position
+    // This is needed for slide-up drawers that start open
+    ...(containerSize > 0 && !isDragging && !isAnimating ? {
+      transform: getTranslate(isOpen ? containerSize : 0),
+    } : {}),
+  };
 
   return {
     handlers: { onTouchStart, onTouchMove, onTouchEnd },
