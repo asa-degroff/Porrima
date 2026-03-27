@@ -3,7 +3,9 @@ import type { ChatListItem as ChatListItemType, ChatType, Project } from "../typ
 import { ChatListItem } from "./ChatListItem";
 import { OctahedronLogo } from "./OctahedronLogo";
 import { BlueskySection } from "./BlueskySection";
+import { DragHandle } from "./DragHandle";
 import { useSidebarState } from "../hooks/useSidebarState";
+import { useGestureDrawer } from "../hooks/useGestureDrawer";
 import { SidebarSearch, SearchResults } from "./SidebarSearch";
 import { searchConversations } from "../api/client";
 import type { ConversationSearchResult } from "../types";
@@ -268,9 +270,38 @@ export function Sidebar({
     return map;
   }, [chats, projects]);
 
+  // Gesture drawer hook for mobile slide-over
+  const { handlers: gestureHandlers, containerRef: gestureRef, style: gestureStyle, openProgress, isDragging, isAnimating } = useGestureDrawer({
+    isOpen,
+    onClose,
+    direction: "right",
+    threshold: 0.4, // 40% of sidebar width to snap
+  });
+
   return (
-    <div className={`w-72 h-full flex flex-col backdrop-blur-sm bg-white/[0.03] border-r border-white/10 fixed inset-y-0 left-0 z-30 transition-transform duration-300 ease-in-out md:static md:translate-x-0 md:z-auto ${isOpen ? "translate-x-0" : "-translate-x-full"}`}>
-      {/* Header */}
+    <>
+      {/* Backdrop for mobile — opacity tracks drag progress */}
+      {(isOpen || isAnimating) && (
+        <div
+          className={`md:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-20 ${isDragging || isAnimating ? "" : "transition-opacity"}`}
+          style={{ opacity: openProgress * 0.6 }}
+          onClick={onClose}
+        />
+      )}
+      {/* Sidebar container — desktop is static, mobile is fixed with gesture support */}
+      <div
+        className={`w-72 h-full flex flex-col backdrop-blur-sm bg-white/[0.03] border-r border-white/10 fixed inset-y-0 left-0 z-30 md:static md:translate-x-0 md:z-auto ${isDragging || isAnimating ? "" : "transition-transform duration-300 ease-in-out"} ${!isDragging && !isAnimating ? (isOpen ? "translate-x-0" : "-translate-x-full") : ""}`}
+        ref={gestureRef}
+        onTouchStart={gestureHandlers.onTouchStart}
+        onTouchMove={gestureHandlers.onTouchMove}
+        onTouchEnd={gestureHandlers.onTouchEnd}
+        style={gestureStyle}
+      >
+        {/* Drag handle for mobile — only visible on mobile */}
+        <div className="md:hidden">
+          <DragHandle onDoubleTap={onClose} />
+        </div>
+        {/* Header */}
       <div ref={headerRef} className="px-3 pt-3 pb-0 shrink-0">
         {/* Search or Logo — mutually exclusive, same fixed height */}
         {searchActive ? (
@@ -536,6 +567,7 @@ export function Sidebar({
 
         {/* Bluesky Section */}
         <BlueskySection onOpenSettings={onOpenSettings} onSelectChat={(id) => { onSelectChat(id); onClose(); }} />
+      </div>
 
       {/* Image Sandbox */}
       <div className="px-3 pb-3 shrink-0">
@@ -554,6 +586,6 @@ export function Sidebar({
       {/* Spacer for TTS bar */}
       {ttsBarVisible && <div className="h-[56px] shrink-0" />}
       </div>
-    </div>
+    </>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useImageSandbox } from "../hooks/useImageSandbox";
 import { useVisionSandbox } from "../hooks/useVisionSandbox";
 import { ImageControls } from "./ImageControls";
@@ -10,6 +10,7 @@ import { VisionControls } from "./VisionControls";
 import { VisionChat } from "./VisionChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { OctahedronLogo } from "./OctahedronLogo";
+import { DragHandle } from "./DragHandle";
 import { useCachedImage } from "../utils/imageCache";
 import { ImageSearch } from "./ImageSearch";
 import CorpusView from "./CorpusView";
@@ -252,6 +253,20 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   // Drawer state for mobile
   const [controlsOpen, setControlsOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+
+  // Gesture hooks for mobile drawers
+  const controlsDrawerRef = useRef<HTMLDivElement>(null);
+  const detailsDrawerRef = useRef<HTMLDivElement>(null);
+
+  const controlsGesture = useMemo(() => ({
+    isOpen: controlsOpen,
+    onClose: () => setControlsOpen(false),
+  }), [controlsOpen]);
+
+  const detailsGesture = useMemo(() => ({
+    isOpen: detailsOpen,
+    onClose: () => setDetailsOpen(false),
+  }), [detailsOpen]);
 
   return (
     <div className="flex-1 flex flex-col h-full min-w-0">
@@ -571,9 +586,53 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             {/* Mobile slide-up drawer - Controls */}
             {controlsOpen && (
               <div className="md:hidden fixed inset-0 z-50 flex items-end">
-                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setControlsOpen(false)} />
-                <div className="relative w-full max-h-[85vh] bg-[#0f0f14] border-t border-white/10 rounded-t-2xl overflow-hidden flex flex-col drawer-slide-up">
-                  <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-white/10">
+                <div
+                  className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+                  style={{ opacity: controlsOpen ? 0.6 : 0 }}
+                  onClick={() => setControlsOpen(false)}
+                />
+                <div
+                  ref={controlsDrawerRef}
+                  className="relative w-full max-h-[85vh] bg-[#0f0f14] border-t border-white/10 rounded-t-2xl overflow-hidden flex flex-col"
+                  onTouchStart={(e) => {
+                    const touch = e.touches[0];
+                    const startY = touch.clientY;
+                    const drawer = controlsDrawerRef.current;
+                    if (!drawer) return;
+                    const rect = drawer.getBoundingClientRect();
+                    const scrollTop = drawer.querySelector('.overflow-y-auto')?.scrollTop || 0;
+                    
+                    // Only drag if at top of scrollable content
+                    if (scrollTop > 10) return;
+                    
+                    const handleMove = (moveEvent: TouchEvent) => {
+                      const dy = moveEvent.touches[0].clientY - startY;
+                      if (dy > 0) {
+                        drawer.style.transform = `translateY(${dy}px)`;
+                      }
+                    };
+                    
+                    const handleEnd = (endEvent: TouchEvent) => {
+                      const dy = endEvent.changedTouches[0].clientY - startY;
+                      drawer.style.transition = 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)';
+                      
+                      if (dy > 100) {
+                        drawer.style.transform = 'translateY(100%)';
+                        setTimeout(() => setControlsOpen(false), 250);
+                      } else {
+                        drawer.style.transform = 'translateY(0)';
+                      }
+                      
+                      document.removeEventListener('touchmove', handleMove);
+                      document.removeEventListener('touchend', handleEnd);
+                    };
+                    
+                    document.addEventListener('touchmove', handleMove, { passive: true });
+                    document.addEventListener('touchend', handleEnd);
+                  }}
+                >
+                  <DragHandle onDoubleTap={() => setControlsOpen(false)} />
+                  <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b border-white/10">
                     <h3 className="text-sm font-semibold text-white/90">Generation Controls</h3>
                     <button
                       onClick={() => setControlsOpen(false)}
@@ -603,9 +662,52 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             {/* Mobile slide-up drawer - Details */}
             {detailsOpen && selectedImage && (
               <div className="md:hidden fixed inset-0 z-50 flex items-end">
-                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setDetailsOpen(false)} />
-                <div className="relative w-full max-h-[85vh] bg-[#0f0f14] border-t border-white/10 rounded-t-2xl overflow-hidden flex flex-col drawer-slide-up">
-                  <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-white/10">
+                <div
+                  className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+                  style={{ opacity: detailsOpen ? 0.6 : 0 }}
+                  onClick={() => setDetailsOpen(false)}
+                />
+                <div
+                  ref={detailsDrawerRef}
+                  className="relative w-full max-h-[85vh] bg-[#0f0f14] border-t border-white/10 rounded-t-2xl overflow-hidden flex flex-col"
+                  onTouchStart={(e) => {
+                    const touch = e.touches[0];
+                    const startY = touch.clientY;
+                    const drawer = detailsDrawerRef.current;
+                    if (!drawer) return;
+                    const scrollTop = drawer.querySelector('.overflow-y-auto')?.scrollTop || 0;
+                    
+                    // Only drag if at top of scrollable content
+                    if (scrollTop > 10) return;
+                    
+                    const handleMove = (moveEvent: TouchEvent) => {
+                      const dy = moveEvent.touches[0].clientY - startY;
+                      if (dy > 0) {
+                        drawer.style.transform = `translateY(${dy}px)`;
+                      }
+                    };
+                    
+                    const handleEnd = (endEvent: TouchEvent) => {
+                      const dy = endEvent.changedTouches[0].clientY - startY;
+                      drawer.style.transition = 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)';
+                      
+                      if (dy > 100) {
+                        drawer.style.transform = 'translateY(100%)';
+                        setTimeout(() => setDetailsOpen(false), 250);
+                      } else {
+                        drawer.style.transform = 'translateY(0)';
+                      }
+                      
+                      document.removeEventListener('touchmove', handleMove);
+                      document.removeEventListener('touchend', handleEnd);
+                    };
+                    
+                    document.addEventListener('touchmove', handleMove, { passive: true });
+                    document.addEventListener('touchend', handleEnd);
+                  }}
+                >
+                  <DragHandle onDoubleTap={() => setDetailsOpen(false)} />
+                  <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b border-white/10">
                     <h3 className="text-sm font-semibold text-white/90">Image Details</h3>
                     <button
                       onClick={() => setDetailsOpen(false)}
@@ -768,11 +870,54 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             </div>
 
             {/* Mobile slide-up drawer - Vision Controls */}
-            {controlsOpen && (
+            {controlsOpen && mode === "analyze" && (
               <div className="md:hidden fixed inset-0 z-50 flex items-end">
-                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setControlsOpen(false)} />
-                <div className="relative w-full max-h-[85vh] bg-[#0f0f14] border-t border-white/10 rounded-t-2xl overflow-hidden flex flex-col drawer-slide-up">
-                  <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-white/10">
+                <div
+                  className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+                  style={{ opacity: controlsOpen ? 0.6 : 0 }}
+                  onClick={() => setControlsOpen(false)}
+                />
+                <div
+                  ref={controlsDrawerRef}
+                  className="relative w-full max-h-[85vh] bg-[#0f0f14] border-t border-white/10 rounded-t-2xl overflow-hidden flex flex-col"
+                  onTouchStart={(e) => {
+                    const touch = e.touches[0];
+                    const startY = touch.clientY;
+                    const drawer = controlsDrawerRef.current;
+                    if (!drawer) return;
+                    const scrollTop = drawer.querySelector('.overflow-y-auto')?.scrollTop || 0;
+                    
+                    // Only drag if at top of scrollable content
+                    if (scrollTop > 10) return;
+                    
+                    const handleMove = (moveEvent: TouchEvent) => {
+                      const dy = moveEvent.touches[0].clientY - startY;
+                      if (dy > 0) {
+                        drawer.style.transform = `translateY(${dy}px)`;
+                      }
+                    };
+                    
+                    const handleEnd = (endEvent: TouchEvent) => {
+                      const dy = endEvent.changedTouches[0].clientY - startY;
+                      drawer.style.transition = 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)';
+                      
+                      if (dy > 100) {
+                        drawer.style.transform = 'translateY(100%)';
+                        setTimeout(() => setControlsOpen(false), 250);
+                      } else {
+                        drawer.style.transform = 'translateY(0)';
+                      }
+                      
+                      document.removeEventListener('touchmove', handleMove);
+                      document.removeEventListener('touchend', handleEnd);
+                    };
+                    
+                    document.addEventListener('touchmove', handleMove, { passive: true });
+                    document.addEventListener('touchend', handleEnd);
+                  }}
+                >
+                  <DragHandle onDoubleTap={() => setControlsOpen(false)} />
+                  <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b border-white/10">
                     <h3 className="text-sm font-semibold text-white/90">Vision Controls</h3>
                     <button
                       onClick={() => setControlsOpen(false)}
