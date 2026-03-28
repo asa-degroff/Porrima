@@ -130,23 +130,13 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       console.log(`[synthesis] Purged ${staleIds.size} stale memories (>6 months, importance ≤2)`);
     }
 
-    // Step 3: Load chats since last synthesis (or last 24h) — skip if no activity
+    // Step 3: Load chats and notebook entries since last synthesis (or last 24h)
+    // Always look back at least SYNTHESIS_INTERVAL_MS to avoid missing activity
+    // that a previous no-op synthesis may have skipped past.
     const sinceMs = store.lastSynthesis
-      ? new Date(store.lastSynthesis).getTime()
+      ? Math.min(new Date(store.lastSynthesis).getTime(), Date.now() - SYNTHESIS_INTERVAL_MS)
       : Date.now() - SYNTHESIS_INTERVAL_MS;
     const todaysDigest = await buildTodaysChatDigest(sinceMs);
-    if (!todaysDigest) {
-      console.log("[synthesis] No agent chats since last synthesis — skipping summary generation");
-      store.lastSynthesis = new Date().toISOString();
-      await saveMemoryStore(store);
-      return;
-    }
-
-    const formattedDigest = formatDigest(todaysDigest);
-    const projectNames = todaysDigest.projectSections.map((ps) => ps.project.name);
-    const projectNote = projectNames.length > 0
-      ? `Active projects today: ${projectNames.join(", ")}.`
-      : "No project-scoped chats today.";
 
     // Step 3b: Load notebook entries since last synthesis
     const notebookEntries = await loadRecentNotebookEntries(sinceMs);
@@ -156,6 +146,22 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       const agentCount = notebookEntries.filter((e) => e.author === "agent").length;
       console.log(`[synthesis] Loaded ${userCount} user + ${agentCount} agent notebook entries`);
     }
+
+    // Skip synthesis only if there are no chats AND no notebook entries
+    if (!todaysDigest && notebookEntries.length === 0) {
+      console.log("[synthesis] No agent chats or notebook entries since last synthesis — skipping summary generation");
+      store.lastSynthesis = new Date().toISOString();
+      await saveMemoryStore(store);
+      return;
+    }
+
+    const formattedDigest = todaysDigest ? formatDigest(todaysDigest) : "";
+    const projectNames = todaysDigest
+      ? todaysDigest.projectSections.map((ps) => ps.project.name)
+      : [];
+    const projectNote = projectNames.length > 0
+      ? `Active projects today: ${projectNames.join(", ")}.`
+      : "No project-scoped chats today.";
 
     // Step 3c: Identify unreviewed user notebook entries for agent
     const lastSynthesisMs = store.lastSynthesis ? new Date(store.lastSynthesis).getTime() : null;
@@ -180,8 +186,10 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       try {
         // Build project name lookup from today's digest
         const projectNameMap = new Map<string, string>();
-        for (const ps of todaysDigest.projectSections) {
-          projectNameMap.set(ps.project.id, ps.project.name);
+        if (todaysDigest) {
+          for (const ps of todaysDigest.projectSections) {
+            projectNameMap.set(ps.project.id, ps.project.name);
+          }
         }
 
         const memoriesText = store.memories
@@ -201,7 +209,9 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           : "";
 
         const promptParts = [
-          `## Today's Conversations\n\n${projectNote}\n\n${formattedDigest}`,
+          formattedDigest
+            ? `## Today's Conversations\n\n${projectNote}\n\n${formattedDigest}`
+            : "## Today's Conversations\n\nNo agent chats since last synthesis.",
           notebookSection ? `---\n\n## Notebook Entries Today\n\n${notebookSection}` : "",
           unreviewedSection,
           `---\n\n## Stored Memories (${store.memories.length} total)\n\n${memoriesText}`,
@@ -331,7 +341,7 @@ async function generateReflections(
   modelId: string,
   formattedDigest: string,
   memories: Array<{ text: string; category: string; importance: number; projectId?: string }>,
-  todaysDigest: TodaysDigest,
+  todaysDigest: TodaysDigest | null,
   notebookSection: string
 ): Promise<Array<{ text: string; category: string; importance: number }>> {
   console.log("[synthesis] Generating reflections...");
@@ -346,9 +356,11 @@ async function generateReflections(
     })
     .join("\n");
 
-  const projectContext = todaysDigest.projectSections
-    .map((ps) => `- ${ps.project.name}: ${ps.project.path}`)
-    .join("\n");
+  const projectContext = todaysDigest
+    ? todaysDigest.projectSections
+        .map((ps) => `- ${ps.project.name}: ${ps.project.path}`)
+        .join("\n")
+    : "";
 
   const promptParts = [
     `## Today's Activity\n\n${formattedDigest}`,
@@ -410,8 +422,8 @@ async function generateReflections(
   }
 
   // Determine projectId: if all today's chats were in one project, tag reflections with it
-  const projectIds = todaysDigest.projectSections.map((ps) => ps.project.id);
-  const singleProject = projectIds.length === 1 && todaysDigest.generalChats.length === 0
+  const projectIds = todaysDigest ? todaysDigest.projectSections.map((ps) => ps.project.id) : [];
+  const singleProject = projectIds.length === 1 && todaysDigest && todaysDigest.generalChats.length === 0
     ? projectIds[0]
     : undefined;
 
@@ -868,7 +880,7 @@ function formatNotebookEntries(entries: NotebookEntry[]): string {
  */
 async function writeAgentNotebookEntry(
   summary: string,
-  todaysDigest: TodaysDigest,
+  todaysDigest: TodaysDigest | null,
   notebookEntries: NotebookEntry[],
   unreviewedUserEntries: NotebookEntry[],
   reflectionMemories: Array<{ text: string; category: string; importance: number }>,
