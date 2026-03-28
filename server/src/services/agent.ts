@@ -70,11 +70,23 @@ export function chatMessagesToPiMessages(
         // Tool results follow the tool-calling assistant message
         if (m.toolResults) {
           for (const tr of m.toolResults) {
+            // For tool results, the content should be the text + images array
+            // This matches how pi-ai expects ToolResultMessage content
+            const content: any[] = [{ type: "text" as const, text: tr.content }];
+            // Attach images if present (for generate_and_review tool)
+            if (tr.images?.length) {
+              console.log(`[agent] Attaching ${tr.images.length} image(s) to tool result ${tr.toolCallId} (${tr.toolName})`);
+              console.log(`[agent] Image sizes: ${tr.images.map(img => `${(img.data.length / 1024).toFixed(1)}KB ${img.mimeType}`).join(", ")}`);
+              for (const img of tr.images) {
+                content.push({ type: "image" as const, data: img.data, mimeType: img.mimeType });
+              }
+            }
+            console.log(`[agent] ToolResultMessage created with ${content.length} content items (${content.filter(c => c.type === "image").length} images)`);
             result.push({
               role: "toolResult" as const,
               toolCallId: tr.toolCallId,
               toolName: tr.toolName,
-              content: [{ type: "text" as const, text: tr.content }],
+              content,
               isError: tr.isError,
               timestamp: m.timestamp,
             } as ToolResultMessage);

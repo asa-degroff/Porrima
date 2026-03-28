@@ -1,7 +1,8 @@
 import { useState } from "react";
-import type { ChatToolCall, ChatToolResult } from "../types";
+import type { ChatToolCall, ChatToolResult, ImageAttachment } from "../types";
 import type { ToolStatus } from "../api/client";
 import { DiffView } from "./DiffView";
+import { UserImage } from "./UserImage";
 
 const statusColors = {
   running: "border-yellow-400/20 bg-yellow-500/5",
@@ -112,6 +113,38 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
           <pre className="text-xs text-white/50 whitespace-pre-wrap break-all font-mono leading-relaxed">
             {result}
           </pre>
+        </div>
+      )}
+      {/* Show generated images inline for generate_and_review tool */}
+      {name === "generate_and_review" && toolResult?.images?.length && (
+        <div className="border-t border-white/5 px-3 py-2">
+          <div className="text-xs text-white/40 mb-2 font-medium">Generated Image</div>
+          <div className="flex flex-wrap gap-2">
+            {toolResult.images.map((img, idx) => (
+              <div key={idx} className="relative group">
+                <UserImage
+                  image={img}
+                  maxDimension={300}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {/* Show other tool images only when expanded */}
+      {expanded && name !== "generate_and_review" && toolResult?.images?.length && (
+        <div className="border-t border-white/5 px-3 py-2">
+          <div className="text-xs text-white/40 mb-2 font-medium">Generated Image{toolResult.images.length > 1 ? "s" : ""}</div>
+          <div className="flex flex-wrap gap-2">
+            {toolResult.images.map((img, idx) => (
+              <div key={idx} className="relative group">
+                <UserImage
+                  image={img}
+                  maxDimension={300}
+                />
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

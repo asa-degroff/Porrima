@@ -434,18 +434,34 @@ async function handleChatStream(
       tools: agentTools,
     };
 
+    // Track pending image injection from generate_and_review tool
+    let pendingImageInjection: { data: string; mimeType: string; imageUrl: string; toolCallId: string } | null = null;
+
+    const safeStreamFn = createSafeStreamFn();
+
+    // Build config with access to pendingImageInjection
     const config: AgentLoopConfig = {
       model: piModel,
       apiKey: "ollama",
       reasoning: piModel.reasoning ? "medium" : undefined,
       convertToLlm: (msgs) => msgs as Message[],
-      // When ask_user fires, skip remaining tools in the batch cleanly
-      // (instead of letting them execute with an aborted signal).
-      // The message content doesn't reach the LLM — the abort stops
-      // the loop before the next streaming call.
       getSteeringMessages: async () => {
         if (askUserRef.current) {
           return [{ role: "user" as const, content: "[paused for user input]", timestamp: Date.now() }];
+        }
+        // Check if we need to inject an image from generate_and_review
+        if (pendingImageInjection) {
+          console.log(`[chat] Injecting image from generate_and_review tool ${pendingImageInjection.toolCallId}`);
+          const injection = pendingImageInjection;
+          pendingImageInjection = null; // Clear so we only inject once
+          return [{
+            role: "user" as const,
+            content: [
+              { type: "text" as const, text: `Here's the generated image for your review. Please evaluate it against the creative intent and let me know if it captures what you're looking for, or if you'd like me to refine it.` },
+              { type: "image" as const, data: injection.data, mimeType: injection.mimeType },
+            ],
+            timestamp: Date.now(),
+          }];
         }
         return [];
       },
@@ -503,12 +519,13 @@ async function handleChatStream(
       },
     };
 
-    const safeStreamFn = createSafeStreamFn();
-
     // Start the agent loop (uses turnAbortController declared earlier)
+    console.log(`[chat] Starting agent loop: userPiMessage=${!!userPiMessage}, context.messages.length=${context.messages.length}, tools=${context.tools?.length || 0}`);
+    console.log(`[chat] Context messages: ${context.messages.map(m => `${m.role}:${m.content?.length || 0}ch`).join(", ")}`);
     const eventStream = userPiMessage
       ? agentLoop([userPiMessage], context, config, turnAbortController.signal, safeStreamFn)
       : agentLoopContinue(context, config, turnAbortController.signal, safeStreamFn);
+    console.log(`[chat] Agent loop started, waiting for events...`);
 
     // Extract token stream for TTS (if enabled)
     async function* extractTokenStream() {
@@ -610,17 +627,49 @@ async function handleChatStream(
         }
 
         case "tool_execution_end": {
+          console.log(`[chat] tool_execution_end: ${event.toolName} (toolCallId: ${event.toolCallId}, isError: ${event.isError})`);
+          
+          // Special handling for generate_and_review: inject image as user message instead of tool result
+          if (event.toolName === "generate_and_review") {
+            // Check if tool result has pending image in details
+            const pendingImage = event.result?.details?.pendingImage;
+            if (pendingImage) {
+              console.log(`[chat] generate_and_review completed with pending image (${(pendingImage.data.length / 1024).toFixed(1)}KB), scheduling injection`);
+              pendingImageInjection = {
+                data: pendingImage.data,
+                mimeType: pendingImage.mimeType,
+                imageUrl: pendingImage.imageUrl,
+                toolCallId: event.toolCallId,
+              };
+            }
+          }
           
           // ask_user gets a dedicated SSE event, not tool_status
           if (event.toolName !== "ask_user") {
             const resultText = event.result?.content?.[0]?.text || "";
+            
+            // For generate_and_review, don't include image in tool result (it will be injected as user message)
+            const images: ImageAttachment[] | undefined = event.toolName === "generate_and_review" 
+              ? undefined 
+              : event.result?.content
+                  ?.filter((c: any) => c.type === "image")
+                  .map((c: any) => ({ data: c.data, mimeType: c.mimeType, name: `generated-${event.toolCallId}.jxl` }));
+            
+            if (images?.length) {
+              console.log(`[chat] Extracted ${images.length} image(s) from tool result ${event.toolCallId} (${event.toolName})`);
+              console.log(`[chat] Image sizes: ${images.map(img => `${(img.data.length / 1024).toFixed(1)}KB`).join(", ")}`);
+            }
+            
             const toolResult: ChatToolResult = {
               toolCallId: event.toolCallId,
               toolName: event.toolName,
               content: resultText,
               isError: event.isError,
+              images: images?.length ? images : undefined,
             };
             state.allToolResults.push(toolResult);
+            console.log(`[chat] Tool result accumulated: ${state.allToolResults.length} total`);
+            
             // Insert tool_result immediately after its tool_call segment (not at the end),
             // so that visual/artifact segments emitted during tool execution stay after the pair.
             const callIdx = state.segments.findIndex(
@@ -638,6 +687,7 @@ async function handleChatStream(
               status: event.isError ? "error" : "done",
               result: resultText,
             })}\n\n`);
+            console.log(`[chat] Tool result segment emitted, waiting for next agent turn...`);
           }
           break;
         }
@@ -645,6 +695,16 @@ async function handleChatStream(
         case "turn_end": {
           const msg = event.message as AssistantMessage;
           const stopReason = msg.stopReason || "stop";
+
+          console.log(`[chat] turn_end: stopReason=${stopReason}, toolResults=${event.toolResults?.length || 0}, content=${state.fullText.length}ch`);
+          if (stopReason === "error") {
+            console.error(`[chat] LLM error: ${msg.errorMessage || "(no error message)"}`);
+          }
+          console.log(`[chat] turn_end event details:`, {
+            stopReason,
+            toolResults: event.toolResults?.length || 0,
+            hasToolCalls: !!event.toolResults?.length,
+          });
 
           // Handle aborted turns gracefully - they're expected from ask_user
           if (stopReason === "aborted") {
@@ -660,6 +720,13 @@ async function handleChatStream(
           if (stopReason === "toolUse" && hasToolCalls && !hasTextContent) {
             state.incompleteToolTurn = true;
             console.log(`[chat] turn ended with toolUse but no final text - marking incomplete`);
+            console.log(`[chat] Agent loop should continue to next iteration with tool results...`);
+            console.log(`[chat] Accumulated state before continuation: ${state.allToolCalls.length} calls, ${state.allToolResults.length} results`);
+            console.log(`[chat] Tool results:`, state.allToolResults.map(tr => ({
+              toolName: tr.toolName,
+              hasImages: !!tr.images?.length,
+              contentLength: tr.content.length,
+            })));
           } else {
             state.incompleteToolTurn = false;
           }
@@ -677,6 +744,21 @@ async function handleChatStream(
             ` content=${state.fullText.length}ch thinking=${state.thinkingText.length}ch` +
             ` tokens=${msg.usage?.totalTokens || "?"} incomplete=${state.incompleteToolTurn}`,
           );
+          
+          // Debug: log tool results if present
+          if (event.toolResults?.length) {
+            console.log(`[chat] Tool results in turn_end:`, event.toolResults.map(tr => ({
+              toolCallId: tr.toolCallId,
+              toolName: tr.toolName,
+              hasImage: tr.content?.some((c: any) => c.type === "image"),
+            })));
+          }
+          
+          // If stopReason is toolUse, the agent loop should automatically continue
+          if (stopReason === "toolUse") {
+            console.log(`[chat] stopReason is toolUse - agent loop will continue to next iteration automatically`);
+            console.log(`[chat] Accumulated state: ${state.allToolCalls.length} tool calls, ${state.allToolResults.length} tool results`);
+          }
 
           if (msg.usage) {
             state.finalUsage = {

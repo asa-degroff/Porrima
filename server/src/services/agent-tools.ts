@@ -494,6 +494,89 @@ ${limited.map((g, i) => `${i + 1}. **${g.theme}** (${g.count} images)
     },
   });
 
+  // generate_and_review — iterative image generation with agent review
+  tools.push({
+    name: "generate_and_review",
+    description: "Generate an image and review it against your creative intent. You can iterate up to 3 times, refining the prompt each time based on what you see. The generated image will be shown for you to evaluate.",
+    parameters: Type.Object({
+      initialPrompt: Type.String({ description: "The initial image generation prompt" }),
+      creativeIntent: Type.String({ description: "What you're trying to achieve - the vision this image should match" }),
+      maxIterations: Type.Optional(Type.Number({ description: "Maximum iterations (default 3, range 1-5)" })),
+      iteration: Type.Optional(Type.Number({ description: "Current iteration number (internal use for retries)" })),
+      imageHistory: Type.Optional(Type.Array(Type.Object({
+        imageUrl: Type.String(),
+        prompt: Type.String(),
+        iteration: Type.Number(),
+      }), { description: "Previous generation attempts (internal use)" })),
+    }),
+    label: "generate_and_review",
+    execute: async (toolCallId, params) => {
+      const args = params as Record<string, any>;
+      const iteration = args.iteration ?? 1;
+      const maxIterations = Math.min(Math.max(args.maxIterations ?? 3, 1), 5);
+      
+      console.log(`[generate_and_review] Starting iteration ${iteration}/${maxIterations}`);
+      
+      try {
+        const { generateForReview, formatReviewResult } = await import("./generate-review.js");
+        
+        console.log(`[generate_and_review] Generating image with prompt: ${args.initialPrompt.slice(0, 100)}...`);
+        
+        // Generate the image
+        const result = await generateForReview(args.initialPrompt, chatId);
+        
+        if (!result.success) {
+          console.log(`[generate_and_review] Generation failed: ${result.error}`);
+          return {
+            content: [{ type: "text", text: `**Generation Failed (Iteration ${iteration}/${maxIterations})**\n\nError: ${result.error}\n\nYou can retry with a modified prompt or accept this outcome.` }],
+            details: { 
+              iteration, 
+              maxIterations, 
+              creativeIntent: args.creativeIntent, 
+              imageHistory: args.imageHistory || [],
+              lastPrompt: args.initialPrompt,
+            },
+            isError: true,
+          };
+        }
+        
+        console.log(`[generate_and_review] Image generated successfully, formatting review result`);
+        
+        // Format result (text-only, image will be injected separately)
+        const reviewResult = formatReviewResult(
+          result,
+          iteration,
+          maxIterations,
+          args.creativeIntent,
+          args.initialPrompt
+        );
+        
+        // Merge image history and track last prompt
+        if (args.imageHistory) {
+          reviewResult.details.imageHistory = [...args.imageHistory, ...reviewResult.details.imageHistory];
+        }
+        reviewResult.details.lastPrompt = args.initialPrompt;
+        
+        console.log(`[generate_and_review] Returning result (image will be injected as user message)`);
+        
+        return reviewResult;
+      } catch (e: any) {
+        console.error(`[generate_and_review] Error: ${e.message}`);
+        return {
+          content: [{ type: "text", text: `**Generation Error (Iteration ${iteration}/${maxIterations})**\n\n${e.message}\n\nYou can retry or accept this outcome.` }],
+          details: { 
+            iteration, 
+            maxIterations, 
+            creativeIntent: args.creativeIntent, 
+            imageHistory: args.imageHistory || [],
+            lastPrompt: args.initialPrompt,
+          },
+          isError: true,
+        };
+      }
+    },
+  });
+
   return tools;
 }
 

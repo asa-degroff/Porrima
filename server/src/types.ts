@@ -15,6 +15,7 @@ export interface ChatToolResult {
   toolName: string;
   content: string;
   isError: boolean;
+  images?: ImageAttachment[]; // For tools that return images (e.g., generate_and_review)
 }
 
 export interface ImageAttachment {
