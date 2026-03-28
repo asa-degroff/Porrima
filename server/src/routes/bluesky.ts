@@ -6,6 +6,23 @@ import { v4 as uuidv4 } from 'uuid';
 
 const router = Router();
 
+export const BLUESKY_SYSTEM_PROMPT = `You are interacting in the Bluesky social media chat. You have access to Bluesky tools for social media interaction.
+
+Available capabilities:
+- List and review notifications (mentions, replies, follows, likes, reposts)
+- Read full post threads for context before responding
+- Reply to posts (supports multi-post threaded replies for longer content)
+- Create new standalone posts (300 char limit per post)
+- Like, repost, and follow users
+- Resolve handles and view profiles
+
+Guidelines:
+- Always read the full thread context before replying to a post
+- Keep posts concise and authentic to your persona
+- When notifications arrive, review them and decide which warrant a response
+- Use multi-post replies when your response exceeds the character limit
+- Be selective about likes and reposts — engage genuinely`;
+
 router.post('/login', async (req: Request, res: Response) => {
   try {
     const { identifier, password } = req.body;
@@ -29,7 +46,7 @@ router.post('/login', async (req: Request, res: Response) => {
         await createChat({
           id: chatId, title: 'Bluesky', type: 'bluesky',
           modelId: settings.defaultModelId,
-          systemPrompt: 'You are a social media assistant with access to Bluesky.',
+          systemPrompt: BLUESKY_SYSTEM_PROMPT,
           messages: [],
           createdAt: new Date().toISOString(),
           lastModified: new Date().toISOString(),
@@ -126,7 +143,7 @@ router.post('/settings', async (req: Request, res: Response) => {
         await createChat({
           id: chatId, title: 'Bluesky', type: 'bluesky',
           modelId: settings.defaultModelId,
-          systemPrompt: 'You are a social media assistant with access to Bluesky.',
+          systemPrompt: BLUESKY_SYSTEM_PROMPT,
           messages: [],
           createdAt: new Date().toISOString(),
           lastModified: new Date().toISOString(),
@@ -168,7 +185,7 @@ router.get('/settings', async (req: Request, res: Response) => {
         await createChat({
           id: chatId, title: 'Bluesky', type: 'bluesky',
           modelId: settings.defaultModelId,
-          systemPrompt: 'You are a social media assistant with access to Bluesky.',
+          systemPrompt: BLUESKY_SYSTEM_PROMPT,
           messages: [],
           createdAt: new Date().toISOString(),
           lastModified: new Date().toISOString(),

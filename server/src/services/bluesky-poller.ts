@@ -1,6 +1,10 @@
 import { EventEmitter } from 'events';
 import { getBlueskyAgent } from './bluesky-agent.js';
 import { getSettings, getChat, saveChat } from './chat-storage.js';
+import { streamChat, chatMessagesToPiMessages } from './agent.js';
+import { getAgentTools, executeTool } from './agent-tools.js';
+import { buildMemoryAugmentedPrompt } from './memory-context.js';
+import { extractMemories } from './memory-extraction.js';
 import { ChatMessage, BlueskyNotification } from '../types.js';
 
 const POLL_INTERVAL_DEFAULT = 10; // minutes
@@ -13,6 +17,7 @@ export class BlueskyPoller extends EventEmitter {
   private interval: NodeJS.Timeout | null = null;
   private lastNotificationDate: string | null = null;
   private isRunning: boolean = false;
+  private responding: boolean = false;
   private pendingNotifications: BlueskyNotification[] = [];
 
   /**
@@ -232,13 +237,179 @@ export class BlueskyPoller extends EventEmitter {
   }
 
   /**
-   * Trigger the agent to respond to the latest message in a chat.
-   * For now, this is a no-op - the agent will respond when the user opens the chat.
-   * Auto-response would require refactoring the chat route to separate agent loop from SSE.
+   * Trigger the agent to autonomously respond to notifications.
+   * Runs a tool loop (like synthesis notebook) so the agent can read threads and reply.
    */
   private async triggerAgentResponse(chatId: string): Promise<void> {
-    // Placeholder - agent responds when user interacts with chat
-    console.log(`[bluesky-poller] Notifications sent to chat ${chatId}, agent will respond when chat is opened`);
+    if (this.responding) {
+      console.log('[bluesky-poller] Agent already responding, skipping');
+      return;
+    }
+
+    this.responding = true;
+    try {
+      const chat = await getChat(chatId);
+      if (!chat) {
+        console.warn('[bluesky-poller] Chat not found for agent response:', chatId);
+        return;
+      }
+
+      const settings = await getSettings();
+      const modelId = chat.modelId || settings.defaultModelId;
+
+      // Build memory-augmented system prompt (includes persona)
+      const systemPrompt = await buildMemoryAugmentedPrompt(
+        chat.systemPrompt || 'You are a helpful assistant.',
+        chat.messages,
+        chat.id,
+        chat.projectId
+      );
+
+      // Convert all messages except the last (the notification) to pi-ai format
+      const contextMessages = chatMessagesToPiMessages(
+        chat.messages.slice(0, -1),
+        modelId
+      );
+
+      // The last message (notifications) becomes the user prompt
+      const lastMsg = chat.messages[chat.messages.length - 1];
+      const piMessages: any[] = [
+        ...contextMessages,
+        {
+          role: 'user',
+          content: lastMsg.content,
+          timestamp: lastMsg.timestamp || Date.now(),
+        },
+      ];
+
+      // Tool loop — modeled after synthesis.ts notebook entry writing
+      const MAX_ITERATIONS = 10;
+      let iteration = 0;
+      let finalContent = '';
+      const allToolCalls: any[] = [];
+
+      const effects = {
+        onArtifact: () => {},
+        onVisual: () => {},
+        onGeneratedImage: () => {},
+        onAskUser: (question: string) => {
+          console.log(`[bluesky-poller] ask_user skipped: ${question}`);
+        },
+      };
+
+      while (iteration < MAX_ITERATIONS) {
+        iteration++;
+        console.log(`[bluesky-poller] Agent response iteration ${iteration}`);
+
+        let iterationContent = '';
+        let toolCalls: any[] = [];
+        let stopReason = 'stop';
+        let assistantMessage: any;
+
+        const tools = getAgentTools(chatId, effects);
+
+        try {
+          const result = await streamChat(
+            modelId,
+            piMessages,
+            systemPrompt,
+            (event) => {
+              if (event.type === 'text_delta') iterationContent += event.delta;
+            },
+            {
+              signal: AbortSignal.timeout(180_000),
+              tools,
+            }
+          );
+
+          toolCalls = result.toolCalls || [];
+          stopReason = result.stopReason;
+          assistantMessage = result.assistantMessage;
+
+          if (stopReason === 'stop') {
+            finalContent = iterationContent;
+          }
+        } catch (e) {
+          console.error('[bluesky-poller] streamChat failed:', e);
+          break;
+        }
+
+        if (toolCalls.length === 0 || stopReason === 'stop') {
+          break;
+        }
+
+        // Execute tool calls
+        console.log(`[bluesky-poller] Executing ${toolCalls.length} tool call(s)`);
+        allToolCalls.push(...toolCalls);
+
+        const toolResults: Array<{ toolCallId: string; toolName: string; content: string; isError: boolean }> = [];
+        for (const toolCall of toolCalls) {
+          try {
+            console.log(`[bluesky-poller] Executing tool: ${toolCall.name}`);
+            const result = await executeTool(toolCall, chatId, effects);
+            toolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, content: JSON.stringify(result), isError: false });
+          } catch (e: any) {
+            console.error(`[bluesky-poller] Tool execution failed: ${toolCall.name}`, e);
+            toolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, content: e.message || 'Tool execution failed', isError: true });
+          }
+        }
+
+        piMessages.push(assistantMessage);
+        for (const tr of toolResults) {
+          piMessages.push({
+            role: 'toolResult' as const,
+            toolCallId: tr.toolCallId,
+            toolName: tr.toolName,
+            content: [{ type: 'text' as const, text: tr.content }],
+            isError: tr.isError,
+            timestamp: Date.now(),
+          });
+        }
+      }
+
+      // Save the assistant response to chat
+      if (finalContent) {
+        const assistantMsg: ChatMessage = {
+          role: 'assistant',
+          content: finalContent,
+          timestamp: Date.now(),
+          _inProgress: false,
+          toolCalls: allToolCalls.length > 0 ? allToolCalls.map(tc => ({
+            id: tc.id,
+            name: tc.name,
+            arguments: tc.input ?? tc.arguments,
+          })) : undefined,
+        };
+
+        // Re-read chat in case it changed during the loop
+        const freshChat = await getChat(chatId);
+        if (freshChat) {
+          freshChat.messages.push(assistantMsg);
+          freshChat.lastModified = new Date().toISOString();
+          await saveChat(freshChat);
+        }
+
+        console.log(`[bluesky-poller] Agent responded (${finalContent.length} chars, ${allToolCalls.length} tool calls)`);
+
+        // Fire-and-forget memory extraction
+        extractMemories(modelId, chatId, lastMsg.content, finalContent)
+          .catch(err => console.error('[bluesky-poller] Memory extraction failed:', err));
+
+        // Notify SSE clients
+        this.emit('agent_response', {
+          chatId,
+          content: finalContent,
+          toolCalls: allToolCalls.length,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        console.warn('[bluesky-poller] Agent produced no response content');
+      }
+    } catch (err: any) {
+      console.error('[bluesky-poller] triggerAgentResponse failed:', err.message);
+    } finally {
+      this.responding = false;
+    }
   }
 
   /**

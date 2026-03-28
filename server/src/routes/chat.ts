@@ -1030,7 +1030,7 @@ async function handleChatStream(
 
       // Fire-and-forget memory extraction for agent chats
       // Only extract if we have actual content
-      if (chat.type === "agent" && hasContent) {
+      if ((chat.type === "agent" || chat.type === "bluesky") && hasContent) {
         extractMemories(chat.modelId, chat.id, lastUserMessage, assistantMsg.content)
           .catch((err) => console.error("[memory] extraction failed:", err));
       }
@@ -1062,7 +1062,7 @@ async function handleChatStream(
             const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive);
             if (compaction.truncated) {
               // Extract memories from removed messages (agent chats only)
-              if (chat.type === "agent" && compaction.removedMessages?.length) {
+              if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
                 await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages);
               }
               await saveChat(chat);

@@ -4,6 +4,7 @@ import { getDb, getSettings, saveSettings, createChat, findBlueskyChatId } from 
 import { v4 as uuidv4 } from "uuid";
 import { extractDelayedMemories } from "./memory-extraction.js";
 import { getBlueskyPoller } from "./bluesky-poller.js";
+import { BLUESKY_SYSTEM_PROMPT } from "../routes/bluesky.js";
 import { buildClusters } from "./cluster-engine.js";
 import { getClusters } from "./cluster-storage.js";
 import { getAllCorpusEntries, enrichCorpusBatch } from "./image-corpus.js";
@@ -336,7 +337,7 @@ async function startBlueskyPoller(): Promise<void> {
           await createChat({
             id: chatId, title: 'Bluesky', type: 'bluesky' as any,
             modelId: settings.defaultModelId,
-            systemPrompt: 'You are a social media assistant with access to Bluesky.',
+            systemPrompt: BLUESKY_SYSTEM_PROMPT,
             messages: [],
             createdAt: new Date().toISOString(),
             lastModified: new Date().toISOString(),
