@@ -163,6 +163,17 @@ export function useBluesky(): UseBlueskyReturn {
     return () => clearInterval(interval);
   }, [fetchNotifications, fetchStatus]);
 
+  // Listen for cross-component updates (e.g. login from SettingsModal)
+  useEffect(() => {
+    const handler = () => {
+      fetchStatus();
+      fetchSettings();
+      fetchNotifications();
+    };
+    window.addEventListener('bluesky-updated', handler);
+    return () => window.removeEventListener('bluesky-updated', handler);
+  }, [fetchStatus, fetchSettings, fetchNotifications]);
+
   return {
     status,
     settings,

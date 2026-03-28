@@ -448,6 +448,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
         setBlueskyAuthenticated(true);
         setBlueskyHandle(data.handle);
         setBlueskyAppPassword("");
+        window.dispatchEvent(new Event('bluesky-updated'));
       } else {
         setBlueskyMessage({ type: "err", text: data.error || "Failed to connect" });
       }
@@ -463,6 +464,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setBlueskyAuthenticated(false);
       setBlueskyHandle(null);
       setBlueskyMessage({ type: "ok", text: "Disconnected from Bluesky" });
+      window.dispatchEvent(new Event('bluesky-updated'));
     } catch (err: any) {
       setBlueskyMessage({ type: "err", text: err.message || "Failed to disconnect" });
     }

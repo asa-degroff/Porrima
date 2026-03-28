@@ -14,7 +14,42 @@ router.post('/login', async (req: Request, res: Response) => {
     }
     const agent = getBlueskyAgent();
     await agent.login(identifier, password);
-    res.json({ success: true, did: agent.getDid(), handle: agent.getHandle() });
+
+    // Auto-enable Bluesky in settings and ensure the dedicated chat exists
+    const settings = await getSettings();
+    if (!settings.bluesky) settings.bluesky = { enabled: false };
+    settings.bluesky.enabled = true;
+
+    if (!settings.bluesky.blueskyChatId) {
+      const existing = await findBlueskyChatId();
+      if (existing) {
+        settings.bluesky.blueskyChatId = existing;
+      } else {
+        const chatId = uuidv4();
+        await createChat({
+          id: chatId, title: 'Bluesky', type: 'bluesky',
+          modelId: settings.defaultModelId,
+          systemPrompt: 'You are a social media assistant with access to Bluesky.',
+          messages: [],
+          createdAt: new Date().toISOString(),
+          lastModified: new Date().toISOString(),
+        });
+        settings.bluesky.blueskyChatId = chatId;
+      }
+    }
+
+    await saveSettings(settings);
+
+    // Start the notification poller
+    const poller = getBlueskyPoller();
+    poller.start(settings.bluesky.pollingIntervalMinutes ?? 10);
+
+    res.json({
+      success: true,
+      did: agent.getDid(),
+      handle: agent.getHandle(),
+      blueskyChatId: settings.bluesky.blueskyChatId,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? 'Login failed' });
   }
