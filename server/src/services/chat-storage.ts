@@ -227,6 +227,18 @@ export function getDb(): Database.Database {
     db.exec("ALTER TABLE chats ADD COLUMN lastDelayedExtractionMessageIndex INTEGER");
   }
 
+  // Auto-add preview column to avoid json_extract on messages in list queries
+  if (!cols.some((c) => c.name === "preview")) {
+    db.exec("ALTER TABLE chats ADD COLUMN preview TEXT DEFAULT ''");
+    // Backfill preview from existing messages
+    db.exec(`
+      UPDATE chats SET preview = COALESCE(
+        SUBSTR(json_extract(messages, '$[#-1].content'), 1, 100),
+        ''
+      )
+    `);
+  }
+
   // Auto-migrate from JSON files if needed
   if (needsChatMigration) {
     migrateChatsFromJson(db);
@@ -253,8 +265,7 @@ export function getDb(): Database.Database {
 export async function listChats(): Promise<ChatListItem[]> {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT id, title, type, lastModified, projectId,
-           SUBSTR(json_extract(messages, '$[#-1].content'), 1, 100) as preview
+    SELECT id, title, type, lastModified, projectId, preview
     FROM chats
     ORDER BY lastModified DESC
   `).all() as Array<{
@@ -321,13 +332,18 @@ export async function saveChat(chat: Chat): Promise<void> {
   const db = getDb();
   chat.lastModified = new Date().toISOString();
 
+  // Compute preview from last message for fast list queries
+  const lastMsg = chat.messages.length > 0 ? chat.messages[chat.messages.length - 1] : null;
+  const preview = lastMsg?.content ? lastMsg.content.slice(0, 100) : "";
+
   db.prepare(`
     INSERT OR REPLACE INTO chats (
       id, title, type, modelId, systemPrompt,
       contextWindow, projectId, activeSkills, messages,
-      createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex
+      createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex,
+      preview
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     chat.id,
     chat.title,
@@ -341,7 +357,8 @@ export async function saveChat(chat: Chat): Promise<void> {
     chat.createdAt,
     chat.lastModified,
     chat.lastDelayedExtractionAt ?? null,
-    chat.lastDelayedExtractionMessageIndex ?? null
+    chat.lastDelayedExtractionMessageIndex ?? null,
+    preview
   );
 
   // Sync messages to FTS index (append-only, only inserts new messages)
@@ -374,13 +391,18 @@ export async function deleteChat(id: string): Promise<boolean> {
 
 export async function createChat(chat: Chat): Promise<void> {
   const db = getDb();
+
+  const lastMsg = chat.messages.length > 0 ? chat.messages[chat.messages.length - 1] : null;
+  const preview = lastMsg?.content ? lastMsg.content.slice(0, 100) : "";
+
   db.prepare(`
     INSERT INTO chats (
       id, title, type, modelId, systemPrompt,
       contextWindow, projectId, activeSkills, messages,
-      createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex
+      createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex,
+      preview
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     chat.id,
     chat.title,
@@ -394,7 +416,8 @@ export async function createChat(chat: Chat): Promise<void> {
     chat.createdAt,
     chat.lastModified,
     chat.lastDelayedExtractionAt ?? null,
-    chat.lastDelayedExtractionMessageIndex ?? null
+    chat.lastDelayedExtractionMessageIndex ?? null,
+    preview
   );
 
   // Sync messages to FTS index

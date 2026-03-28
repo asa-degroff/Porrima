@@ -27,21 +27,9 @@ router.post("/", async (req, res) => {
   const settings = await getSettings();
   const effectiveModelId = modelId || settings.defaultModelId || "qwen3:8b";
   
-  // Validate model exists before creating chat
-  try {
-    const { discoverOllamaModels } = await import("../services/models.js");
-    const models = await discoverOllamaModels();
-    if (!models.find(m => m.id === effectiveModelId)) {
-      return res.status(400).json({ 
-        error: `Model "${effectiveModelId}" not available`,
-        availableModels: models.map(m => m.id)
-      });
-    }
-  } catch (e: any) {
-    console.error("[chats] model validation failed:", e.message);
-    return res.status(503).json({ error: "Cannot validate model - Ollama may be unreachable" });
-  }
-  
+  // Skip model validation on chat creation — it blocks for 1-2s due to Ollama discovery.
+  // The model will be validated when the first message is sent (chat.ts validates there).
+  // This makes chat creation instant.
   const savedContextWindow = settings.modelContextWindows?.[effectiveModelId];
   let systemPrompt = settings.defaultSystemPrompt || "You are a helpful assistant.";
   

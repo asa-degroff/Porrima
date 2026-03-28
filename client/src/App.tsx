@@ -30,7 +30,7 @@ import type { Chat, ChatType } from "./types";
 
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { models } = useModels();
-  const { chats, createChat, removeChat, refresh } = useChats();
+  const { chats, createChat, removeChat, refresh, refreshImmediate } = useChats();
   const { projects, createProject, removeProject } = useProjects();
   const { settings, updateSettings } = useSettings();
   const { isOnline } = useOnlineStatus();
@@ -198,11 +198,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   // Process message queue when coming back online
   useEffect(() => {
     if (isOnline && !prevOnlineRef.current) {
-      refresh();
+      refreshImmediate();
       processQueue();
     }
     prevOnlineRef.current = isOnline;
-  }, [isOnline, refresh, processQueue]);
+  }, [isOnline, refreshImmediate, processQueue]);
 
   // Update chat title when LLM-generated title arrives
   useEffect(() => {
@@ -210,6 +210,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     if (titleUpdate.chatId === activeChatId) {
       setActiveChat((prev) => prev ? { ...prev, title: titleUpdate.title } : prev);
     }
+    // Debounced refresh to update sidebar title (collapses with other pending refreshes)
     refresh();
   }, [titleUpdate]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -221,7 +222,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   }, [models, activeChat]);
 
   // Fetch full chat when selecting one (we need messages)
-  // Cache-first: show IDB cached data immediately, then refresh from server
+  // Cache-first: show IDB cached data immediately, refresh from server in background
   const selectChat = useCallback(
     async (id: string) => {
       setActiveChatId(id);
@@ -237,9 +238,29 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         setActiveChat(cached);
         setActiveChatData(cached);
         if (!hasBg) loadMessages(cached.messages);
+
+        // Background refresh: update cache from server without blocking the UI
+        fetch(`/api/chats/${id}`, { credentials: "include" })
+          .then((res) => res.ok ? res.json() : null)
+          .then((chat: Chat | null) => {
+            if (chat) {
+              setCachedChat(chat).catch(() => {});
+              // Only update if this is still the active chat
+              setActiveChatId((currentId) => {
+                if (currentId === id) {
+                  setActiveChat(chat);
+                  setActiveChatData(chat);
+                  if (!hasBg) loadMessages(chat.messages);
+                }
+                return currentId;
+              });
+            }
+          })
+          .catch(() => {}); // Network error — cached data is fine
+        return;
       }
 
-      // Fetch fresh data from server in parallel
+      // No cache — must fetch from server (blocking)
       try {
         const res = await fetch(`/api/chats/${id}`, { credentials: "include" });
         if (res.ok) {
@@ -248,16 +269,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           setActiveChatData(chat);
           if (!hasBg) loadMessages(chat.messages);
           setCachedChat(chat).catch(() => {});
-        } else if (!cached) {
+        } else {
           setActiveChatId(null);
           setActiveChat(null);
         }
       } catch {
-        // Network error — if we already showed cached data, that's fine
-        if (!cached) {
-          setActiveChatId(null);
-          setActiveChat(null);
-        }
+        setActiveChatId(null);
+        setActiveChat(null);
       }
     },
     [loadMessages, setActiveChatData]
@@ -295,7 +313,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   const handleCreateProject = useCallback(async (name: string, path: string) => {
     await createProject(name, path);
-    await refresh();
+    refresh();
   }, [createProject, refresh]);
 
   const handleDeleteProject = useCallback(async (id: string) => {
@@ -309,21 +327,16 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleSend = useCallback(
     (text: string, images?: import("./types").ImageAttachment[]) => {
       send(text, images);
-      // Refresh chat list after a short delay to pick up title changes
-      setTimeout(() => refresh(), 500);
-      setTimeout(() => refresh(), 2000);
+      // Title update will trigger a debounced refresh when it arrives via titleUpdate effect
     },
-    [send, refresh]
+    [send]
   );
 
   const handleEditMessage = useCallback(
     (index: number, newText: string) => {
       editMessage(index, newText);
-      // Refresh chat list after a short delay to pick up title changes
-      setTimeout(() => refresh(), 500);
-      setTimeout(() => refresh(), 2000);
     },
-    [editMessage, refresh]
+    [editMessage]
   );
 
   const hasActiveChat = activeChat != null;
