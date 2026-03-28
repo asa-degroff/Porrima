@@ -287,6 +287,7 @@ export class BlueskyPoller extends EventEmitter {
       let iteration = 0;
       let finalContent = '';
       const allToolCalls: any[] = [];
+      const allToolResults: Array<{ toolCallId: string; toolName: string; content: string; isError: boolean }> = [];
 
       const effects = {
         onArtifact: () => {},
@@ -347,10 +348,14 @@ export class BlueskyPoller extends EventEmitter {
           try {
             console.log(`[bluesky-poller] Executing tool: ${toolCall.name}`);
             const result = await executeTool(toolCall, chatId, effects);
-            toolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, content: JSON.stringify(result), isError: false });
+            const tr = { toolCallId: toolCall.id, toolName: toolCall.name, content: JSON.stringify(result), isError: false };
+            toolResults.push(tr);
+            allToolResults.push(tr);
           } catch (e: any) {
             console.error(`[bluesky-poller] Tool execution failed: ${toolCall.name}`, e);
-            toolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, content: e.message || 'Tool execution failed', isError: true });
+            const tr = { toolCallId: toolCall.id, toolName: toolCall.name, content: e.message || 'Tool execution failed', isError: true };
+            toolResults.push(tr);
+            allToolResults.push(tr);
           }
         }
 
@@ -379,6 +384,7 @@ export class BlueskyPoller extends EventEmitter {
             name: tc.name,
             arguments: tc.input ?? tc.arguments,
           })) : undefined,
+          toolResults: allToolResults.length > 0 ? allToolResults : undefined,
         };
 
         // Re-read chat in case it changed during the loop
