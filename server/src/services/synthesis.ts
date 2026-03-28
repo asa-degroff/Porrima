@@ -17,7 +17,6 @@ import { loadPersona } from "./persona-store.js";
 import { getSettings, listChats, getChat, getProject } from "./chat-storage.js";
 import { readAgentsMd } from "./project-storage.js";
 import {
-  getUserEntriesToday,
   listNotebookEntries,
   getNotebookEntry,
   createNotebookEntry,
@@ -131,10 +130,13 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       console.log(`[synthesis] Purged ${staleIds.size} stale memories (>6 months, importance ≤2)`);
     }
 
-    // Step 3: Load today's chats — skip synthesis entirely if no activity
-    const todaysDigest = await buildTodaysChatDigest();
+    // Step 3: Load chats since last synthesis (or last 24h) — skip if no activity
+    const sinceMs = store.lastSynthesis
+      ? new Date(store.lastSynthesis).getTime()
+      : Date.now() - SYNTHESIS_INTERVAL_MS;
+    const todaysDigest = await buildTodaysChatDigest(sinceMs);
     if (!todaysDigest) {
-      console.log("[synthesis] No agent chats today — skipping summary generation");
+      console.log("[synthesis] No agent chats since last synthesis — skipping summary generation");
       store.lastSynthesis = new Date().toISOString();
       await saveMemoryStore(store);
       return;
@@ -146,8 +148,8 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
       ? `Active projects today: ${projectNames.join(", ")}.`
       : "No project-scoped chats today.";
 
-    // Step 3b: Load today's notebook entries
-    const notebookEntries = await loadTodaysNotebookEntries();
+    // Step 3b: Load notebook entries since last synthesis
+    const notebookEntries = await loadRecentNotebookEntries(sinceMs);
     const notebookSection = formatNotebookEntries(notebookEntries);
     if (notebookEntries.length > 0) {
       const userCount = notebookEntries.filter((e) => e.author === "user").length;
@@ -156,7 +158,8 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
     }
 
     // Step 3c: Identify unreviewed user notebook entries for agent
-    const unreviewedUserEntries = await getUnreviewedUserEntries(notebookEntries);
+    const lastSynthesisMs = store.lastSynthesis ? new Date(store.lastSynthesis).getTime() : null;
+    const unreviewedUserEntries = await getUnreviewedUserEntries(notebookEntries, lastSynthesisMs);
     if (unreviewedUserEntries.length > 0) {
       console.log(`[synthesis] Found ${unreviewedUserEntries.length} unreviewed user notebook entries (created since last synthesis)`);
     }
@@ -595,29 +598,28 @@ function condenseChatMessages(messages: ChatMessage[]): string {
 }
 
 /**
- * Load today's agent chats grouped by project, with AGENTS.md context.
- * Returns null if no agent chats occurred today.
+ * Load recent agent chats grouped by project, with AGENTS.md context.
+ * Looks back to the last synthesis time (or 24h) to avoid missing activity
+ * that occurred before midnight in the local timezone.
+ * Returns null if no agent chats occurred in the window.
  */
-async function buildTodaysChatDigest(): Promise<TodaysDigest | null> {
+async function buildTodaysChatDigest(sinceMs: number): Promise<TodaysDigest | null> {
   const allChats = await listChats();
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayMs = todayStart.getTime();
 
-  // Find agent chats modified today
-  const todaysAgentChats = allChats.filter(
-    (c) => c.type === "agent" && new Date(c.lastModified).getTime() >= todayMs
+  // Find agent chats modified since the cutoff
+  const recentAgentChats = allChats.filter(
+    (c) => c.type === "agent" && new Date(c.lastModified).getTime() >= sinceMs
   );
 
-  if (todaysAgentChats.length === 0) return null;
+  if (recentAgentChats.length === 0) return null;
 
-  console.log(`[synthesis] Found ${todaysAgentChats.length} agent chat(s) from today`);
+  console.log(`[synthesis] Found ${recentAgentChats.length} agent chat(s) since last synthesis`);
 
   // Group by projectId
-  const byProject = new Map<string, typeof todaysAgentChats>();
-  const general: typeof todaysAgentChats = [];
+  const byProject = new Map<string, typeof recentAgentChats>();
+  const general: typeof recentAgentChats = [];
 
-  for (const chatItem of todaysAgentChats) {
+  for (const chatItem of recentAgentChats) {
     if (chatItem.projectId) {
       const list = byProject.get(chatItem.projectId) || [];
       list.push(chatItem);
@@ -653,14 +655,14 @@ async function buildTodaysChatDigest(): Promise<TodaysDigest | null> {
       const chat = await getChat(chatItem.id);
       if (!chat || chat.messages.length === 0) continue;
 
-      const todaysMessages = chat.messages.filter((m) => m.timestamp >= todayMs);
-      if (todaysMessages.length === 0) continue;
+      const recentMessages = chat.messages.filter((m) => m.timestamp >= sinceMs);
+      if (recentMessages.length === 0) continue;
 
-      const condensed = condenseChatMessages(todaysMessages);
+      const condensed = condenseChatMessages(recentMessages);
       const digest = `#### ${chat.title || "Untitled Chat"}\n${condensed}`;
 
       if (totalChars + digest.length > MAX_DIGEST_CHARS) {
-        chatDigests.push(`#### ${chat.title || "Untitled Chat"}\n(truncated — ${todaysMessages.length} messages)`);
+        chatDigests.push(`#### ${chat.title || "Untitled Chat"}\n(truncated — ${recentMessages.length} messages)`);
         break;
       }
 
@@ -679,14 +681,14 @@ async function buildTodaysChatDigest(): Promise<TodaysDigest | null> {
     const chat = await getChat(chatItem.id);
     if (!chat || chat.messages.length === 0) continue;
 
-    const todaysMessages = chat.messages.filter((m) => m.timestamp >= todayMs);
-    if (todaysMessages.length === 0) continue;
+    const recentMessages = chat.messages.filter((m) => m.timestamp >= sinceMs);
+    if (recentMessages.length === 0) continue;
 
-    const condensed = condenseChatMessages(todaysMessages);
+    const condensed = condenseChatMessages(recentMessages);
     const digest = `#### ${chat.title || "Untitled Chat"}\n${condensed}`;
 
     if (totalChars + digest.length > MAX_DIGEST_CHARS) {
-      generalDigests.push(`#### ${chat.title || "Untitled Chat"}\n(truncated — ${todaysMessages.length} messages)`);
+      generalDigests.push(`#### ${chat.title || "Untitled Chat"}\n(truncated — ${recentMessages.length} messages)`);
       break;
     }
 
@@ -699,7 +701,7 @@ async function buildTodaysChatDigest(): Promise<TodaysDigest | null> {
   return {
     projectSections,
     generalChats: generalDigests,
-    totalChats: todaysAgentChats.length,
+    totalChats: recentAgentChats.length,
   };
 }
 
@@ -731,13 +733,18 @@ const REVIEWED_MARKER_PREFIX = "# Reviewed: ";
 /**
  * Load today's notebook entries (both user and agent).
  */
-async function loadTodaysNotebookEntries(): Promise<NotebookEntry[]> {
+async function loadRecentNotebookEntries(sinceMs: number): Promise<NotebookEntry[]> {
   const entries: NotebookEntry[] = [];
 
   // User entries
   try {
-    const userEntries = await getUserEntriesToday();
-    entries.push(...userEntries);
+    const userIndex = await listNotebookEntries("user");
+    for (const info of userIndex.entries) {
+      if (new Date(info.createdAt).getTime() >= sinceMs) {
+        const entry = await getNotebookEntry("user", info.id);
+        if (entry) entries.push(entry);
+      }
+    }
   } catch (e) {
     console.warn("[synthesis] Failed to load user notebook entries:", e);
   }
@@ -745,9 +752,8 @@ async function loadTodaysNotebookEntries(): Promise<NotebookEntry[]> {
   // Agent entries (include all agent entries, including synthesis, for context)
   try {
     const agentIndex = await listNotebookEntries("agent");
-    const today = new Date().toDateString();
     for (const info of agentIndex.entries) {
-      if (new Date(info.createdAt).toDateString() === today) {
+      if (new Date(info.createdAt).getTime() >= sinceMs) {
         const entry = await getNotebookEntry("agent", info.id);
         if (entry) entries.push(entry);
       }
@@ -764,34 +770,28 @@ async function loadTodaysNotebookEntries(): Promise<NotebookEntry[]> {
  * An entry is considered "unreviewed" if it was created after the last synthesis run.
  * This ensures entries are only highlighted once - in the synthesis that follows their creation.
  */
-async function getUnreviewedUserEntries(allNotebookEntries: NotebookEntry[]): Promise<NotebookEntry[]> {
-  const userEntriesToday = await getUserEntriesToday();
-  
-  if (userEntriesToday.length === 0) {
+async function getUnreviewedUserEntries(allNotebookEntries: NotebookEntry[], lastSynthesisMs: number | null): Promise<NotebookEntry[]> {
+  const userEntries = allNotebookEntries.filter(e => e.author === "user");
+
+  if (userEntries.length === 0) {
     return [];
   }
-  
-  // Get the last synthesis timestamp from memory store
-  const store = await loadMemoryStore();
-  const lastSynthesis = store.lastSynthesis;
-  
-  if (!lastSynthesis) {
+
+  if (!lastSynthesisMs) {
     // No prior synthesis - all entries are unreviewed
-    return userEntriesToday;
+    return userEntries;
   }
-  
-  const lastSynthesisTime = new Date(lastSynthesis).getTime();
-  
+
   // Filter to entries created after the last synthesis
-  const unreviewed = userEntriesToday.filter(entry => {
+  const unreviewed = userEntries.filter(entry => {
     const entryTime = new Date(entry.createdAt).getTime();
-    return entryTime > lastSynthesisTime;
+    return entryTime > lastSynthesisMs;
   });
-  
-  if (unreviewed.length !== userEntriesToday.length) {
-    console.log(`[synthesis] ${unreviewed.length} of ${userEntriesToday.length} user entries are unreviewed (created since last synthesis)`);
+
+  if (unreviewed.length !== userEntries.length) {
+    console.log(`[synthesis] ${unreviewed.length} of ${userEntries.length} user entries are unreviewed (created since last synthesis)`);
   }
-  
+
   return unreviewed;
 }
 
