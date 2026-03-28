@@ -1286,7 +1286,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     })()}
 
                     {/* Results */}
-                    <div className="max-h-[280px] overflow-y-auto space-y-1.5 pr-1">
+                    <div className="max-h-[280px] overflow-x-hidden overflow-y-auto space-y-1.5 pr-1">
                       {memoryLoading ? (
                         <p className="text-white/30 text-xs text-center py-4">Searching...</p>
                       ) : memoryResults.length === 0 ? (
