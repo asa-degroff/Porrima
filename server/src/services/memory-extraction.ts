@@ -4,6 +4,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { streamChat } from "./agent.js";
 import { embedBatch } from "./embeddings.js";
+import { loadPersona } from "./persona-store.js";
 import {
   addMemory,
   updateMemory,
@@ -68,7 +69,11 @@ async function withRetry<T>(
   throw lastError;
 }
 
-const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction system. Analyze a conversation exchange and extract information worth remembering for future interactions.
+const EXTRACTION_INSTRUCTIONS = `---
+
+## Memory Extraction Task
+
+You are reviewing a conversation exchange you just had. Extract information worth remembering for future interactions — write each memory in your own voice, as something you'd tell yourself to remember.
 
 Think beyond surface-level facts. Consider:
 - **User context**: preferences, expertise, role, goals, working style
@@ -88,7 +93,7 @@ Categories:
 - "preference" — user likes, dislikes, stylistic choices
 - "fact" — concrete information about the user, their role, or their environment
 - "behavior" — recurring patterns in how the user works or communicates
-- "instruction" — explicit directives about how the agent should behave
+- "instruction" — explicit directives about how I should behave
 - "context" — project-level information: architecture, tech choices, ongoing work, constraints, relationships between systems
 - "decision" — a choice that was made and why, tradeoffs considered
 - "note" — general observations, curiosities, personal details, or anything worth remembering that doesn't fit the above categories
@@ -97,12 +102,18 @@ If nothing is worth remembering, output: []
 
 IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 
-const DELAYED_EXTRACTION_SYSTEM_PROMPT = `You are a delayed memory extraction system analyzing a full conversation thread. Your task is to extract patterns, decisions, and context that emerged across the entire conversation.
+async function buildExtractionSystemPrompt(): Promise<string> {
+  const persona = await loadPersona();
+  return `${persona.content}\n\n${EXTRACTION_INSTRUCTIONS}`;
+}
 
-PREVIOUSLY CAPTURED MEMORIES from this chat:
-{{PREVIOUS_MEMORIES}}
+const DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS = `---
 
-These memories are already saved. Do NOT duplicate them. Instead, focus on:
+## Delayed Memory Extraction Task
+
+You are looking back at a full conversation thread you had. Your task is to extract patterns, decisions, and context that emerged across the entire conversation — write each memory in your own voice.
+
+Previously captured memories will be provided alongside the conversation. Those memories are already saved — do NOT duplicate them. Instead, focus on:
 1. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
 2. **Evolutions or contradictions** — if the user changed their mind or refined a previous position
 3. **Thematic context** — higher-level insights that connect multiple exchanges
@@ -118,6 +129,16 @@ Output a JSON array. Each item:
 If nothing new is worth remembering, output: []
 
 IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
+
+const DELAYED_EXTRACTION_USER_TEMPLATE = `PREVIOUSLY CAPTURED MEMORIES from this chat:
+{{PREVIOUS_MEMORIES}}
+
+These memories are already saved. Do NOT duplicate them.`;
+
+async function buildDelayedExtractionSystemPrompt(): Promise<string> {
+  const persona = await loadPersona();
+  return `${persona.content}\n\n${DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS}`;
+}
 
 interface ExtractedFact {
   text: string;
@@ -244,6 +265,7 @@ export async function extractMemories(
   extractionMetrics.totalExtractions++;
   try {
   const extractionPrompt = `User message: ${userMsg}\n\nAssistant response: ${assistantMsg}`;
+  const systemPrompt = await buildExtractionSystemPrompt();
 
   // Call the LLM to extract facts (with retry)
   let responseText = "";
@@ -253,7 +275,7 @@ export async function extractMemories(
       await streamChat(
         modelId,
         [{ role: "user", content: extractionPrompt, timestamp: Date.now() }],
-        EXTRACTION_SYSTEM_PROMPT,
+        systemPrompt,
         (event) => {
           if (event.type === "text_delta") {
             responseText += event.delta;
@@ -300,9 +322,13 @@ export async function extractMemories(
   }
 }
 
-const PRE_COMPACTION_SYSTEM_PROMPT = `You are a memory preservation system. A conversation is approaching its context limit and messages will be removed.
+const PRE_COMPACTION_INSTRUCTIONS = `---
 
-Review the messages below and extract everything the agent needs to continue effectively. Focus on:
+## Memory Preservation Task
+
+This conversation is approaching its context limit and messages will be removed. Review the messages below and extract everything you need to continue effectively — write each memory in your own voice.
+
+Focus on:
 1. Task state — what is being worked on, what's done, what's pending, what decisions were made
 2. Technical context — files discussed, architecture patterns, code changes, API details
 3. User context — preferences, instructions, corrections, expertise revealed
@@ -316,6 +342,11 @@ Output a JSON array. Each item:
 - "importance": 1-10
 
 Output ONLY the JSON array.`;
+
+async function buildPreCompactionSystemPrompt(): Promise<string> {
+  const persona = await loadPersona();
+  return `${persona.content}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
+}
 
 /**
  * Pre-compaction flush: extract memories from messages that are about to be removed.
@@ -340,6 +371,8 @@ export async function preCompactionFlush(
     .map((m, i) => `${m.role} (${i + 1}): ${m.content}`)
     .join("\n\n");
 
+  const systemPrompt = await buildPreCompactionSystemPrompt();
+
   let responseText = "";
   await withRetry(
     async () => {
@@ -347,7 +380,7 @@ export async function preCompactionFlush(
       await streamChat(
         modelId,
         [{ role: "user", content: removedText, timestamp: Date.now() }],
-        PRE_COMPACTION_SYSTEM_PROMPT,
+        systemPrompt,
         (event) => {
           if (event.type === "text_delta") {
             responseText += event.delta;
@@ -395,8 +428,9 @@ export async function extractMemoriesFromText(
   entryId: string
 ): Promise<void> {
   console.log(`[memory] Extracting from ${author} notebook entry ${entryId}`);
-  
+
   const extractionPrompt = `${author === 'user' ? 'User' : 'Agent'} notebook entry:\n${text}`;
+  const systemPrompt = await buildExtractionSystemPrompt();
 
   let responseText = "";
   try {
@@ -406,7 +440,7 @@ export async function extractMemoriesFromText(
         await streamChat(
           modelId,
           [{ role: "user", content: extractionPrompt, timestamp: Date.now() }],
-          EXTRACTION_SYSTEM_PROMPT,
+          systemPrompt,
           (event) => {
             if (event.type === "text_delta") {
               responseText += event.delta;
@@ -624,7 +658,7 @@ function buildDelayedExtractionPrompt(
     ? previousMemories.map((m, i) => `[${i + 1}]: "${m.text}" (${m.category}, importance: ${m.importance})`).join("\n")
     : "(none)";
   
-  return DELAYED_EXTRACTION_SYSTEM_PROMPT
+  return DELAYED_EXTRACTION_USER_TEMPLATE
     .replace("{{PREVIOUS_MEMORIES}}", memoriesList)
     .replace("{{MESSAGE_COUNT}}", String(messageCount))
     .replace("{{START_INDEX}}", String(startIndex));
@@ -674,7 +708,8 @@ export async function extractDelayedMemories(
     .join("\n\n");
   
   const extractionPrompt = `${prompt}\n\nCONVERSATION:\n${conversationText}`;
-  
+  const systemPrompt = await buildDelayedExtractionSystemPrompt();
+
   // Call LLM to extract memories
   let responseText = "";
   try {
@@ -684,7 +719,7 @@ export async function extractDelayedMemories(
         await streamChat(
           modelId,
           [{ role: "user", content: extractionPrompt, timestamp: Date.now() }],
-          DELAYED_EXTRACTION_SYSTEM_PROMPT,
+          systemPrompt,
           (event) => {
             if (event.type === "text_delta") {
               responseText += event.delta;
