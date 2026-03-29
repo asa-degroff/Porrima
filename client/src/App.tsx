@@ -217,9 +217,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   // Find context window for active model (chat override takes precedence)
   const contextWindow = useMemo(() => {
     if (activeChat?.contextWindow) return activeChat.contextWindow;
-    const model = models.find((m) => m.id === activeChat?.modelId);
+    const modelId = activeChat?.modelId || settings.defaultModelId;
+    const model = models.find((m) => m.id === modelId);
     return model?.contextWindow || 32768;
-  }, [models, activeChat]);
+  }, [models, activeChat, settings.defaultModelId]);
 
   // Fetch full chat when selecting one (we need messages)
   // Cache-first: show IDB cached data immediately, refresh from server in background
@@ -377,9 +378,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   // Model default context window (for reset-to-default in editor)
   const modelContextWindow = useMemo(() => {
-    const model = models.find((m) => m.id === activeChat?.modelId);
+    const modelId = activeChat?.modelId || settings.defaultModelId;
+    const model = models.find((m) => m.id === modelId);
     return model?.contextWindow || 32768;
-  }, [models, activeChat?.modelId]);
+  }, [models, activeChat?.modelId, settings.defaultModelId]);
 
   const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
   const handleCloseSidebar = useCallback(() => setSidebarOpen(false), []);
@@ -504,7 +506,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         error={error}
         warning={warning}
         models={models}
-        selectedModelId={activeChat?.modelId || models[0]?.id || ""}
+        selectedModelId={activeChat?.modelId || settings.defaultModelId || models[0]?.id || ""}
         systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}
         systemPromptPresets={settings.systemPromptPresets}
         ttsAutoReadEnabled={playbackState.isPlaying || playbackState.isPaused}
