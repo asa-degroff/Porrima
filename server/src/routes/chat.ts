@@ -98,7 +98,7 @@ function isCloudModel(modelId: string): boolean {
   return modelId.includes(":cloud");
 }
 
-function createSafeStreamFn(): StreamFn {
+function createSafeStreamFn(chatOllamaOptions?: { keepAlive?: string | number; numGpu?: number; numPredict?: number }): StreamFn {
   return (model, ctx, options) => {
     if (options?.signal?.aborted) {
       console.log(`[stream] signal already aborted, returning empty abort stream`);
@@ -120,10 +120,15 @@ function createSafeStreamFn(): StreamFn {
       return stream;
     }
 
+    // Merge per-chat Ollama options into the stream options
+    const mergedOptions = chatOllamaOptions
+      ? { ...options, keepAlive: chatOllamaOptions.keepAlive, numGpu: chatOllamaOptions.numGpu, numPredict: chatOllamaOptions.numPredict }
+      : options;
+
     // Wrap the raw stream with an inactivity timeout.
     // If Ollama is stuck loading a model, the stream hangs indefinitely —
     // this detects that and aborts with a clear error.
-    const rawStream = streamSimple(model, ctx, options);
+    const rawStream = streamSimple(model, ctx, mergedOptions);
     const wrappedStream = createAssistantMessageEventStream();
 
     const cloud = isCloudModel(model.id);
@@ -437,7 +442,8 @@ async function handleChatStream(
       tools: agentTools,
     };
 
-    const safeStreamFn = createSafeStreamFn();
+    // Pass per-chat Ollama runtime options to the stream function
+    const safeStreamFn = createSafeStreamFn(chat.ollamaOptions);
 
     // Build config
     const config: AgentLoopConfig = {

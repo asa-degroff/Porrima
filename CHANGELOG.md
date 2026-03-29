@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Improve Python sandbox isolation (#18)
 
 ### Added
+- Increase model discovery timeout for large model libraries (#93)
+- Make Ollama runtime options configurable (keep_alive, num_gpu, num_predict) (#91)
 - Notebook UI: no delete confirmation (#80)
 - Notebook UI: hasUnreadAgentEntries logic is brittle (#78)
 - Notebook: hardcoded model ID in agent trigger (#66)
@@ -23,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Batch embeddings during memory extraction (#22)
 
 ### Fixed
+- Add vision capability detection for Ollama models (#92)
 - Notebook UI: composer clears before async completes (#81)
 - Notebook UI: no loading/error states displayed (#79)
 - Notebook UI: links replaced not appended on update (#77)
@@ -58,6 +61,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Hoist remarkPlugins array to module scope in MarkdownRenderer (#1)
 
 ### Changed
+- Test full agent loop with Ollama native provider (#94)
 - Notebook UI: unused imports across notebook components (#85)
 - Notebook UI: renderEntries dependency array over-specified (#84)
 - Notebook UI: duplicate type definitions in api/client.ts (#83)

@@ -152,7 +152,7 @@ export async function streamChat(
   messages: Message[],
   systemPrompt: string,
   onEvent: (event: AssistantMessageEvent) => void,
-  options?: { signal?: AbortSignal; tools?: Tool[] }
+  options?: { signal?: AbortSignal; tools?: Tool[]; keepAlive?: string | number; numGpu?: number; numPredict?: number }
 ): Promise<StreamChatResult> {
   const ollamaModels = await discoverOllamaModels();
   const ollamaModel = ollamaModels.find((m) => m.id === modelId);
@@ -166,11 +166,17 @@ export async function streamChat(
     tools: options?.tools,
   };
 
-  const eventStream = streamSimple(piModel, context, {
+  // Pass Ollama-specific options (they're extensions to SimpleStreamOptions)
+  const streamOptions: any = {
     apiKey: "ollama",
     signal: options?.signal,
     reasoning: piModel.reasoning ? "medium" : undefined,
-  });
+  };
+  if (options?.keepAlive !== undefined) streamOptions.keepAlive = options.keepAlive;
+  if (options?.numGpu !== undefined) streamOptions.numGpu = options.numGpu;
+  if (options?.numPredict !== undefined) streamOptions.numPredict = options.numPredict;
+
+  const eventStream = streamSimple(piModel, context, streamOptions);
 
   let fullText = "";
   let thinkingText = "";

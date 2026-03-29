@@ -45,6 +45,9 @@ interface OllamaChatChunk {
 
 interface OllamaStreamOptions extends StreamOptions {
   reasoningEffort?: string;
+  keepAlive?: string | number;  // e.g., "15m", "5m", 300 (seconds), -1 (forever), 0 (unload immediately)
+  numGpu?: number;              // Number of layers to offload to GPU
+  numPredict?: number;          // Max tokens to generate (overrides model default)
 }
 
 // ---------------------------------------------------------------------------
@@ -284,8 +287,14 @@ export const streamOllamaNative = (
         options: {
           num_ctx: model.contextWindow,
         },
-        keep_alive: "15m",
       };
+
+      // Configurable keep_alive (default: "15m" for balance between responsiveness and VRAM usage)
+      if (options?.keepAlive !== undefined) {
+        body.keep_alive = options.keepAlive;
+      } else {
+        body.keep_alive = "15m";
+      }
 
       if (context.tools && context.tools.length > 0) {
         body.tools = convertTools(context.tools);
@@ -296,12 +305,20 @@ export const streamOllamaNative = (
         body.think = true;
       }
 
-      if (options?.maxTokens) {
+      // num_predict: prefer explicit option, fall back to maxTokens for backwards compat
+      if (options?.numPredict !== undefined) {
+        body.options.num_predict = options.numPredict;
+      } else if (options?.maxTokens) {
         body.options.num_predict = options.maxTokens;
       }
 
       if (options?.temperature !== undefined) {
         body.options.temperature = options.temperature;
+      }
+
+      // GPU layer offloading (for multi-GPU or VRAM-constrained setups)
+      if (options?.numGpu !== undefined) {
+        body.options.num_gpu = options.numGpu;
       }
 
       const url = `${model.baseUrl}/api/chat`;

@@ -76,6 +76,12 @@ export interface Chat {
   // Delayed extraction tracking
   lastDelayedExtractionAt?: string;
   lastDelayedExtractionMessageIndex?: number;
+  // Ollama runtime options (per-chat overrides)
+  ollamaOptions?: {
+    keepAlive?: string | number;  // e.g., "15m", "5m", 300, -1, 0
+    numGpu?: number;              // GPU layers to offload
+    numPredict?: number;          // Max tokens to generate
+  };
 }
 
 export interface Project {
@@ -101,6 +107,7 @@ export interface OllamaModel {
   parameterSize: string;
   family: string;
   contextWindow: number;
+  supportsImages?: boolean;  // True if model has vision capabilities
 }
 
 export type Theme = "default" | "ripple-grid";
