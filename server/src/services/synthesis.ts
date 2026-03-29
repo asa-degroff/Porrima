@@ -965,8 +965,8 @@ async function writeAgentNotebookEntry(
       },
       onGeneratedImage: (image: any) => {
         console.log(`[synthesis] Notebook image generated: ${image.id}`);
-        // Could track images separately if needed
       },
+      onPendingReviewImage: () => {},
       onAskUser: (question: string, toolCallId: string) => {
         // For notebook synthesis, we skip ask_user and continue
         console.log(`[synthesis] Notebook ask_user skipped: ${question}`);

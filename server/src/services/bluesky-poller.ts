@@ -293,6 +293,7 @@ export class BlueskyPoller extends EventEmitter {
         onArtifact: () => {},
         onVisual: () => {},
         onGeneratedImage: () => {},
+        onPendingReviewImage: () => {},
         onAskUser: (question: string) => {
           console.log(`[bluesky-poller] ask_user skipped: ${question}`);
         },

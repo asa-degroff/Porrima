@@ -265,6 +265,7 @@ Current date: ${new Date().toLocaleDateString()}`;
     onArtifact: (artifact: Artifact) => allArtifacts.push(artifact),
     onVisual: () => {},
     onGeneratedImage: () => {},
+    onPendingReviewImage: () => {},
     onAskUser: () => {},
   };
 

@@ -101,21 +101,11 @@ export async function generateForReview(
     // Mark complete
     await completeGeneration(generationId, imageUrl);
 
-    // Convert image to base64 for attachment
+    // Use WebP thumbnail for agent review — Ollama rejects JXL ("400 invalid image input")
     const imageFilename = imageUrl.replace("/api/images/", "");
-    const imagePath = join(IMAGES_DIR, imageFilename, "image.jxl");
-
-    let imageBuffer: Buffer;
-    let mimeType = "image/jxl";
-
-    try {
-      imageBuffer = await readFile(imagePath);
-    } catch {
-      // Fallback to thumb if main image not found
-      const thumbPath = join(IMAGES_DIR, imageFilename, "thumb.webp");
-      imageBuffer = await readFile(thumbPath);
-      mimeType = "image/webp";
-    }
+    const thumbPath = join(IMAGES_DIR, imageFilename, "thumb.webp");
+    const imageBuffer = await readFile(thumbPath);
+    const mimeType = "image/webp";
 
     console.log(`[generate-review] Generation complete: ${imageId} (${imageUrl})`);
     
@@ -206,9 +196,10 @@ export function formatReviewResult(
 
   const reviewContext = buildReviewContext(creativeIntent, currentPrompt, iteration, maxIterations);
 
-  // Return text-only result with image metadata
-  // The image will be injected as a separate user message after tool completion
-  // This is necessary because Qwen 3.5 rejects images in ToolResultMessage format
+  // Image is excluded from tool result content because Ollama rejects images
+  // in tool result messages ("400 invalid image input"). Instead, the image is
+  // stashed in details.pendingImage and injected as a user message via
+  // getSteeringMessages after the tool result is processed.
   return {
     content: [
       {
@@ -227,7 +218,6 @@ export function formatReviewResult(
           iteration,
         },
       ],
-      // Include image data separately for injection as user message
       pendingImage: {
         data: result.imageData.base64,
         mimeType: result.imageData.mimeType,

@@ -367,6 +367,12 @@ async function handleChatStream(
     }
   };
 
+  // Track pending image injection from generate_and_review tool.
+  // Declared here (before effects) so the onPendingReviewImage callback can access it.
+  // The image can't go in the tool result (Ollama returns "400 invalid image input"),
+  // so we stash it and inject it as a user message via getSteeringMessages.
+  let pendingImageInjection: { data: string; mimeType: string; imageUrl: string; toolCallId: string } | null = null;
+
   // Side-effects bridge between tool execution and SSE output
   const effects: ToolSideEffects = {
     onArtifact: (artifact) => {
@@ -383,6 +389,17 @@ async function handleChatStream(
       state.allGeneratedImages.push(image);
       state.segments.push({ seq: ++state.seqCounter, type: "generated_image", generatedImage: image });
       res.write(`event: generated_image\ndata: ${JSON.stringify(image)}\n\n`);
+    },
+    onPendingReviewImage: (image) => {
+      // Called synchronously from the tool's execute(), BEFORE pi-agent-core
+      // calls getSteeringMessages. This ensures the image is ready for injection.
+      pendingImageInjection = {
+        data: image.data,
+        mimeType: image.mimeType,
+        imageUrl: image.imageUrl,
+        toolCallId: "", // filled from event later, not needed for injection
+      };
+      console.log(`[chat] onPendingReviewImage: image ready for steering injection (${(image.data.length / 1024).toFixed(1)}KB)`);
     },
     onAskUser: (question, toolCallId) => {
       askUserRef.current = { question, toolCallId };
@@ -434,12 +451,9 @@ async function handleChatStream(
       tools: agentTools,
     };
 
-    // Track pending image injection from generate_and_review tool
-    let pendingImageInjection: { data: string; mimeType: string; imageUrl: string; toolCallId: string } | null = null;
-
     const safeStreamFn = createSafeStreamFn();
 
-    // Build config with access to pendingImageInjection
+    // Build config
     const config: AgentLoopConfig = {
       model: piModel,
       apiKey: "ollama",
@@ -449,37 +463,20 @@ async function handleChatStream(
         if (askUserRef.current) {
           return [{ role: "user" as const, content: "[paused for user input]", timestamp: Date.now() }];
         }
-        // Check if we need to inject an image from generate_and_review
+        // Inject generated image as a user message so the agent can visually evaluate it.
+        // This is called by pi-agent-core after each tool execution; pendingImageInjection
+        // is set once and cleared here, so the image is injected exactly once.
         if (pendingImageInjection) {
-          console.log(`[chat] Injecting image from generate_and_review tool ${pendingImageInjection.toolCallId}`);
-          const injection = pendingImageInjection;
-          pendingImageInjection = null; // Clear so we only inject once
-          
-          // Create the user message with image
-          const userMessageWithImage: ChatMessage = {
-            role: "user",
-            content: "Here's the generated image for your review. Please evaluate it against the creative intent and let me know if it captures what you're looking for, or if you'd like me to refine it.",
-            images: [{
-              data: injection.data,
-              mimeType: injection.mimeType,
-              name: `generated-${injection.toolCallId}.jxl`,
-            }],
-            timestamp: Date.now(),
-          };
-          
-          // Persist to chat history so it shows in UI
-          chat.messages.push(userMessageWithImage);
-          await saveChat(chat).catch(err => console.error("[chat] Failed to save injected image message:", err));
-          console.log(`[chat] Injected image message saved to chat history`);
-          
-          // Return for LLM consumption
+          const img = pendingImageInjection;
+          pendingImageInjection = null;
+          console.log(`[chat] Injecting image from generate_and_review as user message (${(img.data.length / 1024).toFixed(1)}KB)`);
           return [{
             role: "user" as const,
             content: [
-              { type: "text" as const, text: userMessageWithImage.content },
-              { type: "image" as const, data: injection.data, mimeType: injection.mimeType },
+              { type: "text" as const, text: "Here is the generated image. Please evaluate it against the creative intent described in the tool result above." },
+              { type: "image" as const, data: img.data, mimeType: img.mimeType },
             ],
-            timestamp: userMessageWithImage.timestamp,
+            timestamp: Date.now(),
           }];
         }
         return [];
@@ -647,31 +644,14 @@ async function handleChatStream(
 
         case "tool_execution_end": {
           console.log(`[chat] tool_execution_end: ${event.toolName} (toolCallId: ${event.toolCallId}, isError: ${event.isError})`);
-          
-          // Special handling for generate_and_review: inject image as user message instead of tool result
-          if (event.toolName === "generate_and_review") {
-            // Check if tool result has pending image in details
-            const pendingImage = event.result?.details?.pendingImage;
-            if (pendingImage && pendingImage.data) {
-              console.log(`[chat] generate_and_review completed with pending image (${(pendingImage.data.length / 1024).toFixed(1)}KB), scheduling injection`);
-              pendingImageInjection = {
-                data: pendingImage.data,
-                mimeType: pendingImage.mimeType,
-                imageUrl: pendingImage.imageUrl,
-                toolCallId: event.toolCallId,
-              };
-            } else {
-              console.log(`[chat] generate_and_review completed but no pending image found (has data: ${!!pendingImage?.data})`);
-            }
-          }
-          
+
           // ask_user gets a dedicated SSE event, not tool_status
           if (event.toolName !== "ask_user") {
             const resultText = event.result?.content?.[0]?.text || "";
-            
-            // For generate_and_review, don't include image in tool result (it will be injected as user message)
-            const images: ImageAttachment[] | undefined = event.toolName === "generate_and_review" 
-              ? undefined 
+
+            // For generate_and_review, image is injected as user message (not in tool result)
+            const images: ImageAttachment[] | undefined = event.toolName === "generate_and_review"
+              ? undefined
               : event.result?.content
                   ?.filter((c: any) => c.type === "image")
                   .map((c: any) => ({ data: c.data, mimeType: c.mimeType, name: `generated-${event.toolCallId}.jxl` }));

@@ -127,6 +127,10 @@ export interface ToolSideEffects {
   onArtifact: (artifact: Artifact) => void;
   onVisual: (visual: InlineVisual) => void;
   onGeneratedImage: (image: GeneratedImage) => void;
+  /** Called when generate_and_review produces an image for agent evaluation.
+   *  Sets the pending image synchronously so getSteeringMessages can inject it
+   *  before the event stream delivers the tool_execution_end event. */
+  onPendingReviewImage: (image: { data: string; mimeType: string; imageUrl: string }) => void;
   /** Called when the ask_user tool fires. The route owns the abort/suspend logic. */
   onAskUser: (question: string, toolCallId: string) => void;
 }
@@ -541,8 +545,8 @@ ${limited.map((g, i) => `${i + 1}. **${g.theme}** (${g.count} images)
         }
         
         console.log(`[generate_and_review] Image generated successfully, formatting review result`);
-        
-        // Format result (text-only, image will be injected separately)
+
+        // Format result (text-only; image goes to details.pendingImage for injection as user message)
         const reviewResult = formatReviewResult(
           result,
           iteration,
@@ -550,15 +554,21 @@ ${limited.map((g, i) => `${i + 1}. **${g.theme}** (${g.count} images)
           args.creativeIntent,
           args.initialPrompt
         );
-        
+
         // Merge image history and track last prompt
         if (args.imageHistory) {
           reviewResult.details.imageHistory = [...args.imageHistory, ...reviewResult.details.imageHistory];
         }
         reviewResult.details.lastPrompt = args.initialPrompt;
-        
-        console.log(`[generate_and_review] Returning result (image will be injected as user message)`);
-        
+
+        // Notify route to set pendingImageInjection SYNCHRONOUSLY, before
+        // getSteeringMessages is called by pi-agent-core after tool execution.
+        // This avoids the race condition where the event stream hasn't delivered
+        // tool_execution_end to chat.ts yet when getSteeringMessages runs.
+        if (reviewResult.details.pendingImage) {
+          effects.onPendingReviewImage(reviewResult.details.pendingImage);
+        }
+
         return reviewResult;
       } catch (e: any) {
         console.error(`[generate_and_review] Error: ${e.message}`);
