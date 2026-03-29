@@ -275,8 +275,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <h2 className="text-lg font-semibold text-white/90">Image Sandbox</h2>
 
-          {/* Mode switcher - hidden on mobile, shown desktop */}
-          <div className="hidden md:flex items-center gap-1 bg-white/5 rounded-lg p-1">
+          {/* Mode switcher - hidden on mobile and iPad portrait, shown on desktop (lg+) */}
+          <div className="hidden lg:flex items-center gap-1 bg-white/5 rounded-lg p-1">
             <button
               onClick={() => setMode("analyze")}
               className={`px-3 py-1 text-xs rounded-md transition-colors ${
@@ -309,7 +309,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             </button>
           </div>
 
-          {/* Status indicator - hidden on mobile, shown desktop */}
+          {/* Status indicator - hidden on mobile and iPad portrait, shown on desktop (lg+) */}
           <div className="hidden lg:flex items-center gap-1.5">
             <div
               className={`w-2 h-2 rounded-full ${
@@ -330,9 +330,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             </span>
           </div>
 
-          {/* Desktop search bar - hidden on mobile */}
+          {/* Desktop search bar - hidden on mobile and iPad portrait */}
           {mode === "generate" && (
-            <div className="hidden md:block w-64 lg:w-80 flex-1 max-w-md">
+            <div className="hidden lg:block w-64 lg:w-80 flex-1 max-w-md">
               <ImageSearch
                 onResults={(results) => { setSearchResults(results); setIsSearching(false); }}
                 onClear={() => { setSearchResults(undefined); setIsSearching(false); }}
@@ -343,8 +343,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Mobile drawer toggles */}
-          <div className="flex md:hidden items-center gap-1">
+          {/* Drawer toggles - shown on mobile and iPad portrait (lg-), hidden on desktop */}
+          <div className="flex lg:hidden items-center gap-1">
             {mode === "generate" ? (
               <>
                 <button
@@ -395,8 +395,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             )}
           </div>
 
-          {/* Mobile mode switcher */}
-          <div className="flex md:hidden items-center gap-1 bg-white/5 rounded-lg p-1">
+          {/* Mode switcher - shown on mobile and iPad portrait (lg-), hidden on desktop */}
+          <div className="flex lg:hidden items-center gap-1 bg-white/5 rounded-lg p-1">
             <button
               onClick={() => setMode("analyze")}
               className={`px-2 py-1 text-xs rounded-md transition-colors ${
@@ -452,8 +452,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
       <div className="flex-1 flex min-h-0 relative">
         {mode === "generate" ? (
           <>
-            {/* Generation Controls - desktop sidebar */}
-            <div className="hidden md:block w-80 shrink-0 border-r border-white/10 overflow-y-auto p-4 backdrop-blur-xl bg-white/[0.03]">
+            {/* Generation Controls - desktop sidebar (lg+ only, iPad portrait uses slide-over) */}
+            <div className="hidden lg:block w-80 shrink-0 border-r border-white/10 overflow-y-auto p-4 backdrop-blur-xl bg-white/[0.03]">
               <ImageControls
                 models={models}
                 generating={generating}
@@ -474,8 +474,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               >
                 {/* Filter toggle + Mobile search bar */}
                 <div className="shrink-0 px-4 py-2 flex flex-col gap-2 border-b border-white/10">
-                  {/* Desktop: just the filter toggle and status */}
-                  <div className="hidden md:flex items-center justify-between">
+                  {/* Desktop (lg+): just the filter toggle and status */}
+                  <div className="hidden lg:flex items-center justify-between">
                     <span className="text-xs text-white/40">
                       {searchResults !== undefined
                         ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
@@ -493,8 +493,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                       Agent only
                     </button>
                   </div>
-                  {/* Mobile: search bar + filter toggle */}
-                  <div className="md:hidden flex flex-col gap-2">
+                  {/* Mobile and iPad portrait (lg-): search bar + filter toggle */}
+                  <div className="lg:hidden flex flex-col gap-2">
                     <ImageSearch
                       onResults={handleSearchResults}
                       onClear={handleSearchClear}
@@ -572,9 +572,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               </div>
             </div>
 
-            {/* Details panel - desktop sidebar */}
+            {/* Details panel - desktop sidebar (lg+ only, iPad portrait uses slide-over) */}
             {selectedImage && (
-              <div className="hidden md:flex w-80 shrink-0 border-l border-white/10 p-4 backdrop-blur-xl bg-white/[0.03] flex-col">
+              <div className="hidden lg:flex w-80 shrink-0 border-l border-white/10 p-4 backdrop-blur-xl bg-white/[0.03] flex-col">
                 <ImageDetails
                   image={selectedImage}
                   onUseParams={handleUseParams}
@@ -583,9 +583,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               </div>
             )}
 
-            {/* Mobile slide-up drawer - Controls */}
+            {/* Slide-up drawer - Controls (lg- only, desktop uses sidebar) */}
             {controlsOpen && (
-              <div className="md:hidden fixed inset-0 z-50 flex items-end">
+              <div className="lg:hidden fixed inset-0 z-50 flex items-end">
                 <div
                   className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
                   style={{ opacity: controlsOpen ? 0.6 : 0 }}
@@ -659,9 +659,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               </div>
             )}
 
-            {/* Mobile slide-up drawer - Details */}
+            {/* Slide-up drawer - Details (lg- only, desktop uses sidebar) */}
             {detailsOpen && selectedImage && (
-              <div className="md:hidden fixed inset-0 z-50 flex items-end">
+              <div className="lg:hidden fixed inset-0 z-50 flex items-end">
                 <div
                   className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
                   style={{ opacity: detailsOpen ? 0.6 : 0 }}
@@ -790,8 +790,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
           <CorpusView />
         ) : (
           <>
-            {/* Vision Controls - desktop sidebar */}
-            <div className="hidden md:block w-80 shrink-0 border-r border-white/10 backdrop-blur-xl bg-white/[0.03]">
+            {/* Vision Controls - desktop sidebar (lg+ only, iPad portrait uses slide-over) */}
+            <div className="hidden lg:block w-80 shrink-0 border-r border-white/10 backdrop-blur-xl bg-white/[0.03]">
               <VisionControls
                 presets={presets}
                 models={ollamaModels}
@@ -869,9 +869,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               )}
             </div>
 
-            {/* Mobile slide-up drawer - Vision Controls */}
+            {/* Slide-up drawer - Vision Controls (lg- only, desktop uses sidebar) */}
             {controlsOpen && mode === "analyze" && (
-              <div className="md:hidden fixed inset-0 z-50 flex items-end">
+              <div className="lg:hidden fixed inset-0 z-50 flex items-end">
                 <div
                   className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
                   style={{ opacity: controlsOpen ? 0.6 : 0 }}
