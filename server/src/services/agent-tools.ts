@@ -353,6 +353,95 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects): AgentTo
     },
   });
 
+  // Skill management tools
+  tools.push({
+    name: "install_skill",
+    description: "Install a new skill from a URL (GitHub or direct SKILL.md link). The agent can use this to extend its capabilities by fetching skills from external sources. Returns the installed skill name and path.",
+    parameters: Type.Object({
+      url: Type.String({ description: "URL to the skill (GitHub blob/tree URL or direct URL to SKILL.md file)" }),
+      name: Type.Optional(Type.String({ description: "Custom name for the skill folder (optional, defaults to name from frontmatter)" })),
+    }),
+    label: "install_skill",
+    execute: async (_id, params) => {
+      const args = params as Record<string, any>;
+      try {
+        const { installSkillFromUrl } = await import("./skills.js");
+        const result = await installSkillFromUrl(args.url, args.name);
+        return { 
+          content: [{ type: "text", text: `✅ ${result.message}\n\nSkill installed to: ${result.path}\n\nActivate it in this chat with /${result.name}` }], 
+          details: { name: result.name, path: result.path },
+        };
+      } catch (e: any) {
+        return { 
+          content: [{ type: "text", text: `❌ Failed to install skill: ${e.message}` }], 
+          details: {},
+          isError: true,
+        };
+      }
+    },
+  });
+
+  tools.push({
+    name: "remove_skill",
+    description: "Remove a global skill by name. This deletes the skill from ~/.quje-agent/skills/. Use when a skill is no longer needed or is causing issues.",
+    parameters: Type.Object({
+      name: Type.String({ description: "Name of the skill to remove (folder name, not display name)" }),
+    }),
+    label: "remove_skill",
+    execute: async (_id, params) => {
+      const args = params as Record<string, any>;
+      try {
+        const { removeGlobalSkill } = await import("./skills.js");
+        const result = await removeGlobalSkill(args.name);
+        return { 
+          content: [{ type: "text", text: `✅ ${result.message}` }], 
+          details: { success: true, name: args.name },
+        };
+      } catch (e: any) {
+        return { 
+          content: [{ type: "text", text: `❌ Failed to remove skill: ${e.message}` }], 
+          details: {},
+          isError: true,
+        };
+      }
+    },
+  });
+
+  tools.push({
+    name: "list_skills",
+    description: "List all available global skills. Returns skill names, descriptions, and source (global vs project).",
+    parameters: Type.Object({
+      includeProject: Type.Optional(Type.Boolean({ description: "Include project-specific skills if in a project chat (default: false)" })),
+    }),
+    label: "list_skills",
+    execute: async (_id, params) => {
+      const args = params as Record<string, any>;
+      try {
+        const { discoverSkills } = await import("./skills.js");
+        const skills = await discoverSkills(args.includeProject ? chatId : undefined);
+        
+        if (skills.length === 0) {
+          return { 
+            content: [{ type: "text", text: "No skills available. Install skills using install_skill or add them to ~/.quje-agent/skills/" }], 
+            details: { skills: [] },
+          };
+        }
+        
+        const list = skills.map((s, i) => `${i + 1}. **${s.name}** (${s.source})\n   ${s.description}`).join("\n");
+        return { 
+          content: [{ type: "text", text: `**Available Skills** (${skills.length} total)\n\n${list}` }], 
+          details: { skills: skills.map(s => ({ name: s.name, description: s.description, source: s.source })) },
+        };
+      } catch (e: any) {
+        return { 
+          content: [{ type: "text", text: `Failed to list skills: ${e.message}` }], 
+          details: {},
+          isError: true,
+        };
+      }
+    },
+  });
+
   // Corpus exploration tools
   tools.push({
     name: "explore_corpus",
