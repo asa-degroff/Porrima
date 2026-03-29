@@ -186,7 +186,66 @@ export function useChat(chatId: string | null) {
           reconstructedBg.artifacts = lastMsg.artifacts || [];
           reconstructedBg.visuals = lastMsg.visuals || [];
           reconstructedBg.generatedImages = lastMsg.generatedImages || [];
-          reconstructedBg.segments = lastMsg.segments || [];
+          
+          // Reconstruct segments from tool calls/results if not persisted
+          // Segments may be missing if the message was persisted mid-stream before segments were flushed
+          if (lastMsg.segments && lastMsg.segments.length > 0) {
+            reconstructedBg.segments = [...lastMsg.segments];
+          } else if (lastMsg.toolCalls?.length) {
+            // Build segments from tool calls and tool results
+            const segments: MessageSegment[] = [];
+            let seqCounter = 0;
+            
+            for (const tc of lastMsg.toolCalls) {
+              segments.push({
+                seq: seqCounter++,
+                type: "tool_call",
+                toolCall: tc,
+              });
+              
+              // Check if we have a result for this tool call
+              const tr = lastMsg.toolResults?.find(r => r.toolCallId === tc.id);
+              if (tr) {
+                segments.push({
+                  seq: seqCounter++,
+                  type: "tool_result",
+                  toolResult: tr,
+                });
+              }
+            }
+            
+            // Add artifact segments
+            for (const artifact of (lastMsg.artifacts || [])) {
+              segments.push({
+                seq: seqCounter++,
+                type: "artifact",
+                artifact,
+              });
+            }
+            
+            // Add generated image segments
+            for (const img of (lastMsg.generatedImages || [])) {
+              segments.push({
+                seq: seqCounter++,
+                type: "generated_image",
+                generatedImage: img,
+              });
+            }
+            
+            // Add visual segments
+            for (const visual of (lastMsg.visuals || [])) {
+              segments.push({
+                seq: seqCounter++,
+                type: "visual",
+                visual,
+              });
+            }
+            
+            reconstructedBg.segments = segments;
+          } else {
+            reconstructedBg.segments = [];
+          }
+          
           reconstructedBg.streaming = true;
           reconstructedBg.waitingForInput = false;
           
