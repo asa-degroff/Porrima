@@ -454,13 +454,32 @@ async function handleChatStream(
           console.log(`[chat] Injecting image from generate_and_review tool ${pendingImageInjection.toolCallId}`);
           const injection = pendingImageInjection;
           pendingImageInjection = null; // Clear so we only inject once
+          
+          // Create the user message with image
+          const userMessageWithImage: ChatMessage = {
+            role: "user",
+            content: "Here's the generated image for your review. Please evaluate it against the creative intent and let me know if it captures what you're looking for, or if you'd like me to refine it.",
+            images: [{
+              data: injection.data,
+              mimeType: injection.mimeType,
+              name: `generated-${injection.toolCallId}.jxl`,
+            }],
+            timestamp: Date.now(),
+          };
+          
+          // Persist to chat history so it shows in UI
+          chat.messages.push(userMessageWithImage);
+          await saveChat(chat).catch(err => console.error("[chat] Failed to save injected image message:", err));
+          console.log(`[chat] Injected image message saved to chat history`);
+          
+          // Return for LLM consumption
           return [{
             role: "user" as const,
             content: [
-              { type: "text" as const, text: `Here's the generated image for your review. Please evaluate it against the creative intent and let me know if it captures what you're looking for, or if you'd like me to refine it.` },
+              { type: "text" as const, text: userMessageWithImage.content },
               { type: "image" as const, data: injection.data, mimeType: injection.mimeType },
             ],
-            timestamp: Date.now(),
+            timestamp: userMessageWithImage.timestamp,
           }];
         }
         return [];
@@ -633,7 +652,7 @@ async function handleChatStream(
           if (event.toolName === "generate_and_review") {
             // Check if tool result has pending image in details
             const pendingImage = event.result?.details?.pendingImage;
-            if (pendingImage) {
+            if (pendingImage && pendingImage.data) {
               console.log(`[chat] generate_and_review completed with pending image (${(pendingImage.data.length / 1024).toFixed(1)}KB), scheduling injection`);
               pendingImageInjection = {
                 data: pendingImage.data,
@@ -641,6 +660,8 @@ async function handleChatStream(
                 imageUrl: pendingImage.imageUrl,
                 toolCallId: event.toolCallId,
               };
+            } else {
+              console.log(`[chat] generate_and_review completed but no pending image found (has data: ${!!pendingImage?.data})`);
             }
           }
           
