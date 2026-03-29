@@ -153,21 +153,83 @@ export function useChat(chatId: string | null) {
         setStreamingSegmentIndex(null);
       }
     } else {
-      // No background stream — fresh reset
-      setStreaming(false);
-      setStreamingThinking("");
-      setActiveTools([]);
-      setArtifacts([]);
-      setGeneratedImages([]);
-      setWaitingForInput(false);
-      setError(null);
-      setWarning(null);
-      setCompacting(false);
-      setCompaction(null);
-      setStreamingSegmentIndex(null);
-      setStreamingUsage(null);
+      // No background stream — check for in-progress message from server persistence
+      // This handles navigation away/back during tool execution
+      if (chatId && messages.length > 0) {
+        const lastMsg = messages[messages.length - 1];
+        
+        // Detect in-progress state: either explicit _inProgress flag, or mismatched tool calls/results
+        // A completed tool execution will have equal toolCalls and toolResults counts
+        const isInProgress = lastMsg?.role === "assistant" && (
+          lastMsg._inProgress === true || 
+          (lastMsg.toolCalls?.length && !lastMsg.toolResults?.length) ||
+          (lastMsg.toolCalls?.length && lastMsg.toolResults?.length && lastMsg.toolCalls.length !== lastMsg.toolResults.length)
+        );
+        
+        if (isInProgress) {
+          // Reconstruct streaming state from persisted message
+          console.log(`[useChat] detected in-progress message, restoring streaming state`);
+          const reconstructedBg = createBgStream(activeChatRef.current);
+          reconstructedBg.messages = [...messages];
+          reconstructedBg.content = lastMsg.content || "";
+          reconstructedBg.thinking = lastMsg.thinking || "";
+          
+          // Mark tools as running only if we don't have results for them yet
+          reconstructedBg.tools = (lastMsg.toolCalls || []).map(tc => {
+            const hasResult = lastMsg.toolResults?.some(tr => tr.toolCallId === tc.id);
+            return {
+              name: tc.name,
+              status: hasResult ? ("done" as const) : ("running" as const),
+            };
+          });
+          
+          reconstructedBg.artifacts = lastMsg.artifacts || [];
+          reconstructedBg.visuals = lastMsg.visuals || [];
+          reconstructedBg.generatedImages = lastMsg.generatedImages || [];
+          reconstructedBg.segments = lastMsg.segments || [];
+          reconstructedBg.streaming = true;
+          reconstructedBg.waitingForInput = false;
+          
+          bgStreams.set(chatId, reconstructedBg);
+          setStreaming(true);
+          streamingContentRef.current = reconstructedBg.content;
+          setStreamingThinking(reconstructedBg.thinking);
+          setActiveTools([...reconstructedBg.tools]);
+          setArtifacts([...reconstructedBg.artifacts]);
+          setGeneratedImages([...reconstructedBg.generatedImages]);
+          setStreamingSegmentIndex(reconstructedBg.segments.length > 0 ? reconstructedBg.segments.length - 1 : null);
+        } else {
+          // No in-progress message — fresh reset
+          setStreaming(false);
+          setStreamingThinking("");
+          setActiveTools([]);
+          setArtifacts([]);
+          setGeneratedImages([]);
+          setWaitingForInput(false);
+          setError(null);
+          setWarning(null);
+          setCompacting(false);
+          setCompaction(null);
+          setStreamingSegmentIndex(null);
+          setStreamingUsage(null);
+        }
+      } else {
+        // No chat or no messages — fresh reset
+        setStreaming(false);
+        setStreamingThinking("");
+        setActiveTools([]);
+        setArtifacts([]);
+        setGeneratedImages([]);
+        setWaitingForInput(false);
+        setError(null);
+        setWarning(null);
+        setCompacting(false);
+        setCompaction(null);
+        setStreamingSegmentIndex(null);
+        setStreamingUsage(null);
+      }
     }
-  }, [chatId]);
+  }, [chatId, messages]);
 
   const loadMessages = useCallback((msgs: ChatMessage[]) => {
     setMessages(msgs);

@@ -60,6 +60,8 @@ export interface ChatMessage {
   _isCompactionSummary?: boolean;
   /** Number of messages that were compacted to create this summary */
   _compactedMessageCount?: number;
+  /** Marks this message as in-progress (streaming/tool execution not yet complete) */
+  _inProgress?: boolean;
 }
 
 export type ChatType = "agent" | "quick" | "bluesky";
