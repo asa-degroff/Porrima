@@ -6,7 +6,7 @@ import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
 import type { AgentContext, AgentLoopConfig, StreamFn } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat, getSettings, loadPendingState, savePendingState, clearPendingState } from "../services/chat-storage.js";
 import { chatMessagesToPiMessages } from "../services/agent.js";
-import { createPiModel, discoverOllamaModels } from "../services/models.js";
+import { createPiModel, discoverOllamaModels, getEffectiveContextWindow } from "../services/models.js";
 import type { OllamaModel } from "../types.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
 import { generateTitle } from "../services/title-generation.js";
@@ -765,7 +765,7 @@ async function handleChatStream(
           if (!hitContextLimit && !msg.usage && (stopReason as string) !== "stop" && (stopReason as string) !== "toolUse" && (stopReason as string) !== "length") {
             // Check if the last known usage was already high
             const lastKnown = state.finalUsage?.totalTokens ?? 0;
-            const effectiveCW = ollamaModel ? (chat.contextWindow ?? ollamaModel.contextWindow) : 0;
+            const effectiveCW = getEffectiveContextWindow(chat, ollamaModel);
             if (effectiveCW > 0 && (lastKnown / effectiveCW > 0.8 || iterations > 3)) {
               hitContextLimit = true;
               console.warn(`[chat] model error with no usage data at iteration ${iterations} (last known: ${lastKnown}/${effectiveCW}) — treating as context overflow`);
@@ -1095,7 +1095,7 @@ async function handleChatStream(
       try {
         const model = ollamaModels.find((m) => m.id === chat.modelId);
         if (model) {
-          const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
+          const effectiveContextWindow = getEffectiveContextWindow(chat, model);
           const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
           const usageRatio = lastUsage > 0 ? lastUsage / effectiveContextWindow : 0;
 
@@ -1401,7 +1401,7 @@ router.post("/", async (req, res) => {
     // Pre-send context protection for resume path
     if (model) {
       try {
-        const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
+        const effectiveContextWindow = getEffectiveContextWindow(chat, model);
         const emitKeepalive = () => res.write(`: keepalive\n\n`);
         const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
@@ -1496,7 +1496,7 @@ router.post("/", async (req, res) => {
     // Pre-send context protection: truncate BEFORE sending if >75% of context window
     if (model) {
       try {
-        const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
+        const effectiveContextWindow = getEffectiveContextWindow(chat, model);
         const emitKeepalive = () => res.write(`: keepalive\n\n`);
         const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
@@ -1667,7 +1667,7 @@ router.post("/edit", async (req, res) => {
   // Pre-send context protection for edit path
   if (model) {
     try {
-      const effectiveContextWindow = chat.contextWindow ?? model.contextWindow;
+      const effectiveContextWindow = getEffectiveContextWindow(chat, model);
       const emitKeepalive = () => res.write(`: keepalive\n\n`);
       const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
       if (compaction && compaction.truncated) {

@@ -20,10 +20,19 @@ interface ModelInfoResult {
 }
 
 async function getModelCapabilities(modelName: string): Promise<ModelInfoResult> {
+  // Conservative default: 32k tokens. Better to compact early than overflow.
+  // Cloud models and models with failed /api/show calls will use this safe default.
   const result: ModelInfoResult = {
     contextWindow: 32768,
     supportsImages: false,
   };
+
+  // Cloud models can't be queried via /api/show (local Ollama endpoint only)
+  // Return the conservative default with a log message
+  if (modelName.includes(":cloud")) {
+    console.log(`[models] ${modelName}: cloud model, using default context window ${result.contextWindow}`);
+    return result;
+  }
 
   try {
     const controller = new AbortController();
@@ -35,14 +44,19 @@ async function getModelCapabilities(modelName: string): Promise<ModelInfoResult>
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
-    if (!res.ok) return result;
+    if (!res.ok) {
+      console.warn(`[models] ${modelName}: /api/show returned ${res.status}, using default context window ${result.contextWindow}`);
+      return result;
+    }
     const data = await res.json();
     const modelInfo = data.model_info as Record<string, unknown> | undefined;
     if (modelInfo) {
+      let detected = false;
       for (const key of Object.keys(modelInfo)) {
         // Context length detection
         if (key.endsWith(".context_length") && typeof modelInfo[key] === "number") {
           result.contextWindow = modelInfo[key] as number;
+          detected = true;
         }
         // Vision capability detection: look for vision-related keys
         // Examples: qwen35.vision.*, llava.*, bakllava.*, etc.
@@ -50,9 +64,16 @@ async function getModelCapabilities(modelName: string): Promise<ModelInfoResult>
           result.supportsImages = true;
         }
       }
+      if (detected) {
+        console.log(`[models] ${modelName}: detected context window ${result.contextWindow}`);
+      } else {
+        console.warn(`[models] ${modelName}: /api/show succeeded but no context_length found, using default ${result.contextWindow}`);
+      }
+    } else {
+      console.warn(`[models] ${modelName}: /api/show returned no model_info, using default ${result.contextWindow}`);
     }
-  } catch {
-    // Timeout or network error - return defaults
+  } catch (err) {
+    console.warn(`[models] ${modelName}: /api/show failed (${err instanceof Error ? err.message : String(err)}), using default context window ${result.contextWindow}`);
   }
   return result;
 }
@@ -123,6 +144,29 @@ function supportsReasoning(family: string): boolean {
   return family.startsWith("qwen3");
 }
 
+/**
+ * Get the effective context window for a chat, with safety guards.
+ * 
+ * Priority order:
+ * 1. Explicit chat override (chat.contextWindow) - user knows best
+ * 2. Model's detected context window (model.contextWindow) - from /api/show
+ * 3. Conservative default (32768) - safe fallback
+ * 
+ * This function exists to prevent context overflow when /api/show fails
+ * or returns unreliable data. The conservative default ensures compaction
+ * triggers before the model hits its actual limit.
+ */
+export function getEffectiveContextWindow(chat: { contextWindow?: number }, model: OllamaModel | undefined): number {
+  if (chat.contextWindow) {
+    return chat.contextWindow;
+  }
+  if (model?.contextWindow) {
+    return model.contextWindow;
+  }
+  // Fallback to conservative default - better to compact early than overflow
+  return 32768;
+}
+
 export function createPiModel(
   ollamaModel: OllamaModel
 ): Model<"ollama-native"> {
@@ -139,7 +183,7 @@ export function createPiModel(
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: ollamaModel.contextWindow,
-    maxTokens: 8192,
+    maxTokens: 32768,
   };
 }
 
