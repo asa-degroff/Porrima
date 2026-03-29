@@ -476,29 +476,36 @@ export function ChatView({
             const sel = window.getSelection();
             if (!sel || sel.rangeCount === 0) return;
             
-            // Get the full text to find the last "/"
-            const fullText = editor.innerText;
-            const lastSlashIndex = fullText.lastIndexOf("/");
-            if (lastSlashIndex === -1) {
-              setSkillSelectorOpen(false);
-              editor.focus();
-              return;
-            }
+            const range = sel.getRangeAt(0);
             
-            // Get text before the slash
-            const textBeforeSlash = fullText.slice(0, lastSlashIndex);
+            // Find the text node containing the cursor and the slash being typed
+            let textNode: Text | null = null;
+            let container: Node = range.startContainer;
             
-            // Save scroll position
-            const scrollTop = editor.scrollTop;
-            
-            // Save non-text children (image previews, etc.)
-            const preservedNodes: Node[] = [];
-            for (let i = 0; i < editor.childNodes.length; i++) {
-              const child = editor.childNodes[i];
-              if (child.nodeType !== Node.TEXT_NODE) {
-                preservedNodes.push(child);
+            // Walk up to find a text node or the editor itself
+            while (container && container !== editor) {
+              if (container.nodeType === Node.TEXT_NODE) {
+                textNode = container as Text;
+                break;
               }
+              container = container.parentNode!;
             }
+            
+            // If no text node found, create one at cursor position
+            if (!textNode) {
+              textNode = document.createTextNode("");
+              range.insertNode(textNode);
+            }
+            
+            // Get the text content up to cursor position
+            const textBeforeCursor = textNode.textContent!.slice(0, range.startOffset);
+            const lastSlashInNode = textBeforeCursor.lastIndexOf("/");
+            
+            // Find the start position of the slash within this text node
+            const slashStartIndex = lastSlashInNode >= 0 ? lastSlashInNode : 0;
+            
+            // Extract text before the slash (keep it)
+            const textBeforeSlash = textNode.textContent!.slice(0, slashStartIndex);
             
             // Create the skill chip
             const chip = document.createElement('span');
@@ -508,28 +515,23 @@ export function ChatView({
             chip.setAttribute('data-skill', skillName);
             chip.setAttribute('contenteditable', 'false');
             
-            // Clear and rebuild
-            editor.textContent = "";
+            // Save scroll position
+            const scrollTop = editor.scrollTop;
             
-            // Restore preserved nodes first
-            for (const node of preservedNodes) {
-              editor.appendChild(node);
-            }
+            // Replace the /skill-name portion in the text node with the chip
+            // Split the text node: keep text before slash, insert chip, add trailing space
+            textNode.textContent = textBeforeSlash;
             
-            // Add text before slash
-            if (textBeforeSlash) {
-              editor.appendChild(document.createTextNode(textBeforeSlash));
-            }
+            // Insert chip after the text node
+            textNode.parentNode?.insertBefore(chip, textNode.nextSibling);
             
-            // Add the chip
-            editor.appendChild(chip);
+            // Add trailing space after chip
+            const spaceNode = document.createTextNode(" ");
+            textNode.parentNode?.insertBefore(spaceNode, chip.nextSibling);
             
-            // Add trailing space
-            editor.appendChild(document.createTextNode(" "));
-            
-            // Position cursor after the chip
+            // Position cursor after the space
             const newRange = document.createRange();
-            newRange.setStartAfter(chip.nextSibling!);
+            newRange.setStartAfter(spaceNode);
             newRange.collapse(true);
             sel.removeAllRanges();
             sel.addRange(newRange);
