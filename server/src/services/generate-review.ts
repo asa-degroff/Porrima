@@ -102,11 +102,11 @@ export async function generateForReview(
     // Mark complete
     await completeGeneration(generationId, imageUrl);
 
-    // Use WebP thumbnail for agent review — Ollama rejects JXL ("400 invalid image input")
+    // Use full JXL image for agent review — now that we use Ollama native API (same as image sandbox)
     const imageFilename = imageUrl.replace("/api/images/", "");
-    const thumbPath = join(IMAGES_DIR, imageFilename, "thumb.webp");
-    const imageBuffer = await readFile(thumbPath);
-    const mimeType = "image/webp";
+    const imagePath = join(IMAGES_DIR, imageFilename, "image.jxl");
+    const imageBuffer = await readFile(imagePath);
+    const mimeType = "image/jxl";
 
     console.log(`[generate-review] Generation complete: ${imageId} (${imageUrl})`);
     
