@@ -1,5 +1,5 @@
 import { embed } from "./embeddings.js";
-import { searchMemories, updateMemory } from "./memory-storage.js";
+import { searchMemories, updateMemory, mmrRerank } from "./memory-storage.js";
 import { loadPersona } from "./persona-store.js";
 import { loadUserDocument } from "./user-store.js";
 import type { ChatMessage } from "../types.js";
@@ -63,24 +63,10 @@ export async function buildMemoryAugmentedPrompt(
       
       // Select top current memories (prioritize these)
       const topCurrent = currentMemories
-        .filter((r) => r.score > 0.0002) // Lower threshold for current memories
-        .slice(0, 8);
+        .filter((r) => r.score > 0.0002); // Lower threshold for current memories
       
-      // Select relevant superseded memories as "historical context"
-      const topSuperseded = supersededMemories
-        .filter((r) => r.score > 0.0001) // Even lower threshold - these provide context
-        .slice(0, 4);
-      
-      // Try to ensure category diversity (at most 3 of any one category)
-      const categoryCount: Record<string, number> = {};
-      const diverseMemories: Array<typeof topCurrent[0]> = [];
-      for (const m of topCurrent) {
-        const cat = m.memory.category;
-        categoryCount[cat] = (categoryCount[cat] || 0) + 1;
-        if (categoryCount[cat] <= 3) {
-          diverseMemories.push(m);
-        }
-      }
+      // Apply MMR re-ranking for diversity (reuse the query embedding)
+      const diverseMemories = mmrRerank(topCurrent, queryEmbedding, 15, 0.7);
       
       // Apply project scoping: boost project-matching memories to the top
       if (projectId) {
@@ -93,6 +79,11 @@ export async function buildMemoryAugmentedPrompt(
       }
       
       const selected = diverseMemories.slice(0, 15);
+      
+      // Select relevant superseded memories as "historical context"
+      const topSuperseded = supersededMemories
+        .filter((r) => r.score > 0.0001) // Even lower threshold - these provide context
+        .slice(0, 5);
       
       // Add superseded memories if they provide useful historical context
       const finalMemories = [...selected];

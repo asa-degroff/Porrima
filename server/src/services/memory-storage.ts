@@ -425,6 +425,90 @@ export interface ScoredMemory {
 }
 
 /**
+ * Maximal Marginal Relevance (MMR) re-ranking.
+ * Balances relevance against redundancy by iteratively selecting items that
+ * are both relevant to the query and dissimilar to already-selected items.
+ * 
+ * @param candidates - Pre-scored candidates (sorted by relevance)
+ * @param queryEmbedding - The query embedding for similarity computation
+ * @param k - Number of items to select
+ * @param lambda - Tradeoff parameter: 1.0 = pure relevance, 0.0 = pure diversity
+ * @returns Re-ranked subset of candidates
+ */
+export function mmrRerank(
+  candidates: ScoredMemory[],
+  queryEmbedding: number[],
+  k: number,
+  lambda: number = 0.7
+): ScoredMemory[] {
+  if (candidates.length <= k || lambda >= 1.0) {
+    return candidates.slice(0, k);
+  }
+
+  const selected: ScoredMemory[] = [];
+  const remaining = [...candidates];
+
+  while (selected.length < k && remaining.length > 0) {
+    if (selected.length === 0) {
+      // First pick: highest relevance score
+      const best = remaining.shift()!;
+      selected.push(best);
+      continue;
+    }
+
+    let bestCandidate: ScoredMemory | null = null;
+    let bestMmrScore = -Infinity;
+
+    for (let i = 0; i < remaining.length; i++) {
+      const candidate = remaining[i];
+      const relevance = candidate.score;
+
+      // Compute max similarity to any already-selected item
+      let maxSimilarity = 0;
+      for (const sel of selected) {
+        const sim = cosineSimilarity(
+          candidate.memory.embedding,
+          sel.memory.embedding
+        );
+        if (sim > maxSimilarity) {
+          maxSimilarity = sim;
+        }
+      }
+
+      const mmrScore = lambda * relevance - (1 - lambda) * maxSimilarity;
+
+      if (mmrScore > bestMmrScore) {
+        bestMmrScore = mmrScore;
+        bestCandidate = candidate;
+      }
+    }
+
+    if (bestCandidate) {
+      selected.push(bestCandidate);
+      remaining.splice(remaining.indexOf(bestCandidate), 1);
+    }
+  }
+
+  return selected;
+}
+
+/**
+ * Compute cosine similarity between two embeddings.
+ * Embeddings are assumed to be L2-normalized (as qwen3-embedding produces),
+ * so cosine similarity = dot product.
+ */
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length === 0 || b.length === 0 || a.length !== b.length) {
+    return 0;
+  }
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+  }
+  return dot;
+}
+
+/**
  * FTS5 full-text search. Returns ranked IDs.
  * Tries quoted phrase match first; falls back to individual terms on no results.
  */
@@ -513,12 +597,15 @@ export async function searchMemories(
     rrfScores.set(id, score);
   }
 
-  // Fetch metadata for all candidate IDs
+  // Fetch metadata + embeddings for all candidate IDs
   const ids = Array.from(allIds);
   const placeholders = ids.map(() => "?").join(",");
   const metaRows = db
     .prepare(
-      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, superseded_by, supersedes FROM memories WHERE id IN (${placeholders})`
+      `SELECT m.id, m.text, m.category, m.importance, m.created_at, m.last_accessed, m.access_count, m.source_chat_id, m.project_id, m.superseded_by, m.supersedes, v.embedding 
+       FROM memories m 
+       JOIN vec_memories v ON m.id = v.id 
+       WHERE m.id IN (${placeholders})`
     )
     .all(...ids) as Array<{
     id: string;
@@ -532,6 +619,7 @@ export async function searchMemories(
     project_id: string;
     superseded_by: string | null;
     supersedes: string | null;
+    embedding: Buffer;
   }>;
 
   const nowMs = now.getTime();
@@ -550,7 +638,7 @@ export async function searchMemories(
         text: r.text,
         category: r.category as Memory["category"],
         importance: r.importance,
-        embedding: [],
+        embedding: Array.from(new Float32Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength / 4)),
         createdAt: r.created_at,
         lastAccessed: r.last_accessed,
         accessCount: r.access_count,
