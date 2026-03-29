@@ -546,6 +546,17 @@ ${limited.map((g, i) => `${i + 1}. **${g.theme}** (${g.count} images)
         
         console.log(`[generate_and_review] Image generated successfully, formatting review result`);
 
+        // Emit generated_image event so the image appears in the chat UI
+        effects.onGeneratedImage({
+          id: result.imageId!,
+          url: result.imageUrl!,
+          params: result.params!,
+          resolvedSeed: result.resolvedSeed!,
+          createdAt: new Date().toISOString(),
+          chatId,
+          generatedBy: "agent",
+        });
+
         // Format result (text-only; image goes to details.pendingImage for injection as user message)
         const reviewResult = formatReviewResult(
           result,

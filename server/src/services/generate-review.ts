@@ -48,6 +48,7 @@ export async function generateForReview(
   generationId?: string;
   error?: string;
   resolvedSeed?: number;
+  params?: import("../types.js").ImageGenerationParams;
 }> {
   console.log(`[generate-review] Generating for review: ${prompt.slice(0, 80)}...`);
 
@@ -119,6 +120,7 @@ export async function generateForReview(
       imageId,
       generationId,
       resolvedSeed: result.resolvedSeed,
+      params: generationParams,
     };
   } catch (err: any) {
     console.error("[generate-review] Generation failed:", err.message);
