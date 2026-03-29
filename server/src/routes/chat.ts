@@ -1255,9 +1255,11 @@ router.post("/", async (req, res) => {
   const invokedSkills = parseSkillInvocations(message);
   const activatedSkillNames: string[] = [];
   
+  // Always discover skills (global + project if applicable)
+  const allSkills = await discoverSkills(chat.projectId);
+  console.log(`[skills] Chat ${chatId} (type=${chat.type}, projectId=${chat.projectId}): discovered ${allSkills.length} skills: ${allSkills.map(s => s.name).join(", ")}`);
+  
   if (invokedSkills.length > 0) {
-    const allSkills = await discoverSkills(chat.projectId);
-    
     for (const invokedSkill of invokedSkills) {
       const skill = allSkills.find(s => s.name.toLowerCase() === invokedSkill.toLowerCase());
       
@@ -1270,7 +1272,11 @@ router.post("/", async (req, res) => {
           chat.activeSkills.push(skill.name);
           activatedSkillNames.push(skill.name);
           console.log(`[skills] Activated skill "${skill.name}" for chat ${chatId}`);
+        } else {
+          console.log(`[skills] Skill "${skill.name}" already active in chat ${chatId}`);
         }
+      } else {
+        console.warn(`[skills] Invoked skill "${invokedSkill}" not found in discovered skills`);
       }
     }
     
@@ -1467,10 +1473,14 @@ router.post("/", async (req, res) => {
     if (chat.activeSkills?.length) {
       const skillsCache = new Map<string, Skill>();
       const allSkills = await discoverSkills(chat.projectId);
+      console.log(`[skills] Chat ${chatId}: projectId=${chat.projectId}, discovered ${allSkills.length} skills, activeSkills=${chat.activeSkills.join(",")}`);
       for (const s of allSkills) {
         skillsCache.set(s.name, s);
       }
       systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+      console.log(`[skills] Injected ${chat.activeSkills.length} skills into system prompt`);
+    } else {
+      console.log(`[skills] Chat ${chatId}: no activeSkills set (projectId=${chat.projectId})`);
     }
     
     // Discover model for pre-send truncation

@@ -843,6 +843,30 @@ export async function fetchSkills(projectId?: string): Promise<SkillInfo[]> {
   return res.json();
 }
 
+export async function installSkill(url: string, name?: string): Promise<{ name: string; path: string; message: string }> {
+  const res = await apiFetch(`${BASE}/skills/install`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to install skill");
+  }
+  return res.json();
+}
+
+export async function deleteSkill(name: string): Promise<{ success: boolean; message: string }> {
+  const res = await apiFetch(`${BASE}/skills/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to delete skill");
+  }
+  return res.json();
+}
+
 // --- Projects API ---
 
 export interface Project {

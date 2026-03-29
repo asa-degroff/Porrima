@@ -6,6 +6,7 @@ import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from 
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
 import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, CreativeDirectionSettings, BlueskySettings, PersonaStore, UserDocument } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
+import { SkillsBrowser } from "./SkillsBrowser";
 
 function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
   useEffect(() => {
@@ -79,6 +80,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
   const [synthesisRunning, setSynthesisRunning] = useState(false);
   const [memoryBrowserOpen, setMemoryBrowserOpen] = useState(false);
+  const [skillsBrowserOpen, setSkillsBrowserOpen] = useState(false);
   // Delayed extraction settings
   const [delayedExtractionEnabled, setDelayedExtractionEnabled] = useState(settings.delayedExtractionEnabled ?? true);
   const [delayedExtractionThreshold, setDelayedExtractionThreshold] = useState(settings.delayedExtractionThresholdMinutes ?? 30);
@@ -1412,6 +1414,32 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             ) : (
               <p className="text-white/30 text-sm">Loading memory status...</p>
             )}
+          </div>
+
+          {/* Skills Section */}
+          <div className="space-y-3 pt-2 border-t border-white/10">
+            <h3 className="text-sm font-medium text-white/70">Skills</h3>
+            <p className="text-white/30 text-xs">
+              Download and manage skills that extend the agent's capabilities. Skills are stored as SKILL.md files with frontmatter metadata.
+            </p>
+            
+            <div className="flex gap-2">
+              <button
+                onClick={() => setSkillsBrowserOpen(!skillsBrowserOpen)}
+                className="flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all"
+                style={{
+                  backgroundColor: skillsBrowserOpen
+                    ? `rgba(var(--theme-secondary), 0.2)`
+                    : `rgba(var(--theme-secondary), 0.1)`,
+                  borderColor: `rgba(var(--theme-secondary-border))`,
+                  color: `rgba(var(--theme-secondary-text))`,
+                }}
+              >
+                {skillsBrowserOpen ? "Close Browser" : "Browse Skills"}
+              </button>
+            </div>
+
+            {skillsBrowserOpen && <SkillsBrowser onClose={() => setSkillsBrowserOpen(false)} projectId={undefined} />}
           </div>
 
           {/* Delayed Extraction Settings */}

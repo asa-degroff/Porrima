@@ -138,21 +138,19 @@ export function ChatView({
   const skillsCache = useRef<Map<string, SkillInfo[]>>(new Map());
   
   useEffect(() => {
-    if (!projectId) {
-      setSkills([]);
-      return;
-    }
+    // Use empty string as cache key for non-project chats (no projectId)
+    const cacheKey = projectId || "";
     
     // Check cache first
-    const cached = skillsCache.current.get(projectId);
+    const cached = skillsCache.current.get(cacheKey);
     if (cached) {
       setSkills(cached);
       return;
     }
     
-    // Fetch and cache
+    // Fetch skills (global skills are always available, project skills added if projectId exists)
     fetchSkills(projectId).then((fetched) => {
-      skillsCache.current.set(projectId, fetched);
+      skillsCache.current.set(cacheKey, fetched);
       setSkills(fetched);
     }).catch(() => {
       setSkills([]);
