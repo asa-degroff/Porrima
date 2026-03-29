@@ -122,6 +122,7 @@ export function useChat(chatId: string | null) {
   activeChatIdRef.current = chatId;
 
   // Restore or reset streaming state when switching chats
+  // IMPORTANT: Only depends on chatId to avoid race conditions with stale messages state
   useEffect(() => {
     // Cancel any pending rAF flush from previous chat's stream
     if (rafRef.current !== null) {
@@ -131,7 +132,7 @@ export function useChat(chatId: string | null) {
 
     const bg = chatId ? bgStreams.get(chatId) : undefined;
     if (bg) {
-      // Restore streaming state from background
+      // Restore streaming state from background (chat was switched away from mid-stream)
       setMessages([...bg.messages]);
       setStreaming(bg.streaming);
       streamingContentRef.current = bg.content;
@@ -153,142 +154,23 @@ export function useChat(chatId: string | null) {
         setStreamingSegmentIndex(null);
       }
     } else {
-      // No background stream — check for in-progress message from server persistence
-      // This handles navigation away/back during tool execution
-      if (chatId && messages.length > 0) {
-        const lastMsg = messages[messages.length - 1];
-        
-        // Detect in-progress state: either explicit _inProgress flag, or mismatched tool calls/results
-        // A completed tool execution will have equal toolCalls and toolResults counts
-        const isInProgress = lastMsg?.role === "assistant" && (
-          lastMsg._inProgress === true || 
-          (lastMsg.toolCalls?.length && !lastMsg.toolResults?.length) ||
-          (lastMsg.toolCalls?.length && lastMsg.toolResults?.length && lastMsg.toolCalls.length !== lastMsg.toolResults.length)
-        );
-        
-        if (isInProgress) {
-          // Reconstruct streaming state from persisted message
-          console.log(`[useChat] detected in-progress message, restoring streaming state`);
-          const reconstructedBg = createBgStream(activeChatRef.current);
-          reconstructedBg.messages = [...messages];
-          reconstructedBg.content = lastMsg.content || "";
-          reconstructedBg.thinking = lastMsg.thinking || "";
-          
-          // Mark tools as running only if we don't have results for them yet
-          reconstructedBg.tools = (lastMsg.toolCalls || []).map(tc => {
-            const hasResult = lastMsg.toolResults?.some(tr => tr.toolCallId === tc.id);
-            return {
-              name: tc.name,
-              status: hasResult ? ("done" as const) : ("running" as const),
-            };
-          });
-          
-          reconstructedBg.artifacts = lastMsg.artifacts || [];
-          reconstructedBg.visuals = lastMsg.visuals || [];
-          reconstructedBg.generatedImages = lastMsg.generatedImages || [];
-          
-          // Reconstruct segments from tool calls/results if not persisted
-          // Segments may be missing if the message was persisted mid-stream before segments were flushed
-          if (lastMsg.segments && lastMsg.segments.length > 0) {
-            reconstructedBg.segments = [...lastMsg.segments];
-          } else if (lastMsg.toolCalls?.length) {
-            // Build segments from tool calls and tool results
-            const segments: MessageSegment[] = [];
-            let seqCounter = 0;
-            
-            for (const tc of lastMsg.toolCalls) {
-              segments.push({
-                seq: seqCounter++,
-                type: "tool_call",
-                toolCall: tc,
-              });
-              
-              // Check if we have a result for this tool call
-              const tr = lastMsg.toolResults?.find(r => r.toolCallId === tc.id);
-              if (tr) {
-                segments.push({
-                  seq: seqCounter++,
-                  type: "tool_result",
-                  toolResult: tr,
-                });
-              }
-            }
-            
-            // Add artifact segments
-            for (const artifact of (lastMsg.artifacts || [])) {
-              segments.push({
-                seq: seqCounter++,
-                type: "artifact",
-                artifact,
-              });
-            }
-            
-            // Add generated image segments
-            for (const img of (lastMsg.generatedImages || [])) {
-              segments.push({
-                seq: seqCounter++,
-                type: "generated_image",
-                generatedImage: img,
-              });
-            }
-            
-            // Add visual segments
-            for (const visual of (lastMsg.visuals || [])) {
-              segments.push({
-                seq: seqCounter++,
-                type: "visual",
-                visual,
-              });
-            }
-            
-            reconstructedBg.segments = segments;
-          } else {
-            reconstructedBg.segments = [];
-          }
-          
-          reconstructedBg.streaming = true;
-          reconstructedBg.waitingForInput = false;
-          
-          bgStreams.set(chatId, reconstructedBg);
-          setStreaming(true);
-          streamingContentRef.current = reconstructedBg.content;
-          setStreamingThinking(reconstructedBg.thinking);
-          setActiveTools([...reconstructedBg.tools]);
-          setArtifacts([...reconstructedBg.artifacts]);
-          setGeneratedImages([...reconstructedBg.generatedImages]);
-          setStreamingSegmentIndex(reconstructedBg.segments.length > 0 ? reconstructedBg.segments.length - 1 : null);
-        } else {
-          // No in-progress message — fresh reset
-          setStreaming(false);
-          setStreamingThinking("");
-          setActiveTools([]);
-          setArtifacts([]);
-          setGeneratedImages([]);
-          setWaitingForInput(false);
-          setError(null);
-          setWarning(null);
-          setCompacting(false);
-          setCompaction(null);
-          setStreamingSegmentIndex(null);
-          setStreamingUsage(null);
-        }
-      } else {
-        // No chat or no messages — fresh reset
-        setStreaming(false);
-        setStreamingThinking("");
-        setActiveTools([]);
-        setArtifacts([]);
-        setGeneratedImages([]);
-        setWaitingForInput(false);
-        setError(null);
-        setWarning(null);
-        setCompacting(false);
-        setCompaction(null);
-        setStreamingSegmentIndex(null);
-        setStreamingUsage(null);
-      }
+      // No background stream — fresh reset for new chat
+      // In-progress state from persistence is handled by App.tsx selectChat logic
+      // which checks for _inProgress flag before calling loadMessages
+      setStreaming(false);
+      setStreamingThinking("");
+      setActiveTools([]);
+      setArtifacts([]);
+      setGeneratedImages([]);
+      setWaitingForInput(false);
+      setError(null);
+      setWarning(null);
+      setCompacting(false);
+      setCompaction(null);
+      setStreamingSegmentIndex(null);
+      setStreamingUsage(null);
     }
-  }, [chatId, messages]);
+  }, [chatId]);
 
   const loadMessages = useCallback((msgs: ChatMessage[]) => {
     setMessages(msgs);
