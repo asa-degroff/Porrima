@@ -118,15 +118,14 @@ async function runCorpusCreativeCycle() {
       });
     }
 
-    // 4. Unload Ollama model to free VRAM for ComfyUI
-    await unloadOllamaModel(modelId);
-    // Brief pause to let VRAM fully release
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    // 5. Execute top directions autonomously (ComfyUI phase — uses GPU for image gen)
-    const { executeDirection, DEFAULT_AUTONOMOUS_CONFIG } = await import("./autonomous-generation.js");
+    // 4. Execute top directions autonomously with agent loop review
+    // The agent loop alternates between Ollama (LLM evaluation) and ComfyUI
+    // (image generation), so Ollama must remain available throughout.
+    const { executeDirectionWithReview, DEFAULT_AUTONOMOUS_CONFIG } = await import("./autonomous-generation.js");
+    const { getClusterMembers } = await import("./creative-engine.js");
     const systemChatId = "autonomous-system";
     const maxExecutions = cdSettings.maxExecutions ?? 4;
+    const maxReviewIterations = cdSettings.maxReviewIterations ?? 3;
 
     // Build config overrides from settings
     const genConfig = {
@@ -137,14 +136,50 @@ async function runCorpusCreativeCycle() {
     };
 
     for (const dir of directions.slice(0, maxExecutions)) {
-      console.log(`[scheduler] Executing direction: ${dir.type} - ${dir.description}`);
-      const result = await executeDirection(dir, systemChatId, genConfig);
+      console.log(`[scheduler] Executing direction with review: ${dir.type} - ${dir.description}`);
+
+      // Gather corpus members for vision context.
+      // For directions with source clusters, pick representative members.
+      // For gap-fill directions (empty sourceClusters), find corpus entries
+      // matching the gap theme so the agent can judge novelty against them.
+      let corpusMembers: import("./image-corpus.js").ImageCorpusEntry[] = [];
+      if (dir.sourceClusters.length > 0) {
+        for (const clusterId of dir.sourceClusters) {
+          const cluster = clusterMap.clusters.find(c => c.id === clusterId);
+          if (cluster) {
+            const members = await getClusterMembers(cluster, corpus, 2);
+            corpusMembers.push(...members);
+          }
+        }
+      } else if (dir.elementCombination.injectNovelty) {
+        // Gap-fill: find existing entries with the underrepresented theme
+        const theme = dir.elementCombination.injectNovelty.toLowerCase();
+        corpusMembers = corpus.filter(
+          e => e.elements?.themes?.some(t => t.toLowerCase().includes(theme))
+        ).slice(0, 3);
+      }
+      // Deduplicate and limit
+      const seen = new Set<string>();
+      corpusMembers = corpusMembers.filter(m => {
+        if (seen.has(m.id)) return false;
+        seen.add(m.id);
+        return true;
+      }).slice(0, 3);
+
+      const result = await executeDirectionWithReview(dir, systemChatId, genConfig, {
+        maxIterations: maxReviewIterations,
+        modelId: modelId,
+        corpusMembers,
+      });
       if (result.success) {
-        console.log(`[scheduler] Generated: ${result.imageId}`);
+        console.log(`[scheduler] Generated: ${result.imageId} (accepted at iteration ${result.acceptedAtIteration}/${maxReviewIterations})`);
       } else {
         console.log(`[scheduler] Failed: ${result.error}`);
       }
     }
+
+    // Unload Ollama model after all directions are processed to free VRAM
+    await unloadOllamaModel(modelId);
 
     console.log("[scheduler] Corpus creative cycle complete");
   } catch (e) {

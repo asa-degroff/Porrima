@@ -39,7 +39,8 @@ export interface GenerationReviewState {
 export async function generateForReview(
   prompt: string,
   chatId: string,
-  config: AutonomousGenerationConfig = DEFAULT_AUTONOMOUS_CONFIG
+  config: AutonomousGenerationConfig = DEFAULT_AUTONOMOUS_CONFIG,
+  options: { directionId?: string } = {}
 ): Promise<{
   success: boolean;
   imageData?: { base64: string; mimeType: string };
@@ -97,6 +98,7 @@ export async function generateForReview(
       createdAt: new Date().toISOString(),
       chatId,
       generatedBy: 'agent',
+      ...(options.directionId ? { directionId: options.directionId } : {}),
     });
 
     // Mark complete

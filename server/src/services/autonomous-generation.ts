@@ -9,6 +9,15 @@ import {
   failGeneration,
 } from "./image-generation.js";
 import crypto from "crypto";
+import { join } from "path";
+import { homedir } from "os";
+import type { Message } from "@mariozechner/pi-ai";
+import { streamSimple } from "@mariozechner/pi-ai";
+import { agentLoop } from "@mariozechner/pi-agent-core";
+import type { AgentContext, AgentLoopConfig, AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
+import { Z_IMAGE_INSTRUCTIONS, loadThumbnail } from "./creative-engine.js";
+import type { ImageCorpusEntry } from "./image-corpus.js";
 
 /**
  * Autonomous generation configuration.
@@ -78,11 +87,324 @@ export function analyzeDimensions(prompt: string, config: AutonomousGenerationCo
 }
 
 /**
- * Execute a creative direction by generating an image.
- * Integrates with the generation state tracking system so progress
- * is visible via SSE subscriptions (same as manual generations).
+ * Build the system prompt for the autonomous review agent loop.
+ * Combines creative direction context with z-image instructions.
  */
+function buildAutonomousSystemPrompt(direction: CreativeDirection): string {
+  const elementLines = Object.entries(direction.elementCombination)
+    .filter(([_, v]) => v)
+    .map(([k, v]) => `- ${k}: ${v}`)
+    .join("\n");
+
+  return `You are an autonomous creative agent generating images for a visual corpus.
+You have the generate_and_review tool to create and iteratively refine images.
+
+**Your Creative Direction:** ${direction.type.toUpperCase()}
+**Goal:** ${direction.description}
+
+**Element Combination:**
+${elementLines}
+
+**Novelty Target:** ${(direction.noveltyScore * 100).toFixed(0)}% new compared to existing corpus
+
+When evaluating each generated image:
+- Does it capture the essence of the creative direction?
+- Does it successfully combine the specified elements (themes, settings, styles)?
+- Is the novelty level appropriate — distinct from the reference images shown?
+- Be specific about what needs to change: composition, lighting, subject matter, style.
+
+When refining prompts, follow the z-image workflow:
+${Z_IMAGE_INSTRUCTIONS}`;
+}
+
 /**
+ * Build the initial user message with the proposed prompt and corpus reference images.
+ * Includes thumbnails as vision context so the agent can judge novelty and alignment.
+ */
+async function buildAutonomousUserMessage(
+  direction: CreativeDirection,
+  corpusMembers?: ImageCorpusEntry[],
+): Promise<Message> {
+  const content: any[] = [];
+
+  // Load corpus reference thumbnails for vision context
+  if (corpusMembers && corpusMembers.length > 0) {
+    const thumbs = await Promise.all(corpusMembers.slice(0, 3).map(m => loadThumbnail(m)));
+    for (const thumb of thumbs) {
+      if (thumb) {
+        content.push({ type: "image", data: thumb.data, mimeType: thumb.mimeType });
+      }
+    }
+  }
+
+  const textPrompt = `Generate an image using the generate_and_review tool with this prompt:
+
+${direction.proposedPrompt}
+
+Creative intent: ${direction.description}
+
+${corpusMembers && corpusMembers.length > 0 ? "The reference images above show existing corpus entries. Your generation should be distinct from these while aligning with the creative direction." : ""}
+
+Use the generate_and_review tool now. Evaluate the result honestly and iterate if it doesn't match your creative vision.`;
+
+  content.push({ type: "text", text: textPrompt });
+
+  return { role: "user" as const, content, timestamp: Date.now() };
+}
+
+/**
+ * Build a generate_and_review tool for the autonomous agent loop.
+ * This is a standalone version that doesn't need chat UI effects.
+ */
+function buildAutonomousGenerateReviewTool(
+  chatId: string,
+  directionId: string,
+  pendingImageRef: { current: { data: string; mimeType: string } | null },
+): AgentTool {
+  return {
+    name: "generate_and_review",
+    description: "Generate an image and review it against your creative intent. You can iterate up to maxIterations times, refining the prompt each time based on what you see.",
+    parameters: Type.Object({
+      initialPrompt: Type.String({ description: "The image generation prompt" }),
+      creativeIntent: Type.String({ description: "What you're trying to achieve" }),
+      maxIterations: Type.Optional(Type.Number({ description: "Maximum iterations (default 3, range 1-5)" })),
+      iteration: Type.Optional(Type.Number({ description: "Current iteration number (internal use)" })),
+      imageHistory: Type.Optional(Type.Array(Type.Object({
+        imageUrl: Type.String(),
+        prompt: Type.String(),
+        iteration: Type.Number(),
+      }), { description: "Previous generation attempts (internal use)" })),
+    }),
+    label: "generate_and_review",
+    execute: async (_toolCallId, params) => {
+      const args = params as Record<string, any>;
+      const iteration = args.iteration ?? 1;
+      const maxIterations = Math.min(Math.max(args.maxIterations ?? 3, 1), 5);
+
+      console.log(`[autonomous-review] generate_and_review iteration ${iteration}/${maxIterations}`);
+
+      try {
+        const { generateForReview, formatReviewResult } = await import("./generate-review.js");
+
+        const result = await generateForReview(args.initialPrompt, chatId, undefined, { directionId });
+
+        if (!result.success) {
+          return {
+            content: [{ type: "text", text: `**Generation Failed (Iteration ${iteration}/${maxIterations})**\n\nError: ${result.error}\n\nYou can retry with a modified prompt.` }],
+            details: {
+              iteration,
+              maxIterations,
+              creativeIntent: args.creativeIntent,
+              imageHistory: args.imageHistory || [],
+              lastPrompt: args.initialPrompt,
+            },
+            isError: true,
+          } as AgentToolResult<any>;
+        }
+
+        const reviewResult = formatReviewResult(
+          result,
+          iteration,
+          maxIterations,
+          args.creativeIntent,
+          args.initialPrompt
+        );
+
+        if (args.imageHistory) {
+          reviewResult.details.imageHistory = [...args.imageHistory, ...reviewResult.details.imageHistory];
+        }
+        reviewResult.details.lastPrompt = args.initialPrompt;
+
+        // Stash pending image for steering message injection
+        if (reviewResult.details.pendingImage) {
+          pendingImageRef.current = {
+            data: reviewResult.details.pendingImage.data,
+            mimeType: reviewResult.details.pendingImage.mimeType,
+          };
+        }
+
+        return reviewResult as AgentToolResult<any>;
+      } catch (e: any) {
+        console.error(`[autonomous-review] generate_and_review error:`, e.message);
+        return {
+          content: [{ type: "text", text: `**Generation Error (Iteration ${iteration}/${maxIterations})**\n\n${e.message}` }],
+          details: {
+            iteration,
+            maxIterations,
+            creativeIntent: args.creativeIntent,
+            imageHistory: args.imageHistory || [],
+            lastPrompt: args.initialPrompt,
+          },
+          isError: true,
+        } as AgentToolResult<any>;
+      }
+    },
+  };
+}
+
+/**
+ * Execute a creative direction with iterative review and refinement.
+ * Runs an agent loop with the generate_and_review tool, allowing the LLM
+ * to autonomously generate, evaluate, and refine images.
+ *
+ * GPU coordination: The agent loop alternates between Ollama (LLM evaluation)
+ * and ComfyUI (image generation). Caller should ensure Ollama is available.
+ *
+ * @param corpusMembers - Optional corpus entries to include as vision context
+ *   so the agent can judge novelty against existing images.
+ * @param existingGenerationId - If provided, reuse a pre-created GenerationState
+ *   instead of creating a new one.
+ */
+export async function executeDirectionWithReview(
+  direction: CreativeDirection,
+  chatId: string,
+  config: AutonomousGenerationConfig = DEFAULT_AUTONOMOUS_CONFIG,
+  options: {
+    maxIterations?: number;
+    modelId?: string;
+    existingGenerationId?: string;
+    corpusMembers?: ImageCorpusEntry[];
+  } = {}
+): Promise<{
+  success: boolean;
+  imageId?: string;
+  imageUrl?: string;
+  generationId?: string;
+  error?: string;
+  iterations?: number;
+  acceptedAtIteration?: number;
+  finalPrompt?: string;
+}> {
+  const maxIterations = Math.min(options.maxIterations ?? 3, 5);
+  const reviewModelId = options.modelId ?? "qwen3.5:9b";
+
+  console.log(`[autonomous-review] Starting agent loop for direction: ${direction.type} - ${direction.description}`);
+  console.log(`[autonomous-review] Max iterations: ${maxIterations}, model: ${reviewModelId}`);
+
+  // Shared ref for the pending image — the tool stashes it here,
+  // getSteeringMessages injects it as a user message so the agent can see it.
+  const pendingImageRef: { current: { data: string; mimeType: string } | null } = { current: null };
+
+  // Build tools — only generate_and_review for autonomous mode
+  const tool = buildAutonomousGenerateReviewTool(chatId, direction.id, pendingImageRef);
+
+  // Build system prompt with direction context and z-image instructions
+  const systemPrompt = buildAutonomousSystemPrompt(direction);
+
+  // Build initial user message with corpus thumbnails and proposed prompt
+  const userMessage = await buildAutonomousUserMessage(direction, options.corpusMembers);
+
+  // Discover the review model
+  const { discoverOllamaModels, createPiModel } = await import("./models.js");
+  const ollamaModels = await discoverOllamaModels();
+  const ollamaModel = ollamaModels.find(m => m.id === reviewModelId);
+  if (!ollamaModel) {
+    return { success: false, error: `Model ${reviewModelId} not available` };
+  }
+  const piModel = createPiModel(ollamaModel);
+
+  // Build agent context
+  const context: AgentContext = {
+    systemPrompt,
+    messages: [],
+    tools: [tool],
+  };
+
+  // Build agent loop config
+  const loopConfig: AgentLoopConfig = {
+    model: piModel,
+    apiKey: "ollama",
+    reasoning: piModel.reasoning ? "medium" : undefined,
+    convertToLlm: (msgs) => msgs as Message[],
+    getSteeringMessages: async () => {
+      // Inject pending image as a user message so the agent can see it
+      if (pendingImageRef.current) {
+        const img = pendingImageRef.current;
+        pendingImageRef.current = null;
+        return [{
+          role: "user" as const,
+          content: [{ type: "image", data: img.data, mimeType: img.mimeType }],
+          timestamp: Date.now(),
+        }];
+      }
+      return [];
+    },
+  };
+
+  // Run the agent loop
+  const abortController = new AbortController();
+  const eventStream = agentLoop(
+    [userMessage],
+    context,
+    loopConfig,
+    abortController.signal,
+    streamSimple,
+  );
+
+  // Collect results from the event stream
+  let lastImageUrl: string | undefined;
+  let lastImageId: string | undefined;
+  let lastPrompt: string | undefined;
+  let iterationCount = 0;
+  let finalText = "";
+
+  try {
+    for await (const event of eventStream) {
+      if (event.type === "tool_execution_end") {
+        const details = (event as any).result?.details;
+        if (details) {
+          iterationCount = details.iteration ?? iterationCount;
+          if (details.lastPrompt) lastPrompt = details.lastPrompt;
+          // Extract image info from history
+          const history = details.imageHistory as Array<{ imageUrl: string; prompt: string; iteration: number }> | undefined;
+          if (history && history.length > 0) {
+            const latest = history[history.length - 1];
+            lastImageUrl = latest.imageUrl;
+            // Extract image ID from URL
+            const urlPart = latest.imageUrl.replace("/api/images/", "");
+            lastImageId = urlPart.split("/")[0];
+          }
+        }
+      } else if (event.type === "message_update") {
+        const ame = (event as any).assistantMessageEvent;
+        if (ame?.type === "text_delta") {
+          finalText += ame.delta;
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error(`[autonomous-review] Agent loop error:`, err.message);
+    return {
+      success: false,
+      error: err.message || "Agent loop failed",
+      iterations: iterationCount,
+    };
+  }
+
+  console.log(`[autonomous-review] Agent loop complete. Iterations: ${iterationCount}, image: ${lastImageId}`);
+
+  if (lastImageId && lastImageUrl) {
+    return {
+      success: true,
+      imageId: lastImageId,
+      imageUrl: lastImageUrl,
+      iterations: iterationCount,
+      acceptedAtIteration: iterationCount,
+      finalPrompt: lastPrompt || direction.proposedPrompt,
+    };
+  }
+
+  return {
+    success: false,
+    error: "Agent loop completed without generating an image",
+    iterations: iterationCount,
+  };
+}
+
+/**
+ * Execute a creative direction by generating an image (single-shot, no review).
+ * Legacy function kept for backwards compatibility.
+ * 
  * @param existingGenerationId - If provided, reuse a pre-created GenerationState
  *   instead of creating a new one. Used by the corpus execute endpoint to return
  *   the generationId to the client immediately before generation starts.

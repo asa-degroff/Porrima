@@ -108,6 +108,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [cdLimit, setCdLimit] = useState(cdDefaults.limit ?? 5);
   const [cdMinNovelty, setCdMinNovelty] = useState(cdDefaults.minNovelty ?? 0.15);
   const [cdMaxExecutions, setCdMaxExecutions] = useState(cdDefaults.maxExecutions ?? 4);
+  const [cdMaxReviewIterations, setCdMaxReviewIterations] = useState(cdDefaults.maxReviewIterations ?? 3);
   const [cdSteps, setCdSteps] = useState(cdDefaults.steps ?? 35);
   const [cdCfgScale, setCdCfgScale] = useState(cdDefaults.cfgScale ?? 4.0);
   const [cdModelDropdownOpen, setCdModelDropdownOpen] = useState(false);
@@ -255,6 +256,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
         limit: cdLimit,
         minNovelty: cdMinNovelty,
         maxExecutions: cdMaxExecutions,
+        maxReviewIterations: cdMaxReviewIterations,
         steps: cdSteps,
         cfgScale: cdCfgScale,
       },
@@ -2184,6 +2186,27 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <span>0 (none)</span>
                     <span>10</span>
                   </div>
+                </div>
+
+                {/* Max Review Iterations */}
+                <div>
+                  <label className="block text-sm text-white/50">Review iterations per image: {cdMaxReviewIterations}</label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={cdMaxReviewIterations}
+                    onChange={(e) => setCdMaxReviewIterations(parseInt(e.target.value))}
+                    className="w-full accent-purple-400"
+                  />
+                  <div className="flex justify-between text-[10px] text-white/25">
+                    <span>1 (fast)</span>
+                    <span>5 (thorough)</span>
+                  </div>
+                  <p className="text-xs text-white/40 mt-1">
+                    Higher values allow more refinement but use more GPU time per image.
+                  </p>
                 </div>
 
                 {/* Generation params */}

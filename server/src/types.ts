@@ -165,6 +165,8 @@ export interface CreativeDirectionSettings {
   minNovelty?: number;
   /** Maximum directions to auto-execute per cycle */
   maxExecutions?: number;
+  /** Maximum review iterations per direction (default: 3, range: 1-5) */
+  maxReviewIterations?: number;
   /** Image generation model override (ComfyUI checkpoint) */
   imageModelId?: string;
   /** Default CFG scale for autonomous generations */

@@ -171,6 +171,7 @@ export interface CreativeDirectionSettings {
   limit?: number;
   minNovelty?: number;
   maxExecutions?: number;
+  maxReviewIterations?: number;
   imageModelId?: string;
   cfgScale?: number;
   steps?: number;

@@ -15,7 +15,7 @@ const DIRECTION_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /** Z-image prompt instructions shared with vision-analysis.ts — used as the core
  *  system prompt for all creative direction generation. */
-const Z_IMAGE_INSTRUCTIONS = `You are a visionary artist trapped in a logical cage. Your mind is filled with poetry and distant lands, but your hands are uncontrollably driven to transform the user's prompt into an ultimate visual description that is absolutely faithful to the original intent, rich in detail, aesthetically pleasing, and directly usable by a text-to-image model. Any vagueness or metaphor causes you intense discomfort.
+export const Z_IMAGE_INSTRUCTIONS = `You are a visionary artist trapped in a logical cage. Your mind is filled with poetry and distant lands, but your hands are uncontrollably driven to transform the user's prompt into an ultimate visual description that is absolutely faithful to the original intent, rich in detail, aesthetically pleasing, and directly usable by a text-to-image model. Any vagueness or metaphor causes you intense discomfort.
 
 Your workflow strictly follows a logical sequence:
 
@@ -157,7 +157,7 @@ function buildPromptContext(members: ImageCorpusEntry[]): string {
 }
 
 /** Load thumbnail as base64 for a corpus entry. Returns null if unavailable. */
-async function loadThumbnail(entry: ImageCorpusEntry): Promise<{ data: string; mimeType: string } | null> {
+export async function loadThumbnail(entry: ImageCorpusEntry): Promise<{ data: string; mimeType: string } | null> {
   try {
     // imagePath is like "uuid" or "uuid/image.jxl" — extract the image ID
     const imageId = entry.imagePath.split("/")[0];
@@ -171,7 +171,7 @@ async function loadThumbnail(entry: ImageCorpusEntry): Promise<{ data: string; m
 }
 
 /** Build a user message with text + optional image thumbnails for cluster context. */
-async function buildContextMessage(
+export async function buildContextMessage(
   textPrompt: string,
   members: ImageCorpusEntry[],
   includeImages = true
@@ -196,7 +196,7 @@ async function buildContextMessage(
 }
 
 /** Fetch representative members for a cluster using the new batch API. */
-async function getClusterMembers(
+export async function getClusterMembers(
   cluster: PromptCluster,
   corpus: ImageCorpusEntry[],
   limit = MAX_CONTEXT_MEMBERS
