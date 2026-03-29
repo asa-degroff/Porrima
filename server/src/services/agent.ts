@@ -59,7 +59,7 @@ export function chatMessagesToPiMessages(
         result.push({
           role: "assistant" as const,
           content: toolContent,
-          api: "openai-completions" as const,
+          api: "ollama-native" as const,
           provider: "ollama",
           model: modelId,
           usage: dummyUsage,
@@ -98,7 +98,7 @@ export function chatMessagesToPiMessages(
           result.push({
             role: "assistant" as const,
             content: [{ type: "text", text: m.content }],
-            api: "openai-completions" as const,
+            api: "ollama-native" as const,
             provider: "ollama",
             model: modelId,
             usage: dummyUsage,
@@ -118,7 +118,7 @@ export function chatMessagesToPiMessages(
         result.push({
           role: "assistant" as const,
           content,
-          api: "openai-completions" as const,
+          api: "ollama-native" as const,
           provider: "ollama",
           model: modelId,
           usage: dummyUsage,
@@ -207,7 +207,7 @@ export async function streamChat(
     assistantMessage = {
       role: "assistant",
       content: [{ type: "text", text: fullText }],
-      api: "openai-completions",
+      api: "ollama-native",
       provider: "ollama",
       model: modelId,
       usage: {

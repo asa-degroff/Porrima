@@ -105,27 +105,19 @@ function supportsReasoning(family: string): boolean {
 
 export function createPiModel(
   ollamaModel: OllamaModel
-): Model<"openai-completions"> {
+): Model<"ollama-native"> {
   const reasoning = supportsReasoning(ollamaModel.family);
   return {
     id: ollamaModel.id,
     name: ollamaModel.name,
-    api: "openai-completions",
+    api: "ollama-native",
     provider: "ollama",
-    baseUrl: `${OLLAMA_BASE}/v1`,
+    baseUrl: OLLAMA_BASE,
     reasoning,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: ollamaModel.contextWindow,
     maxTokens: 8192,
-    compat: {
-      supportsStore: false,
-      supportsDeveloperRole: false,
-      supportsReasoningEffort: false,
-      maxTokensField: "max_tokens",
-      supportsStrictMode: false,
-      thinkingFormat: reasoning ? "qwen" : undefined,
-    },
   };
 }
 

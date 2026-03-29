@@ -367,12 +367,6 @@ async function handleChatStream(
     }
   };
 
-  // Track pending image injection from generate_and_review tool.
-  // Declared here (before effects) so the onPendingReviewImage callback can access it.
-  // The image can't go in the tool result (Ollama returns "400 invalid image input"),
-  // so we stash it and inject it as a user message via getSteeringMessages.
-  let pendingImageInjection: { data: string; mimeType: string; imageUrl: string; toolCallId: string } | null = null;
-
   // Side-effects bridge between tool execution and SSE output
   const effects: ToolSideEffects = {
     onArtifact: (artifact) => {
@@ -390,16 +384,8 @@ async function handleChatStream(
       state.segments.push({ seq: ++state.seqCounter, type: "generated_image", generatedImage: image });
       res.write(`event: generated_image\ndata: ${JSON.stringify(image)}\n\n`);
     },
-    onPendingReviewImage: (image) => {
-      // Called synchronously from the tool's execute(), BEFORE pi-agent-core
-      // calls getSteeringMessages. This ensures the image is ready for injection.
-      pendingImageInjection = {
-        data: image.data,
-        mimeType: image.mimeType,
-        imageUrl: image.imageUrl,
-        toolCallId: "", // filled from event later, not needed for injection
-      };
-      console.log(`[chat] onPendingReviewImage: image ready for steering injection (${(image.data.length / 1024).toFixed(1)}KB)`);
+    onPendingReviewImage: () => {
+      // No-op: native Ollama API handles images in tool results directly
     },
     onAskUser: (question, toolCallId) => {
       askUserRef.current = { question, toolCallId };
@@ -429,7 +415,7 @@ async function handleChatStream(
     // Discover model with timeout protection
     let ollamaModels: OllamaModel[];
     let ollamaModel: OllamaModel | undefined;
-    let piModel: Model<"openai-completions">;
+    let piModel: Model<"ollama-native">;
     
     try {
       ollamaModels = await discoverOllamaModels();
@@ -462,22 +448,6 @@ async function handleChatStream(
       getSteeringMessages: async () => {
         if (askUserRef.current) {
           return [{ role: "user" as const, content: "[paused for user input]", timestamp: Date.now() }];
-        }
-        // Inject generated image as a user message so the agent can visually evaluate it.
-        // This is called by pi-agent-core after each tool execution; pendingImageInjection
-        // is set once and cleared here, so the image is injected exactly once.
-        if (pendingImageInjection) {
-          const img = pendingImageInjection;
-          pendingImageInjection = null;
-          console.log(`[chat] Injecting image from generate_and_review as user message (${(img.data.length / 1024).toFixed(1)}KB)`);
-          return [{
-            role: "user" as const,
-            content: [
-              { type: "text" as const, text: "Here is the generated image. Please evaluate it against the creative intent described in the tool result above." },
-              { type: "image" as const, data: img.data, mimeType: img.mimeType },
-            ],
-            timestamp: Date.now(),
-          }];
         }
         return [];
       },
@@ -649,12 +619,9 @@ async function handleChatStream(
           if (event.toolName !== "ask_user") {
             const resultText = event.result?.content?.[0]?.text || "";
 
-            // For generate_and_review, image is injected as user message (not in tool result)
-            const images: ImageAttachment[] | undefined = event.toolName === "generate_and_review"
-              ? undefined
-              : event.result?.content
-                  ?.filter((c: any) => c.type === "image")
-                  .map((c: any) => ({ data: c.data, mimeType: c.mimeType, name: `generated-${event.toolCallId}.jxl` }));
+            const images: ImageAttachment[] | undefined = event.result?.content
+                ?.filter((c: any) => c.type === "image")
+                .map((c: any) => ({ data: c.data, mimeType: c.mimeType, name: `generated-${event.toolCallId}.jxl` }));
             
             if (images?.length) {
               console.log(`[chat] Extracted ${images.length} image(s) from tool result ${event.toolCallId} (${event.toolName})`);

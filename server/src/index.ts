@@ -29,6 +29,10 @@ import { requireAuth } from "./middleware/auth.js";
 import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
 import { initializePersona } from "./services/persona-store.js";
+import { registerOllamaNativeProvider } from "./services/ollama-native-provider.js";
+
+// Register custom Ollama native API provider before any requests
+registerOllamaNativeProvider();
 
 // Prevent unhandled promise rejections from crashing the process.
 // pi-agent-core's agentLoop() runs an unawaited async IIFE — if the loop throws
