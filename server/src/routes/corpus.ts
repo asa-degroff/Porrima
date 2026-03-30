@@ -4,7 +4,7 @@ import {
   getClusterById,
 } from "../services/cluster-storage.js";
 import { buildClusters } from "../services/cluster-engine.js";
-import { getAllCorpusEntries } from "../services/image-corpus.js";
+import { getAllCorpusEntries, cleanupOrphanedEntries } from "../services/image-corpus.js";
 import {
   proposeDirections,
   type CreativeDirection,
@@ -377,6 +377,93 @@ router.post("/cache/clear", async (_req, res) => {
   } catch (err) {
     console.error("[corpus] cache clear error:", err);
     res.status(500).json({ error: "Failed to clear cache" });
+  }
+});
+
+// POST /api/corpus/cleanup - Clean up orphaned corpus entries
+router.post("/cleanup", async (_req, res) => {
+  try {
+    const report = await cleanupOrphanedEntries();
+    res.json({
+      success: true,
+      ...report,
+      message: `Cleaned up ${report.orphanedCount} orphaned entries (${report.generatedOrphans} generated, ${report.analyzedOrphans} analyzed)`,
+    });
+  } catch (err: any) {
+    console.error("[corpus] cleanup error:", err);
+    res.status(500).json({ error: "Failed to cleanup orphans", details: err.message });
+  }
+});
+
+// GET /api/corpus/cleanup/dry-run - Preview orphaned entries without deleting
+router.get("/cleanup/dry-run", async (_req, res) => {
+  try {
+    const { access } = await import("fs/promises");
+    const { join } = await import("path");
+    const { homedir } = await import("os");
+    const { getAllCorpusEntries } = await import("../services/image-corpus.js");
+    
+    const BASE_DIR = join(homedir(), ".quje-agent");
+    const IMAGES_DIR = join(BASE_DIR, "images");
+    const VISION_DIR = join(BASE_DIR, "vision");
+    
+    const entries = await getAllCorpusEntries();
+    const orphans: Array<{ id: string; type: string; reason: string; imagePath: string }> = [];
+    
+    for (const entry of entries) {
+      let fileExists = false;
+      let checkPath = "";
+      
+      if (entry.type === "generated") {
+        const jxlPath = join(IMAGES_DIR, entry.imagePath, "image.jxl");
+        const pngPath = join(IMAGES_DIR, entry.imagePath, "image.png");
+        checkPath = jxlPath;
+        
+        try {
+          await access(jxlPath);
+          fileExists = true;
+        } catch {
+          try {
+            await access(pngPath);
+            fileExists = true;
+            checkPath = pngPath;
+          } catch {}
+        }
+      } else if (entry.type === "analyzed") {
+        const visionId = entry.visionId || entry.imagePath.split("/")[2];
+        checkPath = join(VISION_DIR, "images", visionId, "metadata.json");
+        
+        try {
+          await access(checkPath);
+          fileExists = true;
+        } catch {}
+      } else if (entry.type === "uploaded") {
+        checkPath = join(BASE_DIR, entry.imagePath);
+        try {
+          await access(checkPath);
+          fileExists = true;
+        } catch {}
+      }
+      
+      if (!fileExists) {
+        orphans.push({ 
+          id: entry.id, 
+          type: entry.type, 
+          reason: "File not found",
+          imagePath: checkPath,
+        });
+      }
+    }
+    
+    res.json({
+      totalScanned: entries.length,
+      orphanedCount: orphans.length,
+      wouldDelete: orphans.map(o => o.id),
+      details: orphans,
+    });
+  } catch (err: any) {
+    console.error("[corpus] dry-run error:", err);
+    res.status(500).json({ error: "Failed to scan for orphans", details: err.message });
   }
 });
 

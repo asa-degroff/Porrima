@@ -392,6 +392,132 @@ export async function deleteCorpusEntry(id: string): Promise<boolean> {
   return del();
 }
 
+/**
+ * Delete a corpus entry by visionId (for analyzed images).
+ * Returns true if a corpus entry was found and deleted.
+ */
+export async function deleteCorpusEntryByVisionId(visionId: string): Promise<boolean> {
+  const db = getDb();
+  const entry = db.prepare("SELECT id FROM corpus_entries WHERE vision_id = ?").get(visionId) as { id: string } | undefined;
+  if (!entry) return false;
+  
+  const del = db.transaction(() => {
+    db.prepare("DELETE FROM vec_corpus WHERE id = ?").run(entry.id);
+    const result = db.prepare("DELETE FROM corpus_entries WHERE id = ?").run(entry.id);
+    return result.changes > 0;
+  });
+  return del();
+}
+
+/**
+ * Cleanup orphaned corpus entries - entries whose image files no longer exist on disk.
+ * Returns a report of what was cleaned up.
+ */
+export async function cleanupOrphanedEntries(): Promise<{
+  totalScanned: number;
+  orphanedCount: number;
+  generatedOrphans: number;
+  analyzedOrphans: number;
+  details: Array<{ id: string; type: string; reason: string }>;
+}> {
+  const db = getDb();
+  const { access } = await import("fs/promises");
+  const { join } = await import("path");
+  const { homedir } = await import("os");
+  
+  const BASE_DIR = join(homedir(), ".quje-agent");
+  const IMAGES_DIR = join(BASE_DIR, "images");
+  const VISION_DIR = join(BASE_DIR, "vision");
+  
+  const rows = db.prepare("SELECT id, type, image_path, vision_id FROM corpus_entries").all() as Array<{
+    id: string;
+    type: string;
+    image_path: string;
+    vision_id: string | null;
+  }>;
+  
+  const orphans: Array<{ id: string; type: string; reason: string }> = [];
+  let generatedOrphans = 0;
+  let analyzedOrphans = 0;
+  
+  for (const row of rows) {
+    let fileExists = false;
+    
+    if (row.type === "generated") {
+      // Generated images: image_path is the image ID
+      // Check for JXL first, then PNG fallback
+      const jxlPath = join(IMAGES_DIR, row.image_path, "image.jxl");
+      const pngPath = join(IMAGES_DIR, row.image_path, "image.png");
+      
+      try {
+        await access(jxlPath);
+        fileExists = true;
+      } catch {
+        try {
+          await access(pngPath);
+          fileExists = true;
+        } catch {
+          fileExists = false;
+        }
+      }
+      
+      if (!fileExists) {
+        orphans.push({ id: row.id, type: "generated", reason: "Image file not found" });
+        generatedOrphans++;
+      }
+    } else if (row.type === "analyzed") {
+      // Analyzed images: image_path is relative path like "vision/images/{id}/{filename}"
+      // Or we can use vision_id to construct the path
+      const visionId = row.vision_id || row.image_path.split("/")[2];
+      const metadataPath = join(VISION_DIR, "images", visionId, "metadata.json");
+      
+      try {
+        await access(metadataPath);
+        fileExists = true;
+      } catch {
+        fileExists = false;
+      }
+      
+      if (!fileExists) {
+        orphans.push({ id: row.id, type: "analyzed", reason: "Vision metadata not found" });
+        analyzedOrphans++;
+      }
+    } else if (row.type === "uploaded") {
+      // Uploaded user images: image_path is relative path
+      const fullPath = join(BASE_DIR, row.image_path);
+      try {
+        await access(fullPath);
+        fileExists = true;
+      } catch {
+        fileExists = false;
+      }
+      
+      if (!fileExists) {
+        orphans.push({ id: row.id, type: "uploaded", reason: "User image file not found" });
+      }
+    }
+  }
+  
+  // Delete orphaned entries
+  const deletedIds: string[] = [];
+  for (const orphan of orphans) {
+    const del = db.transaction(() => {
+      db.prepare("DELETE FROM vec_corpus WHERE id = ?").run(orphan.id);
+      db.prepare("DELETE FROM corpus_entries WHERE id = ?").run(orphan.id);
+    });
+    del();
+    deletedIds.push(orphan.id);
+  }
+  
+  return {
+    totalScanned: rows.length,
+    orphanedCount: orphans.length,
+    generatedOrphans,
+    analyzedOrphans,
+    details: orphans,
+  };
+}
+
 export async function getCorpusStats(): Promise<CorpusStats> {
   const db = getDb();
 

@@ -110,6 +110,24 @@ app.use("/api/notebooks", notebooksRouter);
 app.use("/api/bluesky", blueskyRouter);
 app.use("/api/ui-state", uiStateRouter);
 
+// Optional: Run corpus cleanup on startup to fix orphans from before the deletion fix
+// Set CORPUS_CLEANUP=true to enable
+if (process.env.CORPUS_CLEANUP === "true") {
+  console.log("[startup] Running corpus orphan cleanup...");
+  const { cleanupOrphanedEntries } = await import("./services/image-corpus.js");
+  cleanupOrphanedEntries()
+    .then((report) => {
+      if (report.orphanedCount > 0) {
+        console.log(`[startup] Cleaned up ${report.orphanedCount} orphaned corpus entries (${report.generatedOrphans} generated, ${report.analyzedOrphans} analyzed)`);
+      } else {
+        console.log("[startup] No orphaned corpus entries found");
+      }
+    })
+    .catch((err) => {
+      console.error("[startup] Corpus cleanup failed:", err);
+    });
+}
+
 // Production static serving
 if (isProd) {
   const __dirname = dirname(fileURLToPath(import.meta.url));

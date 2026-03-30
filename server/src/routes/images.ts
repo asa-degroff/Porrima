@@ -13,7 +13,7 @@ import {
   subscribeToGeneration,
   cleanupOldGenerations,
 } from "../services/image-generation.js";
-import { searchCorpusHybrid } from "../services/image-corpus.js";
+import { searchCorpusHybrid, deleteCorpusEntry } from "../services/image-corpus.js";
 import { access } from "fs/promises";
 import { createReadStream } from "fs";
 import type { ImageGenerationParams } from "../types.js";
@@ -234,6 +234,10 @@ router.delete("/:id", async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ error: "Image not found" });
     }
+    
+    // Also remove from corpus to prevent stale references
+    await deleteCorpusEntry(req.params.id);
+    
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

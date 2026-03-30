@@ -12,6 +12,7 @@ import {
   getVisionThumbPath,
   ensureVisionThumbnail,
 } from "../services/vision-analysis.js";
+import { deleteCorpusEntryByVisionId } from "../services/image-corpus.js";
 
 const router = Router();
 
@@ -191,6 +192,10 @@ router.delete("/images/:id", async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ error: "Image not found" });
     }
+    
+    // Also remove from corpus to prevent stale references
+    await deleteCorpusEntryByVisionId(req.params.id);
+    
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
