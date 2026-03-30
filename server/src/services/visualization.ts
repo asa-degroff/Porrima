@@ -61,9 +61,10 @@ export function generateForceGraphHTML(
 
   // Build links between similar images using real cosine similarity
   const links: Array<{ source: string; target: string; similarity: number }> = [];
+  const nodeIdSet = new Set(nodes.map(n => n.id)); // Fast lookup for valid node IDs
 
   for (const cluster of clusterMap.clusters) {
-    const members = cluster.memberIds;
+    const members = cluster.memberIds.filter(id => nodeIdSet.has(id)); // Filter out deleted nodes
     for (let i = 0; i < members.length; i++) {
       for (let j = i + 1; j < members.length; j++) {
         const embA = embeddingMap.get(members[i]);
