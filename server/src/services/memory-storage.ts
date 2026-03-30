@@ -551,7 +551,8 @@ export async function searchMemories(
   queryEmbedding: number[],
   topK: number,
   now: Date = new Date(),
-  queryText?: string
+  queryText?: string,
+  dateRange?: { from?: string; to?: string }
 ): Promise<ScoredMemory[]> {
   const db = getDb();
   const HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -600,14 +601,27 @@ export async function searchMemories(
   // Fetch metadata + embeddings for all candidate IDs
   const ids = Array.from(allIds);
   const placeholders = ids.map(() => "?").join(",");
+
+  // Build date range filter
+  let dateFilter = "";
+  const dateParams: string[] = [];
+  if (dateRange?.from) {
+    dateFilter += " AND m.created_at >= ?";
+    dateParams.push(dateRange.from);
+  }
+  if (dateRange?.to) {
+    dateFilter += " AND m.created_at <= ?";
+    dateParams.push(dateRange.to);
+  }
+
   const metaRows = db
     .prepare(
-      `SELECT m.id, m.text, m.category, m.importance, m.created_at, m.last_accessed, m.access_count, m.source_chat_id, m.project_id, m.superseded_by, m.supersedes, v.embedding 
-       FROM memories m 
-       JOIN vec_memories v ON m.id = v.id 
-       WHERE m.id IN (${placeholders})`
+      `SELECT m.id, m.text, m.category, m.importance, m.created_at, m.last_accessed, m.access_count, m.source_chat_id, m.project_id, m.superseded_by, m.supersedes, v.embedding
+       FROM memories m
+       JOIN vec_memories v ON m.id = v.id
+       WHERE m.id IN (${placeholders})${dateFilter}`
     )
-    .all(...ids) as Array<{
+    .all(...ids, ...dateParams) as Array<{
     id: string;
     text: string;
     category: string;
@@ -720,13 +734,23 @@ export async function setLastSynthesis(value: string | null): Promise<void> {
   }
 }
 
-export async function getAllMemories(): Promise<
-  Omit<Memory, "embedding">[]
-> {
+export type MemorySortBy = "created_at_desc" | "created_at_asc" | "last_accessed_desc" | "importance_desc";
+
+const SORT_CLAUSES: Record<MemorySortBy, string> = {
+  created_at_desc: "ORDER BY created_at DESC",
+  created_at_asc: "ORDER BY created_at ASC",
+  last_accessed_desc: "ORDER BY last_accessed DESC",
+  importance_desc: "ORDER BY importance DESC",
+};
+
+export async function getAllMemories(
+  sortBy: MemorySortBy = "created_at_desc"
+): Promise<Omit<Memory, "embedding">[]> {
   const db = getDb();
+  const orderClause = SORT_CLAUSES[sortBy] || SORT_CLAUSES.created_at_desc;
   const rows = db
     .prepare(
-      "SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories"
+      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories ${orderClause}`
     )
     .all() as Array<{
     id: string;

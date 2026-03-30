@@ -86,8 +86,9 @@ router.post("/search", async (req, res) => {
 });
 
 // List all memories (without embeddings)
-router.get("/", async (_req, res) => {
-  const memories = await getAllMemories();
+router.get("/", async (req, res) => {
+  const sortBy = (req.query.sortBy as string) || "created_at_desc";
+  const memories = await getAllMemories(sortBy as any);
   res.json(memories);
 });
 

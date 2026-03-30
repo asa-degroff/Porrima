@@ -95,13 +95,14 @@ export async function buildMemoryAugmentedPrompt(
         const memoriesBlock = finalMemories
           .map(
             (r) => {
+              const created = r.memory.createdAt.slice(0, 10);
               const supersededNote = r.memory.supersededBy
                 ? " ⚠️ SUPERSEDED — a newer version of this memory exists"
                 : "";
               const projectNote = r.memory.projectId && projectId && r.memory.projectId !== projectId
                 ? ` [project: ${r.memory.projectId}]`
                 : "";
-              return `- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10]${supersededNote}${projectNote}`;
+              return `- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10, saved: ${created}]${supersededNote}${projectNote}`;
             }
           )
           .join("\n");

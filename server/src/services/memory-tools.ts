@@ -33,9 +33,15 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "search_memory",
     description:
-      "Search your memories for relevant information. Use when you need to recall something specific.",
+      "Search your memories for relevant information. Use when you need to recall something specific. Supports date filtering and sorting.",
     parameters: Type.Object({
       query: Type.String({ description: "What to search for" }),
+      from: Type.Optional(Type.String({ description: "Only memories created after this date (ISO 8601, e.g. '2026-01-01')" })),
+      to: Type.Optional(Type.String({ description: "Only memories created before this date (ISO 8601, e.g. '2026-03-30')" })),
+      sort_by: Type.Optional(StringEnum(
+        ["relevance", "newest", "oldest"] as const,
+        { description: "Sort order: relevance (default), newest, or oldest" }
+      )),
     }),
   },
   {
@@ -118,7 +124,7 @@ export async function executeMemoryTool(
     }
 
     case "search_memory": {
-      const { query } = toolCall.arguments;
+      const { query, from, to, sort_by } = toolCall.arguments;
       if (!query) return { content: "Missing query", isError: true };
 
       let queryEmbedding: number[];
@@ -128,14 +134,23 @@ export async function executeMemoryTool(
         return { content: `Embedding failed: ${e.message}`, isError: true };
       }
 
-      const results = await searchMemories(queryEmbedding, 5, new Date(), query);
+      const dateRange = (from || to) ? { from, to } : undefined;
+      const results = await searchMemories(queryEmbedding, 5, new Date(), query, dateRange);
       if (results.length === 0) {
         return { content: "No relevant memories found.", isError: false };
+      }
+
+      // Apply sort override if requested
+      if (sort_by === "newest") {
+        results.sort((a, b) => new Date(b.memory.createdAt).getTime() - new Date(a.memory.createdAt).getTime());
+      } else if (sort_by === "oldest") {
+        results.sort((a, b) => new Date(a.memory.createdAt).getTime() - new Date(b.memory.createdAt).getTime());
       }
 
       const formatted = results
         .map(
           (r) => {
+            const created = r.memory.createdAt.slice(0, 10);
             const source = r.memory.sourceChatId ? `, source: ${r.memory.sourceChatId}` : "";
             const superseded = r.memory.supersededBy
               ? ` [SUPERSEDED by ${r.memory.supersededBy}]`
@@ -143,7 +158,7 @@ export async function executeMemoryTool(
             const supersedes = r.memory.supersedes
               ? `, supersedes: ${r.memory.supersedes}`
               : "";
-            return `- [${r.memory.id}] ${r.memory.text} (${r.memory.category}, importance: ${r.memory.importance}/10, score: ${r.score.toFixed(3)}${source}${supersedes})${superseded}`;
+            return `- [${r.memory.id}] ${r.memory.text} (${r.memory.category}, importance: ${r.memory.importance}/10, created: ${created}, score: ${r.score.toFixed(3)}${source}${supersedes})${superseded}`;
           }
         )
         .join("\n");

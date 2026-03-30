@@ -93,6 +93,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryDeleting, setMemoryDeleting] = useState<string | null>(null);
   const [memoryCategoryFilter, setMemoryCategoryFilter] = useState<string>("all");
+  const [memorySortBy, setMemorySortBy] = useState<string>("created_at_desc");
   const [expandedLineage, setExpandedLineage] = useState<string | null>(null);
   const [lineageData, setLineageData] = useState<Record<string, MemoryLineage>>({});
   const [lineageLoading, setLineageLoading] = useState<string | null>(null);
@@ -376,12 +377,21 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     if (opening && memoryResults.length === 0) {
       setMemoryLoading(true);
       try {
-        const all = await fetchAllMemories();
+        const all = await fetchAllMemories(memorySortBy);
         setMemoryResults(all);
       } catch {}
       setMemoryLoading(false);
     }
-  }, [memoryBrowserOpen, memoryResults.length]);
+  }, [memoryBrowserOpen, memoryResults.length, memorySortBy]);
+
+  const handleMemorySortChange = useCallback((sort: string) => {
+    setMemorySortBy(sort);
+    setMemoryLoading(true);
+    fetchAllMemories(sort)
+      .then(setMemoryResults)
+      .catch(() => {})
+      .finally(() => setMemoryLoading(false));
+  }, []);
 
   const handleMemorySearch = useCallback((query: string) => {
     setMemorySearchQuery(query);
@@ -389,7 +399,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     if (!query.trim()) {
       // Empty query: show all
       setMemoryLoading(true);
-      fetchAllMemories()
+      fetchAllMemories(memorySortBy)
         .then(setMemoryResults)
         .catch(() => {})
         .finally(() => setMemoryLoading(false));
@@ -403,7 +413,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       } catch {}
       setMemoryLoading(false);
     }, 300);
-  }, []);
+  }, [memorySortBy]);
 
   const handleDeleteMemory = useCallback(async (id: string) => {
     setMemoryDeleting(id);
@@ -1266,28 +1276,40 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       />
                     </div>
 
-                    {/* Category filter — derived from actual data */}
-                    {(() => {
-                      const categories = [...new Set(memoryResults.map((m) => m.category))].sort();
-                      if (categories.length <= 1) return null;
-                      return (
-                        <div className="flex gap-1 flex-wrap">
-                          {["all", ...categories].map((cat) => (
-                            <button
-                              key={cat}
-                              onClick={() => setMemoryCategoryFilter(cat)}
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-all ${
-                                memoryCategoryFilter === cat
-                                  ? "bg-purple-500/30 text-purple-200 border border-purple-400/30"
-                                  : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
-                              }`}
-                            >
-                              {cat === "all" ? "All" : cat}
-                            </button>
-                          ))}
-                        </div>
-                      );
-                    })()}
+                    {/* Category filter + sort controls */}
+                    <div className="flex items-center justify-between gap-2">
+                      {(() => {
+                        const categories = [...new Set(memoryResults.map((m) => m.category))].sort();
+                        if (categories.length <= 1) return <div />;
+                        return (
+                          <div className="flex gap-1 flex-wrap">
+                            {["all", ...categories].map((cat) => (
+                              <button
+                                key={cat}
+                                onClick={() => setMemoryCategoryFilter(cat)}
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-all ${
+                                  memoryCategoryFilter === cat
+                                    ? "bg-purple-500/30 text-purple-200 border border-purple-400/30"
+                                    : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
+                                }`}
+                              >
+                                {cat === "all" ? "All" : cat}
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                      <select
+                        value={memorySortBy}
+                        onChange={(e) => handleMemorySortChange(e.target.value)}
+                        className="bg-white/5 border border-white/10 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none focus:ring-1 focus:ring-purple-400/30 shrink-0"
+                      >
+                        <option value="created_at_desc">Newest</option>
+                        <option value="created_at_asc">Oldest</option>
+                        <option value="last_accessed_desc">Recently used</option>
+                        <option value="importance_desc">Importance</option>
+                      </select>
+                    </div>
 
                     {/* Results */}
                     <div className="max-h-[280px] overflow-x-hidden overflow-y-auto space-y-1.5 pr-1">

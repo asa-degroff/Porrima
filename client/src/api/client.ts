@@ -800,8 +800,9 @@ export async function searchMemories(query: string, topK = 10): Promise<(import(
   return res.json();
 }
 
-export async function fetchAllMemories(): Promise<import("../types").MemorySummary[]> {
-  const res = await apiFetch(`${BASE}/memory`);
+export async function fetchAllMemories(sortBy?: string): Promise<import("../types").MemorySummary[]> {
+  const params = sortBy ? `?sortBy=${sortBy}` : "";
+  const res = await apiFetch(`${BASE}/memory${params}`);
   if (!res.ok) throw new Error("Failed to fetch memories");
   return res.json();
 }
