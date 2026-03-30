@@ -158,16 +158,24 @@ function supportsReasoning(family: string): boolean {
  * 
  * Priority order:
  * 1. Explicit chat override (chat.contextWindow) - user knows best
- * 2. Model's detected context window (model.contextWindow) - from /api/show
- * 3. Conservative default (32768) - safe fallback
+ * 2. Per-model setting (settings.modelContextWindows[modelId]) - user's persistent preference
+ * 3. Model's detected context window (model.contextWindow) - from /api/show
+ * 4. Conservative default (32768) - safe fallback
  * 
  * This function exists to prevent context overflow when /api/show fails
  * or returns unreliable data. The conservative default ensures compaction
  * triggers before the model hits its actual limit.
  */
-export function getEffectiveContextWindow(chat: { contextWindow?: number }, model: OllamaModel | undefined): number {
+export function getEffectiveContextWindow(
+  chat: { contextWindow?: number; modelId?: string },
+  model: OllamaModel | undefined,
+  settings?: { modelContextWindows?: Record<string, number> }
+): number {
   if (chat.contextWindow) {
     return chat.contextWindow;
+  }
+  if (chat.modelId && settings?.modelContextWindows?.[chat.modelId]) {
+    return settings.modelContextWindows[chat.modelId];
   }
   if (model?.contextWindow) {
     return model.contextWindow;

@@ -765,7 +765,7 @@ async function handleChatStream(
           if (!hitContextLimit && !msg.usage && (stopReason as string) !== "stop" && (stopReason as string) !== "toolUse" && (stopReason as string) !== "length") {
             // Check if the last known usage was already high
             const lastKnown = state.finalUsage?.totalTokens ?? 0;
-            const effectiveCW = getEffectiveContextWindow(chat, ollamaModel);
+            const effectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
             if (effectiveCW > 0 && (lastKnown / effectiveCW > 0.8 || iterations > 3)) {
               hitContextLimit = true;
               console.warn(`[chat] model error with no usage data at iteration ${iterations} (last known: ${lastKnown}/${effectiveCW}) — treating as context overflow`);
@@ -1095,7 +1095,7 @@ async function handleChatStream(
       try {
         const model = ollamaModels.find((m) => m.id === chat.modelId);
         if (model) {
-          const effectiveContextWindow = getEffectiveContextWindow(chat, model);
+          const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
           const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
           const usageRatio = lastUsage > 0 ? lastUsage / effectiveContextWindow : 0;
 
@@ -1332,6 +1332,9 @@ router.post("/", async (req, res) => {
   if (pendingState && !isMidTurnRecovery) {
     // ASK_USER RESUME: the user's message is the answer to ask_user
     let systemPrompt = pendingState.systemPrompt;
+    
+    // Load settings for context window resolution
+    const settings = await getSettings();
 
     // Check for new skill invocations in resume message
     const invokedSkills = parseSkillInvocations(message);
@@ -1401,7 +1404,7 @@ router.post("/", async (req, res) => {
     // Pre-send context protection for resume path
     if (model) {
       try {
-        const effectiveContextWindow = getEffectiveContextWindow(chat, model);
+        const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
         const emitKeepalive = () => res.write(`: keepalive\n\n`);
         const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
@@ -1458,6 +1461,9 @@ router.post("/", async (req, res) => {
 
     await saveChat(chat);
 
+    // Load settings for context window resolution
+    const settings = await getSettings();
+
     // Build system prompt with memories and active skills
     let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
     if (chat.type === "agent" || chat.type === "bluesky") {
@@ -1496,7 +1502,7 @@ router.post("/", async (req, res) => {
     // Pre-send context protection: truncate BEFORE sending if >75% of context window
     if (model) {
       try {
-        const effectiveContextWindow = getEffectiveContextWindow(chat, model);
+        const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
         const emitKeepalive = () => res.write(`: keepalive\n\n`);
         const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
@@ -1644,6 +1650,9 @@ router.post("/edit", async (req, res) => {
     systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages, chat.id, chat.projectId);
   }
   
+  // Load settings for context window resolution
+  const settings = await getSettings();
+  
   // Inject active skills into system prompt
   if (chat.activeSkills?.length) {
     const skillsCache = new Map<string, Skill>();
@@ -1667,7 +1676,7 @@ router.post("/edit", async (req, res) => {
   // Pre-send context protection for edit path
   if (model) {
     try {
-      const effectiveContextWindow = getEffectiveContextWindow(chat, model);
+      const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
       const emitKeepalive = () => res.write(`: keepalive\n\n`);
       const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
       if (compaction && compaction.truncated) {
