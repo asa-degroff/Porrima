@@ -113,7 +113,8 @@ When evaluating each generated image:
 - Is the novelty level appropriate — distinct from the reference images shown?
 - Be specific about what needs to change: composition, lighting, subject matter, style.
 
-When refining prompts, follow the z-image workflow:
+**CRITICAL: All prompts you pass to generate_and_review (both initial and refined) MUST follow the z-image workflow below. Never pass a short one-line description — always produce a full, detailed, structured prompt.**
+
 ${Z_IMAGE_INSTRUCTIONS}`;
 }
 
@@ -137,15 +138,17 @@ async function buildAutonomousUserMessage(
     }
   }
 
-  const textPrompt = `Generate an image using the generate_and_review tool with this prompt:
+  const textPrompt = `Generate an image using the generate_and_review tool. You MUST pass the ENTIRE prompt below as the initialPrompt parameter exactly as written — do NOT summarize, shorten, or paraphrase it. The full detailed prompt is critical for image quality.
 
+<initialPrompt>
 ${direction.proposedPrompt}
+</initialPrompt>
 
 Creative intent: ${direction.description}
 
 ${corpusMembers && corpusMembers.length > 0 ? "The reference images above show existing corpus entries. Your generation should be distinct from these while aligning with the creative direction." : ""}
 
-Use the generate_and_review tool now. Evaluate the result honestly and iterate if it doesn't match your creative vision.`;
+Use the generate_and_review tool now with the COMPLETE prompt above as initialPrompt. When iterating on subsequent attempts, continue to produce full z-image prompts following the instructions in your system prompt — never reduce a prompt to a single sentence.`;
 
   content.push({ type: "text", text: textPrompt });
 
@@ -163,9 +166,9 @@ function buildAutonomousGenerateReviewTool(
 ): AgentTool {
   return {
     name: "generate_and_review",
-    description: "Generate an image and review it against your creative intent. You can iterate up to maxIterations times, refining the prompt each time based on what you see.",
+    description: "Generate an image and review it against your creative intent. The initialPrompt MUST be a full, detailed z-image prompt (multiple paragraphs with subject, composition, lighting, colors, textures) — never a short one-line summary. You can iterate up to maxIterations times, refining the prompt each time.",
     parameters: Type.Object({
-      initialPrompt: Type.String({ description: "The image generation prompt" }),
+      initialPrompt: Type.String({ description: "The FULL detailed z-image prompt — must include subject, composition, lighting, colors, textures. Pass the complete prompt verbatim, never summarize." }),
       creativeIntent: Type.String({ description: "What you're trying to achieve" }),
       maxIterations: Type.Optional(Type.Number({ description: "Maximum iterations (default 3, range 1-5)" })),
       iteration: Type.Optional(Type.Number({ description: "Current iteration number (internal use)" })),
