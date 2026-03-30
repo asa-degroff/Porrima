@@ -58,6 +58,7 @@ export interface CreativeDirection {
     injectNovelty?: string;
   };
   noveltyScore: number;
+  diversityScore?: number; // MMR score: balances novelty against similarity to other selected directions
   proposedPrompt: string;
   proposedEmbedding?: number[];
   createdAt: number;
@@ -391,10 +392,15 @@ export async function proposeDirections(
 
   console.log(`[creative-engine] Total candidates: ${allDirections.length}, passed novelty (>=${minNovelty}): ${directions.length}, limit: ${limit}`);
 
-  // Sort by novelty score and limit
-  directions.sort((a, b) => b.noveltyScore - a.noveltyScore);
-
-  const finalDirections = directions.slice(0, limit);
+  // Apply MMR selection if we have more candidates than the limit
+  let finalDirections: CreativeDirection[];
+  if (directions.length > limit) {
+    finalDirections = selectDirectionsMMR(directions, limit);
+  } else {
+    // No selection needed — just sort by novelty for consistent ordering
+    directions.sort((a, b) => b.noveltyScore - a.noveltyScore);
+    finalDirections = directions;
+  }
 
   // Only cache if we got results — don't cache empty sets
   if (finalDirections.length > 0) {
@@ -402,6 +408,81 @@ export async function proposeDirections(
   }
 
   return finalDirections;
+}
+
+/**
+ * Select directions using Maximal Marginal Relevance (MMR).
+ * Balances novelty against diversity — avoids selecting multiple similar directions.
+ *
+ * MMR score = λ * novelty - (1-λ) * max_similarity_to_already_selected
+ *
+ * @param candidates - Pre-filtered directions (already passed novelty threshold)
+ * @param limit - Number of directions to select
+ * @param lambda - Balance parameter (0.0-1.0). Higher = more novelty-focused, lower = more diversity-focused. Default 0.65.
+ */
+export function selectDirectionsMMR(
+  candidates: CreativeDirection[],
+  limit: number,
+  lambda = 0.65
+): CreativeDirection[] {
+  const selected: CreativeDirection[] = [];
+  const remaining = [...candidates];
+
+  while (selected.length < limit && remaining.length > 0) {
+    let bestScore = -Infinity;
+    let bestIndex = 0;
+
+    for (let i = 0; i < remaining.length; i++) {
+      const candidate = remaining[i];
+      const novelty = candidate.noveltyScore;
+
+      // Compute max similarity to already-selected directions
+      let maxSimilarity = 0;
+      if (selected.length > 0 && candidate.proposedEmbedding) {
+        for (const s of selected) {
+          if (s.proposedEmbedding) {
+            const sim = cosineSimilarity(candidate.proposedEmbedding, s.proposedEmbedding);
+            maxSimilarity = Math.max(maxSimilarity, sim);
+          }
+        }
+      }
+
+      // MMR score: high novelty is good, high similarity to selected is bad
+      const mmrScore = lambda * novelty - (1 - lambda) * maxSimilarity;
+
+      if (mmrScore > bestScore) {
+        bestScore = mmrScore;
+        bestIndex = i;
+      }
+    }
+
+    // Record the diversity score (the max similarity penalty that was applied)
+    const chosen = remaining[bestIndex];
+    if (selected.length > 0 && chosen.proposedEmbedding) {
+      let maxSimToSelected = 0;
+      for (const s of selected) {
+        if (s.proposedEmbedding) {
+          const sim = cosineSimilarity(chosen.proposedEmbedding, s.proposedEmbedding);
+          maxSimToSelected = Math.max(maxSimToSelected, sim);
+        }
+      }
+      chosen.diversityScore = bestScore; // Store the MMR score for transparency
+    } else {
+      // First selection has no diversity penalty
+      chosen.diversityScore = lambda * chosen.noveltyScore;
+    }
+
+    selected.push(chosen);
+    remaining.splice(bestIndex, 1);
+  }
+
+  console.log(`[creative-engine] MMR selection: chose ${selected.length} from ${candidates.length} candidates (λ=${lambda})`);
+  if (selected.length > 0) {
+    const scores = selected.map(s => `${s.noveltyScore.toFixed(3)}/${s.diversityScore!.toFixed(3)}`);
+    console.log(`[creative-engine] Selected directions (novelty/diversity): ${scores.join(", ")}`);
+  }
+
+  return selected;
 }
 
 /**
