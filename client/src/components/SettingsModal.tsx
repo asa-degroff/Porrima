@@ -787,6 +787,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               {[
                 { value: "static" as BackgroundEffect, label: "Static", icon: "□" },
                 { value: "ripple-grid" as BackgroundEffect, label: "Ripple Grid", icon: "〃" },
+                { value: "scan-lines" as BackgroundEffect, label: "Scan Lines", icon: "≡" },
               ].map((opt) => (
                 <button
                   key={opt.value}
@@ -803,7 +804,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               ))}
             </div>
             <p className="text-white/30 text-xs">
-              Ripple Grid adds an animated reactive background pattern.
+              {backgroundEffect === "ripple-grid"
+                ? "Ripple Grid adds an animated reactive background pattern."
+                : backgroundEffect === "scan-lines"
+                ? "Scan Lines adds a CRT-style horizontal line texture."
+                : "Plain static background with gradient overlay."}
             </p>
           </div>
 

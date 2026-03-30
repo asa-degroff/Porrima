@@ -110,7 +110,8 @@ export interface OllamaModel {
   supportsImages?: boolean;  // True if model has vision capabilities
 }
 
-export type Theme = "default" | "ripple-grid";
+export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono";
+export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines";
 
 export interface SystemPromptPreset {
   id: string;

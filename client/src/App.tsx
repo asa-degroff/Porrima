@@ -11,6 +11,9 @@ const ImageSandbox = lazy(() => import("./components/ImageSandbox").then((m) => 
 const RippleGridBackground = lazy(() =>
   import("./components/RippleGridBackground").then((m) => ({ default: m.RippleGridBackground }))
 );
+const ScanLinesBackground = lazy(() =>
+  import("./components/ScanLinesBackground").then((m) => ({ default: m.ScanLinesBackground }))
+);
 import { useChats } from "./hooks/useChats";
 import { useChat, hasBackgroundStream } from "./hooks/useChat";
 import { useProjects } from "./hooks/useProjects";
@@ -443,6 +446,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       {settings.backgroundEffect === "ripple-grid" && (
         <Suspense fallback={null}>
           <RippleGridBackground />
+        </Suspense>
+      )}
+      {settings.backgroundEffect === "scan-lines" && (
+        <Suspense fallback={null}>
+          <ScanLinesBackground />
         </Suspense>
       )}
       <Sidebar
