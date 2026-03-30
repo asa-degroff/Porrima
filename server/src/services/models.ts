@@ -22,8 +22,12 @@ interface ModelInfoResult {
 async function getModelCapabilities(modelName: string): Promise<ModelInfoResult> {
   // Conservative default: 32k tokens. Better to compact early than overflow.
   // Cloud models and models with failed /api/show calls will use this safe default.
+  // Many models advertise very large context windows (e.g. 256K) but actually allocating
+  // that much KV cache causes severe slowdowns with partial GPU offloading.
+  const DEFAULT_CONTEXT_WINDOW = 32768;
+  const MAX_AUTO_CONTEXT_WINDOW = 32768;
   const result: ModelInfoResult = {
-    contextWindow: 32768,
+    contextWindow: DEFAULT_CONTEXT_WINDOW,
     supportsImages: false,
   };
 
@@ -65,7 +69,12 @@ async function getModelCapabilities(modelName: string): Promise<ModelInfoResult>
         }
       }
       if (detected) {
-        console.log(`[models] ${modelName}: detected context window ${result.contextWindow}`);
+        if (result.contextWindow > MAX_AUTO_CONTEXT_WINDOW) {
+          console.log(`[models] ${modelName}: detected context window ${result.contextWindow}, capping to ${MAX_AUTO_CONTEXT_WINDOW} (override per-chat if needed)`);
+          result.contextWindow = MAX_AUTO_CONTEXT_WINDOW;
+        } else {
+          console.log(`[models] ${modelName}: detected context window ${result.contextWindow}`);
+        }
       } else {
         console.warn(`[models] ${modelName}: /api/show succeeded but no context_length found, using default ${result.contextWindow}`);
       }

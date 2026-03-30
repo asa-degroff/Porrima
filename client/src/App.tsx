@@ -345,8 +345,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleModelChange = useCallback(
     async (modelId: string) => {
       if (!activeChatId || !hasActiveChat) return;
-      await apiUpdateChat(activeChatId, { modelId });
-      setActiveChat((prev) => (prev ? { ...prev, modelId } : prev));
+      const updated = await apiUpdateChat(activeChatId, { modelId });
+      setActiveChat((prev) =>
+        prev
+          ? { ...prev, modelId, contextWindow: updated.contextWindow }
+          : prev
+      );
     },
     [activeChatId, hasActiveChat]
   );

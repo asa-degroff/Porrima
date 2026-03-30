@@ -72,7 +72,21 @@ router.patch("/:id", async (req, res) => {
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
   if (req.body.title !== undefined) chat.title = req.body.title;
-  if (req.body.modelId !== undefined) chat.modelId = req.body.modelId;
+  if (req.body.modelId !== undefined) {
+    chat.modelId = req.body.modelId;
+    // When the model changes, apply the user's per-model context window setting
+    // (unless an explicit contextWindow is also provided in this same request)
+    if (req.body.contextWindow === undefined) {
+      const settings = await getSettings();
+      const savedContextWindow = settings.modelContextWindows?.[req.body.modelId];
+      if (savedContextWindow) {
+        chat.contextWindow = savedContextWindow;
+      } else {
+        // Clear any previous model's override so the new model's detected default is used
+        delete chat.contextWindow;
+      }
+    }
+  }
   if (req.body.systemPrompt !== undefined) chat.systemPrompt = req.body.systemPrompt;
   if (req.body.contextWindow !== undefined) {
     if (req.body.contextWindow === null) {
