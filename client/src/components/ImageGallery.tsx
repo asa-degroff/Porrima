@@ -128,7 +128,7 @@ const ImageGrid = memo(function ImageGrid({
         const aspectRatio = gen.params.width && gen.params.height
           ? (gen.params.width / gen.params.height) * 100
           : 100; // fallback to square
-        const minHeight = 280; // minimum height to fit octahedron + progress bar + text
+        const minHeight = 160; // minimum height to fit octahedron + progress bar + text
         
         return (
           <div
