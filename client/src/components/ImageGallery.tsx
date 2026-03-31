@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, memo, useMemo } from "react";
 import type { GeneratedImage, GenerationState } from "../types";
 import { precacheImages } from "../utils/imageCache";
+import { OctahedronLogo } from "./OctahedronLogo";
 
 interface Props {
   images: GeneratedImage[];
@@ -131,39 +132,28 @@ const ImageGrid = memo(function ImageGrid({
           <div className="aspect-square w-full flex flex-col items-center justify-center gap-3 p-4">
             {gen.status === "queued" ? (
               <>
-                <div className="relative">
-                  <div className="w-10 h-10 rounded-full border-2 border-purple-400/30 border-t-purple-400 animate-spin" />
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-purple-400/60">
-                      <circle cx="12" cy="12" r="10" />
-                      <polyline points="12 6 12 12 16 14" />
-                    </svg>
-                  </div>
-                </div>
+                <OctahedronLogo isActive={true} count={1} size={40} gap={0} speed={0.6} />
                 <span className="text-xs text-purple-300/70 font-medium">Queued</span>
               </>
             ) : gen.status === "processing" && gen.progress ? (
               <>
-                <div className="relative">
-                  <svg width="60" height="60" viewBox="0 0 100 100" className="rotate-[-90deg]">
-                    <circle cx="50" cy="50" r="40" stroke="currentColor" strokeWidth="8" fill="none" className="text-purple-500/20" />
-                    <circle cx="50" cy="50" r="40" stroke="currentColor" strokeWidth="8" fill="none"
-                      strokeDasharray={`${(gen.progress.step / gen.progress.total) * 251.2} 251.2`}
-                      className="text-purple-400 transition-all duration-300" strokeLinecap="round" />
-                  </svg>
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-xs font-mono text-purple-300">
-                      {Math.round((gen.progress.step / gen.progress.total) * 100)}%
-                    </span>
+                <OctahedronLogo isActive={true} count={3} size={40} gap={0} speed={0.5} />
+                <div className="w-full max-w-[120px] space-y-1.5">
+                  <div className="h-1.5 bg-purple-500/20 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-purple-400 rounded-full transition-all duration-300"
+                      style={{ width: `${(gen.progress.step / gen.progress.total) * 100}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-purple-300/60 font-mono">
+                    <span>Step {gen.progress.step}/{gen.progress.total}</span>
+                    <span>{Math.round((gen.progress.step / gen.progress.total) * 100)}%</span>
                   </div>
                 </div>
-                <span className="text-xs text-purple-300/70 font-medium">
-                  Step {gen.progress.step}/{gen.progress.total}
-                </span>
               </>
             ) : (
               <>
-                <div className="w-10 h-10 rounded-full border-2 border-purple-400/30 border-t-purple-400 animate-spin" />
+                <OctahedronLogo isActive={true} count={1} size={40} gap={0} speed={0.8} />
                 <span className="text-xs text-purple-300/70 font-medium">Starting...</span>
               </>
             )}
