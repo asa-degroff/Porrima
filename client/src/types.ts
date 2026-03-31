@@ -130,7 +130,7 @@ export interface ConversationSearchResult {
 }
 
 export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono";
-export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines";
+export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots";
 
 export interface SystemPromptPreset {
   id: string;

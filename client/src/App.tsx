@@ -14,6 +14,9 @@ const RippleGridBackground = lazy(() =>
 const ScanLinesBackground = lazy(() =>
   import("./components/ScanLinesBackground").then((m) => ({ default: m.ScanLinesBackground }))
 );
+const RippleDotsBackground = lazy(() =>
+  import("./components/RippleDotsBackground").then((m) => ({ default: m.RippleDotsBackground }))
+);
 import { useChats } from "./hooks/useChats";
 import { useChat, hasBackgroundStream } from "./hooks/useChat";
 import { useProjects } from "./hooks/useProjects";
@@ -451,6 +454,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       {settings.backgroundEffect === "scan-lines" && (
         <Suspense fallback={null}>
           <ScanLinesBackground />
+        </Suspense>
+      )}
+      {settings.backgroundEffect === "ripple-dots" && (
+        <Suspense fallback={null}>
+          <RippleDotsBackground />
         </Suspense>
       )}
       <Sidebar
