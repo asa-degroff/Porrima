@@ -763,6 +763,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 { value: "forest" as Theme, label: "Forest", preview: "from-green-900" },
                 { value: "crimson" as Theme, label: "Crimson", preview: "from-rose-900" },
                 { value: "mono" as Theme, label: "Asphalt", preview: "from-gray-900" },
+                { value: "strawberry" as Theme, label: "Strawberry", preview: "from-pink-700" },
+                { value: "coffee" as Theme, label: "Coffee", preview: "from-amber-950" },
               ].map((opt) => (
                 <button
                   key={opt.value}

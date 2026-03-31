@@ -120,6 +120,54 @@
   --theme-glow: rgba(148, 163, 184, 0.1);
 }
 
+[data-theme="strawberry"] {
+  /* Light strawberry pinks and soft peach — distinct from crimson's deep reds */
+  --theme-primary: 252, 165, 207;     /* soft strawberry pink */
+  --theme-primary-muted: 252, 165, 207, 0.2;
+  --theme-primary-border: 252, 165, 207, 0.3;
+  --theme-primary-text: 254, 192, 223; /* lighter pink for text */
+  
+  --theme-accent: 254, 189, 105;      /* soft peach */
+  --theme-accent-muted: 254, 189, 105, 0.15;
+  --theme-accent-border: 254, 189, 105, 0.2;
+  --theme-accent-text: 254, 189, 105, 0.8;
+  
+  --theme-secondary: 251, 113, 133;   /* soft rose */
+  --theme-secondary-muted: 251, 113, 133, 0.2;
+  --theme-secondary-border: 251, 113, 133, 0.25;
+  --theme-secondary-text: 253, 164, 175; /* light rose */
+  
+  --theme-grid: 252, 165, 207;        /* soft strawberry pink for grid lines */
+  --theme-grid-opacity: 0.12;
+  
+  --theme-bg-gradient: linear-gradient(135deg, #1a0f14 0%, #2e1a24 25%, #351f2a 38%, #3a222e 50%, #351f2a 62%, #2e1a24 75%, #1a0f14 100%);
+  --theme-glow: rgba(252, 165, 207, 0.15);
+}
+
+[data-theme="coffee"] {
+  /* Deep espresso browns and caramel */
+  --theme-primary: 180, 120, 80;      /* rich espresso */
+  --theme-primary-muted: 180, 120, 80, 0.2;
+  --theme-primary-border: 180, 120, 80, 0.3;
+  --theme-primary-text: 210, 160, 120; /* light tan */
+  
+  --theme-accent: 245, 158, 11;       /* amber-500 */
+  --theme-accent-muted: 245, 158, 11, 0.15;
+  --theme-accent-border: 245, 158, 11, 0.2;
+  --theme-accent-text: 245, 158, 11, 0.8;
+  
+  --theme-secondary: 168, 143, 122;   /* stone-500 */
+  --theme-secondary-muted: 168, 143, 122, 0.2;
+  --theme-secondary-border: 168, 143, 122, 0.25;
+  --theme-secondary-text: 194, 172, 150; /* stone-400 */
+  
+  --theme-grid: 180, 120, 80;         /* espresso for grid lines */
+  --theme-grid-opacity: 0.12;
+  
+  --theme-bg-gradient: linear-gradient(135deg, #0f0a07 0%, #1f1510 25%, #241812 38%, #2a1c14 50%, #241812 62%, #1f1510 75%, #0f0a07 100%);
+  --theme-glow: rgba(180, 120, 80, 0.15);
+}
+
 /* Utility classes for theme colors */
 .theme-primary-bg { background-color: rgba(var(--theme-primary-muted)); }
 .theme-primary-border { border-color: rgba(var(--theme-primary-border)); }

@@ -129,7 +129,7 @@ export interface ConversationSearchResult {
   rank: number;
 }
 
-export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono";
+export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee";
 export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots";
 
 export interface SystemPromptPreset {
