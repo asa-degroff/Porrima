@@ -231,11 +231,15 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
 
   const handleInput = useCallback(() => {
     const el = editorRef.current;
-    if (!el || !chatId) return;
+    if (!el) return;
     textRef.current = el.innerText;
     setHasContent(!!textRef.current.trim());
-    // Save draft
-    setDraft(chatId, textRef.current, images);
+    
+    // Save draft only if chatId exists
+    if (chatId) {
+      setDraft(chatId, textRef.current, images);
+    }
+    
     updateLayout();
     // Check if / was deleted - close skill selector if no longer typing after /
     const lastSlashIndex = textRef.current.lastIndexOf("/");
