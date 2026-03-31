@@ -123,49 +123,61 @@ const ImageGrid = memo(function ImageGrid({
   return (
     <div className="columns-2 md:columns-3 lg:columns-4 gap-3 space-y-3">
       {/* Active generations (queued/processing) */}
-      {activeGenerations.map((gen) => (
-        <div
-          key={gen.id}
-          className="group relative w-full rounded-xl overflow-hidden border-2 border-purple-400/40 bg-purple-500/5 break-inside-avoid"
-          style={{ contain: 'content' }}
-        >
-          <div className="aspect-square w-full flex flex-col items-center justify-center gap-3 p-4">
-            {gen.status === "queued" ? (
-              <>
-                <OctahedronLogo isActive={true} count={1} size={40} gap={0} speed={0.6} />
-                <span className="text-xs text-purple-300/70 font-medium">Queued</span>
-              </>
-            ) : gen.status === "processing" && gen.progress ? (
-              <>
-                <OctahedronLogo isActive={true} count={3} size={40} gap={0} speed={0.5} />
-                <div className="w-full max-w-[120px] space-y-1.5">
-                  <div className="h-1.5 bg-purple-500/20 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-purple-400 rounded-full transition-all duration-300"
-                      style={{ width: `${(gen.progress.step / gen.progress.total) * 100}%` }}
-                    />
+      {activeGenerations.map((gen) => {
+        // Calculate aspect ratio from generation params
+        const aspectRatio = gen.params.width && gen.params.height
+          ? (gen.params.width / gen.params.height) * 100
+          : 100; // fallback to square
+        const minHeight = 280; // minimum height to fit octahedron + progress bar + text
+        
+        return (
+          <div
+            key={gen.id}
+            className="group relative w-full rounded-xl overflow-hidden border-2 border-purple-400/40 bg-purple-500/5 break-inside-avoid"
+            style={{ 
+              contain: 'content',
+              aspectRatio: `${gen.params.width}/${gen.params.height}`,
+              minHeight: minHeight
+            }}
+          >
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-4">
+              {gen.status === "queued" ? (
+                <>
+                  <OctahedronLogo isActive={true} count={1} size={40} gap={0} speed={0.6} />
+                  <span className="text-xs text-purple-300/70 font-medium">Queued</span>
+                </>
+              ) : gen.status === "processing" && gen.progress ? (
+                <>
+                  <OctahedronLogo isActive={true} count={3} size={40} gap={0} speed={0.5} />
+                  <div className="w-full max-w-[120px] space-y-1.5">
+                    <div className="h-1.5 bg-purple-500/20 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-purple-400 rounded-full transition-all duration-300"
+                        style={{ width: `${(gen.progress.step / gen.progress.total) * 100}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[10px] text-purple-300/60 font-mono">
+                      <span>Step {gen.progress.step}/{gen.progress.total}</span>
+                      <span>{Math.round((gen.progress.step / gen.progress.total) * 100)}%</span>
+                    </div>
                   </div>
-                  <div className="flex justify-between text-[10px] text-purple-300/60 font-mono">
-                    <span>Step {gen.progress.step}/{gen.progress.total}</span>
-                    <span>{Math.round((gen.progress.step / gen.progress.total) * 100)}%</span>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <>
-                <OctahedronLogo isActive={true} count={1} size={40} gap={0} speed={0.8} />
-                <span className="text-xs text-purple-300/70 font-medium">Starting...</span>
-              </>
-            )}
+                </>
+              ) : (
+                <>
+                  <OctahedronLogo isActive={true} count={1} size={40} gap={0} speed={0.8} />
+                  <span className="text-xs text-purple-300/70 font-medium">Starting...</span>
+                </>
+              )}
+            </div>
+            <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent">
+              <p className="text-[10px] text-white/60 line-clamp-2 leading-tight">
+                {gen.params.positivePrompt.slice(0, 60)}
+                {gen.params.positivePrompt.length > 60 ? "..." : ""}
+              </p>
+            </div>
           </div>
-          <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent">
-            <p className="text-[10px] text-white/60 line-clamp-2 leading-tight">
-              {gen.params.positivePrompt.slice(0, 60)}
-              {gen.params.positivePrompt.length > 60 ? "..." : ""}
-            </p>
-          </div>
-        </div>
-      ))}
+        );
+      })}
 
       {images.map((image) => (
         <ImageTile
