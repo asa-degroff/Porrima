@@ -230,13 +230,22 @@ export function getDb(): Database.Database {
   // Auto-add preview column to avoid json_extract on messages in list queries
   if (!cols.some((c) => c.name === "preview")) {
     db.exec("ALTER TABLE chats ADD COLUMN preview TEXT DEFAULT ''");
-    // Backfill preview from existing messages
+    // Backfill preview from existing messages (will be recomputed below to skip compaction summaries)
     db.exec(`
       UPDATE chats SET preview = COALESCE(
         SUBSTR(json_extract(messages, '$[#-1].content'), 1, 100),
         ''
       )
     `);
+  }
+
+  // Migration: recompute previews to skip compaction summaries
+  // Compaction summaries start with "The user..." and aren't useful for sidebar previews
+  const previewNeedsRecompute = !cols.some((c) => c.name === "_previewRecomputed");
+  if (previewNeedsRecompute) {
+    db.exec("ALTER TABLE chats ADD COLUMN _previewRecomputed INTEGER DEFAULT 0");
+    // Recompute in TypeScript to properly skip compaction summaries
+    recomputePreviewsSkippingCompaction(db);
   }
 
   // Auto-migrate from JSON files if needed
@@ -332,8 +341,16 @@ export async function saveChat(chat: Chat): Promise<void> {
   const db = getDb();
   chat.lastModified = new Date().toISOString();
 
-  // Compute preview from last message for fast list queries
-  const lastMsg = chat.messages.length > 0 ? chat.messages[chat.messages.length - 1] : null;
+  // Compute preview from last non-compaction message for fast list queries
+  // Skip compaction summaries (they start with "The user..." and aren't useful previews)
+  let lastMsg: ChatMessage | null = null;
+  for (let i = chat.messages.length - 1; i >= 0; i--) {
+    const msg = chat.messages[i];
+    if (!msg._isCompactionSummary) {
+      lastMsg = msg;
+      break;
+    }
+  }
   const preview = lastMsg?.content ? lastMsg.content.slice(0, 100) : "";
 
   db.prepare(`
@@ -392,7 +409,15 @@ export async function deleteChat(id: string): Promise<boolean> {
 export async function createChat(chat: Chat): Promise<void> {
   const db = getDb();
 
-  const lastMsg = chat.messages.length > 0 ? chat.messages[chat.messages.length - 1] : null;
+  // Compute preview from last non-compaction message
+  let lastMsg: ChatMessage | null = null;
+  for (let i = chat.messages.length - 1; i >= 0; i--) {
+    const msg = chat.messages[i];
+    if (!msg._isCompactionSummary) {
+      lastMsg = msg;
+      break;
+    }
+  }
   const preview = lastMsg?.content ? lastMsg.content.slice(0, 100) : "";
 
   db.prepare(`
@@ -754,6 +779,40 @@ export function getChatTitle(chatId: string): string | null {
   const db = getDb();
   const row = db.prepare("SELECT title FROM chats WHERE id = ?").get(chatId) as { title: string } | undefined;
   return row?.title ?? null;
+}
+
+/**
+ * Recompute preview column for all chats, skipping compaction summary messages.
+ * Called once during migration to fix previews that show "The user is reporting..." text.
+ */
+function recomputePreviewsSkippingCompaction(db: Database.Database): void {
+  const chats = db.prepare("SELECT id, messages FROM chats").all() as Array<{
+    id: string; messages: string;
+  }>;
+
+  const update = db.prepare("UPDATE chats SET preview = ?, _previewRecomputed = 1 WHERE id = ?");
+  let updated = 0;
+
+  for (const chat of chats) {
+    try {
+      const messages = JSON.parse(chat.messages) as ChatMessage[];
+      // Find last non-compaction message
+      let lastMsg: ChatMessage | null = null;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (!messages[i]._isCompactionSummary) {
+          lastMsg = messages[i];
+          break;
+        }
+      }
+      const preview = lastMsg?.content ? lastMsg.content.slice(0, 100) : "";
+      update.run(preview, chat.id);
+      updated++;
+    } catch (e) {
+      console.warn(`[chat-storage] Skipping preview recompute for chat ${chat.id}: ${(e as Error).message}`);
+    }
+  }
+
+  console.log(`[chat-storage] Recomputed previews for ${updated} chats (skipping compaction summaries)`);
 }
 
 /**
