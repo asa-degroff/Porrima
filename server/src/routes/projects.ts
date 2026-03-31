@@ -24,6 +24,33 @@ router.post("/validate", async (req, res) => {
   res.json(result);
 });
 
+// Create a directory path (including parent directories)
+router.post("/create-directory", async (req, res) => {
+  const { path } = req.body;
+  if (!path) {
+    return res.status(400).json({ success: false, error: "Path is required" });
+  }
+  
+  const expandedPath = expandTilde(path);
+  
+  // Check if already exists
+  if (existsSync(expandedPath)) {
+    const stats = statSync(expandedPath);
+    if (stats.isDirectory()) {
+      return res.json({ success: true, alreadyExists: true });
+    }
+    return res.status(400).json({ success: false, error: "Path exists but is not a directory" });
+  }
+  
+  // Create directory with parents
+  try {
+    await import("fs/promises").then(({ mkdir }) => mkdir(expandedPath, { recursive: true }));
+    res.json({ success: true, path: expandedPath });
+  } catch (e: any) {
+    res.status(400).json({ success: false, error: `Failed to create directory: ${e.message}` });
+  }
+});
+
 // List all projects
 router.get("/", async (_req, res) => {
   const projects = await listProjects();

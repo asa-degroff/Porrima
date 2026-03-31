@@ -10,6 +10,7 @@ interface PathValidation {
   exists: boolean;
   isDirectory: boolean;
   isReadable: boolean;
+  canCreate?: boolean;
   error?: string;
   hasAgentsMd?: boolean;
 }
@@ -20,6 +21,7 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
   const [validation, setValidation] = useState<PathValidation | null>(null);
   const [validating, setValidating] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [creatingDirectory, setCreatingDirectory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -94,6 +96,32 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
       setValidating(false);
     }
   }, []);
+
+  const handleCreateDirectory = async () => {
+    if (!validation?.canCreate) return;
+    
+    setCreatingDirectory(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/projects/create-directory", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: path.trim() }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setError(data.error || "Failed to create directory");
+      } else {
+        // Re-validate the path now that it exists
+        await validatePath(path.trim());
+      }
+    } catch (e: any) {
+      setError(e.message || "Failed to create directory");
+    } finally {
+      setCreatingDirectory(false);
+    }
+  };
 
   const handleCreate = async () => {
     if (!name.trim() || !validation?.valid) return;
@@ -206,6 +234,8 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
               <div className={`text-xs px-3 py-2 rounded-lg border ${
                 validation.valid 
                   ? "bg-emerald-500/10 border-emerald-400/20 text-emerald-300" 
+                  : validation.canCreate
+                  ? "bg-amber-500/10 border-amber-400/20 text-amber-300"
                   : "bg-red-500/10 border-red-400/20 text-red-300"
               }`}>
                 {validation.valid ? (
@@ -214,6 +244,21 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
                     {validation.hasAgentsMd && (
                       <div className="opacity-80">AGENTS.md already exists — will be used for context</div>
                     )}
+                  </div>
+                ) : validation.canCreate ? (
+                  <div className="space-y-2">
+                    <div className="font-medium">Path does not exist</div>
+                    <div className="opacity-80">Directory can be created at this location</div>
+                    <button
+                      onClick={handleCreateDirectory}
+                      disabled={creatingDirectory}
+                      className="mt-2 px-3 py-1.5 text-xs rounded-lg bg-amber-500/20 border border-amber-400/30 text-amber-200 hover:bg-amber-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      {creatingDirectory && (
+                        <div className="w-3 h-3 border-2 border-amber-400/30 border-t-amber-200 rounded-full animate-spin" />
+                      )}
+                      {creatingDirectory ? "Creating..." : "Create Directory"}
+                    </button>
                   </div>
                 ) : (
                   <div className="space-y-1">

@@ -20,6 +20,7 @@ export interface PathValidationResult {
   exists: boolean;
   isDirectory: boolean;
   isReadable: boolean;
+  canCreate?: boolean;
   error?: string;
   hasAgentsMd?: boolean;
 }
@@ -29,11 +30,29 @@ export function validatePath(pathToValidate: string): PathValidationResult {
   
   // Check if path exists
   if (!existsSync(expandedPath)) {
+    // Check if we could create it (parent exists and is writable)
+    const parentDir = expandedPath.substring(0, expandedPath.lastIndexOf("/"));
+    let canCreate = false;
+    
+    if (parentDir && existsSync(parentDir)) {
+      try {
+        const stats = statSync(parentDir);
+        if (stats.isDirectory()) {
+          accessSync(parentDir, constants.W_OK);
+          canCreate = true;
+        }
+      } catch (e: any) {
+        // Parent exists but isn't writable or accessible
+        canCreate = false;
+      }
+    }
+    
     return {
       valid: false,
       exists: false,
       isDirectory: false,
       isReadable: false,
+      canCreate,
       error: "Path does not exist",
     };
   }
