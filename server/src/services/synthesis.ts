@@ -216,7 +216,7 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           unreviewedSection,
           `---\n\n## Stored Memories (${store.memories.length} total)\n\n${memoriesText}`,
           `---\n\n## Your Persona\n\n${personaData?.content || ''}`,
-          `Based on today's conversations${notebookSection ? ", notebook entries," : ""} and the stored memories, write a daily synthesis. Include:\n1. What the user worked on and asked for today — their goals, decisions, and direction\n2. What you (the agent) accomplished — code written, problems solved, suggestions made, tools used\n3. Broader themes and patterns across the user's projects\n4. If the user wrote notebook entries, incorporate their thoughts and observations\n5. Any contradictions or outdated info in the stored memories that should be cleaned up`,
+          `Write a daily synthesis of your shared work with the user. Cover what the user worked on, what you accomplished together, and any patterns or themes that emerged. If the user wrote notebook entries, respond to their thoughts. Write naturally in first person for your actions, third person for the user.`,
         ].filter(Boolean).join("\n\n");
 
         let summaryText = "";
@@ -252,6 +252,31 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
             `# Daily Synthesis - ${today}\n\n**Memories: ${store.memories.length}** | Superseded: ${superseded.size}\n\n${finalSummary}`
           );
           console.log(`[synthesis] Daily log saved for ${today} (${finalSummary.length} chars)`);
+
+          // Step 5: Save synthesis summary directly as notebook entry and memory
+          try {
+            await saveSynthesisAsNotebookAndMemory(
+              finalSummary,
+              store.memories,
+              todaysDigest,
+              unreviewedUserEntries,
+              resolvedModelId
+            );
+          } catch (e) {
+            console.error("[synthesis] Failed to save synthesis as notebook/memory:", e);
+          }
+
+          // Step 6: Optional follow-up - give the agent a chance to explore something with tools
+          try {
+            await writeOptionalFollowupNotebookEntry(
+              finalSummary,
+              unreviewedUserEntries,
+              personaData?.content || '',
+              resolvedModelId
+            );
+          } catch (e) {
+            console.error("[synthesis] Optional follow-up failed:", e);
+          }
         } else {
           console.warn(
             `[synthesis] LLM returned empty summary for ${today} (model: ${resolvedModelId}). Skipping daily log write.`
@@ -261,8 +286,7 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
         console.error("[synthesis] Summary generation failed:", e);
       }
 
-      // Step 5: Generate reflections and save as memories
-      // Returns the generated reflections so they can be passed to notebook writing
+      // Step 7: Generate reflections and save as memories (higher-order insights beyond the summary)
       let generatedReflections: Array<{ text: string; category: string; importance: number }> = [];
       try {
         generatedReflections = await generateReflections(
@@ -276,29 +300,11 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
         console.error("[synthesis] Reflection generation failed:", e);
       }
 
-      // Step 6: Analyze memories for persona promotion candidates
+      // Step 8: Analyze memories for persona promotion candidates
       try {
         await analyzeAndPromotePersonaPatterns(store.memories, resolvedModelId);
       } catch (e) {
         console.error("[synthesis] Persona pattern analysis failed:", e);
-      }
-
-      // Step 7: Write synthesis notebook entry with tool access and open-ended prompt
-      if (finalSummary) {
-        try {
-          // Use the reflections generated in Step 5 (no duplicate LLM call)
-          await writeAgentNotebookEntry(
-            finalSummary,
-            todaysDigest,
-            notebookEntries,
-            unreviewedUserEntries,
-            generatedReflections,
-            personaData?.content || '',
-            resolvedModelId
-          );
-        } catch (e) {
-          console.error("[synthesis] Notebook entry write failed:", e);
-        }
       }
     } else {
       console.warn("[synthesis] No model available — skipping summary generation and persona analysis");
@@ -868,15 +874,137 @@ function formatNotebookEntries(entries: NotebookEntry[]): string {
 
 
 /**
+ * Save the synthesis summary directly as a notebook entry and memory.
+ * This preserves the synthesis output without losing it or confusing identity.
+ */
+async function saveSynthesisAsNotebookAndMemory(
+  summary: string,
+  memories: Array<{ text: string; category: string; importance: number; embedding: number[]; projectId?: string }>,
+  todaysDigest: TodaysDigest | null,
+  unreviewedUserEntries: NotebookEntry[],
+  modelId: string
+): Promise<void> {
+  const agentIndex = await listNotebookEntries("agent");
+  const today = new Date().toDateString();
+  const existingSynthesis = agentIndex.entries.some(
+    (e) => new Date(e.createdAt).toDateString() === today && e.preview.startsWith("# Daily Synthesis")
+  );
+  if (existingSynthesis) {
+    console.log("[synthesis] Synthesis notebook entry already exists for today, skipping");
+    return;
+  }
+
+  // Save as notebook entry
+  const entry = await createNotebookEntry("agent", summary);
+  console.log(`[synthesis] Saved synthesis as notebook entry: ${entry.id}`);
+
+  // Save as memory (context category, high importance)
+  try {
+    const { embed } = await import("./embeddings.js");
+    const { addMemory } = await import("./memory-storage.js");
+    const { v4: uuid } = await import("uuid");
+    
+    const embedding = await embed(summary);
+    const projectId = todaysDigest && todaysDigest.projectSections.length === 1 
+      ? todaysDigest.projectSections[0].project.id 
+      : undefined;
+    
+    const now = new Date().toISOString();
+    await addMemory({
+      id: uuid(),
+      text: `Daily synthesis: ${summary.slice(0, 500)}${summary.length > 500 ? '...' : ''}`,
+      category: "context",
+      importance: 8,
+      embedding,
+      createdAt: now,
+      lastAccessed: now,
+      accessCount: 0,
+      projectId,
+      sourceType: "synthesis",
+      sourceId: entry.id,
+    });
+    console.log(`[synthesis] Saved synthesis summary as memory`);
+  } catch (e) {
+    console.error("[synthesis] Failed to save synthesis as memory:", e);
+  }
+
+  // Mark unreviewed entries as reviewed
+  if (unreviewedUserEntries.length > 0) {
+    await markEntriesAsReviewed(unreviewedUserEntries.map(e => e.id));
+  }
+}
+
+/**
+ * Optional follow-up notebook entry - gives the agent a chance to explore something with tools
+ * after the synthesis is saved. This is separate from the synthesis itself.
+ */
+async function writeOptionalFollowupNotebookEntry(
+  synthesisSummary: string,
+  unreviewedUserEntries: NotebookEntry[],
+  persona: string,
+  modelId: string
+): Promise<void> {
+  // Check if we already have a follow-up today (prevent duplicates)
+  const agentIndex = await listNotebookEntries("agent");
+  const today = new Date().toDateString();
+  const existingFollowup = agentIndex.entries.some(
+    (e) => new Date(e.createdAt).toDateString() === today && e.preview.includes("follow-up")
+  );
+  if (existingFollowup) {
+    return;
+  }
+
+  // Build prompt - the agent decides if it wants to explore something
+  const unreviewedText = unreviewedUserEntries.length > 0
+    ? `## User Notebook Entries to Consider\n\n${formatNotebookEntries(unreviewedUserEntries)}`
+    : "";
+
+  const promptParts = [
+    `## Today's Synthesis (already saved to your notebook)\n\n${synthesisSummary}`,
+    unreviewedText,
+    `## Your Persona\n\n${persona}`,
+    "The synthesis above has been saved to your notebook. Now: is there anything you want to explore further? Perhaps something the user wrote that you'd like to respond to with more depth, or an idea that emerged that you'd like to investigate with tools (web search, artifact creation, etc.)?\n\nIf yes, write a follow-up notebook entry. If nothing calls to you, that's fine too - just output: [No follow-up needed]",
+  ].filter(Boolean).join("\n\n");
+
+  const systemPrompt = "You're writing an optional follow-up to your daily synthesis. This is only if something genuinely sparks your curiosity or if you feel the user's notebook entries deserve a more thoughtful response. Don't force it.";
+
+  let responseText = "";
+  let thinkingText = "";
+  
+  try {
+    await streamChat(
+      modelId,
+      [{ role: "user", content: promptParts, timestamp: Date.now() }],
+      systemPrompt,
+      (event) => {
+        if (event.type === "text_delta") responseText += event.delta;
+        else if (event.type === "thinking_delta") thinkingText += event.delta;
+      },
+      { signal: AbortSignal.timeout(120_000) }
+    );
+
+    const finalResponse = (responseText || thinkingText).trim();
+    
+    // Check if agent declined to write a follow-up
+    if (!finalResponse || finalResponse.includes("[No follow-up needed]") || finalResponse.length < 50) {
+      console.log("[synthesis] Agent declined optional follow-up");
+      return;
+    }
+
+    // Save the follow-up
+    const entry = await createNotebookEntry("agent", finalResponse);
+    console.log(`[synthesis] Saved optional follow-up notebook entry: ${entry.id}`);
+
+  } catch (e) {
+    console.error("[synthesis] Optional follow-up failed:", e);
+  }
+}
+
+/**
  * Write an agent notebook entry with tool access and open-ended reflection.
- * The agent can use tools (web search, artifacts, etc.) and has access to:
- * - Today's synthesis summary
- * - Reflection memories generated during synthesis
- * - User's unreviewed notebook entries
- * - The agent's persona
- * 
- * Supports full tool execution loop: if the agent calls tools, they are executed
- * and the results (including artifacts/visualizations) are saved with the entry.
+ * DEPRECATED: This function is no longer used in the synthesis flow.
+ * The synthesis summary is now saved directly, and an optional follow-up
+ * is offered separately.
  */
 async function writeAgentNotebookEntry(
   summary: string,
@@ -887,200 +1015,8 @@ async function writeAgentNotebookEntry(
   persona: string,
   modelId: string
 ): Promise<void> {
-  const agentIndex = await listNotebookEntries("agent");
-  const today = new Date().toDateString();
-  const existingSynthesis = agentIndex.entries.some(
-    (e) => new Date(e.createdAt).toDateString() === today && e.preview.startsWith("# Daily Synthesis")
-  );
-  if (existingSynthesis) {
-    console.log("[synthesis] Agent notebook entry already exists for today, skipping");
-    return;
-  }
-
-  // Build context for the agent's notebook writing
-  const reflectionText = reflectionMemories.length > 0
-    ? `## Reflections from Today's Synthesis\n\n${reflectionMemories.map(m => `- ${m.text}`).join("\n")}`
-    : "";
-
-  const unreviewedText = unreviewedUserEntries.length > 0
-    ? `## Your Notebook Entries Pending Review\n\nThese are thoughts from the user that you haven't yet responded to. Consider addressing them in your notebook entry:\n\n${formatNotebookEntries(unreviewedUserEntries)}`
-    : "";
-
-  const promptParts = [
-    `## Today's Synthesis Summary\n\n${summary}`,
-    reflectionText,
-    unreviewedText,
-    `## Your Persona\n\n${persona}`,
-    "Now, write a notebook entry in your own voice. This is your personal space to reflect on today's work. You can:\n- Respond to the user's notebook entries\n- Share what you learned or struggled with\n- Express curiosity about something that came up\n- Create an artifact to demonstrate something\n- Search the web for context on a topic\n- Simply think out loud about where things are heading\n\nThere's no required format. Write what feels meaningful to you. If you use tools (web search, artifact creation, etc.), they will be executed and the results included in your entry.",
-  ].filter(Boolean).join("\n\n");
-
-  const systemPrompt = "You are writing in your personal notebook. This is a space for genuine reflection, not a formal report. Write in first person. Be honest about what worked, what didn't, and what you're curious about. If something sparked your interest today, explore it. If the user shared something in their notebook that resonated with you, respond to it. You have access to tools if you want to search for information, create visualizations, or build interactive demos. Use them if they serve your reflection.";
-
-  // Import tool system for notebook writing
-  const { getAgentTools, executeTool } = await import("./agent-tools.js");
-
-  // Create a temporary chat ID for tool execution context
-  const tempChatId = `notebook-synthesis-${Date.now()}`;
-  
-  // Track accumulated content across tool loop iterations
-  let finalContent = "";
-  let finalThinking = "";
-  const allToolCalls: any[] = [];
-  const allToolResults: any[] = [];
-  const allArtifacts: any[] = [];
-  const allVisuals: any[] = [];
-  
-  // Initial messages
-  const piMessages: any[] = [
-    {
-      role: "user",
-      content: promptParts,
-      timestamp: Date.now(),
-    },
-  ];
-  
-  // Effects object created ONCE outside the loop to maintain references across iterations
-  const effects = {
-    onArtifact: (artifact: any) => {
-      console.log(`[synthesis] Notebook artifact created: ${artifact.id}`);
-      allArtifacts.push(artifact);
-    },
-    onVisual: (visual: any) => {
-      console.log(`[synthesis] Notebook visualization created: ${visual.id}`);
-      allVisuals.push(visual);
-    },
-    onGeneratedImage: (image: any) => {
-      console.log(`[synthesis] Notebook image generated: ${image.id}`);
-    },
-    onPendingReviewImage: () => {},
-    onAskUser: (question: string, toolCallId: string) => {
-      // For notebook synthesis, we skip ask_user and continue
-      console.log(`[synthesis] Notebook ask_user skipped: ${question}`);
-    },
-  };
-  
-  // Tool loop - similar to chat route but simplified for notebook context
-  const MAX_ITERATIONS = 10; // Limit to prevent infinite loops
-  let iteration = 0;
-  
-  while (iteration < MAX_ITERATIONS) {
-    iteration++;
-    console.log(`[synthesis] Notebook tool loop iteration ${iteration}`);
-    
-    let iterationContent = "";
-    let iterationThinking = "";
-    let toolCalls: any[] = [];
-    let stopReason: string = "stop";
-    let assistantMessage: any = undefined;
-    
-    const tools = getAgentTools(tempChatId, effects);
-    
-    try {
-      const result = await streamChat(
-        modelId,
-        piMessages,
-        systemPrompt,
-        (event) => {
-          if (event.type === "text_delta") iterationContent += event.delta;
-          else if (event.type === "thinking_delta") iterationThinking += event.delta;
-        },
-        {
-          signal: AbortSignal.timeout(180_000),
-          tools,
-        }
-      );
-
-      toolCalls = result.toolCalls || [];
-      stopReason = result.stopReason;
-      assistantMessage = result.assistantMessage;
-
-      // Accumulate final content from the last iteration (non-tool response)
-      if (stopReason === "stop") {
-        finalContent = iterationContent;
-        finalThinking = iterationThinking;
-      }
-    } catch (e) {
-      console.error("[synthesis] Notebook streamChat failed:", e);
-      break;
-    }
-
-    // If no tool calls, we're done
-    if (toolCalls.length === 0 || stopReason === "stop") {
-      break;
-    }
-
-    // Execute tool calls
-    console.log(`[synthesis] Executing ${toolCalls.length} tool call(s) for notebook`);
-    allToolCalls.push(...toolCalls);
-
-    const toolResults: Array<{ toolCallId: string; toolName: string; content: string; isError: boolean }> = [];
-    for (const toolCall of toolCalls) {
-      try {
-        console.log(`[synthesis] Executing tool: ${toolCall.name}`);
-        const result = await executeTool(toolCall, tempChatId, effects);
-        const content = JSON.stringify(result);
-        toolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, content, isError: false });
-        allToolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, result, isError: false });
-      } catch (e: any) {
-        console.error(`[synthesis] Tool execution failed: ${toolCall.name}`, e);
-        const content = e.message || "Tool execution failed";
-        toolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, content, isError: true });
-        allToolResults.push({ toolCallId: toolCall.id, toolName: toolCall.name, result: { error: e.message }, isError: true });
-      }
-    }
-
-    // Append the raw AssistantMessage from streamChat (properly formatted pi-ai message)
-    piMessages.push(assistantMessage);
-
-    // Append tool results in pi-ai ToolResultMessage format
-    for (const tr of toolResults) {
-      piMessages.push({
-        role: "toolResult" as const,
-        toolCallId: tr.toolCallId,
-        toolName: tr.toolName,
-        content: [{ type: "text" as const, text: tr.content }],
-        isError: tr.isError,
-        timestamp: Date.now(),
-      });
-    }
-  }
-  
-  // If still no content after tool loop, use thinking as fallback
-  if (!finalContent && finalThinking) {
-    finalContent = finalThinking;
-  }
-  
-  if (!finalContent) {
-    console.warn("[synthesis] Agent notebook entry LLM returned empty content");
-    return;
-  }
-  
-  // Create the notebook entry with content
-  const entry = await createNotebookEntry("agent", finalContent);
-  
-  // Update the entry with tool results, artifacts, and visuals if any were generated
-  if (allToolResults.length > 0 || allArtifacts.length > 0 || allVisuals.length > 0) {
-    const updates: any = {};
-    if (allToolResults.length > 0) {
-      updates.toolResults = allToolResults;
-    }
-    if (allArtifacts.length > 0) {
-      updates.artifacts = allArtifacts;
-    }
-    if (allVisuals.length > 0) {
-      updates.visuals = allVisuals;
-    }
-    
-    await updateNotebookEntry("agent", entry.id, updates);
-    console.log(`[synthesis] Updated notebook entry ${entry.id} with ${allToolResults.length} tool results, ${allArtifacts.length} artifacts, and ${allVisuals.length} visuals`);
-  }
-  
-  console.log(`[synthesis] Wrote agent notebook entry: ${entry.id}`);
-  
-  // Mark unreviewed entries as reviewed
-  if (unreviewedUserEntries.length > 0) {
-    await markEntriesAsReviewed(unreviewedUserEntries.map(e => e.id));
-  }
+  console.log("[synthesis] writeAgentNotebookEntry is deprecated - using saveSynthesisAsNotebookAndMemory instead");
+  // Keep this function for backward compatibility but don't use it
 }
 
 async function getSynthesisModelId(): Promise<string | null> {
