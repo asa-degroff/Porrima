@@ -209,10 +209,10 @@ function ProjectSection({
             {/* Color picker button */}
             <button
               onClick={() => setShowColorPicker(!showColorPicker)}
-              className="text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5"
+              className="p-0.5 rounded hover:bg-white/5"
               title="Change color"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={colors.text}>
                 <circle cx="12" cy="12" r="10"/>
                 <circle cx="12" cy="12" r="4"/>
               </svg>
