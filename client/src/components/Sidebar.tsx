@@ -76,6 +76,23 @@ function ProjectSection({
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // Color mapping for Tailwind classes
+  // Note: All color classes must be fully written out for Tailwind v4 to detect them
+  const colorClasses: Record<string, { icon: string; bg: string; border: string; text: string; hover: string }> = {
+    emerald: { icon: "text-emerald-400/50", bg: "bg-emerald-500/15", border: "border-emerald-400/25", text: "text-emerald-300", hover: "hover:bg-emerald-500/25" },
+    purple: { icon: "text-purple-400/50", bg: "bg-purple-500/15", border: "border-purple-400/25", text: "text-purple-300", hover: "hover:bg-purple-500/25" },
+    blue: { icon: "text-blue-400/50", bg: "bg-blue-500/15", border: "border-blue-400/25", text: "text-blue-300", hover: "hover:bg-blue-500/25" },
+    amber: { icon: "text-amber-400/50", bg: "bg-amber-500/15", border: "border-amber-400/25", text: "text-amber-300", hover: "hover:bg-amber-500/25" },
+    rose: { icon: "text-rose-400/50", bg: "bg-rose-500/15", border: "border-rose-400/25", text: "text-rose-300", hover: "hover:bg-rose-500/25" },
+    cyan: { icon: "text-cyan-400/50", bg: "bg-cyan-500/15", border: "border-cyan-400/25", text: "text-cyan-300", hover: "hover:bg-cyan-500/25" },
+    violet: { icon: "text-violet-400/50", bg: "bg-violet-500/15", border: "border-violet-400/25", text: "text-violet-300", hover: "hover:bg-violet-500/25" },
+    orange: { icon: "text-orange-400/50", bg: "bg-orange-500/15", border: "border-orange-400/25", text: "text-orange-300", hover: "hover:bg-orange-500/25" },
+    pink: { icon: "text-pink-400/50", bg: "bg-pink-500/15", border: "border-pink-400/25", text: "text-pink-300", hover: "hover:bg-pink-500/25" },
+    teal: { icon: "text-teal-400/50", bg: "bg-teal-500/15", border: "border-teal-400/25", text: "text-teal-300", hover: "hover:bg-teal-500/25" },
+  };
+
+  const colors = colorClasses[project.color] || colorClasses.emerald;
+
   return (
     <div className="rounded-lg bg-white/[0.03] border border-white/[0.06]">
       <div className="flex items-center gap-1.5 px-2 py-1.5 group">
@@ -83,7 +100,7 @@ function ProjectSection({
           onClick={onToggleExpanded}
           className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
         >
-          <span className="text-emerald-400/50">
+          <span className={colors.icon}>
             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
             </svg>
@@ -128,7 +145,7 @@ function ProjectSection({
         <div className="px-1 pb-1.5">
           <button
             onClick={() => onNewChat("agent", project.id)}
-            className="w-full px-2 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-400/25 text-emerald-300 text-xs font-medium hover:bg-emerald-500/25 transition-all flex items-center justify-center gap-1.5 mb-2"
+            className={`w-full px-2 py-1.5 rounded-xl text-sm font-medium border ${colors.bg} ${colors.border} ${colors.text} ${colors.hover} transition-all flex items-center justify-center gap-2 mb-2`}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 5v14" />

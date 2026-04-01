@@ -4,6 +4,8 @@ import { join } from "path";
 import { homedir } from "os";
 import type { Chat, ChatListItem, ChatMessage, Project, Settings } from "../types.js";
 
+const PROJECT_COLORS = ["emerald", "purple", "blue", "amber", "rose", "cyan", "violet", "orange", "pink", "teal"];
+
 const BASE_DIR = join(homedir(), ".quje-agent");
 const CHATS_DIR = join(BASE_DIR, "chats");
 const PROJECTS_DIR = join(BASE_DIR, "projects");
@@ -50,6 +52,7 @@ export function getDb(): Database.Database {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       path TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT 'emerald',
       createdAt TEXT NOT NULL,
       lastModified TEXT NOT NULL
     );
@@ -217,6 +220,19 @@ export function getDb(): Database.Database {
   const cols = db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === "activeSkills")) {
     db.exec("ALTER TABLE chats ADD COLUMN activeSkills TEXT");
+  }
+
+  // Auto-add color column to projects if upgrading from earlier schema
+  const projectCols = db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
+  if (!projectCols.some((c) => c.name === "color")) {
+    db.exec("ALTER TABLE projects ADD COLUMN color TEXT NOT NULL DEFAULT 'emerald'");
+    // Assign colors to existing projects
+    const existing = db.prepare("SELECT id FROM projects ORDER BY lastModified DESC").all() as { id: string }[];
+    const update = db.prepare("UPDATE projects SET color = ? WHERE id = ?");
+    existing.forEach((p, i) => {
+      update.run(PROJECT_COLORS[i % PROJECT_COLORS.length], p.id);
+    });
+    console.log(`[chat-storage] Added color column to projects, assigned ${existing.length} projects`);
   }
 
   // Auto-add delayed extraction tracking columns
@@ -468,7 +484,7 @@ export async function findBlueskyChatId(): Promise<string | null> {
 export async function listProjects(): Promise<Project[]> {
   const db = getDb();
   return db.prepare(`
-    SELECT id, name, path, createdAt, lastModified
+    SELECT id, name, path, color, createdAt, lastModified
     FROM projects
     ORDER BY lastModified DESC
   `).all() as Project[];
@@ -476,16 +492,23 @@ export async function listProjects(): Promise<Project[]> {
 
 export async function getProject(id: string): Promise<Project | null> {
   const db = getDb();
-  const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as Project | undefined;
+  const row = db.prepare("SELECT id, name, path, color, createdAt, lastModified FROM projects WHERE id = ?").get(id) as Project | undefined;
   return row ?? null;
 }
 
 export async function createProject(project: Project): Promise<void> {
   const db = getDb();
+  // Assign a color if not provided (cycle through available colors)
+  if (!project.color) {
+    const existing = db.prepare("SELECT color FROM projects ORDER BY lastModified DESC").all() as { color: string }[];
+    const usedColors = existing.map(p => p.color);
+    const nextColor = PROJECT_COLORS.find(c => !usedColors.includes(c)) || PROJECT_COLORS[existing.length % PROJECT_COLORS.length];
+    project.color = nextColor;
+  }
   db.prepare(`
-    INSERT INTO projects (id, name, path, createdAt, lastModified)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(project.id, project.name, project.path, project.createdAt, project.lastModified);
+    INSERT INTO projects (id, name, path, color, createdAt, lastModified)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(project.id, project.name, project.path, project.color, project.createdAt, project.lastModified);
 }
 
 export async function updateProject(id: string, updates: Partial<Project>): Promise<boolean> {
@@ -498,9 +521,9 @@ export async function updateProject(id: string, updates: Partial<Project>): Prom
 
   db.prepare(`
     UPDATE projects
-    SET name = ?, path = ?, lastModified = ?
+    SET name = ?, path = ?, color = ?, lastModified = ?
     WHERE id = ?
-  `).run(project.name, project.path, project.lastModified, project.id);
+  `).run(project.name, project.path, project.color, project.lastModified, project.id);
 
   return true;
 }

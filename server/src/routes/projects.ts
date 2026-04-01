@@ -75,7 +75,7 @@ router.get("/:id/agents-md", async (req, res) => {
 
 // Create a new project
 router.post("/", async (req, res) => {
-  const { name, path } = req.body;
+  const { name, path, color } = req.body;
   if (!name || !path) {
     return res.status(400).json({ error: "name and path are required" });
   }
@@ -83,6 +83,7 @@ router.post("/", async (req, res) => {
     id: crypto.randomUUID(),
     name,
     path,
+    color: color || "emerald",
     createdAt: new Date().toISOString(),
     lastModified: new Date().toISOString(),
   };

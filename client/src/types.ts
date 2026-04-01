@@ -96,6 +96,7 @@ export interface Project {
   id: string;
   name: string;
   path: string;
+  color: string;
   createdAt: string;
   lastModified: string;
 }
