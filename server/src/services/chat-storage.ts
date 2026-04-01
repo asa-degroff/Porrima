@@ -490,17 +490,26 @@ export async function findBlueskyChatId(): Promise<string | null> {
 
 export async function listProjects(): Promise<Project[]> {
   const db = getDb();
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT id, name, path, color, pinned, createdAt, lastModified
     FROM projects
     ORDER BY pinned DESC, lastModified DESC
-  `).all() as Project[];
+  `).all() as Array<{ id: string; name: string; path: string; color: string; pinned: number; createdAt: string; lastModified: string }>;
+  
+  return rows.map(r => ({
+    ...r,
+    pinned: r.pinned === 1,
+  }));
 }
 
 export async function getProject(id: string): Promise<Project | null> {
   const db = getDb();
-  const row = db.prepare("SELECT id, name, path, color, pinned, createdAt, lastModified FROM projects WHERE id = ?").get(id) as Project | undefined;
-  return row ?? null;
+  const row = db.prepare("SELECT id, name, path, color, pinned, createdAt, lastModified FROM projects WHERE id = ?").get(id) as { id: string; name: string; path: string; color: string; pinned: number; createdAt: string; lastModified: string } | undefined;
+  if (!row) return null;
+  return {
+    ...row,
+    pinned: row.pinned === 1,
+  };
 }
 
 export async function createProject(project: Project): Promise<void> {

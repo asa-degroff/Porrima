@@ -126,9 +126,9 @@ function ProjectSection({
           </span>
           <span className="text-xs font-medium text-white/70 truncate">{project.name}</span>
           {project.pinned && (
-            <span className="text-white/30 shrink-0" title="Pinned">
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                <path d="M16 3h5v5l-6 6-4 1-1 4-4-4 1-4 1-4L16 3z"/>
+            <span className="text-amber-400/50 shrink-0 ml-1" title="Pinned">
+              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M17 3a2.85 2.85 0 0 1 2.83 2.63L20 6v3.17a2.83 2.83 0 0 1-2.83 2.83H13l-1.17 4.83L13 21h-2l-1.17-4.17L8.67 21H6.67l1.17-4.17L6.67 12H2.83A2.83 2.83 0 0 1 0 9.17V6a2.83 2.83 0 0 1 2.83-2.83h3.34L7.34 0h2.83l1.17 3.17h3.33L15.83 0H17z"/>
               </svg>
             </span>
           )}
@@ -145,8 +145,8 @@ function ProjectSection({
                 className={`text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5 ${project.pinned ? 'text-amber-400 hover:text-amber-300' : ''}`}
                 title={project.pinned ? "Unpin project" : "Pin project"}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                  <path d="M16 3h5v5l-6 6-4 1-1 4-4-4 1-4 1-4L16 3z"/>
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M17 3a2.85 2.85 0 0 1 2.83 2.63L20 6v3.17a2.83 2.83 0 0 1-2.83 2.83H13l-1.17 4.83L13 21h-2l-1.17-4.17L8.67 21H6.67l1.17-4.17L6.67 12H2.83A2.83 2.83 0 0 1 0 9.17V6a2.83 2.83 0 0 1 2.83-2.83h3.34L7.34 0h2.83l1.17 3.17h3.33L15.83 0H17z"/>
                 </svg>
               </button>
               {/* Color picker button */}
