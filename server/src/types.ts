@@ -57,6 +57,8 @@ export interface ChatMessage {
   _isCompactionSummary?: boolean;
   /** Number of messages that were compacted to create this summary */
   _compactedMessageCount?: number;
+  /** Marks this message's content as promoted from thinking (not useful for previews) */
+  _thinkingPromoted?: boolean;
 }
 
 export type ChatType = "agent" | "quick" | "bluesky";

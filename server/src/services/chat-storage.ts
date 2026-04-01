@@ -271,6 +271,13 @@ export function getDb(): Database.Database {
     recomputePreviewsSkippingCompaction(db);
   }
 
+  // Migration: recompute previews to also skip promoted-thinking messages
+  const previewNeedsThinkingRecompute = !cols.some((c) => c.name === "_previewRecomputedV2");
+  if (previewNeedsThinkingRecompute) {
+    db.exec("ALTER TABLE chats ADD COLUMN _previewRecomputedV2 INTEGER DEFAULT 0");
+    recomputePreviewsSkippingCompaction(db);
+  }
+
   // Auto-migrate from JSON files if needed
   if (needsChatMigration) {
     migrateChatsFromJson(db);
@@ -364,12 +371,12 @@ export async function saveChat(chat: Chat): Promise<void> {
   const db = getDb();
   chat.lastModified = new Date().toISOString();
 
-  // Compute preview from last non-compaction message for fast list queries
-  // Skip compaction summaries (they start with "The user..." and aren't useful previews)
+  // Compute preview from last real message for fast list queries
+  // Skip compaction summaries and promoted-thinking messages (both start with "The user..." and aren't useful previews)
   let lastMsg: ChatMessage | null = null;
   for (let i = chat.messages.length - 1; i >= 0; i--) {
     const msg = chat.messages[i];
-    if (!msg._isCompactionSummary) {
+    if (!msg._isCompactionSummary && !msg._thinkingPromoted) {
       lastMsg = msg;
       break;
     }
@@ -432,11 +439,11 @@ export async function deleteChat(id: string): Promise<boolean> {
 export async function createChat(chat: Chat): Promise<void> {
   const db = getDb();
 
-  // Compute preview from last non-compaction message
+  // Compute preview from last real message
   let lastMsg: ChatMessage | null = null;
   for (let i = chat.messages.length - 1; i >= 0; i--) {
     const msg = chat.messages[i];
-    if (!msg._isCompactionSummary) {
+    if (!msg._isCompactionSummary && !msg._thinkingPromoted) {
       lastMsg = msg;
       break;
     }
@@ -835,10 +842,10 @@ function recomputePreviewsSkippingCompaction(db: Database.Database): void {
   for (const chat of chats) {
     try {
       const messages = JSON.parse(chat.messages) as ChatMessage[];
-      // Find last non-compaction message
+      // Find last real message (skip compaction summaries and promoted-thinking)
       let lastMsg: ChatMessage | null = null;
       for (let i = messages.length - 1; i >= 0; i--) {
-        if (!messages[i]._isCompactionSummary) {
+        if (!messages[i]._isCompactionSummary && !messages[i]._thinkingPromoted) {
           lastMsg = messages[i];
           break;
         }

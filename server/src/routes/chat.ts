@@ -292,6 +292,8 @@ async function handleChatStream(
     finalUsage: undefined as ChatMessage["usage"],
     // Track if last turn ended with toolUse but no final text
     incompleteToolTurn: false,
+    // Track if thinking was promoted to content (not useful for previews)
+    thinkingPromoted: false,
   };
 
   function resetAccumulators() {
@@ -307,6 +309,7 @@ async function handleChatStream(
     state.pendingText = "";
     state.finalUsage = undefined;
     state.incompleteToolTurn = false;
+    state.thinkingPromoted = false;
   }
 
   function buildCurrentAssistantMessage(): ChatMessage {
@@ -328,6 +331,7 @@ async function handleChatStream(
       generatedImages: state.allGeneratedImages.length > 0 ? state.allGeneratedImages : undefined,
       segments: state.segments.length > 0 ? state.segments : undefined,
       timestamp: Date.now(),
+      _thinkingPromoted: state.thinkingPromoted || undefined,
     };
   }
 
@@ -710,9 +714,10 @@ async function handleChatStream(
           if (stopReason === "stop" && !hasTextContent && state.thinkingText.trim().length > 0) {
             state.fullText = state.thinkingText;
             state.thinkingText = "";
+            state.thinkingPromoted = true;
             console.log(`[chat] promoted thinking to content (${state.fullText.length}ch) - model output thinking only`);
           }
-          
+
           console.log(
             `[chat] iter=${iterations} stop=${stopReason} tools=${event.toolResults?.length || 0}` +
             ` content=${state.fullText.length}ch thinking=${state.thinkingText.length}ch` +
@@ -888,6 +893,7 @@ async function handleChatStream(
             if (stopReason === "stop" && !state.fullText.trim() && state.thinkingText.trim().length > 0) {
               state.fullText = state.thinkingText;
               state.thinkingText = "";
+              state.thinkingPromoted = true;
               continuationProducedContent = true;
               console.log(`[chat] continuation: promoted thinking to content (${state.fullText.length}ch)`);
             }
