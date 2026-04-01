@@ -1,6 +1,6 @@
 import { Suspense, memo, lazy, useRef, useCallback, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
-import type { NotebookEntry, Artifact, NotebookLink, ImageAttachment } from "../types";
+import type { NotebookEntry, Artifact, NotebookLink, ImageAttachment, InlineVisual } from "../types";
 import type { ChatListItem } from "../types";
 import { ChatLinkPicker } from "./ChatLinkPicker";
 import { NotebookLinkPicker } from "./NotebookLinkPicker";
@@ -11,6 +11,9 @@ const MarkdownRenderer = lazy(() =>
 );
 const ArtifactPanel = lazy(() =>
   import("./ArtifactPanel").then((m) => ({ default: m.ArtifactPanel }))
+);
+const InlineVisualComponent = lazy(() =>
+  import("./InlineVisual").then((m) => ({ default: m.InlineVisual }))
 );
 
 interface Props {
@@ -264,6 +267,11 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
         {/* Artifacts */}
         {entry.artifacts?.map((artifact) => (
           <ArtifactPanel key={artifact.id} artifact={artifact} />
+        ))}
+        
+        {/* Inline Visualizations */}
+        {entry.visuals?.map((visual) => (
+          <InlineVisualComponent key={visual.id} visual={visual} />
         ))}
       </div>
 

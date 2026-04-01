@@ -286,6 +286,7 @@ export interface NotebookEntry {
   images?: ImageAttachment[];   // User entries only
   toolResults?: ChatToolResult[];   // Agent entries only
   artifacts?: Artifact[];           // Agent entries only
+  visuals?: InlineVisual[];         // Agent entries only (inline visualizations)
   memories?: { memoryId: string; text: string }[];  // Extracted or explicit
 }
 

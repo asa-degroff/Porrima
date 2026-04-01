@@ -348,6 +348,7 @@ export interface NotebookEntry {
   images?: ImageAttachment[];
   toolResults?: ChatToolResult[];
   artifacts?: Artifact[];
+  visuals?: InlineVisual[];
   memories?: { memoryId: string; text: string }[];
 }
 

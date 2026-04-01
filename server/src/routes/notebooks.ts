@@ -13,7 +13,7 @@ import { getAgentTools, executeTool } from "../services/agent-tools.js";
 import { extractMemoriesFromText } from "../services/memory-extraction.js";
 import { getSettings } from "../services/chat-storage.js";
 import { saveUserImage } from "../services/user-image-storage.js";
-import type { Artifact, ChatToolCall, ChatToolResult, ImageAttachment, NotebookEntry } from "../types.js";
+import type { Artifact, ChatToolCall, ChatToolResult, ImageAttachment, NotebookEntry, InlineVisual } from "../types.js";
 
 const router = Router();
 
@@ -259,11 +259,12 @@ Current date: ${new Date().toLocaleDateString()}`;
   const allToolCalls: ChatToolCall[] = [];
   const allToolResults: ChatToolResult[] = [];
   const allArtifacts: Artifact[] = [];
+  const allVisuals: InlineVisual[] = [];
   let iterations = 0;
 
   const effects = {
     onArtifact: (artifact: Artifact) => allArtifacts.push(artifact),
-    onVisual: () => {},
+    onVisual: (visual: InlineVisual) => allVisuals.push(visual),
     onGeneratedImage: () => {},
     onPendingReviewImage: () => {},
     onAskUser: () => {},
@@ -320,11 +321,12 @@ Current date: ${new Date().toLocaleDateString()}`;
     // Create agent entry with response
     const agentEntry = await createNotebookEntry('agent', finalContent);
     
-    // Attach tool results and artifacts
-    if (allToolResults.length || allArtifacts.length) {
+    // Attach tool results, artifacts, and visuals
+    if (allToolResults.length || allArtifacts.length || allVisuals.length) {
       await updateNotebookEntry('agent', agentEntry.id, {
         toolResults: allToolResults,
         artifacts: allArtifacts,
+        visuals: allVisuals,
       });
     }
     

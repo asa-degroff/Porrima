@@ -928,6 +928,7 @@ async function writeAgentNotebookEntry(
   const allToolCalls: any[] = [];
   const allToolResults: any[] = [];
   const allArtifacts: any[] = [];
+  const allVisuals: any[] = [];
   
   // Initial messages
   const piMessages: any[] = [
@@ -937,6 +938,26 @@ async function writeAgentNotebookEntry(
       timestamp: Date.now(),
     },
   ];
+  
+  // Effects object created ONCE outside the loop to maintain references across iterations
+  const effects = {
+    onArtifact: (artifact: any) => {
+      console.log(`[synthesis] Notebook artifact created: ${artifact.id}`);
+      allArtifacts.push(artifact);
+    },
+    onVisual: (visual: any) => {
+      console.log(`[synthesis] Notebook visualization created: ${visual.id}`);
+      allVisuals.push(visual);
+    },
+    onGeneratedImage: (image: any) => {
+      console.log(`[synthesis] Notebook image generated: ${image.id}`);
+    },
+    onPendingReviewImage: () => {},
+    onAskUser: (question: string, toolCallId: string) => {
+      // For notebook synthesis, we skip ask_user and continue
+      console.log(`[synthesis] Notebook ask_user skipped: ${question}`);
+    },
+  };
   
   // Tool loop - similar to chat route but simplified for notebook context
   const MAX_ITERATIONS = 10; // Limit to prevent infinite loops
@@ -951,27 +972,6 @@ async function writeAgentNotebookEntry(
     let toolCalls: any[] = [];
     let stopReason: string = "stop";
     let assistantMessage: any = undefined;
-    
-    // Get tools for this iteration (effects must be created outside the loop scope to track all artifacts)
-    const effects = {
-      onArtifact: (artifact: any) => {
-        console.log(`[synthesis] Notebook artifact created: ${artifact.id}`);
-        allArtifacts.push(artifact);
-      },
-      onVisual: (visual: any) => {
-        console.log(`[synthesis] Notebook visualization created: ${visual.id}`);
-        // Visuals are also stored as artifacts internally
-        allArtifacts.push(visual);
-      },
-      onGeneratedImage: (image: any) => {
-        console.log(`[synthesis] Notebook image generated: ${image.id}`);
-      },
-      onPendingReviewImage: () => {},
-      onAskUser: (question: string, toolCallId: string) => {
-        // For notebook synthesis, we skip ask_user and continue
-        console.log(`[synthesis] Notebook ask_user skipped: ${question}`);
-      },
-    };
     
     const tools = getAgentTools(tempChatId, effects);
     
@@ -1058,8 +1058,8 @@ async function writeAgentNotebookEntry(
   // Create the notebook entry with content
   const entry = await createNotebookEntry("agent", finalContent);
   
-  // Update the entry with tool results and artifacts if any were generated
-  if (allToolResults.length > 0 || allArtifacts.length > 0) {
+  // Update the entry with tool results, artifacts, and visuals if any were generated
+  if (allToolResults.length > 0 || allArtifacts.length > 0 || allVisuals.length > 0) {
     const updates: any = {};
     if (allToolResults.length > 0) {
       updates.toolResults = allToolResults;
@@ -1067,9 +1067,12 @@ async function writeAgentNotebookEntry(
     if (allArtifacts.length > 0) {
       updates.artifacts = allArtifacts;
     }
+    if (allVisuals.length > 0) {
+      updates.visuals = allVisuals;
+    }
     
     await updateNotebookEntry("agent", entry.id, updates);
-    console.log(`[synthesis] Updated notebook entry ${entry.id} with ${allToolResults.length} tool results and ${allArtifacts.length} artifacts`);
+    console.log(`[synthesis] Updated notebook entry ${entry.id} with ${allToolResults.length} tool results, ${allArtifacts.length} artifacts, and ${allVisuals.length} visuals`);
   }
   
   console.log(`[synthesis] Wrote agent notebook entry: ${entry.id}`);
