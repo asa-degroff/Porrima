@@ -20,12 +20,10 @@ interface ModelInfoResult {
 }
 
 async function getModelCapabilities(modelName: string): Promise<ModelInfoResult> {
-  // Conservative default: 32k tokens. Better to compact early than overflow.
-  // Cloud models and models with failed /api/show calls will use this safe default.
-  // Many models advertise very large context windows (e.g. 256K) but actually allocating
-  // that much KV cache causes severe slowdowns with partial GPU offloading.
+  // Safe default for cloud models and models with failed /api/show calls.
+  // When detection succeeds, the model's actual context_length is used.
+  // Users can set a lower limit per-model in settings if KV cache is a concern.
   const DEFAULT_CONTEXT_WINDOW = 32768;
-  const MAX_AUTO_CONTEXT_WINDOW = 32768;
   const result: ModelInfoResult = {
     contextWindow: DEFAULT_CONTEXT_WINDOW,
     supportsImages: false,
@@ -69,12 +67,7 @@ async function getModelCapabilities(modelName: string): Promise<ModelInfoResult>
         }
       }
       if (detected) {
-        if (result.contextWindow > MAX_AUTO_CONTEXT_WINDOW) {
-          console.log(`[models] ${modelName}: detected context window ${result.contextWindow}, capping to ${MAX_AUTO_CONTEXT_WINDOW} (override per-chat if needed)`);
-          result.contextWindow = MAX_AUTO_CONTEXT_WINDOW;
-        } else {
-          console.log(`[models] ${modelName}: detected context window ${result.contextWindow}`);
-        }
+        console.log(`[models] ${modelName}: detected context window ${result.contextWindow}`);
       } else {
         console.warn(`[models] ${modelName}: /api/show succeeded but no context_length found, using default ${result.contextWindow}`);
       }
@@ -154,17 +147,13 @@ function supportsReasoning(family: string): boolean {
 }
 
 /**
- * Get the effective context window for a chat, with safety guards.
- * 
+ * Get the effective context window for a chat.
+ *
  * Priority order:
  * 1. Explicit chat override (chat.contextWindow) - user knows best
  * 2. Per-model setting (settings.modelContextWindows[modelId]) - user's persistent preference
  * 3. Model's detected context window (model.contextWindow) - from /api/show
- * 4. Conservative default (32768) - safe fallback
- * 
- * This function exists to prevent context overflow when /api/show fails
- * or returns unreliable data. The conservative default ensures compaction
- * triggers before the model hits its actual limit.
+ * 4. Safe fallback (32768) - when detection fails
  */
 export function getEffectiveContextWindow(
   chat: { contextWindow?: number; modelId?: string },
