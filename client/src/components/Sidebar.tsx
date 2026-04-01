@@ -361,6 +361,7 @@ export function Sidebar({
   } = useSidebarState();
 
   const [projectsEditMode, setProjectsEditMode] = useState(false);
+  const [previousExpandedStates, setPreviousExpandedStates] = useState<Record<string, boolean>>({});
   const [searchActive, setSearchActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<ConversationSearchResult[]>([]);
@@ -582,11 +583,22 @@ export function Sidebar({
                     {/* Edit mode toggle */}
                     <button
                       onClick={() => {
-                        setProjectsEditMode(!projectsEditMode);
-                        // Collapse all projects when entering edit mode
                         if (!projectsEditMode) {
+                          // Save current expanded states before entering edit mode
+                          const states: Record<string, boolean> = {};
+                          projects.forEach(p => {
+                            states[p.id] = getProjectExpanded(p.id);
+                          });
+                          setPreviousExpandedStates(states);
+                          // Collapse all projects when entering edit mode
                           projects.forEach(p => setProjectExpanded(p.id, false));
+                        } else {
+                          // Restore previous expanded states when exiting edit mode
+                          Object.entries(previousExpandedStates).forEach(([id, expanded]) => {
+                            setProjectExpanded(id, expanded);
+                          });
                         }
+                        setProjectsEditMode(!projectsEditMode);
                       }}
                       className={`text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5 ${projectsEditMode ? 'text-white/60 bg-white/10' : ''}`}
                       title={projectsEditMode ? "Done editing" : "Edit projects"}
