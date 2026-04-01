@@ -278,6 +278,13 @@ export function getDb(): Database.Database {
     recomputePreviewsSkippingCompaction(db);
   }
 
+  // Migration: recompute previews using segment-based text (matches UI display)
+  const previewNeedsSegmentRecompute = !cols.some((c) => c.name === "_previewRecomputedV3");
+  if (previewNeedsSegmentRecompute) {
+    db.exec("ALTER TABLE chats ADD COLUMN _previewRecomputedV3 INTEGER DEFAULT 0");
+    recomputePreviewsSkippingCompaction(db);
+  }
+
   // Auto-migrate from JSON files if needed
   if (needsChatMigration) {
     migrateChatsFromJson(db);
@@ -372,16 +379,16 @@ export async function saveChat(chat: Chat): Promise<void> {
   chat.lastModified = new Date().toISOString();
 
   // Compute preview from last real message for fast list queries
-  // Skip compaction summaries and promoted-thinking messages (both start with "The user..." and aren't useful previews)
+  // Skip compaction summaries; use segment-based text for assistant messages (matches UI display)
   let lastMsg: ChatMessage | null = null;
   for (let i = chat.messages.length - 1; i >= 0; i--) {
     const msg = chat.messages[i];
-    if (!msg._isCompactionSummary && !msg._thinkingPromoted) {
+    if (!msg._isCompactionSummary) {
       lastMsg = msg;
       break;
     }
   }
-  const preview = lastMsg?.content ? lastMsg.content.slice(0, 100) : "";
+  const preview = lastMsg ? extractPreviewText(lastMsg) : "";
 
   db.prepare(`
     INSERT OR REPLACE INTO chats (
@@ -443,12 +450,12 @@ export async function createChat(chat: Chat): Promise<void> {
   let lastMsg: ChatMessage | null = null;
   for (let i = chat.messages.length - 1; i >= 0; i--) {
     const msg = chat.messages[i];
-    if (!msg._isCompactionSummary && !msg._thinkingPromoted) {
+    if (!msg._isCompactionSummary) {
       lastMsg = msg;
       break;
     }
   }
-  const preview = lastMsg?.content ? lastMsg.content.slice(0, 100) : "";
+  const preview = lastMsg ? extractPreviewText(lastMsg) : "";
 
   db.prepare(`
     INSERT INTO chats (
@@ -828,6 +835,24 @@ export function getChatTitle(chatId: string): string | null {
 }
 
 /**
+ * Extract preview text from a message.
+ * For assistant messages with segments, uses the last text segment (matches what the UI displays).
+ * This avoids showing promoted-thinking preamble that appears at the start of content
+ * but is not visible in the UI's segment-based rendering.
+ */
+function extractPreviewText(msg: ChatMessage): string {
+  if (msg.role === "assistant" && msg.segments?.length) {
+    // Find the last text segment — this is what the UI actually displays last
+    for (let i = msg.segments.length - 1; i >= 0; i--) {
+      if (msg.segments[i].type === "text" && msg.segments[i].content?.trim()) {
+        return msg.segments[i].content!.slice(0, 100);
+      }
+    }
+  }
+  return msg.content ? msg.content.slice(0, 100) : "";
+}
+
+/**
  * Recompute preview column for all chats, skipping compaction summary messages.
  * Called once during migration to fix previews that show "The user is reporting..." text.
  */
@@ -842,15 +867,15 @@ function recomputePreviewsSkippingCompaction(db: Database.Database): void {
   for (const chat of chats) {
     try {
       const messages = JSON.parse(chat.messages) as ChatMessage[];
-      // Find last real message (skip compaction summaries and promoted-thinking)
+      // Find last real message (skip compaction summaries)
       let lastMsg: ChatMessage | null = null;
       for (let i = messages.length - 1; i >= 0; i--) {
-        if (!messages[i]._isCompactionSummary && !messages[i]._thinkingPromoted) {
+        if (!messages[i]._isCompactionSummary) {
           lastMsg = messages[i];
           break;
         }
       }
-      const preview = lastMsg?.content ? lastMsg.content.slice(0, 100) : "";
+      const preview = lastMsg ? extractPreviewText(lastMsg) : "";
       update.run(preview, chat.id);
       updated++;
     } catch (e) {
