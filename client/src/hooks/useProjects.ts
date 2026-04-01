@@ -39,7 +39,7 @@ export function useProjects() {
   );
 
   const updateProject = useCallback(
-    async (id: string, updates: { name?: string; path?: string }) => {
+    async (id: string, updates: { name?: string; path?: string; color?: string; pinned?: boolean }) => {
       const project = await apiUpdateProject(id, updates);
       await refresh();
       return project;

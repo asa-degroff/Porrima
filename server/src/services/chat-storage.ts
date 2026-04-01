@@ -53,6 +53,7 @@ export function getDb(): Database.Database {
       name TEXT NOT NULL,
       path TEXT NOT NULL,
       color TEXT NOT NULL DEFAULT 'emerald',
+      pinned INTEGER NOT NULL DEFAULT 0,
       createdAt TEXT NOT NULL,
       lastModified TEXT NOT NULL
     );
@@ -233,6 +234,12 @@ export function getDb(): Database.Database {
       update.run(PROJECT_COLORS[i % PROJECT_COLORS.length], p.id);
     });
     console.log(`[chat-storage] Added color column to projects, assigned ${existing.length} projects`);
+  }
+
+  // Auto-add pinned column to projects if upgrading from earlier schema
+  if (!projectCols.some((c) => c.name === "pinned")) {
+    db.exec("ALTER TABLE projects ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
+    console.log("[chat-storage] Added pinned column to projects");
   }
 
   // Auto-add delayed extraction tracking columns
@@ -484,15 +491,15 @@ export async function findBlueskyChatId(): Promise<string | null> {
 export async function listProjects(): Promise<Project[]> {
   const db = getDb();
   return db.prepare(`
-    SELECT id, name, path, color, createdAt, lastModified
+    SELECT id, name, path, color, pinned, createdAt, lastModified
     FROM projects
-    ORDER BY lastModified DESC
+    ORDER BY pinned DESC, lastModified DESC
   `).all() as Project[];
 }
 
 export async function getProject(id: string): Promise<Project | null> {
   const db = getDb();
-  const row = db.prepare("SELECT id, name, path, color, createdAt, lastModified FROM projects WHERE id = ?").get(id) as Project | undefined;
+  const row = db.prepare("SELECT id, name, path, color, pinned, createdAt, lastModified FROM projects WHERE id = ?").get(id) as Project | undefined;
   return row ?? null;
 }
 
@@ -506,9 +513,9 @@ export async function createProject(project: Project): Promise<void> {
     project.color = nextColor;
   }
   db.prepare(`
-    INSERT INTO projects (id, name, path, color, createdAt, lastModified)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(project.id, project.name, project.path, project.color, project.createdAt, project.lastModified);
+    INSERT INTO projects (id, name, path, color, pinned, createdAt, lastModified)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(project.id, project.name, project.path, project.color, project.pinned ? 1 : 0, project.createdAt, project.lastModified);
 }
 
 export async function updateProject(id: string, updates: Partial<Project>): Promise<boolean> {
@@ -521,9 +528,9 @@ export async function updateProject(id: string, updates: Partial<Project>): Prom
 
   db.prepare(`
     UPDATE projects
-    SET name = ?, path = ?, color = ?, lastModified = ?
+    SET name = ?, path = ?, color = ?, pinned = ?, lastModified = ?
     WHERE id = ?
-  `).run(project.name, project.path, project.color, project.lastModified, project.id);
+  `).run(project.name, project.path, project.color, project.pinned ? 1 : 0, project.lastModified, project.id);
 
   return true;
 }

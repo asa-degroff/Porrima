@@ -61,6 +61,7 @@ function ProjectSection({
   onNewChat,
   onDeleteChat,
   onDeleteProject,
+  onEditProject,
   onSendToNotebook,
 }: {
   project: Project;
@@ -72,8 +73,11 @@ function ProjectSection({
   onNewChat: (type: ChatType, projectId?: string) => void;
   onDeleteChat: (id: string) => void;
   onDeleteProject: (id: string) => void;
+  onEditProject: (project: Project) => void;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
 }) {
+  const [editMode, setEditMode] = useState(false);
+  const [showColorPicker, setShowColorPicker] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Color mapping for Tailwind classes
@@ -93,6 +97,21 @@ function ProjectSection({
 
   const colors = colorClasses[project.color] || colorClasses.emerald;
 
+  const handlePinToggle = async () => {
+    await onEditProject({ ...project, pinned: !project.pinned });
+  };
+
+  const handleColorChange = async (newColor: string) => {
+    await onEditProject({ ...project, color: newColor });
+    setShowColorPicker(false);
+  };
+
+  const handleDelete = async () => {
+    await onDeleteProject(project.id);
+    setConfirmDelete(false);
+    setEditMode(false);
+  };
+
   return (
     <div className="rounded-lg bg-white/[0.03] border border-white/[0.06]">
       <div className="flex items-center gap-1.5 px-2 py-1.5 group">
@@ -106,41 +125,116 @@ function ProjectSection({
             </svg>
           </span>
           <span className="text-xs font-medium text-white/70 truncate">{project.name}</span>
+          {project.pinned && (
+            <span className="text-white/30 shrink-0" title="Pinned">
+              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <path d="M16 3h5v5l-6 6-4 1-1 4-4-4 1-4 1-4L16 3z"/>
+              </svg>
+            </span>
+          )}
           <span className="text-white/20 ml-auto shrink-0">
             <ChevronIcon expanded={expanded} />
           </span>
         </button>
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-            {confirmDelete ? (
-            <div className="flex items-center gap-1">
+          {editMode ? (
+            <div className="flex items-center gap-0.5">
+              {/* Pin button */}
               <button
-                onClick={() => { onDeleteProject(project.id); setConfirmDelete(false); }}
-                className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40"
+                onClick={handlePinToggle}
+                className={`text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5 ${project.pinned ? 'text-amber-400 hover:text-amber-300' : ''}`}
+                title={project.pinned ? "Unpin project" : "Pin project"}
               >
-                Del
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                  <path d="M16 3h5v5l-6 6-4 1-1 4-4-4 1-4 1-4L16 3z"/>
+                </svg>
               </button>
+              {/* Color picker button */}
               <button
-                onClick={() => setConfirmDelete(false)}
-                className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80"
+                onClick={() => setShowColorPicker(!showColorPicker)}
+                className="text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5"
+                title="Change color"
               >
-                No
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <circle cx="12" cy="12" r="4"/>
+                </svg>
+              </button>
+              {/* Delete button */}
+              {confirmDelete ? (
+                <div className="flex items-center gap-0.5">
+                  <button
+                    onClick={handleDelete}
+                    className="text-[10px] px-1 py-0.5 rounded bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40"
+                  >
+                    Del
+                  </button>
+                  <button
+                    onClick={() => setConfirmDelete(false)}
+                    className="text-[10px] px-1 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80"
+                  >
+                    No
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmDelete(true)}
+                  className="text-white/30 hover:text-red-400 transition-colors p-0.5 rounded hover:bg-white/5"
+                  title="Delete project"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 6h18" />
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                  </svg>
+                </button>
+              )}
+              {/* Exit edit mode */}
+              <button
+                onClick={() => { setEditMode(false); setConfirmDelete(false); setShowColorPicker(false); }}
+                className="text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5"
+                title="Done"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
               </button>
             </div>
           ) : (
             <button
-              onClick={() => setConfirmDelete(true)}
-              className="text-white/30 hover:text-red-400 transition-colors p-0.5 rounded hover:bg-white/5"
-              title="Delete project"
+              onClick={() => setEditMode(true)}
+              className="text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5"
+              title="Edit project"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 6h18" />
-                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
               </svg>
             </button>
           )}
         </div>
       </div>
+      
+      {/* Color picker dropdown */}
+      {showColorPicker && (
+        <div className="px-2 pb-2">
+          <div className="flex gap-1 flex-wrap">
+            {Object.keys(colorClasses).map((color) => (
+              <button
+                key={color}
+                onClick={() => handleColorChange(color)}
+                className={`w-5 h-5 rounded-full border-2 transition-all ${
+                  colorClasses[color as keyof typeof colorClasses].bg
+                } ${
+                  colorClasses[color as keyof typeof colorClasses].border
+                } ${
+                  project.color === color ? 'scale-110' : 'hover:scale-105'
+                }`}
+                title={color}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       {expanded && (
         <div className="px-1 pb-1.5">
           <button
@@ -427,16 +521,18 @@ export function Sidebar({
                   )}
                 </button>
                 {projectsExpanded && (
-                  <button
-                    onClick={onNewProject}
-                    className="text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5"
-                    title="New project"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 5v14" />
-                      <path d="M5 12h14" />
-                    </svg>
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={onNewProject}
+                      className="text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5"
+                      title="New project"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 5v14" />
+                        <path d="M5 12h14" />
+                      </svg>
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -455,6 +551,16 @@ export function Sidebar({
                       onNewChat={onNewChat}
                       onDeleteChat={onDeleteChat}
                       onDeleteProject={onDeleteProject}
+                      onEditProject={async (updatedProject) => {
+                        await fetch(`/api/projects/${updatedProject.id}`, {
+                          method: "PATCH",
+                          credentials: "include",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ color: updatedProject.color, pinned: updatedProject.pinned }),
+                        });
+                        // Trigger a refresh of projects
+                        window.dispatchEvent(new CustomEvent("projects:updated"));
+                      }}
                       onSendToNotebook={onSendToNotebook}
                     />
                   ))}

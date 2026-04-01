@@ -875,6 +875,7 @@ export interface Project {
   name: string;
   path: string;
   color: string;
+  pinned: boolean;
   createdAt: string;
   lastModified: string;
 }

@@ -75,7 +75,7 @@ router.get("/:id/agents-md", async (req, res) => {
 
 // Create a new project
 router.post("/", async (req, res) => {
-  const { name, path, color } = req.body;
+  const { name, path, color, pinned } = req.body;
   if (!name || !path) {
     return res.status(400).json({ error: "name and path are required" });
   }
@@ -84,6 +84,7 @@ router.post("/", async (req, res) => {
     name,
     path,
     color: color || "emerald",
+    pinned: pinned || false,
     createdAt: new Date().toISOString(),
     lastModified: new Date().toISOString(),
   };
@@ -99,6 +100,8 @@ router.patch("/:id", async (req, res) => {
   const updates: Partial<Project> = {};
   if (req.body.name !== undefined) updates.name = req.body.name;
   if (req.body.path !== undefined) updates.path = req.body.path;
+  if (req.body.color !== undefined) updates.color = req.body.color;
+  if (req.body.pinned !== undefined) updates.pinned = req.body.pinned;
 
   const success = await updateProject(req.params.id, updates);
   if (!success) return res.status(404).json({ error: "Project not found" });

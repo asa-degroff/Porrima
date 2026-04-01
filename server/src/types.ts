@@ -89,6 +89,7 @@ export interface Project {
   name: string;
   path: string; // project root directory
   color: string; // UI accent color (e.g., "emerald", "purple", "blue")
+  pinned: boolean;
   createdAt: string;
   lastModified: string;
 }
