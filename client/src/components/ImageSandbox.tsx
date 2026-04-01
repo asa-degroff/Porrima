@@ -769,7 +769,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   src={lightboxCachedUrl}
                   thumbSrc={`${lightboxImage.url}/thumb`}
                   alt={lightboxImage.description || lightboxImage.params?.positivePrompt?.slice(0, 50) || "Image"}
-                  className="max-w-[90vw] max-h-[90vh]"
+                  className="w-[90vw] h-[90vh]"
                   width={lightboxImage.params?.width || undefined}
                   height={lightboxImage.params?.height || undefined}
                   onClick={() => {}}
