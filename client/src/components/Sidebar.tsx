@@ -62,6 +62,7 @@ function ProjectSection({
   onDeleteChat,
   onDeleteProject,
   onEditProject,
+  editMode,
   onSendToNotebook,
 }: {
   project: Project;
@@ -74,11 +75,22 @@ function ProjectSection({
   onDeleteChat: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onEditProject: (project: Project) => void;
+  editMode: boolean;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
 }) {
-  const [editMode, setEditMode] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState(project.name);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  // Focus name input when editing starts
+  useEffect(() => {
+    if (editingName && nameInputRef.current) {
+      nameInputRef.current.focus();
+      nameInputRef.current.select();
+    }
+  }, [editingName]);
 
   // Color mapping for Tailwind classes
   // Note: All color classes must be fully written out for Tailwind v4 to detect them
@@ -109,22 +121,58 @@ function ProjectSection({
   const handleDelete = async () => {
     await onDeleteProject(project.id);
     setConfirmDelete(false);
-    setEditMode(false);
   };
+
+  const handleNameSubmit = async () => {
+    if (nameInput.trim() && nameInput.trim() !== project.name) {
+      await onEditProject({ ...project, name: nameInput.trim() });
+    } else {
+      setNameInput(project.name);
+    }
+    setEditingName(false);
+  };
+
+  const handleNameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleNameSubmit();
+    } else if (e.key === 'Escape') {
+      setNameInput(project.name);
+      setEditingName(false);
+    }
+  };
+
+  // Reset name input when project changes
+  useEffect(() => {
+    setNameInput(project.name);
+  }, [project.name]);
 
   return (
     <div className="rounded-lg bg-white/[0.03] border border-white/[0.06]">
       <div className="flex items-center gap-1.5 px-2 py-1.5 group">
         <button
           onClick={onToggleExpanded}
-          className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
+          disabled={editMode}
+          className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer disabled:cursor-default"
         >
           <span className={colors.icon}>
             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
             </svg>
           </span>
-          <span className="text-xs font-medium text-white/70 truncate">{project.name}</span>
+          {editingName ? (
+            <input
+              ref={nameInputRef}
+              type="text"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onBlur={handleNameSubmit}
+              onKeyDown={handleNameKeyDown}
+              className="flex-1 min-w-0 bg-white/10 border border-white/20 rounded px-2 py-0.5 text-xs text-white/80 outline-none focus:border-white/40"
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span className="text-xs font-medium text-white/70 truncate">{project.name}</span>
+          )}
           {project.pinned && (
             <span className="text-amber-400/50 shrink-0 ml-1" title="Pinned">
               <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -137,91 +185,79 @@ function ProjectSection({
             <ChevronIcon expanded={expanded} />
           </span>
         </button>
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-          {editMode ? (
-            <div className="flex items-center gap-0.5">
-              {/* Pin button */}
-              <button
-                onClick={handlePinToggle}
-                className={`text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5 ${project.pinned ? 'text-amber-400 hover:text-amber-300' : ''}`}
-                title={project.pinned ? "Unpin project" : "Pin project"}
-              >
-                {project.pinned ? (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="17" x2="12" y2="22"></line>
-                    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path>
-                    <line x1="3" y1="3" x2="21" y2="21"></line>
-                  </svg>
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="17" x2="12" y2="22"></line>
-                    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path>
-                  </svg>
-                )}
-              </button>
-              {/* Color picker button */}
-              <button
-                onClick={() => setShowColorPicker(!showColorPicker)}
-                className="text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5"
-                title="Change color"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10"/>
-                  <circle cx="12" cy="12" r="4"/>
-                </svg>
-              </button>
-              {/* Delete button */}
-              {confirmDelete ? (
-                <div className="flex items-center gap-0.5">
-                  <button
-                    onClick={handleDelete}
-                    className="text-[10px] px-1 py-0.5 rounded bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40"
-                  >
-                    Del
-                  </button>
-                  <button
-                    onClick={() => setConfirmDelete(false)}
-                    className="text-[10px] px-1 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80"
-                  >
-                    No
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setConfirmDelete(true)}
-                  className="text-white/30 hover:text-red-400 transition-colors p-0.5 rounded hover:bg-white/5"
-                  title="Delete project"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 6h18" />
-                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                  </svg>
-                </button>
-              )}
-              {/* Exit edit mode */}
-              <button
-                onClick={() => { setEditMode(false); setConfirmDelete(false); setShowColorPicker(false); }}
-                className="text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5"
-                title="Done"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              </button>
-            </div>
-          ) : (
+        {editMode && (
+          <div className="flex items-center gap-0.5 shrink-0">
+            {/* Pin button */}
             <button
-              onClick={() => setEditMode(true)}
+              onClick={handlePinToggle}
+              className={`text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5 ${project.pinned ? 'text-amber-400 hover:text-amber-300' : ''}`}
+              title={project.pinned ? "Unpin project" : "Pin project"}
+            >
+              {project.pinned ? (
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="17" x2="12" y2="22"></line>
+                  <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path>
+                  <line x1="3" y1="3" x2="21" y2="21"></line>
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="17" x2="12" y2="22"></line>
+                  <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path>
+                </svg>
+              )}
+            </button>
+            {/* Color picker button */}
+            <button
+              onClick={() => setShowColorPicker(!showColorPicker)}
               className="text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5"
-              title="Edit project"
+              title="Change color"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <circle cx="12" cy="12" r="4"/>
+              </svg>
+            </button>
+            {/* Rename button */}
+            <button
+              onClick={() => setEditingName(true)}
+              className="text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5"
+              title="Rename project"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
               </svg>
             </button>
-          )}
-        </div>
+            {/* Delete button */}
+            {confirmDelete ? (
+              <div className="flex items-center gap-0.5">
+                <button
+                  onClick={handleDelete}
+                  className="text-[10px] px-1 py-0.5 rounded bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40"
+                >
+                  Del
+                </button>
+                <button
+                  onClick={() => setConfirmDelete(false)}
+                  className="text-[10px] px-1 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80"
+                >
+                  No
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="text-white/30 hover:text-red-400 transition-colors p-0.5 rounded hover:bg-white/5"
+                title="Delete project"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 6h18" />
+                  <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                  <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                </svg>
+              </button>
+            )}
+          </div>
+        )}
       </div>
       
       {/* Color picker dropdown */}
@@ -314,6 +350,7 @@ export function Sidebar({
     setProjectExpanded,
   } = useSidebarState();
 
+  const [projectsEditMode, setProjectsEditMode] = useState(false);
   const [searchActive, setSearchActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<ConversationSearchResult[]>([]);
@@ -532,6 +569,22 @@ export function Sidebar({
                 </button>
                 {projectsExpanded && (
                   <div className="flex items-center gap-1">
+                    {/* Edit mode toggle */}
+                    <button
+                      onClick={() => {
+                        setProjectsEditMode(!projectsEditMode);
+                        // Collapse all projects when entering edit mode
+                        if (!projectsEditMode) {
+                          projects.forEach(p => setProjectExpanded(p.id, false));
+                        }
+                      }}
+                      className={`text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5 ${projectsEditMode ? 'text-white/60 bg-white/10' : ''}`}
+                      title={projectsEditMode ? "Done editing" : "Edit projects"}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                      </svg>
+                    </button>
                     <button
                       onClick={onNewProject}
                       className="text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5"
@@ -566,11 +619,16 @@ export function Sidebar({
                           method: "PATCH",
                           credentials: "include",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ color: updatedProject.color, pinned: updatedProject.pinned }),
+                          body: JSON.stringify({ 
+                            name: updatedProject.name, 
+                            color: updatedProject.color, 
+                            pinned: updatedProject.pinned 
+                          }),
                         });
                         // Trigger a refresh of projects
                         window.dispatchEvent(new CustomEvent("projects:updated"));
                       }}
+                      editMode={projectsEditMode}
                       onSendToNotebook={onSendToNotebook}
                     />
                   ))}
