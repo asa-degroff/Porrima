@@ -140,7 +140,7 @@
   --theme-grid: 248, 187, 208;        /* pastel pink for grid lines */
   --theme-grid-opacity: 0.14;
 
-  --theme-bg-gradient: linear-gradient(135deg, #2b0313 0%, #250210 25%, #30081d 38%, #340f20 50%, #30081d 62%, #250210 75%, #2b0313 100%);
+  --theme-bg-gradient: linear-gradient(135deg, #1a010b 0%, #250210 25%, #30081d 38%, #340f20 50%, #30081d 62%, #250210 75%, #1a010b 100%);
   --theme-glow: rgba(248, 187, 208, 0.18);
 }
 
