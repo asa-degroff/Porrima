@@ -427,6 +427,8 @@ export function useChat(chatId: string | null) {
         if (bg) bg.compacting = true;
         if (activeChatIdRef.current === streamChatId) {
           setCompacting(true);
+          // Show background activity indicator in sidebar during compaction
+          setHasBackgroundActivity(true);
         }
       },
       onCompaction: (info) => {
@@ -435,6 +437,8 @@ export function useChat(chatId: string | null) {
         if (bg) {
           bg.compacting = false;
           bg.compaction = info;
+          // Clear background activity indicator after compaction completes
+          setHasBackgroundActivity(false);
           
           // Insert the summary message into the messages array if provided
           if (info.summaryMessage) {
