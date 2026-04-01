@@ -69,7 +69,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
   const [sampler, setSampler] = useState(initialParams?.sampler || "euler");
   const [scheduler, setScheduler] = useState(initialParams?.scheduler || "normal");
   const [lastSeed, setLastSeed] = useState<number | null>(null);
-  const [batchCount, setBatchCount] = useState(1);
+  const [batchCount, setBatchCount] = useState<string>("1");
   const [modelOpen, setModelOpen] = useState(false);
   const [samplerOpen, setSamplerOpen] = useState(false);
   const [schedulerOpen, setSchedulerOpen] = useState(false);
@@ -228,6 +228,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
     const finalHeight = typeof height === 'number' ? height : parseInt(height) || 1024;
 
     const parsedSeed = parseInt(seed);
+    const finalBatchCount = parseInt(batchCount) || 1;
     onEnqueue({
       positivePrompt: positivePrompt.trim(),
       negativePrompt: negativePrompt.trim() || undefined,
@@ -239,7 +240,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
       seed: isNaN(parsedSeed) || parsedSeed < 0 ? undefined : parsedSeed,
       sampler,
       scheduler,
-    }, batchCount);
+    }, Math.max(1, Math.min(32, finalBatchCount)));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -571,11 +572,10 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           <div className="space-y-1 w-20">
             <label className="text-[10px] font-medium text-white/40">Batch</label>
             <input
-              type="number"
-              min={1}
-              max={32}
+              type="text"
+              inputMode="numeric"
               value={batchCount}
-              onChange={(e) => setBatchCount(Math.max(1, Math.min(32, parseInt(e.target.value) || 1)))}
+              onChange={(e) => setBatchCount(e.target.value)}
               className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none focus:ring-1 transition-all text-center"
               style={{
                 '--tw-ring-color': `rgba(var(--theme-accent), 0.2)`,
@@ -593,8 +593,8 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
             }}
           >
             {totalActive > 0
-              ? `Enqueue${batchCount > 1 ? ` ${batchCount}` : ""}`
-              : `Generate${batchCount > 1 ? ` ${batchCount}` : ""}`
+              ? `Enqueue${parseInt(batchCount) > 1 ? ` ${batchCount}` : ""}`
+              : `Generate${parseInt(batchCount) > 1 ? ` ${batchCount}` : ""}`
             }
           </button>
         </div>
