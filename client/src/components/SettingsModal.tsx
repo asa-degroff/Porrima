@@ -238,6 +238,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     const defaultPreset = presets.find((p) => p.isDefault);
     const effectivePrompt = defaultPreset ? defaultPreset.content.trim() : defaultSystemPrompt.trim();
     onSave({
+      ...settings,
       defaultModelId,
       defaultVisionModelId: defaultVisionModelId || undefined,
       defaultSystemPrompt: effectivePrompt,
