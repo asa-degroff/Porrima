@@ -11,7 +11,6 @@ import { VisionChat } from "./VisionChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { OctahedronLogo } from "./OctahedronLogo";
 import { DragHandle } from "./DragHandle";
-import { useCachedImage } from "../utils/imageCache";
 import { ImageSearch } from "./ImageSearch";
 import CorpusView from "./CorpusView";
 import type { GeneratedImage, ImageGenerationParams, OllamaModel } from "../types";
@@ -48,7 +47,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
 
   const [lightboxImage, setLightboxImage] = useState<GeneratedImage | null>(null);
   const closeLightbox = useCallback(() => setLightboxImage(null), []);
-  const lightboxCachedUrl = useCachedImage(lightboxImage?.id ?? "", lightboxImage?.url ?? "");
+  const lightboxUrl = lightboxImage?.url ?? "";
 
   // View mode: gallery (grid) or detail (large image + carousel)
   const [viewMode, setViewMode] = useState<ViewMode>('gallery');
@@ -766,7 +765,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   </svg>
                 </button>
                 <ProgressiveImage
-                  src={lightboxCachedUrl}
+                  src={lightboxUrl}
                   thumbSrc={`${lightboxImage.url}/thumb`}
                   alt={lightboxImage.description || lightboxImage.params?.positivePrompt?.slice(0, 50) || "Image"}
                   className="w-[90vw] h-[90vh]"
