@@ -30,6 +30,7 @@ interface Props {
   hasUnreadNotebooks?: boolean;
   ttsBarVisible?: boolean;
   blueskyChatId?: string;
+  hasBackgroundActivity?: boolean;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -346,6 +347,7 @@ export function Sidebar({
   hasUnreadNotebooks = false,
   ttsBarVisible = false,
   blueskyChatId,
+  hasBackgroundActivity = false,
 }: Props) {
   const {
     projectsExpanded,
@@ -498,15 +500,15 @@ export function Sidebar({
           >
             <div className="relative flex items-center">
               {/* Static logo + title */}
-              <div className={`flex items-center gap-2 transition-opacity duration-300 ${isStreaming ? 'opacity-0' : 'opacity-100'}`}>
+              <div className="flex items-center gap-2">
                 <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
                 <h1 className="text-lg font-semibold text-white/90 tracking-tight">
                   qu.je
                 </h1>
               </div>
-              {/* Animated octahedrons — shown during streaming */}
-              <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${isStreaming ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-                <OctahedronLogo isActive={isStreaming} />
+              {/* Background activity indicator — octahedron for memory extraction, synthesis, creative directions */}
+              <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${hasBackgroundActivity ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                <OctahedronLogo isActive={true} />
               </div>
             </div>
             <button

@@ -428,6 +428,7 @@ export function ChatView({
                     messageIndex={i}
                     availableSkills={skills.length > 0 ? skills.map(s => s.name) : emptySkills}
                     streamingSegmentIndex={streamingSegmentIndex}
+                    showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
                   />
                 </div>
               );

@@ -12,6 +12,7 @@ import { SpeakerButton } from "./SpeakerButton";
 import { UserImage } from "./UserImage";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
 import { CompactionIndicator } from "./CompactionIndicator";
+import { OctahedronLogo } from "./OctahedronLogo";
 
 const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -49,6 +50,7 @@ interface Props {
   isPlayingTts?: boolean;
   availableSkills?: string[];
   streamingSegmentIndex?: number | null;
+  showStreamingIndicator?: boolean;
 }
 
 /**
@@ -104,6 +106,7 @@ export const MessageBubble = memo(function MessageBubble({
   isPlayingTts,
   availableSkills = emptySkillsList,
   streamingSegmentIndex,
+  showStreamingIndicator,
 }: Props) {
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;
@@ -177,7 +180,7 @@ export const MessageBubble = memo(function MessageBubble({
   const renderSegments = !isUser && message.segments && message.segments.length > 0;
 
   return (
-    <div className={`group flex items-start ${isUser ? "justify-end" : "justify-start"} mb-4`}>
+    <div className={`group ${isUser ? "flex justify-end" : "flex justify-start"} mb-4`}>
       {isUser && editable && !editing && (
         <button
           onClick={handleStartEdit}
@@ -190,26 +193,27 @@ export const MessageBubble = memo(function MessageBubble({
           </svg>
         </button>
       )}
-      <div
-        onContextMenu={isUser && editable && !editing ? (e: React.MouseEvent) => {
-          e.preventDefault();
-          setContextMenu({ x: e.clientX, y: e.clientY });
-        } : undefined}
-        {...(isUser && editable && !editing ? longPressProps : {})}
-        className={`max-w-[92%] md:max-w-[80%] rounded-2xl px-3 md:px-4 py-3 ${
-          isUser
-            ? "text-white/95"
-            : "text-white/90"
-        } ${message.queued ? "opacity-60" : ""} ${editing ? "w-full" : ""}`}
-        style={isUser ? {
-          backgroundColor: `rgba(var(--theme-secondary), 0.1)`,
-          border: `1px solid rgba(var(--theme-secondary), 0.15)`,
-        } : {
-          backgroundColor: 'rgba(255, 255, 255, 0.05)',
-          border: '1px solid rgba(255, 255, 255, 0.1)',
-        }}
-      >
-        {isUser ? (
+      <div className="flex flex-col items-start max-w-[92%] md:max-w-[80%]">
+        <div
+          onContextMenu={isUser && editable && !editing ? (e: React.MouseEvent) => {
+            e.preventDefault();
+            setContextMenu({ x: e.clientX, y: e.clientY });
+          } : undefined}
+          {...(isUser && editable && !editing ? longPressProps : {})}
+          className={`rounded-2xl px-3 md:px-4 py-3 ${
+            isUser
+              ? "text-white/95"
+              : "text-white/90"
+          } ${message.queued ? "opacity-60" : ""} ${editing ? "w-full" : ""}`}
+          style={isUser ? {
+            backgroundColor: `rgba(var(--theme-secondary), 0.1)`,
+            border: `1px solid rgba(var(--theme-secondary), 0.15)`,
+          } : {
+            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+          }}
+        >
+          {isUser ? (
           editing ? (
             <div className="space-y-2">
               <textarea
@@ -338,42 +342,52 @@ export const MessageBubble = memo(function MessageBubble({
             )}
           </>
         )}
-      </div>
+        </div>
 
-      {/* Speaker button for assistant messages */}
-      {!isUser && message.content && onReadAloud && (
-        <button
-          onClick={() => onReadAloud(message.content)}
-          disabled={isPlayingTts}
-          className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md mt-2.5 ml-1.5 shrink-0"
-          style={{
-            backgroundColor: isPlayingTts ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-            color: isPlayingTts ? `rgba(var(--theme-secondary-text), 0.9)` : 'rgba(255, 255, 255, 0.4)',
-          }}
-          onMouseEnter={(e) => {
-            if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)';
-            if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
-          }}
-          onMouseLeave={(e) => {
-            if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)';
-            if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'transparent';
-          }}
-          title={isPlayingTts ? "Playing..." : "Read aloud"}
-        >
-          {isPlayingTts ? (
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
-              <rect x="6" y="4" width="3" height="16" />
-              <rect x="12" y="4" width="3" height="16" />
-              <rect x="18" y="4" width="3" height="16" />
-            </svg>
-          ) : (
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-              <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-            </svg>
-          )}
-        </button>
-      )}
+        {/* Speaker button for assistant messages - positioned below bubble content */}
+        {!isUser && message.content && onReadAloud && (
+          <button
+            onClick={() => onReadAloud(message.content)}
+            disabled={isPlayingTts}
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md mt-2 ml-1 shrink-0 self-start"
+            style={{
+              backgroundColor: isPlayingTts ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+              color: isPlayingTts ? `rgba(var(--theme-secondary-text), 0.9)` : 'rgba(255, 255, 255, 0.4)',
+            }}
+            onMouseEnter={(e) => {
+              if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)';
+              if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+            }}
+            onMouseLeave={(e) => {
+              if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)';
+              if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+            title={isPlayingTts ? "Playing..." : "Read aloud"}
+          >
+            {isPlayingTts ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
+                <rect x="6" y="4" width="3" height="16" />
+                <rect x="12" y="4" width="3" height="16" />
+                <rect x="18" y="4" width="3" height="16" />
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+              </svg>
+            )}
+          </button>
+        )}
+
+        {/* Streaming indicator - shown below assistant message during active streaming */}
+        {!isUser && showStreamingIndicator && (
+          <div className="mt-2 ml-1">
+            <div className="w-4 h-4">
+              <OctahedronLogo isActive={true} />
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* User message context menu */}
       {contextMenu && isUser && editable && !editing && (

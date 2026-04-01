@@ -111,6 +111,7 @@ export function useChat(chatId: string | null) {
   const [titleUpdate, setTitleUpdate] = useState<{ chatId: string; title: string } | null>(null);
   const [streamingSegmentIndex, setStreamingSegmentIndex] = useState<number | null>(null);
   const [streamingUsage, setStreamingUsage] = useState<MessageUsage | null>(null);
+  const [hasBackgroundActivity, setHasBackgroundActivity] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
   const streamingContentRef = useRef("");
@@ -515,6 +516,12 @@ export function useChat(chatId: string | null) {
 
         console.log(`[chat] follow-up started for ${streamChatId}`);
       },
+      onBackgroundActivity: (info) => {
+        console.log(`[chat] background activity: ${info.type} for chat ${info.chatId}`);
+        // Set background activity indicator for 5 seconds
+        setHasBackgroundActivity(true);
+        setTimeout(() => setHasBackgroundActivity(false), 5000);
+      },
       onTitleUpdate: (chatId, title) => {
         setTitleUpdate({ chatId, title });
       },
@@ -796,6 +803,7 @@ export function useChat(chatId: string | null) {
     error,
     warning,
     streamingSegmentIndex,
+    hasBackgroundActivity,
     send,
     editMessage,
     abort,

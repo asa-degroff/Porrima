@@ -488,6 +488,8 @@ async function handleChatStream(
 
         // Fire-and-forget memory extraction for the just-completed response
         if (chat.type === "agent") {
+          // Emit background activity event so client can show indicator
+          res.write(`event: background_activity\ndata: ${JSON.stringify({ type: "memory_extraction", chatId: chat.id })}\n\n`);
           extractMemories(chat.modelId, chat.id, lastUserMessage, assistantMsg.content)
             .catch(err => console.error("[memory] extraction failed:", err));
         }
@@ -960,6 +962,8 @@ async function handleChatStream(
 
       // Fire-and-forget memory extraction
       if (chat.type === "agent") {
+        // Emit background activity event so client can show indicator
+        res.write(`event: background_activity\ndata: ${JSON.stringify({ type: "memory_extraction", chatId: chat.id })}\n\n`);
         extractMemories(chat.modelId, chat.id, lastUserMessage, currentAssistantMsg.content)
           .catch(err => console.error("[memory] extraction failed:", err));
       }

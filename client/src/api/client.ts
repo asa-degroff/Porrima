@@ -118,6 +118,7 @@ export interface StreamCallbacks {
   onTitleUpdate?: (chatId: string, title: string) => void;
   onMessageComplete?: (message: any) => void;
   onFollowUpStart?: (data: any) => void;
+  onBackgroundActivity?: (info: { type: string; chatId?: string }) => void;
 }
 
 /** Inactivity timeout for SSE streams — server sends keepalive pings every 30s,
@@ -371,6 +372,9 @@ function processSSEEvent(
       break;
     case "follow_up_start":
       callbacks.onFollowUpStart?.(data);
+      break;
+    case "background_activity":
+      callbacks.onBackgroundActivity?.(data);
       break;
     case "error":
       callbacks.onError(data.error || "Unknown error");

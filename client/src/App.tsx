@@ -98,6 +98,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     error,
     warning,
     streamingSegmentIndex,
+    hasBackgroundActivity,
     send,
     editMessage,
     abort,
@@ -491,6 +492,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         hasUnreadNotebooks={hasUnreadAgentEntries()}
         ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}
         blueskyChatId={settings.bluesky?.blueskyChatId}
+        hasBackgroundActivity={hasBackgroundActivity}
       />
       {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}
       {imageSandboxOpen ? (
