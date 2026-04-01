@@ -149,6 +149,7 @@ export interface Settings {
   modelContextWindows?: Record<string, number>;
   theme?: Theme;
   backgroundEffect?: BackgroundEffect;
+  flatBackground?: boolean;
   systemPromptPresets?: SystemPromptPreset[];
   hapticsEnabled?: boolean;
   defaultVisionPreset?: string;

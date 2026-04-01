@@ -72,6 +72,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
+  const [flatBackground, setFlatBackground] = useState(settings.flatBackground ?? false);
   const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
   const [expandedPresetIds, setExpandedPresetIds] = useState<Set<string>>(new Set());
   const [hapticsEnabled, setHapticsEnabled] = useState(settings.hapticsEnabled ?? true);
@@ -244,6 +245,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       comfyuiUrl: comfyuiUrl.trim() || undefined,
       theme,
       backgroundEffect,
+      flatBackground,
       systemPromptPresets: presets.length > 0 ? presets : undefined,
       hapticsEnabled,
       modelContextWindows: Object.keys(modelContextWindows).length > 0 ? modelContextWindows : undefined,
@@ -779,6 +781,32 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <span className="relative z-10">{opt.label}</span>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Flat Background */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-sm font-medium text-white/60">Flat Background</label>
+                <p className="text-white/30 text-xs mt-0.5">
+                  {flatBackground
+                    ? "Solid background color without gradient."
+                    : "Diagonal gradient background is active."}
+                </p>
+              </div>
+              <button
+                onClick={() => setFlatBackground(!flatBackground)}
+                className={`relative w-11 h-6 rounded-full transition-colors ${
+                  flatBackground ? "bg-white/20" : "bg-white/10"
+                }`}
+              >
+                <div
+                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white/80 transition-transform ${
+                    flatBackground ? "translate-x-5" : "translate-x-0"
+                  }`}
+                />
+              </button>
             </div>
           </div>
 

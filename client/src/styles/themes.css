@@ -21,6 +21,7 @@
   --theme-grid-opacity: 0.12;
   
   --theme-bg-gradient: linear-gradient(135deg, #0f172a 0%, #181845 25%, #1c1a49 38%, #1e1b4b 50%, #1c1a49 62%, #181845 75%, #0f172a 100%);
+  --theme-bg-flat: #1e1b4b;
   --theme-glow: rgba(162, 74, 255, 0.15);
 }
 
@@ -45,6 +46,7 @@
   --theme-grid-opacity: 0.12;
   
   --theme-bg-gradient: linear-gradient(135deg, #0c1929 0%, #172d4e 25%, #1b3458 38%, #1e3a5f 50%, #1b3458 62%, #172d4e 75%, #0c1929 100%);
+  --theme-bg-flat: #1e3a5f;
   --theme-glow: rgba(56, 189, 248, 0.15);
 }
 
@@ -69,6 +71,7 @@
   --theme-grid-opacity: 0.12;
   
   --theme-bg-gradient: linear-gradient(135deg, #0a1a0f 0%, #132d20 25%, #173427 38%, #1a3a2a 50%, #173427 62%, #132d20 75%, #0a1a0f 100%);
+  --theme-bg-flat: #1a3a2a;
   --theme-glow: rgba(134, 239, 172, 0.15);
 }
 
@@ -93,6 +96,7 @@
   --theme-grid-opacity: 0.12;
   
   --theme-bg-gradient: linear-gradient(135deg, #1a0a0f 0%, #2e1220 25%, #351727 38%, #3a1a2a 50%, #351727 62%, #2e1220 75%, #1a0a0f 100%);
+  --theme-bg-flat: #3a1a2a;
   --theme-glow: rgba(244, 63, 94, 0.15);
 }
 
@@ -117,6 +121,7 @@
   --theme-grid-opacity: 0.1;
   
   --theme-bg-gradient: linear-gradient(135deg, #0a0a0a 0%, #151515 25%, #181818 38%, #1a1a1a 50%, #181818 62%, #151515 75%, #0a0a0a 100%);
+  --theme-bg-flat: #1a1a1a;
   --theme-glow: rgba(148, 163, 184, 0.1);
 }
 
@@ -141,6 +146,7 @@
   --theme-grid-opacity: 0.14;
 
   --theme-bg-gradient: linear-gradient(135deg, #1a010b 0%, #250210 25%, #30081d 38%, #340f20 50%, #30081d 62%, #250210 75%, #1a010b 100%);
+  --theme-bg-flat: #340f20;
   --theme-glow: rgba(248, 187, 208, 0.18);
 }
 
@@ -165,6 +171,7 @@
   --theme-grid-opacity: 0.12;
   
   --theme-bg-gradient: linear-gradient(135deg, #0f0a07 0%, #1f1510 25%, #241812 38%, #2a1c14 50%, #241812 62%, #1f1510 75%, #0f0a07 100%);
+  --theme-bg-flat: #2a1c14;
   --theme-glow: rgba(180, 120, 80, 0.15);
 }
 

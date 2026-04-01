@@ -43,6 +43,10 @@ body::before {
   pointer-events: none;
 }
 
+[data-flat-bg] body::before {
+  background: var(--theme-bg-flat);
+}
+
 #root {
   height: 100%;
   overflow: hidden;

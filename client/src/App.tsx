@@ -128,6 +128,15 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, [settings.theme]);
 
+  // Apply flat background toggle
+  useEffect(() => {
+    if (settings.flatBackground) {
+      document.documentElement.setAttribute('data-flat-bg', '');
+    } else {
+      document.documentElement.removeAttribute('data-flat-bg');
+    }
+  }, [settings.flatBackground]);
+
   // Apply background effect
   useEffect(() => {
     if (settings.backgroundEffect === 'ripple-grid' && !imageSandboxOpen) {
