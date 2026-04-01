@@ -27,6 +27,11 @@ export function useProjects() {
 
   useEffect(() => {
     refresh();
+
+    // Listen for project updates from sidebar
+    const handleUpdate = () => refresh();
+    window.addEventListener("projects:updated", handleUpdate);
+    return () => window.removeEventListener("projects:updated", handleUpdate);
   }, [refresh]);
 
   const createProject = useCallback(
