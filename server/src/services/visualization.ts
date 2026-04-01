@@ -191,23 +191,31 @@ export function generateForceGraphHTML(
       box-sizing: border-box;
     }
     
+    html {
+      color-scheme: dark;
+    }
+
+    html, body {
+      background: transparent;
+    }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--theme-bg-gradient);
       color: rgba(226, 232, 240, 0.9);
       overflow: hidden;
-      transition: background 0.3s ease;
     }
     
     #graph-container {
       width: 100vw;
       height: 100vh;
       position: relative;
+      background: transparent;
     }
     
     #graph {
       width: 100%;
       height: 100%;
+      background: transparent;
     }
     
     .node {
@@ -235,7 +243,8 @@ export function generateForceGraphHTML(
     
     .tooltip {
       position: absolute;
-      background: rgba(15, 23, 42, 0.95);
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(8px);
       border: 1px solid rgba(var(--theme-primary-border, 51, 65, 85));
       border-radius: 8px;
       padding: 12px;
@@ -316,7 +325,8 @@ export function generateForceGraphHTML(
       right: 20px;
       width: 320px;
       max-height: calc(100vh - 40px);
-      background: rgba(15, 23, 42, 0.95);
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(8px);
       border: 1px solid rgba(var(--theme-primary-border, 51, 65, 85));
       border-radius: 10px;
       overflow: hidden;
@@ -396,7 +406,8 @@ export function generateForceGraphHTML(
       position: absolute;
       top: 20px;
       right: 20px;
-      background: rgba(15, 23, 42, 0.9);
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(8px);
       border: 1px solid rgba(var(--theme-primary-border, 33, 65, 85));
       border-radius: 8px;
       padding: 12px;
@@ -430,7 +441,8 @@ export function generateForceGraphHTML(
       position: absolute;
       bottom: 20px;
       left: 20px;
-      background: rgba(15, 23, 42, 0.9);
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(8px);
       border: 1px solid rgba(var(--theme-primary-border, 51, 65, 85));
       border-radius: 8px;
       padding: 12px;
@@ -482,10 +494,17 @@ export function generateForceGraphHTML(
     // Create SVG
     const svg = d3.select("#graph")
       .attr("width", width)
-      .attr("height", height);
+      .attr("height", height)
+      .style("background", "transparent");
 
     // Zoomable container — all graph elements go here
     const g = svg.append("g");
+    
+    // Add a transparent rect to ensure SVG background is transparent
+    svg.insert("rect", ":first-child")
+      .attr("width", "100%")
+      .attr("height", "100%")
+      .attr("fill", "none");
 
     // Zoom behavior
     const zoom = d3.zoom()
