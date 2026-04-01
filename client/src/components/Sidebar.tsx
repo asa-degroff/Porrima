@@ -185,22 +185,29 @@ function ProjectSection({
             <ChevronIcon expanded={expanded} />
           </span>
         </button>
-        {editMode && (
-          <div className="flex items-center gap-0.5 shrink-0">
+      </div>
+      
+      {editMode && (
+        <div className="px-2 pb-2 pt-1 border-t border-white/5 mt-1">
+          <div className="flex items-center gap-1">
             {/* Pin button */}
             <button
               onClick={handlePinToggle}
-              className={`text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5 ${project.pinned ? 'text-amber-400 hover:text-amber-300' : ''}`}
+              className={`p-2 rounded-lg transition-colors ${
+                project.pinned 
+                  ? 'text-amber-400 hover:text-amber-300' 
+                  : 'text-white/40 hover:text-white/60'
+              }`}
               title={project.pinned ? "Unpin project" : "Pin project"}
             >
               {project.pinned ? (
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="12" y1="17" x2="12" y2="22"></line>
                   <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path>
                   <line x1="3" y1="3" x2="21" y2="21"></line>
                 </svg>
               ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="12" y1="17" x2="12" y2="22"></line>
                   <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path>
                 </svg>
@@ -209,10 +216,10 @@ function ProjectSection({
             {/* Color picker button */}
             <button
               onClick={() => setShowColorPicker(!showColorPicker)}
-              className="p-0.5 rounded hover:bg-white/5"
+              className="p-2 text-white/40 hover:text-white/60 transition-colors rounded-lg"
               title="Change color"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={colors.text}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={colors.text}>
                 <circle cx="12" cy="12" r="10"/>
                 <circle cx="12" cy="12" r="4"/>
               </svg>
@@ -220,37 +227,37 @@ function ProjectSection({
             {/* Rename button */}
             <button
               onClick={() => setEditingName(true)}
-              className="text-white/30 hover:text-white/60 transition-colors p-0.5 rounded hover:bg-white/5"
+              className="p-2 text-white/40 hover:text-white/60 transition-colors rounded-lg"
               title="Rename project"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
               </svg>
             </button>
             {/* Delete button */}
             {confirmDelete ? (
-              <div className="flex items-center gap-0.5">
+              <div className="flex items-center gap-1 ml-auto">
                 <button
                   onClick={handleDelete}
-                  className="text-[10px] px-1 py-0.5 rounded bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40"
+                  className="px-3 py-1.5 rounded-lg bg-red-500/15 border border-red-400/25 text-red-300 hover:bg-red-500/25 text-xs font-medium"
                 >
-                  Del
+                  Confirm
                 </button>
                 <button
                   onClick={() => setConfirmDelete(false)}
-                  className="text-[10px] px-1 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80"
+                  className="px-3 py-1.5 rounded-lg bg-white/10 border border-white/15 text-white/50 hover:text-white/80 text-xs font-medium"
                 >
-                  No
+                  Cancel
                 </button>
               </div>
             ) : (
               <button
                 onClick={() => setConfirmDelete(true)}
-                className="text-white/30 hover:text-red-400 transition-colors p-0.5 rounded hover:bg-white/5"
+                className="p-2 text-white/40 hover:text-red-400 transition-colors rounded-lg ml-auto"
                 title="Delete project"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M3 6h18" />
                   <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
                   <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
@@ -258,8 +265,8 @@ function ProjectSection({
               </button>
             )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
       
       {/* Color picker dropdown */}
       {showColorPicker && (
