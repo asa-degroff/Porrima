@@ -181,256 +181,247 @@ export const MessageBubble = memo(function MessageBubble({
 
   return (
     <div className={`group ${isUser ? "flex justify-end" : "flex justify-start"} mb-4`}>
-      {isUser && editable && !editing && (
-        <button
-          onClick={handleStartEdit}
-          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-white/10 mt-2.5 mr-1.5 shrink-0"
-          title="Edit message"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
-            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-            <path d="m15 5 4 4" />
-          </svg>
-        </button>
-      )}
-      <div className={`flex flex-col ${isUser ? "items-end" : "items-start"} max-w-[92%] md:max-w-[80%] min-w-0 w-full`}>
-        <div
-          onContextMenu={isUser && editable && !editing ? (e: React.MouseEvent) => {
-            e.preventDefault();
-            setContextMenu({ x: e.clientX, y: e.clientY });
-          } : undefined}
-          {...(isUser && editable && !editing ? longPressProps : {})}
-          className={`rounded-2xl px-3 md:px-4 py-3 max-w-full ${
-            isUser
-              ? "text-white/95"
-              : "text-white/90"
-          } ${message.queued ? "opacity-60" : ""} ${editing ? "w-full" : ""}`}
-          style={isUser ? {
-            backgroundColor: `rgba(var(--theme-secondary), 0.1)`,
-            border: `1px solid rgba(var(--theme-secondary), 0.15)`,
-          } : {
-            backgroundColor: 'rgba(255, 255, 255, 0.05)',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-          }}
-        >
-          {isUser ? (
-          editing ? (
-            <div className="space-y-2">
-              <textarea
-                ref={textareaRef}
-                className="w-full rounded-lg px-3 py-2 text-sm text-white/95 outline-none resize-none leading-relaxed"
-                style={{
-                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
-                }}
-                value={editText}
-                onChange={(e) => {
-                  setEditText(e.target.value);
-                  e.target.style.height = "auto";
-                  e.target.style.height = e.target.scrollHeight + "px";
-                }}
-                onKeyDown={handleKeyDown}
-                rows={1}
-              />
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={handleCancel}
-                  className="px-3 py-1 text-xs rounded-lg transition-colors"
+      <div className={`flex flex-row items-start max-w-[92%] md:max-w-[80%] min-w-0`}>
+        {isUser && editable && !editing && (
+          <button
+            onClick={handleStartEdit}
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-white/10 mt-2.5 mr-1.5 shrink-0"
+            title="Edit message"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
+              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+              <path d="m15 5 4 4" />
+            </svg>
+          </button>
+        )}
+        <div className={`flex flex-col ${isUser ? "items-end" : "items-start"} min-w-0 w-full`}>
+          <div
+            onContextMenu={isUser && editable && !editing ? (e: React.MouseEvent) => {
+              e.preventDefault();
+              setContextMenu({ x: e.clientX, y: e.clientY });
+            } : undefined}
+            {...(isUser && editable && !editing ? longPressProps : {})}
+            className={`rounded-2xl px-3 md:px-4 py-3 max-w-full ${
+              isUser
+                ? "text-white/95"
+                : "text-white/90"
+            } ${message.queued ? "opacity-60" : ""} ${editing ? "w-full" : ""}`}
+            style={isUser ? {
+              backgroundColor: `rgba(var(--theme-secondary), 0.1)`,
+              border: `1px solid rgba(var(--theme-secondary), 0.15)`,
+            } : {
+              backgroundColor: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+            }}
+          >
+            {isUser && editing ? (
+              <div className="space-y-2">
+                <textarea
+                  ref={textareaRef}
+                  className="w-full rounded-lg px-3 py-2 text-sm text-white/95 outline-none resize-none leading-relaxed"
                   style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    color: 'rgba(255, 255, 255, 0.5)',
+                    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
                   }}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSave}
-                  className="px-3 py-1 text-xs rounded-lg transition-colors"
-                  style={{
-                    backgroundColor: `rgba(var(--theme-secondary), 0.15)`,
-                    border: `1px solid rgba(var(--theme-secondary), 0.2)`,
-                    color: `rgba(var(--theme-secondary-text), 0.9)`,
+                  value={editText}
+                  onChange={(e) => {
+                    setEditText(e.target.value);
+                    e.target.style.height = "auto";
+                    e.target.style.height = e.target.scrollHeight + "px";
                   }}
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div>
-              {message.images && message.images.length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-2">
-                  {message.images.map((img, i) => (
-                    <UserImage
-                      key={i}
-                      image={img}
-                      onClick={() => setLightboxImage(img)}
-                    />
-                  ))}
+                  onKeyDown={handleKeyDown}
+                  rows={1}
+                />
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={handleCancel}
+                    className="px-3 py-1 text-xs rounded-lg transition-colors"
+                    style={{
+                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      color: 'rgba(255, 255, 255, 0.5)',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    className="px-3 py-1 text-xs rounded-lg transition-colors"
+                    style={{
+                      backgroundColor: `rgba(var(--theme-secondary), 0.15)`,
+                      border: `1px solid rgba(var(--theme-secondary), 0.2)`,
+                      color: `rgba(var(--theme-secondary-text), 0.9)`,
+                    }}
+                  >
+                    Save
+                  </button>
                 </div>
-              )}
-              {message.content && (
-                <p className="whitespace-pre-wrap text-sm leading-relaxed break-words max-w-full">
-                  {renderSkillChips(message.content, availableSkills)}
-                </p>
-              )}
-              {message.queued && (
-                <div className="flex items-center gap-1 mt-1.5 text-[11px]" style={{ color: `rgba(var(--theme-accent-text), 0.7)` }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
-                  Queued
-                </div>
-              )}
-            </div>
-          )
-        ) : (
-          <>
-            {thinkingText && (
-              <ThinkingBlock
-                thinking={thinkingText}
-                isStreaming={showStreaming}
-              />
-            )}
-
-            {/* Fallback: if message has thinking but no content/segments, show thinking as visible text (backward compat for pre-fix messages) */}
-            {!renderSegments && !message.content && thinkingText && !showStreaming && (
-              <div className="text-sm leading-relaxed mt-2 text-white/70">
-                {thinkingText}
               </div>
-            )}
-
-            {renderSegments ? (
-              // Interleaved segments in chronological order (streaming + persisted)
-              <MessageSegments
-                segments={message.segments}
-                showStreaming={showStreaming}
-                isThinkingStreaming={isThinkingStreaming}
-                streamingSegmentIndex={streamingSegmentIndex ?? null}
-              />
+            ) : isUser ? (
+              <div>
+                {message.images && message.images.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {message.images.map((img, i) => (
+                      <UserImage
+                        key={i}
+                        image={img}
+                        onClick={() => setLightboxImage(img)}
+                      />
+                    ))}
+                  </div>
+                )}
+                {message.content && (
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed break-words max-w-full">
+                    {renderSkillChips(message.content, availableSkills)}
+                  </p>
+                )}
+                {message.queued && (
+                  <div className="flex items-center gap-1 mt-1.5 text-[11px]" style={{ color: `rgba(var(--theme-accent-text), 0.7)` }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <polyline points="12 6 12 12 16 14" />
+                    </svg>
+                    Queued
+                  </div>
+                )}
+              </div>
             ) : (
-              // Legacy fallback (no segments — old messages or non-agent chats)
               <>
-                {/* Tool calls - only show if we don't have segments (prevent duplicates) */}
-                {message.toolCalls && message.toolCalls.length > 0 && (
-                  <ToolCallsList
-                    toolCalls={message.toolCalls}
-                    toolResults={message.toolResults || []}
+                {thinkingText && (
+                  <ThinkingBlock
+                    thinking={thinkingText}
+                    isStreaming={showStreaming}
                   />
                 )}
 
-                {message.content && (
-                  <div className="text-sm leading-relaxed max-w-full min-w-0">
-                    <Suspense fallback={<span className="whitespace-pre-wrap break-words">{message.content}</span>}>
-                      <MarkdownRenderer content={message.content} />
-                    </Suspense>
+                {/* Fallback: if message has thinking but no content/segments, show thinking as visible text (backward compat for pre-fix messages) */}
+                {!renderSegments && !message.content && thinkingText && !showStreaming && (
+                  <div className="text-sm leading-relaxed mt-2 text-white/70">
+                    {thinkingText}
                   </div>
                 )}
 
-                {/* Inline artifacts - legacy fallback */}
-                {(artifacts || message.artifacts)?.map((artifact) => (
-                  <ArtifactPanel key={artifact.id} artifact={artifact} />
-                ))}
+                {renderSegments ? (
+                  // Interleaved segments in chronological order (streaming + persisted)
+                  <MessageSegments
+                    segments={message.segments}
+                    showStreaming={showStreaming}
+                    isThinkingStreaming={isThinkingStreaming}
+                    streamingSegmentIndex={streamingSegmentIndex ?? null}
+                  />
+                ) : (
+                  // Legacy fallback (no segments — old messages or non-agent chats)
+                  <>
+                    {/* Tool calls - only show if we don't have segments (prevent duplicates) */}
+                    {message.toolCalls && message.toolCalls.length > 0 && (
+                      <ToolCallsList
+                        toolCalls={message.toolCalls}
+                        toolResults={message.toolResults || []}
+                      />
+                    )}
 
-                {/* Inline generated images - legacy fallback */}
-                {(generatedImages || message.generatedImages)?.map((img) => (
-                  <GeneratedImagePanel key={img.id} image={img} />
-                ))}
+                    {message.content && (
+                      <div className="text-sm leading-relaxed max-w-full min-w-0">
+                        <Suspense fallback={<span className="whitespace-pre-wrap break-words">{message.content}</span>}>
+                          <MarkdownRenderer content={message.content} />
+                        </Suspense>
+                      </div>
+                    )}
+
+                    {/* Inline artifacts - legacy fallback */}
+                    {(artifacts || message.artifacts)?.map((artifact) => (
+                      <ArtifactPanel key={artifact.id} artifact={artifact} />
+                    ))}
+
+                    {/* Inline generated images - legacy fallback */}
+                    {(generatedImages || message.generatedImages)?.map((img) => (
+                      <GeneratedImagePanel key={img.id} image={img} />
+                    ))}
+                  </>
+                )}
               </>
             )}
-          </>
-        )}
+          </div>
+
+          {/* Speaker button for assistant messages - positioned below bubble content */}
+          {!isUser && message.content && onReadAloud && (
+            <button
+              onClick={() => onReadAloud(message.content)}
+              disabled={isPlayingTts}
+              className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md mt-2 ml-1 shrink-0 self-start"
+              style={{
+                backgroundColor: isPlayingTts ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                color: isPlayingTts ? `rgba(var(--theme-secondary-text), 0.9)` : 'rgba(255, 255, 255, 0.4)',
+              }}
+              onMouseEnter={(e) => {
+                if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)';
+                if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+              }}
+              onMouseLeave={(e) => {
+                if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)';
+                if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+              title={isPlayingTts ? "Playing..." : "Read aloud"}
+            >
+              {isPlayingTts ? (
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
+                  <rect x="6" y="4" width="3" height="16" />
+                  <rect x="12" y="4" width="3" height="16" />
+                  <rect x="18" y="4" width="3" height="16" />
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                </svg>
+              )}
+            </button>
+          )}
+
+          {/* Streaming indicator - shown below assistant message during active streaming */}
+          {!isUser && showStreamingIndicator && (
+            <div className="mt-2 ml-1 self-start">
+              <div className="w-4 h-4">
+                <OctahedronLogo isActive={true} />
+              </div>
+            </div>
+          )}
+
+          {/* User message speaker button - positioned below bubble content, right-aligned */}
+          {isUser && message.content && onReadAloud && (
+            <button
+              onClick={() => onReadAloud(message.content)}
+              disabled={isPlayingTts}
+              className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md mt-2 mr-1 shrink-0 self-end"
+              style={{
+                backgroundColor: isPlayingTts ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                color: isPlayingTts ? `rgba(var(--theme-secondary-text), 0.9)` : 'rgba(255, 255, 255, 0.4)',
+              }}
+              onMouseEnter={(e) => {
+                if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)';
+                if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+              }}
+              onMouseLeave={(e) => {
+                if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)';
+                if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+              title={isPlayingTts ? "Playing..." : "Read aloud"}
+            >
+              {isPlayingTts ? (
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
+                  <rect x="6" y="4" width="3" height="16" />
+                  <rect x="12" y="4" width="3" height="16" />
+                  <rect x="18" y="4" width="3" height="16" />
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                </svg>
+              )}
+            </button>
+          )}
         </div>
-
-        {/* Speaker button for assistant messages - positioned below bubble content */}
-        {!isUser && message.content && onReadAloud && (
-          <button
-            onClick={() => onReadAloud(message.content)}
-            disabled={isPlayingTts}
-            className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md mt-2 ml-1 shrink-0 self-start"
-            style={{
-              backgroundColor: isPlayingTts ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-              color: isPlayingTts ? `rgba(var(--theme-secondary-text), 0.9)` : 'rgba(255, 255, 255, 0.4)',
-            }}
-            onMouseEnter={(e) => {
-              if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)';
-              if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
-            }}
-            onMouseLeave={(e) => {
-              if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)';
-              if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'transparent';
-            }}
-            title={isPlayingTts ? "Playing..." : "Read aloud"}
-          >
-            {isPlayingTts ? (
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
-                <rect x="6" y="4" width="3" height="16" />
-                <rect x="12" y="4" width="3" height="16" />
-                <rect x="18" y="4" width="3" height="16" />
-              </svg>
-            ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-              </svg>
-            )}
-          </button>
-        )}
-
-        {/* Streaming indicator - shown below assistant message during active streaming */}
-        {!isUser && showStreamingIndicator && (
-          <div className="mt-2 ml-1">
-            <div className="w-4 h-4">
-              <OctahedronLogo isActive={true} />
-            </div>
-          </div>
-        )}
-
-        {/* User message speaker button - positioned below bubble content, right-aligned */}
-        {isUser && message.content && onReadAloud && (
-          <button
-            onClick={() => onReadAloud(message.content)}
-            disabled={isPlayingTts}
-            className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md mt-2 mr-1 shrink-0 self-end"
-            style={{
-              backgroundColor: isPlayingTts ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-              color: isPlayingTts ? `rgba(var(--theme-secondary-text), 0.9)` : 'rgba(255, 255, 255, 0.4)',
-            }}
-            onMouseEnter={(e) => {
-              if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)';
-              if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
-            }}
-            onMouseLeave={(e) => {
-              if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)';
-              if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'transparent';
-            }}
-            title={isPlayingTts ? "Playing..." : "Read aloud"}
-          >
-            {isPlayingTts ? (
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
-                <rect x="6" y="4" width="3" height="16" />
-                <rect x="12" y="4" width="3" height="16" />
-                <rect x="18" y="4" width="3" height="16" />
-              </svg>
-            ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-              </svg>
-            )}
-          </button>
-        )}
-
-        {/* Streaming indicator - shown below assistant message during active streaming */}
-        {!isUser && showStreamingIndicator && (
-          <div className="mt-2 ml-1">
-            <div className="w-4 h-4">
-              <OctahedronLogo isActive={true} />
-            </div>
-          </div>
-        )}
       </div>
 
       {/* User message context menu */}
