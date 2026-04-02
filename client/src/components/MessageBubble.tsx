@@ -193,14 +193,14 @@ export const MessageBubble = memo(function MessageBubble({
           </svg>
         </button>
       )}
-      <div className="flex flex-col items-start max-w-[92%] md:max-w-[80%]">
+      <div className="flex flex-col items-start max-w-[92%] md:max-w-[80%] min-w-0 w-full">
         <div
           onContextMenu={isUser && editable && !editing ? (e: React.MouseEvent) => {
             e.preventDefault();
             setContextMenu({ x: e.clientX, y: e.clientY });
           } : undefined}
           {...(isUser && editable && !editing ? longPressProps : {})}
-          className={`rounded-2xl px-3 md:px-4 py-3 ${
+          className={`rounded-2xl px-3 md:px-4 py-3 max-w-full ${
             isUser
               ? "text-white/95"
               : "text-white/90"
@@ -271,7 +271,7 @@ export const MessageBubble = memo(function MessageBubble({
                 </div>
               )}
               {message.content && (
-                <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                <p className="whitespace-pre-wrap text-sm leading-relaxed break-words max-w-full">
                   {renderSkillChips(message.content, availableSkills)}
                 </p>
               )}
@@ -322,8 +322,8 @@ export const MessageBubble = memo(function MessageBubble({
                 )}
 
                 {message.content && (
-                  <div className="text-sm leading-relaxed">
-                    <Suspense fallback={<span className="whitespace-pre-wrap">{message.content}</span>}>
+                  <div className="text-sm leading-relaxed max-w-full min-w-0">
+                    <Suspense fallback={<span className="whitespace-pre-wrap break-words">{message.content}</span>}>
                       <MarkdownRenderer content={message.content} />
                     </Suspense>
                   </div>

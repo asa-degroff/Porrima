@@ -273,7 +273,7 @@ export function ChatView({
   return (
     <div className="flex-1 flex flex-col min-w-0">
       {/* Chat Header */}
-      <div className="px-3 md:px-6 py-3 border-b border-white/10 flex items-center justify-between gap-3 backdrop-blur-sm bg-white/[0.03] relative z-20">
+      <div className="px-3 md:px-6 py-3 border-b border-white/10 flex items-center justify-between gap-3 backdrop-blur-xs bg-white/[0.03] relative z-20">
         <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={onOpenSidebar}
@@ -400,7 +400,7 @@ export function ChatView({
 
       {/* Messages */}
       <div className="flex-1 relative min-h-0">
-        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-3 md:px-6 py-3 md:py-4" style={{ paddingBottom: ttsBarVisible ? "180px" : "140px", contentVisibility: "auto" }}>
+        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto overflow-x-hidden px-3 md:px-6 py-3 md:py-4" style={{ paddingBottom: ttsBarVisible ? "180px" : "140px", contentVisibility: "auto" }}>
           <div ref={contentRef}>
             {messages.length === 0 && (
               <div className="flex items-center justify-center h-full">

@@ -464,14 +464,14 @@ export function Sidebar({
       {/* Backdrop for mobile — opacity tracks drag progress */}
       {(isOpen || isDragging || isAnimating) && (
         <div
-          className={`md:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-20 ${isDragging || isAnimating ? "" : "transition-opacity"}`}
+          className={`md:hidden fixed inset-0 bg-black/60 backdrop-blur-xs z-20 ${isDragging || isAnimating ? "" : "transition-opacity"}`}
           style={{ opacity: openProgress * 0.6 }}
           onClick={onClose}
         />
       )}
       {/* Sidebar container — desktop is static, mobile is fixed with gesture support */}
       <div
-        className={`w-72 h-full flex flex-col backdrop-blur-sm bg-white/[0.03] border-r border-white/10 fixed inset-y-0 left-0 z-30 md:static md:translate-x-0 md:z-auto ${isDragging || isAnimating ? "" : "transition-transform duration-300 ease-in-out"} ${!isDragging && !isAnimating ? (isOpen ? "translate-x-0 md:translate-x-0" : "-translate-x-full md:translate-x-0") : ""}`}
+        className={`w-72 h-full flex flex-col backdrop-blur-xs bg-white/[0.03] border-r border-white/10 fixed inset-y-0 left-0 z-30 md:static md:translate-x-0 md:z-auto ${isDragging || isAnimating ? "" : "transition-transform duration-300 ease-in-out"} ${!isDragging && !isAnimating ? (isOpen ? "translate-x-0 md:translate-x-0" : "-translate-x-full md:translate-x-0") : ""}`}
         ref={gestureRef}
         onTouchStart={gestureHandlers.onTouchStart}
         onTouchMove={gestureHandlers.onTouchMove}

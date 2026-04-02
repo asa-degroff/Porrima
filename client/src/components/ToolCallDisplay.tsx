@@ -50,11 +50,11 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
   const toolIcon = getToolIcon(name);
 
   return (
-    <div className={`my-2 rounded-lg border ${statusColors[status]} overflow-hidden`}>
+    <div className={`my-2 rounded-lg border ${statusColors[status]} overflow-hidden max-w-full`}>
       {/* Header - clickable to expand */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.02] transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.02] transition-colors min-w-0"
       >
         {statusIcons[status]}
         <span className="text-white/40 text-xs shrink-0">{toolIcon}</span>
@@ -62,7 +62,7 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
           {formatToolName(name)}
         </span>
         {argsDisplay && (
-          <span className="text-xs text-white/30 truncate min-w-0 flex-1 ml-1">
+          <span className="text-xs text-white/30 truncate min-w-0 flex-1 ml-1 max-w-full">
             {argsDisplay}
           </span>
         )}
@@ -85,7 +85,7 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
 
       {/* Expandable content */}
       {expanded && name === "edit_file" && toolCall?.arguments?.old_string != null && (
-        <div className="border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto">
+        <div className="border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto overflow-x-hidden">
           <DiffView
             oldString={toolCall.arguments.old_string}
             newString={toolCall.arguments.new_string ?? ""}
@@ -93,24 +93,24 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
         </div>
       )}
       {expanded && name === "bash" && toolCall?.arguments?.command && (
-        <div className="border-t border-white/5 px-3 py-2">
+        <div className="border-t border-white/5 px-3 py-2 overflow-x-hidden max-w-full">
           <div className="text-xs text-white/40 mb-1.5 font-medium">Command</div>
-          <pre className="text-xs text-white/60 whitespace-pre-wrap break-all font-mono leading-relaxed">
+          <pre className="text-xs text-white/60 whitespace-pre-wrap break-all font-mono leading-relaxed overflow-x-auto max-w-full">
             {toolCall.arguments.command}
           </pre>
         </div>
       )}
       {expanded && result && !(name === "edit_file" && toolCall?.arguments?.old_string != null) && !(name === "bash") && (
-        <div className={`border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto ${isMonospaceOutput(name) ? "font-mono" : ""}`}>
-          <pre className="text-xs text-white/50 whitespace-pre-wrap break-all leading-relaxed">
+        <div className={`border-t border-white/5 px-3 py-2 max-h-[300px] overflow-auto overflow-x-hidden max-w-full ${isMonospaceOutput(name) ? "font-mono" : ""}`}>
+          <pre className="text-xs text-white/50 whitespace-pre-wrap break-all leading-relaxed max-w-full">
             {result}
           </pre>
         </div>
       )}
       {expanded && name === "bash" && result && (
-        <div className="border-t border-white/5 px-3 py-2">
+        <div className="border-t border-white/5 px-3 py-2 overflow-x-hidden max-w-full">
           <div className="text-xs text-white/40 mb-1.5 font-medium">Output</div>
-          <pre className="text-xs text-white/50 whitespace-pre-wrap break-all font-mono leading-relaxed">
+          <pre className="text-xs text-white/50 whitespace-pre-wrap break-all font-mono leading-relaxed overflow-x-auto max-w-full">
             {result}
           </pre>
         </div>

@@ -101,7 +101,7 @@ export function ChatListItem({ chat, active, onSelect, onDelete, onSendToNoteboo
       {!confirmDelete && (
         <div
           onClick={handleDeleteClick}
-          className={`absolute right-0 top-0 bottom-0 flex items-center pr-2.5 pl-6 rounded-r-xl opacity-0 group-hover:opacity-100 md:opacity-100 md:group-hover:opacity-100 transition-opacity cursor-pointer hidden md:flex ${
+          className={`absolute right-0 top-0 bottom-0 flex items-center pr-2.5 pl-6 rounded-r-xl opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hidden md:flex ${
             active
               ? "bg-gradient-to-l from-[rgba(255,255,255,0.15)] via-[rgba(255,255,255,0.15)] to-transparent"
               : "bg-gradient-to-l from-[rgba(255,255,255,0.08)] via-[rgba(255,255,255,0.08)] to-transparent"

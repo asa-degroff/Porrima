@@ -99,6 +99,14 @@ body::before {
   background: rgba(255, 255, 255, 0.25);
 }
 
+/* Prevent horizontal overflow in tool call displays while allowing code to scroll */
+.tool-call-content pre {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* Markdown styles inside messages */
 .markdown-body {
   line-height: 1.6;
@@ -122,7 +130,11 @@ body::before {
   border-radius: 0.5rem;
   padding: 0.75rem 1rem;
   overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
   margin: 0.75em 0;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .markdown-body code {

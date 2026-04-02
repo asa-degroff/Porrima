@@ -417,7 +417,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className={`backdrop-blur-sm bg-white/5 border rounded-2xl p-2 md:p-2.5 focus-within:ring-2 focus-within:ring-blue-400/30 focus-within:border-blue-400/30 transition-colors ${
+        className={`backdrop-blur-xs bg-white/5 border rounded-2xl p-2 md:p-2.5 focus-within:ring-2 focus-within:ring-blue-400/30 focus-within:border-blue-400/30 transition-colors ${
           dragging
             ? "border-blue-400/50 ring-2 ring-blue-400/30 bg-blue-500/10"
             : waitingForInput
