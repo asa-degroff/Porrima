@@ -193,7 +193,7 @@ export const MessageBubble = memo(function MessageBubble({
           </svg>
         </button>
       )}
-      <div className="flex flex-col items-start max-w-[92%] md:max-w-[80%] min-w-0 w-full">
+      <div className={`flex flex-col ${isUser ? "items-end" : "items-start"} max-w-[92%] md:max-w-[80%] min-w-0 w-full`}>
         <div
           onContextMenu={isUser && editable && !editing ? (e: React.MouseEvent) => {
             e.preventDefault();
@@ -350,6 +350,50 @@ export const MessageBubble = memo(function MessageBubble({
             onClick={() => onReadAloud(message.content)}
             disabled={isPlayingTts}
             className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md mt-2 ml-1 shrink-0 self-start"
+            style={{
+              backgroundColor: isPlayingTts ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+              color: isPlayingTts ? `rgba(var(--theme-secondary-text), 0.9)` : 'rgba(255, 255, 255, 0.4)',
+            }}
+            onMouseEnter={(e) => {
+              if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)';
+              if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+            }}
+            onMouseLeave={(e) => {
+              if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)';
+              if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+            title={isPlayingTts ? "Playing..." : "Read aloud"}
+          >
+            {isPlayingTts ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
+                <rect x="6" y="4" width="3" height="16" />
+                <rect x="12" y="4" width="3" height="16" />
+                <rect x="18" y="4" width="3" height="16" />
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+              </svg>
+            )}
+          </button>
+        )}
+
+        {/* Streaming indicator - shown below assistant message during active streaming */}
+        {!isUser && showStreamingIndicator && (
+          <div className="mt-2 ml-1">
+            <div className="w-4 h-4">
+              <OctahedronLogo isActive={true} />
+            </div>
+          </div>
+        )}
+
+        {/* User message speaker button - positioned below bubble content, right-aligned */}
+        {isUser && message.content && onReadAloud && (
+          <button
+            onClick={() => onReadAloud(message.content)}
+            disabled={isPlayingTts}
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md mt-2 mr-1 shrink-0 self-end"
             style={{
               backgroundColor: isPlayingTts ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
               color: isPlayingTts ? `rgba(var(--theme-secondary-text), 0.9)` : 'rgba(255, 255, 255, 0.4)',
