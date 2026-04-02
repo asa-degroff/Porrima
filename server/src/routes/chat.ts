@@ -431,6 +431,10 @@ async function handleChatStream(
       ollamaModel = ollamaModels.find(m => m.id === chat.modelId);
       if (!ollamaModel) throw new Error(`Model not found: ${chat.modelId}`);
       piModel = createPiModel(ollamaModel);
+      // Override contextWindow with effective value so num_ctx sent to Ollama
+      // respects per-chat and per-model settings. Without this, Ollama receives
+      // the full detected context window (e.g. 128k) and may overflow VRAM.
+      piModel.contextWindow = getEffectiveContextWindow(chat, ollamaModel, settings);
     } catch (modelError: any) {
       console.error("[chat] model discovery failed:", modelError.message);
       // Send error event and end response cleanly
