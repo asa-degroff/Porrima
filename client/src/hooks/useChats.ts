@@ -11,7 +11,7 @@ import {
   clearCachedChat,
   clearCachedChatList,
 } from "../lib/db";
-import type { ChatListItem, ChatType } from "../types";
+import type { Chat, ChatListItem, ChatType } from "../types";
 
 export function useChats() {
   const [chats, setChats] = useState<ChatListItem[]>([]);
@@ -60,20 +60,43 @@ export function useChats() {
   }, [refreshNow]);
 
   const createChat = useCallback(
-    async (modelId: string, type: ChatType = "quick", projectId?: string) => {
-      const chat = await apiCreateChat(modelId, type, projectId);
-      // Optimistic update: insert the new chat at the top of the list immediately
+    (modelId: string, type: ChatType = "quick", projectId?: string) => {
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const title = type === "agent" ? "New Agent Chat" : "New Chat";
+      const chatType = type === "agent" ? "agent" as const : "quick" as const;
+
+      // Optimistic update: insert immediately before server round-trip
       const newItem: ChatListItem = {
-        id: chat.id,
-        title: chat.title,
-        type: chat.type,
-        lastModified: chat.lastModified,
+        id,
+        title,
+        type: chatType,
+        lastModified: now,
         preview: "",
-        ...(chat.projectId ? { projectId: chat.projectId } : {}),
+        ...(projectId ? { projectId } : {}),
       };
       setChats((prev) => [newItem, ...prev]);
-      // Background refresh to sync with server (debounced)
-      refresh();
+
+      // Fire server creation in background; refresh list when done
+      apiCreateChat(id, modelId, type, projectId)
+        .then(() => refresh())
+        .catch(() => {
+          // Roll back optimistic entry on failure
+          setChats((prev) => prev.filter((c) => c.id !== id));
+        });
+
+      // Return a minimal Chat object so the caller can set it active immediately
+      const chat: Chat = {
+        id,
+        title,
+        type: chatType,
+        modelId,
+        systemPrompt: "",
+        messages: [],
+        createdAt: now,
+        lastModified: now,
+        ...(projectId ? { projectId } : {}),
+      };
       return chat;
     },
     [refresh]

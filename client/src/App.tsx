@@ -298,17 +298,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     [loadMessages, setActiveChatData]
   );
 
-  const handleNewChat = useCallback(async (type: ChatType = "quick", projectId?: string) => {
-    try {
-      const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
-      const chat = await createChat(modelId, type, projectId);
-      setActiveChatId(chat.id);
-      setActiveChat(chat);
-      setActiveChatData(chat);
-      loadMessages([]);
-    } catch {
-      // Can't create chats offline
-    }
+  const handleNewChat = useCallback((type: ChatType = "quick", projectId?: string) => {
+    const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
+    const chat = createChat(modelId, type, projectId);
+    setActiveChatId(chat.id);
+    setActiveChat(chat);
+    setActiveChatData(chat);
+    loadMessages([]);
   }, [settings.defaultModelId, models, createChat, loadMessages, setActiveChatData]);
 
   const handleDeleteChat = useCallback(

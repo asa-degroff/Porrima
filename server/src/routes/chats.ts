@@ -23,7 +23,7 @@ router.get("/:id", async (req, res) => {
 
 // Create a new chat
 router.post("/", async (req, res) => {
-  const { modelId, type, contextWindow, projectId } = req.body;
+  const { id: clientId, modelId, type, contextWindow, projectId } = req.body;
   const settings = await getSettings();
   const effectiveModelId = modelId || settings.defaultModelId || "qwen3:8b";
   
@@ -51,7 +51,7 @@ ${systemPrompt}`;
   }
   
   const chat: Chat = {
-    id: uuid(),
+    id: clientId || uuid(),
     title: type === "agent" ? "New Agent Chat" : "New Chat",
     type: type === "agent" ? "agent" : "quick",
     modelId: effectiveModelId,

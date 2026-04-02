@@ -1051,11 +1051,11 @@ export async function executeCorpusDirection(directionId: string): Promise<{
   return res.json();
 }
 
-export async function createChat(modelId: string, type: ChatType = "quick", projectId?: string): Promise<Chat> {
+export async function createChat(id: string, modelId: string, type: ChatType = "quick", projectId?: string): Promise<Chat> {
   const res = await apiFetch(`${BASE}/chats`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ modelId, type, projectId }),
+    body: JSON.stringify({ id, modelId, type, projectId }),
   });
   if (!res.ok) throw new Error("Failed to create chat");
   return res.json();
