@@ -180,11 +180,13 @@ export class BlueskyPoller extends EventEmitter {
       message += `### ${reason.toUpperCase()} (${notifs.length})\n\n`;
       
       for (const notif of notifs) {
+        const displayName = notif.author.displayName;
         const handle = `@${notif.author.handle}`;
+        const nameLabel = displayName ? `**${displayName}** (${handle})` : `**${handle}**`;
         const text = notif.record.text ? `"${notif.record.text}"` : '(no text)';
         const time = new Date(notif.indexedAt).toLocaleString();
-        
-        message += `- **${handle}** ${time}\n`;
+
+        message += `- ${nameLabel} ${time}\n`;
         message += `  ${text}\n`;
         message += `  \`URI: ${notif.uri}\` \`CID: ${notif.cid}\`\n\n`;
       }
