@@ -267,6 +267,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
         cfgScale: cdCfgScale,
       },
       bluesky: {
+        ...settings.bluesky,
         enabled: blueskyEnabled,
         username: blueskyAuthenticated ? blueskyUsername : undefined,
         pollingIntervalMinutes: blueskyPollingInterval,
