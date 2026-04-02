@@ -32,10 +32,39 @@ export class BlueskyAgent {
     return JSON.parse(decrypted) as AtpSessionData;
   }
 
+  /**
+   * Persist refreshed session tokens back to the database.
+   * Called by @atproto/api's CredentialSession whenever tokens are refreshed.
+   */
+  private persistSession(evt: string, session: AtpSessionData | undefined): void {
+    if (evt === 'update' && session && this.did) {
+      const { encrypted, iv } = BlueskyAgent.encryptSession(session);
+      saveBlueskySession({
+        did: this.did,
+        handle: session.handle,
+        encryptedSession: encrypted,
+        iv,
+        createdAt: new Date().toISOString(),
+        lastUsedAt: new Date().toISOString(),
+      });
+      console.log(`[bluesky-agent] Session tokens refreshed and persisted for ${session.handle}`);
+    } else if (evt === 'expired') {
+      console.warn(`[bluesky-agent] Session expired for ${this.did}`);
+    }
+  }
+
+  private createSessionManager(): CredentialSession {
+    return new CredentialSession(
+      new URL('https://bsky.social'),
+      undefined,
+      (evt, session) => this.persistSession(evt, session)
+    );
+  }
+
   async login(identifier: string, password: string): Promise<void> {
-    this.sessionManager = new CredentialSession(new URL('https://bsky.social'));
+    this.sessionManager = this.createSessionManager();
     await this.sessionManager.login({ identifier, password });
-    
+
     const session = this.sessionManager.session;
     if (!session) {
       throw new Error('Login failed: no session returned');
@@ -46,7 +75,7 @@ export class BlueskyAgent {
     this.handle = session.handle;
 
     const { encrypted, iv } = BlueskyAgent.encryptSession(session);
-    
+
     saveBlueskySession({
       did: this.did!,
       handle: this.handle!,
@@ -59,7 +88,7 @@ export class BlueskyAgent {
 
   async restoreSession(did: string): Promise<boolean> {
     const stored = getBlueskySession(did);
-    
+
     if (!stored) {
       console.warn('[bluesky-agent] No session found for DID:', did);
       return false;
@@ -67,13 +96,12 @@ export class BlueskyAgent {
 
     try {
       const sessionData = BlueskyAgent.decryptSession(stored.encryptedSession, stored.iv);
-      this.sessionManager = new CredentialSession(new URL('https://bsky.social'));
+      this.sessionManager = this.createSessionManager();
       await this.sessionManager.resumeSession(sessionData);
-      
+
       const session = this.sessionManager.session;
       if (!session) {
         console.warn('[bluesky-agent] Resumed session is invalid');
-        // Don't delete the stored session - it might be recoverable or the user can re-login
         return false;
       }
 
