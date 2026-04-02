@@ -32,6 +32,10 @@ interface BackgroundStream {
   /** Client-side segments built during streaming for interleaved rendering */
   segments: MessageSegment[];
   seqCounter: number;
+  /** Thinking duration tracking */
+  thinkingActive: boolean;
+  thinkingAccumulatedMs: number;
+  thinkingLastStart: number;
 }
 
 /** Module-level store — survives hook re-renders and chat switches */
@@ -92,6 +96,9 @@ function createBgStream(chatRef: Chat | null): BackgroundStream {
     chatRef,
     segments: [],
     seqCounter: 0,
+    thinkingActive: false,
+    thinkingAccumulatedMs: 0,
+    thinkingLastStart: 0,
   };
 }
 
@@ -99,6 +106,9 @@ export function useChat(chatId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingThinking, setStreamingThinking] = useState("");
+  const [streamingThinkingActive, setStreamingThinkingActive] = useState(false);
+  const [streamingThinkingAccumulatedMs, setStreamingThinkingAccumulatedMs] = useState(0);
+  const streamingThinkingLastStartRef = useRef(0);
   const [activeTools, setActiveTools] = useState<ToolStatus[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
@@ -138,6 +148,9 @@ export function useChat(chatId: string | null) {
       setStreaming(bg.streaming);
       streamingContentRef.current = bg.content;
       setStreamingThinking(bg.thinking);
+      setStreamingThinkingActive(bg.thinkingActive);
+      setStreamingThinkingAccumulatedMs(bg.thinkingAccumulatedMs);
+      streamingThinkingLastStartRef.current = bg.thinkingActive ? bg.thinkingLastStart : 0;
       setActiveTools([...bg.tools]);
       setArtifacts([...bg.artifacts]);
       setGeneratedImages([...bg.generatedImages]);
@@ -160,6 +173,9 @@ export function useChat(chatId: string | null) {
       // which checks for _inProgress flag before calling loadMessages
       setStreaming(false);
       setStreamingThinking("");
+      setStreamingThinkingActive(false);
+      setStreamingThinkingAccumulatedMs(0);
+      streamingThinkingLastStartRef.current = 0;
       setActiveTools([]);
       setArtifacts([]);
       setGeneratedImages([]);
@@ -210,6 +226,18 @@ export function useChat(chatId: string | null) {
       onDelta: (delta) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+
+        // Pause thinking timer on text output
+        if (bg.thinkingActive) {
+          bg.thinkingAccumulatedMs += Date.now() - bg.thinkingLastStart;
+          bg.thinkingActive = false;
+          if (activeChatIdRef.current === streamChatId) {
+            setStreamingThinkingAccumulatedMs(bg.thinkingAccumulatedMs);
+            setStreamingThinkingActive(false);
+            streamingThinkingLastStartRef.current = 0;
+          }
+        }
+
         bg.content += delta;
 
         // Build streaming segments: append to current text segment or start a new one
@@ -239,8 +267,18 @@ export function useChat(chatId: string | null) {
         if (!bg) return;
         bg.thinking += delta;
 
+        // Start thinking timer if not already active
+        if (!bg.thinkingActive) {
+          bg.thinkingActive = true;
+          bg.thinkingLastStart = Date.now();
+        }
+
         if (activeChatIdRef.current === streamChatId) {
           setStreamingThinking(bg.thinking);
+          if (!streamingThinkingLastStartRef.current) {
+            streamingThinkingLastStartRef.current = bg.thinkingLastStart;
+            setStreamingThinkingActive(true);
+          }
         }
       },
       onGeneratedImage: (image) => {
@@ -280,7 +318,7 @@ export function useChat(chatId: string | null) {
           }
         }
       },
-      onDone: ({ thinking, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi }) => {
+      onDone: ({ thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi }) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg || bg.doneCalled) return;
         bg.doneCalled = true;
@@ -293,6 +331,7 @@ export function useChat(chatId: string | null) {
             ...last,
             content: bg.content,
             thinking: thinking || undefined,
+            thinkingDurationMs: thinkingDurationMs || undefined,
             usage: usage || undefined,
             artifacts: doneArtifacts || undefined,
             generatedImages: doneImages || undefined,
@@ -316,6 +355,9 @@ export function useChat(chatId: string | null) {
           }
           setMessages(finalMsgs);
           setStreamingThinking("");
+          setStreamingThinkingActive(false);
+          setStreamingThinkingAccumulatedMs(0);
+          streamingThinkingLastStartRef.current = 0;
           setStreaming(false);
           setStreamingSegmentIndex(null);
           setStreamingUsage(null);
@@ -334,6 +376,17 @@ export function useChat(chatId: string | null) {
       onToolStatus: (status) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+
+        // Pause thinking timer on tool execution
+        if (bg.thinkingActive) {
+          bg.thinkingAccumulatedMs += Date.now() - bg.thinkingLastStart;
+          bg.thinkingActive = false;
+          if (activeChatIdRef.current === streamChatId) {
+            setStreamingThinkingAccumulatedMs(bg.thinkingAccumulatedMs);
+            setStreamingThinkingActive(false);
+            streamingThinkingLastStartRef.current = 0;
+          }
+        }
         const existingIdx = bg.tools.findIndex(
           (t) => t.name === status.name && t.status === "running"
         );
@@ -797,6 +850,9 @@ export function useChat(chatId: string | null) {
     messages,
     streaming,
     streamingThinking,
+    streamingThinkingActive,
+    streamingThinkingAccumulatedMs,
+    streamingThinkingLastStartRef,
     activeTools,
     artifacts,
     generatedImages,

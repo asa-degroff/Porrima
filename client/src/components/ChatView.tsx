@@ -42,6 +42,9 @@ interface Props {
   messages: ChatMessage[];
   streaming: boolean;
   streamingThinking: string;
+  streamingThinkingActive: boolean;
+  streamingThinkingAccumulatedMs: number;
+  streamingThinkingLastStartRef: React.RefObject<number>;
   activeTools: ToolStatus[];
   artifacts: Artifact[];
   generatedImages: GeneratedImage[];
@@ -84,6 +87,9 @@ export function ChatView({
   messages,
   streaming,
   streamingThinking,
+  streamingThinkingActive,
+  streamingThinkingAccumulatedMs,
+  streamingThinkingLastStartRef,
   activeTools,
   artifacts,
   generatedImages,
@@ -420,6 +426,9 @@ export function ChatView({
                     isStreaming={streaming}
                     isLast={isLast}
                     streamingThinking={isLast ? streamingThinking : undefined}
+                    streamingThinkingActive={isLast ? streamingThinkingActive : false}
+                    streamingThinkingAccumulatedMs={isLast ? streamingThinkingAccumulatedMs : 0}
+                    streamingThinkingLastStartRef={streamingThinkingLastStartRef}
                     activeTools={isLast ? activeTools : undefined}
                     artifacts={isLast && streaming ? artifacts : undefined}
                     generatedImages={isLast && streaming ? generatedImages : undefined}

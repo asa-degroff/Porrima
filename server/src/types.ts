@@ -42,6 +42,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   thinking?: string;
+  thinkingDurationMs?: number;
   usage?: MessageUsage;
   toolCalls?: ChatToolCall[];
   toolResults?: ChatToolResult[];

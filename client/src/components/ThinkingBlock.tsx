@@ -3,13 +3,32 @@ import { useState, useEffect, useRef } from "react";
 interface Props {
   thinking: string;
   isStreaming: boolean;
+  thinkingDurationMs?: number;
+  thinkingActive?: boolean;
+  thinkingAccumulatedMs?: number;
+  thinkingLastStartRef?: React.RefObject<number>;
 }
 
-export function ThinkingBlock({ thinking, isStreaming }: Props) {
+function formatDuration(ms: number): string {
+  const seconds = ms / 1000;
+  if (seconds < 0.1) return "0.1 seconds";
+  if (seconds < 10) return `${seconds.toFixed(1)} seconds`;
+  return `${Math.round(seconds)} seconds`;
+}
+
+export function ThinkingBlock({
+  thinking,
+  isStreaming,
+  thinkingDurationMs,
+  thinkingActive,
+  thinkingAccumulatedMs = 0,
+  thinkingLastStartRef,
+}: Props) {
   const [userToggled, setUserToggled] = useState(false);
   const [userExpanded, setUserExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const prevStreamingRef = useRef(isStreaming);
+  const [, setTick] = useState(0);
 
   // Reset user override when streaming state transitions
   if (prevStreamingRef.current !== isStreaming) {
@@ -24,6 +43,13 @@ export function ThinkingBlock({ thinking, isStreaming }: Props) {
     setUserExpanded(!expanded);
   };
 
+  // Tick the timer every 100ms while thinking is active during streaming
+  useEffect(() => {
+    if (!isStreaming || !thinkingActive) return;
+    const interval = setInterval(() => setTick((t) => t + 1), 100);
+    return () => clearInterval(interval);
+  }, [isStreaming, thinkingActive]);
+
   // Auto-scroll thinking content during streaming
   useEffect(() => {
     if (isStreaming && expanded && contentRef.current) {
@@ -32,6 +58,17 @@ export function ThinkingBlock({ thinking, isStreaming }: Props) {
   }, [thinking, isStreaming, expanded]);
 
   if (!thinking) return null;
+
+  // Compute current elapsed thinking time
+  let displayMs = 0;
+  if (isStreaming) {
+    displayMs = thinkingAccumulatedMs;
+    if (thinkingActive && thinkingLastStartRef?.current) {
+      displayMs += Date.now() - thinkingLastStartRef.current;
+    }
+  } else {
+    displayMs = thinkingDurationMs ?? 0;
+  }
 
   return (
     <div className="mb-2 rounded-xl border overflow-hidden"
@@ -66,10 +103,10 @@ export function ThinkingBlock({ thinking, isStreaming }: Props) {
               style={{
                 backgroundColor: `rgba(var(--theme-primary-text))`,
               }} />
-            Thinking...
+            {displayMs > 0 ? `Thinking... ${formatDuration(displayMs)}` : "Thinking..."}
           </span>
         ) : (
-          <span>Thought for a moment</span>
+          <span>{displayMs > 0 ? `Thought for ${formatDuration(displayMs)}` : "Thought for a moment"}</span>
         )}
       </button>
       {expanded && (

@@ -40,6 +40,9 @@ interface Props {
   isStreaming: boolean;
   isLast: boolean;
   streamingThinking?: string;
+  streamingThinkingActive?: boolean;
+  streamingThinkingAccumulatedMs?: number;
+  streamingThinkingLastStartRef?: React.RefObject<number>;
   activeTools?: ToolStatus[];
   artifacts?: Artifact[];
   generatedImages?: GeneratedImage[];
@@ -96,6 +99,9 @@ export const MessageBubble = memo(function MessageBubble({
   isStreaming,
   isLast,
   streamingThinking,
+  streamingThinkingActive,
+  streamingThinkingAccumulatedMs,
+  streamingThinkingLastStartRef,
   activeTools,
   artifacts,
   generatedImages,
@@ -291,6 +297,10 @@ export const MessageBubble = memo(function MessageBubble({
                   <ThinkingBlock
                     thinking={thinkingText}
                     isStreaming={showStreaming}
+                    thinkingDurationMs={message.thinkingDurationMs}
+                    thinkingActive={showStreaming ? streamingThinkingActive : false}
+                    thinkingAccumulatedMs={showStreaming ? (streamingThinkingAccumulatedMs ?? 0) : 0}
+                    thinkingLastStartRef={streamingThinkingLastStartRef}
                   />
                 )}
 

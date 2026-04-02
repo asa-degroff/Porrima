@@ -294,6 +294,9 @@ async function handleChatStream(
     incompleteToolTurn: false,
     // Track if thinking was promoted to content (not useful for previews)
     thinkingPromoted: false,
+    // Track thinking duration
+    thinkingStartTime: null as number | null,
+    thinkingDurationMs: 0,
   };
 
   function resetAccumulators() {
@@ -310,6 +313,8 @@ async function handleChatStream(
     state.finalUsage = undefined;
     state.incompleteToolTurn = false;
     state.thinkingPromoted = false;
+    state.thinkingStartTime = null;
+    state.thinkingDurationMs = 0;
   }
 
   function buildCurrentAssistantMessage(): ChatMessage {
@@ -323,6 +328,7 @@ async function handleChatStream(
       role: "assistant",
       content: state.fullText,
       thinking: state.thinkingText || undefined,
+      thinkingDurationMs: state.thinkingDurationMs > 0 ? state.thinkingDurationMs : undefined,
       usage: state.finalUsage,
       toolCalls: state.allToolCalls.length > 0 ? state.allToolCalls : undefined,
       toolResults: state.allToolResults.length > 0 ? state.allToolResults : undefined,
@@ -333,6 +339,14 @@ async function handleChatStream(
       timestamp: Date.now(),
       _thinkingPromoted: state.thinkingPromoted || undefined,
     };
+  }
+
+  /** Flush any active thinking timer into accumulated duration */
+  function flushThinkingTimer() {
+    if (state.thinkingStartTime !== null) {
+      state.thinkingDurationMs += Date.now() - state.thinkingStartTime;
+      state.thinkingStartTime = null;
+    }
   }
 
   /** Flush any accumulated text into a text segment */
@@ -558,10 +572,14 @@ async function handleChatStream(
         case "message_update": {
           const ame = event.assistantMessageEvent;
           if (ame.type === "text_delta") {
+            flushThinkingTimer();
             state.fullText += ame.delta;
             state.pendingText += ame.delta;
             res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
           } else if (ame.type === "thinking_delta") {
+            if (state.thinkingStartTime === null) {
+              state.thinkingStartTime = Date.now();
+            }
             state.thinkingText += ame.delta;
             res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
           }
@@ -569,6 +587,7 @@ async function handleChatStream(
         }
 
         case "tool_execution_start": {
+          flushThinkingTimer();
           flushTextSegment();
           const toolCall: ChatToolCall = {
             id: event.toolCallId,
@@ -1042,6 +1061,9 @@ async function handleChatStream(
 
       res.write(`event: ask_user\ndata: ${JSON.stringify({ question: askUserRef.current.question })}\n\n`);
     }
+
+    // Flush any remaining thinking timer before building the final message
+    flushThinkingTimer();
 
     // Build the final assistant message
     const assistantMsg = buildCurrentAssistantMessage();

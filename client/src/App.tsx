@@ -88,6 +88,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     messages,
     streaming,
     streamingThinking,
+    streamingThinkingActive,
+    streamingThinkingAccumulatedMs,
+    streamingThinkingLastStartRef,
     activeTools,
     artifacts,
     generatedImages,
@@ -522,6 +525,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         messages={messages}
         streaming={streaming}
         streamingThinking={streamingThinking}
+        streamingThinkingActive={streamingThinkingActive}
+        streamingThinkingAccumulatedMs={streamingThinkingAccumulatedMs}
+        streamingThinkingLastStartRef={streamingThinkingLastStartRef}
         activeTools={activeTools}
         artifacts={artifacts}
         generatedImages={generatedImages}
