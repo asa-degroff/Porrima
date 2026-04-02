@@ -156,6 +156,7 @@ export interface BlueskySettings {
   pollingIntervalMinutes?: number;  // Default: 10
   notificationTypes?: string[];  // ['mention', 'reply', 'follow', 'like', 'repost']
   autoSendToAgent?: boolean;  // Auto-send notifications to Bluesky chat
+  autoRespondToNotifications?: boolean;  // Agent autonomously responds to notifications
   blueskyChatId?: string;  // Dedicated chat for Bluesky interactions
 }
 

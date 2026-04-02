@@ -187,6 +187,7 @@ export interface BlueskySettings {
   pollingIntervalMinutes?: number;
   notificationTypes?: string[];
   autoSendToAgent?: boolean;
+  autoRespondToNotifications?: boolean;
   blueskyChatId?: string;
 }
 

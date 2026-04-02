@@ -124,6 +124,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [blueskyAppPassword, setBlueskyAppPassword] = useState("");
   const [blueskyPollingInterval, setBlueskyPollingInterval] = useState(blueskyDefaults.pollingIntervalMinutes ?? 10);
   const [blueskyAutoSendToAgent, setBlueskyAutoSendToAgent] = useState(blueskyDefaults.autoSendToAgent ?? false);
+  const [blueskyAutoRespond, setBlueskyAutoRespond] = useState(blueskyDefaults.autoRespondToNotifications ?? false);
   const [blueskyConnecting, setBlueskyConnecting] = useState(false);
   const [blueskyMessage, setBlueskyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [blueskyAuthenticated, setBlueskyAuthenticated] = useState(false);
@@ -272,6 +273,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
         username: blueskyAuthenticated ? blueskyUsername : undefined,
         pollingIntervalMinutes: blueskyPollingInterval,
         autoSendToAgent: blueskyAutoSendToAgent,
+        autoRespondToNotifications: blueskyAutoRespond,
       },
     });
     
@@ -1734,6 +1736,26 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <div
                       className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
                         blueskyAutoSendToAgent ? "left-7" : "left-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className={`block text-sm font-medium ${blueskyAutoSendToAgent ? "text-white/60" : "text-white/30"}`}>Auto-respond to notifications</label>
+                    <p className="text-xs text-white/30 mt-0.5">Agent autonomously reviews and replies to mentions/replies</p>
+                  </div>
+                  <button
+                    onClick={() => setBlueskyAutoRespond(!blueskyAutoRespond)}
+                    disabled={!blueskyAutoSendToAgent}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      blueskyAutoRespond && blueskyAutoSendToAgent ? "bg-emerald-500/30" : "bg-white/10"
+                    } disabled:opacity-40 disabled:cursor-not-allowed`}
+                  >
+                    <div
+                      className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                        blueskyAutoRespond && blueskyAutoSendToAgent ? "left-7" : "left-1"
                       }`}
                     />
                   </button>

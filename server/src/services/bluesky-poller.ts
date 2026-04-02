@@ -114,7 +114,11 @@ export class BlueskyPoller extends EventEmitter {
 
       // Auto-send to agent chat if enabled
       if (settings.bluesky?.autoSendToAgent && settings.bluesky.blueskyChatId) {
-        await this.sendNotificationsToAgent(converted, settings.bluesky.blueskyChatId);
+        await this.sendNotificationsToAgent(
+          converted,
+          settings.bluesky.blueskyChatId,
+          settings.bluesky.autoRespondToNotifications ?? false
+        );
       }
 
     } catch (err: any) {
@@ -196,17 +200,18 @@ export class BlueskyPoller extends EventEmitter {
    */
   private async sendNotificationsToAgent(
     notifications: BlueskyNotification[],
-    chatId: string
+    chatId: string,
+    autoRespond: boolean
   ): Promise<void> {
     try {
       const content = this.formatNotificationsAsMessage(notifications);
       const chat = await getChat(chatId);
-      
+
       if (!chat) {
         console.warn('[bluesky-poller] Bluesky chat not found:', chatId);
         return;
       }
-      
+
       // Add as USER message (notifications are incoming events)
       const userMessage: ChatMessage = {
         role: 'user',
@@ -214,18 +219,21 @@ export class BlueskyPoller extends EventEmitter {
         timestamp: Date.now(),
         _inProgress: false,
       };
-      
+
       chat.messages.push(userMessage);
       chat.lastModified = new Date().toISOString();
       await saveChat(chat);
 
-      console.log(`[bluesky-poller] Sent ${notifications.length} notifications to chat ${chatId}, triggering agent response...`);
-      
-      // Trigger agent to respond
-      this.triggerAgentResponse(chatId).catch(err => {
-        console.error('[bluesky-poller] Failed to trigger agent response:', err.message);
-      });
-      
+      console.log(`[bluesky-poller] Sent ${notifications.length} notifications to chat ${chatId}`);
+
+      // Trigger autonomous agent response if enabled
+      if (autoRespond) {
+        console.log(`[bluesky-poller] Auto-respond enabled, triggering agent response...`);
+        this.triggerAgentResponse(chatId).catch(err => {
+          console.error('[bluesky-poller] Failed to trigger agent response:', err.message);
+        });
+      }
+
       this.emit('sent_to_agent', {
         chatId,
         count: notifications.length,
@@ -257,9 +265,15 @@ export class BlueskyPoller extends EventEmitter {
       const settings = await getSettings();
       const modelId = chat.modelId || settings.defaultModelId;
 
-      // Build memory-augmented system prompt (includes persona)
+      // Build memory-augmented system prompt with explicit tool-use instructions.
+      // The base chat prompt may be terse, so we inject Bluesky-specific guidance
+      // so the model knows to call tools directly using URIs/CIDs from notifications.
+      const basePrompt = chat.systemPrompt || 'You are a helpful assistant.';
+      const blueskyToolPrompt = `${basePrompt}
+
+When Bluesky notifications arrive, you MUST use your tools to handle them — do not ask the user for information that is already present in the notification. Extract URI and CID values directly from the notification and pass them to tools. Use bluesky_get_thread to read full context before replying, then use bluesky_reply to respond. Keep replies concise and authentic to your persona.`;
       const systemPrompt = await buildMemoryAugmentedPrompt(
-        chat.systemPrompt || 'You are a helpful assistant.',
+        blueskyToolPrompt,
         chat.messages,
         chat.id,
         chat.projectId
@@ -271,13 +285,19 @@ export class BlueskyPoller extends EventEmitter {
         modelId
       );
 
-      // The last message (notifications) becomes the user prompt
+      // The last message (notifications) becomes the user prompt, with an
+      // action directive so the agent knows it should review and respond.
       const lastMsg = chat.messages[chat.messages.length - 1];
+      const actionPrompt = `${lastMsg.content}
+
+---
+Review the notifications above. For mentions and replies, use bluesky_get_thread to read the full conversation context, then decide whether to respond. If a response is appropriate, use bluesky_reply to post your reply. Keep responses authentic to your persona.`;
+
       const piMessages: any[] = [
         ...contextMessages,
         {
           role: 'user',
-          content: lastMsg.content,
+          content: actionPrompt,
           timestamp: lastMsg.timestamp || Date.now(),
         },
       ];
@@ -309,6 +329,10 @@ export class BlueskyPoller extends EventEmitter {
         let assistantMessage: any;
 
         const tools = getAgentTools(chatId, effects);
+        if (iteration === 1) {
+          console.log(`[bluesky-poller] Using model: ${modelId}, tools: ${tools.length} (${tools.map(t => t.name).join(', ')})`);
+          console.log(`[bluesky-poller] Messages: ${piMessages.length}, last role: ${piMessages[piMessages.length - 1]?.role}`);
+        }
 
         try {
           const result = await streamChat(
@@ -328,7 +352,11 @@ export class BlueskyPoller extends EventEmitter {
           stopReason = result.stopReason;
           assistantMessage = result.assistantMessage;
 
-          if (stopReason === 'stop') {
+          console.log(`[bluesky-poller] Iteration ${iteration} result: stopReason=${stopReason}, toolCalls=${toolCalls.length}, contentLen=${iterationContent.length}, thinkingLen=${result.thinking?.length ?? 0}, usage=${JSON.stringify(result.usage)}, content=${iterationContent.slice(0, 200)}`);
+
+          // Tool calls take priority: some providers return stopReason='stop'
+          // even when tool calls are present (e.g. cloud-proxied models).
+          if (toolCalls.length === 0 && stopReason === 'stop') {
             finalContent = iterationContent;
           }
         } catch (e) {
@@ -336,7 +364,7 @@ export class BlueskyPoller extends EventEmitter {
           break;
         }
 
-        if (toolCalls.length === 0 || stopReason === 'stop') {
+        if (toolCalls.length === 0) {
           break;
         }
 
@@ -373,8 +401,8 @@ export class BlueskyPoller extends EventEmitter {
         }
       }
 
-      // Save the assistant response to chat
-      if (finalContent) {
+      // Save the assistant response to chat (even if text is empty, tool calls matter)
+      if (finalContent || allToolCalls.length > 0) {
         const assistantMsg: ChatMessage = {
           role: 'assistant',
           content: finalContent,
