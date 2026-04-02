@@ -1,7 +1,9 @@
 import type { Model } from "@mariozechner/pi-ai";
-import type { OllamaModel } from "../types.js";
+import type { OllamaModel, Settings } from "../types.js";
+import { getSettings } from "./chat-storage.js";
 
 const OLLAMA_BASE = "http://localhost:11434";
+const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
 
 interface OllamaTagResponse {
   models: Array<{
@@ -142,6 +144,134 @@ export async function discoverOllamaModels(): Promise<OllamaModel[]> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// llama.cpp model discovery
+// ---------------------------------------------------------------------------
+
+interface LlamaCppModelsResponse {
+  data: Array<{
+    id: string;
+    object: string;
+    owned_by?: string;
+    meta?: { n_ctx_train?: number };
+  }>;
+}
+
+interface LlamaCppPropsResponse {
+  default_generation_settings?: {
+    n_ctx?: number;
+  };
+}
+
+let llamacppCache: { models: OllamaModel[]; timestamp: number } | null = null;
+
+export async function discoverLlamaCppModels(settings?: Settings): Promise<OllamaModel[]> {
+  if (llamacppCache && Date.now() - llamacppCache.timestamp < MODEL_CACHE_TTL_MS) {
+    return llamacppCache.models;
+  }
+
+  const s = settings ?? await getSettings();
+  if (!s.llamacppEnabled) return [];
+  const baseUrl = s.llamacppUrl || LLAMACPP_DEFAULT_URL;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    // Fetch models and props in parallel
+    const [modelsRes, propsRes] = await Promise.all([
+      fetch(`${baseUrl}/v1/models`, { signal: controller.signal }),
+      fetch(`${baseUrl}/props`, { signal: controller.signal }).catch(() => null),
+    ]);
+    clearTimeout(timeoutId);
+
+    if (!modelsRes.ok) throw new Error(`llama.cpp not reachable: ${modelsRes.status}`);
+    const modelsData = (await modelsRes.json()) as LlamaCppModelsResponse;
+
+    // Get context window from /props if available
+    let propsContextWindow: number | undefined;
+    if (propsRes?.ok) {
+      try {
+        const propsData = (await propsRes.json()) as LlamaCppPropsResponse;
+        propsContextWindow = propsData.default_generation_settings?.n_ctx;
+      } catch { /* ignore parse errors */ }
+    }
+
+    const DEFAULT_CONTEXT_WINDOW = 32768;
+
+    const models: OllamaModel[] = modelsData.data
+      .filter((m) => m.id && !m.id.includes("embedding"))
+      .map((m) => {
+        const contextWindow = m.meta?.n_ctx_train ?? propsContextWindow ?? DEFAULT_CONTEXT_WINDOW;
+        // Vision heuristic: check model name for common vision model patterns
+        const nameLower = m.id.toLowerCase();
+        const supportsImages = nameLower.includes("vision") || nameLower.includes("-vl") ||
+          nameLower.includes("llava") || nameLower.includes("pixtral");
+        return {
+          id: m.id,
+          name: formatLlamaCppModelName(m.id),
+          parameterSize: "",  // llama.cpp /v1/models doesn't provide this
+          family: "",
+          contextWindow,
+          supportsImages,
+          provider: "llamacpp" as const,
+        };
+      });
+
+    llamacppCache = { models, timestamp: Date.now() };
+    return models;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    console.error("[models] discoverLlamaCppModels failed:", error);
+    if (llamacppCache) {
+      console.warn("[models] returning stale llama.cpp cache");
+      return llamacppCache.models;
+    }
+    return []; // Graceful — llama.cpp being down shouldn't break Ollama
+  }
+}
+
+function formatLlamaCppModelName(id: string): string {
+  // llama.cpp model IDs can be filenames like "my-model-Q4_K_M.gguf" or HF-style "org/model"
+  let name = id;
+  // Strip .gguf extension
+  name = name.replace(/\.gguf$/i, "");
+  // Strip path prefixes
+  if (name.includes("/")) {
+    name = name.split("/").pop() || name;
+  }
+  // Title-case words separated by hyphens/underscores
+  return name
+    .split(/[-_]/)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
+}
+
+/**
+ * Discover models from all enabled providers.
+ * Returns a unified list tagged with their provider.
+ */
+export async function discoverAllModels(): Promise<OllamaModel[]> {
+  const settings = await getSettings();
+  const [ollamaModels, llamacppModels] = await Promise.all([
+    discoverOllamaModels().catch((err) => {
+      console.error("[models] Ollama discovery failed:", err);
+      return [] as OllamaModel[];
+    }),
+    discoverLlamaCppModels(settings),
+  ]);
+
+  // Tag Ollama models that don't have a provider field yet
+  const tagged = ollamaModels.map((m) => ({ ...m, provider: m.provider ?? ("ollama" as const) }));
+  return [...tagged, ...llamacppModels];
+}
+
+/** Invalidate model caches (e.g., after settings change). */
+export function invalidateModelCache() {
+  modelCache = null;
+  llamacppCache = null;
+}
+
 function supportsReasoning(family: string): boolean {
   return family.startsWith("qwen3");
 }
@@ -191,6 +321,33 @@ export function createPiModel(
     contextWindow: ollamaModel.contextWindow,
     maxTokens: 32768,
   };
+}
+
+/**
+ * Create a pi-ai Model from any provider's model.
+ * Dispatches to the correct API based on the model's provider field.
+ */
+export async function createPiModelFromProvider(
+  model: OllamaModel
+): Promise<Model<string>> {
+  if (model.provider === "llamacpp") {
+    const settings = await getSettings();
+    const baseUrl = settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
+    const input: ("text" | "image")[] = model.supportsImages ? ["text", "image"] : ["text"];
+    return {
+      id: model.id,
+      name: model.name,
+      api: "openai-compat",
+      provider: "llamacpp",
+      baseUrl,
+      reasoning: false, // llama.cpp OpenAI API doesn't expose reasoning tokens
+      input,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: model.contextWindow,
+      maxTokens: 32768,
+    };
+  }
+  return createPiModel(model);
 }
 
 function formatModelName(id: string, paramSize: string): string {

@@ -55,6 +55,26 @@ async function unloadOllamaModel(modelId: string): Promise<void> {
 }
 
 /**
+ * Free llama.cpp server slots to release VRAM.
+ * Only runs if llama.cpp is enabled and shares GPU.
+ */
+async function unloadLlamaCppSlots(): Promise<void> {
+  try {
+    const settings = await getSettings();
+    if (!settings.llamacppEnabled || !settings.llamacppSharesGpu) return;
+    const baseUrl = settings.llamacppUrl || "http://localhost:8080";
+    await fetch(`${baseUrl}/slots`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "erase" }),
+    });
+    console.log(`[scheduler] Erased llama.cpp slots to free VRAM`);
+  } catch {
+    // Non-critical — llama.cpp may not be running
+  }
+}
+
+/**
  * Run the corpus creative cycle: rebuild clusters, generate directions, save as memories.
  * Called during daily synthesis to keep the creative engine fresh.
  *
@@ -178,8 +198,9 @@ async function runCorpusCreativeCycle() {
       }
     }
 
-    // Unload Ollama model after all directions are processed to free VRAM
+    // Unload models after all directions are processed to free VRAM
     await unloadOllamaModel(modelId);
+    await unloadLlamaCppSlots();
 
     console.log("[scheduler] Corpus creative cycle complete");
   } catch (e) {

@@ -6,7 +6,7 @@ import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
 import type { AgentContext, AgentLoopConfig, StreamFn } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat, getSettings, loadPendingState, savePendingState, clearPendingState } from "../services/chat-storage.js";
 import { chatMessagesToPiMessages } from "../services/agent.js";
-import { createPiModel, discoverOllamaModels, getEffectiveContextWindow } from "../services/models.js";
+import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { OllamaModel } from "../types.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
 import { generateTitle } from "../services/title-generation.js";
@@ -436,15 +436,15 @@ async function handleChatStream(
 
   try {
     // Discover model with timeout protection
-    let ollamaModels: OllamaModel[];
+    let allModels: OllamaModel[];
     let ollamaModel: OllamaModel | undefined;
-    let piModel: Model<"ollama-native">;
-    
+    let piModel: Model<string>;
+
     try {
-      ollamaModels = await discoverOllamaModels();
-      ollamaModel = ollamaModels.find(m => m.id === chat.modelId);
+      allModels = await discoverAllModels();
+      ollamaModel = allModels.find(m => m.id === chat.modelId);
       if (!ollamaModel) throw new Error(`Model not found: ${chat.modelId}`);
-      piModel = createPiModel(ollamaModel);
+      piModel = await createPiModelFromProvider(ollamaModel);
       // Override contextWindow with effective value so num_ctx sent to Ollama
       // respects per-chat and per-model settings. Without this, Ollama receives
       // the full detected context window (e.g. 128k) and may overflow VRAM.
@@ -1129,7 +1129,7 @@ async function handleChatStream(
 
       // Post-response compaction: truncate if usage > 75% OR if we hit the context limit
       try {
-        const model = ollamaModels.find((m) => m.id === chat.modelId);
+        const model = allModels.find((m: OllamaModel) => m.id === chat.modelId);
         if (model) {
           const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
           const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
@@ -1430,11 +1430,11 @@ router.post("/", async (req, res) => {
     // Discover model for pre-send truncation
     let model: OllamaModel | undefined;
     try {
-      const ollamaModels = await discoverOllamaModels();
-      model = ollamaModels.find((m) => m.id === chat.modelId);
+      const allModels = await discoverAllModels();
+      model = allModels.find((m) => m.id === chat.modelId);
     } catch (err: any) {
       console.error("[compaction] model discovery failed (resume):", err.message);
-      model = undefined; // Skip truncation if Ollama is unreachable
+      model = undefined; // Skip truncation if providers are unreachable
     }
 
     // Pre-send context protection for resume path
@@ -1528,11 +1528,11 @@ router.post("/", async (req, res) => {
     // Discover model for pre-send truncation
     let model: OllamaModel | undefined;
     try {
-      const ollamaModels = await discoverOllamaModels();
-      model = ollamaModels.find((m) => m.id === chat.modelId);
+      const allModels = await discoverAllModels();
+      model = allModels.find((m) => m.id === chat.modelId);
     } catch (err: any) {
       console.error("[compaction] model discovery failed:", err.message);
-      model = undefined; // Skip truncation if Ollama is unreachable
+      model = undefined; // Skip truncation if providers are unreachable
     }
     
     // Pre-send context protection: truncate BEFORE sending if >75% of context window
@@ -1702,11 +1702,11 @@ router.post("/edit", async (req, res) => {
   // Discover model for pre-send truncation
   let model: OllamaModel | undefined;
   try {
-    const ollamaModels = await discoverOllamaModels();
-    model = ollamaModels.find((m) => m.id === chat.modelId);
+    const allModels = await discoverAllModels();
+    model = allModels.find((m) => m.id === chat.modelId);
   } catch (err: any) {
     console.error("[compaction] model discovery failed (edit):", err.message);
-    model = undefined; // Skip truncation if Ollama is unreachable
+    model = undefined; // Skip truncation if providers are unreachable
   }
   
   // Pre-send context protection for edit path

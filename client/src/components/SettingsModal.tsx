@@ -70,6 +70,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [comfyuiUrl, setComfyuiUrl] = useState(settings.comfyuiUrl || "http://127.0.0.1:8188");
   const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
+  // llama.cpp server settings
+  const [llamacppEnabled, setLlamacppEnabled] = useState(settings.llamacppEnabled ?? false);
+  const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || "http://localhost:8080");
+  const [llamacppSharesGpu, setLlamacppSharesGpu] = useState(settings.llamacppSharesGpu ?? true);
+  const [llamacppStatus, setLlamacppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [flatBackground, setFlatBackground] = useState(settings.flatBackground ?? false);
@@ -245,6 +250,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       defaultSystemPrompt: effectivePrompt,
       braveApiKey: braveApiKey.trim(),
       comfyuiUrl: comfyuiUrl.trim() || undefined,
+      llamacppEnabled,
+      llamacppUrl: llamacppUrl.trim() || undefined,
+      llamacppSharesGpu,
       theme,
       backgroundEffect,
       flatBackground,
@@ -360,6 +368,20 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       }
     } catch {
       setComfyuiStatus("unavailable");
+    }
+  }, []);
+
+  const handleTestLlamaCpp = useCallback(async () => {
+    setLlamacppStatus("checking");
+    try {
+      const res = await fetch("/api/models/llamacpp/health", { credentials: "include" });
+      if (res.ok) {
+        setLlamacppStatus("connected");
+      } else {
+        setLlamacppStatus("unavailable");
+      }
+    } catch {
+      setLlamacppStatus("unavailable");
     }
   }, []);
 
@@ -1232,6 +1254,65 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               <p className="text-white/30 text-xs">
                 Local ComfyUI instance for image generation. Used by the Image Sandbox and the generate_image agent tool.
               </p>
+            </div>
+          </div>
+
+          {/* llama.cpp Server */}
+          <div className="space-y-3 pt-2 border-t border-white/10">
+            <h3 className="text-sm font-medium text-white/70">llama.cpp Server</h3>
+            <div className="space-y-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={llamacppEnabled}
+                  onChange={(e) => setLlamacppEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+                />
+                <span className="text-sm text-white/80">Enable llama.cpp server</span>
+              </label>
+              {llamacppEnabled && (
+                <>
+                  <div className="space-y-2">
+                    <label className="block text-sm text-white/50">Server URL</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={llamacppUrl}
+                        onChange={(e) => setLlamacppUrl(e.target.value)}
+                        className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                        placeholder="http://localhost:8080"
+                      />
+                      <button
+                        onClick={handleTestLlamaCpp}
+                        disabled={llamacppStatus === "checking"}
+                        className="px-3 py-2 rounded-lg text-sm font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
+                      >
+                        {llamacppStatus === "checking" ? "Testing..." : "Test"}
+                      </button>
+                    </div>
+                    {llamacppStatus && llamacppStatus !== "checking" && (
+                      <div className="flex items-center gap-1.5">
+                        <div className={`w-2 h-2 rounded-full ${llamacppStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
+                        <span className={`text-xs ${llamacppStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
+                          {llamacppStatus === "connected" ? "Connected" : "Not available"}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={llamacppSharesGpu}
+                      onChange={(e) => setLlamacppSharesGpu(e.target.checked)}
+                      className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+                    />
+                    <span className="text-sm text-white/80">Shares GPU with Ollama</span>
+                  </label>
+                  <p className="text-white/30 text-xs">
+                    When enabled, Ollama models are unloaded before llama.cpp inference to avoid VRAM overflow. Use a more up-to-date llama.cpp build for newly released models and GGUF formats.
+                  </p>
+                </>
+              )}
             </div>
           </div>
 

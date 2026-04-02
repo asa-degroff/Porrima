@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import type { OllamaModel } from "../types";
 
 interface Props {
@@ -25,6 +25,17 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
 
   const selected = models.find((m) => m.id === selectedId);
 
+  // Group models by provider — only show headers when multiple providers exist
+  const { groups, hasMultipleProviders } = useMemo(() => {
+    const ollamaModels = models.filter((m) => !m.provider || m.provider === "ollama");
+    const llamacppModels = models.filter((m) => m.provider === "llamacpp");
+    const multi = ollamaModels.length > 0 && llamacppModels.length > 0;
+    const g: Array<{ label: string; provider: string; models: OllamaModel[] }> = [];
+    if (ollamaModels.length > 0) g.push({ label: "Ollama", provider: "ollama", models: ollamaModels });
+    if (llamacppModels.length > 0) g.push({ label: "llama.cpp", provider: "llamacpp", models: llamacppModels });
+    return { groups: g, hasMultipleProviders: multi };
+  }, [models]);
+
   return (
     <div className="relative" ref={ref}>
       <button
@@ -33,6 +44,9 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
         className="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 md:px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all disabled:opacity-40 cursor-pointer max-w-[120px] md:max-w-none"
       >
         <span className="truncate">{selected?.name || selectedId}</span>
+        {selected?.provider === "llamacpp" && (
+          <span className="text-[9px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-400/20 shrink-0">LC</span>
+        )}
         <svg
           xmlns="http://www.w3.org/2000/svg"
           width="10"
@@ -54,26 +68,35 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
             backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
             borderColor: `rgba(var(--theme-primary-border))`,
           }}>
-          {models.map((m) => (
-            <button
-              key={m.id}
-              onClick={() => {
-                onChange(m.id);
-                setOpen(false);
-              }}
-              className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                m.id === selectedId
-                  ? "text-white"
-                  : "text-white/60 hover:bg-white/10 hover:text-white/80"
-              }`}
-              style={{
-                backgroundColor: m.id === selectedId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                color: m.id === selectedId ? `rgba(var(--theme-secondary-text))` : '',
-              }}
-            >
-              <span className="truncate flex-1">{m.name}</span>
-              <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
-            </button>
+          {groups.map((group) => (
+            <div key={group.provider}>
+              {hasMultipleProviders && (
+                <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-white/30 font-medium border-b border-white/5">
+                  {group.label}
+                </div>
+              )}
+              {group.models.map((m) => (
+                <button
+                  key={`${m.provider || "ollama"}-${m.id}`}
+                  onClick={() => {
+                    onChange(m.id);
+                    setOpen(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                    m.id === selectedId
+                      ? "text-white"
+                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  }`}
+                  style={{
+                    backgroundColor: m.id === selectedId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                    color: m.id === selectedId ? `rgba(var(--theme-secondary-text))` : '',
+                  }}
+                >
+                  <span className="truncate flex-1">{m.name}</span>
+                  {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       )}

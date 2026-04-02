@@ -115,12 +115,16 @@ export interface UserDocument {
   path?: string;
 }
 
+export type InferenceProvider = "ollama" | "llamacpp";
+
 export interface OllamaModel {
   id: string;
   name: string;
   parameterSize: string;
   family: string;
   contextWindow: number;
+  supportsImages?: boolean;
+  provider?: InferenceProvider;  // Default: "ollama" for backward compat
 }
 
 export interface ConversationSearchResult {
@@ -166,6 +170,10 @@ export interface Settings {
   extractionFallbackEnabled?: boolean;
   // Creative direction settings
   creativeDirections?: CreativeDirectionSettings;
+  // llama.cpp server settings
+  llamacppEnabled?: boolean;
+  llamacppUrl?: string;         // default "http://localhost:8080"
+  llamacppSharesGpu?: boolean;  // default true
   bluesky?: BlueskySettings;
 }
 

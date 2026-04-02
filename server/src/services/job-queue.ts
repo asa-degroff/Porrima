@@ -3,6 +3,7 @@ import type { PromptCluster } from "./cluster-storage.js";
 import type { ImageCorpusEntry } from "./image-corpus.js";
 import { proposeDirections } from "./creative-engine.js";
 import { cacheDirections } from "./direction-cache.js";
+import { getSettings } from "./chat-storage.js";
 
 export type JobStatus = 'pending' | 'running' | 'complete' | 'failed';
 
@@ -97,13 +98,24 @@ export async function processNextJob(): Promise<DirectionJob | null> {
       { limit: job.params.limit, minNovelty: job.params.minNovelty, useCache: false, modelId: job.params.modelId }
     );
 
-    // Unload Ollama model after LLM work to free VRAM for any subsequent ComfyUI work
+    // Unload models after LLM work to free VRAM for any subsequent ComfyUI work
     try {
       await fetch("http://localhost:11434/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: job.params.modelId, prompt: "", keep_alive: "0s" }),
       });
+    } catch {}
+    try {
+      const settings = await getSettings();
+      if (settings.llamacppEnabled && settings.llamacppSharesGpu) {
+        const baseUrl = settings.llamacppUrl || "http://localhost:8080";
+        await fetch(`${baseUrl}/slots`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "erase" }),
+        });
+      }
     } catch {}
 
     // Cache the results (only if non-empty)

@@ -12,7 +12,7 @@ import {
   updateMemory,
   addMemory,
 } from "./memory-storage.js";
-import { discoverOllamaModels } from "./models.js";
+import { discoverAllModels } from "./models.js";
 import { loadPersona } from "./persona-store.js";
 import { getSettings, listChats, getChat, getProject } from "./chat-storage.js";
 import { readAgentsMd } from "./project-storage.js";
@@ -1024,12 +1024,12 @@ async function getSynthesisModelId(): Promise<string | null> {
   try {
     const settings = await getSettings();
     if (settings.defaultModelId) {
-      // Verify the configured model is actually available in Ollama
-      const models = await discoverOllamaModels();
+      // Verify the configured model is actually available
+      const models = await discoverAllModels();
       const found = models.find((m) => m.id === settings.defaultModelId);
       if (found) return found.id;
       console.warn(
-        `[synthesis] Configured model "${settings.defaultModelId}" not available in Ollama, falling back`
+        `[synthesis] Configured model "${settings.defaultModelId}" not available, falling back`
       );
     }
   } catch {
@@ -1038,15 +1038,15 @@ async function getSynthesisModelId(): Promise<string | null> {
 
   // Fallback: pick the first available non-embedding model
   try {
-    const models = await discoverOllamaModels();
+    const models = await discoverAllModels();
     if (models.length === 0) {
-      console.error("[synthesis] No Ollama models available for synthesis");
+      console.error("[synthesis] No models available for synthesis");
       return null;
     }
     console.log(`[synthesis] Using fallback model: ${models[0].id}`);
     return models[0].id;
   } catch (e) {
-    console.error("[synthesis] Ollama unreachable:", e);
+    console.error("[synthesis] Model discovery failed:", e);
     return null;
   }
 }

@@ -9,7 +9,7 @@ import {
   type ToolResultMessage,
   type StopReason,
 } from "@mariozechner/pi-ai";
-import { createPiModel, discoverOllamaModels } from "./models.js";
+import { createPiModelFromProvider, discoverAllModels } from "./models.js";
 import type { ChatMessage, MessageUsage } from "../types.js";
 
 export interface StreamChatResult {
@@ -154,11 +154,11 @@ export async function streamChat(
   onEvent: (event: AssistantMessageEvent) => void,
   options?: { signal?: AbortSignal; tools?: Tool[]; keepAlive?: string | number; numGpu?: number; numPredict?: number }
 ): Promise<StreamChatResult> {
-  const ollamaModels = await discoverOllamaModels();
-  const ollamaModel = ollamaModels.find((m) => m.id === modelId);
-  if (!ollamaModel) throw new Error(`Model not found: ${modelId}`);
+  const allModels = await discoverAllModels();
+  const model = allModels.find((m) => m.id === modelId);
+  if (!model) throw new Error(`Model not found: ${modelId}`);
 
-  const piModel = createPiModel(ollamaModel);
+  const piModel = await createPiModelFromProvider(model);
 
   const context: Context = {
     systemPrompt,

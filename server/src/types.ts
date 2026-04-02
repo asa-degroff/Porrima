@@ -106,6 +106,8 @@ export interface ChatListItem {
   projectId?: string;
 }
 
+export type InferenceProvider = "ollama" | "llamacpp";
+
 export interface OllamaModel {
   id: string;
   name: string;
@@ -113,6 +115,7 @@ export interface OllamaModel {
   family: string;
   contextWindow: number;
   supportsImages?: boolean;  // True if model has vision capabilities
+  provider?: InferenceProvider;  // Default: "ollama" for backward compat
 }
 
 export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono";
@@ -146,6 +149,10 @@ export interface Settings {
   extractionFallbackEnabled?: boolean;
   // Creative direction settings
   creativeDirections?: CreativeDirectionSettings;
+  // llama.cpp server settings
+  llamacppEnabled?: boolean;
+  llamacppUrl?: string;         // default "http://localhost:8080"
+  llamacppSharesGpu?: boolean;  // default true — unload Ollama before llama.cpp and vice versa
   // Bluesky integration settings
   bluesky?: BlueskySettings;
 }
