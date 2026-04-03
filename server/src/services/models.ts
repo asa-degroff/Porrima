@@ -340,7 +340,7 @@ export async function createPiModelFromProvider(
       api: "openai-compat",
       provider: "llamacpp",
       baseUrl,
-      reasoning: false, // llama.cpp OpenAI API doesn't expose reasoning tokens
+      reasoning: true, // llama.cpp serves reasoning models; thinking via delta.reasoning_content
       input,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: model.contextWindow,

@@ -31,6 +31,7 @@ interface OpenAIChatChunk {
     delta: {
       role?: string;
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: Array<{
         index: number;
         id?: string;
@@ -335,6 +336,13 @@ export const streamOpenAICompat = (
             content: block.text,
             partial: output,
           } as AssistantMessageEvent);
+        } else if (block.type === "thinking") {
+          stream.push({
+            type: "thinking_end",
+            contentIndex: blockIndex(),
+            content: block.thinking,
+            partial: output,
+          } as AssistantMessageEvent);
         } else if (block.type === "toolCall") {
           if (block.partialArgs) {
             block.arguments = parseStreamingJson(block.partialArgs);
@@ -373,6 +381,27 @@ export const streamOpenAICompat = (
 
         const delta = choice.delta;
         if (!delta) continue;
+
+        // Handle reasoning/thinking tokens
+        if (delta.reasoning_content) {
+          if (!currentBlock || currentBlock.type !== "thinking") {
+            finishCurrentBlock(currentBlock);
+            currentBlock = { type: "thinking", thinking: "" };
+            output.content.push(currentBlock);
+            stream.push({
+              type: "thinking_start",
+              contentIndex: blockIndex(),
+              partial: output,
+            } as AssistantMessageEvent);
+          }
+          currentBlock.thinking += delta.reasoning_content;
+          stream.push({
+            type: "thinking_delta",
+            contentIndex: blockIndex(),
+            delta: delta.reasoning_content,
+            partial: output,
+          } as AssistantMessageEvent);
+        }
 
         // Handle content tokens
         if (delta.content) {
