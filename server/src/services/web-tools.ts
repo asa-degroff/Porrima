@@ -196,6 +196,18 @@ async function executeWebFetch(
     });
 
     const page = await browser.newPage();
+
+    // Block image/media requests to avoid base64-encoded content bloating the output
+    await page.setRequestInterception(true);
+    page.on("request", (req) => {
+      const type = req.resourceType();
+      if (type === "image" || type === "media" || type === "font") {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
     await page.setUserAgent(
       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     );
@@ -230,6 +242,9 @@ async function executeWebFetch(
     } else {
       contentHtml = document.body?.innerHTML || html;
     }
+
+    // Strip img tags to avoid base64 data URIs bloating output
+    contentHtml = contentHtml.replace(/<img[^>]*>/gi, "");
 
     // Convert to markdown
     const turndown = new TurndownService({
