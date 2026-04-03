@@ -75,6 +75,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || "http://localhost:8080");
   const [llamacppSharesGpu, setLlamacppSharesGpu] = useState(settings.llamacppSharesGpu ?? true);
   const [llamacppStatus, setLlamacppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
+  const [favoriteModels, setFavoriteModels] = useState<Set<string>>(new Set(settings.favoriteModels || []));
+  const [showOnlyFavorites, setShowOnlyFavorites] = useState(settings.showOnlyFavorites ?? false);
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [flatBackground, setFlatBackground] = useState(settings.flatBackground ?? false);
@@ -253,6 +255,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
       llamacppSharesGpu,
+      favoriteModels: favoriteModels.size > 0 ? [...favoriteModels] : undefined,
+      showOnlyFavorites,
       theme,
       backgroundEffect,
       flatBackground,
@@ -640,6 +644,105 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* llama.cpp Server */}
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={llamacppEnabled}
+                onChange={(e) => setLlamacppEnabled(e.target.checked)}
+                className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+              />
+              <span className="text-sm text-white/80">Enable llama.cpp server</span>
+            </label>
+            {llamacppEnabled && (
+              <div className="space-y-2 ml-6">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={llamacppUrl}
+                    onChange={(e) => setLlamacppUrl(e.target.value)}
+                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                    placeholder="http://localhost:8080"
+                  />
+                  <button
+                    onClick={handleTestLlamaCpp}
+                    disabled={llamacppStatus === "checking"}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
+                  >
+                    {llamacppStatus === "checking" ? "Testing..." : "Test"}
+                  </button>
+                </div>
+                {llamacppStatus && llamacppStatus !== "checking" && (
+                  <div className="flex items-center gap-1.5">
+                    <div className={`w-2 h-2 rounded-full ${llamacppStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
+                    <span className={`text-xs ${llamacppStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
+                      {llamacppStatus === "connected" ? "Connected" : "Not available"}
+                    </span>
+                  </div>
+                )}
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={llamacppSharesGpu}
+                    onChange={(e) => setLlamacppSharesGpu(e.target.checked)}
+                    className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+                  />
+                  <span className="text-xs text-white/60">Shares GPU with Ollama</span>
+                </label>
+              </div>
+            )}
+          </div>
+
+          {/* Model Favorites */}
+          <div className="space-y-2 pt-2 border-t border-white/10">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-white/60">Model Favorites</label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showOnlyFavorites}
+                  onChange={(e) => setShowOnlyFavorites(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-white/20 bg-white/5 text-amber-400 focus:ring-amber-400/30"
+                />
+                <span className="text-xs text-white/50">Show only favorites in chat</span>
+              </label>
+            </div>
+            <div className="max-h-[200px] overflow-y-auto rounded-lg border border-white/10 bg-white/[0.02]">
+              {models.map((m) => {
+                const isFav = favoriteModels.has(m.id);
+                return (
+                  <div
+                    key={`${m.provider || "ollama"}-${m.id}`}
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-white/5 transition-colors"
+                  >
+                    <button
+                      onClick={() => {
+                        setFavoriteModels((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(m.id)) next.delete(m.id);
+                          else next.add(m.id);
+                          return next;
+                        });
+                      }}
+                      className={`shrink-0 transition-colors ${isFav ? "text-amber-400" : "text-white/20 hover:text-white/40"}`}
+                      title={isFav ? "Remove from favorites" : "Add to favorites"}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill={isFav ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                      </svg>
+                    </button>
+                    <span className="truncate flex-1 text-white/70">{m.name}</span>
+                    {m.provider === "llamacpp" && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-400/20 shrink-0">LC</span>
+                    )}
+                    {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -1254,65 +1357,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               <p className="text-white/30 text-xs">
                 Local ComfyUI instance for image generation. Used by the Image Sandbox and the generate_image agent tool.
               </p>
-            </div>
-          </div>
-
-          {/* llama.cpp Server */}
-          <div className="space-y-3 pt-2 border-t border-white/10">
-            <h3 className="text-sm font-medium text-white/70">llama.cpp Server</h3>
-            <div className="space-y-3">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={llamacppEnabled}
-                  onChange={(e) => setLlamacppEnabled(e.target.checked)}
-                  className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
-                />
-                <span className="text-sm text-white/80">Enable llama.cpp server</span>
-              </label>
-              {llamacppEnabled && (
-                <>
-                  <div className="space-y-2">
-                    <label className="block text-sm text-white/50">Server URL</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={llamacppUrl}
-                        onChange={(e) => setLlamacppUrl(e.target.value)}
-                        className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
-                        placeholder="http://localhost:8080"
-                      />
-                      <button
-                        onClick={handleTestLlamaCpp}
-                        disabled={llamacppStatus === "checking"}
-                        className="px-3 py-2 rounded-lg text-sm font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
-                      >
-                        {llamacppStatus === "checking" ? "Testing..." : "Test"}
-                      </button>
-                    </div>
-                    {llamacppStatus && llamacppStatus !== "checking" && (
-                      <div className="flex items-center gap-1.5">
-                        <div className={`w-2 h-2 rounded-full ${llamacppStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
-                        <span className={`text-xs ${llamacppStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
-                          {llamacppStatus === "connected" ? "Connected" : "Not available"}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={llamacppSharesGpu}
-                      onChange={(e) => setLlamacppSharesGpu(e.target.checked)}
-                      className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
-                    />
-                    <span className="text-sm text-white/80">Shares GPU with Ollama</span>
-                  </label>
-                  <p className="text-white/30 text-xs">
-                    When enabled, Ollama models are unloaded before llama.cpp inference to avoid VRAM overflow. Use a more up-to-date llama.cpp build for newly released models and GGUF formats.
-                  </p>
-                </>
-              )}
             </div>
           </div>
 

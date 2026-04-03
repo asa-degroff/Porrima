@@ -174,6 +174,9 @@ export interface Settings {
   llamacppEnabled?: boolean;
   llamacppUrl?: string;         // default "http://localhost:8080"
   llamacppSharesGpu?: boolean;  // default true
+  // Model favorites
+  favoriteModels?: string[];
+  showOnlyFavorites?: boolean;
   bluesky?: BlueskySettings;
 }
 
