@@ -161,6 +161,10 @@ interface LlamaCppPropsResponse {
   default_generation_settings?: {
     n_ctx?: number;
   };
+  modalities?: {
+    vision?: boolean;
+    audio?: boolean;
+  };
 }
 
 let llamacppCache: { models: OllamaModel[]; timestamp: number } | null = null;
@@ -199,14 +203,34 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Ollam
 
     const DEFAULT_CONTEXT_WINDOW = 32768;
 
+    // Query per-model props for loaded models to get accurate modalities
+    const loadedModels = modelsData.data.filter((m) => (m as any).status?.value === "loaded");
+    const modelPropsMap = new Map<string, LlamaCppPropsResponse>();
+    await Promise.all(
+      loadedModels.map(async (m) => {
+        try {
+          const r = await fetch(`${baseUrl}/props?model=${encodeURIComponent(m.id)}`, { signal: AbortSignal.timeout(3000) });
+          if (r.ok) modelPropsMap.set(m.id, await r.json());
+        } catch { /* ignore — props query is best-effort */ }
+      })
+    );
+
     const models: OllamaModel[] = modelsData.data
       .filter((m) => m.id && !m.id.includes("embedding"))
       .map((m) => {
-        const contextWindow = m.meta?.n_ctx_train ?? propsContextWindow ?? DEFAULT_CONTEXT_WINDOW;
-        // Vision heuristic: check model name for common vision model patterns
-        const nameLower = m.id.toLowerCase();
-        const supportsImages = nameLower.includes("vision") || nameLower.includes("-vl") ||
-          nameLower.includes("llava") || nameLower.includes("pixtral");
+        const modelProps = modelPropsMap.get(m.id);
+        const contextWindow = modelProps?.default_generation_settings?.n_ctx ??
+          m.meta?.n_ctx_train ?? propsContextWindow ?? DEFAULT_CONTEXT_WINDOW;
+
+        // Use actual modalities from props if available, otherwise name heuristic
+        let supportsImages = modelProps?.modalities?.vision ?? false;
+        if (!supportsImages) {
+          const nameLower = m.id.toLowerCase();
+          supportsImages = nameLower.includes("vision") || nameLower.includes("-vl") ||
+            nameLower.includes("llava") || nameLower.includes("pixtral") ||
+            nameLower.includes("qwen3.5") || nameLower.includes("gemma-4") ||
+            nameLower.includes("gemma4");
+        }
         return {
           id: m.id,
           name: formatLlamaCppModelName(m.id),

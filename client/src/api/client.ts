@@ -288,9 +288,10 @@ export function editMessage(
   chatId: string,
   messageIndex: number,
   message: string,
-  callbacks: StreamCallbacks
+  callbacks: StreamCallbacks,
+  images?: ImageAttachment[]
 ): AbortController {
-  return streamSSE(`${BASE}/chat/edit`, { chatId, messageIndex, message }, callbacks);
+  return streamSSE(`${BASE}/chat/edit`, { chatId, messageIndex, message, images: images?.length ? images : undefined }, callbacks);
 }
 
 export async function stopChat(chatId: string): Promise<{ stopped: boolean; reason?: string }> {

@@ -1023,7 +1023,16 @@ async function handleChatStream(
           chat.messages, chat.id, chat.projectId
         );
       }
-      const resumeMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
+      // Exclude the last assistant message (our in-progress accumulator) from
+      // the resumed context. agentLoopContinue requires the last message to be
+      // a user or toolResult — not an assistant message.
+      const messagesForResume = chat.messages.slice(
+        0,
+        chat.messages.length > 0 && chat.messages[chat.messages.length - 1].role === "assistant"
+          ? chat.messages.length - 1
+          : chat.messages.length
+      );
+      const resumeMessages = chatMessagesToPiMessages(messagesForResume, chat.modelId);
 
       // 4. Resume the agent loop with compacted context
       const resumeContext: AgentContext = {
@@ -1034,7 +1043,7 @@ async function handleChatStream(
       const resumeAbortController = new AbortController();
       connectionAbortController.signal.addEventListener("abort", () => resumeAbortController.abort());
 
-      console.log(`[chat] Mid-turn compaction: resuming agent loop with ${resumeMessages.length} messages`);
+      console.log(`[chat] Mid-turn compaction: resuming agent loop with ${resumeMessages.length} messages (excluded in-progress assistant)`);
       res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: "\n\n*[Context compacted — continuing...]*\n\n" })}\n\n`);
       state.fullText += "\n\n*[Context compacted — continuing...]*\n\n";
 
@@ -1638,7 +1647,7 @@ router.post("/", async (req, res) => {
     const userMsg: ChatMessage = {
       role: "user",
       content: message,
-      images: images?.length ? images : undefined,
+      images: persistedImages?.length ? persistedImages : (images?.length ? images : undefined),
       timestamp: Date.now(),
     };
     chat.messages.push(userMsg);
@@ -1794,10 +1803,11 @@ router.post("/stop", async (req, res) => {
 
 // Edit message at index and regenerate response via SSE
 router.post("/edit", async (req, res) => {
-  const { chatId, messageIndex, message } = req.body as {
+  const { chatId, messageIndex, message, images } = req.body as {
     chatId: string;
     messageIndex: number;
     message: string;
+    images?: ImageAttachment[];
   };
 
   if (!chatId || messageIndex == null || !message) {
@@ -1821,11 +1831,12 @@ router.post("/edit", async (req, res) => {
   // Truncate everything from messageIndex onwards
   chat.messages = chat.messages.slice(0, messageIndex);
 
-  // Add edited user message, preserving images from the original
+  // Add edited user message — use new images if provided, otherwise preserve originals
+  const editImages = images?.length ? images : (originalMessage.images?.length ? originalMessage.images : undefined);
   const userMsg: ChatMessage = {
     role: "user",
     content: message,
-    images: originalMessage.images?.length ? originalMessage.images : undefined,
+    images: editImages,
     timestamp: Date.now(),
   };
   chat.messages.push(userMsg);
@@ -1909,7 +1920,7 @@ router.post("/edit", async (req, res) => {
     console.warn(`[chat] WARNING: edit chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
   }
   
-  const userPiMessage = buildUserPiMessage(message);
+  const userPiMessage = buildUserPiMessage(message, editImages);
 
   await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
 });

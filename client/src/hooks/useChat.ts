@@ -712,16 +712,20 @@ export function useChat(chatId: string | null) {
       if (!chatId || streaming || !navigator.onLine) return;
       const targetChatId = chatId;
 
+      // Get the original message to preserve its images
+      const originalMessage = messages[index];
+      const originalImages = originalMessage.images?.length ? originalMessage.images : undefined;
+
       // Create bgStream entry
       const bg = createBgStream(activeChatRef.current);
       bgStreams.set(targetChatId, bg);
 
-      // Truncate to edit point, add new user msg + placeholder assistant msg
+      // Truncate to edit point, add new user msg (with preserved images) + placeholder assistant msg
       setMessages((prev) => {
         const truncated = prev.slice(0, index);
         const next = [
           ...truncated,
-          { role: "user" as const, content: newText, timestamp: Date.now() },
+          { role: "user" as const, content: newText, images: originalImages, timestamp: Date.now() },
           { role: "assistant" as const, content: "", timestamp: Date.now() },
         ];
         bg.messages = next;
@@ -731,7 +735,7 @@ export function useChat(chatId: string | null) {
       prepareStream();
 
       const callbacks = makeStreamCallbacks(targetChatId);
-      const controller = apiEditMessage(targetChatId, index, newText, callbacks);
+      const controller = apiEditMessage(targetChatId, index, newText, callbacks, originalImages);
       bg.abortController = controller;
       abortRef.current = controller;
     },
