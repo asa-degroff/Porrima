@@ -68,6 +68,9 @@ async function unloadLlamaCppSlots(): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "erase" }),
     });
+    // Invalidate cached model state since slots were erased
+    const { invalidateLoadedModel } = await import("./openai-compat-provider.js");
+    invalidateLoadedModel();
     console.log(`[scheduler] Erased llama.cpp slots to free VRAM`);
   } catch {
     // Non-critical — llama.cpp may not be running

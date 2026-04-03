@@ -247,6 +247,73 @@ async function* parseSSE(
 }
 
 // ---------------------------------------------------------------------------
+// Model loading (router mode)
+// ---------------------------------------------------------------------------
+
+/**
+ * Track the last model loaded to avoid redundant /models/load calls.
+ * This is a per-process cache; safe because llama.cpp connections are
+ * to a single server per baseUrl.
+ */
+let lastLoadedModel: { baseUrl: string; modelId: string } | null = null;
+
+/** Clear the cached model state (e.g., after GPU coordination unloads slots). */
+export function invalidateLoadedModel() {
+  lastLoadedModel = null;
+}
+
+/**
+ * Ensure the target model is loaded on the llama.cpp server.
+ * In router mode, calls POST /models/load which blocks until the model is ready.
+ * In single-model mode, the endpoint doesn't exist — we catch and ignore 404s.
+ */
+async function ensureModelLoaded(baseUrl: string, modelId: string): Promise<void> {
+  // Skip if we already loaded this model
+  if (lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel?.modelId === modelId) {
+    return;
+  }
+
+  try {
+    // Unload the previous model first to free VRAM
+    if (lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel.modelId !== modelId) {
+      try {
+        const unloadRes = await fetch(`${baseUrl}/models/unload`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: lastLoadedModel.modelId }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (unloadRes.ok) {
+          console.log(`[openai-compat] Unloaded previous model: ${lastLoadedModel.modelId}`);
+        }
+      } catch {
+        // Non-critical — model may already be unloaded or endpoint doesn't exist
+      }
+    }
+
+    const res = await fetch(`${baseUrl}/models/load`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: modelId }),
+      signal: AbortSignal.timeout(120_000), // Model loading can take a while
+    });
+
+    if (res.ok) {
+      console.log(`[openai-compat] Loaded model: ${modelId}`);
+      lastLoadedModel = { baseUrl, modelId };
+    } else if (res.status === 404) {
+      // Single-model mode — endpoint doesn't exist, proceed normally
+      lastLoadedModel = { baseUrl, modelId };
+    } else {
+      const text = await res.text().catch(() => "");
+      console.warn(`[openai-compat] /models/load returned ${res.status}: ${text}`);
+    }
+  } catch (err) {
+    console.warn(`[openai-compat] ensureModelLoaded failed:`, err instanceof Error ? err.message : err);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main stream function
 // ---------------------------------------------------------------------------
 
@@ -277,6 +344,11 @@ export const streamOpenAICompat = (
     };
 
     try {
+      // Pre-load the model in router mode. This ensures the target model is
+      // loaded and ready before we send the chat request. In single-model mode
+      // this endpoint doesn't exist, so we catch and ignore errors.
+      await ensureModelLoaded(model.baseUrl, model.id);
+
       const messages = convertMessages(model, context);
       const body: any = {
         model: model.id,
