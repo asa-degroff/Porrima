@@ -2,7 +2,7 @@
 
 ## Project
 
-**qu.je Agent** — An feature-rich agent framework and user interface with persistent memory, project context, image generation, and agentic tool execution. npm workspaces monorepo: `server/` (Express + TypeScript) and `client/` (React + Vite + Tailwind).
+**qu.je Agent** — A feature-rich agent framework and user interface with persistent memory, project context, image generation, social media integration, and agentic tool execution. npm workspaces monorepo: `server/` (Express + TypeScript) and `client/` (React + Vite + Tailwind).
 
 ## Quick Reference
 
@@ -18,7 +18,7 @@
 
 ### Chat Types
 
-Two chat types: **agent** (memory-augmented) and **quick** (standalone). Existing chats without a `type` field default to "quick".
+Three chat types: **agent** (memory-augmented), **quick** (standalone), and **bluesky** (social media integration). Existing chats without a `type` field default to "quick".
 
 The server is the integration hub. The chat route (`server/src/routes/chat.ts`) orchestrates:
 1. Memory context augmentation (agent chats only)
@@ -35,6 +35,22 @@ Projects provide persistent context for agent chats through AGENTS.md files:
 - New chats in a project automatically inject AGENTS.md content into the system prompt
 - Chats within projects are grouped under their project in the UI
 - The agent uses `list_files`, `read_file`, etc. tools to explore the project structure
+- UI features: color customization per project, pin/unpin, path validation with permissions checking, directory creation
+- `project-storage.ts` provides filesystem utility for reading AGENTS.md from project directories
+
+### LLM Provider Architecture
+
+Multi-provider system supporting multiple inference backends through pi-ai's provider abstraction:
+
+- **Ollama Native** (`ollama-native-provider.ts`): Registers with pi-ai for Ollama's native `/api/chat` format
+- **OpenAI-Compatible** (`openai-compat-provider.ts`): Registers with pi-ai for OpenAI-format APIs (llama.cpp, etc.)
+  - SSE parser for OpenAI streaming format
+  - Incremental tool call handling with argument accumulation
+  - Support for `reasoning_content` field (thinking blocks)
+  - Vision model support with base64 image encoding
+  - Router mode: per-process model loading cache with `ensureModelLoaded()` calling `/models/load`; tracks `lastLoadedModel` to avoid redundant loads; 30s unload / 120s load timeouts
+- **Model Discovery** (`models.ts`): `discoverAllModels()` queries both Ollama and llama.cpp servers, tags each model with `provider: "ollama"` or `provider: "llamacpp"`. `createPiModelFromProvider()` routes to the correct pi-ai API provider.
+- **Settings**: `llamacppEnabled`, `llamacppUrl`, `llamacppSharesGpu` control llama.cpp integration
 
 ### Memory Services
 
@@ -60,6 +76,7 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 - **Conversation search**: `search_conversation` — FTS5 search on chat history, scoped to single chat or global
 - **Filesystem tools**: `read_file`, `write_file`, `edit_file`, `list_files`, `bash`
 - **Sandbox tools**: `run_python`, `create_artifact`
+- **Bluesky tools** (from `bluesky-tools.ts`): `list_notifications`, `get_thread`, `reply`, `post` (bluesky chats only)
 - **Flow control**: `ask_user` (pauses tool loop, saves pending state to `pending_states` table in SQLite, resumes on next user message)
 
 ### Tool Loop (`server/src/routes/chat.ts`)
@@ -185,9 +202,37 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 - Stored in `~/.quje-agent/vision/`
 - UI: `VisionGallery`, `VisionChat`, `VisionControls`
 
+### Notebook System
+
+Dual user/agent notebook for structured notes, reflections, and cross-referencing:
+- **Storage**: `notebook-storage.ts` with file-based persistence in `~/.quje-agent/notebooks/`
+- **Entry types**: user-created and agent-created entries (e.g., synthesis summaries)
+- **Linking**: `NotebookLink` cross-references between notebooks, chats, and external URLs
+- **Attachments**: image attachments, tool results, artifacts, visuals, and memory associations
+- **Daily synthesis integration**: synthesis loads today's notebook entries (user + agent, excluding prior synthesis entries) as context; writes an agent notebook entry with the synthesis summary
+- **UI**: `NotebookView.tsx`, `NotebookEntryComposer.tsx`, `NotebookEntryDisplay.tsx`, `NotebookLinkPicker.tsx`
+- **Routes** (`notebooks.ts`): CRUD for entries, filtered by author (user/agent)
+
+### Bluesky Integration
+
+Social media integration with the AT Protocol (Bluesky):
+- **Authentication** (`bluesky-agent.ts`): AT Protocol agent with encrypted session persistence
+- **Notification polling** (`bluesky-poller.ts`): EventEmitter-based polling with configurable interval, auto-respond capability
+- **Agent tools** (`bluesky-tools.ts`): `list_notifications`, `get_thread`, `reply`, `post` — available in bluesky chat type
+- **Chat type**: Dedicated `"bluesky"` chat type with specialized system prompt, notification context injection
+- **Multi-post replies**: Automatic thread splitting for responses >300 characters
+- **Thread context**: Reads parent thread before replying for conversational awareness
+- **Settings**: `BlueskySettings` — polling interval, notification types, auto-send, auto-respond, dedicated chat ID
+- **UI**: `BlueskySection.tsx` in sidebar with expand/collapse, unread count, quick access to dedicated chat
+- **Routes** (`bluesky.ts`): `POST /api/bluesky/login`, `POST /api/bluesky/logout`
+
 ### TTS (Text-to-Speech)
 
-- Kokoro TTS integration (ported from GreenGale codebase)
+- **Kokoro TTS**: Original integration (ported from GreenGale codebase)
+- **Qwen3-TTS** (`tts-qwen3.ts`): Alternative backend with caching
+- **Streaming TTS** (`tts-streaming.ts`, `tts-buffer.ts`): Generator-based streaming with 3-tier boundary detection (word/clause/sentence) for chunking
+- **Text preprocessing** (`tts-text-preprocessor.ts`): Markdown-to-speech text extraction
+- **Client streaming** (`useStreamingTTS.ts`): MediaSource API with WAV/PCM and MP3 codec support, chunk queueing, pause on tool execution, graceful fallback to non-streaming
 - Voice selection, speed, pitch controls
 - Auto-read toggle for assistant messages
 - Playback state in control bar
@@ -202,8 +247,9 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 ### Skills
 
 - Pluggable skill definitions
-- Activated per chat
-- UI: `SkillSelector`
+- Activated per chat, project-scoped vs. global filtering
+- Installation from URL with custom naming
+- UI: `SkillSelector`, `SkillsBrowser` (install, delete, expandable details)
 
 ### Persona
 
@@ -220,22 +266,46 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 
 ### Message Queueing
 
-- Offline message queueing
+- Offline message queueing (`message-queue.ts`) with per-chat persistence
 - Retry on reconnect
 - Queue state persistence
+- **UI**: `OfflineIndicator.tsx` with real-time online/offline status, queued message count
+
+### User Profile
+
+- Markdown-based user information document (`user-store.ts`)
+- **Routes** (`user.ts`): `GET/PUT/DELETE /api/user/`
+
+### UI State Persistence
+
+- Client state management via backend (`ui-state.ts`)
+- **Routes**: `GET/PUT /api/ui-state/`
 
 ## Streaming & Reasoning
 
 - Server-Sent Events for real-time token streaming
-- Collapsible thinking blocks for reasoning-capable models (Qwen3+)
-- Token usage indicator with context window progress bar
+- Collapsible thinking blocks for reasoning-capable models (Qwen3+) with live duration timer (100ms updates), user toggle override, accumulated duration tracking
+- Token usage indicator (`TokenIndicator.tsx`) with context window progress bar, compaction warning, removed message count
+- Compaction indicator (`CompactionIndicator.tsx`) — collapsible UI showing where messages were compacted, removed count, timestamp, expandable summary
+
+## Mobile & Touch
+
+- **Gesture drawer** (`useGestureDrawer.ts`): Up/right direction swipe with velocity-based snapping, 30% threshold
+- **Keyboard inset** (`useKeyboardInset.ts`): VisualViewport API detection for mobile keyboard handling
+- **Haptic feedback** (`useHaptics.tsx`): Web Haptics API with patterns — light, medium, heavy, success, error, navigation, toolComplete, streamingComplete; settings-gated
+
+## Conversation Search
+
+- **Modal search** (`ConversationSearch.tsx`): 2-char minimum, 300ms debounce, jump-to-message (chatId + messageIndex)
+- **Sidebar inline** (`SidebarSearch.tsx`): Inline search in sidebar
+- Backend: FTS5 via `search_conversation` tool and `/api/memory/conversations/search`
 
 ## Other
 
 - Per-chat model selector and system prompt editor
 - Glassmorphism UI with Tailwind CSS v4
 - Markdown rendering with GFM support
-- SQLite + sqlite-vec for memory storage with SIMD-accelerated vector search; JSON files for chat persistence
+- SQLite + sqlite-vec for memory storage with SIMD-accelerated vector search
 
 ## Prerequisites
 
@@ -245,7 +315,8 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 - The embedding model for memory: `ollama pull qwen3-embedding:0.6b`
 - **Creative Engine**: `ollama pull qwen3.5:9b` (recommended for direction generation with vision context)
 - (Optional) ComfyUI for image generation
-- (Optional) Kokoro TTS voices
+- (Optional) Kokoro TTS voices or Qwen3-TTS
+- (Optional) llama.cpp server for OpenAI-compatible inference
 
 ## Setup
 
@@ -325,7 +396,7 @@ quje-agent/
 │   │   ├── chats.ts                 # Chat CRUD
 │   │   ├── projects.ts              # Project CRUD + AGENTS.md injection
 │   │   ├── memory.ts                # Memory CRUD + search + synthesis + conversation search
-│   │   ├── models.ts                # Ollama model discovery
+│   │   ├── models.ts                # Model discovery (Ollama + llama.cpp)
 │   │   ├── settings.ts              # User preferences
 │   │   ├── tts.ts                   # TTS settings + voice info
 │   │   ├── vision.ts                # Vision analysis endpoints
@@ -334,7 +405,14 @@ quje-agent/
 │   │   ├── artifacts.ts             # Artifact serving
 │   │   ├── skills.ts                # Skill definitions
 │   │   ├── persona.ts               # Persona endpoints
-│   │   └── auth.ts                  # Passkey auth
+│   │   ├── auth.ts                  # Passkey auth
+│   │   ├── bluesky.ts               # Bluesky login/logout
+│   │   ├── corpus.ts                # Corpus clusters, directions, creative engine
+│   │   ├── image-corpus.ts          # Corpus entry CRUD + search + enrichment
+│   │   ├── notebooks.ts             # Notebook entry CRUD (user/agent)
+│   │   ├── ui-state.ts              # UI state persistence
+│   │   ├── user.ts                  # User profile document
+│   │   └── visuals.ts               # Visual artifact serving
 │   └── services/
 │       ├── agent.ts                 # pi-ai streaming wrapper
 │       ├── agent-tools.ts           # Tool registry + execution
@@ -347,12 +425,21 @@ quje-agent/
 │       ├── synthesis.ts             # Daily memory consolidation
 │       ├── scheduler.ts             # Synthesis check + delayed extraction + creative cycle
 │       ├── compaction.ts            # Message compaction when near context limit
+│       ├── ollama-native-provider.ts # Ollama native API provider for pi-ai
+│       ├── openai-compat-provider.ts # OpenAI-compatible API provider (llama.cpp, etc.)
+│       ├── models.ts                # Model discovery, provider dispatch, reasoning detection
 │       ├── tts.ts                   # Kokoro TTS integration
+│       ├── tts-qwen3.ts             # Qwen3-TTS backend with caching
+│       ├── tts-streaming.ts         # Generator-based streaming TTS
+│       ├── tts-buffer.ts            # 3-tier boundary detection for streaming chunks
+│       ├── tts-text-preprocessor.ts # Markdown-to-speech text extraction
 │       ├── comfyui.ts               # ComfyUI API client
 │       ├── image-generation.ts      # Generation state tracking + ComfyUI integration
 │       ├── image-storage.ts         # Generated image persistence + metadata
 │       ├── image-corpus.ts          # SQLite corpus + FTS5 + vector search + hybrid RRF
 │       ├── image-tools.ts           # Image analysis + element extraction
+│       ├── element-extraction.ts    # Structured extraction into 10 visual categories
+│       ├── generate-review.ts       # Multi-iteration image gen with agent review loop
 │       ├── cluster-engine.ts        # Density-based clustering with cosine similarity
 │       ├── cluster-storage.ts       # Cluster persistence + centroid/element computation
 │       ├── creative-engine.ts       # Direction generation (remix/gap-fill/deepen/contrast)
@@ -368,12 +455,18 @@ quje-agent/
 │       ├── auth-storage.ts          # Passkey credential storage
 │       ├── title-generation.ts      # LLM-generated chat titles
 │       ├── sandbox.ts               # Python code execution sandbox
-│       └── models.ts                # Ollama model config + reasoning detection
+│       ├── bluesky-agent.ts         # AT Protocol agent with session encryption
+│       ├── bluesky-poller.ts        # Notification polling with auto-respond
+│       ├── bluesky-tools.ts         # Agent tool definitions for Bluesky
+│       ├── notebook-storage.ts      # Dual notebook system (user/agent entries)
+│       ├── project-storage.ts       # Filesystem utility for reading AGENTS.md
+│       ├── user-store.ts            # User profile markdown file management
+│       └── message-queue.ts         # Offline message queue with per-chat persistence
 ├── client/src/
 │   ├── types.ts                     # Shared interfaces (client copy)
 │   ├── api/client.ts                # Fetch API client + SSE parser
-│   ├── hooks/                       # React hooks (useChat, useChats, useProjects, useModels, useSettings, useTTS, etc.)
-│   ├── components/                  # React components (Sidebar, ChatView, MessageBubble, ArtifactPanel, ImageSandbox, VisionGallery, etc.)
+│   ├── hooks/                       # React hooks (useChat, useChats, useProjects, useModels, useSettings, useTTS, useBluesky, useNotebooks, useStreamingTTS, useGestureDrawer, useHaptics, useOnlineStatus, etc.)
+│   ├── components/                  # React components (Sidebar, ChatView, MessageBubble, ArtifactPanel, ImageSandbox, VisionGallery, BlueskySection, NotebookView, ConversationSearch, SidebarSearch, CompactionIndicator, OfflineIndicator, TokenIndicator, SkillsBrowser, etc.)
 │   ├── styles/                      # Tailwind styles
 │   ├── lib/                         # IndexedDB cache, utils
 │   └── utils/                       # Helper functions
@@ -397,6 +490,7 @@ All data is stored in `~/.quje-agent/`:
 ├── settings.json       # Legacy JSON file (migrated to app.db on startup)
 ├── clusters/           # Cluster data (clusters.json with centroids, dominant elements)
 ├── directions/         # Creative direction cache (cache.json)
+├── notebooks/          # Notebook entries (user + agent)
 ├── image-corpus/       # Image corpus SQLite database
 │   ├── corpus.db       # SQLite: corpus_entries + vec_corpus (sqlite-vec) + fts_corpus (FTS5)
 │   └── corpus.json.bak # Legacy JSON (migrated on first startup)
@@ -476,12 +570,34 @@ All data is stored in `~/.quje-agent/`:
 | POST | `/api/auth/register` | Register passkey |
 | POST | `/api/auth/login` | Login with passkey |
 | POST | `/api/auth/logout` | Logout |
+| POST | `/api/bluesky/login` | Login to Bluesky and create dedicated chat |
+| POST | `/api/bluesky/logout` | Logout from Bluesky |
+| GET | `/api/notebooks/user` | List user notebook entries |
+| GET | `/api/notebooks/agent` | List agent notebook entries |
+| GET | `/api/notebooks/:id` | Get single notebook entry |
+| POST | `/api/notebooks` | Create notebook entry |
+| PATCH | `/api/notebooks/:id` | Update notebook entry |
+| DELETE | `/api/notebooks/:id` | Delete notebook entry |
+| GET | `/api/image-corpus/` | List all corpus entries |
+| GET | `/api/image-corpus/stats` | Corpus statistics |
+| GET | `/api/image-corpus/:id` | Get single corpus entry |
+| POST | `/api/image-corpus/search` | Semantic corpus search |
+| GET | `/api/image-corpus/by-chat/:chatId` | Corpus entries by chat |
+| GET | `/api/image-corpus/by-project/:projectId` | Corpus entries by project |
+| POST | `/api/image-corpus/enrich` | Batch corpus enrichment |
+| GET | `/api/ui-state/` | Get persisted UI state |
+| PUT | `/api/ui-state/` | Save UI state |
+| GET | `/api/user/` | Get user profile document |
+| PUT | `/api/user/` | Save user profile document |
+| DELETE | `/api/user/` | Delete user profile document |
+| GET | `/api/visuals/:id` | Serve visual HTML by ID |
 
 ## Key Patterns
 
 - **Streaming**: SSE with event types `text_delta`, `thinking_delta`, `tool_status`, `artifact`, `ask_user`, `done`, `error`, `iteration`, `warning`, `compaction`, `title_update`, `message_complete`, `follow_up_start`
 - **Types**: Shared interfaces in `server/src/types.ts` and `client/src/types.ts` (kept in sync manually)
 - **Storage**: SQLite for chats/projects/settings/pending (`chat-storage.ts` → `~/.quje-agent/app.db`), SQLite + sqlite-vec for memories (`memory-storage.ts` → `~/.quje-agent/memory/memories.db`), SQLite + sqlite-vec for image corpus (`image-corpus.ts` → `~/.quje-agent/image-corpus/corpus.db`), notebooks via `notebook-storage.ts` → `~/.quje-agent/notebooks/`. All use `~/.quje-agent/` as the base directory.
+- **LLM providers**: Two registered pi-ai providers — `ollama-native` for Ollama's `/api/chat` and `openai-compat` for llama.cpp / OpenAI-format servers. `discoverAllModels()` merges both; `createPiModelFromProvider()` routes by `provider` field. llama.cpp router mode tracks `lastLoadedModel` to minimize model swap overhead.
 - **Context window**: Fetched per-model from Ollama `/api/show` (`model_info.*.context_length`). Per-chat override via `chat.contextWindow`; effective value is `chat.contextWindow ?? model.contextWindow`.
 - **Embeddings**: Ollama `qwen3-embedding:0.6b` via `POST http://localhost:11434/api/embed` (supports 32k context). Vectors are L2-normalized, so cosine similarity = dot product.
 - **Memory scoring**: `rrf_score * recency_decay * (importance / 10)` with RRF combining vector search and FTS5 full-text search rankings; 30-day half-life on recency.
@@ -489,17 +605,19 @@ All data is stored in `~/.quje-agent/`:
 - **Supersession tracking**: memories can be linked via `superseded_by` / `supersedes` columns when contradicted or updated. Confidence threshold (default 0.75) determines automatic linking; manual override via API.
 - **Delayed extraction**: time-based trigger (configurable, default 30 min) extracts memories from inactive chats. Uses `updateChatExtractionState()` to avoid modifying `lastModified` (preserves chat ordering).
 - **Project scoping**: memories have optional `projectId`; synthesis groups chats and memories by project, loading each project's AGENTS.md for context.
-- **GPU coordination**: Ollama LLM and ComfyUI cannot run concurrently on single GPU. Scheduler unloads Ollama model (`keep_alive: "0s"`) with 3s pause before ComfyUI execution. Direction generation jobs also unload after LLM work.
+- **GPU coordination**: Ollama LLM and ComfyUI cannot run concurrently on single GPU. Scheduler unloads Ollama model (`keep_alive: "0s"`) with 3s pause before ComfyUI execution. Direction generation jobs also unload after LLM work. llama.cpp shares GPU flag (`llamacppSharesGpu`) controls whether Ollama is unloaded before llama.cpp inference; `invalidateLoadedModel()` resets router mode cache when needed.
 - **Creative direction caching**: 24h TTL, invalidates on corpus size change (>10%) or cluster count change. Prevents redundant LLM calls on page refresh.
 - **Job queue**: Async direction generation avoids blocking UI; jobs processed sequentially with 1s delay between runs.
 - **Novelty scoring**: `1.0 - avgTop5Similarity` against corpus embeddings; default threshold 0.15 (more permissive than original 0.6).
 - **Clustering**: Density-based with 0.85 cosine similarity threshold; O(n²) pairwise matrix acceptable for n<500 images.
+- **Element extraction**: `element-extraction.ts` extracts visual elements into 10 structured categories (themes, characters, settings, concepts, styles, colors, composition, lighting, textures, mood) using qwen3.5:9b with vision input.
+- **Generate review**: `generate-review.ts` supports multi-iteration image generation with agent review loops for quality refinement.
 - **Backward compat**: `getChat()` and `listChats()` default missing `type` to "quick". Memory DB auto-migrates `project_id` column. Chat/project/settings JSON files auto-migrate to SQLite on startup. Corpus JSON auto-migrates to SQLite on first startup.
 
 ## Style
 
 - Tailwind v4 with glassmorphism (`backdrop-blur-xl bg-white/[0.08]`)
-- Agent-related UI uses purple accent colors; quick chats use blue; projects use emerald
+- Agent-related UI uses purple accent colors; quick chats use blue; bluesky chats use sky blue; projects use emerald
 - No external state management — React hooks + API calls
 - Lazy loading for heavy components (ImageSandbox, MarkdownRenderer, RippleGridBackground)
 
@@ -516,3 +634,6 @@ All data is stored in `~/.quje-agent/`:
 - When editing types, update both `server/src/types.ts` and `client/src/types.ts`.
 - The server may run compiled `dist/index.js` (via `npm start` / systemd) rather than tsx dev mode — source changes require `npm run build` + restart to take effect.
 - Blob URLs for artifacts are critical for Chrome animation performance — do not use cross-origin iframe src.
+- Bluesky session is encrypted at rest via `bluesky-agent.ts`. The poller emits events that the chat route subscribes to for notification injection.
+- llama.cpp provider supports both single-model and router mode. Router mode calls `/models/load` to switch models; single-model mode gracefully ignores 404s from that endpoint.
+- The `extractionModelId` setting allows using a separate model for memory extraction; `extractionFallbackEnabled` controls whether to fall back to the default model if the extraction model is unavailable.
