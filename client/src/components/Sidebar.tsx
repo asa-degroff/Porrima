@@ -500,8 +500,8 @@ export function Sidebar({
             onClick={handleActivateSearch}
           >
             <div className="relative flex items-center">
-              {/* Static logo + title */}
-              <div className="flex items-center gap-2">
+              {/* Static logo + title — hidden during background activity */}
+              <div className={`flex items-center gap-2 transition-opacity duration-300 ${hasBackgroundActivity ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
                 <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
                 <h1 className="text-lg font-semibold text-white/90 tracking-tight">
                   qu.je
