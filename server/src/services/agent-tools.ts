@@ -138,9 +138,27 @@ export interface ToolSideEffects {
 // --- Adapter helpers ---
 
 /** Wrap a { content, isError } result into AgentToolResult, throwing on error */
-function wrapResult(result: { content: string; isError: boolean }): AgentToolResult<{}> {
-  if (result.isError) throw new Error(result.content);
-  return { content: [{ type: "text", text: result.content }], details: {} };
+/**
+ * Compute the max tool result size in characters, scaled to the context window.
+ * Uses 15% of context (at ~4 chars/token), with a floor of 8k chars.
+ */
+function getMaxToolResultChars(contextWindow: number): number {
+  return Math.max(8_000, Math.floor(contextWindow * 4 * 0.15));
+}
+
+function createWrapResult(contextWindow: number) {
+  const maxChars = getMaxToolResultChars(contextWindow);
+  return function wrapResult(result: { content: string; isError: boolean }): AgentToolResult<{}> {
+    if (result.isError) throw new Error(result.content);
+    let text = result.content;
+    if (text.length > maxChars) {
+      const truncated = text.slice(0, maxChars);
+      const totalLines = text.split("\n").length;
+      const keptLines = truncated.split("\n").length;
+      text = truncated + `\n\n[Truncated: showing ${keptLines} of ${totalLines} lines (${(maxChars / 1024).toFixed(0)}KB of ${(result.content.length / 1024).toFixed(0)}KB). Use offset/limit parameters to read specific sections.]`;
+    }
+    return { content: [{ type: "text", text }], details: {} };
+  };
 }
 
 /** Build a pi-ai ToolCall object for existing executor functions */
@@ -169,7 +187,8 @@ export function getAgentToolDefinitions(): { name: string; description: string }
 }
 
 /** Get all tools available for agent chats, wrapped as AgentTool */
-export function getAgentTools(chatId: string, effects: ToolSideEffects): AgentTool[] {
+export function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768): AgentTool[] {
+  const wrapResult = createWrapResult(contextWindow);
   const tools: AgentTool[] = [];
 
   // Memory tools
