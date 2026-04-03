@@ -4,7 +4,7 @@ import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } fr
 import { streamSimple, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
 import type { AgentContext, AgentLoopConfig, StreamFn } from "@mariozechner/pi-agent-core";
-import { getChat, saveChat, getSettings, loadPendingState, savePendingState, clearPendingState } from "../services/chat-storage.js";
+import { getChat, saveChat, getSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
 import { chatMessagesToPiMessages } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { OllamaModel } from "../types.js";
@@ -460,7 +460,8 @@ async function handleChatStream(
     }
 
     // Create tools AFTER model discovery so we can pass the effective context window
-    const agentTools = isAgent ? getAgentTools(chat.id, effects, piModel.contextWindow) : undefined;
+    const project = chat.projectId ? await getProject(chat.projectId) : null;
+    const agentTools = isAgent ? getAgentTools(chat.id, effects, piModel.contextWindow, project?.path) : undefined;
 
     // Build agent context
     const context: AgentContext = {

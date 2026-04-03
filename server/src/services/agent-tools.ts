@@ -187,7 +187,8 @@ export function getAgentToolDefinitions(): { name: string; description: string }
 }
 
 /** Get all tools available for agent chats, wrapped as AgentTool */
-export function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768): AgentTool[] {
+export function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768, projectPath?: string): AgentTool[] {
+  const baseDir = projectPath || HOME;
   const wrapResult = createWrapResult(contextWindow);
   const tools: AgentTool[] = [];
 
@@ -250,31 +251,31 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
   tools.push({
     ...READ_FILE_TOOL,
     label: "read_file",
-    execute: async (_id, params) => wrapResult(await executeReadFile(params as Record<string, any>)),
+    execute: async (_id, params) => wrapResult(await executeReadFile(params as Record<string, any>, baseDir)),
   });
 
   tools.push({
     ...WRITE_FILE_TOOL,
     label: "write_file",
-    execute: async (_id, params) => wrapResult(await executeWriteFile(params as Record<string, any>)),
+    execute: async (_id, params) => wrapResult(await executeWriteFile(params as Record<string, any>, baseDir)),
   });
 
   tools.push({
     ...EDIT_FILE_TOOL,
     label: "edit_file",
-    execute: async (_id, params) => wrapResult(await executeEditFile(params as Record<string, any>)),
+    execute: async (_id, params) => wrapResult(await executeEditFile(params as Record<string, any>, baseDir)),
   });
 
   tools.push({
     ...LIST_FILES_TOOL,
     label: "list_files",
-    execute: async (_id, params) => wrapResult(await executeListFiles(params as Record<string, any>)),
+    execute: async (_id, params) => wrapResult(await executeListFiles(params as Record<string, any>, baseDir)),
   });
 
   tools.push({
     ...BASH_TOOL,
     label: "bash",
-    execute: async (_id, params) => wrapResult(await executeBash(params as Record<string, any>)),
+    execute: async (_id, params) => wrapResult(await executeBash(params as Record<string, any>, baseDir)),
   });
 
   tools.push({
@@ -286,7 +287,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
   tools.push({
     ...READ_PDF_TOOL,
     label: "read_pdf",
-    execute: async (_id, params) => wrapResult(await executeReadPdf(params as Record<string, any>)),
+    execute: async (_id, params) => wrapResult(await executeReadPdf(params as Record<string, any>, baseDir)),
   });
 
   // create_artifact — uses effects.onArtifact callback
@@ -731,20 +732,20 @@ export async function executeTool(
 
 // --- Internal executor functions (unchanged) ---
 
-/** Resolve a path relative to $HOME */
-function resolvePath(inputPath: string): string {
+/** Resolve a path relative to the base directory (project path or $HOME) */
+function resolvePath(inputPath: string, baseDir: string = HOME): string {
   if (inputPath.startsWith("~")) {
     return resolve(HOME, inputPath.slice(2));
   }
   if (inputPath.startsWith("/")) {
     return inputPath;
   }
-  return resolve(HOME, inputPath);
+  return resolve(baseDir, inputPath);
 }
 
-async function executeReadFile(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+async function executeReadFile(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
   try {
-    const filePath = resolvePath(args.path);
+    const filePath = resolvePath(args.path, baseDir);
     const content = await readFile(filePath, "utf-8");
     const lines = content.split("\n");
 
@@ -762,9 +763,9 @@ async function executeReadFile(args: Record<string, any>): Promise<{ content: st
   }
 }
 
-async function executeWriteFile(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+async function executeWriteFile(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
   try {
-    const filePath = resolvePath(args.path);
+    const filePath = resolvePath(args.path, baseDir);
     await mkdir(dirname(filePath), { recursive: true });
     await writeFile(filePath, args.content, "utf-8");
     return { content: `File written: ${filePath}`, isError: false };
@@ -773,9 +774,9 @@ async function executeWriteFile(args: Record<string, any>): Promise<{ content: s
   }
 }
 
-async function executeEditFile(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+async function executeEditFile(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
   try {
-    const filePath = resolvePath(args.path);
+    const filePath = resolvePath(args.path, baseDir);
     const content = await readFile(filePath, "utf-8");
 
     const occurrences = content.split(args.old_string).length - 1;
@@ -794,9 +795,9 @@ async function executeEditFile(args: Record<string, any>): Promise<{ content: st
   }
 }
 
-async function executeListFiles(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+async function executeListFiles(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
   try {
-    const basePath = resolvePath(args.path || "~");
+    const basePath = resolvePath(args.path || ".", baseDir);
 
     if (args.pattern) {
       // Use glob
@@ -837,7 +838,7 @@ async function executeRunPython(args: Record<string, any>): Promise<{ content: s
   }
 }
 
-async function executeBash(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+async function executeBash(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
   const timeout = (args.timeout || 30) * 1000;
 
   return new Promise((resolve) => {
@@ -847,7 +848,7 @@ async function executeBash(args: Record<string, any>): Promise<{ content: string
       {
         timeout,
         maxBuffer: 1024 * 1024, // 1MB
-        cwd: HOME,
+        cwd: baseDir,
         env: { ...process.env, HOME },
       },
       (error, stdout, stderr) => {
@@ -903,7 +904,7 @@ async function fetchPdfFromUrl(url: string, timeoutMs: number = 30000): Promise<
 /**
  * Execute the read_pdf tool using PyMuPDF via Python sandbox.
  */
-async function executeReadPdf(args: Record<string, any>): Promise<{ content: string; isError: boolean }> {
+async function executeReadPdf(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
   const pathOrUrl = args.path;
   if (!pathOrUrl) {
     return { content: "Missing required parameter: path", isError: true };
@@ -922,7 +923,7 @@ async function executeReadPdf(args: Record<string, any>): Promise<{ content: str
       pdfBuffer = await fetchPdfFromUrl(pathOrUrl);
     } else {
       // Local path - resolve and validate
-      filePath = resolvePath(pathOrUrl);
+      filePath = resolvePath(pathOrUrl, baseDir);
       try {
         pdfBuffer = await readFile(filePath);
       } catch (e: any) {
