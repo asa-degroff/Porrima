@@ -22,27 +22,55 @@ function estimateTokens(text: string): number {
  */
 export { estimateContextSize as estimateContextTokens };
 function estimateContextSize(messages: Chat["messages"], systemPrompt: string): number {
-  let total = estimateTokens(systemPrompt);
+  // If the most recent assistant message has actual LLM-reported usage,
+  // use that as a baseline — it includes tool definitions, system prompt,
+  // and framing overhead that character estimation misses.
+  let lastKnownUsage = 0;
+  let lastUsageIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant" && messages[i].usage?.totalTokens) {
+      lastKnownUsage = messages[i].usage!.totalTokens;
+      lastUsageIndex = i;
+      break;
+    }
+  }
+
+  // Character-based estimation for comparison / messages after last usage
+  let charEstimate = estimateTokens(systemPrompt);
   for (const m of messages) {
     if (m.role === "user") {
-      total += estimateTokens(m.content);
+      charEstimate += estimateTokens(m.content);
       if (m.images?.length) {
         // Rough estimate: ~256 tokens per image
-        total += m.images.length * 256;
+        charEstimate += m.images.length * 256;
       }
     } else if (m.role === "assistant") {
-      total += estimateTokens(m.content);
-      if (m.thinking) total += estimateTokens(m.thinking);
+      charEstimate += estimateTokens(m.content);
+      if (m.thinking) charEstimate += estimateTokens(m.thinking);
       // Tool calls/results add overhead
-      if (m.toolCalls) total += m.toolCalls.length * 50;
+      if (m.toolCalls) charEstimate += m.toolCalls.length * 50;
       if (m.toolResults) {
         for (const r of m.toolResults) {
-          total += estimateTokens(r.content) + 20; // content + framing overhead
+          charEstimate += estimateTokens(r.content) + 20; // content + framing overhead
         }
       }
     }
   }
-  return total;
+
+  if (lastKnownUsage > 0 && lastUsageIndex >= 0) {
+    // Add character estimate for messages AFTER the last usage checkpoint
+    let additionalTokens = 0;
+    for (let i = lastUsageIndex + 1; i < messages.length; i++) {
+      const m = messages[i];
+      additionalTokens += estimateTokens(m.content);
+      if (m.images?.length) additionalTokens += m.images.length * 256;
+    }
+    const usageBased = lastKnownUsage + additionalTokens;
+    // Use the higher of the two estimates
+    return Math.max(charEstimate, usageBased);
+  }
+
+  return charEstimate;
 }
 
 /**
