@@ -297,6 +297,8 @@ async function handleChatStream(
     // Track thinking duration
     thinkingStartTime: null as number | null,
     thinkingDurationMs: 0,
+    // Mid-turn compaction: set when usage > 85% during tool loop
+    needsMidTurnCompaction: false,
   };
 
   function resetAccumulators() {
@@ -315,6 +317,7 @@ async function handleChatStream(
     state.thinkingPromoted = false;
     state.thinkingStartTime = null;
     state.thinkingDurationMs = 0;
+    state.needsMidTurnCompaction = false;
   }
 
   function buildCurrentAssistantMessage(): ChatMessage {
@@ -417,7 +420,6 @@ async function handleChatStream(
   };
 
   const isAgent = chat.type === "agent" || chat.type === "bluesky";
-  const agentTools = isAgent ? getAgentTools(chat.id, effects) : undefined;
 
   // Load TTS settings
   const settings = await getSettings();
@@ -432,7 +434,7 @@ async function handleChatStream(
   let hitContextLimit = false;
   let lastUserMessage = userMessage; // tracks the current user message text for title gen / memory
 
-  console.log(`[chat] type=${chat.type} tools=${agentTools ? agentTools.map(t => t.name).join(",") : "none"} tts=${ttsEnabled}`);
+  console.log(`[chat] type=${chat.type} isAgent=${isAgent} tts=${ttsEnabled}`);
 
   try {
     // Discover model with timeout protection
@@ -456,6 +458,9 @@ async function handleChatStream(
       res.end();
       return;
     }
+
+    // Create tools AFTER model discovery so we can pass the effective context window
+    const agentTools = isAgent ? getAgentTools(chat.id, effects, piModel.contextWindow) : undefined;
 
     // Build agent context
     const context: AgentContext = {
@@ -806,6 +811,25 @@ async function handleChatStream(
             }
           }
 
+          // Mid-turn context protection: if usage > 85% during tool loop, break for compaction
+          if (stopReason === "toolUse" && !hitContextLimit) {
+            const effectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
+            let currentTokens = state.finalUsage?.totalTokens ?? 0;
+            // Fallback to character estimation if usage not reported
+            if (!currentTokens && chat.messages.length > 0) {
+              const { estimateContextTokens } = await import("../services/compaction.js");
+              currentTokens = estimateContextTokens(chat.messages, systemPrompt);
+            }
+            if (effectiveCW > 0 && currentTokens > 0) {
+              const usageRatio = currentTokens / effectiveCW;
+              if (usageRatio > 0.85) {
+                console.warn(`[chat] Mid-turn context overflow: ${currentTokens}/${effectiveCW} (${(usageRatio * 100).toFixed(0)}%) at iteration ${iterations} — breaking for compaction`);
+                turnAbortController.abort();
+                state.needsMidTurnCompaction = true;
+              }
+            }
+          }
+
           // Guard against runaway tool loops
           if (iterations >= MAX_ITERATIONS) {
             console.warn(`[chat] hit iteration limit (${MAX_ITERATIONS}), aborting`);
@@ -952,6 +976,134 @@ async function handleChatStream(
         // Don't continue to message persistence - we'll handle this below
         state.finalUsage = { input: 0, output: 0, totalTokens: 0 }; // Mark as failed
       }
+    }
+
+    // Mid-turn compaction: if we broke out of the tool loop due to context pressure,
+    // save progress, compact, rebuild context, and resume the agent loop
+    if (state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput) {
+      console.log(`[chat] Mid-turn compaction: saving progress and compacting`);
+
+      // 1. Save current progress as an in-progress assistant message
+      flushThinkingTimer();
+      const partialAssistant = buildCurrentAssistantMessage();
+      partialAssistant._inProgress = true;
+      const lastMsg = chat.messages[chat.messages.length - 1];
+      if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
+        chat.messages[chat.messages.length - 1] = partialAssistant;
+      } else {
+        chat.messages.push(partialAssistant);
+      }
+      await saveChat(chat);
+
+      // 2. Run compaction to free context space
+      const effectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
+      const emitCompacting = () => res.write(`event: compaction\ndata: ${JSON.stringify({ type: "mid_turn" })}\n\n`);
+      const emitKeepalive = () => res.write(`: keepalive\n\n`);
+      try {
+        const compaction = await truncateChatHistory(chat, effectiveCW, true, emitCompacting, emitKeepalive);
+        if (compaction?.truncated) {
+          await saveChat(chat);
+          console.log(`[chat] Mid-turn compaction: removed ${compaction.removedCount} messages, estimated ${compaction.estimatedTokenCount} tokens remaining`);
+
+          // Extract memories from removed messages before they're lost
+          if (isAgent && compaction.removedMessages?.length) {
+            preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages)
+              .catch(err => console.error("[compaction] pre-flush failed:", err));
+          }
+        }
+      } catch (compErr) {
+        console.error(`[chat] Mid-turn compaction failed:`, compErr);
+      }
+
+      // 3. Rebuild system prompt and context
+      if (isAgent) {
+        systemPrompt = await buildMemoryAugmentedPrompt(
+          chat.systemPrompt || "You are a helpful assistant.",
+          chat.messages, chat.id, chat.projectId
+        );
+      }
+      const resumeMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
+
+      // 4. Resume the agent loop with compacted context
+      const resumeContext: AgentContext = {
+        systemPrompt,
+        messages: resumeMessages,
+        tools: agentTools,
+      };
+      const resumeAbortController = new AbortController();
+      connectionAbortController.signal.addEventListener("abort", () => resumeAbortController.abort());
+
+      console.log(`[chat] Mid-turn compaction: resuming agent loop with ${resumeMessages.length} messages`);
+      res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: "\n\n*[Context compacted — continuing...]*\n\n" })}\n\n`);
+      state.fullText += "\n\n*[Context compacted — continuing...]*\n\n";
+
+      try {
+        const resumeStream = agentLoopContinue(resumeContext, config, resumeAbortController.signal, safeStreamFn);
+
+        for await (const event of resumeStream) {
+          if (event.type === "message_update") {
+            const ame = event.assistantMessageEvent;
+            if (ame.type === "text_delta") {
+              flushThinkingTimer();
+              state.fullText += ame.delta;
+              state.pendingText += ame.delta;
+              res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+            } else if (ame.type === "thinking_delta") {
+              if (state.thinkingStartTime === null) {
+                state.thinkingStartTime = Date.now();
+              }
+              state.thinkingText += ame.delta;
+              res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+            }
+          } else if (event.type === "tool_execution_start") {
+            flushThinkingTimer();
+            flushTextSegment();
+            const toolCall: ChatToolCall = {
+              id: event.toolCallId,
+              name: event.toolName,
+              arguments: event.args,
+            };
+            state.allToolCalls.push(toolCall);
+            state.segments.push({ seq: ++state.seqCounter, type: "tool_call", toolCall });
+            if (event.toolName !== "ask_user") {
+              res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
+            }
+          } else if (event.type === "tool_execution_end") {
+            if (event.toolName !== "ask_user") {
+              const resultText = event.result?.content?.[0]?.text || "";
+              const toolResult: ChatToolResult = {
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                content: resultText,
+                isError: event.isError,
+              };
+              state.allToolResults.push(toolResult);
+              const resultSegment: OutputSegment = { seq: ++state.seqCounter, type: "tool_result", toolResult };
+              state.segments.push(resultSegment);
+              res.write(`event: segment\ndata: ${JSON.stringify(resultSegment)}\n\n`);
+              res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: event.isError ? "error" : "done", result: resultText })}\n\n`);
+            }
+          } else if (event.type === "turn_end") {
+            const msg = event.message as AssistantMessage;
+            const sr = msg.stopReason || "stop";
+            if (msg.usage) {
+              state.finalUsage = { input: msg.usage.input, output: msg.usage.output, totalTokens: msg.usage.totalTokens };
+            }
+            console.log(`[chat] resume turn_end: stop=${sr} content=${state.fullText.length}ch tokens=${msg.usage?.totalTokens || "?"}`);
+            if (sr !== "toolUse") break;
+          }
+        }
+      } catch (resumeErr: any) {
+        console.error(`[chat] resume loop failed: ${resumeErr.message}`);
+      }
+
+      // Update the in-progress message with resumed content
+      const updatedMsg = buildCurrentAssistantMessage();
+      const lastAssistant = chat.messages[chat.messages.length - 1];
+      if (lastAssistant?.role === "assistant") {
+        chat.messages[chat.messages.length - 1] = updatedMsg;
+      }
+      state.needsMidTurnCompaction = false;
     }
 
     // Check for queued follow-up messages even if loop exited early (e.g., due to abort)
@@ -1662,13 +1814,17 @@ router.post("/edit", async (req, res) => {
     return res.status(400).json({ error: "messageIndex must point to a user message" });
   }
 
+  // Get the original message to preserve images BEFORE truncating
+  const originalMessage = chat.messages[messageIndex];
+  
   // Truncate everything from messageIndex onwards
   chat.messages = chat.messages.slice(0, messageIndex);
 
-  // Add edited user message
+  // Add edited user message, preserving images from the original
   const userMsg: ChatMessage = {
     role: "user",
     content: message,
+    images: originalMessage.images?.length ? originalMessage.images : undefined,
     timestamp: Date.now(),
   };
   chat.messages.push(userMsg);
