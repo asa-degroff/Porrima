@@ -270,7 +270,7 @@ async function* parseSSE(
  * This is a per-process cache; safe because llama.cpp connections are
  * to a single server per baseUrl.
  */
-let lastLoadedModel: { baseUrl: string; modelId: string } | null = null;
+let lastLoadedModel: { baseUrl: string; modelId: string; contextWindow?: number } | null = null;
 
 /** Clear the cached model state (e.g., after GPU coordination unloads slots). */
 export function invalidateLoadedModel() {
@@ -278,47 +278,67 @@ export function invalidateLoadedModel() {
 }
 
 /**
- * Ensure the target model is loaded on the llama.cpp server.
+ * Ensure the target model is loaded on the llama.cpp server with the right context window.
  * In router mode, calls POST /models/load which blocks until the model is ready.
+ * If the context window changed, the model is reloaded with the new size.
  * In single-model mode, the endpoint doesn't exist — we catch and ignore 404s.
  */
-async function ensureModelLoaded(baseUrl: string, modelId: string): Promise<void> {
-  // Skip if we already loaded this model
+async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow?: number): Promise<void> {
+  // Skip if we already loaded this model with the same (or larger) context window
   if (lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel?.modelId === modelId) {
-    return;
+    if (!contextWindow || (lastLoadedModel.contextWindow && lastLoadedModel.contextWindow >= contextWindow)) {
+      return;
+    }
+    // Context window increased — need to reload
+    console.log(`[openai-compat] Context window changed (${lastLoadedModel.contextWindow} → ${contextWindow}), reloading ${modelId}`);
   }
 
   try {
     // Unload the previous model first to free VRAM
-    if (lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel.modelId !== modelId) {
+    const needsUnload = lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel.modelId !== modelId;
+    const needsReload = lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel.modelId === modelId;
+    if (needsUnload || needsReload) {
       try {
         const unloadRes = await fetch(`${baseUrl}/models/unload`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: lastLoadedModel.modelId }),
+          body: JSON.stringify({ model: needsUnload ? lastLoadedModel!.modelId : modelId }),
           signal: AbortSignal.timeout(30_000),
         });
         if (unloadRes.ok) {
-          console.log(`[openai-compat] Unloaded previous model: ${lastLoadedModel.modelId}`);
+          console.log(`[openai-compat] Unloaded model: ${needsUnload ? lastLoadedModel!.modelId : modelId}`);
         }
       } catch {
         // Non-critical — model may already be unloaded or endpoint doesn't exist
       }
     }
 
+    const loadBody: any = { model: modelId };
+    if (contextWindow) {
+      loadBody.args = ["--ctx-size", String(contextWindow)];
+    }
+
     const res = await fetch(`${baseUrl}/models/load`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: modelId }),
+      body: JSON.stringify(loadBody),
       signal: AbortSignal.timeout(120_000), // Model loading can take a while
     });
 
     if (res.ok) {
-      console.log(`[openai-compat] Loaded model: ${modelId}`);
-      lastLoadedModel = { baseUrl, modelId };
+      console.log(`[openai-compat] Loaded model: ${modelId}${contextWindow ? ` (ctx=${contextWindow})` : ""}`);
+      lastLoadedModel = { baseUrl, modelId, contextWindow };
+    } else if (res.status === 400) {
+      // Model already running — check if context window needs updating
+      const text = await res.text().catch(() => "");
+      if (text.includes("already running") && contextWindow && lastLoadedModel?.contextWindow !== contextWindow) {
+        // Model is loaded but with wrong context window — need to reload
+        console.log(`[openai-compat] Model already running but context window may differ, updating cache`);
+      }
+      lastLoadedModel = { baseUrl, modelId, contextWindow: lastLoadedModel?.contextWindow ?? contextWindow };
     } else if (res.status === 404) {
       // Single-model mode — endpoint doesn't exist, proceed normally
-      lastLoadedModel = { baseUrl, modelId };
+      lastLoadedModel = { baseUrl, modelId, contextWindow };
     } else {
       const text = await res.text().catch(() => "");
       console.warn(`[openai-compat] /models/load returned ${res.status}: ${text}`);
@@ -362,7 +382,7 @@ export const streamOpenAICompat = (
       // Pre-load the model in router mode. This ensures the target model is
       // loaded and ready before we send the chat request. In single-model mode
       // this endpoint doesn't exist, so we catch and ignore errors.
-      await ensureModelLoaded(model.baseUrl, model.id);
+      await ensureModelLoaded(model.baseUrl, model.id, model.contextWindow);
 
       const messages = convertMessages(model, context);
       const body: any = {
