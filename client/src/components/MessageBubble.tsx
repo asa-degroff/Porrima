@@ -133,9 +133,11 @@ export const MessageBubble = memo(function MessageBubble({
 
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
+  const [editMinWidth, setEditMinWidth] = useState<number | undefined>(undefined);
   const [lightboxImage, setLightboxImage] = useState<ImageAttachment | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const bubbleRef = useRef<HTMLDivElement>(null);
 
   const openContextMenu = useCallback((pos: { x: number; y: number }) => {
     if (isUser && editable && !editing) setContextMenu(pos);
@@ -153,6 +155,9 @@ export const MessageBubble = memo(function MessageBubble({
   }, [editing]);
 
   const handleStartEdit = () => {
+    if (bubbleRef.current) {
+      setEditMinWidth(bubbleRef.current.offsetWidth);
+    }
     setEditText(message.content);
     setEditing(true);
   };
@@ -200,24 +205,28 @@ export const MessageBubble = memo(function MessageBubble({
             </svg>
           </button>
         )}
-        <div className={`flex flex-col ${isUser ? "items-end" : "items-start"} min-w-0 w-full`}>
+        <div className={`flex flex-col ${isUser ? "items-end" : "items-start"} min-w-0`}>
           <div
+            ref={bubbleRef}
             onContextMenu={isUser && editable && !editing ? (e: React.MouseEvent) => {
               e.preventDefault();
               setContextMenu({ x: e.clientX, y: e.clientY });
             } : undefined}
             {...(isUser && editable && !editing ? longPressProps : {})}
-            className={`rounded-2xl px-3 md:px-4 py-3 max-w-full ${
+            className={`rounded-2xl px-3 md:px-4 py-3 max-w-full min-w-fit ${
               isUser
                 ? "text-white/95"
                 : "text-white/90"
-            } ${message.queued ? "opacity-60" : ""} ${editing ? "w-full" : ""}`}
-            style={isUser ? {
-              backgroundColor: `rgba(var(--theme-secondary), 0.1)`,
-              border: `1px solid rgba(var(--theme-secondary), 0.15)`,
-            } : {
-              backgroundColor: 'rgba(255, 255, 255, 0.05)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
+            } ${message.queued ? "opacity-60" : ""}`}
+            style={{
+              ...(isUser ? {
+                backgroundColor: `rgba(var(--theme-secondary), 0.1)`,
+                border: `1px solid rgba(var(--theme-secondary), 0.15)`,
+              } : {
+                backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }),
+              ...(editing && editMinWidth ? { minWidth: editMinWidth } : {}),
             }}
           >
             {isUser && editing ? (
