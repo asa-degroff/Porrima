@@ -165,6 +165,96 @@ export interface GenerateProgress {
   totalSteps: number;
 }
 
+// Minimum free VRAM (in bytes) required before starting generation.
+// Image generation typically needs 6-10GB depending on resolution and model.
+const MIN_FREE_VRAM_BYTES = 6 * 1024 * 1024 * 1024; // 6 GB
+
+/**
+ * Wait until the ComfyUI GPU has enough free VRAM for image generation.
+ * Polls /system_stats and unloads LLM models if VRAM is insufficient.
+ * Returns true if VRAM is available, false if timed out.
+ */
+export async function waitForFreeVRAM(
+  minFreeBytes = MIN_FREE_VRAM_BYTES,
+  maxWaitMs = 120_000,
+  onWaiting?: () => void,
+): Promise<boolean> {
+  const baseUrl = await getBaseUrl();
+  const start = Date.now();
+  let warned = false;
+
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const res = await fetch(`${baseUrl}/system_stats`, { signal: AbortSignal.timeout(3000) });
+      if (res.ok) {
+        const stats = await res.json();
+        const devices = stats.devices || [];
+        // Check the first GPU device (ComfyUI's primary)
+        if (devices.length > 0) {
+          const gpu = devices[0];
+          const freeVram = gpu.vram_free || 0;
+          if (freeVram >= minFreeBytes) {
+            if (warned) console.log(`[comfyui] VRAM available: ${(freeVram / (1024 ** 3)).toFixed(1)}GB free`);
+            return true;
+          }
+
+          if (!warned) {
+            console.log(`[comfyui] Waiting for VRAM: ${(freeVram / (1024 ** 3)).toFixed(1)}GB free, need ${(minFreeBytes / (1024 ** 3)).toFixed(1)}GB`);
+            warned = true;
+            onWaiting?.();
+
+            // Try to free VRAM by unloading LLM models
+            try {
+              // Unload Ollama models
+              const { getSettings } = await import("./chat-storage.js");
+              const settings = await getSettings();
+              if (settings.defaultModelId) {
+                await fetch("http://localhost:11434/api/generate", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ model: settings.defaultModelId, prompt: "", keep_alive: "0s" }),
+                }).catch(() => {});
+              }
+              // Unload llama.cpp models
+              if (settings.llamacppEnabled) {
+                const lcUrl = settings.llamacppUrl || "http://localhost:8080";
+                const modelsRes = await fetch(`${lcUrl}/v1/models`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
+                if (modelsRes?.ok) {
+                  const modelsData = await modelsRes.json();
+                  for (const m of modelsData.data || []) {
+                    if (m.status?.value === "loaded") {
+                      await fetch(`${lcUrl}/models/unload`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ model: m.id }),
+                      }).catch(() => {});
+                    }
+                  }
+                }
+                const { invalidateLoadedModel } = await import("./openai-compat-provider.js");
+                invalidateLoadedModel();
+              }
+            } catch (err) {
+              console.warn("[comfyui] Failed to unload LLM models:", err);
+            }
+          }
+        } else {
+          // No GPU devices reported — ComfyUI might be CPU-only, proceed
+          return true;
+        }
+      }
+    } catch {
+      // ComfyUI unreachable — caller will handle
+      return false;
+    }
+
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+
+  console.warn(`[comfyui] VRAM wait timed out after ${maxWaitMs / 1000}s`);
+  return false;
+}
+
 /**
  * Generate image with state tracking.
  * Calls onLinkComfyUI with the promptId so the route can link it to our generation ID.
@@ -176,6 +266,9 @@ export async function generateImageWithState(
   onLinkComfyUI: (promptId: string) => void,
   onProgress?: (progress: GenerateProgress) => void
 ): Promise<{ imageData: Buffer; resolvedSeed: number }> {
+  // Ensure sufficient VRAM before starting — unloads LLM models if needed
+  await waitForFreeVRAM();
+
   const baseUrl = await getBaseUrl();
   const workflow = buildWorkflow(params, clientId);
   const resolvedSeed = (workflow["7"].inputs as any).seed as number;
