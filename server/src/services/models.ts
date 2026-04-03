@@ -273,7 +273,7 @@ export function invalidateModelCache() {
 }
 
 function supportsReasoning(family: string): boolean {
-  return family.startsWith("qwen3");
+  return family.startsWith("qwen3") || family.startsWith("gemma4");
 }
 
 /**

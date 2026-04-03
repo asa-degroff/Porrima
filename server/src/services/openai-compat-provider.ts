@@ -60,7 +60,14 @@ function convertMessages(model: Model<Api>, context: Context): any[] {
   const params: any[] = [];
 
   if (context.systemPrompt) {
-    params.push({ role: "system", content: sanitizeSurrogates(context.systemPrompt) });
+    // Gemma 4 models need /think directive prepended to reliably enable thinking
+    // output when tools are present. The chat_template_kwargs enable_thinking
+    // flag alone is insufficient with complex system prompts.
+    const needsThinkDirective = model.reasoning && model.id.toLowerCase().includes("gemma");
+    const systemContent = needsThinkDirective
+      ? `/think\n${context.systemPrompt}`
+      : context.systemPrompt;
+    params.push({ role: "system", content: sanitizeSurrogates(systemContent) });
   }
 
   for (let i = 0; i < transformed.length; i++) {
@@ -92,6 +99,7 @@ function convertMessages(model: Model<Api>, context: Context): any[] {
       const assistantMsg = msg as any;
       const textBlocks = assistantMsg.content.filter((b: any) => b.type === "text");
       const toolCalls = assistantMsg.content.filter((b: any) => b.type === "toolCall");
+      const thinkingBlocks = assistantMsg.content.filter((b: any) => b.type === "thinking");
 
       const nonEmptyText = textBlocks
         .filter((b: any) => b.type === "text" && b.text && b.text.trim().length > 0)
@@ -99,8 +107,15 @@ function convertMessages(model: Model<Api>, context: Context): any[] {
         .join("");
       const content = nonEmptyText ? sanitizeSurrogates(nonEmptyText) : null;
 
+      // Include reasoning_content for proper context replay (DeepSeek API convention)
+      const thinkingText = thinkingBlocks
+        .filter((b: any) => b.type === "thinking" && (b as any).thinking?.trim())
+        .map((b: any) => (b as any).thinking)
+        .join("\n");
+
       const openaiMsg: any = { role: "assistant" };
       if (content) openaiMsg.content = content;
+      if (thinkingText) openaiMsg.reasoning_content = sanitizeSurrogates(thinkingText);
 
       if (toolCalls.length > 0) {
         openaiMsg.tool_calls = toolCalls.map((tc: any) => ({
@@ -113,7 +128,7 @@ function convertMessages(model: Model<Api>, context: Context): any[] {
         }));
       }
 
-      if (!content && toolCalls.length === 0) continue;
+      if (!content && !thinkingText && toolCalls.length === 0) continue;
       params.push(openaiMsg);
     } else if (msg.role === "toolResult") {
       // Collect consecutive tool results
@@ -367,6 +382,10 @@ export const streamOpenAICompat = (
 
       if (context.tools && context.tools.length > 0) {
         body.tools = convertTools(context.tools);
+      }
+
+      if (model.reasoning) {
+        body.chat_template_kwargs = { enable_thinking: true };
       }
 
       const url = `${model.baseUrl}/v1/chat/completions`;
