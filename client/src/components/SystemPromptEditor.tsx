@@ -6,9 +6,10 @@ interface Props {
   onChange: (value: string) => void;
   disabled?: boolean;
   presets?: SystemPromptPreset[];
+  isAgent?: boolean;
 }
 
-export function SystemPromptEditor({ value, onChange, disabled, presets }: Props) {
+export function SystemPromptEditor({ value, onChange, disabled, presets, isAgent }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [localValue, setLocalValue] = useState(value);
@@ -45,11 +46,20 @@ export function SystemPromptEditor({ value, onChange, disabled, presets }: Props
   const matchingPreset = presets?.find((p) => p.content.trim() === localValue.trim());
   const hasPresets = presets && presets.length > 0;
 
-  const handlePresetSelect = (presetId: string) => {
-    const preset = presets?.find((p) => p.id === presetId);
-    if (preset) {
-      setLocalValue(preset.content);
-      onChange(preset.content.trim());
+  // In agent mode, no matching preset means using persona only (the "None" state)
+  const isNoneSelected = isAgent && !matchingPreset;
+
+  const handlePresetSelect = (presetId: string | null) => {
+    if (presetId === null) {
+      // "None" selected — clear to default (persona will be used on server)
+      setLocalValue("You are a helpful assistant.");
+      onChange("You are a helpful assistant.");
+    } else {
+      const preset = presets?.find((p) => p.id === presetId);
+      if (preset) {
+        setLocalValue(preset.content);
+        onChange(preset.content.trim());
+      }
     }
     setDropdownOpen(false);
   };
@@ -88,6 +98,8 @@ export function SystemPromptEditor({ value, onChange, disabled, presets }: Props
               className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border transition-all disabled:opacity-40 ${
                 matchingPreset
                   ? "hover:opacity-90"
+                  : isNoneSelected
+                  ? "bg-white/5 border-white/10 text-white/40 hover:bg-white/10 hover:text-white/60"
                   : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:text-white/70"
               }`}
               style={{
@@ -96,7 +108,7 @@ export function SystemPromptEditor({ value, onChange, disabled, presets }: Props
                 color: matchingPreset ? `rgba(var(--theme-primary-text))` : '',
               }}
             >
-              {matchingPreset ? matchingPreset.name || "Untitled" : "Custom"}
+              {matchingPreset ? (matchingPreset.name || "Untitled") : isNoneSelected ? "Add preset" : "Custom"}
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 width="10"
@@ -118,6 +130,22 @@ export function SystemPromptEditor({ value, onChange, disabled, presets }: Props
                   backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
                   borderColor: `rgba(var(--theme-primary-border))`,
                 }}>
+                {isAgent && (
+                  <button
+                    onClick={() => handlePresetSelect(null)}
+                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      isNoneSelected
+                        ? "text-white"
+                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    }`}
+                    style={{
+                      backgroundColor: isNoneSelected ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                      color: isNoneSelected ? `rgba(var(--theme-secondary-text))` : '',
+                    }}
+                  >
+                    None (persona only)
+                  </button>
+                )}
                 {presets.map((p) => (
                   <button
                     key={p.id}

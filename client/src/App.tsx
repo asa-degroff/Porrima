@@ -556,6 +556,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         selectedModelId={activeChat?.modelId || settings.defaultModelId || models[0]?.id || ""}
         systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}
         systemPromptPresets={settings.systemPromptPresets}
+        chatType={activeChat?.type}
         ttsAutoReadEnabled={playbackState.isPlaying || playbackState.isPaused}
         playbackState={playbackState}
         ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}

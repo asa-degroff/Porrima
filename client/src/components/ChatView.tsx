@@ -59,6 +59,7 @@ interface Props {
   selectedModelId: string;
   systemPrompt: string;
   systemPromptPresets?: SystemPromptPreset[];
+  chatType?: string;
   ttsAutoReadEnabled?: boolean;
   onTtsAutoReadToggle?: (enabled: boolean) => void;
   onReadAloud?: (text: string) => void;
@@ -104,6 +105,7 @@ export function ChatView({
   selectedModelId,
   systemPrompt,
   systemPromptPresets,
+  chatType,
   ttsAutoReadEnabled = false,
   playbackState,
   ttsBarVisible,
@@ -402,6 +404,7 @@ export function ChatView({
         onChange={onSystemPromptChange}
         disabled={streaming}
         presets={systemPromptPresets}
+        isAgent={chatType === "agent" || chatType === "bluesky"}
       />
 
       {/* Messages */}
