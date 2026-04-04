@@ -323,6 +323,23 @@ async function waitForModelUnloaded(baseUrl: string, modelId: string, maxWaitMs 
 }
 
 /**
+ * Query llama.cpp to find which model is actually loaded right now.
+ * Returns the model ID if exactly one model is in "loaded" state, or null.
+ */
+async function getActualLoadedModel(baseUrl: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const loaded = data.data?.filter((m: any) => m.status?.value === "loaded");
+    if (loaded?.length === 1) return loaded[0].id;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Ensure the target model is loaded on the llama.cpp server with the right context window.
  * In router mode, calls POST /models/load which blocks until the model is ready.
  * If the context window changed, the model is reloaded with the new size.
@@ -340,11 +357,18 @@ async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow
 
   try {
     // Unload the previous model first to free VRAM
-    const needsUnload = lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel.modelId !== modelId;
-    const needsReload = lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel.modelId === modelId;
+    const previousModelId = lastLoadedModel?.modelId;
+    const needsUnload = lastLoadedModel?.baseUrl === baseUrl && previousModelId !== modelId;
+    const needsReload = lastLoadedModel?.baseUrl === baseUrl && previousModelId === modelId;
+
+    // Invalidate cache before any model change so failures don't leave stale state
+    if (needsUnload) {
+      lastLoadedModel = null;
+    }
+
     if (needsUnload || needsReload) {
       try {
-        const unloadModelId = needsUnload ? lastLoadedModel!.modelId : modelId;
+        const unloadModelId = needsUnload ? previousModelId! : modelId;
         const unloadRes = await fetch(`${baseUrl}/models/unload`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -354,9 +378,11 @@ async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow
         if (unloadRes.ok) {
           console.log(`[openai-compat] Unloaded model: ${unloadModelId}`);
           await waitForModelUnloaded(baseUrl, unloadModelId);
+        } else {
+          console.warn(`[openai-compat] Unload returned ${unloadRes.status} for ${unloadModelId}`);
         }
-      } catch {
-        // Non-critical — model may already be unloaded or endpoint doesn't exist
+      } catch (err) {
+        console.warn(`[openai-compat] Unload failed:`, err instanceof Error ? err.message : err);
       }
     }
 
@@ -379,9 +405,41 @@ async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow
     } else if (res.status === 400) {
       const text = await res.text().catch(() => "");
       if (text.includes("already running")) {
-        // Model is running but may have the wrong context window.
-        // If we don't know what ctx it was loaded with, or the requested ctx
-        // is larger, unload and reload with the correct size.
+        // Verify which model is actually loaded on llama.cpp
+        const actualModel = await getActualLoadedModel(baseUrl);
+        if (actualModel && actualModel !== modelId) {
+          // A different model is running — unload it and retry
+          console.log(`[openai-compat] Expected ${modelId} but ${actualModel} is running, forcing switch`);
+          try {
+            await fetch(`${baseUrl}/models/unload`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ model: actualModel }),
+              signal: AbortSignal.timeout(30_000),
+            });
+            await waitForModelUnloaded(baseUrl, actualModel);
+            const retryRes = await fetch(`${baseUrl}/models/load`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(loadBody),
+              signal: AbortSignal.timeout(120_000),
+            });
+            if (retryRes.ok) {
+              await waitForModelReady(baseUrl, modelId);
+              console.log(`[openai-compat] Loaded model after forced switch: ${modelId}`);
+              lastLoadedModel = { baseUrl, modelId, contextWindow };
+              return;
+            }
+            console.warn(`[openai-compat] Retry load after forced unload returned ${retryRes.status}`);
+          } catch (err) {
+            console.warn(`[openai-compat] Forced switch failed:`, err instanceof Error ? err.message : err);
+          }
+          // Force switch failed — invalidate cache so next attempt retries
+          lastLoadedModel = null;
+          return;
+        }
+
+        // The requested model IS what's running — handle context window mismatch
         const knownCtx = lastLoadedModel?.contextWindow;
         if (contextWindow && (!knownCtx || knownCtx < contextWindow)) {
           console.log(`[openai-compat] Model already running (ctx=${knownCtx ?? "unknown"}) but need ctx=${contextWindow}, reloading`);
@@ -420,6 +478,10 @@ async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow
           await waitForModelReady(baseUrl, modelId).catch(() => {});
         }
         lastLoadedModel = { baseUrl, modelId, contextWindow: knownCtx ?? contextWindow };
+      } else {
+        // Non-"already running" 400 error — don't cache
+        console.warn(`[openai-compat] /models/load returned 400: ${text}`);
+        lastLoadedModel = null;
       }
     } else if (res.status === 404) {
       // Single-model mode — endpoint doesn't exist, proceed normally
@@ -427,9 +489,13 @@ async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow
     } else {
       const text = await res.text().catch(() => "");
       console.warn(`[openai-compat] /models/load returned ${res.status}: ${text}`);
+      // Don't cache — state is unknown
+      lastLoadedModel = null;
     }
   } catch (err) {
     console.warn(`[openai-compat] ensureModelLoaded failed:`, err instanceof Error ? err.message : err);
+    // Invalidate cache on any unexpected failure
+    lastLoadedModel = null;
   }
 }
 
