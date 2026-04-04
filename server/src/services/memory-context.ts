@@ -1,5 +1,6 @@
 import { embed } from "./embeddings.js";
 import { searchMemories, updateMemory, mmrRerank } from "./memory-storage.js";
+import { rerank, RERANK_INSTRUCTIONS } from "./reranker.js";
 import { loadPersona } from "./persona-store.js";
 import { loadUserDocument } from "./user-store.js";
 import type { ChatMessage } from "../types.js";
@@ -20,7 +21,8 @@ export async function buildMemoryAugmentedPrompt(
   baseSystemPrompt: string,
   recentMessages: ChatMessage[],
   chatId?: string,
-  projectId?: string
+  projectId?: string,
+  chatType?: string
 ): Promise<string> {
   try {
     // Load persona and inject it first
@@ -54,38 +56,52 @@ export async function buildMemoryAugmentedPrompt(
 
     if (userMessages) {
       const queryEmbedding = await embed(userMessages);
-      // Fetch more candidates to allow filtering/diversity selection
-      const results = await searchMemories(queryEmbedding, 15, new Date(), userMessages);
-      
+      // Fetch a larger candidate pool for reranking (30 up from 15)
+      const results = await searchMemories(queryEmbedding, 30, new Date(), userMessages);
+
+      // Rerank candidates using the cross-encoder for query-specific relevance
+      const instruction = RERANK_INSTRUCTIONS[chatType || "agent"];
+      const rerankResults = await rerank(
+        userMessages,
+        results.map((r) => r.memory.text),
+        instruction,
+        25 // Return top 25 from 30 candidates
+      );
+
+      // Replace RRF scores with reranker scores (0-1 calibrated relevance)
+      const rerankedResults = rerankResults.map(({ index, score }) => ({
+        ...results[index],
+        score,
+      }));
+
       // Separate current and superseded memories
-      const currentMemories = results.filter((r) => !r.memory.supersededBy);
-      const supersededMemories = results.filter((r) => r.memory.supersededBy);
-      
-      // Select top current memories (prioritize these)
-      const topCurrent = currentMemories
-        .filter((r) => r.score > 0.0002); // Lower threshold for current memories
-      
+      const currentMemories = rerankedResults.filter((r) => !r.memory.supersededBy);
+      const supersededMemories = rerankedResults.filter((r) => r.memory.supersededBy);
+
+      // Filter by reranker relevance threshold (scores are 0-1)
+      const topCurrent = currentMemories.filter((r) => r.score > 0.05);
+
       // Apply MMR re-ranking for diversity (reuse the query embedding)
       const diverseMemories = mmrRerank(topCurrent, queryEmbedding, 15, 0.7);
-      
+
       // Apply project scoping: boost project-matching memories to the top
       if (projectId) {
         diverseMemories.sort((a, b) => {
           const aMatch = a.memory.projectId === projectId ? 1 : 0;
           const bMatch = b.memory.projectId === projectId ? 1 : 0;
           if (aMatch !== bMatch) return bMatch - aMatch;
-          return b.score - a.score; // Fall back to score
+          return b.score - a.score;
         });
       }
-      
+
       const selected = diverseMemories.slice(0, 15);
-      
+
       // Select relevant superseded memories as "historical context"
       const topSuperseded = supersededMemories
-        .filter((r) => r.score > 0.0001) // Even lower threshold - these provide context
+        .filter((r) => r.score > 0.02) // Lower threshold for historical context
         .slice(0, 5);
-      
-      // Add superseded memories if they provide useful historical context
+
+      // Combine current + superseded
       const finalMemories = [...selected];
       if (topSuperseded.length > 0) {
         finalMemories.push(...topSuperseded.slice(0, 5));

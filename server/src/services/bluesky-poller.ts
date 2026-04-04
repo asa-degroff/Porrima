@@ -278,7 +278,8 @@ When Bluesky notifications arrive, you MUST use your tools to handle them — do
         blueskyToolPrompt,
         chat.messages,
         chat.id,
-        chat.projectId
+        chat.projectId,
+        "bluesky"
       );
 
       // Convert all messages except the last (the notification) to pi-ai format

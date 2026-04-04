@@ -113,7 +113,7 @@ router.get("/:id/rendered-prompt", async (req, res) => {
     if (cached) {
       systemPrompt = cached;
     } else {
-      systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages, chat.id, chat.projectId);
+      systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages, chat.id, chat.projectId, chat.type);
     }
   }
 

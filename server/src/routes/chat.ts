@@ -1020,7 +1020,7 @@ async function handleChatStream(
       if (isAgent) {
         systemPrompt = await buildMemoryAugmentedPrompt(
           chat.systemPrompt || "You are a helpful assistant.",
-          chat.messages, chat.id, chat.projectId
+          chat.messages, chat.id, chat.projectId, chat.type
         );
       }
       // Exclude the last assistant message (our in-progress accumulator) from
@@ -1180,7 +1180,7 @@ async function handleChatStream(
       }
       
       const followUpSystemPrompt = (chat.type === "agent" || chat.type === "bluesky")
-        ? await buildMemoryAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId)
+        ? await buildMemoryAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type)
         : chat.systemPrompt || "You are a helpful assistant.";
       
       // Recursively handle the follow-up with a fresh turn abort controller
@@ -1851,7 +1851,7 @@ router.post("/edit", async (req, res) => {
   // Build context with skills
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
   if (chat.type === "agent") {
-    systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages, chat.id, chat.projectId);
+    systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages, chat.id, chat.projectId, chat.type);
   }
   
   // Load settings for context window resolution
