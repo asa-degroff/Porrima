@@ -1,4 +1,5 @@
 import type { Chat, ChatMessage } from "../types.js";
+import { getNextArchiveSequence, saveArchives, type ContextArchive } from "./chat-storage.js";
 
 export interface CompactionResult {
   truncated: boolean;
@@ -157,26 +158,18 @@ export async function truncateBeforeSend(
 
   if (messagesToRemove <= 0) return noOp;
 
-  // Generate summary of removed messages before truncation
+  // Archive removed messages and generate indexed summary
   const removedMessages = messages.slice(1, keepFromIndex);
-  const summary = await generateCompactionSummary(removedMessages, chat.modelId, onKeepalive);
+  const indexedSummary = await archiveAndIndex(chat.id, removedMessages, chat.modelId, onKeepalive);
 
-  // Keep first message, insert summary, then recent messages
+  // Keep first message, insert indexed summary, then recent messages
   const firstMessage = messages[0];
   const recentMessages = messages.slice(keepFromIndex);
-  
-  // Preserve usage from the last removed message if available
-  const lastRemovedUsage = removedMessages.length > 0 
-    ? removedMessages[removedMessages.length - 1].usage 
-    : undefined;
-  
+
   const summaryMessage: typeof firstMessage = {
     role: "assistant",
-    content: summary, // Strip the prefix - UI will handle rendering
+    content: indexedSummary,
     thinking: undefined,
-    // Note: Summary messages intentionally DON'T inherit usage from removed messages.
-    // This prevents confusion in the TokenIndicator. The next real assistant response
-    // will have accurate usage data from Ollama's prompt_eval_count.
     timestamp: Date.now(),
     _isCompactionSummary: true,
     _compactedMessageCount: messagesToRemove,
@@ -268,6 +261,186 @@ Output ONLY the summary, no introduction or formatting.`;
   }
 }
 
+// ---------------------------------------------------------------------------
+// Indexed archival — replaces narrative summaries with structured indexes
+// ---------------------------------------------------------------------------
+
+/**
+ * Group removed messages into logical archive blocks:
+ * - Tool call + result pairs → one block each
+ * - User + assistant exchanges (no tools) → one block
+ * - Standalone messages → one block
+ */
+function groupIntoBlocks(messages: ChatMessage[]): ChatMessage[][] {
+  const blocks: ChatMessage[][] = [];
+  let i = 0;
+  while (i < messages.length) {
+    const m = messages[i];
+    // Assistant message with tool calls: include it + all subsequent tool results
+    if (m.role === "assistant" && m.toolCalls?.length) {
+      blocks.push([m]);
+      i++;
+      continue;
+    }
+    // User message: pair with next assistant response if available
+    if (m.role === "user") {
+      const block = [m];
+      if (i + 1 < messages.length && messages[i + 1].role === "assistant") {
+        block.push(messages[i + 1]);
+        i += 2;
+      } else {
+        i++;
+      }
+      blocks.push(block);
+      continue;
+    }
+    // Anything else: standalone block
+    blocks.push([m]);
+    i++;
+  }
+  return blocks;
+}
+
+/** Format a block of messages into readable text for the index description. */
+function blockToText(block: ChatMessage[]): string {
+  const parts: string[] = [];
+  for (const m of block) {
+    if (m.role === "user") {
+      parts.push(`user: ${m.content.slice(0, 200)}`);
+    } else if (m.role === "assistant") {
+      if (m.toolCalls?.length) {
+        for (const tc of m.toolCalls) {
+          parts.push(`tool: ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 100)})`);
+        }
+        if (m.toolResults?.length) {
+          for (const tr of m.toolResults) {
+            parts.push(`result [${tr.toolName}]: ${tr.content.slice(0, 200)}`);
+          }
+        }
+      }
+      if (m.content) {
+        parts.push(`assistant: ${m.content.slice(0, 200)}`);
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
+/**
+ * Archive removed messages and generate an indexed summary.
+ * Returns the summary text to insert into the chat in place of removed messages.
+ */
+async function archiveAndIndex(
+  chatId: string,
+  removedMessages: ChatMessage[],
+  modelId: string,
+  onKeepalive?: () => void,
+): Promise<string> {
+  if (removedMessages.length === 0) return "";
+
+  const blocks = groupIntoBlocks(removedMessages);
+  if (blocks.length === 0) return "";
+
+  // Assign archive IDs
+  let seq = getNextArchiveSequence(chatId);
+  const shortChatId = chatId.slice(0, 8);
+  const archives: ContextArchive[] = [];
+  const blockDescriptions: Array<{ id: string; text: string }> = [];
+
+  for (const block of blocks) {
+    const id = `archive:${shortChatId}:${String(seq).padStart(3, "0")}`;
+    const text = blockToText(block);
+    const tokens = block.reduce((sum, m) => {
+      let t = estimateTokens(m.content);
+      if (m.toolResults) for (const r of m.toolResults) t += estimateTokens(r.content);
+      if (m.thinking) t += estimateTokens(m.thinking);
+      return sum + t;
+    }, 0);
+
+    archives.push({
+      id,
+      chatId,
+      sequenceNum: seq,
+      messages: block,
+      indexEntry: "", // filled by LLM below
+      messageCount: block.length,
+      estimatedTokens: tokens,
+      createdAt: new Date().toISOString(),
+    });
+    blockDescriptions.push({ id, text });
+    seq++;
+  }
+
+  // Generate index descriptions via LLM
+  const { streamChat } = await import("./agent.js");
+
+  const inputParts = blockDescriptions.map(
+    (b) => `[${b.id}]\n${b.text.slice(0, 500)}`
+  ).join("\n\n---\n\n");
+
+  const systemPrompt = `You are generating a structured index of conversation content being archived.
+For each block below (identified by its archive ID), write a ONE-LINE description of what it contains.
+
+Format your response as exactly one line per block:
+${blockDescriptions.map((b) => `- ${b.id} — <description>`).join("\n")}
+
+Focus on WHAT the block contains and WHY it might be useful later:
+- Tool outputs: what command/file/search was run and what it revealed
+- Code changes: what file was modified and what the change accomplished
+- Findings: what was discovered or decided
+- Conversations: what topic was discussed
+
+Output ONLY the formatted lines, nothing else.`;
+
+  const keepaliveInterval = onKeepalive ? setInterval(onKeepalive, 10_000) : null;
+
+  try {
+    const result = await streamChat(
+      modelId,
+      [{ role: "user", content: inputParts, timestamp: Date.now() }],
+      systemPrompt,
+      () => {},
+    );
+
+    // Parse index entries from LLM output
+    const lines = result.content.trim().split("\n");
+    for (const line of lines) {
+      const match = line.match(/^-\s*(archive:\S+)\s*[—–-]\s*(.+)$/);
+      if (match) {
+        const archive = archives.find((a) => a.id === match[1]);
+        if (archive) archive.indexEntry = match[2].trim();
+      }
+    }
+
+    // Fill any missing entries with a generic description
+    for (const a of archives) {
+      if (!a.indexEntry) {
+        const preview = blockToText(a.messages).slice(0, 80);
+        a.indexEntry = preview || "conversation context";
+      }
+    }
+  } catch (err) {
+    console.error("[compaction] Index generation failed, using fallback descriptions:", err);
+    for (const a of archives) {
+      const preview = blockToText(a.messages).slice(0, 80);
+      a.indexEntry = preview || "conversation context";
+    }
+  } finally {
+    if (keepaliveInterval) clearInterval(keepaliveInterval);
+  }
+
+  // Persist archives
+  saveArchives(archives);
+  console.log(`[compaction] Archived ${archives.length} blocks for chat ${chatId}`);
+
+  // Build the indexed summary text
+  const indexLines = archives
+    .map((a) => `- ${a.id} — ${a.indexEntry}`)
+    .join("\n");
+
+  return `[Compacted context — use read_archived_context to retrieve details]\nArchived blocks:\n${indexLines}`;
+}
+
 /**
  * Truncate chat history to fit within the context window (post-response).
  *
@@ -349,20 +522,12 @@ export async function truncateChatHistory(
   const removedMessages = messages.slice(1, keepFromIndex);
   const recentMessages = messages.slice(keepFromIndex);
 
-  // Generate summary of removed messages to preserve continuity
-  const summary = await generateCompactionSummary(removedMessages, chat.modelId, onKeepalive);
-
-  // Preserve usage from the last removed message if available
-  const lastRemovedUsage = removedMessages.length > 0
-    ? removedMessages[removedMessages.length - 1].usage
-    : undefined;
+  // Archive removed messages and generate indexed summary
+  const indexedSummary = await archiveAndIndex(chat.id, removedMessages, chat.modelId, onKeepalive);
 
   const summaryMessage: ChatMessage = {
     role: "assistant",
-    content: summary, // Strip the prefix - UI will handle rendering
-    // Note: Summary messages intentionally DON'T inherit usage from removed messages.
-    // This prevents confusion in the TokenIndicator. The next real assistant response
-    // will have accurate usage data from Ollama's prompt_eval_count.
+    content: indexedSummary,
     timestamp: Date.now(),
     _isCompactionSummary: true,
     _compactedMessageCount: messagesToRemove,

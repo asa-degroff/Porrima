@@ -217,6 +217,44 @@ export function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id);
   `);
 
+  // ---------------------------------------------------------------------------
+  // Context archives (indexed compaction — preserves full-fidelity messages)
+  // ---------------------------------------------------------------------------
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS context_archives (
+      id TEXT PRIMARY KEY,
+      chatId TEXT NOT NULL,
+      sequenceNum INTEGER NOT NULL,
+      messages JSON NOT NULL,
+      indexEntry TEXT NOT NULL,
+      messageCount INTEGER NOT NULL,
+      estimatedTokens INTEGER,
+      createdAt TEXT NOT NULL,
+      UNIQUE(chatId, sequenceNum)
+    );
+    CREATE INDEX IF NOT EXISTS idx_archives_chat ON context_archives(chatId);
+  `);
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS context_archives_fts USING fts5(
+      content,
+      indexEntry,
+      chatId UNINDEXED,
+      content='context_archives',
+      content_rowid='rowid'
+    );
+  `);
+
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS context_archives_ai AFTER INSERT ON context_archives BEGIN
+      INSERT INTO context_archives_fts(rowid, content, indexEntry, chatId) VALUES (new.rowid, new.messages, new.indexEntry, new.chatId);
+    END;
+    CREATE TRIGGER IF NOT EXISTS context_archives_ad AFTER DELETE ON context_archives BEGIN
+      INSERT INTO context_archives_fts(context_archives_fts, rowid, content, indexEntry, chatId) VALUES('delete', old.rowid, old.messages, old.indexEntry, old.chatId);
+    END;
+  `);
+
   // Auto-add activeSkills column if upgrading from earlier schema
   const cols = db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === "activeSkills")) {
@@ -1224,4 +1262,127 @@ export async function saveUserUIState(state: Partial<UserUIState>): Promise<void
     INSERT OR REPLACE INTO user_ui_state (key, value, updatedAt)
     VALUES (?, ?, ?)
   `).run(UI_STATE_KEY, JSON.stringify(merged), new Date().toISOString());
+}
+
+// ---------------------------------------------------------------------------
+// Context Archives (indexed compaction)
+// ---------------------------------------------------------------------------
+
+export interface ContextArchive {
+  id: string;
+  chatId: string;
+  sequenceNum: number;
+  messages: ChatMessage[];
+  indexEntry: string;
+  messageCount: number;
+  estimatedTokens: number;
+  createdAt: string;
+}
+
+/** Get the next sequence number for a chat's archives. */
+export function getNextArchiveSequence(chatId: string): number {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT MAX(sequenceNum) as maxSeq FROM context_archives WHERE chatId = ?"
+  ).get(chatId) as { maxSeq: number | null } | undefined;
+  return (row?.maxSeq ?? 0) + 1;
+}
+
+/** Save a batch of archive blocks for a single compaction event. */
+export function saveArchives(archives: ContextArchive[]): void {
+  const db = getDb();
+  const insert = db.prepare(`
+    INSERT OR REPLACE INTO context_archives (id, chatId, sequenceNum, messages, indexEntry, messageCount, estimatedTokens, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const tx = db.transaction(() => {
+    for (const a of archives) {
+      // Store messages as JSON; the FTS trigger indexes the raw JSON (which contains the text)
+      insert.run(a.id, a.chatId, a.sequenceNum, JSON.stringify(a.messages), a.indexEntry, a.messageCount, a.estimatedTokens, a.createdAt);
+    }
+  });
+  tx();
+}
+
+/** Retrieve a single archive block by ID. */
+export function getArchive(id: string): ContextArchive | null {
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM context_archives WHERE id = ?").get(id) as any;
+  if (!row) return null;
+  return {
+    ...row,
+    messages: JSON.parse(row.messages),
+  };
+}
+
+/** Search archives via FTS5. Returns matches with archive metadata. */
+export function searchArchives(
+  query: string,
+  opts: { chatId?: string; limit?: number } = {}
+): Array<{ id: string; chatId: string; indexEntry: string; rank: number }> {
+  const db = getDb();
+  const limit = opts.limit ?? 10;
+
+  // Escape special FTS5 characters and try phrase match first
+  const escaped = query.replace(/['"]/g, "");
+  let sql: string;
+  let params: any[];
+
+  if (opts.chatId) {
+    sql = `
+      SELECT ca.id, ca.chatId, ca.indexEntry, f.rank
+      FROM context_archives_fts f
+      JOIN context_archives ca ON ca.rowid = f.rowid
+      WHERE f.context_archives_fts MATCH ?
+        AND f.chatId = ?
+      ORDER BY f.rank LIMIT ?
+    `;
+    params = [`"${escaped}"`, opts.chatId, limit];
+  } else {
+    sql = `
+      SELECT ca.id, ca.chatId, ca.indexEntry, f.rank
+      FROM context_archives_fts f
+      JOIN context_archives ca ON ca.rowid = f.rowid
+      WHERE f.context_archives_fts MATCH ?
+      ORDER BY f.rank LIMIT ?
+    `;
+    params = [`"${escaped}"`, limit];
+  }
+
+  try {
+    const results = db.prepare(sql).all(...params) as any[];
+    if (results.length > 0) return results;
+  } catch { /* phrase match failed, try term-based */ }
+
+  // Fallback: OR-based term search
+  const terms = escaped.split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return [];
+  const termQuery = terms.map((t) => `"${t}"`).join(" OR ");
+
+  if (opts.chatId) {
+    sql = `
+      SELECT ca.id, ca.chatId, ca.indexEntry, f.rank
+      FROM context_archives_fts f
+      JOIN context_archives ca ON ca.rowid = f.rowid
+      WHERE f.context_archives_fts MATCH ?
+        AND f.chatId = ?
+      ORDER BY f.rank LIMIT ?
+    `;
+    params = [termQuery, opts.chatId, limit];
+  } else {
+    sql = `
+      SELECT ca.id, ca.chatId, ca.indexEntry, f.rank
+      FROM context_archives_fts f
+      JOIN context_archives ca ON ca.rowid = f.rowid
+      WHERE f.context_archives_fts MATCH ?
+      ORDER BY f.rank LIMIT ?
+    `;
+    params = [termQuery, limit];
+  }
+
+  try {
+    return db.prepare(sql).all(...params) as any[];
+  } catch {
+    return [];
+  }
 }

@@ -5,7 +5,7 @@ import {
   getMemoryById,
   searchMemories,
 } from "./memory-storage.js";
-import { searchChatMessages, getChatMessageRange, getChatTitle } from "./chat-storage.js";
+import { searchChatMessages, getChatMessageRange, getChatTitle, getArchive, searchArchives } from "./chat-storage.js";
 import { dedupAndSave } from "./memory-extraction.js";
 import type { Tool, ToolCall } from "@mariozechner/pi-ai";
 import type { MemoryCategory } from "../types.js";
@@ -88,6 +88,14 @@ export const MEMORY_TOOLS: Tool[] = [
       limit: Type.Optional(
         Type.Number({ description: "Max matches to return (default 5)", minimum: 1, maximum: 50 })
       ),
+    }),
+  },
+  {
+    name: "read_archived_context",
+    description:
+      "Retrieve the full content of an archived context block by its ID. Use this when you see an archive reference (e.g. archive:xxxx:001) in a compaction summary and need the exact details — tool outputs, code, reasoning traces.",
+    parameters: Type.Object({
+      archive_id: Type.String({ description: "Archive block ID (e.g. archive:abc12345:001)" }),
     }),
   },
 ];
@@ -260,7 +268,13 @@ export async function executeMemoryTool(
         limit: resultLimit,
       });
 
-      if (matches.length === 0) {
+      // Also search archived context blocks (cross-chat)
+      const archiveMatches = searchArchives(query, {
+        chatId: targetChatId,
+        limit: Math.min(5, resultLimit),
+      });
+
+      if (matches.length === 0 && archiveMatches.length === 0) {
         const scope = targetChatId
           ? `conversation "${getChatTitle(targetChatId) || targetChatId}"`
           : "any conversation";
@@ -315,10 +329,59 @@ export async function executeMemoryTool(
         sections.push(chatLabel + messageGroups.join("\n  ...\n"));
       }
 
+      // Append archive matches if any
+      if (archiveMatches.length > 0) {
+        sections.push("\n--- Archived Context ---");
+        for (const am of archiveMatches) {
+          const chatLabel = targetChatId ? "" : ` (${getChatTitle(am.chatId) || am.chatId})`;
+          sections.push(`  [${am.id}]${chatLabel}: ${am.indexEntry}`);
+        }
+        sections.push("  Use read_archived_context(archive_id) to retrieve full content.");
+      }
+
+      const totalMatches = matches.length + archiveMatches.length;
       return {
-        content: `Found ${matches.length} matching message(s):\n\n${sections.join("\n")}`,
+        content: `Found ${totalMatches} match(es) (${matches.length} messages, ${archiveMatches.length} archived):\n\n${sections.join("\n")}`,
         isError: false,
       };
+    }
+
+    case "read_archived_context": {
+      const { archive_id } = toolCall.arguments;
+      if (!archive_id) return { content: "Missing archive_id", isError: true };
+
+      const archive = getArchive(archive_id);
+      if (!archive) {
+        return { content: `Archive block not found: ${archive_id}`, isError: false };
+      }
+
+      // Format the archived messages as readable conversation text
+      const lines: string[] = [];
+      lines.push(`Archive: ${archive.id} (${archive.messageCount} messages, ~${archive.estimatedTokens} tokens)`);
+      lines.push(`From chat: ${getChatTitle(archive.chatId) || archive.chatId}`);
+      lines.push(`Archived: ${archive.createdAt.slice(0, 10)}`);
+      lines.push("---");
+
+      for (const m of archive.messages) {
+        if (m.role === "user") {
+          lines.push(`user: ${m.content}`);
+        } else if (m.role === "assistant") {
+          if (m.thinking) lines.push(`thinking: ${m.thinking}`);
+          if (m.content) lines.push(`assistant: ${m.content}`);
+          if (m.toolCalls?.length) {
+            for (const tc of m.toolCalls) {
+              lines.push(`tool_call: ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 500)})`);
+            }
+          }
+          if (m.toolResults?.length) {
+            for (const tr of m.toolResults) {
+              lines.push(`tool_result [${tr.toolName}]: ${tr.content}`);
+            }
+          }
+        }
+      }
+
+      return { content: lines.join("\n"), isError: false };
     }
 
     default:
