@@ -539,6 +539,9 @@ export function useChat(chatId: string | null) {
         // Reset streaming accumulators for the next response
         bg.content = "";
         bg.thinking = "";
+        bg.thinkingActive = false;
+        bg.thinkingAccumulatedMs = 0;
+        bg.thinkingLastStart = 0;
         bg.tools = [];
         bg.artifacts = [];
         bg.visuals = [];
@@ -549,6 +552,9 @@ export function useChat(chatId: string | null) {
         if (activeChatIdRef.current === streamChatId) {
           streamingContentRef.current = "";
           setStreamingThinking("");
+          setStreamingThinkingActive(false);
+          setStreamingThinkingAccumulatedMs(0);
+          streamingThinkingLastStartRef.current = 0;
           setActiveTools([]);
           setArtifacts([]);
           setGeneratedImages([]);
