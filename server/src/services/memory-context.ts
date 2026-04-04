@@ -1,6 +1,6 @@
 import { embed } from "./embeddings.js";
 import { searchMemories, updateMemory, mmrRerank } from "./memory-storage.js";
-import { rerank, RERANK_INSTRUCTIONS } from "./reranker.js";
+import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { loadPersona } from "./persona-store.js";
 import { loadUserDocument } from "./user-store.js";
 import type { ChatMessage } from "../types.js";
@@ -61,7 +61,7 @@ export async function buildMemoryAugmentedPrompt(
 
       // Rerank candidates using the cross-encoder for query-specific relevance
       const instruction = RERANK_INSTRUCTIONS[chatType || "agent"];
-      const rerankResults = await rerank(
+      const rerankOutput: RerankOutput = await rerank(
         userMessages,
         results.map((r) => r.memory.text),
         instruction,
@@ -69,7 +69,7 @@ export async function buildMemoryAugmentedPrompt(
       );
 
       // Replace RRF scores with reranker scores (0-1 calibrated relevance)
-      const rerankedResults = rerankResults.map(({ index, score }) => ({
+      const rerankedResults = rerankOutput.results.map(({ index, score }) => ({
         ...results[index],
         score,
       }));
@@ -105,6 +105,18 @@ export async function buildMemoryAugmentedPrompt(
       const finalMemories = [...selected];
       if (topSuperseded.length > 0) {
         finalMemories.push(...topSuperseded.slice(0, 5));
+      }
+
+      // --- Retrieval pipeline logging ---
+      const allScores = rerankOutput.results.map((r) => r.score);
+      const queryPreview = userMessages.length > 120 ? userMessages.slice(0, 120) + "..." : userMessages;
+      console.log(`[memory-retrieval] query="${queryPreview}" type=${chatType || "agent"} reranker=${rerankOutput.usedModel ? "model" : "fallback"} latency=${rerankOutput.latencyMs}ms`);
+      console.log(`[memory-retrieval] candidates=${results.length} reranked=${rerankOutput.results.length} scores: min=${Math.min(...allScores).toFixed(4)} max=${Math.max(...allScores).toFixed(4)} median=${allScores.sort((a, b) => a - b)[Math.floor(allScores.length / 2)]?.toFixed(4) ?? "?"}`);
+      console.log(`[memory-retrieval] current: ${currentMemories.length} total, ${topCurrent.length} above threshold (0.05), ${currentMemories.length - topCurrent.length} filtered`);
+      console.log(`[memory-retrieval] superseded: ${supersededMemories.length} total, ${topSuperseded.length} above threshold (0.02)`);
+      console.log(`[memory-retrieval] selected: ${selected.length} current + ${topSuperseded.length} superseded = ${finalMemories.length} injected`);
+      if (finalMemories.length > 0) {
+        console.log(`[memory-retrieval] top memories: ${finalMemories.slice(0, 5).map((r) => `[${r.score.toFixed(3)}] ${r.memory.text.slice(0, 60)}...`).join(" | ")}`);
       }
 
       if (finalMemories.length > 0) {

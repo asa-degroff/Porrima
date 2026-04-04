@@ -39,13 +39,21 @@ interface RerankResponse {
  * @returns Sorted array of { index, score } where index maps to the input documents array.
  *          Falls back to original order if the reranker is unavailable.
  */
+export interface RerankOutput {
+  results: Array<{ index: number; score: number }>;
+  usedModel: boolean;
+  latencyMs: number;
+}
+
 export async function rerank(
   query: string,
   documents: string[],
   instruction?: string,
   topN?: number
-): Promise<Array<{ index: number; score: number }>> {
-  if (documents.length === 0) return [];
+): Promise<RerankOutput> {
+  if (documents.length === 0) return { results: [], usedModel: false, latencyMs: 0 };
+
+  const start = Date.now();
 
   // Build the instruction-aware query in Qwen3-Reranker format
   const formattedQuery = instruction
@@ -67,20 +75,21 @@ export async function rerank(
 
     if (!res.ok) {
       console.warn(`[reranker] /v1/rerank returned ${res.status}`);
-      return fallbackOrder(documents.length, topN);
+      return { results: fallbackOrder(documents.length, topN), usedModel: false, latencyMs: Date.now() - start };
     }
 
     const data = (await res.json()) as RerankResponse;
-    return data.results.map((r) => ({
-      index: r.index,
-      score: r.relevance_score,
-    }));
+    return {
+      results: data.results.map((r) => ({ index: r.index, score: r.relevance_score })),
+      usedModel: true,
+      latencyMs: Date.now() - start,
+    };
   } catch (err) {
     console.warn(
       `[reranker] unavailable, using fallback:`,
       err instanceof Error ? err.message : err
     );
-    return fallbackOrder(documents.length, topN);
+    return { results: fallbackOrder(documents.length, topN), usedModel: false, latencyMs: Date.now() - start };
   }
 }
 
