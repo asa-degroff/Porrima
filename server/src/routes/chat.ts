@@ -979,10 +979,16 @@ async function handleChatStream(
       }
     }
 
-    // Mid-turn compaction: if we broke out of the tool loop due to context pressure,
-    // save progress, compact, rebuild context, and resume the agent loop
-    if (state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput) {
-      console.log(`[chat] Mid-turn compaction: saving progress and compacting`);
+    // Mid-turn compaction loop: compact and resume as many times as needed.
+    // Long-running tool chains can exceed the context window multiple times within
+    // a single user turn. Each cycle archives the overflow, compacts, and resumes.
+    const MAX_COMPACTION_CYCLES = 5;
+    let compactionCycle = 0;
+
+    while (state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && compactionCycle < MAX_COMPACTION_CYCLES) {
+      compactionCycle++;
+      state.needsMidTurnCompaction = false;
+      console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: saving progress and compacting`);
 
       // 1. Save current progress as an in-progress assistant message
       flushThinkingTimer();
@@ -998,13 +1004,13 @@ async function handleChatStream(
 
       // 2. Run compaction to free context space
       const effectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
-      const emitCompacting = () => res.write(`event: compaction\ndata: ${JSON.stringify({ type: "mid_turn" })}\n\n`);
+      const emitCompacting = () => res.write(`event: compaction\ndata: ${JSON.stringify({ type: "mid_turn", cycle: compactionCycle })}\n\n`);
       const emitKeepalive = () => res.write(`: keepalive\n\n`);
       try {
         const compaction = await truncateChatHistory(chat, effectiveCW, true, emitCompacting, emitKeepalive);
         if (compaction?.truncated) {
           await saveChat(chat);
-          console.log(`[chat] Mid-turn compaction: removed ${compaction.removedCount} messages, estimated ${compaction.estimatedTokenCount} tokens remaining`);
+          console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: removed ${compaction.removedCount} messages, estimated ${compaction.estimatedTokenCount} tokens remaining`);
 
           // Extract memories from removed messages before they're lost
           if (isAgent && compaction.removedMessages?.length) {
@@ -1013,7 +1019,8 @@ async function handleChatStream(
           }
         }
       } catch (compErr) {
-        console.error(`[chat] Mid-turn compaction failed:`, compErr);
+        console.error(`[chat] Mid-turn compaction cycle ${compactionCycle} failed:`, compErr);
+        break;
       }
 
       // 3. Rebuild system prompt and context
@@ -1023,9 +1030,6 @@ async function handleChatStream(
           chat.messages, chat.id, chat.projectId, chat.type
         );
       }
-      // Exclude the last assistant message (our in-progress accumulator) from
-      // the resumed context. agentLoopContinue requires the last message to be
-      // a user or toolResult — not an assistant message.
       const messagesForResume = chat.messages.slice(
         0,
         chat.messages.length > 0 && chat.messages[chat.messages.length - 1].role === "assistant"
@@ -1043,9 +1047,9 @@ async function handleChatStream(
       const resumeAbortController = new AbortController();
       connectionAbortController.signal.addEventListener("abort", () => resumeAbortController.abort());
 
-      console.log(`[chat] Mid-turn compaction: resuming agent loop with ${resumeMessages.length} messages (excluded in-progress assistant)`);
-      res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: "\n\n*[Context compacted — continuing...]*\n\n" })}\n\n`);
-      state.fullText += "\n\n*[Context compacted — continuing...]*\n\n";
+      console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: resuming agent loop with ${resumeMessages.length} messages`);
+      res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: `\n\n*[Context compacted (cycle ${compactionCycle}) — continuing...]*\n\n` })}\n\n`);
+      state.fullText += `\n\n*[Context compacted (cycle ${compactionCycle}) — continuing...]*\n\n`;
 
       try {
         const resumeStream = agentLoopContinue(resumeContext, config, resumeAbortController.signal, safeStreamFn);
@@ -1099,12 +1103,26 @@ async function handleChatStream(
             if (msg.usage) {
               state.finalUsage = { input: msg.usage.input, output: msg.usage.output, totalTokens: msg.usage.totalTokens };
             }
-            console.log(`[chat] resume turn_end: stop=${sr} content=${state.fullText.length}ch tokens=${msg.usage?.totalTokens || "?"}`);
+            console.log(`[chat] resume turn_end (cycle ${compactionCycle}): stop=${sr} content=${state.fullText.length}ch tokens=${msg.usage?.totalTokens || "?"}`);
             if (sr !== "toolUse") break;
+
+            // Check for overflow — if hit, set flag and break to trigger another compaction cycle
+            const resumeEffectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
+            let resumeTokens = state.finalUsage?.totalTokens ?? 0;
+            if (!resumeTokens) {
+              const { estimateContextTokens } = await import("../services/compaction.js");
+              resumeTokens = estimateContextTokens(chat.messages, systemPrompt);
+            }
+            if (resumeEffectiveCW > 0 && resumeTokens > 0 && resumeTokens / resumeEffectiveCW > 0.85) {
+              console.warn(`[chat] Resume loop overflow (cycle ${compactionCycle}): ${resumeTokens}/${resumeEffectiveCW} (${((resumeTokens / resumeEffectiveCW) * 100).toFixed(0)}%) — triggering another compaction cycle`);
+              state.needsMidTurnCompaction = true;
+              break;
+            }
           }
         }
       } catch (resumeErr: any) {
-        console.error(`[chat] resume loop failed: ${resumeErr.message}`);
+        console.error(`[chat] resume loop failed (cycle ${compactionCycle}): ${resumeErr.message}`);
+        break;
       }
 
       // Update the in-progress message with resumed content
@@ -1113,7 +1131,10 @@ async function handleChatStream(
       if (lastAssistant?.role === "assistant") {
         chat.messages[chat.messages.length - 1] = updatedMsg;
       }
-      state.needsMidTurnCompaction = false;
+    }
+
+    if (compactionCycle >= MAX_COMPACTION_CYCLES) {
+      console.warn(`[chat] Hit max compaction cycles (${MAX_COMPACTION_CYCLES}) — stopping to prevent infinite loop`);
     }
 
     // Check for queued follow-up messages even if loop exited early (e.g., due to abort)

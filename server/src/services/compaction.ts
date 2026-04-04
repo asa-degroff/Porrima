@@ -403,9 +403,14 @@ Output ONLY the formatted lines, nothing else.`;
     );
 
     // Parse index entries from LLM output
-    const lines = result.content.trim().split("\n");
+    // The model may produce thinking-only output; use thinking as fallback
+    const outputText = result.content.trim() || result.thinking?.trim() || "";
+    console.log(`[compaction] Index LLM output (${outputText.length}ch): ${outputText.slice(0, 300)}`);
+
+    const lines = outputText.split("\n");
     for (const line of lines) {
-      const match = line.match(/^-\s*(archive:\S+)\s*[—–-]\s*(.+)$/);
+      // Match: "- archive:xxx:001 — description" with various dash types
+      const match = line.match(/^[-*]\s*(archive:\S+)\s*[—–\-:]\s*(.+)$/);
       if (match) {
         const archive = archives.find((a) => a.id === match[1]);
         if (archive) archive.indexEntry = match[2].trim();
@@ -413,11 +418,16 @@ Output ONLY the formatted lines, nothing else.`;
     }
 
     // Fill any missing entries with a generic description
+    let filled = 0;
     for (const a of archives) {
       if (!a.indexEntry) {
         const preview = blockToText(a.messages).slice(0, 80);
         a.indexEntry = preview || "conversation context";
+        filled++;
       }
+    }
+    if (filled > 0) {
+      console.log(`[compaction] ${filled}/${archives.length} index entries used fallback descriptions`);
     }
   } catch (err) {
     console.error("[compaction] Index generation failed, using fallback descriptions:", err);
