@@ -432,6 +432,9 @@ async function handleChatStream(
   let iterations = 0;
   let waitingForInput = false;
   let hitContextLimit = false;
+  // Defer memory extractions until the agent loop finishes to avoid concurrent
+  // LLM calls that can interfere with the active tool loop (e.g., model unload/reload)
+  const deferredExtractions: Array<{ userMsg: string; assistantMsg: string }> = [];
   let lastUserMessage = userMessage; // tracks the current user message text for title gen / memory
 
   console.log(`[chat] type=${chat.type} isAgent=${isAgent} tts=${ttsEnabled}`);
@@ -510,12 +513,10 @@ async function handleChatStream(
         res.write(`event: message_complete\ndata: ${JSON.stringify({ message: assistantMsg })}\n\n`);
         res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queued.id })}\n\n`);
 
-        // Fire-and-forget memory extraction for the just-completed response
+        // Defer memory extraction until after the agent loop finishes
+        // to avoid concurrent LLM calls that can interfere with the active tool loop
         if (chat.type === "agent") {
-          // Emit background activity event so client can show indicator
-          res.write(`event: background_activity\ndata: ${JSON.stringify({ type: "memory_extraction", chatId: chat.id })}\n\n`);
-          extractMemories(chat.modelId, chat.id, lastUserMessage, assistantMsg.content)
-            .catch(err => console.error("[memory] extraction failed:", err));
+          deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: assistantMsg.content });
         }
 
         // Title generation for first exchange
@@ -1166,12 +1167,9 @@ async function handleChatStream(
       res.write(`event: message_complete\ndata: ${JSON.stringify({ message: currentAssistantMsg })}\n\n`);
       res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queuedFollowUp.id })}\n\n`);
 
-      // Fire-and-forget memory extraction
+      // Defer memory extraction until after the follow-up loop finishes
       if (chat.type === "agent") {
-        // Emit background activity event so client can show indicator
-        res.write(`event: background_activity\ndata: ${JSON.stringify({ type: "memory_extraction", chatId: chat.id })}\n\n`);
-        extractMemories(chat.modelId, chat.id, lastUserMessage, currentAssistantMsg.content)
-          .catch(err => console.error("[memory] extraction failed:", err));
+        deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: currentAssistantMsg.content });
       }
 
       // Title generation for first exchange
@@ -1303,12 +1301,17 @@ async function handleChatStream(
         }
       }
 
-      // Fire-and-forget memory extraction for agent chats
-      // Only extract if we have actual content
+      // Memory extraction — runs after agent loop is fully complete (no concurrent LLM interference)
       if ((chat.type === "agent" || chat.type === "bluesky") && hasContent) {
         extractMemories(chat.modelId, chat.id, lastUserMessage, assistantMsg.content)
           .catch((err) => console.error("[memory] extraction failed:", err));
       }
+      // Run any deferred extractions from mid-loop follow-ups
+      for (const deferred of deferredExtractions) {
+        extractMemories(chat.modelId, chat.id, deferred.userMsg, deferred.assistantMsg)
+          .catch((err) => console.error("[memory] deferred extraction failed:", err));
+      }
+      deferredExtractions.length = 0;
 
       // Post-response compaction: truncate if usage > 75% OR if we hit the context limit
       try {
