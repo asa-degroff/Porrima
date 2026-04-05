@@ -21,7 +21,7 @@ export interface ChatToolResult {
 /** A segment represents one unit of agent output in chronological order */
 export interface MessageSegment {
   seq: number;
-  type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image" | "visual";
+  type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image" | "visual" | "compaction_marker";
   content?: string;
   toolCall?: ChatToolCall;
   toolResult?: ChatToolResult;
