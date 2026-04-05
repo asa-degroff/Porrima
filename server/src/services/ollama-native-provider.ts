@@ -18,6 +18,7 @@ import type {
 import { transformMessages } from "@mariozechner/pi-ai/dist/providers/transform-messages.js";
 import { sanitizeSurrogates } from "@mariozechner/pi-ai/dist/utils/sanitize-unicode.js";
 import { randomUUID } from "crypto";
+import { isLlamaCppModelLoaded } from "./openai-compat-provider.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -316,8 +317,13 @@ export const streamOllamaNative = (
         body.options.temperature = options.temperature;
       }
 
-      // GPU layer offloading (for multi-GPU or VRAM-constrained setups)
-      if (options?.numGpu !== undefined) {
+      // GPU layer offloading: force CPU when llama.cpp owns the GPU,
+      // otherwise respect explicit option. Skip for cloud models which
+      // don't run locally.
+      const isCloud = model.id.includes(":cloud");
+      if (!isCloud && isLlamaCppModelLoaded()) {
+        body.options.num_gpu = 0;
+      } else if (options?.numGpu !== undefined) {
         body.options.num_gpu = options.numGpu;
       }
 

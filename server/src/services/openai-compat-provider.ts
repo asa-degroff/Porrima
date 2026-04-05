@@ -277,6 +277,11 @@ export function invalidateLoadedModel() {
   lastLoadedModel = null;
 }
 
+/** Check whether llama.cpp currently has a model loaded on GPU. */
+export function isLlamaCppModelLoaded(): boolean {
+  return lastLoadedModel !== null;
+}
+
 /**
  * Wait for a model to be fully ready to accept requests after loading.
  * Polls the /v1/models endpoint until the model status is "loaded".
