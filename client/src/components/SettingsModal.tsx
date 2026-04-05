@@ -8,6 +8,55 @@ import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, Bac
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 
+const SECTIONS = [
+  { id: 'models', label: 'Models' },
+  { id: 'llamacpp', label: 'llama.cpp' },
+  { id: 'favorites', label: 'Favorites' },
+  { id: 'vision', label: 'Vision' },
+  { id: 'context', label: 'Context' },
+  { id: 'theme', label: 'Appearance' },
+  { id: 'background', label: 'Background' },
+  { id: 'haptics', label: 'Haptics' },
+  { id: 'persona', label: 'Persona' },
+  { id: 'user-doc', label: 'About You' },
+  { id: 'presets', label: 'Presets' },
+  { id: 'api-keys', label: 'API Keys' },
+  { id: 'images', label: 'Images' },
+  { id: 'memory', label: 'Memory' },
+  { id: 'skills', label: 'Skills' },
+  { id: 'extraction', label: 'Extraction' },
+  { id: 'bluesky', label: 'Bluesky' },
+  { id: 'tts', label: 'TTS' },
+  { id: 'creative', label: 'Creative' },
+  { id: 'passkeys', label: 'Security' },
+] as const;
+
+function useActiveSection(sectionIds: readonly string[]) {
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            setActiveId(entry.target.id);
+          }
+        });
+      },
+      { rootMargin: '-20% 0% -70% 0%' }
+    );
+
+    sectionIds.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    });
+
+    return () => observer.disconnect();
+  }, [sectionIds]);
+
+  return activeId;
+}
+
 function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
   useEffect(() => {
     if (!active) return;
@@ -582,6 +631,21 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     setUserDocSaving(false);
   }, []);
 
+  const activeSection = useActiveSection(SECTIONS.map(s => s.id));
+
+  const scrollToSection = (id: string) => {
+    const el = document.getElementById(id);
+    if (el) {
+      const container = el.closest('.settings-content-scroll');
+      if (container) {
+        const offsetTop = el.offsetTop - 20;
+        container.scrollTo({ top: offsetTop, behavior: 'smooth' });
+      } else {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
@@ -589,7 +653,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-lg mx-4 backdrop-blur-xl bg-white/[0.08] border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col">
+      <div className="w-full max-w-3xl mx-4 backdrop-blur-xl bg-white/[0.08] border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
           <h2 className="text-lg font-semibold text-white/90">Settings</h2>
@@ -604,10 +668,31 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </button>
         </div>
 
-        {/* Body */}
-        <div className="px-6 py-5 space-y-5 overflow-y-auto">
+        {/* Body - Two column layout */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left sidebar - Table of Contents */}
+          <div className="w-48 shrink-0 border-r border-white/10 overflow-y-auto py-4">
+            <nav className="px-3 space-y-1">
+              {SECTIONS.map((section) => (
+                <button
+                  key={section.id}
+                  onClick={() => scrollToSection(section.id)}
+                  className={`block w-full text-left px-3 py-2 text-xs rounded-lg transition-all ${
+                    activeSection === section.id
+                      ? 'bg-white/15 text-white font-medium'
+                      : 'text-white/50 hover:text-white/80 hover:bg-white/5'
+                  }`}
+                >
+                  {section.label}
+                </button>
+              ))}
+            </nav>
+          </div>
+
+          {/* Right - Settings content */}
+          <div className="flex-1 overflow-y-auto settings-content-scroll px-6 py-5 space-y-5">
           {/* Default Model */}
-          <div className="space-y-2">
+          <div id="models" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Default Model</label>
             <div className="relative" ref={modelDropdownRef}>
               <button
@@ -659,7 +744,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* llama.cpp Server */}
-          <div className="space-y-3">
+          <div id="llamacpp" className="space-y-3">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -709,7 +794,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Model Favorites */}
-          <div className="space-y-2 pt-2 border-t border-white/10">
+          <div id="favorites" className="space-y-2 pt-2 border-t border-white/10">
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium text-white/60">Model Favorites</label>
               <label className="flex items-center gap-1.5 cursor-pointer">
@@ -758,7 +843,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Default Vision Model */}
-          <div className="space-y-2">
+          <div id="vision" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Default Vision Model</label>
             <div className="relative" ref={visionModelDropdownRef}>
               <button
@@ -814,7 +899,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 
           {/* Model Context Windows */}
           {models.length > 0 && (
-            <div className="space-y-2">
+            <div id="context" className="space-y-2">
               <button
                 onClick={() => setCtxWindowsExpanded(!ctxWindowsExpanded)}
                 className="flex items-center gap-1.5 text-sm font-medium text-white/60 hover:text-white/80 transition-colors"
@@ -896,7 +981,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           )}
 
           {/* Color Theme */}
-          <div className="space-y-2">
+          <div id="theme" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Color Theme</label>
             <div className="grid grid-cols-3 gap-2">
               {[
@@ -951,7 +1036,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Background Effect */}
-          <div className="space-y-2">
+          <div id="background" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Background Effect</label>
             <div className="flex gap-2">
               {[
@@ -986,7 +1071,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Haptic Feedback */}
-          <div className="space-y-2">
+          <div id="haptics" className="space-y-2">
             <div className="flex items-center justify-between">
               <div>
                 <label className="block text-sm font-medium text-white/60">Haptic Feedback</label>
@@ -1008,7 +1093,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Agent Persona */}
-          <div className="space-y-3 pt-2 border-t border-white/10">
+          <div id="persona" className="space-y-3 pt-2 border-t border-white/10">
             <label className="block text-sm font-medium text-white/60">Agent Persona</label>
             <p className="text-white/30 text-xs -mt-2">
               The agent's core identity, voice, and values. Loaded from <code className="text-white/40">~/.quje-agent/persona.md</code>.
@@ -1079,7 +1164,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* User Document */}
-          <div className="space-y-3 pt-2 border-t border-white/10">
+          <div id="user-doc" className="space-y-3 pt-2 border-t border-white/10">
             <label className="block text-sm font-medium text-white/60">About You</label>
             <p className="text-white/30 text-xs -mt-2">
               Optional. Share your name, preferences, and context. Helps me understand you better.
@@ -1167,7 +1252,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* System Prompt Presets */}
-          <div className="space-y-3 pt-2 border-t border-white/10">
+          <div id="presets" className="space-y-3 pt-2 border-t border-white/10">
             <div className="flex items-center justify-between">
               <label className="block text-sm font-medium text-white/60">System Prompt Presets</label>
               <button
@@ -1306,7 +1391,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* API Keys Section */}
-          <div className="space-y-3 pt-2 border-t border-white/10">
+          <div id="api-keys" className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">API Keys</h3>
             <div className="space-y-2">
               <label className="block text-sm text-white/50">Brave Search API Key</label>
@@ -1328,7 +1413,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Image Generation (ComfyUI) */}
-          <div className="space-y-3 pt-2 border-t border-white/10">
+          <div id="images" className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">Image Generation (ComfyUI)</h3>
             <div className="space-y-2">
               <label className="block text-sm text-white/50">ComfyUI URL</label>
@@ -1363,7 +1448,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Memory Section */}
-          <div className="space-y-3 pt-2 border-t border-white/10">
+          <div id="memory" className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">Memory</h3>
 
             {memoryStatus ? (
@@ -1608,7 +1693,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Skills Section */}
-          <div className="space-y-3 pt-2 border-t border-white/10">
+          <div id="skills" className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">Skills</h3>
             <p className="text-white/30 text-xs">
               Download and manage skills that extend the agent's capabilities. Skills are stored as SKILL.md files with frontmatter metadata.
@@ -1634,7 +1719,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Delayed Extraction Settings */}
-          <div className="border-t border-white/10 pt-6">
+          <div id="extraction" className="border-t border-white/10 pt-6">
             <h3 className="text-sm font-semibold text-white/80 mb-4">Delayed Memory Extraction</h3>
             
             <div className="space-y-4">
@@ -1796,7 +1881,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Bluesky Section */}
-          <div className="border-t border-white/10 pt-6">
+          <div id="bluesky" className="border-t border-white/10 pt-6">
             <h3 className="text-sm font-semibold text-white/80 mb-4">Bluesky</h3>
             
             {blueskyMessage && (
@@ -1969,7 +2054,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* TTS Section */}
-          <div className="space-y-3 pt-2 border-t border-white/10">
+          <div id="tts" className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">Text-to-Speech</h3>
             
             {ttsError ? (
@@ -2305,7 +2390,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Creative Directions Section */}
-          <div className="space-y-3 pt-2 border-t border-white/10">
+          <div id="creative" className="space-y-3 pt-2 border-t border-white/10">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium text-white/70">Creative Directions</h3>
               <label className="relative inline-flex items-center cursor-pointer">
@@ -2480,7 +2565,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Passkeys Section */}
-          <div className="space-y-3 pt-2 border-t border-white/10">
+          <div id="passkeys" className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">Passkeys</h3>
             {passkeyMessage && (
               <p className={`text-sm ${passkeyMessage.type === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
@@ -2521,6 +2606,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               </svg>
               Sign Out
             </button>
+          </div>
           </div>
         </div>
 
