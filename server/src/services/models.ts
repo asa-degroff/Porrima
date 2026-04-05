@@ -217,6 +217,10 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Ollam
 
     const models: OllamaModel[] = modelsData.data
       .filter((m) => m.id && !m.id.includes("embedding"))
+      // Exclude HF-cached model presets (contain '/') — they duplicate local models
+      // and try to download from HuggingFace which is unreliable. Local models in
+      // --models-dir are the authoritative source.
+      .filter((m) => !m.id.includes("/"))
       .map((m) => {
         const modelProps = modelPropsMap.get(m.id);
         const contextWindow = modelProps?.default_generation_settings?.n_ctx ??

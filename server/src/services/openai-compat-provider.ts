@@ -281,7 +281,7 @@ export function invalidateLoadedModel() {
  * Wait for a model to be fully ready to accept requests after loading.
  * Polls the /v1/models endpoint until the model status is "loaded".
  */
-async function waitForModelReady(baseUrl: string, modelId: string, maxWaitMs = 60_000): Promise<void> {
+async function waitForModelReady(baseUrl: string, modelId: string, maxWaitMs = 120_000): Promise<void> {
   const start = Date.now();
   const pollInterval = 1000;
   while (Date.now() - start < maxWaitMs) {
@@ -293,9 +293,21 @@ async function waitForModelReady(baseUrl: string, modelId: string, maxWaitMs = 6
         if (model?.status?.value === "loaded") {
           return;
         }
+        // Detect load failure — child process exited with error
+        if (model?.status?.value === "error" || model?.status?.value === "exited") {
+          console.error(`[openai-compat] Model ${modelId} failed to load (status: ${model.status.value})`);
+          throw new Error(`Model ${modelId} failed to load`);
+        }
+        // If model disappeared from the list entirely after some time, it failed
+        if (!model && Date.now() - start > 10_000) {
+          console.error(`[openai-compat] Model ${modelId} not found in model list after load request`);
+          throw new Error(`Model ${modelId} not found after load`);
+        }
       }
-    } catch {
-      // Ignore transient errors during startup
+    } catch (err) {
+      // Re-throw load failure errors (not transient network issues)
+      if (err instanceof Error && err.message.includes("failed to load")) throw err;
+      if (err instanceof Error && err.message.includes("not found after")) throw err;
     }
     await new Promise((r) => setTimeout(r, pollInterval));
   }
@@ -421,9 +433,15 @@ async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow
     });
 
     if (res.ok) {
-      await waitForModelReady(baseUrl, modelId);
-      console.log(`[openai-compat] Loaded model: ${modelId}${contextWindow ? ` (ctx=${contextWindow})` : ""}`);
-      lastLoadedModel = { baseUrl, modelId, contextWindow };
+      try {
+        await waitForModelReady(baseUrl, modelId);
+        console.log(`[openai-compat] Loaded model: ${modelId}${contextWindow ? ` (ctx=${contextWindow})` : ""}`);
+        lastLoadedModel = { baseUrl, modelId, contextWindow };
+      } catch (loadErr) {
+        console.error(`[openai-compat] Model ${modelId} load accepted but never became ready`);
+        lastLoadedModel = null;
+        throw loadErr;
+      }
     } else if (res.status === 400) {
       const text = await res.text().catch(() => "");
       if (text.includes("already running")) {
