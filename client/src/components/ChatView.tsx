@@ -342,16 +342,16 @@ export function ChatView({
                 )}
               </form>
             ) : (
-              <TokenIndicator 
-                usage={totalUsage} 
-                contextWindow={contextWindow} 
-                compacting={compacting} 
-                compaction={compaction} 
+              <TokenIndicator
+                usage={totalUsage}
+                contextWindow={contextWindow}
+                compacting={compacting}
+                compaction={compaction}
                 hasCompactionSummary={hasCompactionSummary}
-                onClick={() => {
+                onClick={messages.length === 0 ? () => {
                   setCtxInput(String(contextWindow));
                   setEditingCtx(true);
-                }}
+                } : undefined}
               />
             )}
           </span>
