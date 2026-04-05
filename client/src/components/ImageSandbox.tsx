@@ -56,6 +56,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   // Filter: show all or agent generations only
   const [showAgentOnly, setShowAgentOnly] = useState(false);
   
+  // Filter: show favorites only
+  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  
   // Search
   const [searchResults, setSearchResults] = useState<Array<GeneratedImage & { score: number }> | undefined>(undefined);
   const [isSearching, setIsSearching] = useState(false);
@@ -479,36 +482,24 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                     <span className="text-xs text-white/40">
                       {searchResults !== undefined
                         ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
-                        : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'
-                      }
+                        : showFavoritesOnly ? `${images.filter(i => i.isFavorite).length} favorited` : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'}
                     </span>
-                    <button
-                      onClick={() => setShowAgentOnly(!showAgentOnly)}
-                      className={`px-3 py-1 text-xs rounded transition-colors ${
-                        showAgentOnly
-                          ? 'bg-purple-500/80 text-white'
-                          : 'bg-white/10 text-white/60 hover:text-white/90'
-                      }`}
-                    >
-                      Agent only
-                    </button>
-                  </div>
-                  {/* Mobile and iPad portrait (lg-): search bar + filter toggle */}
-                  <div className="lg:hidden flex flex-col gap-2">
-                    <ImageSearch
-                      onResults={handleSearchResults}
-                      onClear={handleSearchClear}
-                      placeholder="Search images..."
-                    />
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-white/40">
-                        {searchResults !== undefined
-                          ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
-                          : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'
-                        }
-                      </span>
+                    <div className="flex items-center gap-2">
                       <button
-                        onClick={() => setShowAgentOnly(!showAgentOnly)}
+                        onClick={() => { setShowFavoritesOnly(!showFavoritesOnly); setShowAgentOnly(false); }}
+                        className={`px-3 py-1 text-xs rounded transition-colors flex items-center gap-1.5 ${
+                          showFavoritesOnly
+                            ? 'bg-rose-500/80 text-white'
+                            : 'bg-white/10 text-white/60 hover:text-white/90'
+                        }`}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill={showFavoritesOnly ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+                        </svg>
+                        Favorites
+                      </button>
+                      <button
+                        onClick={() => { setShowAgentOnly(!showAgentOnly); setShowFavoritesOnly(false); }}
                         className={`px-3 py-1 text-xs rounded transition-colors ${
                           showAgentOnly
                             ? 'bg-purple-500/80 text-white'
@@ -517,6 +508,46 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                       >
                         Agent only
                       </button>
+                    </div>
+                  </div>
+                  {/* Mobile and iPad portrait (lg-): search bar + filter toggle */}
+                  <div className="lg:hidden flex flex-col gap-2">
+                    <ImageSearch
+                      onResults={handleSearchResults}
+                      onClear={handleSearchClear}
+                      placeholder="Search images..."
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-white/40">
+                        {searchResults !== undefined
+                          ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
+                          : showFavoritesOnly ? `${images.filter(i => i.isFavorite).length} favorited` : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => { setShowFavoritesOnly(!showFavoritesOnly); setShowAgentOnly(false); }}
+                          className={`p-1.5 rounded transition-colors ${
+                            showFavoritesOnly
+                              ? 'bg-rose-500/80 text-white'
+                              : 'bg-white/10 text-white/60 hover:text-white/90'
+                          }`}
+                          title="Favorites"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill={showFavoritesOnly ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={() => { setShowAgentOnly(!showAgentOnly); setShowFavoritesOnly(false); }}
+                          className={`px-2 py-1 text-xs rounded transition-colors ${
+                            showAgentOnly
+                              ? 'bg-purple-500/80 text-white'
+                              : 'bg-white/10 text-white/60 hover:text-white/90'
+                          }`}
+                        >
+                          Agent
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -530,6 +561,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   searchResults={searchResults}
                   isSearching={isSearching}
                   showAgentOnly={showAgentOnly}
+                  showFavoritesOnly={showFavoritesOnly}
                 />
               </div>
 
@@ -548,6 +580,32 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                     <path d="M15 18l-6-6 6-6" />
                   </svg>
                 </button>
+                {/* Favorites button */}
+                {selectedImage && (
+                  <button
+                    onClick={() => toggleImageFavorite(selectedImage.id)}
+                    className={`absolute top-4 right-4 z-10 p-2 rounded-lg backdrop-blur-sm transition-all ${
+                      selectedImage.isFavorite
+                        ? "bg-rose-500/20 text-rose-400"
+                        : "bg-black/40 text-white/60 hover:text-rose-400 hover:bg-black/60"
+                    }`}
+                    title={selectedImage.isFavorite ? "Remove from favorites" : "Add to favorites"}
+                  >
+                    <svg 
+                      xmlns="http://www.w3.org/2000/svg" 
+                      width="20" 
+                      height="20" 
+                      viewBox="0 0 24 24" 
+                      fill={selectedImage.isFavorite ? "currentColor" : "none"} 
+                      stroke="currentColor" 
+                      strokeWidth="2" 
+                      strokeLinecap="round" 
+                      strokeLinejoin="round"
+                    >
+                      <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+                    </svg>
+                  </button>
+                )}
                 {selectedImage ? (
                   <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
                     <ProgressiveImage

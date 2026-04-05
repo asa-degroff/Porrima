@@ -13,6 +13,7 @@ interface Props {
   searchResults?: GeneratedImage[];
   isSearching?: boolean;
   showAgentOnly?: boolean;
+  showFavoritesOnly?: boolean;
 }
 
 /** A single image tile — memoized so it survives parent list changes. */
@@ -224,7 +225,7 @@ const ImageGrid = memo(function ImageGrid({
   );
 });
 
-export function ImageGallery({ images, selectedImage, onSelect, onDelete, onToggleFavorite, activeGenerations = [], searchResults, isSearching, showAgentOnly = false }: Props) {
+export function ImageGallery({ images, selectedImage, onSelect, onDelete, onToggleFavorite, activeGenerations = [], searchResults, isSearching, showAgentOnly = false, showFavoritesOnly = false }: Props) {
   const hasSearch = searchResults !== undefined;
   const selectedImageUrl = selectedImage?.url;
 
@@ -266,19 +267,23 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, onTogg
     </div>
   );
 
-  // Filter images for agent-only view
+  // Filter images for agent-only view and favorites
   const allImages = images;
   const agentImages = useMemo(() => images.filter(i => i.generatedBy === 'agent'), [images]);
+  const favoriteImages = useMemo(() => images.filter(i => i.isFavorite), [images]);
   const filteredSearchResults = searchResults && showAgentOnly 
     ? searchResults.filter(i => i.generatedBy === 'agent') 
     : searchResults;
+  const filteredFavoriteSearchResults = searchResults && showFavoritesOnly
+    ? searchResults.filter(i => i.isFavorite)
+    : undefined;
 
   return (
     <div className="flex-1 overflow-hidden relative">
       {/* All images grid — always mounted */}
       <div
         className="absolute inset-0 overflow-y-auto p-4"
-        style={{ opacity: !showAgentOnly && !hasSearch ? 1 : 0, pointerEvents: !showAgentOnly && !hasSearch ? 'auto' : 'none', zIndex: !showAgentOnly && !hasSearch ? 1 : 0 }}
+        style={{ opacity: !showAgentOnly && !showFavoritesOnly && !hasSearch ? 1 : 0, pointerEvents: !showAgentOnly && !showFavoritesOnly && !hasSearch ? 'auto' : 'none', zIndex: !showAgentOnly && !showFavoritesOnly && !hasSearch ? 1 : 0 }}
       >
         {allImages.length === 0 ? (
           emptyState(false, "No images generated yet", "Enter a prompt and click Generate")
@@ -297,13 +302,32 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, onTogg
       {/* Agent-only grid — always mounted */}
       <div
         className="absolute inset-0 overflow-y-auto p-4"
-        style={{ opacity: showAgentOnly && !hasSearch ? 1 : 0, pointerEvents: showAgentOnly && !hasSearch ? 'auto' : 'none', zIndex: showAgentOnly && !hasSearch ? 1 : 0 }}
+        style={{ opacity: showAgentOnly && !hasSearch && !showFavoritesOnly ? 1 : 0, pointerEvents: showAgentOnly && !hasSearch && !showFavoritesOnly ? 'auto' : 'none', zIndex: showAgentOnly && !hasSearch && !showFavoritesOnly ? 1 : 0 }}
       >
         {agentImages.length === 0 ? (
           emptyState(false, "No agent images", "Generate images with the agent to see them here")
         ) : (
           <ImageGrid
             images={agentImages}
+            selectedImage={selectedImage}
+            onSelect={onSelect}
+            onDelete={onDelete}
+            onToggleFavorite={onToggleFavorite}
+            activeGenerations={activeGenerations}
+          />
+        )}
+      </div>
+
+      {/* Favorites-only grid — always mounted */}
+      <div
+        className="absolute inset-0 overflow-y-auto p-4"
+        style={{ opacity: showFavoritesOnly && !hasSearch ? 1 : 0, pointerEvents: showFavoritesOnly && !hasSearch ? 'auto' : 'none', zIndex: showFavoritesOnly && !hasSearch ? 1 : 0 }}
+      >
+        {favoriteImages.length === 0 ? (
+          emptyState(false, "No favorited images", "Tap the heart on images to add them to favorites")
+        ) : (
+          <ImageGrid
+            images={favoriteImages}
             selectedImage={selectedImage}
             onSelect={onSelect}
             onDelete={onDelete}
