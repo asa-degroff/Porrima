@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat } from "../api/client";
+import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat } from "../api/client";
 import type { StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InlineVisual, MessageSegment, MessageUsage } from "../types";
 import { useStreamingTTS } from "./useStreamingTTS";
@@ -490,32 +490,21 @@ export function useChat(chatId: string | null) {
         if (bg) {
           bg.compacting = false;
           bg.compaction = info;
-          // Clear background activity indicator after compaction completes
           setHasBackgroundActivity(false);
-          
-          // Insert the summary message into the messages array if provided
-          if (info.summaryMessage) {
-            const summaryMsg: ChatMessage = {
-              ...info.summaryMessage,
-              _isCompactionSummary: true,
-              _compactedMessageCount: info.removedCount,
-            };
-            // Insert after first message (index 1) - this matches server behavior
-            const newMessages = [...bg.messages];
-            // Remove any existing compaction summary to avoid duplicates
-            const existingSummaryIdx = newMessages.findIndex(m => m._isCompactionSummary);
-            if (existingSummaryIdx >= 0) {
-              newMessages.splice(existingSummaryIdx, 1);
-            }
-            // Insert at index 1 (after the first message)
-            newMessages.splice(1, 0, summaryMsg);
-            bg.messages = newMessages;
-            
-            // Sync to React state if this is the active chat
-            if (activeChatIdRef.current === streamChatId) {
-              setMessages(newMessages);
-            }
-          }
+
+          // Reload messages from server to ensure correct ordering.
+          // The server has the authoritative message order after compaction —
+          // manual index splicing is fragile and causes ordering bugs.
+          apiFetchChat(streamChatId)
+            .then((chat) => {
+              if (chat) {
+                bg.messages = chat.messages;
+                if (activeChatIdRef.current === streamChatId) {
+                  setMessages(chat.messages);
+                }
+              }
+            })
+            .catch((err) => console.warn("[chat] Failed to sync messages after compaction:", err));
         }
         if (activeChatIdRef.current === streamChatId) {
           setCompacting(false);

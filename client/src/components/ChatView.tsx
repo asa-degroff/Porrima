@@ -418,33 +418,66 @@ export function ChatView({
                 </p>
               </div>
             )}
-            {messages.map((msg, i) => {
-              const isLast = i === messages.length - 1;
-              // Use stable key based on timestamp - index changes cause remounts
-              const stableKey = `${msg.timestamp}-${msg.role}`;
-              return (
-                <div key={stableKey} className={!isLast ? "message-item" : undefined}>
-                  <MessageBubble
-                    message={msg}
-                    isStreaming={streaming}
-                    isLast={isLast}
-                    streamingThinking={isLast ? streamingThinking : undefined}
-                    streamingThinkingActive={isLast ? streamingThinkingActive : false}
-                    streamingThinkingAccumulatedMs={isLast ? streamingThinkingAccumulatedMs : 0}
-                    streamingThinkingLastStartRef={streamingThinkingLastStartRef}
-                    activeTools={isLast ? activeTools : undefined}
-                    artifacts={isLast && streaming ? artifacts : undefined}
-                    generatedImages={isLast && streaming ? generatedImages : undefined}
-                    editable={msg.role === "user" && !streaming && isOnline}
-                    onEditMessage={msg.role === "user" ? onEditMessage : undefined}
-                    messageIndex={i}
-                    availableSkills={skills.length > 0 ? skills.map(s => s.name) : emptySkills}
-                    streamingSegmentIndex={streamingSegmentIndex}
-                    showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
-                  />
-                </div>
-              );
-            })}
+            {messages.length > 200 && (
+              <div className="text-center py-2">
+                <span className="text-xs text-white/30">{messages.length - 200} earlier messages not shown</span>
+              </div>
+            )}
+            {(() => {
+              // Find the last compaction summary to determine context boundary
+              let lastCompactionIndex = -1;
+              for (let j = messages.length - 1; j >= 0; j--) {
+                if (messages[j]._isCompactionSummary) { lastCompactionIndex = j; break; }
+              }
+
+              // Performance limit: only render the last 200 messages for long chats
+              const MAX_RENDERED = 200;
+              const startIndex = messages.length > MAX_RENDERED ? messages.length - MAX_RENDERED : 0;
+
+              return messages.slice(startIndex).map((msg, sliceIdx) => {
+                const i = startIndex + sliceIdx;
+                const isLast = i === messages.length - 1;
+                const isOutOfContext = lastCompactionIndex >= 0 && i < lastCompactionIndex;
+                const stableKey = `msg-${i}-${msg.timestamp}-${msg.role}`;
+
+                // Render "in context" divider after the compaction indicator
+                const showContextResume = lastCompactionIndex >= 0
+                  && i === lastCompactionIndex + 1
+                  && !messages[lastCompactionIndex + 1]?._isCompactionSummary;
+
+                return (
+                  <div key={stableKey} className={!isLast ? "message-item" : undefined}>
+                    {showContextResume && (
+                      <div className="flex items-center gap-3 my-3 px-2">
+                        <div className="flex-1 border-t border-green-400/20" />
+                        <span className="text-[10px] text-green-400/50 uppercase tracking-wider font-medium whitespace-nowrap">In context</span>
+                        <div className="flex-1 border-t border-green-400/20" />
+                      </div>
+                    )}
+                    <div className={isOutOfContext ? "opacity-45" : undefined}>
+                      <MessageBubble
+                        message={msg}
+                        isStreaming={streaming}
+                        isLast={isLast}
+                        streamingThinking={isLast ? streamingThinking : undefined}
+                        streamingThinkingActive={isLast ? streamingThinkingActive : false}
+                        streamingThinkingAccumulatedMs={isLast ? streamingThinkingAccumulatedMs : 0}
+                        streamingThinkingLastStartRef={streamingThinkingLastStartRef}
+                        activeTools={isLast ? activeTools : undefined}
+                        artifacts={isLast && streaming ? artifacts : undefined}
+                        generatedImages={isLast && streaming ? generatedImages : undefined}
+                        editable={msg.role === "user" && !streaming && isOnline}
+                        onEditMessage={msg.role === "user" ? onEditMessage : undefined}
+                        messageIndex={i}
+                        availableSkills={skills.length > 0 ? skills.map(s => s.name) : emptySkills}
+                        streamingSegmentIndex={streamingSegmentIndex}
+                        showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
+                      />
+                    </div>
+                  </div>
+                );
+              });
+            })()}
             {warning && (
               <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-400/20 text-amber-300 text-sm">
                 {warning.message}
