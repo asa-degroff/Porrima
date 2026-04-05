@@ -76,7 +76,7 @@ const EXTRACTION_INSTRUCTIONS = `---
 You are reviewing a conversation exchange you just had. Extract information worth remembering for future interactions — write each memory in your own voice, as something you'd tell yourself to remember.
 
 Think beyond surface-level facts. Consider:
-- **User context**: preferences, expertise, role, goals, working style
+- **User context**: preferences, role, goals, personal details, communication style
 - **Project context**: architecture decisions, tech stack details, ongoing initiatives, constraints, what's being built and why
 - **Decisions & rationale**: why something was chosen over alternatives, tradeoffs discussed
 - **Relationships**: connections between concepts, dependencies, blockers

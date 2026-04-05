@@ -33,7 +33,7 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "search_memory",
     description:
-      "Search your memories for relevant information. Use when you need to recall something specific. Supports date filtering and sorting.",
+      "Search your memories for relevant information. Use when you need to recall something from your past conversations. Supports date filtering and sorting.",
     parameters: Type.Object({
       query: Type.String({ description: "What to search for" }),
       from: Type.Optional(Type.String({ description: "Only memories created after this date (ISO 8601, e.g. '2026-01-01')" })),
