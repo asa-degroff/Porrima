@@ -76,9 +76,9 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "search_conversation",
     description:
-      "Search past conversations for specific details. Use when a memory summary lacks the detail you need — this lets you expand the compressed summary by finding the original exchange. Can search a specific conversation (by memory_id or chat_id) or across all conversations.",
+      "Search past conversations for specific details. Use when a memory lacks the detail you need — this lets you find the original exchange. Can search a specific conversation (by memory_id or chat_id) or across all conversations.",
     parameters: Type.Object({
-      query: Type.String({ description: "Search terms to find in conversation messages" }),
+      query: Type.String({ description: "Search terms to find in past conversation messages" }),
       memory_id: Type.Optional(
         Type.String({ description: "Memory ID — automatically looks up the source conversation" })
       ),
