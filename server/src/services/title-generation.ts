@@ -69,7 +69,8 @@ export async function generateTitle(
           ],
           stream: false,
           think: false,
-          options: { num_predict: 30, temperature: 0.3 },
+          keep_alive: "0s",
+          options: { num_predict: 30, temperature: 0.3, num_gpu: 0 },
         }),
         signal: AbortSignal.timeout(10000),
       });
