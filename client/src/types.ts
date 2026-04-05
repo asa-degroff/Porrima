@@ -274,6 +274,7 @@ export interface GeneratedImage {
   description?: string;  // For analyzed images (search results may include these)
   type?: 'generated' | 'analyzed' | 'uploaded';  // For search results
   score?: number;  // For search results (relevance score)
+  isFavorite?: boolean;  // User favorite status
 }
 
 export interface ComfyUIStatus {

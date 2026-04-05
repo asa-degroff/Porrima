@@ -8,6 +8,7 @@ interface Props {
   selectedImage: GeneratedImage | null;
   onSelect: (image: GeneratedImage) => void;
   onDelete?: (id: string) => void;
+  onToggleFavorite?: (id: string) => Promise<void>;
   activeGenerations?: GenerationState[];
   searchResults?: GeneratedImage[];
   isSearching?: boolean;
@@ -20,11 +21,13 @@ const ImageTile = memo(function ImageTile({
   isSelected,
   onSelect,
   onDelete,
+  onToggleFavorite,
 }: {
   image: GeneratedImage;
   isSelected: boolean;
   onSelect: (image: GeneratedImage) => void;
   onDelete?: (id: string) => void;
+  onToggleFavorite?: (id: string) => Promise<void>;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -70,7 +73,7 @@ const ImageTile = memo(function ImageTile({
       {onDelete && (
         <div
           onClick={(e) => { e.stopPropagation(); setConfirmDelete(true); }}
-          className="absolute top-1.5 right-1.5 p-1 rounded-md bg-black/50 text-white/40 hover:text-red-400 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
+          className="absolute top-1.5 right-10 p-1 rounded-md bg-black/50 text-white/40 hover:text-red-400 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-all cursor-pointer z-10"
           title="Delete"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -78,6 +81,32 @@ const ImageTile = memo(function ImageTile({
             <path d="M6 6l12 12" />
           </svg>
         </div>
+      )}
+      {/* Favorite button */}
+      {onToggleFavorite && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleFavorite(image.id); }}
+          className={`absolute top-1.5 right-1.5 p-1.5 rounded-full backdrop-blur-sm transition-all cursor-pointer z-5 ${
+            image.isFavorite
+              ? "bg-rose-500/20 text-rose-400"
+              : "bg-black/40 text-white/30 hover:text-rose-400 hover:bg-black/60 opacity-0 group-hover:opacity-100"
+          }`}
+          title={image.isFavorite ? "Remove from favorites" : "Add to favorites"}
+        >
+          <svg 
+            xmlns="http://www.w3.org/2000/svg" 
+            width="16" 
+            height="16" 
+            viewBox="0 0 24 24" 
+            fill={image.isFavorite ? "currentColor" : "none"} 
+            stroke="currentColor" 
+            strokeWidth="2" 
+            strokeLinecap="round" 
+            strokeLinejoin="round"
+          >
+            <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+          </svg>
+        </button>
       )}
       {/* Delete confirmation overlay */}
       {confirmDelete && (
@@ -112,12 +141,14 @@ const ImageGrid = memo(function ImageGrid({
   selectedImage,
   onSelect,
   onDelete,
+  onToggleFavorite,
   activeGenerations,
 }: {
   images: GeneratedImage[];
   selectedImage: GeneratedImage | null;
   onSelect: (image: GeneratedImage) => void;
   onDelete?: (id: string) => void;
+  onToggleFavorite?: (id: string) => Promise<void>;
   activeGenerations: GenerationState[];
 }) {
   return (
@@ -186,13 +217,14 @@ const ImageGrid = memo(function ImageGrid({
           isSelected={selectedImage?.id === image.id}
           onSelect={onSelect}
           onDelete={onDelete}
+          onToggleFavorite={onToggleFavorite}
         />
       ))}
     </div>
   );
 });
 
-export function ImageGallery({ images, selectedImage, onSelect, onDelete, activeGenerations = [], searchResults, isSearching, showAgentOnly = false }: Props) {
+export function ImageGallery({ images, selectedImage, onSelect, onDelete, onToggleFavorite, activeGenerations = [], searchResults, isSearching, showAgentOnly = false }: Props) {
   const hasSearch = searchResults !== undefined;
   const selectedImageUrl = selectedImage?.url;
 
@@ -256,6 +288,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
             selectedImage={selectedImage}
             onSelect={onSelect}
             onDelete={onDelete}
+            onToggleFavorite={onToggleFavorite}
             activeGenerations={activeGenerations}
           />
         )}
@@ -274,6 +307,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
             selectedImage={selectedImage}
             onSelect={onSelect}
             onDelete={onDelete}
+            onToggleFavorite={onToggleFavorite}
             activeGenerations={activeGenerations}
           />
         )}
@@ -290,6 +324,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, active
               selectedImage={selectedImage}
               onSelect={onSelect}
               onDelete={onDelete}
+              onToggleFavorite={onToggleFavorite}
               activeGenerations={[]}
             />
           )}

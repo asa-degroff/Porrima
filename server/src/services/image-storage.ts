@@ -15,6 +15,7 @@ interface ImageMetadata {
   chatId?: string;
   generatedBy?: 'user' | 'agent';
   directionId?: string;
+  isFavorite?: boolean;
 }
 
 export async function saveGeneratedImage(
@@ -112,6 +113,7 @@ export interface StoredImage {
   resolvedSeed: number;
   createdAt: string;
   generatedBy?: 'user' | 'agent';
+  isFavorite?: boolean;
 }
 
 export async function listImages(): Promise<StoredImage[]> {
@@ -133,6 +135,7 @@ export async function listImages(): Promise<StoredImage[]> {
         resolvedSeed: metadata.resolvedSeed,
         createdAt: metadata.createdAt,
         generatedBy: metadata.generatedBy,
+        isFavorite: metadata.isFavorite,
       };
     })
   );
@@ -150,5 +153,21 @@ export async function deleteImage(id: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+export async function toggleImageFavorite(id: string): Promise<boolean | null> {
+  const metadataPath = join(IMAGES_DIR, id, "metadata.json");
+  try {
+    const metadata = await getImageMetadata(id);
+    if (!metadata) return null;
+    
+    const newFavoriteState = !metadata.isFavorite;
+    metadata.isFavorite = newFavoriteState;
+    
+    await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+    return newFavoriteState;
+  } catch {
+    return null;
   }
 }

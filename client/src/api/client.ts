@@ -444,6 +444,16 @@ export async function deleteGeneratedImage(id: string): Promise<void> {
   }
 }
 
+export async function toggleImageFavorite(id: string): Promise<boolean> {
+  const res = await apiFetch(`${BASE}/images/${id}/favorite`, { method: "POST" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to toggle favorite");
+  }
+  const data = await res.json();
+  return data.isFavorite;
+}
+
 export async function fetchGenerations(): Promise<GenerationState[]> {
   const res = await apiFetch(`${BASE}/images/generations`);
   if (!res.ok) return [];

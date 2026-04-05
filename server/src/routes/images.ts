@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { getComfyUIStatus, getComfyUIModels, generateImageWithState } from "../services/comfyui.js";
-import { saveGeneratedImage, getImagePath, getImagePathPNG, getThumbPath, ensureThumbnail, getImageMetadata, listImages, deleteImage } from "../services/image-storage.js";
+import { saveGeneratedImage, getImagePath, getImagePathPNG, getThumbPath, ensureThumbnail, getImageMetadata, listImages, deleteImage, toggleImageFavorite } from "../services/image-storage.js";
 import {
   loadGenerations,
   createGeneration,
@@ -303,6 +303,18 @@ router.get("/:id/metadata", async (req, res) => {
     return res.status(404).json({ error: "Image not found" });
   }
   res.json(metadata);
+});
+
+router.post("/:id/favorite", async (req, res) => {
+  try {
+    const newFavoriteState = await toggleImageFavorite(req.params.id);
+    if (newFavoriteState === null) {
+      return res.status(404).json({ error: "Image not found" });
+    }
+    res.json({ success: true, isFavorite: newFavoriteState });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 export default router;

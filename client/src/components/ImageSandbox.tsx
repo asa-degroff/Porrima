@@ -42,6 +42,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     enqueue,
     abort,
     deleteImage: deleteGeneratedImage,
+    toggleFavorite: toggleImageFavorite,
     activeGenerations,
   } = useImageSandbox();
 
@@ -524,6 +525,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   selectedImage={selectedImage}
                   onSelect={(image) => { setSelectedImage(image as GeneratedImage); setViewMode('detail'); }}
                   onDelete={deleteGeneratedImage}
+                  onToggleFavorite={toggleImageFavorite}
                   activeGenerations={activeGenerations}
                   searchResults={searchResults}
                   isSearching={isSearching}

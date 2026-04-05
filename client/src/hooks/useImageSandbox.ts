@@ -6,6 +6,7 @@ import {
   deleteGeneratedImage as apiDeleteImage,
   fetchGenerations,
   subscribeToGeneration,
+  toggleImageFavorite as apiToggleImageFavorite,
 } from "../api/client";
 import type { ComfyUIStatus, GeneratedImage, ImageGenerationParams, GenerationState } from "../types";
 
@@ -281,6 +282,24 @@ export function useImageSandbox() {
     }
   }, [selectedImage]);
 
+  const toggleFavorite = useCallback(async (id: string) => {
+    try {
+      const newFavoriteState = await apiToggleImageFavorite(id);
+      // Update the local image's favorite status
+      setImages((prev) => prev.map((img) => 
+        img.id === id ? { ...img, isFavorite: newFavoriteState } : img
+      ));
+      // Update selected image if it's the one being toggled
+      if (selectedImage?.id === id) {
+        setSelectedImage({ ...selectedImage, isFavorite: newFavoriteState });
+      }
+      // Clear any errors on success
+      setError(null);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }, [selectedImage]);
+
   // Clear error when selecting a different image
   const handleSetSelectedImage = useCallback((image: GeneratedImage | null) => {
     setSelectedImage(image);
@@ -308,6 +327,7 @@ export function useImageSandbox() {
     enqueue,
     abort,
     deleteImage,
+    toggleFavorite,
     activeGenerations,
   };
 }
