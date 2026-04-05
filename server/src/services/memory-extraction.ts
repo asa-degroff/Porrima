@@ -364,10 +364,18 @@ export async function preCompactionFlush(
     return;
   }
 
-  console.log(`[memory] Pre-compaction flush: processing ${removedMessages.length} removed messages`);
+  // Filter out compaction summary messages — they contain archive indices
+  // and system metadata, not actual conversation content worth remembering.
+  const substantiveMessages = removedMessages.filter((m) => !m._isCompactionSummary);
+  if (substantiveMessages.length === 0) {
+    console.log("[memory] Pre-compaction flush: only compaction summaries, skipping");
+    return;
+  }
+
+  console.log(`[memory] Pre-compaction flush: processing ${substantiveMessages.length} removed messages (${removedMessages.length - substantiveMessages.length} compaction summaries skipped)`);
 
   // Only send the messages being removed, not the full conversation
-  const removedText = removedMessages
+  const removedText = substantiveMessages
     .map((m, i) => `${m.role} (${i + 1}): ${m.content}`)
     .join("\n\n");
 
