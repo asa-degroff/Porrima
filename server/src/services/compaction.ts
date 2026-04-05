@@ -326,6 +326,36 @@ function blockToText(block: ChatMessage[]): string {
   return parts.join("\n");
 }
 
+/** Generate a readable fallback description when the LLM index generation fails. */
+function generateFallbackDescription(block: ChatMessage[]): string {
+  // Summarize tool calls if present
+  const toolNames: string[] = [];
+  let userPreview = "";
+  let assistantPreview = "";
+
+  for (const m of block) {
+    if (m.role === "user" && !userPreview) {
+      userPreview = m.content.slice(0, 80).replace(/\n/g, " ");
+    }
+    if (m.role === "assistant") {
+      if (m.toolCalls?.length) {
+        for (const tc of m.toolCalls) toolNames.push(tc.name);
+      }
+      if (m.content && !assistantPreview) {
+        assistantPreview = m.content.slice(0, 80).replace(/\n/g, " ");
+      }
+    }
+  }
+
+  if (toolNames.length > 0) {
+    const unique = [...new Set(toolNames)];
+    return `Tool calls: ${unique.join(", ")} (${toolNames.length} total)`;
+  }
+  if (userPreview) return `User: ${userPreview}`;
+  if (assistantPreview) return `Assistant: ${assistantPreview}`;
+  return "Conversation context";
+}
+
 /**
  * Archive removed messages and generate an indexed summary.
  * Returns the summary text to insert into the chat in place of removed messages.
@@ -410,19 +440,18 @@ Output ONLY the formatted lines, nothing else.`;
     const lines = outputText.split("\n");
     for (const line of lines) {
       // Match: "- archive:xxx:001 — description" with various dash types
-      const match = line.match(/^[-*]\s*(archive:\S+)\s*[—–\-:]\s*(.+)$/);
+      const match = line.match(/^[-*]?\s*(archive:\S+)\s*[—–\-:]\s*(.+)$/);
       if (match) {
         const archive = archives.find((a) => a.id === match[1]);
         if (archive) archive.indexEntry = match[2].trim();
       }
     }
 
-    // Fill any missing entries with a generic description
+    // Fill any missing entries with a readable fallback description
     let filled = 0;
     for (const a of archives) {
       if (!a.indexEntry) {
-        const preview = blockToText(a.messages).slice(0, 80);
-        a.indexEntry = preview || "conversation context";
+        a.indexEntry = generateFallbackDescription(a.messages);
         filled++;
       }
     }
