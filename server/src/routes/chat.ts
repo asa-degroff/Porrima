@@ -991,10 +991,28 @@ async function handleChatStream(
       state.needsMidTurnCompaction = false;
       console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: saving progress and compacting`);
 
-      // 1. Save current progress as an in-progress assistant message
+      // 1. Save current progress and build a handoff summary for the resumed agent
       flushThinkingTimer();
       const partialAssistant = buildCurrentAssistantMessage();
       partialAssistant._inProgress = true;
+
+      // Build a handoff message that gives the resumed agent continuity.
+      // Summarizes what was done, which tools were called, and what to do next.
+      const handoffParts: string[] = [];
+      handoffParts.push("[System: Context was compacted mid-turn. Here is a summary of your work so far — continue from where you left off.]");
+      if (partialAssistant.content) {
+        handoffParts.push(`Your progress so far:\n${partialAssistant.content.slice(0, 5000)}`);
+      }
+      if (partialAssistant.toolCalls?.length) {
+        const toolSummary = partialAssistant.toolCalls.map((tc) => {
+          const result = partialAssistant.toolResults?.find((r) => r.toolCallId === tc.id);
+          const resultPreview = result ? result.content.slice(0, 200) : "no result";
+          return `- ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 100)}) → ${resultPreview}`;
+        }).join("\n");
+        handoffParts.push(`Tools you already called (${partialAssistant.toolCalls.length} total):\n${toolSummary}`);
+      }
+      handoffParts.push("Continue the task from where you left off. Do not repeat work already done.");
+      const handoffText = handoffParts.join("\n\n");
       const lastMsg = chat.messages[chat.messages.length - 1];
       if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
         chat.messages[chat.messages.length - 1] = partialAssistant;
@@ -1044,6 +1062,9 @@ async function handleChatStream(
       const messagesForResume = chat.messages.slice(0, resumeEndIndex);
       const resumeMessages = chatMessagesToPiMessages(messagesForResume, chat.modelId);
 
+      // Append the handoff message so the resumed agent has continuity
+      resumeMessages.push({ role: "user", content: handoffText, timestamp: Date.now() });
+
       // 4. Resume the agent loop with compacted context
       const resumeContext: AgentContext = {
         systemPrompt,
@@ -1054,8 +1075,16 @@ async function handleChatStream(
       connectionAbortController.signal.addEventListener("abort", () => resumeAbortController.abort());
 
       console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: resuming agent loop with ${resumeMessages.length} messages`);
-      res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: `\n\n*[Context compacted (cycle ${compactionCycle}) — continuing...]*\n\n` })}\n\n`);
-      state.fullText += `\n\n*[Context compacted (cycle ${compactionCycle}) — continuing...]*\n\n`;
+
+      // Emit a compaction marker segment so the client can display where compaction happened
+      flushTextSegment();
+      const compactionSegment: OutputSegment = {
+        seq: ++state.seqCounter,
+        type: "compaction_marker" as any,
+        content: `Context compacted (cycle ${compactionCycle})`,
+      };
+      state.segments.push(compactionSegment);
+      res.write(`event: segment\ndata: ${JSON.stringify(compactionSegment)}\n\n`);
 
       try {
         const resumeStream = agentLoopContinue(resumeContext, config, resumeAbortController.signal, safeStreamFn);
@@ -1084,8 +1113,10 @@ async function handleChatStream(
               arguments: event.args,
             };
             state.allToolCalls.push(toolCall);
-            state.segments.push({ seq: ++state.seqCounter, type: "tool_call", toolCall });
             if (event.toolName !== "ask_user") {
+              const segment: OutputSegment = { seq: ++state.seqCounter, type: "tool_call", toolCall };
+              state.segments.push(segment);
+              res.write(`event: segment\ndata: ${JSON.stringify(segment)}\n\n`);
               res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
             }
           } else if (event.type === "tool_execution_end") {
@@ -1109,7 +1140,17 @@ async function handleChatStream(
             if (msg.usage) {
               state.finalUsage = { input: msg.usage.input, output: msg.usage.output, totalTokens: msg.usage.totalTokens };
             }
+            iterations++;
             console.log(`[chat] resume turn_end (cycle ${compactionCycle}): stop=${sr} content=${state.fullText.length}ch tokens=${msg.usage?.totalTokens || "?"}`);
+
+            // Emit iteration event so client updates token indicator in real-time
+            res.write(`event: iteration\ndata: ${JSON.stringify({
+              iteration: iterations,
+              stopReason: sr,
+              toolCount: event.toolResults?.length || 0,
+              usage: state.finalUsage || undefined,
+            })}\n\n`);
+
             if (sr !== "toolUse") break;
 
             // Check for overflow — if hit, set flag and break to trigger another compaction cycle
