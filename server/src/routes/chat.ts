@@ -1031,12 +1031,17 @@ async function handleChatStream(
           chat.messages, chat.id, chat.projectId, chat.type
         );
       }
-      const messagesForResume = chat.messages.slice(
-        0,
-        chat.messages.length > 0 && chat.messages[chat.messages.length - 1].role === "assistant"
-          ? chat.messages.length - 1
-          : chat.messages.length
-      );
+      // Strip trailing assistant messages (in-progress + compaction summaries).
+      // agentLoopContinue requires the last message to be user or toolResult.
+      let resumeEndIndex = chat.messages.length;
+      while (resumeEndIndex > 0 && chat.messages[resumeEndIndex - 1].role === "assistant") {
+        resumeEndIndex--;
+      }
+      // Ensure we have at least one message
+      if (resumeEndIndex === 0 && chat.messages.length > 0) {
+        resumeEndIndex = 1; // Keep at least the first user message
+      }
+      const messagesForResume = chat.messages.slice(0, resumeEndIndex);
       const resumeMessages = chatMessagesToPiMessages(messagesForResume, chat.modelId);
 
       // 4. Resume the agent loop with compacted context
