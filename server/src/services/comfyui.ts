@@ -195,6 +195,9 @@ export async function waitForFreeVRAM(
   while (Date.now() - start < maxWaitMs) {
     if (!unloaded) {
       unloaded = true;
+      // Free ComfyUI's own cached models first — they may still be in VRAM
+      // even if idle-unload-timeout hasn't fired yet
+      await freeComfyUIModels(baseUrl);
       await unloadLLMModels();
       // Give VRAM a moment to actually be released by the driver
       await new Promise((r) => setTimeout(r, 3000));
@@ -233,6 +236,25 @@ async function checkFreeVRAM(baseUrl: string): Promise<number | null> {
     return devices[0].vram_free || 0;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Ask ComfyUI to free its own cached models from VRAM.
+ * Uses the /free endpoint to release GPU memory held by previously loaded
+ * models (UNet, CLIP, VAE) that may still be cached even after idle timeout.
+ */
+async function freeComfyUIModels(baseUrl: string): Promise<void> {
+  try {
+    await fetch(`${baseUrl}/free`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unload_models: true, free_memory: true }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    console.log("[comfyui] Freed ComfyUI cached models from VRAM");
+  } catch (err) {
+    console.warn("[comfyui] Failed to free ComfyUI models:", err);
   }
 }
 
@@ -329,8 +351,13 @@ export async function generateImageWithState(
   onLinkComfyUI: (promptId: string) => void,
   onProgress?: (progress: GenerateProgress) => void
 ): Promise<{ imageData: Buffer; resolvedSeed: number }> {
-  // Ensure sufficient VRAM before starting — unloads LLM models if needed
-  await waitForFreeVRAM();
+  // Ensure sufficient VRAM before starting — unloads LLM models if needed.
+  // Abort if VRAM can't be freed — proceeding would cause ComfyUI to fall
+  // back to CPU, consuming all system RAM and hanging indefinitely.
+  const vramReady = await waitForFreeVRAM();
+  if (!vramReady) {
+    throw new Error("Insufficient VRAM for image generation — could not free enough GPU memory");
+  }
 
   const baseUrl = await getBaseUrl();
   const workflow = buildWorkflow(params, clientId);
