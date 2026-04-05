@@ -346,13 +346,13 @@ async function getActualLoadedModel(baseUrl: string): Promise<string | null> {
  * In single-model mode, the endpoint doesn't exist — we catch and ignore 404s.
  */
 async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow?: number): Promise<void> {
-  // Skip if we already loaded this model with the same (or larger) context window
+  // Skip if we already loaded this model — context window is set on first load only.
+  // We don't reload for context window changes because:
+  // 1. Background callers (extraction, title gen) may request a different ctx than the active chat
+  // 2. Reloading mid-turn kills active connections and disrupts the agent loop
+  // 3. The application layer (compaction, token counting) handles context limits
   if (lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel?.modelId === modelId) {
-    if (!contextWindow || (lastLoadedModel.contextWindow && lastLoadedModel.contextWindow >= contextWindow)) {
-      return;
-    }
-    // Context window increased — need to reload
-    console.log(`[openai-compat] Context window changed (${lastLoadedModel.contextWindow} → ${contextWindow}), reloading ${modelId}`);
+    return;
   }
 
   try {
@@ -560,16 +560,35 @@ export const streamOpenAICompat = (
       }
 
       const url = `${model.baseUrl}/v1/chat/completions`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: options?.signal,
-      });
 
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unknown error");
-        throw new Error(`llama.cpp API error ${response.status}: ${errorText}`);
+      // Retry on transient connection failures (fetch failed / ECONNRESET).
+      // llama.cpp's router can briefly refuse connections between rapid iterations.
+      let response: Response | undefined;
+      let lastFetchError: Error | undefined;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal: options?.signal,
+          });
+          lastFetchError = undefined;
+          break;
+        } catch (err) {
+          lastFetchError = err instanceof Error ? err : new Error(String(err));
+          if (options?.signal?.aborted) throw lastFetchError;
+          if (attempt < 2) {
+            console.warn(`[openai-compat] fetch attempt ${attempt + 1} failed: ${lastFetchError.message}, retrying in 1s...`);
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+        }
+      }
+      if (lastFetchError) throw lastFetchError;
+
+      if (!response || !response.ok) {
+        const errorText = response ? await response.text().catch(() => "Unknown error") : "No response";
+        throw new Error(`llama.cpp API error ${response?.status ?? "?"}: ${errorText}`);
       }
 
       if (!response.body) {
