@@ -720,6 +720,7 @@ export function useChat(chatId: string | null) {
 
       // Get the original message to preserve its images
       const originalMessage = messages[index];
+      if (!originalMessage) return;
       const originalImages = originalMessage.images?.length ? originalMessage.images : undefined;
 
       // Create bgStream entry
@@ -745,7 +746,7 @@ export function useChat(chatId: string | null) {
       bg.abortController = controller;
       abortRef.current = controller;
     },
-    [chatId, streaming, prepareStream, makeStreamCallbacks]
+    [chatId, streaming, messages, prepareStream, makeStreamCallbacks]
   );
 
   const abort = useCallback(async () => {
