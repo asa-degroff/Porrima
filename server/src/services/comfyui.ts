@@ -181,84 +181,147 @@ export async function waitForFreeVRAM(
 ): Promise<boolean> {
   const baseUrl = await getBaseUrl();
   const start = Date.now();
-  let warned = false;
+  let unloaded = false;
+
+  // Check once before attempting any unloads
+  const initialFree = await checkFreeVRAM(baseUrl);
+  if (initialFree === null) return false; // ComfyUI unreachable
+  if (initialFree === -1) return true; // No GPU devices — CPU-only mode
+  if (initialFree >= minFreeBytes) return true;
+
+  console.log(`[comfyui] Waiting for VRAM: ${fmtGB(initialFree)} free, need ${fmtGB(minFreeBytes)}`);
+  onWaiting?.();
 
   while (Date.now() - start < maxWaitMs) {
-    try {
-      const res = await fetch(`${baseUrl}/system_stats`, { signal: AbortSignal.timeout(3000) });
-      if (res.ok) {
-        const stats = await res.json();
-        const devices = stats.devices || [];
-        // Check the first GPU device (ComfyUI's primary)
-        if (devices.length > 0) {
-          const gpu = devices[0];
-          const freeVram = gpu.vram_free || 0;
-          if (freeVram >= minFreeBytes) {
-            if (warned) console.log(`[comfyui] VRAM available: ${(freeVram / (1024 ** 3)).toFixed(1)}GB free`);
-            return true;
-          }
-
-          if (!warned) {
-            console.log(`[comfyui] Waiting for VRAM: ${(freeVram / (1024 ** 3)).toFixed(1)}GB free, need ${(minFreeBytes / (1024 ** 3)).toFixed(1)}GB`);
-            warned = true;
-            onWaiting?.();
-
-            // Try to free VRAM by unloading LLM models
-            try {
-              // Unload Ollama models
-              const { getSettings } = await import("./chat-storage.js");
-              const settings = await getSettings();
-              if (settings.defaultModelId) {
-                await fetch("http://localhost:11434/api/generate", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ model: settings.defaultModelId, prompt: "", keep_alive: "0s" }),
-                }).catch(() => {});
-              }
-              // Unload llama.cpp models
-              if (settings.llamacppEnabled) {
-                const lcUrl = settings.llamacppUrl || "http://localhost:8080";
-                const modelsRes = await fetch(`${lcUrl}/v1/models`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
-                if (modelsRes?.ok) {
-                  const modelsData = await modelsRes.json();
-                  for (const m of modelsData.data || []) {
-                    if (m.status?.value === "loaded") {
-                      await fetch(`${lcUrl}/models/unload`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ model: m.id }),
-                      }).catch(() => {});
-                    }
-                  }
-                }
-                const { invalidateLoadedModel } = await import("./openai-compat-provider.js");
-                invalidateLoadedModel();
-              }
-            } catch (err) {
-              console.warn("[comfyui] Failed to unload LLM models:", err);
-            }
-          }
-        } else {
-          // No GPU devices reported — ComfyUI might be CPU-only, proceed
-          return true;
-        }
-      }
-    } catch {
-      // ComfyUI unreachable — caller will handle
-      return false;
+    if (!unloaded) {
+      unloaded = true;
+      await unloadLLMModels();
+      // Give VRAM a moment to actually be released by the driver
+      await new Promise((r) => setTimeout(r, 3000));
     }
 
-    await new Promise((r) => setTimeout(r, 5000));
+    const freeVram = await checkFreeVRAM(baseUrl);
+    if (freeVram === null) return false;
+    if (freeVram === -1) return true;
+    if (freeVram >= minFreeBytes) {
+      console.log(`[comfyui] VRAM available: ${fmtGB(freeVram)} free`);
+      return true;
+    }
+
+    await new Promise((r) => setTimeout(r, 3000));
   }
 
   console.warn(`[comfyui] VRAM wait timed out after ${maxWaitMs / 1000}s`);
   return false;
 }
 
+function fmtGB(bytes: number): string {
+  return `${(bytes / (1024 ** 3)).toFixed(1)}GB`;
+}
+
 /**
- * Generate image with state tracking.
- * Calls onLinkComfyUI with the promptId so the route can link it to our generation ID.
+ * Check free VRAM from ComfyUI system_stats.
+ * Returns free bytes, -1 if no GPU devices, or null if unreachable.
  */
+async function checkFreeVRAM(baseUrl: string): Promise<number | null> {
+  try {
+    const res = await fetch(`${baseUrl}/system_stats`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return null;
+    const stats = await res.json();
+    const devices = stats.devices || [];
+    if (devices.length === 0) return -1;
+    return devices[0].vram_free || 0;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Unload all LLM models (Ollama + llama.cpp) and wait for completion.
+ * Awaits each unload request so VRAM is actually freed before returning.
+ */
+async function unloadLLMModels(): Promise<void> {
+  const { getSettings } = await import("./chat-storage.js");
+  const settings = await getSettings();
+
+  // Unload all loaded Ollama models (not just the default)
+  try {
+    const psRes = await fetch("http://localhost:11434/api/ps", {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (psRes.ok) {
+      const psData = await psRes.json();
+      const loadedModels: string[] = (psData.models || []).map((m: any) => m.name || m.model).filter(Boolean);
+      for (const modelName of loadedModels) {
+        console.log(`[comfyui] Unloading Ollama model: ${modelName}`);
+        await fetch("http://localhost:11434/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: modelName, prompt: "", keep_alive: "0s" }),
+          signal: AbortSignal.timeout(30_000),
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("[comfyui] Failed to unload Ollama models:", err);
+  }
+
+  // Unload llama.cpp models
+  if (settings.llamacppEnabled) {
+    try {
+      const lcUrl = settings.llamacppUrl || "http://localhost:8080";
+      const modelsRes = await fetch(`${lcUrl}/v1/models`, { signal: AbortSignal.timeout(3000) });
+      if (modelsRes.ok) {
+        const modelsData = await modelsRes.json();
+        for (const m of modelsData.data || []) {
+          if (m.status?.value === "loaded") {
+            console.log(`[comfyui] Unloading llama.cpp model: ${m.id}`);
+            await fetch(`${lcUrl}/models/unload`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ model: m.id }),
+              signal: AbortSignal.timeout(30_000),
+            });
+          }
+        }
+      }
+      const { invalidateLoadedModel } = await import("./openai-compat-provider.js");
+      invalidateLoadedModel();
+    } catch (err) {
+      console.warn("[comfyui] Failed to unload llama.cpp models:", err);
+    }
+  }
+}
+
+/**
+ * Cancel a ComfyUI prompt by deleting it from the queue.
+ * Prevents orphaned jobs from consuming resources after we give up.
+ */
+async function cancelComfyUIPrompt(promptId: string): Promise<void> {
+  try {
+    const baseUrl = await getBaseUrl();
+    await fetch(`${baseUrl}/queue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ delete: [promptId] }),
+      signal: AbortSignal.timeout(5000),
+    });
+    // Also interrupt any currently executing node
+    await fetch(`${baseUrl}/interrupt`, {
+      method: "POST",
+      signal: AbortSignal.timeout(5000),
+    });
+    console.log(`[comfyui] Cancelled prompt ${promptId}`);
+  } catch (err) {
+    console.warn(`[comfyui] Failed to cancel prompt ${promptId}:`, err);
+  }
+}
+
+// Maximum time to wait after sampling completes for VAE decode + save.
+// VAE decode on GPU takes seconds; if it takes minutes, something is wrong
+// (likely fell back to CPU due to VRAM pressure).
+const POST_SAMPLING_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 export async function generateImageWithState(
   generationId: string,
   clientId: string,
@@ -278,26 +341,40 @@ export async function generateImageWithState(
 
   return new Promise((resolve, reject) => {
     let promptId: string | null = null;
-    let wsTimeout: ReturnType<typeof setTimeout>;
+    let globalTimeout: ReturnType<typeof setTimeout>;
+    let postSamplingTimeout: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
 
     const ws = new WebSocket(wsUrl);
 
     const cleanup = () => {
-      clearTimeout(wsTimeout);
+      clearTimeout(globalTimeout);
+      if (postSamplingTimeout) clearTimeout(postSamplingTimeout);
       try {
         ws.close();
       } catch {}
     };
 
-    // Timeout after 2 hours — batch generation can take a long time
-    wsTimeout = setTimeout(() => {
+    const settle = (
+      action: "resolve" | "reject",
+      value: any,
+    ) => {
+      if (settled) return;
+      settled = true;
       cleanup();
-      reject(new Error("Image generation timed out after 2 hours"));
-    }, 2 * 60 * 60 * 1000);
+      if (action === "resolve") resolve(value);
+      else reject(value);
+    };
+
+    // Global timeout — 30 minutes max for any single generation
+    globalTimeout = setTimeout(() => {
+      const pid = promptId;
+      settle("reject", new Error("Image generation timed out after 30 minutes"));
+      if (pid) cancelComfyUIPrompt(pid);
+    }, 30 * 60 * 1000);
 
     ws.on("error", (err) => {
-      cleanup();
-      reject(new Error(`ComfyUI WebSocket error: ${err.message}`));
+      settle("reject", new Error(`ComfyUI WebSocket error: ${err.message}`));
     });
 
     ws.on("open", async () => {
@@ -314,7 +391,6 @@ export async function generateImageWithState(
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({})) as any;
-          cleanup();
           // Extract node-level errors for a useful message
           let detail = err.error?.message || res.statusText;
           if (err.node_errors) {
@@ -326,7 +402,7 @@ export async function generateImageWithState(
               .join(", ");
             if (nodeDetails) detail += ` [${nodeDetails}]`;
           }
-          reject(new Error(`ComfyUI prompt error: ${detail}`));
+          settle("reject", new Error(`ComfyUI prompt error: ${detail}`));
           return;
         }
 
@@ -334,8 +410,7 @@ export async function generateImageWithState(
         promptId = data.prompt_id;
         if (promptId) onLinkComfyUI(promptId);
       } catch (err: any) {
-        cleanup();
-        reject(new Error(`Failed to queue prompt: ${err.message}`));
+        settle("reject", new Error(`Failed to queue prompt: ${err.message}`));
       }
     });
 
@@ -344,16 +419,35 @@ export async function generateImageWithState(
         const msg = JSON.parse(raw.toString());
 
         if (msg.type === "progress" && msg.data?.prompt_id === promptId) {
+          // Reset post-sampling timeout on every progress event
+          if (postSamplingTimeout) {
+            clearTimeout(postSamplingTimeout);
+            postSamplingTimeout = null;
+          }
+
           onProgress?.({
             step: msg.data.value,
             totalSteps: msg.data.max,
           });
+
+          // When the last sampling step completes, start the post-sampling
+          // timeout. VAE decode + save should complete in seconds on GPU.
+          // If it takes >5 minutes, ComfyUI likely fell back to CPU.
+          if (msg.data.value >= msg.data.max) {
+            postSamplingTimeout = setTimeout(() => {
+              const pid = promptId;
+              console.warn(`[comfyui] Post-sampling phase timed out after ${POST_SAMPLING_TIMEOUT_MS / 1000}s — likely CPU fallback`);
+              settle("reject", new Error(
+                "Post-sampling phase (VAE decode) timed out — ComfyUI likely fell back to CPU due to insufficient VRAM"
+              ));
+              if (pid) cancelComfyUIPrompt(pid);
+            }, POST_SAMPLING_TIMEOUT_MS);
+          }
         }
 
         if (msg.type === "execution_error" && msg.data?.prompt_id === promptId) {
-          cleanup();
           const d = msg.data;
-          reject(new Error(`ComfyUI error in ${d.node_type || d.node_id}: ${d.exception_message || "unknown error"}`));
+          settle("reject", new Error(`ComfyUI error in ${d.node_type || d.node_id}: ${d.exception_message || "unknown error"}`));
           return;
         }
 
@@ -364,16 +458,14 @@ export async function generateImageWithState(
               `${baseUrl}/history/${promptId}`
             );
             if (!histRes.ok) {
-              cleanup();
-              reject(new Error("Failed to fetch generation history"));
+              settle("reject", new Error("Failed to fetch generation history"));
               return;
             }
 
             const history = await histRes.json();
             const outputs = history[promptId!]?.outputs;
             if (!outputs) {
-              cleanup();
-              reject(new Error("No outputs in generation history"));
+              settle("reject", new Error("No outputs in generation history"));
               return;
             }
 
@@ -387,8 +479,7 @@ export async function generateImageWithState(
             }
 
             if (!imageInfo) {
-              cleanup();
-              reject(new Error("No image in generation output"));
+              settle("reject", new Error("No image in generation output"));
               return;
             }
 
@@ -397,8 +488,7 @@ export async function generateImageWithState(
               `${baseUrl}/view?filename=${encodeURIComponent(imageInfo.filename)}&subfolder=${encodeURIComponent(imageInfo.subfolder || "")}&type=${encodeURIComponent(imageInfo.type || "output")}`
             );
             if (!imgRes.ok) {
-              cleanup();
-              reject(new Error("Failed to fetch generated image"));
+              settle("reject", new Error("Failed to fetch generated image"));
               return;
             }
 
@@ -425,11 +515,9 @@ export async function generateImageWithState(
               // Ignore cleanup errors — image was already retrieved successfully
             }
 
-            cleanup();
-            resolve({ imageData, resolvedSeed });
+            settle("resolve", { imageData, resolvedSeed });
           } catch (err: any) {
-            cleanup();
-            reject(new Error(`Failed to retrieve image: ${err.message}`));
+            settle("reject", new Error(`Failed to retrieve image: ${err.message}`));
           }
         }
       } catch {
@@ -438,11 +526,8 @@ export async function generateImageWithState(
     });
 
     ws.on("close", () => {
-      // If we haven't resolved yet, this is unexpected
-      if (promptId) {
-        // WebSocket closed before completion — might still be ok
-        // The resolve/reject should have been called already
-      }
+      // WebSocket closed before completion — reject if we haven't settled yet
+      settle("reject", new Error("ComfyUI WebSocket closed unexpectedly before generation completed"));
     });
   });
 }
