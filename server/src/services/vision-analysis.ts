@@ -4,6 +4,7 @@ import { join } from "path";
 import { existsSync } from "fs";
 import sharp from "sharp";
 import { addCorpusEntry, enrichCorpusEntry } from "./image-corpus.js";
+import { isLlamaCppModelLoaded } from "./openai-compat-provider.js";
 
 const VISION_DIR = join(process.env.HOME || process.env.USERPROFILE || ".", ".quje-agent", "vision");
 const OLLAMA_BASE = process.env.OLLAMA_URL || "http://localhost:11434";
@@ -277,6 +278,9 @@ export async function analyzeImage(
 
   const imageBuffer = base64ToBuffer(imageData).toString("base64");
 
+  const visionOptions: Record<string, any> = { temperature: 0.7 };
+  if (isLlamaCppModelLoaded()) visionOptions.num_gpu = 0;
+
   const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -292,7 +296,7 @@ export async function analyzeImage(
         },
       ],
       keep_alive: 0,
-      options: { temperature: 0.7 },
+      options: visionOptions,
     }),
   });
 
@@ -328,6 +332,8 @@ export async function analyzeImageStream(
   onEvent({ event: "keepalive", data: { status: "starting", timestamp: Date.now() } });
 
   const imageBuffer = base64ToBuffer(imageData).toString("base64");
+  const streamOptions: Record<string, any> = { temperature: 0.7 };
+  if (isLlamaCppModelLoaded()) streamOptions.num_gpu = 0;
 
   const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
     method: "POST",
@@ -344,7 +350,7 @@ export async function analyzeImageStream(
         },
       ],
       keep_alive: 0,
-      options: { temperature: 0.7 },
+      options: streamOptions,
     }),
   });
 
@@ -428,6 +434,9 @@ export async function chatAboutImage(
     { role: "user", content: userMessage },
   ];
 
+  const chatOptions: Record<string, any> = { temperature: 0.7 };
+  if (isLlamaCppModelLoaded()) chatOptions.num_gpu = 0;
+
   const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -436,7 +445,7 @@ export async function chatAboutImage(
       stream: false,
       messages,
       keep_alive: "5m",
-      options: { temperature: 0.7 },
+      options: chatOptions,
     }),
   });
 

@@ -9,6 +9,18 @@ import { homedir } from "os";
 import { readFile, writeFile, mkdir, access } from "fs/promises";
 import { existsSync } from "fs";
 import type { Message } from "@mariozechner/pi-ai";
+import { getSettings } from "./chat-storage.js";
+
+const DEFAULT_CREATIVE_MODEL = "qwen3.5:9b";
+
+async function getCreativeModelId(): Promise<string> {
+  try {
+    const settings = await getSettings();
+    return settings.defaultVisionModelId || DEFAULT_CREATIVE_MODEL;
+  } catch {
+    return DEFAULT_CREATIVE_MODEL;
+  }
+}
 
 const DIRECTION_CACHE_FILE = join(homedir(), ".quje-agent", "directions.json");
 const DIRECTION_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -322,7 +334,7 @@ export async function proposeDirections(
   const limit = options.limit ?? 5;
   const minNovelty = options.minNovelty ?? 0.15;
   const useCache = options.useCache ?? true;
-  const modelId = options.modelId ?? "qwen3.5:9b";
+  const modelId = options.modelId ?? await getCreativeModelId();
 
   // Try to load from cache first
   if (useCache) {
@@ -521,7 +533,7 @@ export async function createGapFilling(
   gap: GapAnalysis,
   clusters: PromptCluster[],
   corpus: ImageCorpusEntry[],
-  modelId: string = "qwen3.5:9b"
+  modelId: string
 ): Promise<CreativeDirection> {
   // Find existing images with this theme to show the model what already exists
   const existingWithTheme = corpus.filter(
@@ -577,7 +589,7 @@ export async function createCrossPollination(
   clusters: PromptCluster[],
   corpus: ImageCorpusEntry[],
   minNovelty: number,
-  modelId: string = "qwen3.5:9b"
+  modelId: string
 ): Promise<CreativeDirection[]> {
   // Find distant cluster pairs (low centroid similarity)
   const distantPairs: Array<[PromptCluster, PromptCluster]> = [];
@@ -678,7 +690,7 @@ export async function createDeepVariation(
   clusters: PromptCluster[],
   corpus: ImageCorpusEntry[],
   minNovelty: number,
-  modelId: string = "qwen3.5:9b"
+  modelId: string
 ): Promise<CreativeDirection[]> {
   // Pick large clusters (more than 5 members) for deep exploration
   const largeClusters = clusters.filter(c => c.size > 5).slice(0, 3);
@@ -748,7 +760,7 @@ export async function createContrast(
   clusters: PromptCluster[],
   corpus: ImageCorpusEntry[],
   minNovelty: number,
-  modelId: string = "qwen3.5:9b"
+  modelId: string
 ): Promise<CreativeDirection[]> {
   // Find dominant patterns
   const dominantThemes: Record<string, number> = {};

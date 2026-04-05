@@ -106,7 +106,7 @@ async function runCorpusCreativeCycle() {
     console.log(`[scheduler] Rebuilt ${clusterMap.clusters.length} clusters from ${corpus.length} images`);
 
     // 2. Generate creative directions (LLM phase — uses Ollama GPU)
-    const modelId = cdSettings.modelId || "qwen3.5:9b";
+    const modelId = cdSettings.modelId || settings.defaultVisionModelId || "qwen3.5:9b";
     const limit = cdSettings.limit ?? 5;
     const minNovelty = cdSettings.minNovelty ?? 0.15;
     const directions = await proposeDirections(clusterMap.clusters, corpus, {

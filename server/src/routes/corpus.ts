@@ -175,7 +175,7 @@ router.get("/directions", async (req, res) => {
     const cdSettings = settings.creativeDirections ?? {};
     const limit = req.query.limit ? parseInt(req.query.limit as string) : (cdSettings.limit ?? 5);
     const minNovelty = req.query.minNovelty ? parseFloat(req.query.minNovelty as string) : (cdSettings.minNovelty ?? 0.15);
-    const dirModelId = cdSettings.modelId || "qwen3.5:9b";
+    const dirModelId = cdSettings.modelId || settings.defaultVisionModelId || "qwen3.5:9b";
     const useCache = req.query.cached !== 'false'; // Default to using cache
     const forceRefresh = req.query.refresh === 'true';
     
@@ -265,7 +265,7 @@ router.post("/directions/generate", async (req, res) => {
     const cdSettings = settings.creativeDirections ?? {};
     const limit = req.body.limit || (cdSettings.limit ?? 5);
     const minNovelty = req.body.minNovelty || (cdSettings.minNovelty ?? 0.15);
-    const dirModelId = cdSettings.modelId || "qwen3.5:9b";
+    const dirModelId = cdSettings.modelId || settings.defaultVisionModelId || "qwen3.5:9b";
 
     // Create background job
     const jobId = createDirectionJob(
