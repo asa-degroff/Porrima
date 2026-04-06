@@ -163,6 +163,7 @@ export interface Settings {
   enrichmentBatchSize?: number;
   // Extraction model configuration
   extractionModelId?: string;
+  extractionModelUrl?: string;  // Direct URL for dedicated extraction model (e.g., http://localhost:8083)
   extractionFallbackEnabled?: boolean;
   // Creative direction settings
   creativeDirections?: CreativeDirectionSettings;

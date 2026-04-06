@@ -3,6 +3,7 @@ import { appendFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import { streamChat } from "./agent.js";
+import { getSettings } from "./chat-storage.js";
 import { embedBatch } from "./embeddings.js";
 import { loadPersona } from "./persona-store.js";
 import {
@@ -20,6 +21,59 @@ import { getChat, updateChatExtractionState } from "./chat-storage.js";
 import type { ChatMessage, Memory, MemoryCategory, Chat } from "../types.js";
 
 const LOG_DIR = join(homedir(), ".quje-agent", "logs");
+
+/**
+ * Call the extraction LLM — uses dedicated CPU extraction model if configured,
+ * otherwise falls back to streamChat with the main model.
+ * The dedicated model avoids GPU VRAM contention and KV cache invalidation.
+ */
+async function callExtractionLLM(
+  modelId: string,
+  userContent: string,
+  systemPrompt: string,
+  signal?: AbortSignal
+): Promise<string> {
+  const settings = await getSettings();
+  const extractionUrl = settings.extractionModelUrl;
+
+  if (extractionUrl) {
+    // Direct call to dedicated extraction endpoint (CPU-only, no provider pipeline)
+    const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "extraction",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
+        max_tokens: 2000,
+        temperature: 0.3,
+        stream: false,
+      }),
+      signal: signal ?? AbortSignal.timeout(90_000),
+    });
+    if (!res.ok) {
+      const err = await res.text().catch(() => "");
+      throw new Error(`Extraction model error ${res.status}: ${err}`);
+    }
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content?.trim() || "";
+  }
+
+  // Fallback: use streamChat with the main model
+  let responseText = "";
+  await streamChat(
+    modelId,
+    [{ role: "user", content: userContent, timestamp: Date.now() }],
+    systemPrompt,
+    (event) => {
+      if (event.type === "text_delta") responseText += event.delta;
+    },
+    { signal: signal ?? AbortSignal.timeout(90_000) }
+  );
+  return responseText;
+}
 
 // In-memory extraction metrics (reset on server restart)
 const extractionMetrics = {
@@ -285,18 +339,7 @@ export async function extractMemories(
   let responseText = "";
   await withRetry(
     async () => {
-      responseText = "";
-      await streamChat(
-        modelId,
-        [{ role: "user", content: extractionPrompt, timestamp: Date.now() }],
-        systemPrompt,
-        (event) => {
-          if (event.type === "text_delta") {
-            responseText += event.delta;
-          }
-        },
-        { signal: AbortSignal.timeout(90_000) }
-      );
+      responseText = await callExtractionLLM(modelId, extractionPrompt, systemPrompt);
     },
     `extractMemories LLM call (chat ${chatId})`
   );
@@ -398,18 +441,7 @@ export async function preCompactionFlush(
   let responseText = "";
   await withRetry(
     async () => {
-      responseText = "";
-      await streamChat(
-        modelId,
-        [{ role: "user", content: removedText, timestamp: Date.now() }],
-        systemPrompt,
-        (event) => {
-          if (event.type === "text_delta") {
-            responseText += event.delta;
-          }
-        },
-        { signal: AbortSignal.timeout(90_000) }
-      );
+      responseText = await callExtractionLLM(modelId, removedText, systemPrompt);
     },
     `preCompactionFlush LLM call (chat ${chatId})`
   );
@@ -458,18 +490,7 @@ export async function extractMemoriesFromText(
   try {
     await withRetry(
       async () => {
-        responseText = "";
-        await streamChat(
-          modelId,
-          [{ role: "user", content: extractionPrompt, timestamp: Date.now() }],
-          systemPrompt,
-          (event) => {
-            if (event.type === "text_delta") {
-              responseText += event.delta;
-            }
-          },
-          { signal: AbortSignal.timeout(90_000) }
-        );
+        responseText = await callExtractionLLM(modelId, extractionPrompt, systemPrompt);
       },
       `extractMemoriesFromText LLM call (entry ${entryId})`
     );
@@ -737,18 +758,7 @@ export async function extractDelayedMemories(
   try {
     await withRetry(
       async () => {
-        responseText = "";
-        await streamChat(
-          modelId,
-          [{ role: "user", content: extractionPrompt, timestamp: Date.now() }],
-          systemPrompt,
-          (event) => {
-            if (event.type === "text_delta") {
-              responseText += event.delta;
-            }
-          },
-          { signal: AbortSignal.timeout(90_000) }
-        );
+        responseText = await callExtractionLLM(modelId, extractionPrompt, systemPrompt);
       },
       `extractDelayedMemories LLM call (chat ${chatId})`
     );

@@ -29,6 +29,16 @@ export function BlockIndicator({ projectId }: Props) {
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
+  // Reset cached blocks when projectId changes (different chat/project)
+  const lastProjectIdRef = useRef(projectId);
+  if (lastProjectIdRef.current !== projectId) {
+    lastProjectIdRef.current = projectId;
+    setBlocks(null);
+    setOpen(false);
+    setExpandedBlockId(null);
+    setHistory(null);
+  }
+
   const handleClick = useCallback(() => {
     const opening = !open;
     setOpen(opening);
