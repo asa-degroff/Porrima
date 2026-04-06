@@ -375,7 +375,12 @@ async function archiveAndIndex(
 ): Promise<string> {
   if (removedMessages.length === 0) return "";
 
-  const blocks = groupIntoBlocks(removedMessages);
+  // Filter out compaction summary messages — they contain archive indices and
+  // system metadata, not actual conversation content worth archiving.
+  const substantiveMessages = removedMessages.filter((m) => !m._isCompactionSummary);
+  if (substantiveMessages.length === 0) return "";
+
+  const blocks = groupIntoBlocks(substantiveMessages);
   if (blocks.length === 0) return "";
 
   // Assign archive IDs
