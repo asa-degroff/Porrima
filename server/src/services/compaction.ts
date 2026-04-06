@@ -127,8 +127,13 @@ export async function truncateBeforeSend(
   });
 
   // Keep first message (title context) + most RECENT messages that fit in budget.
-  // Iterate backwards from end to prioritize recent context.
-  let runningTotal = estimateTokens(systemPrompt) + messageTokenEstimates[0];
+  // Use the actual estimated tokens (which may include LLM-reported usage as baseline)
+  // for the initial budget, then subtract message-level char estimates to find the boundary.
+  // This accounts for system prompt + tool definitions + framing overhead that char-only
+  // estimation misses.
+  const messageContentTokens = messageTokenEstimates.reduce((s, t) => s + t, 0);
+  const overheadTokens = Math.max(0, estimatedTokens - messageContentTokens);
+  let runningTotal = overheadTokens + messageTokenEstimates[0];
   let keepFromIndex = 1; // start assuming we keep only the first message
 
   // Build a list of recent messages that fit within threshold
@@ -155,6 +160,7 @@ export async function truncateBeforeSend(
   }
 
   const messagesToRemove = keepFromIndex - 1; // messages between first and keepFromIndex
+  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} msgContent=${messageContentTokens} keepFrom=${keepFromIndex} removing=${messagesToRemove}/${messages.length}`);
 
   if (messagesToRemove <= 0) return noOp;
 
