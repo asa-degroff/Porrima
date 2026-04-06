@@ -413,8 +413,11 @@ async function archiveAndIndex(
     seq++;
   }
 
-  // Generate index descriptions via LLM
-  const { streamChat } = await import("./agent.js");
+  // Generate index descriptions — prefer the dedicated extraction model (CPU, fast)
+  // to avoid blocking the GPU chat model's KV cache.
+  const { getSettings } = await import("./chat-storage.js");
+  const settings = await getSettings();
+  const extractionUrl = settings.extractionModelUrl;
 
   const inputParts = blockDescriptions.map(
     (b) => `[${b.id}]\n${b.text.slice(0, 500)}`
@@ -437,16 +440,42 @@ Output ONLY the formatted lines, nothing else.`;
   const keepaliveInterval = onKeepalive ? setInterval(onKeepalive, 10_000) : null;
 
   try {
-    const result = await streamChat(
-      modelId,
-      [{ role: "user", content: inputParts, timestamp: Date.now() }],
-      systemPrompt,
-      () => {},
-    );
+    let outputText = "";
 
-    // Parse index entries from LLM output
-    // The model may produce thinking-only output; use thinking as fallback
-    const outputText = result.content.trim() || result.thinking?.trim() || "";
+    if (extractionUrl) {
+      // Use dedicated CPU extraction model — fast, no GPU contention
+      const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "index-gen",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: inputParts },
+          ],
+          max_tokens: 1000,
+          temperature: 0.3,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        outputText = data.choices?.[0]?.message?.content?.trim() || "";
+      }
+    }
+
+    if (!outputText) {
+      // Fallback: use main chat model via streamChat
+      const { streamChat } = await import("./agent.js");
+      const result = await streamChat(
+        modelId,
+        [{ role: "user", content: inputParts, timestamp: Date.now() }],
+        systemPrompt,
+        () => {},
+      );
+      outputText = result.content.trim() || result.thinking?.trim() || "";
+    }
     console.log(`[compaction] Index LLM output (${outputText.length}ch): ${outputText.slice(0, 300)}`);
 
     const lines = outputText.split("\n");
