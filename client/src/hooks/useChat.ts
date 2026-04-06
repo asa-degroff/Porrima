@@ -498,29 +498,36 @@ export function useChat(chatId: string | null) {
           apiFetchChat(streamChatId)
             .then((chat) => {
               if (chat) {
-                bg.messages = chat.messages;
+                // Only sync messages if the bg stream hasn't accumulated new content
+                // since the compaction event (avoids wiping streaming content from
+                // a concurrent agent loop that started after compaction).
+                const hasNewContent = bg.content && !chat.messages.some(
+                  (m) => m.role === "assistant" && m.content === bg.content
+                );
+                if (!hasNewContent) {
+                  bg.messages = chat.messages;
 
-                // Reset streaming accumulators so the resume loop starts fresh.
-                // The server-saved messages already contain the pre-compaction content;
-                // the resume loop will accumulate new content from this point.
-                const lastMsg = chat.messages[chat.messages.length - 1];
-                bg.content = lastMsg?.content || "";
-                bg.segments = lastMsg?.segments ? lastMsg.segments.map(s => ({ ...s })) : [];
-                bg.seqCounter = bg.segments.length;
-                bg.tools = [];
-                bg.thinking = lastMsg?.thinking || "";
-                bg.thinkingActive = false;
-                bg.thinkingAccumulatedMs = 0;
-                bg.thinkingLastStart = 0;
+                  const lastMsg = chat.messages[chat.messages.length - 1];
+                  bg.content = lastMsg?.content || "";
+                  bg.segments = lastMsg?.segments ? lastMsg.segments.map(s => ({ ...s })) : [];
+                  bg.seqCounter = bg.segments.length;
+                  bg.tools = [];
+                  bg.thinking = lastMsg?.thinking || "";
+                  bg.thinkingActive = false;
+                  bg.thinkingAccumulatedMs = 0;
+                  bg.thinkingLastStart = 0;
 
-                if (activeChatIdRef.current === streamChatId) {
-                  streamingContentRef.current = bg.content;
-                  setStreamingThinking(bg.thinking);
-                  setStreamingThinkingActive(false);
-                  setStreamingThinkingAccumulatedMs(0);
-                  streamingThinkingLastStartRef.current = 0;
-                  setActiveTools([]);
-                  setMessages(chat.messages);
+                  if (activeChatIdRef.current === streamChatId) {
+                    streamingContentRef.current = bg.content;
+                    setStreamingThinking(bg.thinking);
+                    setStreamingThinkingActive(false);
+                    setStreamingThinkingAccumulatedMs(0);
+                    streamingThinkingLastStartRef.current = 0;
+                    setActiveTools([]);
+                    setMessages(chat.messages);
+                  }
+                } else {
+                  console.log("[chat] Skipping compaction message sync — streaming has new content");
                 }
               }
             })
