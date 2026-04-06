@@ -35,7 +35,13 @@ Native pi-ai tool calling with TypeBox schemas. Registry in `agent-tools.ts` wit
 
 See [docs/memory-system.md](docs/memory-system.md) for full details.
 
-8 memory categories (preference, fact, behavior, instruction, context, decision, note, reflection). Immediate + delayed extraction via LLM. Hybrid retrieval: vector search + FTS5 with RRF fusion, then cross-encoder reranking via Qwen3-Reranker-0.6B with chat-type-specific instructions. Cosine >0.85 dedup. Daily synthesis generates reflections and notebook entries. Pre-compaction flush preserves facts before context truncation. Indexed compaction archives full-fidelity messages in `context_archives` table with cross-chat FTS search. Key files: `memory-storage.ts`, `memory-extraction.ts`, `memory-context.ts`, `reranker.ts`, `synthesis.ts`.
+Two complementary memory systems: **atomic memories** (8 categories: preference, fact, behavior, instruction, context, decision, note, reflection) and **memory blocks** (structured, editable knowledge documents). Atomic memories are extracted automatically via LLM; blocks are agent-curated documents that organize knowledge by topic/project/domain.
+
+Hybrid retrieval: vector search + FTS5 with RRF fusion, then cross-encoder reranking via Qwen3-Reranker-0.6B with chat-type-specific instructions. Memory blocks loaded by scope (global/project) with progressive disclosure — descriptions always in context, full content via `read_memory_block` tool. Extraction pipeline sees loaded blocks to prevent redundant extraction.
+
+Indexed compaction archives full-fidelity messages in `context_archives` table with cross-chat FTS search. Stable prompt prefix caching for KV cache optimization. Key files: `memory-storage.ts`, `memory-extraction.ts`, `memory-context.ts`, `memory-tools.ts`, `reranker.ts`, `synthesis.ts`.
+
+See also: [docs/memory-blocks.md](docs/memory-blocks.md) for the block system details.
 
 ## Artifacts & Image Systems
 
@@ -100,10 +106,10 @@ quje-agent/
 │       ├── agent-tools.ts           # Tool registry + execution
 │       ├── chat-storage.ts          # SQLite storage for chats/projects/settings + FTS5
 │       ├── embeddings.ts            # Ollama embedding API wrapper
-│       ├── memory-storage.ts        # Memory SQLite + sqlite-vec persistence + KNN search
+│       ├── memory-storage.ts        # Memory + block SQLite + sqlite-vec persistence + KNN search
 │       ├── memory-extraction.ts     # Immediate + delayed extraction + supersession tracking
-│       ├── memory-context.ts        # System prompt augmentation with memories
-│       ├── memory-tools.ts          # Agent tool definitions, parsing, execution
+│       ├── memory-context.ts        # System prompt augmentation with memories + blocks + stable prefix caching
+│       ├── memory-tools.ts          # Agent tool definitions: memories, blocks, archives, conversation search
 │       ├── synthesis.ts             # Daily memory consolidation
 │       ├── scheduler.ts             # Synthesis check + delayed extraction + creative cycle
 │       ├── compaction.ts            # Message compaction + indexed archival
@@ -162,4 +168,5 @@ quje-agent/
 - [API Reference](docs/api-reference.md) — Full endpoint table
 - [Data Storage](docs/data-storage.md) — Directory layout and SQLite schemas
 - [Key Patterns](docs/key-patterns.md) — Cross-cutting patterns and important notes
+- [Memory Blocks](docs/memory-blocks.md) — Structured knowledge document system
 - [Setup & Deployment](docs/setup.md) — Prerequisites, development, production, systemd

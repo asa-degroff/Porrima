@@ -8,6 +8,7 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 - **Memory tools** (from `memory-tools.ts`): `save_memory`, `search_memory`, `forget_memory`
 - **Conversation search**: `search_conversation` — FTS5 search on chat history AND archived context blocks (cross-chat), scoped to single chat or global
 - **Archive retrieval**: `read_archived_context` — dereferences an archive block ID to return full original messages (tool outputs, code, reasoning)
+- **Memory blocks**: `create_memory_block`, `update_memory_block`, `read_memory_block`, `list_memory_blocks`, `get_block_history` — structured knowledge documents (see [memory-blocks.md](memory-blocks.md))
 - **Filesystem tools**: `read_file`, `write_file`, `edit_file`, `list_files`, `bash`
 - **Sandbox tools**: `run_python`, `create_artifact`
 - **Bluesky tools** (from `bluesky-tools.ts`): `list_notifications`, `get_thread`, `reply`, `post` (bluesky chats only)

@@ -1,5 +1,9 @@
 # Memory System
 
+The memory system has two complementary layers:
+- **Atomic memories** — individual facts extracted from conversations (this document)
+- **Memory blocks** — structured knowledge documents curated by the agent (see [memory-blocks.md](memory-blocks.md))
+
 ## Categories (8 types)
 
 - `preference` — user likes, dislikes, stylistic choices
