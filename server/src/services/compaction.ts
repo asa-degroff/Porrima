@@ -127,23 +127,24 @@ export async function truncateBeforeSend(
   });
 
   // Keep first message (title context) + most RECENT messages that fit in budget.
-  // Use the actual estimated tokens (which may include LLM-reported usage as baseline)
-  // for the initial budget, then subtract message-level char estimates to find the boundary.
-  // This accounts for system prompt + tool definitions + framing overhead that char-only
-  // estimation misses.
+  // The char-based per-message estimates undercount (they miss tool/thinking/framing overhead).
+  // Apply a scaling factor: ratio of actual total to char-estimated total.
+  // This makes per-message estimates proportionally accurate to the real token count.
   const messageContentTokens = messageTokenEstimates.reduce((s, t) => s + t, 0);
-  const overheadTokens = Math.max(0, estimatedTokens - messageContentTokens);
-  let runningTotal = overheadTokens + messageTokenEstimates[0];
+  const charEstimateTotal = estimateTokens(systemPrompt) + messageContentTokens;
+  const scaleFactor = charEstimateTotal > 0 ? estimatedTokens / charEstimateTotal : 1;
+  const scaledMessageEstimates = messageTokenEstimates.map((t) => Math.ceil(t * scaleFactor));
+  const overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
+  let runningTotal = overheadTokens + scaledMessageEstimates[0];
   let keepFromIndex = 1; // start assuming we keep only the first message
 
-  // Build a list of recent messages that fit within threshold
+  // Build a list of recent messages that fit within threshold (using scaled estimates)
   const recentIndices: number[] = [];
   for (let i = messages.length - 1; i >= 1; i--) {
-    if (runningTotal + messageTokenEstimates[i] <= threshold) {
-      runningTotal += messageTokenEstimates[i];
+    if (runningTotal + scaledMessageEstimates[i] <= threshold) {
+      runningTotal += scaledMessageEstimates[i];
       recentIndices.push(i);
     } else {
-      // Stop adding messages, but don't break - we need to find the boundary
       break;
     }
   }
@@ -160,7 +161,7 @@ export async function truncateBeforeSend(
   }
 
   const messagesToRemove = keepFromIndex - 1; // messages between first and keepFromIndex
-  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} msgContent=${messageContentTokens} keepFrom=${keepFromIndex} removing=${messagesToRemove}/${messages.length}`);
+  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFrom=${keepFromIndex} removing=${messagesToRemove}/${messages.length}`);
 
   if (messagesToRemove <= 0) return noOp;
 
