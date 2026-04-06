@@ -9,6 +9,8 @@ import {
   getMemoryBlock,
   searchBlocks,
   supersedeBlock,
+  listMemoryBlocks,
+  getBlockHistory,
   MAX_BLOCK_CHARS,
 } from "./memory-storage.js";
 import { searchChatMessages, getChatMessageRange, getChatTitle, getArchive, searchArchives } from "./chat-storage.js";
@@ -132,6 +134,24 @@ export const MEMORY_TOOLS: Tool[] = [
       "Load the full content of a memory block. Use when you see a block reference in the Available Memory Blocks section and need the full details.",
     parameters: Type.Object({
       block_id: Type.String({ description: "Block ID (e.g. blk-...)" }),
+    }),
+  },
+  {
+    name: "list_memory_blocks",
+    description:
+      "List available memory blocks by scope or search. Use this to discover what knowledge blocks exist before reading or creating new ones.",
+    parameters: Type.Object({
+      scope: Type.Optional(StringEnum(["global", "project"], { description: "Filter by scope" })),
+      project_id: Type.Optional(Type.String({ description: "Project ID for project-scoped blocks" })),
+      query: Type.Optional(Type.String({ description: "Optional search query to filter blocks by name/description" })),
+    }),
+  },
+  {
+    name: "get_block_history",
+    description:
+      "Get the revision history of a memory block by following the supersession chain. Shows how the block evolved over time.",
+    parameters: Type.Object({
+      block_id: Type.String({ description: "Block ID to get history for" }),
     }),
   },
 ];
@@ -511,6 +531,49 @@ export async function executeMemoryTool(
         `---`,
         block.content,
       ];
+      return { content: lines.join("\n"), isError: false };
+    }
+
+    case "list_memory_blocks": {
+      const { scope, project_id, query } = toolCall.arguments;
+      const blocks = listMemoryBlocks({ scope, projectId: project_id, query });
+      
+      if (blocks.length === 0) {
+        return { content: "No memory blocks found matching criteria.", isError: false };
+      }
+      
+      const lines = blocks.map((b) => 
+        `- [${b.id}] ${b.name} (${b.scope}) — ${b.description} [${b.tokenEstimate} tokens, updated ${b.updatedAt.slice(0,10)}]`
+      );
+      return { content: `Found ${blocks.length} memory block(s):\n${lines.join("\n")}`, isError: false };
+    }
+
+    case "get_block_history": {
+      const { block_id } = toolCall.arguments;
+      if (!block_id) return { content: "Missing block_id", isError: true };
+
+      const currentBlock = getMemoryBlock(block_id);
+      if (!currentBlock) return { content: `Block not found: ${block_id}`, isError: false };
+
+      const history = getBlockHistory(block_id);
+      if (history.length === 0) {
+        return { content: "No history found for this block.", isError: false };
+      }
+
+      const lines = [
+        `Revision history for "${currentBlock.name}":`,
+        `Total revisions: ${history.length}`,
+        "---",
+      ];
+
+      for (let i = 0; i < history.length; i++) {
+        const b = history[i];
+        const version = i + 1;
+        const isCurrent = b.id === block_id;
+        lines.push(`\n[${version}] ${b.id} (${b.updatedAt.slice(0, 10)}) by ${b.updatedBy}${isCurrent ? " (current)" : ""}`);
+        lines.push(`Content: ${b.content.slice(0, 200)}${b.content.length > 200 ? "..." : ""}`);
+      }
+
       return { content: lines.join("\n"), isError: false };
     }
 

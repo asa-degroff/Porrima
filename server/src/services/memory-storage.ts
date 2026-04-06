@@ -1419,4 +1419,62 @@ function extractExcerpt(text: string, query: string, radius = 400): string {
   return excerpt;
 }
 
+/** List blocks with optional filtering. */
+export function listMemoryBlocks(opts: { scope?: "global" | "project"; projectId?: string; query?: string } = {}): MemoryBlock[] {
+  const db = getDb();
+  let querySQL = "SELECT * FROM memory_blocks WHERE supersededBy IS NULL";
+  const params: any[] = [];
+  
+  if (opts.scope) {
+    querySQL += " AND scope = ?";
+    params.push(opts.scope);
+  }
+  
+  if (opts.projectId) {
+    querySQL += " AND projectId = ?";
+    params.push(opts.projectId);
+  }
+  
+  if (opts.query) {
+    querySQL += " AND (name LIKE ? OR description LIKE ?)";
+    const searchPattern = `%${opts.query}%`;
+    params.push(searchPattern, searchPattern);
+  }
+  
+  querySQL += " ORDER BY updatedAt DESC";
+  
+  const rows = db.prepare(querySQL).all(...params) as any[];
+  return rows.map((r: any) => ({
+    ...r,
+    projectId: r.projectId || undefined,
+    supersededBy: r.supersededBy || undefined,
+    supersedes: r.supersedes || undefined,
+  }));
+}
+
+/** Get revision history by following supersedes/supersededBy chain. */
+export function getBlockHistory(blockId: string): MemoryBlock[] {
+  const db = getDb();
+  const history: MemoryBlock[] = [];
+  let currentId: string | null = blockId;
+  
+  // Walk backwards through superseded versions
+  while (currentId) {
+    const row = db.prepare("SELECT * FROM memory_blocks WHERE id = ?").get(currentId) as any;
+    if (!row) break;
+    
+    const block: MemoryBlock = {
+      ...row,
+      projectId: row.projectId || undefined,
+      supersededBy: row.supersededBy || undefined,
+      supersedes: row.supersedes || undefined,
+    };
+    history.push(block);
+    currentId = row.supersedes || null;
+  }
+  
+  // Reverse so oldest is first
+  return history.reverse();
+}
+
 export { MAX_BLOCK_CHARS };
