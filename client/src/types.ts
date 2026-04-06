@@ -234,6 +234,21 @@ export interface MemoryLineage {
   newer: MemoryLineageEntry[];
 }
 
+export interface MemoryBlock {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  scope: "global" | "project";
+  projectId?: string;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: "agent" | "user";
+  tokenEstimate: number;
+  supersededBy?: string;
+  supersedes?: string;
+}
+
 export interface Artifact {
   id: string;           // canonical ID (persists across versions)
   title: string;

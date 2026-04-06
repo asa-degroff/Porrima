@@ -834,6 +834,49 @@ export async function fetchMemoryLineage(id: string): Promise<import("../types")
   return res.json();
 }
 
+// Memory Blocks API
+
+export async function fetchMemoryBlocks(scope?: string, projectId?: string): Promise<import("../types").MemoryBlock[]> {
+  const params = new URLSearchParams();
+  if (scope) params.set("scope", scope);
+  if (projectId) params.set("projectId", projectId);
+  const qs = params.toString();
+  const res = await apiFetch(`${BASE}/memory/blocks${qs ? `?${qs}` : ""}`);
+  if (!res.ok) throw new Error("Failed to fetch memory blocks");
+  return res.json();
+}
+
+export async function createMemoryBlockApi(block: { name: string; description: string; content: string; scope?: string; projectId?: string }): Promise<import("../types").MemoryBlock> {
+  const res = await apiFetch(`${BASE}/memory/blocks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(block),
+  });
+  if (!res.ok) throw new Error("Failed to create memory block");
+  return res.json();
+}
+
+export async function updateMemoryBlockApi(id: string, updates: { content?: string; description?: string; name?: string }): Promise<import("../types").MemoryBlock> {
+  const res = await apiFetch(`${BASE}/memory/blocks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) throw new Error("Failed to update memory block");
+  return res.json();
+}
+
+export async function deleteMemoryBlockApi(id: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/memory/blocks/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete memory block");
+}
+
+export async function fetchBlockHistory(id: string): Promise<import("../types").MemoryBlock[]> {
+  const res = await apiFetch(`${BASE}/memory/blocks/${id}/history`);
+  if (!res.ok) throw new Error("Failed to fetch block history");
+  return res.json();
+}
+
 export async function searchConversations(query: string, chatId?: string, limit?: number): Promise<import("../types").ConversationSearchResult[]> {
   const res = await apiFetch(`${BASE}/memory/conversations/search`, {
     method: "POST",

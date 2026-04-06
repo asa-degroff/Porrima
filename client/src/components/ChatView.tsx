@@ -8,6 +8,7 @@ import { ModelSelector } from "./ModelSelector";
 import { TokenIndicator } from "./TokenIndicator";
 import { SystemPromptEditor } from "./SystemPromptEditor";
 import { OfflineIndicator } from "./OfflineIndicator";
+import { BlockIndicator } from "./BlockIndicator";
 import { SkillSelector } from "./SkillSelector";
 
 const hamburgerIconLg = (
@@ -304,6 +305,9 @@ export function ChatView({
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <OfflineIndicator isOnline={isOnline} queueProcessing={queueProcessing} />
+          <span className="hidden md:contents">
+            <BlockIndicator projectId={projectId} />
+          </span>
           {/* Context window editor — integrated into TokenIndicator */}
           <span className="hidden md:contents">
             {editingCtx ? (

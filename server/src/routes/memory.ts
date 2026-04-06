@@ -13,6 +13,13 @@ import {
   createSupersessionLink,
   removeSupersessionLink,
   getMemoryLineage,
+  createMemoryBlock,
+  updateMemoryBlock,
+  getMemoryBlock,
+  deleteMemoryBlock,
+  listMemoryBlocks,
+  getBlockHistory,
+  MAX_BLOCK_CHARS,
 } from "../services/memory-storage.js";
 import { runDailySynthesis } from "../services/synthesis.js";
 import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
@@ -122,6 +129,86 @@ router.post("/", async (req, res) => {
   await addMemory(memory);
   res.status(201).json(stripEmbedding(memory));
 });
+
+// ---------------------------------------------------------------------------
+// Memory Blocks API
+// ---------------------------------------------------------------------------
+
+// List blocks (optional filters: scope, projectId)
+router.get("/blocks", async (_req, res) => {
+  const { scope, projectId } = _req.query as { scope?: string; projectId?: string };
+  const blocks = listMemoryBlocks({
+    scope: scope as "global" | "project" | undefined,
+    projectId,
+  });
+  res.json(blocks);
+});
+
+// Create block
+router.post("/blocks", async (req, res) => {
+  const { name, description, content, scope, projectId } = req.body;
+  if (!name || !description || !content) {
+    return res.status(400).json({ error: "name, description, and content are required" });
+  }
+  if (content.length > MAX_BLOCK_CHARS) {
+    return res.status(400).json({ error: `Content exceeds ${MAX_BLOCK_CHARS} character limit` });
+  }
+  const id = `blk-${uuid()}`;
+  const now = new Date().toISOString();
+  const block = createMemoryBlock({
+    id,
+    name,
+    description,
+    content,
+    scope: scope || "global",
+    projectId: projectId || "",
+    createdAt: now,
+    updatedAt: now,
+    updatedBy: "user",
+    supersededBy: undefined,
+    supersedes: undefined,
+  });
+  res.status(201).json(block);
+});
+
+// Get single block
+router.get("/blocks/:id", async (req, res) => {
+  const block = getMemoryBlock(req.params.id);
+  if (!block) return res.status(404).json({ error: "Block not found" });
+  res.json(block);
+});
+
+// Update block
+router.patch("/blocks/:id", async (req, res) => {
+  const { content, description, name } = req.body;
+  const success = updateMemoryBlock(req.params.id, {
+    content,
+    description,
+    name,
+    updatedBy: "user",
+  });
+  if (!success) return res.status(404).json({ error: "Block not found" });
+  res.json(getMemoryBlock(req.params.id));
+});
+
+// Delete block
+router.delete("/blocks/:id", async (req, res) => {
+  const success = deleteMemoryBlock(req.params.id);
+  if (!success) return res.status(404).json({ error: "Block not found" });
+  res.json({ deleted: true });
+});
+
+// Block history (supersession chain)
+router.get("/blocks/:id/history", async (req, res) => {
+  const block = getMemoryBlock(req.params.id);
+  if (!block) return res.status(404).json({ error: "Block not found" });
+  const history = getBlockHistory(req.params.id);
+  res.json(history);
+});
+
+// ---------------------------------------------------------------------------
+// Individual Memory CRUD (must come after /blocks routes)
+// ---------------------------------------------------------------------------
 
 // Get single memory
 router.get("/:id", async (req, res) => {

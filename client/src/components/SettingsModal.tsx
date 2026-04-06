@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage } from "../api/client";
+import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
 import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, CreativeDirectionSettings, BlueskySettings, PersonaStore, UserDocument } from "../types";
@@ -139,6 +139,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [synthesisRunning, setSynthesisRunning] = useState(false);
   const [memoryBrowserOpen, setMemoryBrowserOpen] = useState(false);
   const [skillsBrowserOpen, setSkillsBrowserOpen] = useState(false);
+  // Memory blocks state
+  const [blocksBrowserOpen, setBlocksBrowserOpen] = useState(false);
+  const [blocks, setBlocks] = useState<import("../types").MemoryBlock[]>([]);
+  const [blocksLoading, setBlocksLoading] = useState(false);
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const [editBlockContent, setEditBlockContent] = useState("");
+  const [blockScopeFilter, setBlockScopeFilter] = useState<"all" | "global" | "project">("all");
   // Delayed extraction settings
   const [delayedExtractionEnabled, setDelayedExtractionEnabled] = useState(settings.delayedExtractionEnabled ?? true);
   const [delayedExtractionThreshold, setDelayedExtractionThreshold] = useState(settings.delayedExtractionThresholdMinutes ?? 30);
@@ -1689,6 +1696,164 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               </div>
             ) : (
               <p className="text-white/30 text-sm">Loading memory status...</p>
+            )}
+          </div>
+
+          {/* Memory Blocks Section */}
+          <div className="space-y-3 pt-2 border-t border-white/10">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium text-white/70">Memory Blocks</h3>
+              <button
+                onClick={() => {
+                  const opening = !blocksBrowserOpen;
+                  setBlocksBrowserOpen(opening);
+                  if (opening) {
+                    setBlocksLoading(true);
+                    fetchMemoryBlocks().then(setBlocks).catch(() => {}).finally(() => setBlocksLoading(false));
+                  }
+                }}
+                className="px-3 py-1 rounded-lg text-xs font-medium transition-all"
+                style={{
+                  backgroundColor: blocksBrowserOpen ? `rgba(var(--theme-secondary), 0.2)` : `rgba(var(--theme-secondary), 0.1)`,
+                  borderColor: `rgba(var(--theme-secondary), 0.3)`,
+                  color: `rgba(var(--theme-secondary-text))`,
+                  border: "1px solid",
+                }}
+              >
+                {blocksBrowserOpen ? "Close" : "Browse Blocks"}
+              </button>
+            </div>
+            <p className="text-white/30 text-xs">
+              Structured knowledge documents maintained by the agent. Blocks organize related facts into editable documents that reduce redundant memory extraction.
+            </p>
+
+            {blocksBrowserOpen && (
+              <div className="space-y-2 pt-2">
+                {/* Scope filter */}
+                <div className="flex gap-1">
+                  {(["all", "global", "project"] as const).map((scope) => (
+                    <button
+                      key={scope}
+                      onClick={() => setBlockScopeFilter(scope)}
+                      className={`px-2 py-1 rounded text-xs transition-all ${
+                        blockScopeFilter === scope ? "text-white" : "text-white/40 hover:text-white/60"
+                      }`}
+                      style={{
+                        backgroundColor: blockScopeFilter === scope ? `rgba(var(--theme-secondary), 0.15)` : "transparent",
+                      }}
+                    >
+                      {scope === "all" ? "All" : scope === "global" ? "Global" : "Project"}
+                    </button>
+                  ))}
+                </div>
+
+                {blocksLoading ? (
+                  <p className="text-white/30 text-xs py-4 text-center">Loading blocks...</p>
+                ) : blocks.length === 0 ? (
+                  <p className="text-white/30 text-xs py-4 text-center">No memory blocks yet. The agent will create blocks as it learns about recurring topics.</p>
+                ) : (
+                  <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                    {blocks
+                      .filter((b) => blockScopeFilter === "all" || b.scope === blockScopeFilter)
+                      .map((block) => (
+                        <div
+                          key={block.id}
+                          className="group rounded-lg p-3 transition-all"
+                          style={{
+                            backgroundColor: "rgba(255, 255, 255, 0.03)",
+                            border: "1px solid rgba(255, 255, 255, 0.08)",
+                          }}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-white/80">{block.name}</span>
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                  block.scope === "global" ? "bg-blue-500/15 text-blue-300" : "bg-emerald-500/15 text-emerald-300"
+                                }`}>
+                                  {block.scope}
+                                </span>
+                                <span className="text-[10px] text-white/25">{block.tokenEstimate}t</span>
+                              </div>
+                              <p className="text-xs text-white/40 mt-0.5">{block.description}</p>
+                            </div>
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={() => {
+                                  if (editingBlockId === block.id) {
+                                    setEditingBlockId(null);
+                                  } else {
+                                    setEditingBlockId(block.id);
+                                    setEditBlockContent(block.content);
+                                  }
+                                }}
+                                className="p-1 rounded hover:bg-white/10 text-white/30 hover:text-white/60"
+                                title="Edit"
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (confirm(`Delete block "${block.name}"?`)) {
+                                    deleteMemoryBlockApi(block.id).then(() => {
+                                      setBlocks((prev) => prev.filter((b) => b.id !== block.id));
+                                    });
+                                  }
+                                }}
+                                className="p-1 rounded hover:bg-red-500/20 text-white/30 hover:text-red-400"
+                                title="Delete"
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                              </button>
+                            </div>
+                          </div>
+
+                          {editingBlockId === block.id ? (
+                            <div className="mt-2 space-y-2">
+                              <textarea
+                                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 resize-y outline-none focus:ring-1 focus:ring-blue-400/30"
+                                value={editBlockContent}
+                                onChange={(e) => setEditBlockContent(e.target.value)}
+                                rows={6}
+                              />
+                              <div className="flex gap-2 justify-end">
+                                <button
+                                  onClick={() => setEditingBlockId(null)}
+                                  className="px-2 py-1 text-xs text-white/40 hover:text-white/60"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    updateMemoryBlockApi(block.id, { content: editBlockContent }).then((updated) => {
+                                      setBlocks((prev) => prev.map((b) => b.id === block.id ? updated : b));
+                                      setEditingBlockId(null);
+                                    });
+                                  }}
+                                  className="px-2 py-1 text-xs rounded"
+                                  style={{
+                                    backgroundColor: `rgba(var(--theme-secondary), 0.15)`,
+                                    color: `rgba(var(--theme-secondary-text))`,
+                                  }}
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="mt-1.5 text-xs text-white/50 whitespace-pre-wrap line-clamp-3">
+                              {block.content}
+                            </p>
+                          )}
+
+                          <div className="mt-1.5 text-[10px] text-white/25">
+                            Updated {block.updatedAt.slice(0, 10)} by {block.updatedBy}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
