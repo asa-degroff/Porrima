@@ -153,6 +153,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [delayedExtractionCap, setDelayedExtractionCap] = useState(settings.delayedExtractionMessageCap ?? 50);
   const [enrichmentBatchSize, setEnrichmentBatchSize] = useState(settings.enrichmentBatchSize ?? 5);
   const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
+  const [extractionModelUrl, setExtractionModelUrl] = useState(settings.extractionModelUrl || "");
+  const [extractionModelStatus, setExtractionModelStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [extractionFallbackEnabled, setExtractionFallbackEnabled] = useState(settings.extractionFallbackEnabled ?? true);
   const [memorySearchQuery, setMemorySearchQuery] = useState("");
   const [memoryResults, setMemoryResults] = useState<(MemorySummary & { score?: number })[]>([]);
@@ -326,6 +328,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       delayedExtractionMessageCap: delayedExtractionCap,
       enrichmentBatchSize,
       extractionModelId,
+      extractionModelUrl: extractionModelUrl.trim() || undefined,
       extractionFallbackEnabled,
       creativeDirections: {
         enabled: cdEnabled,
@@ -456,6 +459,21 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setLlamacppStatus("unavailable");
     }
   }, []);
+
+  const handleTestExtractionModel = useCallback(async () => {
+    if (!extractionModelUrl) return;
+    setExtractionModelStatus("checking");
+    try {
+      const res = await fetch(`/api/models/llamacpp/health?url=${encodeURIComponent(extractionModelUrl)}`, { credentials: "include" });
+      if (res.ok) {
+        setExtractionModelStatus("connected");
+      } else {
+        setExtractionModelStatus("unavailable");
+      }
+    } catch {
+      setExtractionModelStatus("unavailable");
+    }
+  }, [extractionModelUrl]);
 
   const handleRunSynthesis = useCallback(async () => {
     setSynthesisRunning(true);
@@ -1991,6 +2009,46 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <h4 className="text-xs font-medium text-white/60 uppercase tracking-wider mb-3">Extraction Model</h4>
                 
                 <div className="space-y-3">
+                  {/* Dedicated URL option */}
+                  <div className="space-y-2">
+                    <label className="block text-xs text-white/70">Dedicated extraction server URL</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={extractionModelUrl}
+                        onChange={(e) => setExtractionModelUrl(e.target.value)}
+                        disabled={!delayedExtractionEnabled}
+                        className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all disabled:opacity-50"
+                        placeholder="http://localhost:8083"
+                      />
+                      {extractionModelUrl && (
+                        <button
+                          onClick={handleTestExtractionModel}
+                          disabled={extractionModelStatus === "checking"}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
+                        >
+                          {extractionModelStatus === "checking" ? "Testing..." : "Test"}
+                        </button>
+                      )}
+                    </div>
+                    {extractionModelUrl && extractionModelStatus && extractionModelStatus !== "checking" && (
+                      <div className="flex items-center gap-1.5">
+                        <div className={`w-2 h-2 rounded-full ${extractionModelStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
+                        <span className={`text-xs ${extractionModelStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
+                          {extractionModelStatus === "connected" ? "Connected" : "Not available"}
+                        </span>
+                      </div>
+                    )}
+                    <p className="text-xs text-white/40">
+                      Optional: dedicated llama.cpp instance for extraction (CPU). Keeps chat model KV cache intact.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs text-white/40">
+                    <span>or select model from server:</span>
+                  </div>
+
+                  {/* Model selection */}
                   <div>
                     <label className="block text-xs text-white/70 mb-1.5">Model</label>
                     <div className="relative" ref={extractionModelDropdownRef}>

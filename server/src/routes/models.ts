@@ -71,10 +71,12 @@ router.get("/health/:modelId", async (req, res) => {
 });
 
 // llama.cpp server health check (proxied to avoid CORS issues)
-router.get("/llamacpp/health", async (_req, res) => {
+router.get("/llamacpp/health", async (req, res) => {
   try {
+    // Allow optional URL override via query parameter (for extraction model testing)
+    const urlOverride = req.query.url as string | undefined;
     const settings = await getSettings();
-    const baseUrl = settings.llamacppUrl || "http://localhost:8080";
+    const baseUrl = urlOverride || settings.llamacppUrl || "http://localhost:8080";
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
     const response = await fetch(`${baseUrl}/health`, { signal: controller.signal });
