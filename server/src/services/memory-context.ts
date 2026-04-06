@@ -17,6 +17,12 @@ export function setCachedAugmentedPrompt(chatId: string, prompt: string): void {
   promptCache.set(chatId, prompt);
 }
 
+// Cache the stable prefix (base prompt + persona + user doc + blocks) per chat.
+// This avoids re-fetching and re-assembling the stable parts every turn.
+// The prefix only changes when the base system prompt changes (rare).
+// Dynamic memories are appended after the cached prefix.
+const stablePrefixCache = new Map<string, { basePrompt: string; prefix: string; blocksSection: string }>();
+
 export async function buildMemoryAugmentedPrompt(
   baseSystemPrompt: string,
   recentMessages: ChatMessage[],
@@ -25,24 +31,78 @@ export async function buildMemoryAugmentedPrompt(
   chatType?: string
 ): Promise<string> {
   try {
-    // Load persona and inject it first
-    let personaSection = "";
-    try {
-      const persona = await loadPersona();
-      personaSection = `\n\n## Your Persona\n${persona.content}\n\nRemember: This is your core identity.`;
-    } catch (e) {
-      console.error("[memory] Failed to load persona, continuing without:", e);
-    }
+    // Build or reuse the stable prefix (base prompt + persona + user doc + blocks).
+    // This prefix rarely changes within a conversation, so caching it avoids
+    // re-fetching persona/user doc/blocks every turn AND keeps the system prompt
+    // prefix stable for llama.cpp's KV cache prefix matching.
+    const cacheKey = chatId || "_default";
+    let cached = stablePrefixCache.get(cacheKey);
+    let stablePrefix: string;
+    let blocksSection: string;
 
-    // Load user document (optional) and inject after persona
-    let userSection = "";
-    try {
-      const userDoc = await loadUserDocument();
-      if (userDoc && userDoc.content.trim()) {
-        userSection = `\n\n## About the User\n${userDoc.content}`;
+    if (cached && cached.basePrompt === baseSystemPrompt) {
+      // Cache hit — reuse stable prefix
+      stablePrefix = cached.prefix;
+      blocksSection = cached.blocksSection;
+    } else {
+      // Cache miss or base prompt changed — rebuild
+      let personaSection = "";
+      try {
+        const persona = await loadPersona();
+        personaSection = `\n\n## Your Persona\n${persona.content}\n\nRemember: This is your core identity.`;
+      } catch (e) {
+        console.error("[memory] Failed to load persona, continuing without:", e);
       }
-    } catch (e) {
-      // User document is optional - silently skip if not found
+
+      let userSection = "";
+      try {
+        const userDoc = await loadUserDocument();
+        if (userDoc && userDoc.content.trim()) {
+          userSection = `\n\n## About the User\n${userDoc.content}`;
+        }
+      } catch (e) {
+        // User document is optional
+      }
+
+      // Load memory blocks by scope
+      blocksSection = "";
+      try {
+        const loadedBlocks: MemoryBlock[] = [];
+        const globalBlocks = getMemoryBlocksByScope("global");
+        loadedBlocks.push(...globalBlocks);
+        if (projectId) {
+          const projectBlocks = getMemoryBlocksByScope("project", projectId);
+          loadedBlocks.push(...projectBlocks);
+        }
+        const allBlocks = getAllMemoryBlocks();
+        const loadedIds = new Set(loadedBlocks.map((b) => b.id));
+        const indexedBlocks = allBlocks.filter((b) => !loadedIds.has(b.id));
+
+        let loadedTokens = 0;
+        const loadedParts: string[] = [];
+        for (const block of loadedBlocks) {
+          if (loadedTokens + block.tokenEstimate > 3000) break;
+          loadedParts.push(`### ${block.name}\n${block.content}`);
+          loadedTokens += block.tokenEstimate;
+        }
+        const indexParts = indexedBlocks.map((b) => `- [${b.id}] ${b.name} — ${b.description}`);
+
+        if (loadedParts.length > 0 || indexParts.length > 0) {
+          const parts: string[] = [];
+          if (loadedParts.length > 0) {
+            parts.push(`## Knowledge Blocks\n${loadedParts.join("\n\n")}`);
+          }
+          if (indexParts.length > 0) {
+            parts.push(`## Available Memory Blocks\n${indexParts.join("\n")}\nUse read_memory_block(id) to load full content when relevant.`);
+          }
+          blocksSection = "\n\n" + parts.join("\n\n");
+        }
+      } catch (e) {
+        console.error("[memory] Failed to load memory blocks:", e);
+      }
+
+      stablePrefix = `${baseSystemPrompt}${personaSection}${userSection}${blocksSection}`;
+      stablePrefixCache.set(cacheKey, { basePrompt: baseSystemPrompt, prefix: stablePrefix, blocksSection });
     }
 
     // Build a query from the last 3 user messages
@@ -148,55 +208,8 @@ export async function buildMemoryAugmentedPrompt(
       }
     }
 
-    // Load memory blocks by scope
-    let blocksSection = "";
-    try {
-      const loadedBlocks: MemoryBlock[] = [];
-
-      // Always load global blocks
-      const globalBlocks = getMemoryBlocksByScope("global");
-      loadedBlocks.push(...globalBlocks);
-
-      // Load project blocks if projectId is provided
-      if (projectId) {
-        const projectBlocks = getMemoryBlocksByScope("project", projectId);
-        loadedBlocks.push(...projectBlocks);
-      }
-
-      // Get all blocks for the index (including ones not directly loaded)
-      const allBlocks = getAllMemoryBlocks();
-      const loadedIds = new Set(loadedBlocks.map((b) => b.id));
-      const indexedBlocks = allBlocks.filter((b) => !loadedIds.has(b.id));
-
-      // Build loaded blocks section (full content, capped at ~3000 tokens)
-      let loadedTokens = 0;
-      const loadedParts: string[] = [];
-      for (const block of loadedBlocks) {
-        if (loadedTokens + block.tokenEstimate > 3000) break;
-        loadedParts.push(`### ${block.name}\n${block.content}`);
-        loadedTokens += block.tokenEstimate;
-      }
-
-      // Build index of remaining blocks (one-liners for progressive disclosure)
-      const indexParts = indexedBlocks.map(
-        (b) => `- [${b.id}] ${b.name} — ${b.description}`
-      );
-
-      if (loadedParts.length > 0 || indexParts.length > 0) {
-        const parts: string[] = [];
-        if (loadedParts.length > 0) {
-          parts.push(`## Knowledge Blocks\n${loadedParts.join("\n\n")}`);
-        }
-        if (indexParts.length > 0) {
-          parts.push(`## Available Memory Blocks\n${indexParts.join("\n")}\nUse read_memory_block(id) to load full content when relevant.`);
-        }
-        blocksSection = "\n\n" + parts.join("\n\n");
-      }
-    } catch (e) {
-      console.error("[memory] Failed to load memory blocks:", e);
-    }
-
-    return `${baseSystemPrompt}${personaSection}${userSection}${blocksSection}${memoriesSection}`;
+    // Assemble final prompt: stable prefix (cached) + dynamic memories
+    return `${stablePrefix}${memoriesSection}`;
   } catch (e) {
     console.error("[memory] Context augmentation failed, using base prompt:", e);
     return baseSystemPrompt;
