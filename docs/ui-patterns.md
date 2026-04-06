@@ -5,7 +5,11 @@
 - Server-Sent Events for real-time token streaming
 - Collapsible thinking blocks for reasoning-capable models (Qwen3+) with live duration timer (100ms updates), user toggle override, accumulated duration tracking
 - Token usage indicator (`TokenIndicator.tsx`) with context window progress bar, compaction warning, removed message count
-- Compaction indicator (`CompactionIndicator.tsx`) — collapsible UI showing where messages were compacted, removed count, timestamp, expandable summary
+- Compaction indicator (`CompactionIndicator.tsx`) — collapsible UI showing where messages were compacted, removed count, timestamp, expandable indexed summary with archive IDs
+- Context boundary visualization — messages before the last compaction point render at 45% opacity ("out of context"), with a green "In context" divider marking where active context resumes
+- Messages synced from server after compaction to ensure correct chronological ordering
+- Context window editing restricted to fresh chats (no messages yet) to prevent mid-conversation model reloads
+- Performance limit: max 200 messages rendered, with "N earlier messages not shown" indicator
 
 ## Mobile & Touch
 
@@ -28,6 +32,9 @@
 
 ## Other
 
-- Per-chat model selector and system prompt editor
+- Per-chat model selector with provider grouping (Ollama / llama.cpp headers, "LC" badge)
+- Model favorites: star toggle in settings, "Show only favorites in chat" mode
+- System prompt presets with "None (persona only)" option for agent chats, "Add preset" label when none selected
 - Markdown rendering with GFM support
 - SQLite + sqlite-vec for memory storage with SIMD-accelerated vector search
+- Message edit preserves images from original message; fixes stale closure in edit callback

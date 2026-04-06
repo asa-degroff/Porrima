@@ -12,7 +12,12 @@
 - **Build client**: `cd client && npm run build` (outputs to `client/dist/`)
 - **Type check**: `npx tsc --noEmit` from either `server/` or `client/`
 - **Data dir**: `~/.quje-agent/` (chats, projects, settings, memories, artifacts)
-- **systemd service**: `quje-agent.service` (user service, auto-starts on boot)
+- **Models dir**: `~/.local/share/llama-models/` (symlinked GGUFs for llama.cpp router)
+- **systemd services**:
+  - `quje-agent.service` — main server (auto-starts on boot)
+  - `llama-server.service` — llama.cpp router (port 8080, GPU inference)
+  - `reranker.service` — Qwen3-Reranker-0.6B (port 8082, CPU-only, memory retrieval)
+  - `sync-llama-models.timer` — auto-syncs HuggingFace GGUF downloads every 5 min
 
 ## Architecture
 
@@ -30,7 +35,7 @@ Native pi-ai tool calling with TypeBox schemas. Registry in `agent-tools.ts` wit
 
 See [docs/memory-system.md](docs/memory-system.md) for full details.
 
-8 memory categories (preference, fact, behavior, instruction, context, decision, note, reflection). Immediate + delayed extraction via LLM. RRF scoring combining vector search + FTS5. Cosine >0.85 dedup. Daily synthesis generates reflections and notebook entries. Pre-compaction flush preserves facts before context truncation. Key files: `memory-storage.ts`, `memory-extraction.ts`, `memory-context.ts`, `synthesis.ts`.
+8 memory categories (preference, fact, behavior, instruction, context, decision, note, reflection). Immediate + delayed extraction via LLM. Hybrid retrieval: vector search + FTS5 with RRF fusion, then cross-encoder reranking via Qwen3-Reranker-0.6B with chat-type-specific instructions. Cosine >0.85 dedup. Daily synthesis generates reflections and notebook entries. Pre-compaction flush preserves facts before context truncation. Indexed compaction archives full-fidelity messages in `context_archives` table with cross-chat FTS search. Key files: `memory-storage.ts`, `memory-extraction.ts`, `memory-context.ts`, `reranker.ts`, `synthesis.ts`.
 
 ## Artifacts & Image Systems
 
@@ -39,7 +44,7 @@ See [docs/artifacts-and-images.md](docs/artifacts-and-images.md) for full detail
 - **Artifacts**: `create_artifact` tool writes HTML to `~/.quje-agent/artifacts/`. Blob URLs for iframe src (critical for Chrome animation performance).
 - **Image Corpus**: SQLite + sqlite-vec + FTS5. Hybrid search via RRF. Density-based clustering (0.85 threshold).
 - **Creative Engine**: 5 direction types (gap-fill, remix, deepen, contrast, explore). 24h direction cache. Async job queue.
-- **Image Generation**: ComfyUI integration with autonomous generation during synthesis. GPU coordination unloads Ollama before ComfyUI.
+- **Image Generation**: ComfyUI integration with autonomous generation during synthesis. GPU coordination via `waitForFreeVRAM` — checks ComfyUI's `/system_stats` VRAM, unloads all LLM models (Ollama + llama.cpp) if needed.
 - **Vision**: Pluggable analysis presets with conversation support.
 
 ## Integrations & Features
@@ -101,9 +106,10 @@ quje-agent/
 │       ├── memory-tools.ts          # Agent tool definitions, parsing, execution
 │       ├── synthesis.ts             # Daily memory consolidation
 │       ├── scheduler.ts             # Synthesis check + delayed extraction + creative cycle
-│       ├── compaction.ts            # Message compaction when near context limit
+│       ├── compaction.ts            # Message compaction + indexed archival
+│       ├── reranker.ts              # Qwen3-Reranker client for memory retrieval
 │       ├── ollama-native-provider.ts # Ollama native API provider for pi-ai
-│       ├── openai-compat-provider.ts # OpenAI-compatible API provider (llama.cpp, etc.)
+│       ├── openai-compat-provider.ts # OpenAI-compatible API provider (llama.cpp)
 │       ├── models.ts                # Model discovery, provider dispatch, reasoning detection
 │       ├── tts.ts                   # Kokoro TTS integration
 │       ├── tts-qwen3.ts             # Qwen3-TTS backend with caching
