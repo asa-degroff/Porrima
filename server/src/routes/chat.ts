@@ -238,12 +238,15 @@ async function handleChatStream(
     console.error(`[chat] CRITICAL: context is empty but chat has ${chat.messages.length} messages - agent will respond without conversation history`);
   }
   
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
+  // Only set headers if not already sent (recursive follow-up calls reuse the same response)
+  if (!res.headersSent) {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+  }
 
   // Disable Nagle's algorithm so each res.write() sends immediately
   // instead of batching small SSE events into fewer TCP packets
