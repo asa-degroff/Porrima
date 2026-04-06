@@ -1,5 +1,5 @@
 import { embed } from "./embeddings.js";
-import { searchMemories, updateMemory, mmrRerank } from "./memory-storage.js";
+import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, getAllMemoryBlocks, type MemoryBlock } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { loadPersona } from "./persona-store.js";
 import { loadUserDocument } from "./user-store.js";
@@ -148,7 +148,55 @@ export async function buildMemoryAugmentedPrompt(
       }
     }
 
-    return `${baseSystemPrompt}${personaSection}${userSection}${memoriesSection}`;
+    // Load memory blocks by scope
+    let blocksSection = "";
+    try {
+      const loadedBlocks: MemoryBlock[] = [];
+
+      // Always load global blocks
+      const globalBlocks = getMemoryBlocksByScope("global");
+      loadedBlocks.push(...globalBlocks);
+
+      // Load project blocks if projectId is provided
+      if (projectId) {
+        const projectBlocks = getMemoryBlocksByScope("project", projectId);
+        loadedBlocks.push(...projectBlocks);
+      }
+
+      // Get all blocks for the index (including ones not directly loaded)
+      const allBlocks = getAllMemoryBlocks();
+      const loadedIds = new Set(loadedBlocks.map((b) => b.id));
+      const indexedBlocks = allBlocks.filter((b) => !loadedIds.has(b.id));
+
+      // Build loaded blocks section (full content, capped at ~3000 tokens)
+      let loadedTokens = 0;
+      const loadedParts: string[] = [];
+      for (const block of loadedBlocks) {
+        if (loadedTokens + block.tokenEstimate > 3000) break;
+        loadedParts.push(`### ${block.name}\n${block.content}`);
+        loadedTokens += block.tokenEstimate;
+      }
+
+      // Build index of remaining blocks (one-liners for progressive disclosure)
+      const indexParts = indexedBlocks.map(
+        (b) => `- [${b.id}] ${b.name} — ${b.description}`
+      );
+
+      if (loadedParts.length > 0 || indexParts.length > 0) {
+        const parts: string[] = [];
+        if (loadedParts.length > 0) {
+          parts.push(`## Knowledge Blocks\n${loadedParts.join("\n\n")}`);
+        }
+        if (indexParts.length > 0) {
+          parts.push(`## Available Memory Blocks\n${indexParts.join("\n")}\nUse read_memory_block(id) to load full content when relevant.`);
+        }
+        blocksSection = "\n\n" + parts.join("\n\n");
+      }
+    } catch (e) {
+      console.error("[memory] Failed to load memory blocks:", e);
+    }
+
+    return `${baseSystemPrompt}${personaSection}${userSection}${blocksSection}${memoriesSection}`;
   } catch (e) {
     console.error("[memory] Context augmentation failed, using base prompt:", e);
     return baseSystemPrompt;

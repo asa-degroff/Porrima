@@ -108,6 +108,23 @@ export interface ChatListItem {
 
 export type InferenceProvider = "ollama" | "llamacpp";
 
+export type MemoryBlockScope = "global" | "project";
+
+export interface MemoryBlock {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  scope: MemoryBlockScope;
+  projectId?: string;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: "agent" | "user";
+  tokenEstimate: number;
+  supersededBy?: string;
+  supersedes?: string;
+}
+
 export interface OllamaModel {
   id: string;
   name: string;

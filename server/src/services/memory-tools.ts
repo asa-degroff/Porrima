@@ -4,6 +4,12 @@ import {
   deleteMemory,
   getMemoryById,
   searchMemories,
+  createMemoryBlock,
+  updateMemoryBlock,
+  getMemoryBlock,
+  searchBlocks,
+  supersedeBlock,
+  MAX_BLOCK_CHARS,
 } from "./memory-storage.js";
 import { searchChatMessages, getChatMessageRange, getChatTitle, getArchive, searchArchives } from "./chat-storage.js";
 import { dedupAndSave } from "./memory-extraction.js";
@@ -98,6 +104,36 @@ export const MEMORY_TOOLS: Tool[] = [
       archive_id: Type.String({ description: "Archive block ID (e.g. archive:abc12345:001)" }),
     }),
   },
+  {
+    name: "create_memory_block",
+    description:
+      "Create a structured memory block — a named, editable document for organizing knowledge about a topic, project, or domain. Use this to consolidate related facts into a coherent document. Blocks are indexed and searchable across all chats.",
+    parameters: Type.Object({
+      name: Type.String({ description: "Block name (e.g. 'Tech Stack', 'User Preferences', 'Architecture', 'Topic Details')" }),
+      description: Type.String({ description: "One-line summary of what this block covers — used for retrieval and indexing" }),
+      content: Type.String({ description: "Full block content — structured text, up to ~4000 characters" }),
+      scope: Type.Optional(StringEnum(["global", "project"], { description: "Scope: 'global' (all chats) or 'project' (project-scoped). Default: global" })),
+      project_id: Type.Optional(Type.String({ description: "Project ID for project-scoped blocks" })),
+    }),
+  },
+  {
+    name: "update_memory_block",
+    description:
+      "Update an existing memory block's content or description. Use this to refine, expand, or correct knowledge in a block. If the block would exceed ~4000 characters, consider splitting into a new block.",
+    parameters: Type.Object({
+      block_id: Type.String({ description: "Block ID (e.g. blk-...)" }),
+      content: Type.Optional(Type.String({ description: "New content to replace the block's content" })),
+      description: Type.Optional(Type.String({ description: "Updated one-line description" })),
+    }),
+  },
+  {
+    name: "read_memory_block",
+    description:
+      "Load the full content of a memory block. Use when you see a block reference in the Available Memory Blocks section and need the full details.",
+    parameters: Type.Object({
+      block_id: Type.String({ description: "Block ID (e.g. blk-...)" }),
+    }),
+  },
 ];
 
 export interface ToolResult {
@@ -171,7 +207,17 @@ export async function executeMemoryTool(
         )
         .join("\n");
 
-      return { content: `Found memories:\n${formatted}`, isError: false };
+      // Also search memory blocks for matching content
+      const blockResults = searchBlocks(query, { limit: 3 });
+      let blockSection = "";
+      if (blockResults.length > 0) {
+        const blockFormatted = blockResults
+          .map((r) => `- [${r.block.id}] ${r.block.name}: ...${r.excerpt.slice(0, 200)}... (use read_memory_block to see full content)`)
+          .join("\n");
+        blockSection = `\n\nMemory blocks:\n${blockFormatted}`;
+      }
+
+      return { content: `Found memories:\n${formatted}${blockSection}`, isError: false };
     }
 
     case "forget_memory": {
@@ -381,6 +427,90 @@ export async function executeMemoryTool(
         }
       }
 
+      return { content: lines.join("\n"), isError: false };
+    }
+
+    case "create_memory_block": {
+      const { name, description, content, scope, project_id } = toolCall.arguments;
+      if (!name || !description || !content) {
+        return { content: "Missing required fields: name, description, content", isError: true };
+      }
+      if (content.length > MAX_BLOCK_CHARS) {
+        return { content: `Content exceeds ${MAX_BLOCK_CHARS} character limit (${content.length} chars). Please shorten or split into multiple blocks.`, isError: true };
+      }
+      const { v4: uuid } = await import("uuid");
+      const id = `blk-${uuid()}`;
+      const now = new Date().toISOString();
+      const block = createMemoryBlock({
+        id,
+        name,
+        description,
+        content,
+        scope: scope || "global",
+        projectId: project_id || "",
+        createdAt: now,
+        updatedAt: now,
+        updatedBy: "agent",
+        supersededBy: undefined,
+        supersedes: undefined,
+      });
+      return { content: `Created memory block: [${block.id}] "${block.name}" (${block.scope}, ${block.tokenEstimate} tokens)`, isError: false };
+    }
+
+    case "update_memory_block": {
+      const { block_id, content: newContent, description: newDesc } = toolCall.arguments;
+      if (!block_id) return { content: "Missing block_id", isError: true };
+
+      const existing = getMemoryBlock(block_id);
+      if (!existing) return { content: `Block not found: ${block_id}`, isError: false };
+
+      const finalContent = newContent ?? existing.content;
+      if (finalContent.length > MAX_BLOCK_CHARS) {
+        // Content too large — create a superseding block instead
+        const { v4: uuid } = await import("uuid");
+        const newId = `blk-${uuid()}`;
+        const now = new Date().toISOString();
+        const newBlock = supersedeBlock(existing.id, {
+          id: newId,
+          name: existing.name,
+          description: newDesc ?? existing.description,
+          content: finalContent.slice(0, MAX_BLOCK_CHARS),
+          scope: existing.scope,
+          projectId: existing.projectId || "",
+          createdAt: now,
+          updatedAt: now,
+          updatedBy: "agent",
+          supersededBy: undefined,
+          supersedes: existing.id,
+        });
+        return {
+          content: `Block exceeded ${MAX_BLOCK_CHARS} char limit — created new version [${newBlock.id}] superseding [${existing.id}]. Content was truncated to fit.`,
+          isError: false,
+        };
+      }
+
+      updateMemoryBlock(block_id, {
+        content: newContent,
+        description: newDesc,
+        updatedBy: "agent",
+      });
+      return { content: `Updated block [${block_id}] "${existing.name}"`, isError: false };
+    }
+
+    case "read_memory_block": {
+      const { block_id } = toolCall.arguments;
+      if (!block_id) return { content: "Missing block_id", isError: true };
+
+      const block = getMemoryBlock(block_id);
+      if (!block) return { content: `Block not found: ${block_id}`, isError: false };
+
+      const lines = [
+        `Memory Block: ${block.name} [${block.id}]`,
+        `Scope: ${block.scope}${block.projectId ? ` (project: ${block.projectId})` : ""}`,
+        `Updated: ${block.updatedAt.slice(0, 10)} by ${block.updatedBy}`,
+        `---`,
+        block.content,
+      ];
       return { content: lines.join("\n"), isError: false };
     }
 

@@ -131,6 +131,48 @@ export function getDb(): Database.Database {
     );
   `);
 
+  // Memory blocks — structured, editable knowledge documents
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_blocks (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      content TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'global',
+      projectId TEXT NOT NULL DEFAULT '',
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      updatedBy TEXT NOT NULL DEFAULT 'agent',
+      tokenEstimate INTEGER NOT NULL DEFAULT 0,
+      supersededBy TEXT,
+      supersedes TEXT
+    );
+  `);
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS memory_blocks_fts USING fts5(
+      content,
+      name,
+      description,
+      id UNINDEXED,
+      content='memory_blocks',
+      content_rowid='rowid'
+    );
+  `);
+
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS memory_blocks_ai AFTER INSERT ON memory_blocks BEGIN
+      INSERT INTO memory_blocks_fts(rowid, content, name, description, id) VALUES (new.rowid, new.content, new.name, new.description, new.id);
+    END;
+    CREATE TRIGGER IF NOT EXISTS memory_blocks_ad AFTER DELETE ON memory_blocks BEGIN
+      INSERT INTO memory_blocks_fts(memory_blocks_fts, rowid, content, name, description, id) VALUES('delete', old.rowid, old.content, old.name, old.description, old.id);
+    END;
+    CREATE TRIGGER IF NOT EXISTS memory_blocks_au AFTER UPDATE ON memory_blocks BEGIN
+      INSERT INTO memory_blocks_fts(memory_blocks_fts, rowid, content, name, description, id) VALUES('delete', old.rowid, old.content, old.name, old.description, old.id);
+      INSERT INTO memory_blocks_fts(rowid, content, name, description, id) VALUES (new.rowid, new.content, new.name, new.description, new.id);
+    END;
+  `);
+
   // Auto-migrate from JSON if needed
   if (needsMigration) {
     migrateFromJson(db);
@@ -1190,3 +1232,191 @@ export async function saveDailyLog(
   const filePath = join(DAILY_DIR, `${date}.md`);
   await writeFile(filePath, content);
 }
+
+// ---------------------------------------------------------------------------
+// Memory Blocks — structured, editable knowledge documents
+// ---------------------------------------------------------------------------
+
+const MAX_BLOCK_CHARS = 4000;
+
+export interface MemoryBlock {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  scope: "global" | "project";
+  projectId: string;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: "agent" | "user";
+  tokenEstimate: number;
+  supersededBy?: string;
+  supersedes?: string;
+}
+
+function estimateBlockTokens(content: string): number {
+  return Math.ceil(content.length / 4);
+}
+
+export function createMemoryBlock(block: Omit<MemoryBlock, "tokenEstimate">): MemoryBlock {
+  const db = getDb();
+  const full: MemoryBlock = {
+    ...block,
+    tokenEstimate: estimateBlockTokens(block.content),
+  };
+  db.prepare(`
+    INSERT INTO memory_blocks (id, name, description, content, scope, projectId, createdAt, updatedAt, updatedBy, tokenEstimate, supersededBy, supersedes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    full.id, full.name, full.description, full.content, full.scope,
+    full.projectId || "", full.createdAt, full.updatedAt, full.updatedBy,
+    full.tokenEstimate, full.supersededBy ?? null, full.supersedes ?? null
+  );
+  return full;
+}
+
+export function updateMemoryBlock(id: string, updates: { content?: string; description?: string; name?: string; updatedBy?: "agent" | "user" }): boolean {
+  const db = getDb();
+  const existing = getMemoryBlock(id);
+  if (!existing) return false;
+
+  const content = updates.content ?? existing.content;
+  const tokenEstimate = estimateBlockTokens(content);
+  const now = new Date().toISOString();
+
+  db.prepare(`
+    UPDATE memory_blocks SET
+      content = ?, description = ?, name = ?,
+      updatedAt = ?, updatedBy = ?, tokenEstimate = ?
+    WHERE id = ?
+  `).run(
+    content,
+    updates.description ?? existing.description,
+    updates.name ?? existing.name,
+    now,
+    updates.updatedBy ?? "agent",
+    tokenEstimate,
+    id
+  );
+  return true;
+}
+
+export function getMemoryBlock(id: string): MemoryBlock | null {
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM memory_blocks WHERE id = ?").get(id) as any;
+  if (!row) return null;
+  return {
+    ...row,
+    projectId: row.projectId || undefined,
+    supersededBy: row.supersededBy || undefined,
+    supersedes: row.supersedes || undefined,
+  };
+}
+
+export function getMemoryBlocksByScope(scope: "global" | "project", projectId?: string): MemoryBlock[] {
+  const db = getDb();
+  let rows: any[];
+  if (scope === "project" && projectId) {
+    rows = db.prepare(
+      "SELECT * FROM memory_blocks WHERE scope = 'project' AND projectId = ? AND supersededBy IS NULL ORDER BY updatedAt DESC"
+    ).all(projectId);
+  } else {
+    rows = db.prepare(
+      "SELECT * FROM memory_blocks WHERE scope = 'global' AND supersededBy IS NULL ORDER BY updatedAt DESC"
+    ).all();
+  }
+  return rows.map((r: any) => ({
+    ...r,
+    projectId: r.projectId || undefined,
+    supersededBy: r.supersededBy || undefined,
+    supersedes: r.supersedes || undefined,
+  }));
+}
+
+export function getAllMemoryBlocks(): MemoryBlock[] {
+  const db = getDb();
+  const rows = db.prepare(
+    "SELECT * FROM memory_blocks WHERE supersededBy IS NULL ORDER BY updatedAt DESC"
+  ).all() as any[];
+  return rows.map((r: any) => ({
+    ...r,
+    projectId: r.projectId || undefined,
+    supersededBy: r.supersededBy || undefined,
+    supersedes: r.supersedes || undefined,
+  }));
+}
+
+export function deleteMemoryBlock(id: string): boolean {
+  const db = getDb();
+  const result = db.prepare("DELETE FROM memory_blocks WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+/** Supersede a block with a new version. */
+export function supersedeBlock(oldBlockId: string, newBlock: Omit<MemoryBlock, "tokenEstimate">): MemoryBlock {
+  const db = getDb();
+  // Mark old block
+  db.prepare("UPDATE memory_blocks SET supersededBy = ? WHERE id = ?").run(newBlock.id, oldBlockId);
+  // Create new block with supersedes link
+  const full = createMemoryBlock({ ...newBlock, supersedes: oldBlockId });
+  return full;
+}
+
+/** Search block content via FTS5. Returns excerpts around matches. */
+export function searchBlocks(
+  query: string,
+  opts: { projectId?: string; limit?: number } = {}
+): Array<{ block: MemoryBlock; excerpt: string; rank: number }> {
+  const db = getDb();
+  const limit = opts.limit ?? 5;
+  const escaped = query.replace(/['"]/g, "");
+  const terms = escaped.split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return [];
+
+  const termQuery = terms.map((t) => `"${t}"`).join(" OR ");
+  try {
+    const rows = db.prepare(`
+      SELECT mb.*, f.rank
+      FROM memory_blocks_fts f
+      JOIN memory_blocks mb ON mb.rowid = f.rowid
+      WHERE f.memory_blocks_fts MATCH ?
+        AND mb.supersededBy IS NULL
+      ORDER BY f.rank LIMIT ?
+    `).all(termQuery, limit) as any[];
+
+    return rows
+      .filter((r) => !opts.projectId || r.scope === "global" || r.projectId === opts.projectId)
+      .map((r) => ({
+        block: {
+          ...r,
+          projectId: r.projectId || undefined,
+          supersededBy: r.supersededBy || undefined,
+          supersedes: r.supersedes || undefined,
+        },
+        excerpt: extractExcerpt(r.content, query, 400),
+        rank: r.rank,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/** Extract a text excerpt around the first occurrence of any query term. */
+function extractExcerpt(text: string, query: string, radius = 400): string {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const lower = text.toLowerCase();
+  let bestPos = -1;
+  for (const term of terms) {
+    const pos = lower.indexOf(term);
+    if (pos >= 0 && (bestPos < 0 || pos < bestPos)) bestPos = pos;
+  }
+  if (bestPos < 0) return text.slice(0, radius);
+  const start = Math.max(0, bestPos - radius / 2);
+  const end = Math.min(text.length, bestPos + radius / 2);
+  let excerpt = text.slice(start, end);
+  if (start > 0) excerpt = "..." + excerpt;
+  if (end < text.length) excerpt = excerpt + "...";
+  return excerpt;
+}
+
+export { MAX_BLOCK_CHARS };

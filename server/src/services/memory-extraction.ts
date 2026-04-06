@@ -102,9 +102,23 @@ If nothing is worth remembering, output: []
 
 IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 
-async function buildExtractionSystemPrompt(): Promise<string> {
+async function buildExtractionSystemPrompt(projectId?: string): Promise<string> {
   const persona = await loadPersona();
-  return `${persona.content}\n\n${EXTRACTION_INSTRUCTIONS}`;
+
+  // Include loaded block summaries so extraction avoids redundant facts
+  let blockContext = "";
+  try {
+    const { getMemoryBlocksByScope } = await import("./memory-storage.js");
+    const globalBlocks = getMemoryBlocksByScope("global");
+    const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId) : [];
+    const allBlocks = [...globalBlocks, ...projectBlocks];
+    if (allBlocks.length > 0) {
+      const summaries = allBlocks.map((b) => `- ${b.name}: ${b.content.slice(0, 300)}`).join("\n");
+      blockContext = `\n\n## Existing Knowledge Blocks\nThe following memory blocks already contain relevant context — do NOT extract information that is already covered here:\n${summaries}\n`;
+    }
+  } catch { /* non-critical */ }
+
+  return `${persona.content}${blockContext}\n\n${EXTRACTION_INSTRUCTIONS}`;
 }
 
 const DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS = `---
@@ -265,7 +279,7 @@ export async function extractMemories(
   extractionMetrics.totalExtractions++;
   try {
   const extractionPrompt = `User message: ${userMsg}\n\nAssistant response: ${assistantMsg}`;
-  const systemPrompt = await buildExtractionSystemPrompt();
+  const systemPrompt = await buildExtractionSystemPrompt(projectId);
 
   // Call the LLM to extract facts (with retry)
   let responseText = "";
