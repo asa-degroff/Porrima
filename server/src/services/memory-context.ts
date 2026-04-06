@@ -64,7 +64,10 @@ export async function buildMemoryAugmentedPrompt(
         // User document is optional
       }
 
-      // Load memory blocks by scope
+      // Load memory blocks by scope:
+      // - Global blocks: always loaded (full content)
+      // - Project blocks: auto-loaded for matching project chats (full content)
+      // - Other blocks: shown as one-line index for discovery via read_memory_block
       blocksSection = "";
       try {
         const loadedBlocks: MemoryBlock[] = [];
@@ -74,18 +77,25 @@ export async function buildMemoryAugmentedPrompt(
           const projectBlocks = getMemoryBlocksByScope("project", projectId);
           loadedBlocks.push(...projectBlocks);
         }
+
         const allBlocks = getAllMemoryBlocks();
         const loadedIds = new Set(loadedBlocks.map((b) => b.id));
         const indexedBlocks = allBlocks.filter((b) => !loadedIds.has(b.id));
 
+        // Load full content for global + project blocks (up to 5000 tokens for project chats)
+        const tokenBudget = projectId ? 5000 : 3000;
         let loadedTokens = 0;
         const loadedParts: string[] = [];
         for (const block of loadedBlocks) {
-          if (loadedTokens + block.tokenEstimate > 3000) break;
+          if (loadedTokens + block.tokenEstimate > tokenBudget) break;
           loadedParts.push(`### ${block.name}\n${block.content}`);
           loadedTokens += block.tokenEstimate;
         }
-        const indexParts = indexedBlocks.map((b) => `- [${b.id}] ${b.name} — ${b.description}`);
+
+        // Build index for non-loaded blocks (other projects, overflow)
+        const indexParts = indexedBlocks.map(
+          (b) => `- [${b.id}] ${b.name}${b.scope === "project" ? ` (project)` : ""} — ${b.description}`
+        );
 
         if (loadedParts.length > 0 || indexParts.length > 0) {
           const parts: string[] = [];
@@ -204,7 +214,13 @@ export async function buildMemoryAugmentedPrompt(
           }).catch(() => {});
         }
 
-        memoriesSection = `\n\n## My relevant memories to this chat:\n${memoriesBlock}\n\nUse these memories as needed — there's no need to list them unless asked.`;
+        // Check if there are non-loaded blocks that might have relevant context
+        const hasIndexedBlocks = cached?.blocksSection?.includes("Available Memory Blocks");
+        const blockHint = hasIndexedBlocks
+          ? "\n\nAdditional context may be available in memory blocks listed above — use read_memory_block(id) if relevant to the current topic."
+          : "";
+
+        memoriesSection = `\n\n## My relevant memories to this chat:\n${memoriesBlock}\n\nUse these memories as needed — there's no need to list them unless asked.${blockHint}`;
       }
     }
 
