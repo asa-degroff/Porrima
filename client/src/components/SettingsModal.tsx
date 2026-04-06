@@ -145,6 +145,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [blocksLoading, setBlocksLoading] = useState(false);
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [editBlockContent, setEditBlockContent] = useState("");
+  const [confirmingBlockDelete, setConfirmingBlockDelete] = useState<string | null>(null);
   const [blockScopeFilter, setBlockScopeFilter] = useState<"all" | "global" | "project">("all");
   // Delayed extraction settings
   const [delayedExtractionEnabled, setDelayedExtractionEnabled] = useState(settings.delayedExtractionEnabled ?? true);
@@ -522,6 +523,16 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setMemoryStatus((prev) => prev ? { ...prev, memoryCount: prev.memoryCount - 1 } : prev);
     } catch {}
     setMemoryDeleting(null);
+  }, []);
+
+  const handleDeleteBlock = useCallback(async (blockId: string) => {
+    try {
+      await deleteMemoryBlockApi(blockId);
+      setBlocks((prev) => prev.filter((b) => b.id !== blockId));
+    } catch (err) {
+      console.error("Failed to delete block:", err);
+    }
+    setConfirmingBlockDelete(null);
   }, []);
 
   const handleToggleLineage = useCallback(async (id: string) => {
@@ -1792,19 +1803,30 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                               >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
                               </button>
-                              <button
-                                onClick={() => {
-                                  if (confirm(`Delete block "${block.name}"?`)) {
-                                    deleteMemoryBlockApi(block.id).then(() => {
-                                      setBlocks((prev) => prev.filter((b) => b.id !== block.id));
-                                    });
-                                  }
-                                }}
-                                className="p-1 rounded hover:bg-red-500/20 text-white/30 hover:text-red-400"
-                                title="Delete"
-                              >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
-                              </button>
+                              {confirmingBlockDelete === block.id ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => handleDeleteBlock(block.id)}
+                                    className="px-2 py-0.5 rounded bg-red-500/15 border border-red-400/25 text-red-300 hover:bg-red-500/25 text-xs font-medium"
+                                  >
+                                    Confirm
+                                  </button>
+                                  <button
+                                    onClick={() => setConfirmingBlockDelete(null)}
+                                    className="px-2 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80 text-xs font-medium"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => setConfirmingBlockDelete(block.id)}
+                                  className="p-1 rounded hover:bg-red-500/20 text-white/30 hover:text-red-400"
+                                  title="Delete"
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                                </button>
+                              )}
                             </div>
                           </div>
 
