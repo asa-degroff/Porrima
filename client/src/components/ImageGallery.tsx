@@ -74,7 +74,7 @@ const ImageTile = memo(function ImageTile({
       {onDelete && (
         <div
           onClick={(e) => { e.stopPropagation(); setConfirmDelete(true); }}
-          className="absolute top-1.5 right-10 p-1 rounded-md bg-black/50 text-white/40 hover:text-red-400 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-all cursor-pointer z-10"
+          className="absolute top-1.5 right-1.5 p-1 rounded-md bg-black/50 text-white/40 hover:text-red-400 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-all cursor-pointer z-10"
           title="Delete"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -87,7 +87,7 @@ const ImageTile = memo(function ImageTile({
       {onToggleFavorite && (
         <button
           onClick={(e) => { e.stopPropagation(); onToggleFavorite(image.id); }}
-          className={`absolute top-1.5 right-1.5 p-1.5 rounded-full backdrop-blur-sm transition-all cursor-pointer z-5 ${
+          className={`absolute top-1.5 left-1.5 p-1.5 rounded-full backdrop-blur-sm transition-all cursor-pointer z-5 ${
             image.isFavorite
               ? "bg-rose-500/20 text-rose-400"
               : "bg-black/40 text-white/30 hover:text-rose-400 hover:bg-black/60 opacity-0 group-hover:opacity-100"
