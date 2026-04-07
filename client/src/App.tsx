@@ -373,9 +373,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleSend = useCallback(
     (text: string, images?: import("./types").ImageAttachment[]) => {
       send(text, images);
-      // Title update will trigger a debounced refresh when it arrives via titleUpdate effect
+      // Mark this chat as having a warm KV cache
+      if (activeChatId) setLastActiveChatId(activeChatId);
     },
-    [send]
+    [send, activeChatId]
   );
 
   const handleEditMessage = useCallback(
