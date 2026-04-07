@@ -1175,8 +1175,11 @@ async function handleChatStream(
         break;
       }
 
-      // Update the in-progress message with resumed content
+      // Update the in-progress message with resumed content.
+      // Keep _inProgress so the final handler at end-of-turn replaces
+      // rather than pushing a duplicate.
       const updatedMsg = buildCurrentAssistantMessage();
+      updatedMsg._inProgress = true;
       const lastAssistant = chat.messages[chat.messages.length - 1];
       if (lastAssistant?.role === "assistant") {
         chat.messages[chat.messages.length - 1] = updatedMsg;
