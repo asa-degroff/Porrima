@@ -1816,11 +1816,15 @@ router.post("/", async (req, res) => {
     // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
     const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
 
-    // Inject dynamic memories as a system message at the END of context (before the new user message).
-    // This keeps the system prompt + conversation history stable for KV cache prefix matching.
+    // Inject dynamic memories at the END of context (before the new user message).
+    // This keeps the system prompt + conversation history stable for KV cache
+    // prefix matching — only the memories + new user message are reprocessed.
     if (memoriesMessage) {
-      contextMessages.push({ role: "user", content: `[System context — relevant memories]\n${memoriesMessage}`, timestamp: Date.now() });
-      contextMessages.push({ role: "assistant", content: "I'll keep these memories in mind.", timestamp: Date.now() } as any);
+      contextMessages.push({
+        role: "user",
+        content: `[System context — relevant memories]\n${memoriesMessage}`,
+        timestamp: Date.now(),
+      });
     }
 
     // Safety check: warn if context is empty for non-first messages
