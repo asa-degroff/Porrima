@@ -290,11 +290,13 @@ export const streamOllamaNative = (
         },
       };
 
-      // Configurable keep_alive (default: "15m" for balance between responsiveness and VRAM usage)
+      // Configurable keep_alive (default: "60m" — keep model loaded for responsive follow-ups.
+      // Extraction and title gen use separate CPU instances, so VRAM contention is minimal.
+      // ComfyUI's waitForFreeVRAM handles explicit unloading when GPU is needed.)
       if (options?.keepAlive !== undefined) {
         body.keep_alive = options.keepAlive;
       } else {
-        body.keep_alive = "15m";
+        body.keep_alive = "60m";
       }
 
       if (context.tools && context.tools.length > 0) {
