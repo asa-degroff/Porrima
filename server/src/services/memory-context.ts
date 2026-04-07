@@ -23,6 +23,12 @@ export function setCachedAugmentedPrompt(chatId: string, prompt: string): void {
 // Dynamic memories are appended after the cached prefix.
 const stablePrefixCache = new Map<string, { basePrompt: string; prefix: string; blocksSection: string }>();
 
+export interface AugmentedPromptResult {
+  systemPrompt: string;        // Stable prefix (persona + user doc + blocks)
+  memoriesMessage: string;     // Dynamic memories (injected as separate message near end)
+  combined: string;            // Legacy: full combined prompt for backward compat
+}
+
 export async function buildMemoryAugmentedPrompt(
   baseSystemPrompt: string,
   recentMessages: ChatMessage[],
@@ -230,4 +236,42 @@ export async function buildMemoryAugmentedPrompt(
     console.error("[memory] Context augmentation failed, using base prompt:", e);
     return baseSystemPrompt;
   }
+}
+
+/**
+ * Build the augmented prompt with memories SPLIT from the system prompt.
+ * Returns the stable system prompt separately from the dynamic memories message.
+ * The caller should inject the memories as a separate message near the end of
+ * the conversation, AFTER the conversation history. This maximizes KV cache
+ * prefix reuse — the system prompt + conversation history stay stable across
+ * turns, and only the memories + new user message are reprocessed.
+ */
+export async function buildSplitAugmentedPrompt(
+  baseSystemPrompt: string,
+  recentMessages: ChatMessage[],
+  chatId?: string,
+  projectId?: string,
+  chatType?: string
+): Promise<AugmentedPromptResult> {
+  // Build the full prompt using the existing function
+  const combined = await buildMemoryAugmentedPrompt(
+    baseSystemPrompt, recentMessages, chatId, projectId, chatType
+  );
+
+  // Extract the stable prefix from cache
+  const cacheKey = chatId || "_default";
+  const cached = stablePrefixCache.get(cacheKey);
+  const stablePrefix = cached?.prefix || combined;
+
+  // Extract the memories section (everything after the stable prefix)
+  let memoriesMessage = "";
+  if (cached && combined.startsWith(stablePrefix)) {
+    memoriesMessage = combined.slice(stablePrefix.length).trim();
+  }
+
+  return {
+    systemPrompt: stablePrefix,
+    memoriesMessage,
+    combined,
+  };
 }
