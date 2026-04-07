@@ -1,4 +1,5 @@
 import type { MessageUsage } from "../types";
+import { OctahedronLogo } from "./OctahedronLogo";
 
 interface CompactionInfo {
   removedCount: number;
@@ -80,12 +81,10 @@ export function TokenIndicator({
         />
       </div>
       {compacting ? (
-        <span
-          className="text-purple-300/80 animate-pulse cursor-default"
-          title="Summarizing older messages to free context space"
-        >
-          compacting...
-        </span>
+        <div className="flex items-center gap-2 text-purple-300/80 cursor-default" title="Summarizing older messages to free context space">
+          <OctahedronLogo isActive={true} count={3} size={14} gap={2} speed={0.8} />
+          <span className="animate-pulse">compacting...</span>
+        </div>
       ) : compaction ? (
         <span
           className="text-purple-300/60 cursor-default"

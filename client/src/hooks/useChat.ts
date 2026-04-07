@@ -480,8 +480,7 @@ export function useChat(chatId: string | null) {
         if (bg) bg.compacting = true;
         if (activeChatIdRef.current === streamChatId) {
           setCompacting(true);
-          // Show background activity indicator in sidebar during compaction
-          setHasBackgroundActivity(true);
+          // Don't show sidebar indicator — octahedron is shown inline in TokenIndicator
         }
       },
       onCompaction: (info) => {
@@ -490,7 +489,7 @@ export function useChat(chatId: string | null) {
         if (bg) {
           bg.compacting = false;
           bg.compaction = info;
-          setHasBackgroundActivity(false);
+          // Don't toggle sidebar indicator — it wasn't set during compaction
 
           // Reload messages from server to ensure correct ordering.
           // The server has the authoritative message order after compaction —
