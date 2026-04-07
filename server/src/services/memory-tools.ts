@@ -461,13 +461,25 @@ export async function executeMemoryTool(
       const { v4: uuid } = await import("uuid");
       const id = `blk-${uuid()}`;
       const now = new Date().toISOString();
+      
+      // Auto-assign projectId for project-scoped blocks when created in a project chat
+      // The agent may not have the project UUID, so we infer it from the chat context
+      let finalProjectId = project_id || "";
+      if (scope === "project" && !project_id && chatId) {
+        const { getChat } = await import("./chat-storage.js");
+        const chat = await getChat(chatId);
+        if (chat?.projectId) {
+          finalProjectId = chat.projectId;
+        }
+      }
+      
       const block = createMemoryBlock({
         id,
         name,
         description,
         content,
         scope: scope || "global",
-        projectId: project_id || "",
+        projectId: finalProjectId,
         createdAt: now,
         updatedAt: now,
         updatedBy: "agent",
