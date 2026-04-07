@@ -31,6 +31,7 @@ interface Props {
   ttsBarVisible?: boolean;
   blueskyChatId?: string;
   hasBackgroundActivity?: boolean;
+  lastActiveChatId?: string | null;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -65,6 +66,7 @@ function ProjectSection({
   onEditProject,
   editMode,
   onSendToNotebook,
+  lastActiveChatId,
 }: {
   project: Project;
   chats: ChatListItemType[];
@@ -78,6 +80,7 @@ function ProjectSection({
   onEditProject: (project: Project) => void;
   editMode: boolean;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
+  lastActiveChatId?: string | null;
 }) {
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -309,6 +312,7 @@ function ProjectSection({
                   key={chat.id}
                   chat={chat}
                   active={chat.id === activeChatId}
+                  lastActive={chat.id === lastActiveChatId}
                   onSelect={() => onSelectChat(chat.id)}
                   onDelete={() => onDeleteChat(chat.id)}
                   onSendToNotebook={onSendToNotebook}
@@ -348,6 +352,7 @@ export function Sidebar({
   ttsBarVisible = false,
   blueskyChatId,
   hasBackgroundActivity = false,
+  lastActiveChatId = null,
 }: Props) {
   const {
     projectsExpanded,
@@ -652,6 +657,7 @@ export function Sidebar({
                       }}
                       editMode={projectsEditMode}
                       onSendToNotebook={onSendToNotebook}
+                      lastActiveChatId={lastActiveChatId}
                     />
                   ))}
                 </div>
@@ -707,7 +713,7 @@ export function Sidebar({
               </button>
             )}
           </div>
-          {/* Scrollable chat list */}
+           {/* Scrollable chat list */}
           {agentExpanded && (
             <div className="flex-1 overflow-y-auto pb-1">
               <div className="space-y-0.5 pl-3 pr-2">
@@ -716,6 +722,7 @@ export function Sidebar({
                     key={chat.id}
                     chat={chat}
                     active={chat.id === activeChatId}
+                    lastActive={chat.id === lastActiveChatId}
                     onSelect={() => { onSelectChat(chat.id); onClose(); }}
                     onDelete={() => onDeleteChat(chat.id)}
                     onSendToNotebook={onSendToNotebook}
@@ -771,6 +778,7 @@ export function Sidebar({
                     key={chat.id}
                     chat={chat}
                     active={chat.id === activeChatId}
+                    lastActive={chat.id === lastActiveChatId}
                     onSelect={() => { onSelectChat(chat.id); onClose(); }}
                     onDelete={() => onDeleteChat(chat.id)}
                     onSendToNotebook={onSendToNotebook}

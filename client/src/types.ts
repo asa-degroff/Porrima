@@ -179,6 +179,8 @@ export interface Settings {
   favoriteModels?: string[];
   showOnlyFavorites?: boolean;
   bluesky?: BlueskySettings;
+  // Last active chat ID (for warm cache indicator)
+  lastActiveChatId?: string;
 }
 
 export interface CreativeDirectionSettings {

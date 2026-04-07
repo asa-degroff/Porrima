@@ -5,12 +5,13 @@ import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
 interface Props {
   chat: ChatListItemType;
   active: boolean;
+  lastActive?: boolean;
   onSelect: () => void;
   onDelete: () => void;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
 }
 
-export function ChatListItem({ chat, active, onSelect, onDelete, onSendToNotebook }: Props) {
+export function ChatListItem({ chat, active, lastActive = false, onSelect, onDelete, onSendToNotebook }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -59,7 +60,9 @@ export function ChatListItem({ chat, active, onSelect, onDelete, onSendToNoteboo
       className={`w-full text-left px-2.5 py-2 rounded-xl transition-all group relative ${
         active
           ? "bg-white/15 border border-white/20"
-          : "hover:bg-white/8 border border-transparent"
+          : lastActive
+            ? "hover:bg-white/8 border border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
+            : "hover:bg-white/8 border border-transparent"
       }`}
     >
       {/* Always-rendered content to maintain consistent height */}

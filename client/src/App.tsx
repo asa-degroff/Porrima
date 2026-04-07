@@ -59,6 +59,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [activeView, setActiveView] = useState<'chats' | 'notebooks'>('chats');
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
+  const [lastActiveChatId, setLastActiveChatId] = useState<string | null>(settings.lastActiveChatId || null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [imageSandboxOpen, setImageSandboxOpen] = useState(false);
@@ -84,6 +85,17 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         setUiStateSynced(true);
       });
   }, []);
+
+  // Persist lastActiveChatId to settings (only when it changes, not on every settings update)
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  useEffect(() => {
+    if (!lastActiveChatId) return;
+    const timer = setTimeout(async () => {
+      await updateSettings({ ...settingsRef.current, lastActiveChatId });
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [lastActiveChatId, updateSettings]);
   const {
     messages,
     streaming,
@@ -259,6 +271,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   // Cache-first: show IDB cached data immediately, refresh from server in background
   const selectChat = useCallback(
     async (id: string) => {
+      // Track the previous active chat before switching
+      if (activeChatId && activeChatId !== id) {
+        setLastActiveChatId(activeChatId);
+      }
       setActiveChatId(id);
 
       // If this chat has a background stream (active or recently completed),
@@ -506,6 +522,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}
         blueskyChatId={settings.bluesky?.blueskyChatId}
         hasBackgroundActivity={hasBackgroundActivity}
+        lastActiveChatId={lastActiveChatId}
       />
       {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}
       {imageSandboxOpen ? (
