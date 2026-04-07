@@ -908,7 +908,68 @@ async function handleChatStream(
       })();
     }
 
-    // --- Post-loop: handle incomplete tool turns, ask_user, build message, compaction ---
+    // --- Post-loop: compaction check, then handle incomplete tool turns, ask_user, build message ---
+
+    // End-of-turn compaction: if we crossed the 75% threshold during this turn,
+    // compact NOW before building the final message. This prevents the user from
+    // waiting on compaction after their response appears complete.
+    // Mid-turn compaction (85% during tool loops) is handled separately above.
+    if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput) {
+      try {
+        const model = allModels.find((m: OllamaModel) => m.id === chat.modelId);
+        if (model) {
+          const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
+          const lastUsage = state.finalUsage?.totalTokens ?? 0;
+          const usageRatio = lastUsage > 0 ? lastUsage / effectiveContextWindow : 0;
+
+          // Check if we crossed the 75% threshold
+          let needsCompaction = hitContextLimit || usageRatio > 0.75;
+          
+          // Fallback to character estimation if usage is missing
+          if (!needsCompaction && lastUsage === 0 && chat.messages.length > 4) {
+            const { estimateContextTokens } = await import("../services/compaction.js");
+            const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt);
+            const estimatedRatio = estimatedTokens / effectiveContextWindow;
+            if (estimatedRatio > 0.75) {
+              console.log(`[compaction] End-of-turn: usage missing but estimation shows ${estimatedTokens} tokens (${(estimatedRatio * 100).toFixed(0)}%) — forcing compaction`);
+              needsCompaction = true;
+            }
+          }
+
+          if (needsCompaction) {
+            console.log(`[compaction] End-of-turn compaction triggered: ${lastUsage}/${effectiveContextWindow} (${(usageRatio * 100).toFixed(0)}%)`);
+            const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
+            const emitKeepalive = () => res.write(`: keepalive\n\n`);
+            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive);
+            if (compaction.truncated) {
+              // Extract memories from removed messages (agent chats only)
+              if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages);
+              }
+              await saveChat(chat);
+              
+              // Find the summary message that was inserted
+              const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
+              res.write(`event: compaction\ndata: ${JSON.stringify({
+                removedCount: compaction.removedCount,
+                remainingCount: chat.messages.length,
+                summaryMessage: summaryMsg || null,
+              })}\n\n`);
+              
+              // Rebuild system prompt after compaction (memories may have changed)
+              if (chat.type === "agent" || chat.type === "bluesky") {
+                systemPrompt = await buildMemoryAugmentedPrompt(
+                  chat.systemPrompt || "You are a helpful assistant.",
+                  chat.messages, chat.id, chat.projectId, chat.type
+                );
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[compaction] End-of-turn compaction failed:", err);
+      }
+    }
 
     // If the last turn ended with toolUse but no final text, continue the loop
     // This handles cases where the LLM signaled tool use but didn't produce the final text response
@@ -1364,52 +1425,6 @@ async function handleChatStream(
           .catch((err) => console.error("[memory] deferred extraction failed:", err));
       }
       deferredExtractions.length = 0;
-
-      // Post-response compaction: truncate if usage > 75% OR if we hit the context limit
-      try {
-        const model = allModels.find((m: OllamaModel) => m.id === chat.modelId);
-        if (model) {
-          const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
-          const lastUsage = assistantMsg.usage?.totalTokens ?? 0;
-          const usageRatio = lastUsage > 0 ? lastUsage / effectiveContextWindow : 0;
-
-          // If usage data is missing (tokens=?), fall back to character-based estimation.
-          // This commonly happens when Ollama errors out at context limits without reporting usage.
-          let needsCompaction = hitContextLimit || usageRatio > 0.75;
-          if (!needsCompaction && lastUsage === 0 && chat.messages.length > 4) {
-            const { estimateContextTokens } = await import("../services/compaction.js");
-            const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt);
-            const estimatedRatio = estimatedTokens / effectiveContextWindow;
-            if (estimatedRatio > 0.75) {
-              console.log(`[compaction] Usage missing but char estimation shows ${estimatedTokens} tokens (${(estimatedRatio * 100).toFixed(0)}% of ${effectiveContextWindow}) — forcing compaction`);
-              needsCompaction = true;
-            }
-          }
-
-          if (needsCompaction) {
-            const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
-            const emitKeepalive = () => res.write(`: keepalive\n\n`);
-            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive);
-            if (compaction.truncated) {
-              // Extract memories from removed messages (agent chats only)
-              if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
-                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages);
-              }
-              await saveChat(chat);
-              
-              // Find the summary message that was inserted
-              const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
-              res.write(`event: compaction\ndata: ${JSON.stringify({
-                removedCount: compaction.removedCount,
-                remainingCount: chat.messages.length,
-                summaryMessage: summaryMsg || null,
-              })}\n\n`);
-            }
-          }
-        }
-      } catch (err) {
-        console.error("[compaction] failed:", err);
-      }
     }
   } catch (e: any) {
     // ask_user abort is expected — handle it gracefully
