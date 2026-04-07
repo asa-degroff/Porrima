@@ -956,13 +956,19 @@ async function handleChatStream(
                 summaryMessage: summaryMsg || null,
               })}\n\n`);
               
-              // Rebuild system prompt after compaction (memories may have changed)
+              // Rebuild system prompt after compaction using split approach
+              // to preserve the stable prefix for KV cache optimization
               if (chat.type === "agent" || chat.type === "bluesky") {
-                systemPrompt = await buildMemoryAugmentedPrompt(
+                const split = await buildSplitAugmentedPrompt(
                   chat.systemPrompt || "You are a helpful assistant.",
                   chat.messages, chat.id, chat.projectId, chat.type
                 );
+                systemPrompt = split.systemPrompt;
               }
+
+              // Clear usage so the token indicator reflects the compacted state
+              // rather than showing stale pre-compaction numbers
+              state.finalUsage = undefined;
             }
           }
         }
