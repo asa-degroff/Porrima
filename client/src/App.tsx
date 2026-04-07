@@ -373,10 +373,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleSend = useCallback(
     (text: string, images?: import("./types").ImageAttachment[]) => {
       send(text, images);
-      // Mark this chat as having a warm KV cache
-      if (activeChatId) setLastActiveChatId(activeChatId);
     },
-    [send, activeChatId]
+    [send]
   );
 
   const handleEditMessage = useCallback(
