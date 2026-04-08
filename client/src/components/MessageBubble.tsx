@@ -203,7 +203,7 @@ export const MessageBubble = memo(function MessageBubble({
 
   return (
     <div className={`group ${isUser ? "flex justify-end" : "flex justify-start"} mb-4`}>
-      <div className={`flex flex-row items-start max-w-[92%] md:max-w-[80%] min-w-0`}>
+      <div className={`flex flex-row items-start max-w-[95%] md:max-w-[80%] min-w-0`}>
         {isUser && editable && !editing && (
           <button
             onClick={handleStartEdit}
