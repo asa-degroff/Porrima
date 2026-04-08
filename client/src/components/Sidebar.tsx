@@ -53,6 +53,53 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
   );
 }
 
+function RecentChatItem({
+  chat,
+  active,
+  onSelect,
+  color = "purple",
+}: {
+  chat: ChatListItemType;
+  active: boolean;
+  onSelect: () => void;
+  color?: "purple" | "blue" | "emerald" | "amber" | "rose" | "cyan" | "violet" | "orange" | "pink" | "teal";
+}) {
+  const colorClasses: Record<string, string> = {
+    purple: "text-purple-300/60 border-purple-400/20",
+    blue: "text-blue-300/60 border-blue-400/20",
+    emerald: "text-emerald-300/60 border-emerald-400/20",
+    amber: "text-amber-300/60 border-amber-400/20",
+    rose: "text-rose-300/60 border-rose-400/20",
+    cyan: "text-cyan-300/60 border-cyan-400/20",
+    violet: "text-violet-300/60 border-violet-400/20",
+    orange: "text-orange-300/60 border-orange-400/20",
+    pink: "text-pink-300/60 border-pink-400/20",
+    teal: "text-teal-300/60 border-teal-400/20",
+  };
+  
+  const colorClass = colorClasses[color] || colorClasses.purple;
+  
+  return (
+    <button
+      onClick={onSelect}
+      className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative ${
+        active
+          ? "bg-white/15 border border-white/20"
+          : `hover:bg-white/8 border ${colorClass.split(" ")[1]}`
+      }`}
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <span className={`text-[10px] shrink-0 ${colorClass.split(" ")[0]}`}>●</span>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-medium text-white/80 leading-snug truncate">
+            {chat.title}
+          </p>
+        </div>
+      </div>
+    </button>
+  );
+}
+
 function ProjectSection({
   project,
   chats,
@@ -293,6 +340,18 @@ function ProjectSection({
           </div>
         </div>
       )}
+      {/* Recent chat when collapsed */}
+      {!expanded && chats.length > 0 && (
+        <div className="px-2 pb-2">
+          <RecentChatItem
+            chat={chats[0]}
+            active={chats[0].id === activeChatId}
+            onSelect={() => onSelectChat(chats[0].id)}
+            color={project.color as any}
+          />
+        </div>
+      )}
+      
       {expanded && (
         <div className="px-1 pb-1.5">
           <button
@@ -713,6 +772,17 @@ export function Sidebar({
               </button>
             )}
           </div>
+          {/* Recent chat when collapsed */}
+          {!agentExpanded && agentChats.length > 0 && (
+            <div className="px-2 pb-2">
+              <RecentChatItem
+                chat={agentChats[0]}
+                active={agentChats[0].id === activeChatId}
+                onSelect={() => { onSelectChat(agentChats[0].id); onClose(); }}
+                color="purple"
+              />
+            </div>
+          )}
            {/* Scrollable chat list */}
           {agentExpanded && (
             <div className="flex-1 overflow-y-auto pb-1">
@@ -769,6 +839,17 @@ export function Sidebar({
               </button>
             )}
           </div>
+          {/* Recent chat when collapsed */}
+          {!quickExpanded && quickChats.length > 0 && (
+            <div className="px-2 pb-2">
+              <RecentChatItem
+                chat={quickChats[0]}
+                active={quickChats[0].id === activeChatId}
+                onSelect={() => { onSelectChat(quickChats[0].id); onClose(); }}
+                color="blue"
+              />
+            </div>
+          )}
           {/* Scrollable chat list */}
           {quickExpanded && (
             <div className="flex-1 overflow-y-auto pb-2">
