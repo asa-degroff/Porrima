@@ -334,23 +334,30 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleNewChat = useCallback((type: ChatType = "quick", projectId?: string) => {
     const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
     const chat = createChat(modelId, type, projectId);
+    // Track the previous chat as warm before switching
+    if (activeChatId) {
+      setLastActiveChatId(activeChatId);
+    }
     setActiveChatId(chat.id);
     setActiveChat(chat);
     setActiveChatData(chat);
     loadMessages([]);
-  }, [settings.defaultModelId, models, createChat, loadMessages, setActiveChatData]);
+  }, [activeChatId, settings.defaultModelId, models, createChat, loadMessages, setActiveChatData]);
 
   const handleDeleteChat = useCallback(
     async (id: string) => {
       await removeChat(id);
       clearCachedChat(id).catch(() => {});
+      if (lastActiveChatId === id) {
+        setLastActiveChatId(null);
+      }
       if (activeChatId === id) {
         setActiveChatId(null);
         setActiveChat(null);
         loadMessages([]);
       }
     },
-    [activeChatId, removeChat, loadMessages]
+    [activeChatId, lastActiveChatId, removeChat, loadMessages]
   );
 
   const handleNewProject = useCallback(() => {
