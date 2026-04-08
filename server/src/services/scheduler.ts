@@ -9,7 +9,6 @@ import { buildClusters } from "./cluster-engine.js";
 import { getClusters } from "./cluster-storage.js";
 import { getAllCorpusEntries, enrichCorpusBatch } from "./image-corpus.js";
 import { proposeDirections } from "./creative-engine.js";
-import { addMemory } from "./memory-storage.js";
 import { createDirectionJob, processPendingJobs } from "./job-queue.js";
 import { clearCache } from "./direction-cache.js";
 
@@ -117,29 +116,54 @@ async function runCorpusCreativeCycle() {
     });
     console.log(`[scheduler] Generated ${directions.length} creative directions`);
 
-    // 3. Save directions as context memories
-    // Store full prompts—they're valuable artifacts for learning creative patterns
-    const { embed } = await import("./embeddings.js");
-    for (const dir of directions.slice(0, 3)) {
-      const memoryText = `Creative direction proposed: ${dir.type} - ${dir.description}. Prompt: ${dir.proposedPrompt}`;
-      const embedding = await embed(memoryText);
-      await addMemory({
-        id: crypto.randomUUID(),
-        text: memoryText,
-        category: "context",
-        importance: 6,
-        embedding,
-        createdAt: new Date().toISOString(),
-        lastAccessed: new Date().toISOString(),
-        accessCount: 0,
-        sourceChatId: undefined,
-        projectId: undefined,
-        sourceType: "synthesis",
-        sourceId: `creative-cycle-${Date.now()}`,
-        supersededBy: undefined,
-        supersedes: undefined,
-      });
-    }
+    // 3. Save directions to a project-scoped memory block
+    const { ensureDirectionsProject } = await import("./project-storage.js");
+    const { createMemoryBlock } = await import("./memory-storage.js");
+
+    const projectId = await ensureDirectionsProject();
+    const cycleDate = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+    const blockName = `Creative Directions — ${cycleDate}`;
+
+    // Format all directions into structured block content
+    const blockContent = directions.map((dir, idx) => `
+## Direction ${idx + 1}: ${dir.type}
+
+**Description:** ${dir.description}
+
+**Source Clusters:** ${dir.sourceClusters.join(", ") || "none (gap-fill)"}
+
+**Novelty Score:** ${dir.noveltyScore.toFixed(3)}
+
+**Element Combination:**
+${dir.elementCombination.takeThemesFrom ? `- Themes from: ${dir.elementCombination.takeThemesFrom}` : ""}
+${dir.elementCombination.takeSettingsFrom ? `- Settings from: ${dir.elementCombination.takeSettingsFrom}` : ""}
+${dir.elementCombination.takeCharactersFrom ? `- Characters from: ${dir.elementCombination.takeCharactersFrom}` : ""}
+${dir.elementCombination.takeStylesFrom ? `- Styles from: ${dir.elementCombination.takeStylesFrom}` : ""}
+${dir.elementCombination.injectNovelty ? `- Inject novelty: ${dir.elementCombination.injectNovelty}` : ""}
+
+**Proposed Prompt:**
+
+${dir.proposedPrompt}
+
+---
+`).join("\n");
+
+    const blockDescription = `${directions.length} creative directions generated during daily synthesis cycle`;
+    const now = new Date().toISOString();
+
+    await createMemoryBlock({
+      id: uuidv4(),
+      name: blockName,
+      description: blockDescription,
+      content: blockContent,
+      scope: "project",
+      projectId: projectId,
+      createdAt: now,
+      updatedAt: now,
+      updatedBy: "agent" as const,
+    });
+
+    console.log(`[scheduler] Saved ${directions.length} directions to memory block "${blockName}"`);
 
     // 4. Execute top directions autonomously with agent loop review
     // The agent loop alternates between Ollama (LLM evaluation) and ComfyUI
