@@ -224,7 +224,7 @@ export const MessageBubble = memo(function MessageBubble({
               setContextMenu({ x: e.clientX, y: e.clientY });
             } : undefined}
             {...(isUser && editable && !editing ? longPressProps : {})}
-            className={`rounded-2xl px-3 md:px-4 py-3 max-w-full min-w-fit ${
+            className={`rounded-2xl px-3 md:px-4 py-3 max-w-full min-w-0 overflow-x-hidden ${
               isUser
                 ? "text-white/95"
                 : "text-white/90"
