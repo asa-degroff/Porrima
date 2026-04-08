@@ -57,7 +57,7 @@ export async function buildMemoryAugmentedPrompt(
       let personaSection = "";
       try {
         const persona = await loadPersona();
-        personaSection = `\n\n## Your Persona\n${persona.content}\n\nRemember: This is your core identity.`;
+        personaSection = `\n${persona.content}\n\nRemember: This is your core identity.`;
       } catch (e) {
         console.error("[memory] Failed to load persona, continuing without:", e);
       }
@@ -66,7 +66,7 @@ export async function buildMemoryAugmentedPrompt(
       try {
         const userDoc = await loadUserDocument();
         if (userDoc && userDoc.content.trim()) {
-          userSection = `\n\n## About the User\n${userDoc.content}`;
+          userSection = `\n\n## About the User\n${userDoc.content}\n\nThis concludes the user information.`;
         }
       } catch (e) {
         // User document is optional
@@ -125,10 +125,10 @@ export async function buildMemoryAugmentedPrompt(
         if (loadedParts.length > 0 || indexParts.length > 0) {
           const parts: string[] = [];
           if (loadedParts.length > 0) {
-            parts.push(`## Knowledge Blocks\n${loadedParts.join("\n\n")}`);
+            parts.push(`## Memory Blocks\n${loadedParts.join("\n\n")}`);
           }
           if (indexParts.length > 0) {
-            parts.push(`## Available Memory Blocks\n${indexParts.join("\n")}\nUse read_memory_block(id) to load full content when relevant.`);
+            parts.push(`## Available Memory Blocks\n${indexParts.join("\n")}\nTo get the full content of any block, use read_memory_block(id) when relevant.`);
           }
           blocksSection = "\n\n" + parts.join("\n\n");
         }
@@ -220,7 +220,7 @@ export async function buildMemoryAugmentedPrompt(
             (r) => {
               const created = r.memory.createdAt.slice(0, 10);
               const supersededNote = r.memory.supersededBy
-                ? " ⚠️ SUPERSEDED — a newer version of this memory exists"
+                ? "SUPERSEDED — a newer version of this memory exists"
                 : "";
               const projectNote = r.memory.projectId && projectId && r.memory.projectId !== projectId
                 ? ` [project: ${r.memory.projectId}]`
@@ -242,10 +242,10 @@ export async function buildMemoryAugmentedPrompt(
         // Check if there are non-loaded blocks that might have relevant context
         const hasIndexedBlocks = cached?.blocksSection?.includes("Available Memory Blocks");
         const blockHint = hasIndexedBlocks
-          ? "\n\nAdditional context may be available in memory blocks listed above — use read_memory_block(id) if relevant to the current topic."
+          ? "\n\nAdditional context may be available in memory blocks listed above — use read_memory_block(id) to read your full memories from that block."
           : "";
 
-        memoriesSection = `\n\n## My relevant memories to this chat:\n${memoriesBlock}\n\nUse these memories as needed — there's no need to list them unless asked.${blockHint}`;
+        memoriesSection = `\n\n## Relevant memories to this chat:\n${memoriesBlock}\n\nUse these memories as needed — there's no need to list them unless asked.${blockHint}`;
       }
     }
 
