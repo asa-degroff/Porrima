@@ -133,6 +133,7 @@ export function ChatView({
   const isNearBottomRef = useRef(true);
   const prevChatIdRef = useRef<string | null>(null);
   const prevMessageCountRef = useRef(0);
+  const manualScrollOverrideRef = useRef(false);
   const [editingCtx, setEditingCtx] = useState(false);
   const [ctxInput, setCtxInput] = useState("");
   const [promptModal, setPromptModal] = useState<{ systemPrompt: string; tools: { name: string; description: string }[] } | null>(null);
@@ -142,6 +143,7 @@ export function ChatView({
   const [skillSelectorOpen, setSkillSelectorOpen] = useState(false);
   const [skillFilter, setSkillFilter] = useState("");
   const [inputRect, setInputRect] = useState<DOMRect | null>(null);
+  const [scrollPaused, setScrollPaused] = useState(false);
   
   // Cache skills by projectId to avoid refetching on every render
   const skillsCache = useRef<Map<string, SkillInfo[]>>(new Map());
@@ -198,9 +200,22 @@ export function ChatView({
     const el = scrollRef.current;
     if (!el) return;
     const threshold = 80;
+    const wasNearBottom = isNearBottomRef.current;
     isNearBottomRef.current =
       el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-  }, []);
+    
+    // If we're streaming and user scrolls away from bottom, enable manual override
+    if (streaming && wasNearBottom && !isNearBottomRef.current) {
+      manualScrollOverrideRef.current = true;
+      setScrollPaused(true);
+    }
+    
+    // If user scrolls back to bottom, disable override
+    if (isNearBottomRef.current && manualScrollOverrideRef.current) {
+      manualScrollOverrideRef.current = false;
+      setScrollPaused(false);
+    }
+  }, [streaming]);
 
   // Scroll to bottom when switching chats
   useEffect(() => {
@@ -217,12 +232,24 @@ export function ChatView({
   }, [chatId, messages]);
 
   // Force near-bottom when new messages are added (user sent or assistant placeholder)
+  // BUT only if user hasn't manually scrolled away during streaming
   useEffect(() => {
     if (messages.length > prevMessageCountRef.current) {
-      isNearBottomRef.current = true;
+      // Only force near-bottom if not in manual override mode
+      if (!manualScrollOverrideRef.current) {
+        isNearBottomRef.current = true;
+      }
     }
     prevMessageCountRef.current = messages.length;
   }, [messages]);
+  
+  // Reset scroll pause state when streaming stops
+  useEffect(() => {
+    if (!streaming && scrollPaused) {
+      setScrollPaused(false);
+      manualScrollOverrideRef.current = false;
+    }
+  }, [streaming, scrollPaused]);
 
   // Auto-scroll via ResizeObserver on the content div (fires before paint).
   // Also observes the scroll container for when the input textarea resizes.
@@ -232,7 +259,8 @@ export function ChatView({
     const content = contentRef.current;
     if (!scroll) return;
     const observer = new ResizeObserver(() => {
-      if (isNearBottomRef.current) {
+      // Only auto-scroll if near bottom AND user hasn't manually scrolled away
+      if (isNearBottomRef.current && !manualScrollOverrideRef.current) {
         scroll.scrollTop = scroll.scrollHeight;
       }
     });
@@ -240,6 +268,17 @@ export function ChatView({
     observer.observe(scroll);
     return () => observer.disconnect();
   }, [chatId]);
+  
+  // Scroll to bottom handler (for the "scroll to bottom" button)
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      manualScrollOverrideRef.current = false;
+      isNearBottomRef.current = true;
+      setScrollPaused(false);
+    }
+  }, []);
 
   if (!chatId) {
     return (
@@ -494,6 +533,20 @@ export function ChatView({
             )}
           </div>
         </div>
+        {/* Scroll to bottom button - appears when user scrolls away during streaming */}
+        {scrollPaused && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-4 right-4 md:right-6 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 border border-white/20 text-white/70 hover:text-white hover:bg-white/15 hover:border-white/30 transition-all shadow-lg backdrop-blur-sm"
+            title="Scroll to bottom"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v14" />
+              <path d="m19 12-7 7-7-7" />
+            </svg>
+            <span className="text-xs font-medium">New output</span>
+          </button>
+        )}
         <div className="absolute inset-0 pointer-events-none z-10 shadow-[inset_0_16px_80px_-16px_rgba(0,0,0,0.35),inset_0px_-16px_80px_-16px_rgba(0,0,0,0.35)]" />
       </div>
 
