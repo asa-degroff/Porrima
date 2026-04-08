@@ -51,7 +51,7 @@ Then, once the core image is established (whether directly from the user or thro
 
 Output ONLY the structured prompt content. Do not include any introductory text, explanations, or meta-commentary.`;
 
-export type DirectionType = "remix" | "explore" | "deepen" | "contrast" | "gap-fill";
+export type DirectionType = "remix" | "explore" | "deepen" | "contrast" | "gap-fill" | "wildcard";
 
 export interface CreativeDirection {
   id: string;
@@ -356,6 +356,7 @@ export async function proposeDirections(
   let remixDirections: CreativeDirection[] = [];
   let deepenDirections: CreativeDirection[] = [];
   let contrastDirections: CreativeDirection[] = [];
+  let wildcardDirections: CreativeDirection[] = [];
 
   try {
     for (const gap of gaps.slice(0, 2)) {
@@ -383,7 +384,19 @@ export async function proposeDirections(
     console.error(`[creative-engine] contrast generation failed:`, err.message);
   }
 
-  for (const [label, dirs] of [["gap-fill", gapDirections], ["remix", remixDirections], ["deepen", deepenDirections], ["contrast", contrastDirections]] as [string, CreativeDirection[]][]) {
+  try {
+    wildcardDirections = await createWildcard(clusters, corpus, minNovelty, modelId);
+  } catch (err: any) {
+    console.error(`[creative-engine] wildcard generation failed:`, err.message);
+  }
+
+  for (const [label, dirs] of [
+    ["gap-fill", gapDirections],
+    ["remix", remixDirections],
+    ["deepen", deepenDirections],
+    ["contrast", contrastDirections],
+    ["wildcard", wildcardDirections],
+  ] as [string, CreativeDirection[]][]) {
     console.log(`[creative-engine] ${label}: ${dirs.length} directions${dirs.length > 0 ? ` (novelty: ${dirs.map(d => d.noveltyScore.toFixed(3)).join(", ")})` : ""}`);
   }
 
@@ -393,6 +406,7 @@ export async function proposeDirections(
     ...remixDirections,
     ...deepenDirections,
     ...contrastDirections,
+    ...wildcardDirections,
   ];
 
   // Single novelty filter — the individual generators no longer pre-filter
@@ -400,15 +414,10 @@ export async function proposeDirections(
 
   console.log(`[creative-engine] Total candidates: ${allDirections.length}, passed novelty (>=${minNovelty}): ${directions.length}, limit: ${limit}`);
 
-  // Apply MMR selection if we have more candidates than the limit
-  let finalDirections: CreativeDirection[];
-  if (directions.length > limit) {
-    finalDirections = selectDirectionsMMR(directions, limit);
-  } else {
-    // No selection needed — just sort by novelty for consistent ordering
-    directions.sort((a, b) => b.noveltyScore - a.noveltyScore);
-    finalDirections = directions;
-  }
+  // Sort by novelty and take top N — MMR removed to allow thematic variations
+  // that would otherwise be penalized for similarity
+  directions.sort((a, b) => b.noveltyScore - a.noveltyScore);
+  const finalDirections = directions.slice(0, limit);
 
   // Only cache if we got results — don't cache empty sets
   if (finalDirections.length > 0) {
@@ -419,77 +428,23 @@ export async function proposeDirections(
 }
 
 /**
- * Select directions using Maximal Marginal Relevance (MMR).
- * Balances novelty against diversity — avoids selecting multiple similar directions.
- *
- * MMR score = λ * novelty - (1-λ) * max_similarity_to_already_selected
- *
- * @param candidates - Pre-filtered directions (already passed novelty threshold)
- * @param limit - Number of directions to select
- * @param lambda - Balance parameter (0.0-1.0). Higher = more novelty-focused, lower = more diversity-focused. Default 0.65.
+ * Select directions by novelty score only.
+ * MMR was removed — with small candidate pools (5-10), diversity penalties
+ * filter out interesting thematic variations. Let the user see similar-but-
+ * distinct directions; they can judge what's worth exploring.
  */
-export function selectDirectionsMMR(
+function selectDirectionsByNovelty(
   candidates: CreativeDirection[],
-  limit: number,
-  lambda = 0.65
+  limit: number
 ): CreativeDirection[] {
-  const selected: CreativeDirection[] = [];
-  const remaining = [...candidates];
-
-  while (selected.length < limit && remaining.length > 0) {
-    let bestScore = -Infinity;
-    let bestIndex = 0;
-
-    for (let i = 0; i < remaining.length; i++) {
-      const candidate = remaining[i];
-      const novelty = candidate.noveltyScore;
-
-      // Compute max similarity to already-selected directions
-      let maxSimilarity = 0;
-      if (selected.length > 0 && candidate.proposedEmbedding) {
-        for (const s of selected) {
-          if (s.proposedEmbedding) {
-            const sim = cosineSimilarity(candidate.proposedEmbedding, s.proposedEmbedding);
-            maxSimilarity = Math.max(maxSimilarity, sim);
-          }
-        }
-      }
-
-      // MMR score: high novelty is good, high similarity to selected is bad
-      const mmrScore = lambda * novelty - (1 - lambda) * maxSimilarity;
-
-      if (mmrScore > bestScore) {
-        bestScore = mmrScore;
-        bestIndex = i;
-      }
-    }
-
-    // Record the diversity score (the max similarity penalty that was applied)
-    const chosen = remaining[bestIndex];
-    if (selected.length > 0 && chosen.proposedEmbedding) {
-      let maxSimToSelected = 0;
-      for (const s of selected) {
-        if (s.proposedEmbedding) {
-          const sim = cosineSimilarity(chosen.proposedEmbedding, s.proposedEmbedding);
-          maxSimToSelected = Math.max(maxSimToSelected, sim);
-        }
-      }
-      chosen.diversityScore = bestScore; // Store the MMR score for transparency
-    } else {
-      // First selection has no diversity penalty
-      chosen.diversityScore = lambda * chosen.noveltyScore;
-    }
-
-    selected.push(chosen);
-    remaining.splice(bestIndex, 1);
-  }
-
-  console.log(`[creative-engine] MMR selection: chose ${selected.length} from ${candidates.length} candidates (λ=${lambda})`);
+  const sorted = [...candidates].sort((a, b) => b.noveltyScore - a.noveltyScore);
+  const selected = sorted.slice(0, limit);
+  
+  console.log(`[creative-engine] Selected ${selected.length} from ${candidates.length} candidates by novelty`);
   if (selected.length > 0) {
-    const scores = selected.map(s => `${s.noveltyScore.toFixed(3)}/${s.diversityScore!.toFixed(3)}`);
-    console.log(`[creative-engine] Selected directions (novelty/diversity): ${scores.join(", ")}`);
+    console.log(`[creative-engine] Selected directions (novelty): ${selected.map(s => s.noveltyScore.toFixed(3)).join(", ")}`);
   }
-
+  
   return selected;
 }
 
@@ -582,8 +537,39 @@ ${Z_IMAGE_INSTRUCTIONS}`;
 }
 
 /**
- * Create remix directions by combining elements from distant clusters.
- * Executes in parallel for multiple cluster pairs.
+ * Weighted random selection from an array.
+ * Higher weight = higher chance of being picked.
+ */
+function weightedRandom<T>(items: T[], weights: number[]): T {
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  let random = Math.random() * total;
+  
+  for (let i = 0; i < items.length; i++) {
+    random -= weights[i];
+    if (random <= 0) return items[i];
+  }
+  
+  return items[items.length - 1]; // fallback
+}
+
+/**
+ * Pick a random element from top N (not always the #1).
+ * Uses weighted random — higher rank = higher chance, but not guaranteed.
+ */
+function pickFromTop<T>(items: T[], topN = 3): T | undefined {
+  if (items.length === 0) return undefined;
+  const pool = items.slice(0, Math.min(topN, items.length));
+  if (pool.length === 1) return pool[0];
+  
+  // Weight by rank: first item gets 3x, second gets 2x, third gets 1x
+  const weights = pool.map((_, i) => Math.max(1, 3 - i));
+  return weightedRandom(pool, weights);
+}
+
+/**
+ * Create remix directions by combining elements from clusters.
+ * Uses weighted random selection — distant pairs are favored but not guaranteed.
+ * Executes sequentially to avoid GPU contention.
  */
 export async function createCrossPollination(
   clusters: PromptCluster[],
@@ -591,31 +577,34 @@ export async function createCrossPollination(
   minNovelty: number,
   modelId: string
 ): Promise<CreativeDirection[]> {
-  // Find distant cluster pairs (low centroid similarity)
-  const distantPairs: Array<[PromptCluster, PromptCluster]> = [];
+  // Build weighted pool of cluster pairs
+  const allPairs: Array<[PromptCluster, PromptCluster, number]> = [];
 
   for (let i = 0; i < clusters.length; i++) {
     for (let j = i + 1; j < clusters.length; j++) {
       const sim = cosineSimilarity(clusters[i].centroid, clusters[j].centroid);
-      if (sim < 0.7) {
-        distantPairs.push([clusters[i], clusters[j]]);
-      }
+      // Weight by distance: lower similarity = higher weight
+      // Pairs with sim < 0.5 get 3x weight, 0.5-0.7 get 2x, others get 1x
+      let weight = sim < 0.5 ? 3 : sim < 0.7 ? 2 : 1;
+      allPairs.push([clusters[i], clusters[j], weight]);
     }
   }
 
-  // Sort by distance (most distant first), then randomly sample 3 from the top 10
-  // to avoid always picking the same pairs on every regeneration.
-  distantPairs.sort(
-    (a, b) =>
-      cosineSimilarity(a[0].centroid, a[1].centroid) -
-      cosineSimilarity(b[0].centroid, b[1].centroid)
-  );
-  const candidatePairs = distantPairs.slice(0, 10);
-  for (let i = candidatePairs.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [candidatePairs[i], candidatePairs[j]] = [candidatePairs[j], candidatePairs[i]];
+  // Select 3 pairs using weighted random
+  const selectedPairs: Array<[PromptCluster, PromptCluster]> = [];
+  const weights = allPairs.map(p => p[2]);
+  
+  for (let i = 0; i < Math.min(3, allPairs.length); i++) {
+    if (allPairs.length === 0) break;
+    
+    const idx = weightedRandomIndex(weights);
+    const [clusterA, clusterB] = allPairs[idx];
+    selectedPairs.push([clusterA, clusterB]);
+    
+    // Remove selected pair to avoid duplicates
+    allPairs.splice(idx, 1);
+    weights.splice(idx, 1);
   }
-  const selectedPairs = candidatePairs.slice(0, 3);
 
   // Generate directions sequentially — each call includes images in context,
   // so concurrent requests would overload Ollama on a single GPU.
@@ -684,7 +673,8 @@ The combination should feel intentional, not random. Draw specific visual elemen
 
 /**
  * Create deep variations within a cluster (add complexity/detail).
- * Executes in parallel for multiple clusters.
+ * Uses weighted random cluster selection — larger clusters favored but not guaranteed.
+ * Executes sequentially to avoid GPU contention.
  */
 export async function createDeepVariation(
   clusters: PromptCluster[],
@@ -692,15 +682,30 @@ export async function createDeepVariation(
   minNovelty: number,
   modelId: string
 ): Promise<CreativeDirection[]> {
-  // Pick large clusters (more than 5 members) for deep exploration
-  const largeClusters = clusters.filter(c => c.size > 5).slice(0, 3);
+  // Weighted random selection from clusters with > 3 members
+  // Larger clusters get higher weight, but smaller ones still have a chance
+  const eligibleClusters = clusters.filter(c => c.size > 3);
+  const selectedClusters: PromptCluster[] = [];
+  
+  for (let i = 0; i < Math.min(3, eligibleClusters.length); i++) {
+    if (eligibleClusters.length === 0) break;
+    
+    // Weight by size: cluster with 10 members gets 2x weight of cluster with 5
+    const weights = eligibleClusters.map(c => Math.max(1, c.size / 5));
+    const idx = weightedRandomIndex(weights);
+    selectedClusters.push(eligibleClusters[idx]);
+    
+    // Remove selected to avoid duplicates
+    eligibleClusters.splice(idx, 1);
+  }
 
   // Generate directions sequentially to avoid GPU contention
   const directions: CreativeDirection[] = [];
-  for (const cluster of largeClusters) {
+  for (const cluster of selectedClusters) {
     try {
-      const primaryTheme = cluster.dominantElements.themes[0];
-      const primarySetting = cluster.dominantElements.settings[0];
+      // Random element selection from top 3
+      const primaryTheme = pickFromTop(cluster.dominantElements.themes, 3) || cluster.dominantElements.themes[0] || "unknown";
+      const primarySetting = pickFromTop(cluster.dominantElements.settings, 3) || cluster.dominantElements.settings[0] || "scene";
 
       const members = await getClusterMembers(cluster, corpus);
       const promptContext = buildPromptContext(members);
@@ -755,6 +760,7 @@ Study the existing images carefully. Make the new prompt more complex and layere
 
 /**
  * Create contrast directions (deliberately oppose existing patterns).
+ * Analyzes actual corpus patterns and generates contextual opposites.
  */
 export async function createContrast(
   clusters: PromptCluster[],
@@ -764,35 +770,46 @@ export async function createContrast(
 ): Promise<CreativeDirection[]> {
   // Find dominant patterns
   const dominantThemes: Record<string, number> = {};
-  const dominantMoods: Record<string, number> = {};
+  const dominantSettings: Record<string, number> = {};
 
   for (const cluster of clusters) {
     for (const theme of cluster.dominantElements.themes) {
       dominantThemes[theme] = (dominantThemes[theme] || 0) + cluster.size;
     }
-    for (const mood of (cluster.dominantElements as any).mood || []) {
-      dominantMoods[mood] = (dominantMoods[mood] || 0) + 1;
+    for (const setting of cluster.dominantElements.settings) {
+      dominantSettings[setting] = (dominantSettings[setting] || 0) + cluster.size;
     }
   }
 
   const topTheme = Object.entries(dominantThemes).sort((a, b) => b[1] - a[1])[0]?.[0];
-  const topMood = Object.entries(dominantMoods).sort((a, b) => b[1] - a[1])[0]?.[0];
+  const topSetting = Object.entries(dominantSettings).sort((a, b) => b[1] - a[1])[0]?.[0];
 
   if (!topTheme) return [];
 
-  // Generate opposite
-  const opposites: Record<string, string> = {
-    "sci-fi": "organic natural",
-    "cyberpunk": "pastoral rural",
-    "industrial": "ethereal mystical",
-    "noir": "vibrant colorful",
-    "dark": "luminous bright",
-    "cold": "warm fiery",
-    "mechanical": "organic flowing",
+  // Generate contextual opposites based on what's actually dominant
+  // These are softer opposites — we want contrast, not nonsense
+  const themeOpposites: Record<string, string[]> = {
+    "sci-fi": ["organic natural", "pastoral rural", "handcrafted artisanal"],
+    "cyberpunk": ["pastoral rural", "minimalist clean", "historical vintage"],
+    "industrial": ["ethereal mystical", "organic flowing", "delicate fragile"],
+    "noir": ["vibrant colorful", "pastel soft", "warm golden"],
+    "fantasy": ["gritty realistic", "modern urban", "scientific technical"],
+    "abstract": ["literal concrete", "photorealistic", "architectural structured"],
   };
 
-  const oppositeTheme = opposites[topTheme] || "contrasting visual style";
-  const oppositeMood = topMood === "dark" ? "hopeful uplifting" : "somber mysterious";
+  const settingOpposites: Record<string, string[]> = {
+    "urban": ["wilderness natural", "interior intimate", "aquatic underwater"],
+    "interior": ["vast outdoor", "wilderness untamed", "cosmic infinite"],
+    "natural": ["artificial constructed", "urban industrial", "surreal impossible"],
+    "dark": ["bright luminous", "pastel soft", "neon vibrant"],
+  };
+
+  // Pick random opposite from available options (not hardcoded single answer)
+  const oppositeThemes = themeOpposites[topTheme] || ["contrasting aesthetic"];
+  const oppositeSettings = topSetting ? (settingOpposites[topSetting] || ["opposite environment"]) : ["contrasting setting"];
+  
+  const oppositeTheme = oppositeThemes[Math.floor(Math.random() * oppositeThemes.length)];
+  const oppositeSetting = oppositeSettings[Math.floor(Math.random() * oppositeSettings.length)];
 
   // Show the model examples of the dominant theme so it knows what to contrast against
   const dominantCluster = clusters.sort((a, b) => b.size - a.size)[0];
@@ -800,18 +817,18 @@ export async function createContrast(
   const promptContext = buildPromptContext(dominantMembers);
 
   const systemPrompt = `You are creating a prompt that deliberately contrasts with the dominant corpus patterns.
-Dominant theme: ${topTheme}
-Dominant mood: ${topMood}
+Dominant theme: ${topTheme}${topSetting ? `
+Dominant setting: ${topSetting}` : ""}
 
 Here are examples of the dominant style you should contrast against:${promptContext}
 
-Your prompt should be the opposite: ${oppositeTheme} with ${oppositeMood} mood.
+Your prompt should be the opposite: ${oppositeTheme} with ${oppositeSetting} setting.
 
 ${Z_IMAGE_INSTRUCTIONS}
 
 Study the attached images to understand the dominant visual language, then create something that deliberately inverts it. Make it visually striking and thematically coherent.`;
 
-  const userPrompt = `Generate a ${oppositeTheme} prompt with ${oppositeMood} mood. Look at the attached images showing the dominant ${topTheme} style, then create a prompt that deliberately contrasts with it. Follow the z-image workflow.`;
+  const userPrompt = `Generate a ${oppositeTheme} prompt with ${oppositeSetting} setting. Look at the attached images showing the dominant ${topTheme}${topSetting ? `/${topSetting}` : ""} style, then create a prompt that deliberately contrasts with it. Follow the z-image workflow.`;
 
   const userMsg = await buildContextMessage(userPrompt, dominantMembers);
 
@@ -822,7 +839,7 @@ Study the attached images to understand the dominant visual language, then creat
     () => {}
   );
 
-  const proposedPrompt = validateLLMOutput(result.content) ?? `A ${oppositeTheme} scene with ${oppositeMood} atmosphere`;
+  const proposedPrompt = validateLLMOutput(result.content) ?? `A ${oppositeTheme} scene in ${oppositeSetting}`;
   const embedding = await generateEmbedding(proposedPrompt);
   const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.75;
 
@@ -830,17 +847,15 @@ Study the attached images to understand the dominant visual language, then creat
     id: crypto.randomUUID(),
     type: "contrast",
     description: `Contrast dominant ${topTheme} with ${oppositeTheme}`,
-    sourceClusters: [],
+    sourceClusters: dominantCluster ? [dominantCluster.id] : [],
     elementCombination: {
-      injectNovelty: `${oppositeTheme}, ${oppositeMood}`,
+      injectNovelty: `${oppositeTheme}, ${oppositeSetting}`,
     },
     noveltyScore,
     proposedPrompt,
     proposedEmbedding: embedding ?? undefined,
     createdAt: Date.now(),
   }];
-
-  return [];
 }
 
 /**
@@ -882,6 +897,106 @@ async function generateEmbedding(prompt: string): Promise<number[] | null> {
     console.error("[creative-engine] embedding error:", err);
     return null;
   }
+}
+
+/**
+ * Create wildcard directions — pure creative chaos.
+ * Picks 2-3 random clusters and randomly combines their elements.
+ * No optimization, no logic — just unexpected combinations.
+ */
+export async function createWildcard(
+  clusters: PromptCluster[],
+  corpus: ImageCorpusEntry[],
+  minNovelty: number,
+  modelId: string
+): Promise<CreativeDirection[]> {
+  if (clusters.length < 2) return [];
+
+  // Pick 2-3 random clusters
+  const numClusters = Math.random() > 0.5 ? 3 : 2;
+  const selectedClusters: PromptCluster[] = [];
+  const available = [...clusters];
+  
+  for (let i = 0; i < Math.min(numClusters, available.length); i++) {
+    const idx = Math.floor(Math.random() * available.length);
+    selectedClusters.push(available[idx]);
+    available.splice(idx, 1);
+  }
+
+  // Randomly pick elements from each cluster's top 5
+  const allThemes = selectedClusters.flatMap(c => c.dominantElements.themes.slice(0, 5));
+  const allSettings = selectedClusters.flatMap(c => c.dominantElements.settings.slice(0, 5));
+  const allStyles = selectedClusters.flatMap(c => c.dominantElements.styles.slice(0, 5));
+  
+  const theme = allThemes[Math.floor(Math.random() * allThemes.length)] || "mysterious";
+  const setting = allSettings[Math.floor(Math.random() * allSettings.length)] || "dreamlike";
+  const style = allStyles[Math.floor(Math.random() * allStyles.length)] || "surreal";
+  
+  // Gather representative members from all selected clusters
+  const allMembers: ImageCorpusEntry[] = [];
+  for (const cluster of selectedClusters) {
+    const members = await getClusterMembers(cluster, corpus, 1);
+    allMembers.push(...members);
+  }
+  
+  const promptContext = buildPromptContext(allMembers);
+  const clusterNames = selectedClusters.map(c => c.name).join(", ");
+
+  const systemPrompt = `You are creating a wildly unexpected image prompt by combining unrelated visual elements.
+Source clusters: ${clusterNames}
+Selected elements: ${theme} + ${setting} + ${style}
+
+Existing images from these clusters:${promptContext}
+
+${Z_IMAGE_INSTRUCTIONS}
+
+Embrace the unexpected. The goal is creative discovery.`;
+
+  const userPrompt = `Generate a wild combination: ${theme} theme in ${setting} setting with ${style} styling. Look at the attached images for inspiration, then create something unexpected. Follow the z-image Workflow.`;
+
+  const userMsg = await buildContextMessage(userPrompt, allMembers);
+
+  const result = await streamChat(
+    modelId,
+    [userMsg],
+    systemPrompt,
+    () => {}
+  );
+
+  const proposedPrompt = validateLLMOutput(result.content) ?? `A ${theme} scene in ${setting} with ${style} elements`;
+  const embedding = await generateEmbedding(proposedPrompt);
+  const noveltyScore = embedding ? scoreNovelty(embedding, corpus) : 0.8;
+
+  return [{
+    id: crypto.randomUUID(),
+    type: "wildcard",
+    description: `Wild combination: ${clusterNames}`,
+    sourceClusters: selectedClusters.map(c => c.id),
+    elementCombination: {
+      takeThemesFrom: selectedClusters[0]?.id,
+      takeSettingsFrom: selectedClusters[1]?.id,
+      takeStylesFrom: selectedClusters[2]?.id || selectedClusters[0]?.id,
+    },
+    noveltyScore,
+    proposedPrompt,
+    proposedEmbedding: embedding ?? undefined,
+    createdAt: Date.now(),
+  }];
+}
+
+/**
+ * Helper: weighted random index selection.
+ */
+function weightedRandomIndex(weights: number[]): number {
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  let random = Math.random() * total;
+  
+  for (let i = 0; i < weights.length; i++) {
+    random -= weights[i];
+    if (random <= 0) return i;
+  }
+  
+  return weights.length - 1; // fallback
 }
 
 /**
