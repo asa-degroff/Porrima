@@ -18,16 +18,60 @@ export function setCachedAugmentedPrompt(chatId: string, prompt: string): void {
   promptCache.set(chatId, prompt);
 }
 
-// Cache the stable prefix (base prompt + persona + user doc + blocks) per chat.
+// Cache the stable prefix (base prompt + persona + user doc + blocks + project context) per chat.
 // This avoids re-fetching and re-assembling the stable parts every turn.
 // The prefix only changes when the base system prompt changes (rare).
-// Dynamic memories are appended after the cached prefix.
 const stablePrefixCache = new Map<string, { basePrompt: string; prefix: string; blocksSection: string }>();
 
+// Cache retrieved memories per chat. Only invalidated when new memories are
+// extracted or modified, so the system prompt stays byte-identical between
+// consecutive turns — maximizing KV cache prefix reuse.
+const memoriesCache = new Map<string, { memoriesSection: string }>();
+
+/**
+ * Invalidate the cached memories for a chat, forcing re-retrieval on the next turn.
+ * Call this after memory extraction, block updates, or any memory modification.
+ */
+export function invalidateMemoriesCache(chatId: string): void {
+  memoriesCache.delete(chatId);
+}
+
+/**
+ * Invalidate all memories caches (e.g., after global memory changes like synthesis).
+ */
+export function invalidateAllMemoriesCaches(): void {
+  memoriesCache.clear();
+}
+
+/**
+ * Invalidate the stable prefix cache for a chat (e.g., after block modifications).
+ * This forces re-assembly of persona + user doc + blocks on the next turn.
+ */
+export function invalidateStablePrefixCache(chatId: string): void {
+  stablePrefixCache.delete(chatId);
+}
+
+/**
+ * Invalidate all caches for a chat (memories + stable prefix).
+ * Use after operations that affect both memories and blocks.
+ */
+export function invalidateAllCaches(chatId: string): void {
+  memoriesCache.delete(chatId);
+  stablePrefixCache.delete(chatId);
+}
+
+/**
+ * Invalidate all stable prefix caches globally.
+ * Use after block modifications via the API (no specific chatId available).
+ */
+export function invalidateAllStablePrefixCaches(): void {
+  stablePrefixCache.clear();
+}
+
 export interface AugmentedPromptResult {
-  systemPrompt: string;        // Stable prefix (persona + user doc + blocks)
-  memoriesMessage: string;     // Dynamic memories (injected as separate message near end)
-  combined: string;            // Legacy: full combined prompt for backward compat
+  systemPrompt: string;        // Full system prompt including memories
+  memoriesMessage: string;     // Empty string — memories are now in system prompt
+  combined: string;            // Same as systemPrompt for backward compat
 }
 
 export async function buildMemoryAugmentedPrompt(
@@ -36,7 +80,7 @@ export async function buildMemoryAugmentedPrompt(
   chatId?: string,
   projectId?: string,
   chatType?: string,
-  projectPath?: string  // Added: project path for AGENTS.md loading
+  projectPath?: string
 ): Promise<string> {
   try {
     // Build or reuse the stable prefix (base prompt + persona + user doc + blocks).
@@ -138,6 +182,13 @@ export async function buildMemoryAugmentedPrompt(
 
       stablePrefix = `${baseSystemPrompt}${personaSection}${userSection}${projectSection}${blocksSection}`;
       stablePrefixCache.set(cacheKey, { basePrompt: baseSystemPrompt, prefix: stablePrefix, blocksSection });
+    }
+
+    // Check if we have cached memories for this chat
+    const cachedMemories = chatId ? memoriesCache.get(chatId) : undefined;
+    if (cachedMemories) {
+      console.log(`[memory-retrieval] using cached memories for chat ${chatId}`);
+      return `${stablePrefix}${cachedMemories.memoriesSection}`;
     }
 
     // Build a query from the last 3 user messages
@@ -249,7 +300,13 @@ export async function buildMemoryAugmentedPrompt(
       }
     }
 
-    // Assemble final prompt: stable prefix (cached) + dynamic memories
+    // Cache the memories for this chat so subsequent turns reuse the same text,
+    // keeping the system prompt byte-identical for KV cache prefix matching.
+    if (chatId) {
+      memoriesCache.set(chatId, { memoriesSection });
+    }
+
+    // Assemble final prompt: stable prefix (cached) + memories (cached after first retrieval)
     return `${stablePrefix}${memoriesSection}`;
   } catch (e) {
     console.error("[memory] Context augmentation failed, using base prompt:", e);
@@ -258,12 +315,13 @@ export async function buildMemoryAugmentedPrompt(
 }
 
 /**
- * Build the augmented prompt with memories SPLIT from the system prompt.
- * Returns the stable system prompt separately from the dynamic memories message.
- * The caller should inject the memories as a separate message near the end of
- * the conversation, AFTER the conversation history. This maximizes KV cache
- * prefix reuse — the system prompt + conversation history stay stable across
- * turns, and only the memories + new user message are reprocessed.
+ * Build the augmented prompt — memories are now included in the system prompt
+ * (not split out). The memoriesMessage field is always empty for backward compat.
+ *
+ * With memories cached per-chat and only re-retrieved when invalidated (after
+ * extraction), the system prompt stays byte-identical between consecutive turns.
+ * This means only the new messages at the end of context need KV cache processing,
+ * reducing prompt eval from ~10k tokens to ~200-500 tokens per turn.
  */
 export async function buildSplitAugmentedPrompt(
   baseSystemPrompt: string,
@@ -271,27 +329,15 @@ export async function buildSplitAugmentedPrompt(
   chatId?: string,
   projectId?: string,
   chatType?: string,
-  projectPath?: string  // Added: project path for AGENTS.md loading
+  projectPath?: string
 ): Promise<AugmentedPromptResult> {
-  // Build the full prompt using the existing function
   const combined = await buildMemoryAugmentedPrompt(
     baseSystemPrompt, recentMessages, chatId, projectId, chatType, projectPath
   );
 
-  // Extract the stable prefix from cache
-  const cacheKey = chatId || "_default";
-  const cached = stablePrefixCache.get(cacheKey);
-  const stablePrefix = cached?.prefix || combined;
-
-  // Extract the memories section (everything after the stable prefix)
-  let memoriesMessage = "";
-  if (cached && combined.startsWith(stablePrefix)) {
-    memoriesMessage = combined.slice(stablePrefix.length).trim();
-  }
-
   return {
-    systemPrompt: stablePrefix,
-    memoriesMessage,
+    systemPrompt: combined,
+    memoriesMessage: "",  // No longer split — memories are in system prompt
     combined,
   };
 }

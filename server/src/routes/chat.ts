@@ -11,7 +11,7 @@ import type { OllamaModel } from "../types.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
 import { generateTitle } from "../services/title-generation.js";
 import { truncateChatHistory, truncateBeforeSend } from "../services/compaction.js";
-import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt } from "../services/memory-context.js";
+import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt, invalidateMemoriesCache } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
 import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
@@ -1786,12 +1786,11 @@ router.post("/", async (req, res) => {
     // Load settings for context window resolution
     const settings = await getSettings();
 
-    // Build system prompt with memories separated for KV cache optimization.
-    // The stable system prompt (persona + user doc + blocks + project context) stays in the system message.
-    // Dynamic memories are injected as a separate message near the end of context,
-    // AFTER conversation history. This maximizes KV cache prefix reuse.
+    // Build system prompt with memories included. Memories are cached per-chat
+    // and only re-retrieved when invalidated (after extraction adds new memories).
+    // This keeps the system prompt byte-identical between consecutive turns,
+    // maximizing KV cache prefix reuse — only new messages at the end are processed.
     let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
-    let memoriesMessage = "";
     if (chat.type === "agent" || chat.type === "bluesky") {
       // Get project path for AGENTS.md loading
       let projectPath: string | undefined;
@@ -1808,7 +1807,6 @@ router.post("/", async (req, res) => {
         projectPath
       );
       systemPrompt = split.systemPrompt;
-      memoriesMessage = split.memoriesMessage;
     }
     
     // Inject active skills into system prompt
@@ -1843,6 +1841,9 @@ router.post("/", async (req, res) => {
         const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
           await saveChat(chat);
+          // Invalidate memories cache so rebuild retrieves fresh memories
+          // for the compacted context (different recent messages = different query)
+          invalidateMemoriesCache(chat.id);
           // Rebuild system prompt after truncation (memories may have changed)
           if (chat.type === "agent") {
             // Get project path for AGENTS.md loading
@@ -1874,21 +1875,10 @@ router.post("/", async (req, res) => {
       }
     }
 
-    setCachedAugmentedPrompt(chat.id, memoriesMessage ? `${systemPrompt}\n\n${memoriesMessage}` : systemPrompt);
+    setCachedAugmentedPrompt(chat.id, systemPrompt);
 
     // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
     const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
-
-    // Inject dynamic memories at the END of context (before the new user message).
-    // This keeps the system prompt + conversation history stable for KV cache
-    // prefix matching — only the memories + new user message are reprocessed.
-    if (memoriesMessage) {
-      contextMessages.push({
-        role: "user",
-        content: `[System context — relevant memories]\n${memoriesMessage}`,
-        timestamp: Date.now(),
-      });
-    }
 
     // Safety check: warn if context is empty for non-first messages
     if (contextMessages.length === 0 && chat.messages.length > 1) {

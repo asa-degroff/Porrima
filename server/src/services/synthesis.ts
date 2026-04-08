@@ -13,6 +13,7 @@ import {
   addMemory,
 } from "./memory-storage.js";
 import { discoverAllModels } from "./models.js";
+import { invalidateAllMemoriesCaches } from "./memory-context.js";
 import { loadPersona } from "./persona-store.js";
 import { getSettings, listChats, getChat, getProject } from "./chat-storage.js";
 import { readAgentsMd } from "./project-storage.js";
@@ -312,6 +313,8 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
 
     store.lastSynthesis = new Date().toISOString();
     await saveMemoryStore(store);
+    // Invalidate all memories caches since synthesis can add/modify/supersede memories globally
+    invalidateAllMemoriesCaches();
     console.log("[synthesis] Complete");
   });
 }

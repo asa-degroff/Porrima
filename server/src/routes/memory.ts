@@ -23,6 +23,7 @@ import {
 } from "../services/memory-storage.js";
 import { runDailySynthesis } from "../services/synthesis.js";
 import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
+import { invalidateAllMemoriesCaches, invalidateAllStablePrefixCaches } from "../services/memory-context.js";
 import type { Memory, MemorySummary } from "../types.js";
 
 const router = Router();
@@ -168,6 +169,8 @@ router.post("/blocks", async (req, res) => {
     supersededBy: undefined,
     supersedes: undefined,
   });
+  // Blocks affect the stable prefix — invalidate all caches
+  invalidateAllStablePrefixCaches();
   res.status(201).json(block);
 });
 
@@ -188,6 +191,7 @@ router.patch("/blocks/:id", async (req, res) => {
     updatedBy: "user",
   });
   if (!success) return res.status(404).json({ error: "Block not found" });
+  invalidateAllStablePrefixCaches();
   res.json(getMemoryBlock(req.params.id));
 });
 
@@ -195,6 +199,7 @@ router.patch("/blocks/:id", async (req, res) => {
 router.delete("/blocks/:id", async (req, res) => {
   const success = deleteMemoryBlock(req.params.id);
   if (!success) return res.status(404).json({ error: "Block not found" });
+  invalidateAllStablePrefixCaches();
   res.json({ deleted: true });
 });
 

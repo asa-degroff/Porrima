@@ -18,6 +18,7 @@ import {
   getMemoryById,
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
+import { invalidateMemoriesCache } from "./memory-context.js";
 import type { ChatMessage, Memory, MemoryCategory, Chat } from "../types.js";
 
 const LOG_DIR = join(homedir(), ".quje-agent", "logs");
@@ -369,6 +370,11 @@ export async function extractMemories(
   // Dedup and save inside a single write lock to prevent concurrent overwrites
   await dedupAndSave(facts, embeddings, chatId, projectId);
 
+  // Invalidate the memories cache for this chat so the next turn re-retrieves
+  // with the newly extracted memories included. This keeps the system prompt
+  // stable between turns (byte-identical) until new memories actually change.
+  invalidateMemoriesCache(chatId);
+
   extractionMetrics.successfulExtractions++;
   extractionMetrics.totalFactsExtracted += facts.length;
   extractionMetrics.lastExtractionAt = new Date().toISOString();
@@ -467,6 +473,9 @@ export async function preCompactionFlush(
   }
 
   await dedupAndSave(facts, embeddings, chatId, projectId);
+
+  // Invalidate memories cache so next turn picks up new memories
+  invalidateMemoriesCache(chatId);
 
   console.log("[memory] Pre-compaction flush complete");
 }
