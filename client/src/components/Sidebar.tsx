@@ -88,10 +88,10 @@ function RecentChatItem({
           : `hover:bg-white/8 border ${colorClass.split(" ")[1]}`
       }`}
     >
-      <div className="flex items-center gap-2 min-w-0">
-        <span className={`text-[10px] shrink-0 ${colorClass.split(" ")[0]}`}>●</span>
+      <div className="flex items-start gap-2 min-w-0">
+        <span className={`text-[10px] shrink-0 mt-0.5 ${colorClass.split(" ")[0]}`}>●</span>
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium text-white/80 leading-snug truncate">
+          <p className="text-xs font-medium text-white/80 leading-snug line-clamp-2">
             {chat.title}
           </p>
         </div>
