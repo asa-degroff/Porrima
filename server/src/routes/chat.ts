@@ -237,7 +237,14 @@ async function handleChatStream(
   if (contextMessages.length === 0 && chat.messages.length > 1) {
     console.error(`[chat] CRITICAL: context is empty but chat has ${chat.messages.length} messages - agent will respond without conversation history`);
   }
-  
+
+  // Resolve project path once for AGENTS.md loading in memory augmentation
+  let projectPath: string | undefined;
+  if (chat.projectId) {
+    const project = await getProject(chat.projectId);
+    projectPath = project?.path;
+  }
+
   // Only set headers if not already sent (recursive follow-up calls reuse the same response)
   if (!res.headersSent) {
     res.writeHead(200, {
@@ -961,7 +968,7 @@ async function handleChatStream(
               if (chat.type === "agent" || chat.type === "bluesky") {
                 const split = await buildSplitAugmentedPrompt(
                   chat.systemPrompt || "You are a helpful assistant.",
-                  chat.messages, chat.id, chat.projectId, chat.type
+                  chat.messages, chat.id, chat.projectId, chat.type, projectPath
                 );
                 systemPrompt = split.systemPrompt;
               }
@@ -1128,7 +1135,7 @@ async function handleChatStream(
       if (isAgent) {
         systemPrompt = await buildMemoryAugmentedPrompt(
           chat.systemPrompt || "You are a helpful assistant.",
-          chat.messages, chat.id, chat.projectId, chat.type
+          chat.messages, chat.id, chat.projectId, chat.type, projectPath
         );
       }
       // Strip trailing assistant messages (in-progress + compaction summaries).
@@ -1330,7 +1337,7 @@ async function handleChatStream(
       }
       
       const followUpSystemPrompt = (chat.type === "agent" || chat.type === "bluesky")
-        ? await buildMemoryAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type)
+        ? await buildMemoryAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type, projectPath)
         : chat.systemPrompt || "You are a helpful assistant.";
       
       // Recursively handle the follow-up with a fresh turn abort controller
@@ -1718,11 +1725,19 @@ router.post("/", async (req, res) => {
           await saveChat(chat);
           // Rebuild system prompt after truncation
           if (chat.type === "agent") {
+            // Get project path for AGENTS.md loading
+            let projectPath: string | undefined;
+            if (chat.projectId) {
+              const project = await getProject(chat.projectId);
+              projectPath = project?.path;
+            }
             systemPrompt = await buildMemoryAugmentedPrompt(
               chat.systemPrompt || "You are a helpful assistant.",
               chat.messages,
               chat.id,
-              chat.projectId
+              chat.projectId,
+              undefined,
+              projectPath
             );
           }
           // Find the summary message that was inserted
@@ -1772,18 +1787,25 @@ router.post("/", async (req, res) => {
     const settings = await getSettings();
 
     // Build system prompt with memories separated for KV cache optimization.
-    // The stable system prompt (persona + user doc + blocks) stays in the system message.
+    // The stable system prompt (persona + user doc + blocks + project context) stays in the system message.
     // Dynamic memories are injected as a separate message near the end of context,
     // AFTER conversation history. This maximizes KV cache prefix reuse.
     let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
     let memoriesMessage = "";
     if (chat.type === "agent" || chat.type === "bluesky") {
+      // Get project path for AGENTS.md loading
+      let projectPath: string | undefined;
+      if (chat.projectId) {
+        const project = await getProject(chat.projectId);
+        projectPath = project?.path;
+      }
       const split = await buildSplitAugmentedPrompt(
         systemPrompt,
         chat.messages,
         chat.id,
         chat.projectId,
-        chat.type
+        chat.type,
+        projectPath
       );
       systemPrompt = split.systemPrompt;
       memoriesMessage = split.memoriesMessage;
@@ -1823,11 +1845,19 @@ router.post("/", async (req, res) => {
           await saveChat(chat);
           // Rebuild system prompt after truncation (memories may have changed)
           if (chat.type === "agent") {
+            // Get project path for AGENTS.md loading
+            let projectPath: string | undefined;
+            if (chat.projectId) {
+              const project = await getProject(chat.projectId);
+              projectPath = project?.path;
+            }
             systemPrompt = await buildMemoryAugmentedPrompt(
               chat.systemPrompt || "You are a helpful assistant.",
               chat.messages,
               chat.id,
-              chat.projectId
+              chat.projectId,
+              undefined,
+              projectPath
             );
           }
           // Find the summary message that was inserted
@@ -2014,11 +2044,18 @@ router.post("/edit", async (req, res) => {
         await saveChat(chat);
         // Rebuild system prompt after truncation
         if (chat.type === "agent") {
+          let editProjectPath: string | undefined;
+          if (chat.projectId) {
+            const project = await getProject(chat.projectId);
+            editProjectPath = project?.path;
+          }
           systemPrompt = await buildMemoryAugmentedPrompt(
             chat.systemPrompt || "You are a helpful assistant.",
             chat.messages,
             chat.id,
-            chat.projectId
+            chat.projectId,
+            chat.type,
+            editProjectPath
           );
         }
         // Emit compaction event for UI indicator

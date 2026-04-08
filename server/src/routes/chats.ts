@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
 import { listChats, getChat, saveChat, deleteChat, getSettings, createChat, getProject } from "../services/chat-storage.js";
-import { readAgentsMd } from "../services/project-storage.js";
 import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import type { Chat } from "../types.js";
@@ -33,22 +32,9 @@ router.post("/", async (req, res) => {
   const savedContextWindow = settings.modelContextWindows?.[effectiveModelId];
   let systemPrompt = settings.defaultSystemPrompt || "You are a helpful assistant.";
   
-  // Inject project context if creating a chat within a project
-  if (projectId) {
-    const project = await getProject(projectId);
-    if (project) {
-      const agentsMd = await readAgentsMd(project.path);
-      if (agentsMd) {
-        systemPrompt = `You are working on the project: ${project.name}
-Path: ${project.path}
-
-Project context from AGENTS.md:
-${agentsMd}
-
-${systemPrompt}`;
-      }
-    }
-  }
+  // Note: AGENTS.md is now loaded dynamically in memory-context.ts at prompt build time,
+  // not baked into the system prompt at chat creation. This allows for better KV cache
+  // efficiency since the stable prefix (persona + user doc + blocks) can be cached separately.
   
   const chat: Chat = {
     id: clientId || uuid(),
@@ -113,7 +99,20 @@ router.get("/:id/rendered-prompt", async (req, res) => {
     if (cached) {
       systemPrompt = cached;
     } else {
-      systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages, chat.id, chat.projectId, chat.type);
+      // Get project path for AGENTS.md loading
+      let projectPath: string | undefined;
+      if (chat.projectId) {
+        const project = await getProject(chat.projectId);
+        projectPath = project?.path;
+      }
+      systemPrompt = await buildMemoryAugmentedPrompt(
+        systemPrompt,
+        chat.messages,
+        chat.id,
+        chat.projectId,
+        chat.type,
+        projectPath
+      );
     }
   }
 

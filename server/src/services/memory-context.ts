@@ -3,6 +3,7 @@ import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, getAll
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { loadPersona } from "./persona-store.js";
 import { loadUserDocument } from "./user-store.js";
+import { readAgentsMd } from "./project-storage.js";
 import type { ChatMessage } from "../types.js";
 
 // Cache the last-built augmented prompt per chat so the prompt viewer
@@ -34,7 +35,8 @@ export async function buildMemoryAugmentedPrompt(
   recentMessages: ChatMessage[],
   chatId?: string,
   projectId?: string,
-  chatType?: string
+  chatType?: string,
+  projectPath?: string  // Added: project path for AGENTS.md loading
 ): Promise<string> {
   try {
     // Build or reuse the stable prefix (base prompt + persona + user doc + blocks).
@@ -70,10 +72,27 @@ export async function buildMemoryAugmentedPrompt(
         // User document is optional
       }
 
+       // Load project context (AGENTS.md) after stable user context.
+      // This is more stable than memory blocks (which are loaded/unloaded dynamically)
+      // but less stable than persona/user docs.
+      let projectSection = "";
+      if (projectId && projectPath) {
+        try {
+          const agentsMd = await readAgentsMd(projectPath);
+          if (agentsMd) {
+            projectSection = `\n\n## Project Context\nYou are working on the project with the following context from AGENTS.md:\n${agentsMd}`;
+          }
+        } catch (e) {
+          console.error("[memory] Failed to load AGENTS.md:", e);
+        }
+      }
+
       // Load memory blocks by scope:
       // - Global blocks: always loaded (full content)
       // - Project blocks: auto-loaded for matching project chats (full content)
       // - Other blocks: shown as one-line index for discovery via read_memory_block
+      // Memory blocks come after AGENTS.md because they're more volatile -
+      // they're loaded/unloaded dynamically and edited by the agent.
       blocksSection = "";
       try {
         const loadedBlocks: MemoryBlock[] = [];
@@ -117,7 +136,7 @@ export async function buildMemoryAugmentedPrompt(
         console.error("[memory] Failed to load memory blocks:", e);
       }
 
-      stablePrefix = `${baseSystemPrompt}${personaSection}${userSection}${blocksSection}`;
+      stablePrefix = `${baseSystemPrompt}${personaSection}${userSection}${projectSection}${blocksSection}`;
       stablePrefixCache.set(cacheKey, { basePrompt: baseSystemPrompt, prefix: stablePrefix, blocksSection });
     }
 
@@ -251,11 +270,12 @@ export async function buildSplitAugmentedPrompt(
   recentMessages: ChatMessage[],
   chatId?: string,
   projectId?: string,
-  chatType?: string
+  chatType?: string,
+  projectPath?: string  // Added: project path for AGENTS.md loading
 ): Promise<AugmentedPromptResult> {
   // Build the full prompt using the existing function
   const combined = await buildMemoryAugmentedPrompt(
-    baseSystemPrompt, recentMessages, chatId, projectId, chatType
+    baseSystemPrompt, recentMessages, chatId, projectId, chatType, projectPath
   );
 
   // Extract the stable prefix from cache
