@@ -1081,6 +1081,18 @@ async function handleChatStream(
         }).join("\n");
         handoffParts.push(`Tools you already called (${partialAssistant.toolCalls.length} total):\n${toolSummary}`);
       }
+      // Include memories extracted from this conversation for continuity
+      try {
+        const { getMemoriesFromChat } = await import("../services/memory-storage.js");
+        const chatMemories = getMemoriesFromChat(chat.id, 10);
+        if (chatMemories.length > 0) {
+          const memoryLines = chatMemories.map(
+            (m) => `- ${m.text} [${m.category}]`
+          ).join("\n");
+          handoffParts.push(`Key context from this conversation (${chatMemories.length} memories):\n${memoryLines}`);
+        }
+      } catch { /* non-critical */ }
+
       handoffParts.push("Continue the task from where you left off. Do not repeat work already done.");
       const handoffText = handoffParts.join("\n\n");
       const lastMsg = chat.messages[chat.messages.length - 1];

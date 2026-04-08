@@ -827,6 +827,32 @@ export async function getAllMemories(
   }));
 }
 
+/** Get memories extracted from a specific chat, newest first. */
+export function getMemoriesFromChat(chatId: string, limit = 15): Omit<Memory, "embedding">[] {
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes
+     FROM memories WHERE source_chat_id = ? AND superseded_by IS NULL
+     ORDER BY created_at DESC LIMIT ?`
+  ).all(chatId, limit) as any[];
+
+  return rows.map((r: any) => ({
+    id: r.id,
+    text: r.text,
+    category: r.category,
+    importance: r.importance,
+    createdAt: r.created_at,
+    lastAccessed: r.last_accessed,
+    accessCount: r.access_count,
+    sourceChatId: r.source_chat_id,
+    ...(r.project_id ? { projectId: r.project_id } : {}),
+    sourceType: r.source_type,
+    sourceId: r.source_id || undefined,
+    supersededBy: r.superseded_by || undefined,
+    supersedes: r.supersedes || undefined,
+  }));
+}
+
 /**
  * Raw semantic search without scoring/reranking - returns memories as-is.
  * Used for supersession detection.
