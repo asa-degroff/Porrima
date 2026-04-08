@@ -1,3 +1,4 @@
+import type { ChatMessage } from "../types.js";
 import { discoverAllModels } from "./models.js";
 import { getSettings } from "./chat-storage.js";
 
@@ -100,6 +101,115 @@ export async function generateTitle(
     return title;
   } catch (err) {
     console.warn("[title] generation failed:", err);
+    return null;
+  }
+}
+
+/**
+ * Regenerate a chat title based on recent messages.
+ * Used during compaction to keep titles up-to-date with long-running conversations.
+ * Analyzes the last 10 messages (or fewer if chat is shorter) to capture the current topic.
+ */
+export async function regenerateTitle(
+  messages: ChatMessage[]
+): Promise<string | null> {
+  if (messages.length === 0) return null;
+
+  try {
+    // Get the last 10 messages (or all if fewer)
+    const recentMessages = messages.slice(-10);
+    
+    // Build context from recent messages
+    const parts: string[] = [];
+    for (const m of recentMessages) {
+      const role = m.role === "user" ? "User" : "Assistant";
+      const content = m.content.slice(0, 200);
+      parts.push(`${role}: ${content}`);
+    }
+    const context = parts.join("\n\n");
+
+    const systemContent =
+      "Generate a short title (3-8 words) summarizing this conversation. " +
+      "Reply with ONLY the title text. No quotes, no trailing punctuation, no explanation. " +
+      "Focus on the current topic being discussed.";
+
+    // Check which provider has the title model
+    let provider: "ollama" | "llamacpp" = "ollama";
+    try {
+      const models = await discoverAllModels();
+      const found = models.find((m) => m.id === TITLE_MODEL);
+      if (found?.provider) provider = found.provider;
+    } catch { /* fall through to default provider */ }
+
+    let title: string | null = null;
+
+    if (provider === "llamacpp") {
+      const settings = await getSettings();
+      const baseUrl = settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
+      const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: TITLE_MODEL,
+          messages: [
+            { role: "system", content: systemContent },
+            { role: "user", content: `Recent conversation:\n${context}` },
+          ],
+          stream: false,
+          max_tokens: 30,
+          temperature: 0.3,
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) {
+        console.warn(`[title] llama.cpp regeneration failed: HTTP ${res.status}`);
+        return null;
+      }
+      const data = await res.json();
+      title = data.choices?.[0]?.message?.content?.trim() ?? null;
+    } else {
+      const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: TITLE_MODEL,
+          messages: [
+            { role: "system", content: systemContent },
+            { role: "user", content: `Recent conversation:\n${context}` },
+          ],
+          stream: false,
+          think: false,
+          keep_alive: "0s",
+          options: { num_predict: 30, temperature: 0.3, num_gpu: 0 },
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) {
+        console.warn(`[title] Ollama regeneration failed: HTTP ${res.status}`);
+        return null;
+      }
+      const data = await res.json();
+      title = data.message?.content?.trim() ?? null;
+    }
+
+    if (!title) return null;
+
+    // Remove surrounding quotes if present
+    title = title.replace(/^["']|["']$/g, "").trim();
+    // Remove trailing period
+    title = title.replace(/\.$/, "").trim();
+
+    if (!title) return null;
+
+    // Truncate to reasonable length
+    if (title.length > 60) {
+      title = title.slice(0, 57) + "...";
+    }
+
+    console.log(`[title] regenerated: "${title}"`);
+    return title;
+  } catch (err) {
+    console.warn("[title] regeneration failed:", err);
     return null;
   }
 }

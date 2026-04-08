@@ -1,5 +1,6 @@
 import type { Chat, ChatMessage } from "../types.js";
-import { getNextArchiveSequence, saveArchives, type ContextArchive } from "./chat-storage.js";
+import { getNextArchiveSequence, saveArchives, type ContextArchive, updateChatTitle } from "./chat-storage.js";
+import { regenerateTitle } from "./title-generation.js";
 
 export interface CompactionResult {
   truncated: boolean;
@@ -206,6 +207,18 @@ export async function truncateBeforeSend(
     `[compaction] Pre-send truncated chat ${chat.id}: removed ${messagesToRemove} messages ` +
     `(~${estimatedRemovedTokens} est. tokens) → ${chat.messages.length} messages`
   );
+
+  // Regenerate title based on remaining messages to keep it current
+  try {
+    const newTitle = await regenerateTitle(chat.messages);
+    if (newTitle && newTitle !== chat.title) {
+      await updateChatTitle(chat.id, newTitle);
+      chat.title = newTitle;
+      console.log(`[compaction] Title updated: "${chat.title}"`);
+    }
+  } catch (err) {
+    console.warn("[compaction] Title regeneration failed:", err);
+  }
 
   return { truncated: true, removedCount: messagesToRemove, estimatedTokenCount: estimatedRemovedTokens };
 }
@@ -637,6 +650,18 @@ export async function truncateChatHistory(
     `[compaction] Truncated chat ${chat.id}: removed ${messagesToRemove} messages ` +
     `(~${estimatedRemovedTokens} est. tokens) → ${chat.messages.length} messages`
   );
+
+  // Regenerate title based on remaining messages to keep it current
+  try {
+    const newTitle = await regenerateTitle(chat.messages);
+    if (newTitle && newTitle !== chat.title) {
+      await updateChatTitle(chat.id, newTitle);
+      chat.title = newTitle;
+      console.log(`[compaction] Title updated: "${chat.title}"`);
+    }
+  } catch (err) {
+    console.warn("[compaction] Title regeneration failed:", err);
+  }
 
   return { truncated: true, removedCount: messagesToRemove, removedMessages, estimatedTokenCount: estimatedRemovedTokens };
 }

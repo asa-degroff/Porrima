@@ -470,6 +470,18 @@ export async function updateChatExtractionState(
   `).run(extractionAt, messageIndex, chatId);
 }
 
+export async function updateChatTitle(
+  chatId: string,
+  title: string
+): Promise<void> {
+  const db = getDb();
+  db.prepare(`
+    UPDATE chats
+    SET title = ?, lastModified = ?
+    WHERE id = ?
+  `).run(title, new Date().toISOString(), chatId);
+}
+
 export async function deleteChat(id: string): Promise<boolean> {
   const db = getDb();
   const del = db.transaction(() => {
