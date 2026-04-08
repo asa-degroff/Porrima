@@ -46,7 +46,7 @@ interface Props {
   activeTools?: ToolStatus[];
   artifacts?: Artifact[];
   generatedImages?: GeneratedImage[];
-  onEditMessage?: (index: number, newText: string) => void;
+  onEditMessage?: (index: number, newText: string, images?: ImageAttachment[]) => void;
   messageIndex?: number;
   editable?: boolean;
   onReadAloud?: (text: string) => void;
@@ -133,6 +133,7 @@ export const MessageBubble = memo(function MessageBubble({
 
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
+  const [editImages, setEditImages] = useState<ImageAttachment[]>([]);
   const [editMinWidth, setEditMinWidth] = useState<number | undefined>(undefined);
   const [lightboxImage, setLightboxImage] = useState<ImageAttachment | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -159,19 +160,29 @@ export const MessageBubble = memo(function MessageBubble({
       setEditMinWidth(bubbleRef.current.offsetWidth);
     }
     setEditText(message.content);
+    setEditImages(message.images || []);
     setEditing(true);
   };
 
   const handleSave = () => {
     const trimmed = editText.trim();
-    if (trimmed && trimmed !== message.content && messageIndex != null) {
-      onEditMessage?.(messageIndex, trimmed);
+    if (messageIndex == null) return;
+    
+    const textChanged = trimmed !== message.content.trim();
+    const imagesChanged = editImages.length !== (message.images?.length || 0);
+    
+    if (textChanged || imagesChanged) {
+      onEditMessage?.(messageIndex, trimmed, editImages);
     }
     setEditing(false);
   };
 
   const handleCancel = () => {
     setEditing(false);
+  };
+
+  const removeEditImage = (index: number) => {
+    setEditImages((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -231,6 +242,28 @@ export const MessageBubble = memo(function MessageBubble({
           >
             {isUser && editing ? (
               <div className="space-y-2">
+                {editImages.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {editImages.map((img, i) => (
+                      <div key={i} className="relative group/thumb">
+                        <img
+                          src={`data:${img.mimeType};base64,${img.data}`}
+                          alt={img.name}
+                          className="h-16 w-16 object-cover rounded-lg border border-white/15"
+                        />
+                        <button
+                          onClick={() => removeEditImage(i)}
+                          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500/80 text-white text-xs flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity hover:bg-red-500"
+                        >
+                          ×
+                        </button>
+                        <span className="absolute bottom-0 left-0 right-0 text-[9px] text-white/60 bg-black/50 rounded-b-lg px-1 truncate">
+                          {img.name}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <textarea
                   ref={textareaRef}
                   className="w-full rounded-lg px-3 py-2 text-sm text-white/95 outline-none resize-none leading-relaxed"

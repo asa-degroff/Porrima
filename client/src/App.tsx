@@ -378,8 +378,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   );
 
   const handleEditMessage = useCallback(
-    (index: number, newText: string) => {
-      editMessage(index, newText);
+    (index: number, newText: string, images?: import("./types").ImageAttachment[]) => {
+      editMessage(index, newText, images);
     },
     [editMessage]
   );

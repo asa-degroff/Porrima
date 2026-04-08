@@ -729,14 +729,14 @@ export function useChat(chatId: string | null) {
   );
 
   const editMessage = useCallback(
-    (index: number, newText: string) => {
+    (index: number, newText: string, images?: ImageAttachment[]) => {
       if (!chatId || streaming || !navigator.onLine) return;
       const targetChatId = chatId;
 
-      // Get the original message to preserve its images
+      // Use provided images if explicitly passed (including empty array), otherwise preserve originals
       const originalMessage = messages[index];
       if (!originalMessage) return;
-      const originalImages = originalMessage.images?.length ? originalMessage.images : undefined;
+      const originalImages = images !== undefined ? images : (originalMessage.images?.length ? originalMessage.images : undefined);
 
       // Create bgStream entry
       const bg = createBgStream(activeChatRef.current);

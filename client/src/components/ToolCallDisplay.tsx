@@ -54,15 +54,15 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
       {/* Header - clickable to expand */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.02] transition-colors min-w-0"
+        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.02] transition-colors min-w-0 overflow-hidden"
       >
         {statusIcons[status]}
         <span className="text-white/40 text-xs shrink-0">{toolIcon}</span>
-        <span className="text-xs font-medium text-white/70 shrink-0 min-w-fit">
+        <span className="text-xs font-medium text-white/70 shrink-0 whitespace-nowrap">
           {formatToolName(name)}
         </span>
         {argsDisplay && (
-          <span className="text-xs text-white/30 truncate min-w-0 flex-1 ml-1 max-w-full">
+          <span className="text-xs text-white/30 truncate min-w-0 flex-1 ml-1">
             {argsDisplay}
           </span>
         )}

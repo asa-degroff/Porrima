@@ -67,7 +67,7 @@ interface Props {
   playbackState?: import("../hooks/useTTS").PlaybackState;
   ttsBarVisible?: boolean;
   onSend: (text: string, images?: import("../types").ImageAttachment[]) => void;
-  onEditMessage: (index: number, newText: string) => void;
+  onEditMessage: (index: number, newText: string, images?: import("../types").ImageAttachment[]) => void;
   onAbort: () => void;
   onModelChange: (modelId: string) => void;
   onSystemPromptChange: (value: string) => void;
