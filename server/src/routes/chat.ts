@@ -11,7 +11,7 @@ import type { OllamaModel } from "../types.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
 import { generateTitle } from "../services/title-generation.js";
 import { truncateChatHistory, truncateBeforeSend } from "../services/compaction.js";
-import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt, invalidateMemoriesCache } from "../services/memory-context.js";
+import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
 import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
@@ -963,9 +963,10 @@ async function handleChatStream(
                 summaryMessage: summaryMsg || null,
               })}\n\n`);
               
-              // Rebuild system prompt after compaction using split approach
-              // to preserve the stable prefix for KV cache optimization
+              // Full reset of memory context after compaction — rebuild with
+              // fresh retrieval, all memories frozen into the new system prompt.
               if (chat.type === "agent" || chat.type === "bluesky") {
+                resetMemoryContext(chat.id);
                 const split = await buildSplitAugmentedPrompt(
                   chat.systemPrompt || "You are a helpful assistant.",
                   chat.messages, chat.id, chat.projectId, chat.type, projectPath
@@ -1786,11 +1787,11 @@ router.post("/", async (req, res) => {
     // Load settings for context window resolution
     const settings = await getSettings();
 
-    // Build system prompt with memories included. Memories are cached per-chat
-    // and only re-retrieved when invalidated (after extraction adds new memories).
-    // This keeps the system prompt byte-identical between consecutive turns,
-    // maximizing KV cache prefix reuse — only new messages at the end are processed.
+    // Build system prompt with delta-based memory injection for KV cache optimization.
+    // Frozen memories live in the system prompt (byte-identical between turns).
+    // When extraction adds new memories, only the delta is appended at end of context.
     let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+    let memoriesDelta = "";
     if (chat.type === "agent" || chat.type === "bluesky") {
       // Get project path for AGENTS.md loading
       let projectPath: string | undefined;
@@ -1807,6 +1808,7 @@ router.post("/", async (req, res) => {
         projectPath
       );
       systemPrompt = split.systemPrompt;
+      memoriesDelta = split.memoriesMessage;
     }
     
     // Inject active skills into system prompt
@@ -1841,10 +1843,10 @@ router.post("/", async (req, res) => {
         const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
           await saveChat(chat);
-          // Invalidate memories cache so rebuild retrieves fresh memories
-          // for the compacted context (different recent messages = different query)
-          invalidateMemoriesCache(chat.id);
-          // Rebuild system prompt after truncation (memories may have changed)
+          // Full reset of memory context — compaction reshapes the entire context,
+          // so we need fresh retrieval with all memories going into the system prompt.
+          resetMemoryContext(chat.id);
+          // Rebuild system prompt after truncation
           if (chat.type === "agent") {
             // Get project path for AGENTS.md loading
             let projectPath: string | undefined;
@@ -1875,10 +1877,21 @@ router.post("/", async (req, res) => {
       }
     }
 
-    setCachedAugmentedPrompt(chat.id, systemPrompt);
+    setCachedAugmentedPrompt(chat.id, memoriesDelta ? `${systemPrompt}\n\n${memoriesDelta}` : systemPrompt);
 
     // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
     const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
+
+    // Inject memory delta at end of context (only new memories not already in system prompt).
+    // This keeps the system prompt + conversation history stable for KV cache prefix
+    // matching — only the delta + new user message are reprocessed.
+    if (memoriesDelta) {
+      contextMessages.push({
+        role: "user",
+        content: `[System context — updated memories]\n${memoriesDelta}`,
+        timestamp: Date.now(),
+      });
+    }
 
     // Safety check: warn if context is empty for non-first messages
     if (contextMessages.length === 0 && chat.messages.length > 1) {
