@@ -21,6 +21,7 @@ import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, Generat
 import { saveUserImage } from "../services/user-image-storage.js";
 import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
+import { log } from "../services/logger.js";
 
 /** Truncate a string to maxChars graphemes, preserving emoji and multi-byte characters */
 function truncateTitle(text: string, maxChars: number = 50): string {
@@ -1921,7 +1922,7 @@ router.post("/", async (req, res) => {
     setCachedAugmentedPrompt(chat.id, memoriesDelta ? `${systemPrompt}\n\n${memoriesDelta}` : systemPrompt);
 
     // KV cache efficiency logging
-    console.log(`[kv-cache] chat=${chatId} system_prompt=${systemPrompt.length}ch delta=${memoriesDelta.length}ch new_msg=${message.length}ch type=${memoriesDelta ? "delta" : "stable"}`);
+    log(`[kv-cache] chat=${chatId} system_prompt=${systemPrompt.length}ch delta=${memoriesDelta.length}ch new_msg=${message.length}ch type=${memoriesDelta ? "delta" : "stable"}`);
 
     // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
     const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);

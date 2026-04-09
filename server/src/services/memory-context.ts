@@ -4,6 +4,7 @@ import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { loadPersona } from "./persona-store.js";
 import { loadUserDocument } from "./user-store.js";
 import { readAgentsMd } from "./project-storage.js";
+import { log } from "./logger.js";
 import type { ChatMessage } from "../types.js";
 
 // Cache the last-built augmented prompt per chat so the prompt viewer
@@ -168,13 +169,13 @@ async function retrieveMemories(
   // --- Retrieval pipeline logging ---
   const allScores = rerankOutput.results.map((r) => r.score);
   const queryPreview = userMessages.length > 120 ? userMessages.slice(0, 120) + "..." : userMessages;
-  console.log(`[memory-retrieval] query="${queryPreview}" type=${chatType || "agent"} reranker=${rerankOutput.usedModel ? "model" : "fallback"} latency=${rerankOutput.latencyMs}ms`);
-  console.log(`[memory-retrieval] candidates=${results.length} reranked=${rerankOutput.results.length} scores: min=${Math.min(...allScores).toFixed(4)} max=${Math.max(...allScores).toFixed(4)} median=${allScores.sort((a, b) => a - b)[Math.floor(allScores.length / 2)]?.toFixed(4) ?? "?"}`);
-  console.log(`[memory-retrieval] current: ${currentMemories.length} total, ${topCurrent.length} above threshold (0.05), ${currentMemories.length - topCurrent.length} filtered`);
-  console.log(`[memory-retrieval] superseded: ${supersededMemories.length} total, ${topSuperseded.length} above threshold (0.02)`);
-  console.log(`[memory-retrieval] selected: ${selected.length} current + ${topSuperseded.length} superseded = ${finalMemories.length} total`);
+  log(`[memory-retrieval] query="${queryPreview}" type=${chatType || "agent"} reranker=${rerankOutput.usedModel ? "model" : "fallback"} latency=${rerankOutput.latencyMs}ms`);
+  log(`[memory-retrieval] candidates=${results.length} reranked=${rerankOutput.results.length} scores: min=${Math.min(...allScores).toFixed(4)} max=${Math.max(...allScores).toFixed(4)} median=${allScores.sort((a, b) => a - b)[Math.floor(allScores.length / 2)]?.toFixed(4) ?? "?"}`);
+  log(`[memory-retrieval] current: ${currentMemories.length} total, ${topCurrent.length} above threshold (0.05), ${currentMemories.length - topCurrent.length} filtered`);
+  log(`[memory-retrieval] superseded: ${supersededMemories.length} total, ${topSuperseded.length} above threshold (0.02)`);
+  log(`[memory-retrieval] selected: ${selected.length} current + ${topSuperseded.length} superseded = ${finalMemories.length} total`);
   if (finalMemories.length > 0) {
-    console.log(`[memory-retrieval] top memories: ${finalMemories.slice(0, 5).map((r) => `[${r.score.toFixed(3)}] ${r.memory.text.slice(0, 60)}...`).join(" | ")}`);
+    log(`[memory-retrieval] top memories: ${finalMemories.slice(0, 5).map((r) => `[${r.score.toFixed(3)}] ${r.memory.text.slice(0, 60)}...`).join(" | ")}`);
   }
 
   return finalMemories;
@@ -388,7 +389,7 @@ export async function buildSplitAugmentedPrompt(
         });
       }
 
-      console.log(`[memory-context] chat=${chatId} full retrieval: ${memories.length} memories frozen in system prompt`);
+      log(`[memory-context] chat=${chatId} full retrieval: ${memories.length} memories frozen in system prompt`);
 
       return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
     }
@@ -396,7 +397,7 @@ export async function buildSplitAugmentedPrompt(
     // Case 2: State exists, not dirty — reuse frozen system prompt, no delta.
     if (!state.dirty) {
       const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;
-      console.log(`[memory-context] chat=${chatId} cache hit: system prompt stable, no delta needed`);
+      log(`[memory-context] chat=${chatId} cache hit: system prompt stable, no delta needed`);
       return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
     }
 
@@ -424,12 +425,12 @@ export async function buildSplitAugmentedPrompt(
 
     const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;
 
-    console.log(`[memory-context] chat=${chatId} delta: ${memories.length} retrieved, ${newMemories.length} new (${state.frozenIds.size} frozen + ${state.deltaIds.size} delta in context)`);
+    log(`[memory-context] chat=${chatId} delta: ${memories.length} retrieved, ${newMemories.length} new (${state.frozenIds.size} frozen + ${state.deltaIds.size} delta in context)`);
 
     // If deltas have accumulated too many (>20), schedule a full reset on next compaction.
     // Don't reset now — that would change the system prompt and invalidate the KV cache.
     if (state.deltaIds.size > 20) {
-      console.log(`[memory-context] chat=${chatId} delta accumulation high (${state.deltaIds.size}), will reset on next compaction`);
+      log(`[memory-context] chat=${chatId} delta accumulation high (${state.deltaIds.size}), will reset on next compaction`);
     }
 
     return { systemPrompt, memoriesMessage, combined: memoriesMessage ? `${systemPrompt}\n\n${memoriesMessage}` : systemPrompt };
