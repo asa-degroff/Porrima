@@ -49,6 +49,37 @@ Memory retrieval uses a multi-stage pipeline for high-relevance results:
 
 **Retrieval logging**: Each retrieval logs query preview, reranker model/fallback status, latency, score distribution (min/max/median), threshold crossings, and top memory previews for tuning.
 
+## KV Cache Optimization (Delta-Based Memory Injection)
+
+To maximize KV cache hit rates with llama.cpp's longest-common-prefix caching, memory augmentation uses a delta-based strategy:
+
+**Architecture:**
+- **Frozen memories**: On first turn or after compaction, retrieved memories are baked into the system prompt
+- **Delta injection**: When new memories are extracted, only NEW memories (not already in context) are injected as a small message at the end of conversation history, just before the new user message
+- **Cache preservation**: This keeps the system prompt byte-identical between turns, preserving the KV cache for the stable prefix (system prompt + persona + user doc + blocks + AGENTS.md + frozen memories + conversation history)
+
+**State tracking:**
+- `MemoryContextState` per chat tracks `frozenIds` (memories in system prompt) and `deltaIds` (memories injected via deltas)
+- `dirty` flag triggers re-retrieval when new memories are extracted
+- On retrieval, only memories not in `frozenIds ∪ deltaIds` are included in the delta
+
+**Invalidation points:**
+- `invalidateMemoriesCache(chatId)` — sets dirty flag after extraction (triggers delta on next turn)
+- `resetMemoryContext(chatId)` — full reset after compaction (rebuilds frozen set from scratch)
+- `invalidateStablePrefixCache(chatId)` — when blocks or persona change
+
+**Error handling:**
+- If delta retrieval fails, the frozen system prompt is preserved (not falling back to bare base prompt)
+- Dirty flag is cleared to prevent immediate retry loops
+
+**Logging:**
+- `[kv-cache]` logs show system_prompt size, delta size, new message size, and turn type (stable/delta)
+- Correlate with llama.cpp prompt eval stats to verify cache efficiency
+
+**Key insight:** The tradeoff of adding delta messages to conversation history (~200-500 tokens) is minimal compared to reprocessing the entire context (potentially thousands of tokens) when the system prompt changes.
+
+See `memory-context.ts` for implementation details: `buildSplitAugmentedPrompt()` returns both `systemPrompt` (frozen) and `memoriesMessage` (delta).
+
 ## Agent Tools
 
 The agent can explicitly save, search, forget memories, and read archived context:
