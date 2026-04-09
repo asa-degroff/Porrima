@@ -187,7 +187,7 @@ export function getAgentToolDefinitions(): { name: string; description: string }
 }
 
 /** Get all tools available for agent chats, wrapped as AgentTool */
-export function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768, projectPath?: string): AgentTool[] {
+export function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768, projectPath?: string, chatType?: string): AgentTool[] {
   const baseDir = projectPath || HOME;
   const wrapResult = createWrapResult(contextWindow);
   const tools: AgentTool[] = [];
@@ -232,19 +232,21 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
     });
   }
 
-  // Bluesky tools
-  for (const tool of BLUESKY_TOOLS) {
-    tools.push({
-      name: tool.name,
-      description: tool.description,
-      parameters: (tool.schema as any),
-      label: tool.name,
-      execute: async (toolCallId, params) => {
-        const args = params as Record<string, any>;
-        const result = await executeBlueskyTool(tool.name, args);
-        return wrapResult({ content: result, isError: result.startsWith("Error:") });
-      },
-    });
+  // Bluesky tools — only for bluesky chat context
+  if (chatType === "bluesky") {
+    for (const tool of BLUESKY_TOOLS) {
+      tools.push({
+        name: tool.name,
+        description: tool.description,
+        parameters: (tool.schema as any),
+        label: tool.name,
+        execute: async (toolCallId, params) => {
+          const args = params as Record<string, any>;
+          const result = await executeBlueskyTool(tool.name, args);
+          return wrapResult({ content: result, isError: result.startsWith("Error:") });
+        },
+      });
+    }
   }
 
   // Filesystem tools

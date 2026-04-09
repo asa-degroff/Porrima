@@ -331,7 +331,7 @@ Review the notifications above. For mentions and replies, use bluesky_get_thread
         let stopReason = 'stop';
         let assistantMessage: any;
 
-        const tools = getAgentTools(chatId, effects);
+        const tools = getAgentTools(chatId, effects, undefined, undefined, "bluesky");
         if (iteration === 1) {
           console.log(`[bluesky-poller] Using model: ${modelId}, tools: ${tools.length} (${tools.map(t => t.name).join(', ')})`);
           console.log(`[bluesky-poller] Messages: ${piMessages.length}, last role: ${piMessages[piMessages.length - 1]?.role}`);

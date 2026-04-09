@@ -474,7 +474,7 @@ async function handleChatStream(
 
     // Create tools AFTER model discovery so we can pass the effective context window
     const project = chat.projectId ? await getProject(chat.projectId) : null;
-    const agentTools = isAgent ? getAgentTools(chat.id, effects, piModel.contextWindow, project?.path) : undefined;
+    const agentTools = isAgent ? getAgentTools(chat.id, effects, piModel.contextWindow, project?.path, chat.type) : undefined;
 
     // Build agent context
     const context: AgentContext = {
