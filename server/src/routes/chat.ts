@@ -496,7 +496,45 @@ async function handleChatStream(
         if (askUserRef.current) {
           return [{ role: "user" as const, content: "[paused for user input]", timestamp: Date.now() }];
         }
-        return [];
+        // Check for queued messages — these are sent by the user while the agent
+        // is working (tool loop in progress). Injecting them as steering messages
+        // means the agent sees them between tool executions and can adjust.
+        const queued = await messageQueue.drainOne(chat.id);
+        if (!queued) return [];
+
+        // Save the completed assistant message and the steering user message
+        const assistantMsg = buildCurrentAssistantMessage();
+        const lastMsg = chat.messages[chat.messages.length - 1];
+        if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
+          chat.messages[chat.messages.length - 1] = assistantMsg;
+        } else {
+          chat.messages.push(assistantMsg);
+        }
+        const queuedUserMsg: ChatMessage = {
+          role: "user",
+          content: queued.message,
+          images: queued.images?.length ? queued.images : undefined,
+          timestamp: queued.timestamp,
+        };
+        chat.messages.push(queuedUserMsg);
+        await saveChat(chat);
+
+        // Emit events so client can finalize current response and start the steered turn
+        res.write(`event: message_complete\ndata: ${JSON.stringify({ message: assistantMsg })}\n\n`);
+        res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queued.id })}\n\n`);
+
+        // Defer memory extraction for the completed turn
+        if (chat.type === "agent" || chat.type === "bluesky") {
+          deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: assistantMsg.content });
+        }
+
+        // Reset accumulators for the new response
+        resetAccumulators();
+        lastUserMessage = queued.message;
+
+        console.log(`[chat] steering: injecting queued message ${queued.id} mid-loop`);
+
+        return [{ role: "user" as const, content: queued.message, timestamp: queued.timestamp }];
       },
       getFollowUpMessages: async () => {
         const queued = await messageQueue.drainOne(chat.id);
