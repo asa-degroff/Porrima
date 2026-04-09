@@ -204,7 +204,7 @@ function updateAccessMetadata(memories: RetrievalResult[]): void {
 function buildMemoriesSection(memories: RetrievalResult[], projectId?: string, blockHint?: string): string {
   if (memories.length === 0) return "";
   const memoriesBlock = memories.map((r) => formatMemory(r, projectId)).join("\n");
-  return `\n\n## Relevant memories to this chat:\n${memoriesBlock}\n\nUse these memories as needed — there's no need to list them unless asked.${blockHint || ""}`;
+  return `\n\n## My relevant memories to this chat:\n${memoriesBlock}\n\nUse these memories as needed — there's no need to list them unless asked.${blockHint || ""}`;
 }
 
 // ---- Stable prefix builder ----
@@ -225,7 +225,7 @@ async function buildStablePrefix(
   let personaSection = "";
   try {
     const persona = await loadPersona();
-    personaSection = `\n${persona.content}\n\nRemember: This is your core identity.`;
+    personaSection = `\n${persona.content}\n\nThis is my core identity.`;
   } catch (e) {
     console.error("[memory] Failed to load persona, continuing without:", e);
   }
@@ -419,7 +419,7 @@ export async function buildSplitAugmentedPrompt(
     let memoriesMessage = "";
     if (newMemories.length > 0) {
       const deltaBlock = newMemories.map((r) => formatMemory(r, projectId)).join("\n");
-      memoriesMessage = `## Updated context — newly recalled memories:\n${deltaBlock}\n\nThese supplement the memories in your system prompt.`;
+      memoriesMessage = `## Updated context — my newly recalled memories:\n${deltaBlock}`;
     }
 
     const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;
