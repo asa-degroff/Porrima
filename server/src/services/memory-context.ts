@@ -265,7 +265,17 @@ async function buildStablePrefix(
 
     const allBlocks = getAllMemoryBlocks();
     const loadedIds = new Set(loadedBlocks.map((b) => b.id));
-    const indexedBlocks = allBlocks.filter((b) => !loadedIds.has(b.id));
+    
+    // Filter to only index blocks that are relevant:
+    // - Global blocks that weren't loaded (token budget)
+    // - Project-scoped blocks from the current project that weren't loaded
+    // Exclude project-scoped blocks from other projects
+    const indexedBlocks = allBlocks.filter((b) => {
+      if (loadedIds.has(b.id)) return false; // Already loaded
+      if (b.scope === "global") return true; // Global blocks are always indexable
+      if (b.scope === "project" && b.projectId === projectId) return true; // Current project blocks
+      return false; // Other projects' blocks are excluded
+    });
 
     const tokenBudget = projectId ? 5000 : 3000;
     let loadedTokens = 0;
