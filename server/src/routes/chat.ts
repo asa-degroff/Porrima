@@ -1844,24 +1844,27 @@ router.post("/", async (req, res) => {
         if (compaction && compaction.truncated) {
           await saveChat(chat);
           // Full reset of memory context — compaction reshapes the entire context,
-          // so we need fresh retrieval with all memories going into the system prompt.
+          // so we need fresh retrieval with all memories frozen into the new system prompt.
+          // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
+          // the frozen context state is set up immediately, avoiding a redundant retrieval
+          // on the next turn.
           resetMemoryContext(chat.id);
-          // Rebuild system prompt after truncation
           if (chat.type === "agent") {
-            // Get project path for AGENTS.md loading
             let projectPath: string | undefined;
             if (chat.projectId) {
               const project = await getProject(chat.projectId);
               projectPath = project?.path;
             }
-            systemPrompt = await buildMemoryAugmentedPrompt(
+            const split = await buildSplitAugmentedPrompt(
               chat.systemPrompt || "You are a helpful assistant.",
               chat.messages,
               chat.id,
               chat.projectId,
-              undefined,
+              chat.type,
               projectPath
             );
+            systemPrompt = split.systemPrompt;
+            // split.memoriesMessage is always empty after reset (case 1: full retrieval)
           }
           // Find the summary message that was inserted
           const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
@@ -1878,6 +1881,9 @@ router.post("/", async (req, res) => {
     }
 
     setCachedAugmentedPrompt(chat.id, memoriesDelta ? `${systemPrompt}\n\n${memoriesDelta}` : systemPrompt);
+
+    // KV cache efficiency logging
+    console.log(`[kv-cache] chat=${chatId} system_prompt=${systemPrompt.length}ch delta=${memoriesDelta.length}ch new_msg=${message.length}ch type=${memoriesDelta ? "delta" : "stable"}`);
 
     // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
     const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);

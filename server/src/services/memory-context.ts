@@ -435,6 +435,18 @@ export async function buildSplitAugmentedPrompt(
     return { systemPrompt, memoriesMessage, combined: memoriesMessage ? `${systemPrompt}\n\n${memoriesMessage}` : systemPrompt };
   } catch (e) {
     console.error("[memory] Context augmentation failed, using base prompt:", e);
+    // If we have existing frozen state, preserve the system prompt rather than falling
+    // back to bare base prompt — the frozen memories are still valid.
+    const state = chatId ? contextState.get(chatId) : undefined;
+    if (state) {
+      const cached = stablePrefixCache.get(chatId || "_default");
+      if (cached) {
+        const systemPrompt = `${cached.prefix}${state.frozenMemoriesSection}`;
+        console.warn(`[memory-context] chat=${chatId} delta retrieval failed, using frozen state (skipping delta)`);
+        state.dirty = false; // Don't retry immediately — wait for next invalidation
+        return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
+      }
+    }
     return { systemPrompt: baseSystemPrompt, memoriesMessage: "", combined: baseSystemPrompt };
   }
 }
