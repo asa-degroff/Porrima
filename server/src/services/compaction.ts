@@ -573,6 +573,22 @@ export async function truncateChatHistory(
     if (lastUsage <= targetTokens) return noOp;
   }
 
+  // Truncate any oversized tool results in-place before estimation.
+  // This prevents a single bloated error result (e.g., 1MB bash output)
+  // from consuming the entire compaction budget and causing all intermediate
+  // messages to be removed.
+  const MAX_TOOL_RESULT_CHARS = 60_000;
+  for (const m of messages) {
+    if (m.role === "assistant" && m.toolResults) {
+      for (const r of m.toolResults) {
+        if (r.content && r.content.length > MAX_TOOL_RESULT_CHARS) {
+          console.log(`[compaction] Truncating oversized tool result: ${r.toolName} ${(r.content.length / 1024).toFixed(0)}KB → ${(MAX_TOOL_RESULT_CHARS / 1024).toFixed(0)}KB`);
+          r.content = r.content.slice(0, MAX_TOOL_RESULT_CHARS) + `\n[Truncated from ${(r.content.length / 1024).toFixed(0)}KB]`;
+        }
+      }
+    }
+  }
+
   // Use character-based per-message estimation (consistent with truncateBeforeSend)
   const messageTokenEstimates = messages.map((m) => {
     let tokens = estimateTokens(m.content);
