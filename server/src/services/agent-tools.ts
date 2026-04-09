@@ -149,7 +149,14 @@ function getMaxToolResultChars(contextWindow: number): number {
 function createWrapResult(contextWindow: number) {
   const maxChars = getMaxToolResultChars(contextWindow);
   return function wrapResult(result: { content: string; isError: boolean }): AgentToolResult<{}> {
-    if (result.isError) throw new Error(result.content);
+    if (result.isError) {
+      // Truncate error content too — a 1MB error message would blow up the context
+      let errText = result.content;
+      if (errText.length > maxChars) {
+        errText = errText.slice(0, maxChars) + `\n\n[Error output truncated: ${(errText.length / 1024).toFixed(0)}KB → ${(maxChars / 1024).toFixed(0)}KB]`;
+      }
+      throw new Error(errText);
+    }
     let text = result.content;
     if (text.length > maxChars) {
       const truncated = text.slice(0, maxChars);
@@ -181,8 +188,8 @@ const FILESYSTEM_TOOLS: Tool[] = [
 ];
 
 /** Get tool definitions (name + description) for display/metadata only */
-export function getAgentToolDefinitions(): { name: string; description: string }[] {
-  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS, ...IMAGE_TOOLS, ...BLUESKY_TOOLS];
+export function getAgentToolDefinitions(chatType?: string): { name: string; description: string }[] {
+  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS, ...IMAGE_TOOLS, ...(chatType === "bluesky" ? BLUESKY_TOOLS : [])];
   return allTools.map(t => ({ name: t.name, description: t.description }));
 }
 

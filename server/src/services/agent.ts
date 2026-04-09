@@ -72,7 +72,14 @@ export function chatMessagesToPiMessages(
           for (const tr of m.toolResults) {
             // For tool results, the content should be the text + images array
             // This matches how pi-ai expects ToolResultMessage content
-            const content: any[] = [{ type: "text" as const, text: tr.content }];
+            // Safety truncation: cap tool result text to prevent oversized results
+            // from persisted messages blowing up the context on replay.
+            const MAX_TOOL_RESULT_CHARS = 60_000;
+            let trText = tr.content || "";
+            if (trText.length > MAX_TOOL_RESULT_CHARS) {
+              trText = trText.slice(0, MAX_TOOL_RESULT_CHARS) + `\n[Truncated from ${(trText.length / 1024).toFixed(0)}KB]`;
+            }
+            const content: any[] = [{ type: "text" as const, text: trText }];
             // Attach images if present (for generate_and_review tool)
             if (tr.images?.length) {
               console.log(`[agent] Attaching ${tr.images.length} image(s) to tool result ${tr.toolCallId} (${tr.toolName})`);

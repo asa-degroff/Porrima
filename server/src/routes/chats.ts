@@ -128,7 +128,7 @@ router.get("/:id/rendered-prompt", async (req, res) => {
   }
 
   const tools = (chat.type === "agent" || chat.type === "bluesky")
-    ? getAgentToolDefinitions()
+    ? getAgentToolDefinitions(chat.type)
     : [];
 
   res.json({ systemPrompt, tools });
