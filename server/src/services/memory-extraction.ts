@@ -38,6 +38,15 @@ async function callExtractionLLM(
   const extractionUrl = settings.extractionModelUrl;
 
   if (extractionUrl) {
+    // Truncate input to fit within the extraction model's context window.
+    // Reserve tokens for system prompt (~500), output (2000), and overhead (~500).
+    const ctxSize = settings.extractionCtxSize ?? 16384;
+    const reservedTokens = 3000;
+    const maxInputChars = Math.max(4000, (ctxSize - reservedTokens) * 4);
+    const truncatedContent = userContent.length > maxInputChars
+      ? userContent.slice(0, maxInputChars) + `\n[Truncated: ${(userContent.length / 1024).toFixed(0)}KB → ${(maxInputChars / 1024).toFixed(0)}KB to fit extraction context]`
+      : userContent;
+
     // Direct call to dedicated extraction endpoint (CPU-only, no provider pipeline)
     const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
       method: "POST",
@@ -46,7 +55,7 @@ async function callExtractionLLM(
         model: "extraction",
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
+          { role: "user", content: truncatedContent },
         ],
         max_tokens: 2000,
         temperature: 0.3,

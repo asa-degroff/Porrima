@@ -171,6 +171,11 @@ export interface Settings {
   llamacppEnabled?: boolean;
   llamacppUrl?: string;         // default "http://localhost:8080"
   llamacppSharesGpu?: boolean;  // default true — unload Ollama before llama.cpp and vice versa
+  // Extraction server (CPU-only llama.cpp instance)
+  extractionCtxSize?: number;   // default 16384 — context window for extraction server
+  // Reranker server (CPU-only llama.cpp instance)
+  rerankerEnabled?: boolean;    // default true
+  rerankerUrl?: string;         // default "http://localhost:8082"
   // Model favorites
   favoriteModels?: string[];
   showOnlyFavorites?: boolean;

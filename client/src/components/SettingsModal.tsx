@@ -122,6 +122,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || "http://localhost:8080");
   const [llamacppSharesGpu, setLlamacppSharesGpu] = useState(settings.llamacppSharesGpu ?? true);
   const [llamacppStatus, setLlamacppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
+  // Extraction server settings
+  const [extractionCtxSize, setExtractionCtxSize] = useState(settings.extractionCtxSize ?? 16384);
+  // Reranker server settings
+  const [rerankerEnabled, setRerankerEnabled] = useState(settings.rerankerEnabled ?? true);
+  const [rerankerUrl, setRerankerUrl] = useState(settings.rerankerUrl || "http://localhost:8082");
+  const [rerankerStatus, setRerankerStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [favoriteModels, setFavoriteModels] = useState<Set<string>>(new Set(settings.favoriteModels || []));
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(settings.showOnlyFavorites ?? false);
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
@@ -315,6 +321,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
       llamacppSharesGpu,
+      extractionCtxSize,
+      rerankerEnabled,
+      rerankerUrl: rerankerUrl.trim() || undefined,
       favoriteModels: favoriteModels.size > 0 ? [...favoriteModels] : undefined,
       showOnlyFavorites,
       theme,
@@ -474,6 +483,21 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setExtractionModelStatus("unavailable");
     }
   }, [extractionModelUrl]);
+
+  const handleTestReranker = useCallback(async () => {
+    if (!rerankerUrl) return;
+    setRerankerStatus("checking");
+    try {
+      const res = await fetch(`/api/models/llamacpp/health?url=${encodeURIComponent(rerankerUrl)}`, { credentials: "include" });
+      if (res.ok) {
+        setRerankerStatus("connected");
+      } else {
+        setRerankerStatus("unavailable");
+      }
+    } catch {
+      setRerankerStatus("unavailable");
+    }
+  }, [rerankerUrl]);
 
   const handleRunSynthesis = useCallback(async () => {
     setSynthesisRunning(true);
@@ -671,15 +695,25 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 
   const scrollToSection = (id: string) => {
     const el = document.getElementById(id);
-    if (el) {
-      const container = el.closest('.settings-content-scroll');
-      if (container) {
-        const offsetTop = el.offsetTop - 20;
-        container.scrollTo({ top: offsetTop, behavior: 'smooth' });
-      } else {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
+    if (!el) return;
+    
+    const container = el.closest('.settings-content-scroll') as HTMLDivElement;
+    if (!container) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
     }
+    
+    // The section's offsetTop is relative to the scroll container
+    // We want to scroll so the section title sits with some padding from the top
+    // The container has py-5 (20px padding), so we account for that
+    const sectionTop = el.offsetTop;
+    const paddingFromTop = 8; // Small gap above the section title
+    const targetScroll = sectionTop - paddingFromTop;
+    
+    container.scrollTo({
+      top: targetScroll,
+      behavior: 'smooth'
+    });
   };
 
   return (
@@ -779,54 +813,153 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             </div>
           </div>
 
-          {/* llama.cpp Server */}
-          <div id="llamacpp" className="space-y-3">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={llamacppEnabled}
-                onChange={(e) => setLlamacppEnabled(e.target.checked)}
-                className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
-              />
-              <span className="text-sm text-white/80">Enable llama.cpp server</span>
-            </label>
-            {llamacppEnabled && (
-              <div className="space-y-2 ml-6">
+          {/* llama.cpp Servers */}
+          <div id="llamacpp" className="space-y-4">
+            <h3 className="text-sm font-semibold text-white/80">llama.cpp Servers</h3>
+
+            {/* Inference Server */}
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={llamacppEnabled}
+                  onChange={(e) => setLlamacppEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+                />
+                <span className="text-sm text-white/80">Inference server</span>
+              </label>
+              {llamacppEnabled && (
+                <div className="space-y-2 ml-6">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={llamacppUrl}
+                      onChange={(e) => setLlamacppUrl(e.target.value)}
+                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                      placeholder="http://localhost:8080"
+                    />
+                    <button
+                      onClick={handleTestLlamaCpp}
+                      disabled={llamacppStatus === "checking"}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
+                    >
+                      {llamacppStatus === "checking" ? "Testing..." : "Test"}
+                    </button>
+                  </div>
+                  {llamacppStatus && llamacppStatus !== "checking" && (
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-2 h-2 rounded-full ${llamacppStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
+                      <span className={`text-xs ${llamacppStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
+                        {llamacppStatus === "connected" ? "Connected" : "Not available"}
+                      </span>
+                    </div>
+                  )}
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={llamacppSharesGpu}
+                      onChange={(e) => setLlamacppSharesGpu(e.target.checked)}
+                      className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+                    />
+                    <span className="text-xs text-white/60">Shares GPU with Ollama</span>
+                  </label>
+                  <p className="text-xs text-white/30">Main GPU inference server (router mode). Models are loaded on demand.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Extraction Server */}
+            <div className="space-y-2 border-t border-white/5 pt-3">
+              <h4 className="text-sm text-white/80">Extraction server</h4>
+              <div className="space-y-2 ml-2">
                 <div className="flex gap-2">
                   <input
                     type="text"
-                    value={llamacppUrl}
-                    onChange={(e) => setLlamacppUrl(e.target.value)}
+                    value={extractionModelUrl}
+                    onChange={(e) => setExtractionModelUrl(e.target.value)}
                     className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
-                    placeholder="http://localhost:8080"
+                    placeholder="http://localhost:8083"
                   />
-                  <button
-                    onClick={handleTestLlamaCpp}
-                    disabled={llamacppStatus === "checking"}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
-                  >
-                    {llamacppStatus === "checking" ? "Testing..." : "Test"}
-                  </button>
+                  {extractionModelUrl && (
+                    <button
+                      onClick={handleTestExtractionModel}
+                      disabled={extractionModelStatus === "checking"}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
+                    >
+                      {extractionModelStatus === "checking" ? "Testing..." : "Test"}
+                    </button>
+                  )}
                 </div>
-                {llamacppStatus && llamacppStatus !== "checking" && (
+                {extractionModelUrl && extractionModelStatus && extractionModelStatus !== "checking" && (
                   <div className="flex items-center gap-1.5">
-                    <div className={`w-2 h-2 rounded-full ${llamacppStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
-                    <span className={`text-xs ${llamacppStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
-                      {llamacppStatus === "connected" ? "Connected" : "Not available"}
+                    <div className={`w-2 h-2 rounded-full ${extractionModelStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
+                    <span className={`text-xs ${extractionModelStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
+                      {extractionModelStatus === "connected" ? "Connected" : "Not available"}
                     </span>
                   </div>
                 )}
-                <label className="flex items-center gap-2 cursor-pointer">
+                <div>
+                  <label className="block text-xs text-white/70 mb-1">Context window</label>
                   <input
-                    type="checkbox"
-                    checked={llamacppSharesGpu}
-                    onChange={(e) => setLlamacppSharesGpu(e.target.checked)}
-                    className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+                    type="number"
+                    value={extractionCtxSize}
+                    onChange={(e) => setExtractionCtxSize(Math.max(2048, parseInt(e.target.value) || 16384))}
+                    min={2048}
+                    max={131072}
+                    step={1024}
+                    className="w-32 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
                   />
-                  <span className="text-xs text-white/60">Shares GPU with Ollama</span>
-                </label>
+                  <span className="text-xs text-white/30 ml-2">tokens</span>
+                </div>
+                <p className="text-xs text-white/30">
+                  Dedicated CPU instance for memory extraction. Keeps chat model KV cache intact. Must match the server's <code className="text-white/50">--ctx-size</code>.
+                </p>
               </div>
-            )}
+            </div>
+
+            {/* Reranker Server */}
+            <div className="space-y-2 border-t border-white/5 pt-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={rerankerEnabled}
+                  onChange={(e) => setRerankerEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+                />
+                <span className="text-sm text-white/80">Reranker server</span>
+              </label>
+              {rerankerEnabled && (
+                <div className="space-y-2 ml-2">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={rerankerUrl}
+                      onChange={(e) => setRerankerUrl(e.target.value)}
+                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                      placeholder="http://localhost:8082"
+                    />
+                    <button
+                      onClick={handleTestReranker}
+                      disabled={rerankerStatus === "checking"}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
+                    >
+                      {rerankerStatus === "checking" ? "Testing..." : "Test"}
+                    </button>
+                  </div>
+                  {rerankerStatus && rerankerStatus !== "checking" && (
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-2 h-2 rounded-full ${rerankerStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
+                      <span className={`text-xs ${rerankerStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
+                        {rerankerStatus === "connected" ? "Connected" : "Not available"}
+                      </span>
+                    </div>
+                  )}
+                  <p className="text-xs text-white/30">
+                    Cross-encoder reranker for memory retrieval quality. CPU-only, uses Qwen3-Reranker.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Model Favorites */}
@@ -2007,48 +2140,21 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               {/* Extraction model configuration */}
               <div className="border-t border-white/5 pt-4 mt-4">
                 <h4 className="text-xs font-medium text-white/60 uppercase tracking-wider mb-3">Extraction Model</h4>
-                
+
                 <div className="space-y-3">
-                  {/* Dedicated URL option */}
-                  <div className="space-y-2">
-                    <label className="block text-xs text-white/70">Dedicated extraction server URL</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={extractionModelUrl}
-                        onChange={(e) => setExtractionModelUrl(e.target.value)}
-                        disabled={!delayedExtractionEnabled}
-                        className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all disabled:opacity-50"
-                        placeholder="http://localhost:8083"
-                      />
-                      {extractionModelUrl && (
-                        <button
-                          onClick={handleTestExtractionModel}
-                          disabled={extractionModelStatus === "checking"}
-                          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
-                        >
-                          {extractionModelStatus === "checking" ? "Testing..." : "Test"}
-                        </button>
-                      )}
-                    </div>
-                    {extractionModelUrl && extractionModelStatus && extractionModelStatus !== "checking" && (
-                      <div className="flex items-center gap-1.5">
-                        <div className={`w-2 h-2 rounded-full ${extractionModelStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
-                        <span className={`text-xs ${extractionModelStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
-                          {extractionModelStatus === "connected" ? "Connected" : "Not available"}
-                        </span>
-                      </div>
-                    )}
+                  {extractionModelUrl && (
                     <p className="text-xs text-white/40">
-                      Optional: dedicated llama.cpp instance for extraction (CPU). Keeps chat model KV cache intact.
+                      Using dedicated extraction server at <code className="text-white/60">{extractionModelUrl}</code>. Configure in llama.cpp Servers above.
                     </p>
-                  </div>
+                  )}
 
-                  <div className="flex items-center gap-2 text-xs text-white/40">
-                    <span>or select model from server:</span>
-                  </div>
+                  {!extractionModelUrl && (
+                    <p className="text-xs text-white/40">
+                      No dedicated server configured. Select a model from the server, or configure an extraction server in the llama.cpp Servers section above.
+                    </p>
+                  )}
 
-                  {/* Model selection */}
+                  {/* Model selection (fallback when no dedicated server) */}
                   <div>
                     <label className="block text-xs text-white/70 mb-1.5">Model</label>
                     <div className="relative" ref={extractionModelDropdownRef}>

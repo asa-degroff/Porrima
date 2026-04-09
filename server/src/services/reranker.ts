@@ -1,9 +1,12 @@
 /**
  * Qwen3-Reranker client for memory retrieval.
  * Uses a dedicated llama.cpp instance with the /v1/rerank endpoint.
+ * Configuration is read from user settings (rerankerEnabled, rerankerUrl).
  */
 
-const RERANKER_URL = "http://localhost:8082";
+import { getSettings } from "./chat-storage.js";
+
+const DEFAULT_RERANKER_URL = "http://localhost:8082";
 const RERANKER_TIMEOUT_MS = 15_000;
 
 /**
@@ -37,7 +40,7 @@ interface RerankResponse {
  * @param instruction - Optional instruction to guide relevance judgment
  * @param topN - Maximum number of results to return (default: all)
  * @returns Sorted array of { index, score } where index maps to the input documents array.
- *          Falls back to original order if the reranker is unavailable.
+ *          Falls back to original order if the reranker is unavailable or disabled.
  */
 export interface RerankOutput {
   results: Array<{ index: number; score: number }>;
@@ -55,13 +58,21 @@ export async function rerank(
 
   const start = Date.now();
 
+  // Read settings for reranker configuration
+  const settings = await getSettings();
+  if (settings.rerankerEnabled === false) {
+    return { results: fallbackOrder(documents.length, topN), usedModel: false, latencyMs: Date.now() - start };
+  }
+
+  const rerankerUrl = settings.rerankerUrl || DEFAULT_RERANKER_URL;
+
   // Build the instruction-aware query in Qwen3-Reranker format
   const formattedQuery = instruction
     ? `Instruct: ${instruction}\nQuery: ${query}`
     : query;
 
   try {
-    const res = await fetch(`${RERANKER_URL}/v1/rerank`, {
+    const res = await fetch(`${rerankerUrl}/v1/rerank`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -110,7 +121,10 @@ function fallbackOrder(
  */
 export async function isRerankerAvailable(): Promise<boolean> {
   try {
-    const res = await fetch(`${RERANKER_URL}/health`, {
+    const settings = await getSettings();
+    if (settings.rerankerEnabled === false) return false;
+    const rerankerUrl = settings.rerankerUrl || DEFAULT_RERANKER_URL;
+    const res = await fetch(`${rerankerUrl}/health`, {
       signal: AbortSignal.timeout(3000),
     });
     return res.ok;
