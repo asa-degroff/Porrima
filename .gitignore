@@ -2,3 +2,5 @@ node_modules
 dist
 .chainlink
 /server/data/*
+.env
+/server/.env
