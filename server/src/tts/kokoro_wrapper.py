@@ -2,13 +2,6 @@
 """
 Kokoro TTS wrapper for quje-agent.
 Generates WAV audio from text and outputs to stdout.
-
-Usage:
-    python kokoro_wrapper.py --text "Hello world" --voice af_heart --speed 1.0
-
-Output:
-    Binary WAV data to stdout
-    Metadata JSON to stderr
 """
 
 import argparse
@@ -16,7 +9,8 @@ import json
 import sys
 import wave
 import io
-
+import subprocess
+import numpy as np
 from kokoro import KPipeline
 
 
@@ -40,47 +34,89 @@ def main():
         # Load pipeline
         pipeline = KPipeline(lang_code=lang_code)
         
-        # Generate audio
-        # KPipeline returns an iterable of Result segments
-        # Kokoro uses a fixed 24kHz sample rate
+        # Generate audio at native speed (1.0) to avoid generation-time artifacts
+        # Kokoro's internal speed parameter causes pitch/timing artifacts.
+        # We will use ffmpeg's atempo filter for pitch-corrected speed adjustment.
         all_audio = []
         sample_rate = 24000
 
-        for segment in pipeline(args.text, voice=args.voice, speed=args.speed):
+        for segment in pipeline(args.text, voice=args.voice, speed=1.0):
             all_audio.append(segment.audio)
         
         if not all_audio:
             raise ValueError("No audio generated")
         
         # Concatenate all audio segments
-        import numpy as np
         audio = np.concatenate(all_audio)
         
-        # Write WAV to stdout
-        buffer = io.BytesIO()
-        with wave.open(buffer, "wb") as wav_file:
+        # Convert float32 to int16 for WAV storage
+        audio_int16 = (audio * 32767).clip(-32768, 32767).astype("int16")
+        
+        # Write native audio to an in-memory buffer
+        native_buffer = io.BytesIO()
+        with wave.open(native_buffer, "wb") as wav_file:
             wav_file.setnchannels(1)  # Mono
             wav_file.setsampwidth(2)  # 16-bit
             wav_file.setframerate(sample_rate)
-            
-            # Convert float32 to int16
-            audio_int16 = (audio * 32767).clip(-32768, 32767).astype("int16")
             wav_file.writeframes(audio_int16.tobytes())
-        
-        # Write binary WAV data to stdout
-        sys.stdout.buffer.write(buffer.getvalue())
-        sys.stdout.buffer.flush()
-        
-        # Write metadata to stderr as JSON
-        duration = len(audio) / sample_rate
-        metadata = {
-            "duration": duration,
-            "sample_rate": sample_rate,
-            "voice": args.voice,
-            "speed": args.speed,
-            "lang_code": lang_code,
-        }
-        print(json.dumps(metadata), file=sys.stderr)
+        native_buffer.seek(0)
+
+        # If speed is 1.0, just output the native audio directly
+        if abs(args.speed - 1.0) < 0.01:
+            sys.stdout.buffer.write(native_buffer.getvalue())
+            sys.stdout.buffer.flush()
+            duration = len(audio) / sample_rate
+            metadata = {
+                "duration": duration,
+                "sample_rate": sample_rate,
+                "voice": args.voice,
+                "speed": args.speed,
+                "lang_code": lang_code,
+            }
+            print(json.dumps(metadata), file=sys.stderr)
+        else:
+            # Use ffmpeg to change speed with pitch correction (atempo)
+            # atempo filter works in range [0.5, 2.0]
+            # We handle the speed adjustment via a subprocess pipe
+            
+            # Construct the ffmpeg command
+            # We use -filter:a atempo=X to adjust speed without changing pitch
+            cmd = [
+                "ffmpeg",
+                "-loglevel", "error",
+                "-i", "pipe:0",
+                "-filter:a", f"atempo={args.speed}",
+                "-f", "wav",
+                "pipe:1"
+            ]
+            
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            out, err = process.communicate(input=native_buffer.getvalue())
+            
+            if process.returncode != 0:
+                raise RuntimeError(f"FFmpeg error: {err.decode()}")
+
+            # Write the processed audio to stdout
+            sys.stdout.buffer.write(out)
+            sys.stdout.buffer.flush()
+            
+            # Calculate expected duration (original duration / speed)
+            duration = (len(audio) / sample_rate) / args.speed
+            
+            metadata = {
+                "duration": duration,
+                "sample_rate": sample_rate,
+                "voice": args.voice,
+                "speed": args.speed,
+                "lang_code": lang_code,
+            }
+            print(json.dumps(metadata), file=sys.stderr)
         
     except Exception as e:
         # Write error to stderr
