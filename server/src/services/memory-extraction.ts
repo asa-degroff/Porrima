@@ -140,8 +140,8 @@ const EXTRACTION_INSTRUCTIONS = `---
 You are reviewing a conversation exchange you just had. Extract information worth remembering for future interactions — write each memory in your own voice, as something you'd tell yourself to remember.
 
 Think beyond surface-level facts. Consider:
-- **User context**: preferences, role, goals, personal details, communication style
-- **Project context**: architecture decisions, tech stack details, ongoing initiatives, constraints, what's being built and why
+- **User context**: preferences, goals, personal details
+- **Project context**: architecture decisions, ongoing initiatives, constraints, what's being built and why
 - **Decisions & rationale**: why something was chosen over alternatives, tradeoffs discussed
 - **Relationships**: connections between concepts, dependencies, blockers
 - **Lessons**: what worked, what didn't, patterns that emerged
@@ -154,7 +154,7 @@ Output a JSON array. Each item:
 - "importance": 1-10 (10 = critical, 1 = trivial)
 
 Categories:
-- "preference" — user likes, dislikes, stylistic choices
+- "preference" — likes, dislikes, stylistic choices
 - "fact" — concrete information about the user, their role, or their environment
 - "behavior" — recurring patterns in how the user works or communicates
 - "instruction" — explicit directives about how I should behave
@@ -162,7 +162,7 @@ Categories:
 - "decision" — a choice that was made and why, tradeoffs considered
 - "note" — general observations, curiosities, personal details, or anything worth remembering that doesn't fit the above categories
 
-If nothing is worth remembering, output: []
+If nothing is genuinely novel or significant, output: []
 
 IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 
@@ -204,7 +204,7 @@ Output a JSON array. Each item:
 - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
 - "importance": 1-10 (10 = critical, 1 = trivial)
 
-If nothing new is worth remembering, output: []
+If nothing is genuinely novel or significant, output: []
 
 IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 
