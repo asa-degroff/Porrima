@@ -1637,36 +1637,8 @@ router.post("/", async (req, res) => {
     // Trigger compaction
     const compaction = await triggerCompaction(chat, contextWindow);
     
-    if (compaction && compaction.truncated) {
-      // Save the chat after compaction
-      await saveChat(chat);
-      
-      // If there's a follow-up message, process it; otherwise send a confirmation
-      if (compactResult.followUpMessage) {
-        console.log(`[chat] /compact with follow-up: "${compactResult.followUpMessage.slice(0, 50)}..."`);
-        message = compactResult.followUpMessage;
-        // Continue with normal message processing below
-      } else {
-        console.log(`[chat] /compact complete: removed ${compaction.removedCount} messages`);
-        // Send a confirmation message and end
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-          "X-Accel-Buffering": "no",
-        });
-        res.socket?.setNoDelay(true);
-        res.write(`event: compaction\ndata: ${JSON.stringify({
-          removedCount: compaction.removedCount,
-          estimatedTokenCount: compaction.estimatedTokenCount,
-        })}\n\n`);
-        res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: `Context compacted. Removed ${compaction.removedCount} messages (~${compaction.estimatedTokenCount} tokens).` })}\n\n`);
-        res.write(`event: done\ndata: ${JSON.stringify({})}\n\n`);
-        res.end();
-        return;
-      }
-    } else {
-      // Compaction was not needed
+    // Set SSE headers early for compaction progress events
+    if (!res.headersSent) {
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -1674,8 +1646,50 @@ router.post("/", async (req, res) => {
         "X-Accel-Buffering": "no",
       });
       res.socket?.setNoDelay(true);
-      res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: "Compaction skipped: not enough messages to compact." })}\n\n`);
-      res.write(`event: done\ndata: ${JSON.stringify({})}\n\n`);
+    }
+
+    if (compaction && compaction.truncated) {
+      // Build and save a confirmation assistant message
+      const confirmText = `Context compacted. Removed ${compaction.removedCount} messages (~${compaction.estimatedTokenCount} tokens).`;
+      const confirmMsg: ChatMessage = {
+        role: "assistant",
+        content: confirmText,
+        timestamp: Date.now(),
+        _isSystemMessage: true,
+      };
+      chat.messages.push(confirmMsg);
+      await saveChat(chat);
+
+      // If there's a follow-up message, process it; otherwise send confirmation
+      if (compactResult.followUpMessage) {
+        console.log(`[chat] /compact with follow-up: "${compactResult.followUpMessage.slice(0, 50)}..."`);
+        message = compactResult.followUpMessage;
+        // Continue with normal message processing below
+      } else {
+        console.log(`[chat] /compact complete: removed ${compaction.removedCount} messages`);
+        const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
+        res.write(`event: compaction\ndata: ${JSON.stringify({
+          removedCount: compaction.removedCount,
+          remainingCount: chat.messages.filter(m => !m._outOfContext).length,
+          summaryMessage: summaryMsg || null,
+        })}\n\n`);
+        res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: confirmText })}\n\n`);
+        res.write(`event: done\ndata: ${JSON.stringify({ message: confirmMsg })}\n\n`);
+        res.end();
+        return;
+      }
+    } else {
+      // Compaction was not needed
+      const skipMsg: ChatMessage = {
+        role: "assistant",
+        content: "Compaction skipped: not enough messages to compact.",
+        timestamp: Date.now(),
+        _isSystemMessage: true,
+      };
+      chat.messages.push(skipMsg);
+      await saveChat(chat);
+      res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: skipMsg.content })}\n\n`);
+      res.write(`event: done\ndata: ${JSON.stringify({ message: skipMsg })}\n\n`);
       res.end();
       return;
     }
