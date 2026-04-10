@@ -573,7 +573,9 @@ export async function truncateChatHistory(
   contextWindow: number,
   forceCompact: boolean = false,
   onCompacting?: () => void,
-  onKeepalive?: () => void
+  onKeepalive?: () => void,
+  /** Known token usage from the current turn (the message may not be in chat.messages yet). */
+  knownUsage?: number
 ): Promise<CompactionResult> {
   const noOp: CompactionResult = { truncated: false, removedCount: 0 };
   const messages = chat.messages;
@@ -582,12 +584,15 @@ export async function truncateChatHistory(
   const targetTokens = contextWindow * 0.5;
 
   if (!forceCompact) {
-    // Find the most recent assistant message with usage info
-    let lastUsage = 0;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].usage?.totalTokens) {
-        lastUsage = messages[i].usage!.totalTokens;
-        break;
+    // Use caller-provided usage if available, otherwise search messages
+    let lastUsage = knownUsage ?? 0;
+    if (!lastUsage) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]._outOfContext) continue;
+        if (messages[i].usage?.totalTokens) {
+          lastUsage = messages[i].usage!.totalTokens;
+          break;
+        }
       }
     }
 

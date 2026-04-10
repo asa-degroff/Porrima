@@ -1003,7 +1003,7 @@ async function handleChatStream(
             console.log(`[compaction] End-of-turn compaction triggered: ${lastUsage}/${effectiveContextWindow} (${(usageRatio * 100).toFixed(0)}%)`);
             const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
             const emitKeepalive = () => res.write(`: keepalive\n\n`);
-            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive);
+            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive, lastUsage);
             if (compaction.truncated) {
               // Extract memories from removed messages (agent chats only)
               if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
