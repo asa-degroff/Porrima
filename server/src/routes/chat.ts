@@ -990,7 +990,7 @@ async function handleChatStream(
             if (compaction.truncated) {
               // Extract memories from removed messages (agent chats only)
               if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
-                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages);
+                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
               }
               await saveChat(chat);
               
@@ -1162,7 +1162,7 @@ async function handleChatStream(
 
           // Extract memories from removed messages before they're lost
           if (isAgent && compaction.removedMessages?.length) {
-            preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages)
+            preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId)
               .catch(err => console.error("[compaction] pre-flush failed:", err));
           }
         }
