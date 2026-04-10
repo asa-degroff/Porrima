@@ -280,9 +280,16 @@ async function handleChatStream(
   const connectionAbortController = new AbortController();
   let connectionClosed = false;
   
-  // Store the abort controller in a map so it can be accessed by the stop endpoint
+  // Store the abort controller in a map so it can be accessed by the stop endpoint.
+  // If there's already an active stream for this chat (e.g., from a dropped SSE connection
+  // that didn't fire req.close), abort it first to prevent duplicate processing.
   const activeStreams = (globalThis as any)._activeChatStreams || new Map<string, AbortController>();
   (globalThis as any)._activeChatStreams = activeStreams;
+  const existingController = activeStreams.get(chat.id);
+  if (existingController) {
+    console.warn(`[chat] aborting existing stream for chat ${chat.id} (new stream starting)`);
+    existingController.abort();
+  }
   activeStreams.set(chat.id, connectionAbortController);
   
   req.on("close", () => {
