@@ -10,7 +10,7 @@ import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow
 import type { OllamaModel } from "../types.js";
 import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
 import { generateTitle } from "../services/title-generation.js";
-import { truncateChatHistory, truncateBeforeSend } from "../services/compaction.js";
+import { truncateChatHistory, truncateBeforeSend, triggerCompaction } from "../services/compaction.js";
 import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
@@ -22,6 +22,23 @@ import { saveUserImage } from "../services/user-image-storage.js";
 import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
 import { log } from "../services/logger.js";
+
+/**
+ * Parse /compact command from user message.
+ * Returns { compact: true, followUpMessage: string | null } if found.
+ * /compact alone → followUpMessage is null
+ * /compact [message] → followUpMessage contains the message text
+ */
+function parseCompactCommand(message: string): { compact: boolean; followUpMessage: string | null } {
+  const trimmed = message.trim();
+  if (trimmed === "/compact") {
+    return { compact: true, followUpMessage: null };
+  }
+  if (trimmed.startsWith("/compact ")) {
+    return { compact: true, followUpMessage: trimmed.slice(9).trim() };
+  }
+  return { compact: false, followUpMessage: null };
+}
 
 /** Truncate a string to maxChars graphemes, preserving emoji and multi-byte characters */
 function truncateTitle(text: string, maxChars: number = 50): string {
@@ -1604,6 +1621,65 @@ router.post("/", async (req, res) => {
   const persistedImages = images?.length ? await persistImages(images) : undefined;
 
   let message = messageText;
+
+  // Check for /compact command (before skill parsing, as it's a reserved command)
+  const compactResult = parseCompactCommand(message);
+  if (compactResult.compact) {
+    console.log(`[chat] /compact command detected for chat ${chatId}`);
+    
+    // Get settings for context window resolution
+    const settings = await getSettings();
+    const { getEffectiveContextWindow, discoverAllModels } = await import("../services/models.js");
+    const allModels = await discoverAllModels();
+    const ollamaModel = allModels.find(m => m.id === chat.modelId);
+    const contextWindow = getEffectiveContextWindow(chat, ollamaModel, settings);
+    
+    // Trigger compaction
+    const compaction = await triggerCompaction(chat, contextWindow);
+    
+    if (compaction && compaction.truncated) {
+      // Save the chat after compaction
+      await saveChat(chat);
+      
+      // If there's a follow-up message, process it; otherwise send a confirmation
+      if (compactResult.followUpMessage) {
+        console.log(`[chat] /compact with follow-up: "${compactResult.followUpMessage.slice(0, 50)}..."`);
+        message = compactResult.followUpMessage;
+        // Continue with normal message processing below
+      } else {
+        console.log(`[chat] /compact complete: removed ${compaction.removedCount} messages`);
+        // Send a confirmation message and end
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+        });
+        res.socket?.setNoDelay(true);
+        res.write(`event: compaction\ndata: ${JSON.stringify({
+          removedCount: compaction.removedCount,
+          estimatedTokenCount: compaction.estimatedTokenCount,
+        })}\n\n`);
+        res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: `Context compacted. Removed ${compaction.removedCount} messages (~${compaction.estimatedTokenCount} tokens).` })}\n\n`);
+        res.write(`event: done\ndata: ${JSON.stringify({})}\n\n`);
+        res.end();
+        return;
+      }
+    } else {
+      // Compaction was not needed
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      res.socket?.setNoDelay(true);
+      res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: "Compaction skipped: not enough messages to compact." })}\n\n`);
+      res.write(`event: done\ndata: ${JSON.stringify({})}\n\n`);
+      res.end();
+      return;
+    }
+  }
 
   // Check for skill invocations anywhere in the message
   const invokedSkills = parseSkillInvocations(message);

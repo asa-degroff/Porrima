@@ -741,3 +741,26 @@ export async function truncateChatHistory(
 
   return { truncated: true, removedCount: messagesToMarkCount, removedMessages, estimatedTokenCount: estimatedRemovedTokens };
 }
+
+/**
+ * Trigger a manual compaction of the chat history.
+ * This is used for /compact command - it forces compaction regardless of current token usage.
+ * Returns the compaction result, or null if compaction was not needed.
+ */
+export async function triggerCompaction(
+  chat: Chat,
+  contextWindow: number
+): Promise<CompactionResult | null> {
+  console.log(`[compaction] Manual compaction triggered for chat ${chat.id}`);
+  
+  // Use truncateChatHistory with forceCompact=true
+  const result = await truncateChatHistory(chat, contextWindow, true);
+  
+  if (result.truncated) {
+    console.log(`[compaction] Manual compaction complete: removed ${result.removedCount} messages (~${result.estimatedTokenCount} est. tokens)`);
+  } else {
+    console.log(`[compaction] Manual compaction skipped: not enough messages to compact`);
+  }
+  
+  return result;
+}
