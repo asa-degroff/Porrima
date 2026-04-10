@@ -579,7 +579,7 @@ export async function truncateChatHistory(
 ): Promise<CompactionResult> {
   const noOp: CompactionResult = { truncated: false, removedCount: 0 };
   const messages = chat.messages;
-  if (messages.length <= 2) return noOp;
+  if (messages.length <= 1) return noOp;  // Need at least 2 total messages
 
   const targetTokens = contextWindow * 0.5;
 
@@ -622,7 +622,9 @@ export async function truncateChatHistory(
     if (!messages[i]._outOfContext) inContextIndices.push(i);
   }
 
-  if (inContextIndices.length <= 2) return noOp;
+  // Need at least 2 in-context messages to compact (unless forcing with very few messages)
+  if (inContextIndices.length <= 1) return noOp;
+  if (!forceCompact && inContextIndices.length <= 2) return noOp;  // Auto-compaction needs 3+ in-context
 
   // Estimate tokens for each in-context message
   const inContextEstimates = inContextIndices.map((idx) => {
