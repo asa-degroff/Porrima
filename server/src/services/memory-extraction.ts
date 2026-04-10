@@ -18,7 +18,7 @@ import {
   getMemoryById,
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
-import { invalidateMemoriesCache } from "./memory-context.js";
+import { invalidateMemoriesCache, invalidateStablePrefixCache } from "./memory-context.js";
 import type { ChatMessage, Memory, MemoryCategory, Chat } from "../types.js";
 
 const LOG_DIR = join(homedir(), ".quje-agent", "logs");
@@ -222,6 +222,14 @@ interface ExtractedFact {
   text: string;
   category: MemoryCategory;
   importance: number;
+  blockUpdate?: {
+    blockId?: string;  // Existing block to update
+    targetBlockName?: string;  // Or name of block to create
+    updateType: "append" | "replace_section" | "refine";
+    content: string;  // What to add/replace
+    section?: string;  // Which section to modify (for replace_section)
+    reasoning: string;  // Why this block needs updating
+  };
 }
 
 export function parseExtractionResponse(text: string): ExtractedFact[] {
@@ -408,16 +416,202 @@ Focus on:
 
 Each memory should be self-contained and meaningful (2-5 sentences).
 
+### Memory Block Updates
+
+You will be provided with existing memory blocks below. These are structured knowledge documents that organize related information. Consider whether the conversation contains information that should update these blocks.
+
+**When to update blocks:**
+- Substantive changes to architecture, decisions, or technical context already covered in a block
+- New important details that expand on existing block content
+- Corrections or refinements to information in blocks
+
+**When to use atomic memories instead:**
+- Quick facts, preferences, or one-off details
+- Information that doesn't fit existing block topics
+- Lower importance observations (importance ≤ 7)
+
+**Block update guidelines:**
+- You will see remaining character space for each block (max 4000 chars)
+- If space is available (>500 chars remaining), use "append" to add new content
+- If space is limited, use "replace_section" or "refine" to make targeted edits
+- Keep edits focused and minimal — don't rewrite entire sections
+
 Output a JSON array. Each item:
 - "text": A standalone statement with sufficient context (2-5 sentences)
 - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
 - "importance": 1-10
+- "blockUpdate": Optional. If this fact warrants a block update:
+  - "blockId": ID of existing block to update (if modifying)
+  - "targetBlockName": Name of new block to create (if creating)
+  - "updateType": "append" (add to end), "replace_section" (modify specific section), or "refine" (general update)
+  - "content": The content to add or the modified content
+  - "section": Which section header to modify (for replace_section)
+  - "reasoning": Why this block needs updating
 
 Output ONLY the JSON array.`;
 
-async function buildPreCompactionSystemPrompt(): Promise<string> {
+async function buildPreCompactionSystemPrompt(projectId?: string): Promise<string> {
   const persona = await loadPersona();
-  return `${persona.content}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
+  
+  // Load existing blocks with space awareness
+  let blockContext = "";
+  try {
+    const { getMemoryBlocksByScope } = await import("./memory-storage.js");
+    const globalBlocks = getMemoryBlocksByScope("global");
+    const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId) : [];
+    const allBlocks = [...globalBlocks, ...projectBlocks];
+    
+    if (allBlocks.length > 0) {
+      const MAX_BLOCK_CHARS = 4000;
+      const blockSummaries = allBlocks.map((b) => {
+        const remainingSpace = MAX_BLOCK_CHARS - b.content.length;
+        const spaceStatus = remainingSpace > 500 
+          ? `${remainingSpace.toLocaleString()} chars remaining (good for appends)`
+          : remainingSpace > 100
+          ? `${remainingSpace.toLocaleString()} chars remaining (consider targeted edits)`
+          : `${remainingSpace.toLocaleString()} chars remaining (space constrained)`;
+        
+        return `### ${b.name} [${b.id}]
+Scope: ${b.scope}
+${spaceStatus}
+
+${b.content}`;
+      }).join("\n\n");
+      
+      blockContext = `\n\n## Existing Memory Blocks\nThe following memory blocks contain structured knowledge. Consider whether information from this conversation should update these blocks:\n\n${blockSummaries}\n`;
+    }
+  } catch { /* non-critical */ }
+  
+  return `${persona.content}${blockContext}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
+}
+
+/**
+ * Process block updates from extraction output.
+ * Only applies updates for high-importance facts (≥8) with blockUpdate field.
+ */
+async function processBlockUpdates(
+  facts: ExtractedFact[],
+  projectId?: string
+): Promise<boolean> {
+  const { getMemoryBlock, updateMemoryBlock, createMemoryBlock, supersedeBlock } = await import("./memory-storage.js");
+  
+  const MAX_BLOCK_CHARS = 4000;
+  const MIN_SPACE_FOR_APPEND = 500;
+  
+  let updatesMade = false;
+  const now = new Date().toISOString();
+  
+  for (const fact of facts) {
+    // Only process high-importance facts with block updates
+    if (!fact.blockUpdate || fact.importance < 8) continue;
+    
+    const update = fact.blockUpdate;
+    
+    try {
+      if (update.targetBlockName && !update.blockId) {
+        // Create new block
+        const newBlockId = `blk-${Math.random().toString(36).substr(2, 9)}`;
+        createMemoryBlock({
+          id: newBlockId,
+          name: update.targetBlockName,
+          description: update.reasoning.slice(0, 200),  // Use reasoning as initial description
+          content: update.content,
+          scope: projectId ? "project" : "global",
+          projectId: projectId || "",
+          createdAt: now,
+          updatedAt: now,
+          updatedBy: "agent",
+        });
+        console.log(`[memory-blocks] Created new block "${update.targetBlockName}" (${newBlockId})`);
+        updatesMade = true;
+      } else if (update.blockId) {
+        // Update existing block
+        const existingBlock = getMemoryBlock(update.blockId);
+        if (!existingBlock) {
+          console.warn(`[memory-blocks] Block ${update.blockId} not found, skipping update`);
+          continue;
+        }
+        
+        const remainingSpace = MAX_BLOCK_CHARS - existingBlock.content.length;
+        
+        if (update.updateType === "append") {
+          if (remainingSpace < MIN_SPACE_FOR_APPEND) {
+            console.log(`[memory-blocks] Insufficient space for append on ${update.blockId} (${remainingSpace} chars remaining), skipping`);
+            continue;
+          }
+          
+          const newContent = existingBlock.content + "\n\n" + update.content;
+          if (newContent.length > MAX_BLOCK_CHARS) {
+            console.warn(`[memory-blocks] Append would exceed limit (${newContent.length} > ${MAX_BLOCK_CHARS}), skipping`);
+            continue;
+          }
+          
+          updateMemoryBlock(update.blockId, {
+            content: newContent,
+            updatedBy: "agent",
+          });
+          console.log(`[memory-blocks] Appended to block ${update.blockId} (${newContent.length} chars total)`);
+          updatesMade = true;
+        } else if (update.updateType === "replace_section" && update.section) {
+          // Find and replace the section
+          const sectionHeader = `### ${update.section}`;
+          const sectionIndex = existingBlock.content.indexOf(sectionHeader);
+          
+          if (sectionIndex === -1) {
+            console.warn(`[memory-blocks] Section "${update.section}" not found in ${update.blockId}, skipping`);
+            continue;
+          }
+          
+          // Find end of section (next ### or end of content)
+          const nextSectionIndex = existingBlock.content.indexOf("\n### ", sectionIndex + sectionHeader.length);
+          const sectionEnd = nextSectionIndex === -1 ? existingBlock.content.length : nextSectionIndex;
+          
+          const beforeSection = existingBlock.content.slice(0, sectionIndex);
+          const afterSection = existingBlock.content.slice(sectionEnd);
+          const newContent = beforeSection + sectionHeader + "\n" + update.content + afterSection;
+          
+          if (newContent.length > MAX_BLOCK_CHARS) {
+            console.warn(`[memory-blocks] Section replace would exceed limit (${newContent.length} > ${MAX_BLOCK_CHARS}), skipping`);
+            continue;
+          }
+          
+          updateMemoryBlock(update.blockId, {
+            content: newContent,
+            updatedBy: "agent",
+          });
+          console.log(`[memory-blocks] Replaced section "${update.section}" in block ${update.blockId}`);
+          updatesMade = true;
+        } else if (update.updateType === "refine") {
+          // General refinement - create superseded version
+          const newBlockId = `blk-${Math.random().toString(36).substr(2, 9)}`;
+          const newContent = update.content;
+          
+          if (newContent.length > MAX_BLOCK_CHARS) {
+            console.warn(`[memory-blocks] Refine content exceeds limit (${newContent.length} > ${MAX_BLOCK_CHARS}), skipping`);
+            continue;
+          }
+          
+          supersedeBlock(update.blockId, {
+            id: newBlockId,
+            name: existingBlock.name,
+            description: existingBlock.description,
+            content: newContent,
+            scope: existingBlock.scope,
+            projectId: existingBlock.projectId || "",
+            createdAt: now,
+            updatedAt: now,
+            updatedBy: "agent",
+          });
+          console.log(`[memory-blocks] Refined block ${update.blockId} → ${newBlockId}`);
+          updatesMade = true;
+        }
+      }
+    } catch (e) {
+      console.error(`[memory-blocks] Failed to apply block update:`, e);
+    }
+  }
+  
+  return updatesMade;
 }
 
 /**
@@ -451,7 +645,7 @@ export async function preCompactionFlush(
     .map((m, i) => `${m.role} (${i + 1}): ${m.content}`)
     .join("\n\n");
 
-  const systemPrompt = await buildPreCompactionSystemPrompt();
+  const systemPrompt = await buildPreCompactionSystemPrompt(projectId);
 
   let responseText = "";
   await withRetry(
@@ -482,6 +676,12 @@ export async function preCompactionFlush(
   }
 
   await dedupAndSave(facts, embeddings, chatId, projectId);
+
+  // Process block updates (only high-importance facts with blockUpdate field)
+  const blockUpdatesMade = await processBlockUpdates(facts, projectId);
+  if (blockUpdatesMade) {
+    invalidateStablePrefixCache(chatId);  // Force reload of updated blocks
+  }
 
   // Invalidate memories cache so next turn picks up new memories
   invalidateMemoriesCache(chatId);
