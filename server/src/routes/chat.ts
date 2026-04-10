@@ -107,7 +107,7 @@ async function persistImages(images: ImageAttachment[]): Promise<ImageAttachment
  * loading / processing context.  We allow extra time here, then switch to the
  * shorter "ongoing" timeout once streaming has started.
  */
-const LOCAL_INACTIVITY_TIMEOUT_MS  = 900_000;  // 15 minutes for local
+const LOCAL_INACTIVITY_TIMEOUT_MS  = 1_800_000;  // 30 minutes for local (cold model load + large prompt can take 15-20 min)
 const CLOUD_INACTIVITY_TIMEOUT_MS  = 300_000;  // 5 min between events (cloud)
 const CLOUD_FIRST_EVENT_TIMEOUT_MS = 300_000;  // 5 min for first event (cloud)
 const SSE_KEEPALIVE_INTERVAL_MS    = 30_000;   // 30s keepalive pings to prevent client timeout
