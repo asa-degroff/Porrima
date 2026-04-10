@@ -17,6 +17,19 @@ import type {
 import { transformMessages } from "@mariozechner/pi-ai/dist/providers/transform-messages.js";
 import { sanitizeSurrogates } from "@mariozechner/pi-ai/dist/utils/sanitize-unicode.js";
 import { randomUUID } from "crypto";
+import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
+
+// Long-lived HTTP agent for llama.cpp SSE streaming.
+// Cold model load + large prompt processing can take 15-20 minutes before
+// the first SSE event arrives. Node's default undici headersTimeout (300s)
+// is too short and causes "fetch failed" errors.
+// IMPORTANT: Must use undici.fetch (not global fetch) — Node 22's global fetch
+// does NOT honor the dispatcher option, silently falling back to defaults.
+const llamaStreamAgent = new UndiciAgent({
+  headersTimeout: 1_800_000,  // 30 minutes — matches LOCAL_INACTIVITY_TIMEOUT_MS
+  bodyTimeout: 0,             // No body timeout (SSE streams indefinitely)
+  keepAliveTimeout: 60_000,
+});
 
 // ---------------------------------------------------------------------------
 // Types
@@ -612,12 +625,13 @@ export const streamOpenAICompat = (
       let lastFetchError: Error | undefined;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          response = await fetch(url, {
+          response = await undiciFetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
             signal: options?.signal,
-          });
+            dispatcher: llamaStreamAgent,
+          }) as unknown as Response;
           lastFetchError = undefined;
           break;
         } catch (err) {
