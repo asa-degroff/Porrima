@@ -18,6 +18,7 @@ import type { AgentContext, AgentLoopConfig, AgentTool, AgentToolResult } from "
 import { Type } from "@sinclair/typebox";
 import { Z_IMAGE_INSTRUCTIONS, loadThumbnail } from "./creative-engine.js";
 import type { ImageCorpusEntry } from "./image-corpus.js";
+import { postDirectionProgress } from "./chat-poster.js";
 
 /**
  * Autonomous generation configuration.
@@ -284,6 +285,19 @@ export async function executeDirectionWithReview(
   console.log(`[autonomous-review] Starting agent loop for direction: ${direction.type} - ${direction.description}`);
   console.log(`[autonomous-review] Max iterations: ${maxIterations}, model: ${reviewModelId}`);
 
+  // Post progress message if chatId is the directions chat
+  if (chatId && options.corpusMembers) {
+    try {
+      const { postDirectionProgress } = await import("./chat-poster.js");
+      await postDirectionProgress(chatId, direction.id, "started", {
+        description: direction.description,
+        type: direction.type,
+      });
+    } catch (e) {
+      console.error("[autonomous-review] Failed to post progress:", e);
+    }
+  }
+
   // Shared ref for the pending image — the tool stashes it here,
   // getSteeringMessages injects it as a user message so the agent can see it.
   const pendingImageRef: { current: { data: string; mimeType: string } | null } = { current: null };
@@ -385,6 +399,20 @@ export async function executeDirectionWithReview(
   }
 
   console.log(`[autonomous-review] Agent loop complete. Iterations: ${iterationCount}, image: ${lastImageId}`);
+
+  // Post completion message if chatId is the directions chat
+  if (chatId && lastImageUrl) {
+    try {
+      const { postDirectionProgress } = await import("./chat-poster.js");
+      await postDirectionProgress(chatId, direction.id, "complete", {
+        description: direction.description,
+        type: direction.type,
+        imageUrl: lastImageUrl,
+      });
+    } catch (e) {
+      console.error("[autonomous-review] Failed to post completion:", e);
+    }
+  }
 
   if (lastImageId && lastImageUrl) {
     return {

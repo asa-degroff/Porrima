@@ -63,6 +63,8 @@ export interface ChatMessage {
   _compactedMessageCount?: number;
   /** Marks this message as in-progress (streaming/tool execution not yet complete) */
   _inProgress?: boolean;
+  /** Marks this message as a system-generated message (not from agent response) */
+  _isSystemMessage?: boolean;
 }
 
 export type ChatType = "agent" | "quick" | "bluesky";

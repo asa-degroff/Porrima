@@ -60,6 +60,8 @@ export interface ChatMessage {
   _compactedMessageCount?: number;
   /** Marks this message's content as promoted from thinking (not useful for previews) */
   _thinkingPromoted?: boolean;
+  /** Marks this message as a system-generated message (not from agent response) */
+  _isSystemMessage?: boolean;
 }
 
 export type ChatType = "agent" | "quick" | "bluesky";
