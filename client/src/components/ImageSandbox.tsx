@@ -13,6 +13,7 @@ import { OctahedronLogo } from "./OctahedronLogo";
 import { DragHandle } from "./DragHandle";
 import { ImageSearch } from "./ImageSearch";
 import CorpusView from "./CorpusView";
+import { DirectionsChat } from "./DirectionsChat";
 import type { GeneratedImage, ImageGenerationParams, OllamaModel } from "../types";
 
 interface Props {
@@ -22,7 +23,7 @@ interface Props {
   onClose: () => void;
 }
 
-type SandboxMode = "generate" | "analyze" | "corpus";
+type SandboxMode = "generate" | "analyze" | "corpus" | "directions";
 type ViewMode = "gallery" | "detail";
 
 function isVisionCapable(family: string): boolean {
@@ -310,6 +311,16 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             >
               Corpus
             </button>
+            <button
+              onClick={() => setMode("directions")}
+              className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                mode === "directions"
+                  ? "bg-white/10 text-white/90"
+                  : "text-white/50 hover:text-white/70"
+              }`}
+            >
+              Directions
+            </button>
           </div>
 
           {/* Status indicator - hidden on mobile and iPad portrait, shown on desktop (lg+) */}
@@ -429,6 +440,16 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               }`}
             >
               C
+            </button>
+            <button
+              onClick={() => setMode("directions")}
+              className={`px-2 py-1 text-xs rounded-md transition-colors ${
+                mode === "directions"
+                  ? "bg-white/10 text-white/90"
+                  : "text-white/50 hover:text-white/70"
+              }`}
+            >
+              D
             </button>
           </div>
 
@@ -847,6 +868,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
         ) : mode === "corpus" ? (
           /* Corpus mode: force-directed graph visualization */
           <CorpusView />
+        ) : mode === "directions" ? (
+          /* Directions mode: chat interface for creative directions */
+          <DirectionsChat />
         ) : (
           <>
             {/* Vision Controls - desktop sidebar (lg+ only, iPad portrait uses slide-over) */}
