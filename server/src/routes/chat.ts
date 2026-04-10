@@ -1861,7 +1861,7 @@ router.post("/", async (req, res) => {
           // Emit compaction event for UI indicator
           res.write(`event: compaction\ndata: ${JSON.stringify({
             removedCount: compaction.removedCount,
-            remainingCount: chat.messages.length,
+            remainingCount: chat.messages.filter(m => !m._outOfContext).length,
             summaryMessage: summaryMsg || null,
           })}\n\n`);
         }
@@ -1951,6 +1951,16 @@ router.post("/", async (req, res) => {
     }
     
     // Pre-send context protection: truncate BEFORE sending if >75% of context window
+    // Set SSE headers early so compaction progress events reach the client.
+    // handleChatStream checks headersSent and won't set them again.
+    if (!res.headersSent) {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+    }
     if (model) {
       try {
         const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
@@ -1986,7 +1996,7 @@ router.post("/", async (req, res) => {
           // Emit compaction event for UI indicator
           res.write(`event: compaction\ndata: ${JSON.stringify({
             removedCount: compaction.removedCount,
-            remainingCount: chat.messages.length,
+            remainingCount: chat.messages.filter(m => !m._outOfContext).length,
             summaryMessage: summaryMsg || null,
           })}\n\n`);
         }
