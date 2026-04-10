@@ -3,6 +3,7 @@ import { ChatView } from "./ChatView";
 import { useChat } from "../hooks/useChat";
 import { useModels } from "../hooks/useModels";
 import { useSettings } from "../hooks/useSettings";
+import { useTTS } from "../hooks/useTTS";
 import { fetchChat as apiFetchChat } from "../api/client";
 import type { Chat } from "../types";
 
@@ -10,7 +11,8 @@ const DIRECTIONS_PROJECT_ID = "creative-engine-directions";
 
 export function DirectionsChat() {
   const { models } = useModels();
-  const { settings } = useSettings();
+  const { settings, updateSettings } = useSettings();
+  const { settings: ttsSettings, playbackState, updateSettings: updateTtsSettings } = useTTS();
   const [chat, setChat] = useState<Chat | null>(null);
   const [loading, setLoading] = useState(true);
   const creatingRef = useRef(false);
@@ -123,6 +125,10 @@ export function DirectionsChat() {
     setChat((prev) => prev ? { ...prev, contextWindow: value ?? undefined } : null);
   }, [chat]);
 
+  const handleTtsAutoReadToggle = useCallback((enabled: boolean) => {
+    updateTtsSettings({ autoReadEnabled: enabled });
+  }, [updateTtsSettings]);
+
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center text-white/30">
@@ -167,7 +173,12 @@ export function DirectionsChat() {
       models={models}
       selectedModelId={chat.modelId}
       systemPrompt={chat.systemPrompt}
+      systemPromptPresets={settings.systemPromptPresets}
       chatType={chat.type}
+      ttsAutoReadEnabled={ttsSettings.autoReadEnabled}
+      onTtsAutoReadToggle={handleTtsAutoReadToggle}
+      playbackState={playbackState}
+      ttsBarVisible={ttsSettings.enabled}
       waitingForInput={waitingForInput}
       streamingSegmentIndex={streamingSegmentIndex}
       onSend={send}
@@ -182,6 +193,7 @@ export function DirectionsChat() {
       isOnline={navigator.onLine}
       queueProcessing={queueProcessing}
       projectId={chat.projectId}
+      activeSkills={chat.activeSkills}
     />
   );
 }
