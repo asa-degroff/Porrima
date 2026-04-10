@@ -659,6 +659,15 @@ export async function truncateChatHistory(
   }
 
   keepFromICIdx = Math.min(keepFromICIdx, inContextIndices.length - 1);
+
+  // For forced compaction (manual /compact), if the budget calculation would keep
+  // everything, still compact at least half the in-context messages. The user
+  // explicitly asked to compact — don't skip just because it all fits.
+  if (forceCompact && keepFromICIdx <= 1 && inContextIndices.length > 3) {
+    keepFromICIdx = Math.ceil(inContextIndices.length / 2);
+    console.log(`[compaction] Force compact: budget keeps all, compacting first half (${keepFromICIdx - 1} of ${inContextIndices.length} in-context messages)`);
+  }
+
   const messagesToMarkCount = keepFromICIdx - 1; // exclude the first in-context message
 
   if (messagesToMarkCount <= 0) return noOp;
