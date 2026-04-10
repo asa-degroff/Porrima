@@ -32,6 +32,9 @@ export function chatMessagesToPiMessages(
   const result: Message[] = [];
 
   for (const m of messages) {
+    // Skip out-of-context messages (preserved for UI, not for LLM)
+    if (m._outOfContext) continue;
+
     if (m.role === "assistant") {
       const dummyUsage = {
         input: 0,

@@ -30,6 +30,7 @@ function estimateContextSize(messages: Chat["messages"], systemPrompt: string): 
   let lastKnownUsage = 0;
   let lastUsageIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]._outOfContext) continue;
     if (messages[i].role === "assistant" && messages[i].usage?.totalTokens) {
       lastKnownUsage = messages[i].usage!.totalTokens;
       lastUsageIndex = i;
@@ -38,8 +39,10 @@ function estimateContextSize(messages: Chat["messages"], systemPrompt: string): 
   }
 
   // Character-based estimation for comparison / messages after last usage
+  // Only count in-context messages (skip _outOfContext ones)
   let charEstimate = estimateTokens(systemPrompt);
   for (const m of messages) {
+    if (m._outOfContext) continue;
     if (m.role === "user") {
       charEstimate += estimateTokens(m.content);
       if (m.images?.length) {
@@ -107,110 +110,129 @@ export async function truncateBeforeSend(
     `[compaction] Pre-send truncation triggered: ${estimatedTokens} tokens > ${threshold} threshold`
   );
 
-  // Calculate how many messages to remove to get below threshold
-  // Use character-based estimation for per-message sizing
-  const messageTokenEstimates = messages.map((m, i) => {
-    let tokens = 0;
-    if (m.role === "user") {
-      tokens = estimateTokens(m.content);
-      if (m.images?.length) tokens += m.images.length * 256;
-    } else {
-      tokens = estimateTokens(m.content);
+  // Build index of in-context messages for budget calculation
+  const icIndices: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    if (!messages[i]._outOfContext) icIndices.push(i);
+  }
+  if (icIndices.length <= 2) return noOp;
+
+  // Per-message token estimates for in-context messages
+  const icEstimates = icIndices.map((idx) => {
+    const m = messages[idx];
+    let tokens = estimateTokens(m.content);
+    if (m.role === "user" && m.images?.length) tokens += m.images.length * 256;
+    if (m.role === "assistant") {
       if (m.thinking) tokens += estimateTokens(m.thinking);
       if (m.toolCalls) tokens += m.toolCalls.length * 50;
       if (m.toolResults) {
-        for (const r of m.toolResults) {
-          tokens += estimateTokens(r.content) + 20;
-        }
+        for (const r of m.toolResults) tokens += estimateTokens(r.content) + 20;
       }
     }
     return tokens;
   });
 
-  // Keep first message (title context) + most RECENT messages that fit in budget.
-  // The char-based per-message estimates undercount (they miss tool/thinking/framing overhead).
-  // Apply a scaling factor: ratio of actual total to char-estimated total.
-  // This makes per-message estimates proportionally accurate to the real token count.
-  const messageContentTokens = messageTokenEstimates.reduce((s, t) => s + t, 0);
+  // Apply scaling factor for accurate estimates
+  const messageContentTokens = icEstimates.reduce((s, t) => s + t, 0);
   const charEstimateTotal = estimateTokens(systemPrompt) + messageContentTokens;
   const scaleFactor = charEstimateTotal > 0 ? estimatedTokens / charEstimateTotal : 1;
-  const scaledMessageEstimates = messageTokenEstimates.map((t) => Math.ceil(t * scaleFactor));
+  const scaledEstimates = icEstimates.map((t) => Math.ceil(t * scaleFactor));
   const overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
-  let runningTotal = overheadTokens + scaledMessageEstimates[0];
-  let keepFromIndex = 1; // start assuming we keep only the first message
 
-  // Build a list of recent messages that fit within threshold (using scaled estimates)
-  const recentIndices: number[] = [];
-  for (let i = messages.length - 1; i >= 1; i--) {
-    if (runningTotal + scaledMessageEstimates[i] <= threshold) {
-      runningTotal += scaledMessageEstimates[i];
-      recentIndices.push(i);
+  // Iterate backwards over in-context messages to find budget boundary
+  let runningTotal = overheadTokens + scaledEstimates[0]; // always keep first
+  let keepFromIC = 1;
+  const recentICIndices: number[] = [];
+  for (let ic = icIndices.length - 1; ic >= 1; ic--) {
+    if (runningTotal + scaledEstimates[ic] <= threshold) {
+      runningTotal += scaledEstimates[ic];
+      recentICIndices.push(ic);
     } else {
       break;
     }
   }
 
-  // If no recent messages fit, we're in a dangerous state - keep at least the last 2 messages
-  // even if it slightly exceeds threshold. Better to have context than lose it entirely.
-  if (recentIndices.length === 0) {
-    console.warn(`[compaction] No recent messages fit within threshold (${runningTotal} > ${threshold}), keeping last 2 messages`);
-    keepFromIndex = Math.max(1, messages.length - 2);
+  if (recentICIndices.length === 0) {
+    console.warn(`[compaction] No recent messages fit within threshold (${runningTotal} > ${threshold}), keeping last 2 in-context`);
+    keepFromIC = Math.max(1, icIndices.length - 2);
   } else {
-    // Sort indices ascending to get the boundary
-    recentIndices.sort((a, b) => a - b);
-    keepFromIndex = recentIndices[0];
+    recentICIndices.sort((a, b) => a - b);
+    keepFromIC = recentICIndices[0];
   }
 
-  const messagesToRemove = keepFromIndex - 1; // messages between first and keepFromIndex
-  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFrom=${keepFromIndex} removing=${messagesToRemove}/${messages.length}`);
+  const messagesToMarkCount = keepFromIC - 1;
+  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFromIC=${keepFromIC} marking=${messagesToMarkCount}/${icIndices.length} in-context`);
 
-  if (messagesToRemove <= 0) return noOp;
+  if (messagesToMarkCount <= 0) return noOp;
 
-  // Archive removed messages and generate indexed summary
-  const removedMessages = messages.slice(1, keepFromIndex);
+  // Collect removed messages for archiving
+  const removedMessages: ChatMessage[] = [];
+  const markedIndices: number[] = [];
+  for (let ic = 1; ic < keepFromIC; ic++) {
+    const origIdx = icIndices[ic];
+    removedMessages.push(messages[origIdx]);
+    markedIndices.push(origIdx);
+  }
+
+  // Archive and generate summary
   const indexedSummary = await archiveAndIndex(chat.id, removedMessages, chat.modelId, onKeepalive);
 
-  // Keep first message, insert indexed summary, then recent messages
-  const firstMessage = messages[0];
-  const recentMessages = messages.slice(keepFromIndex);
+  // Mark messages as out-of-context, strip large content
+  const ARCHIVED_CONTENT_CAP = 500;
+  for (const origIdx of markedIndices) {
+    const m = messages[origIdx];
+    m._outOfContext = true;
+    if (m.toolResults) {
+      for (const r of m.toolResults) {
+        if (r.content && r.content.length > ARCHIVED_CONTENT_CAP) {
+          r.content = r.content.slice(0, ARCHIVED_CONTENT_CAP) + "\n[archived]";
+        }
+      }
+    }
+    if (m.thinking && m.thinking.length > ARCHIVED_CONTENT_CAP) {
+      m.thinking = m.thinking.slice(0, ARCHIVED_CONTENT_CAP) + "\n[archived]";
+    }
+    if (m.images) {
+      m.images = m.images.map(img => ({ ...img, data: "" }));
+    }
+  }
 
-  const summaryMessage: typeof firstMessage = {
+  // Insert summary before the first kept in-context message
+  const insertionIdx = icIndices[keepFromIC];
+  const summaryMessage: ChatMessage = {
     role: "assistant",
     content: indexedSummary,
     thinking: undefined,
     timestamp: Date.now(),
     _isCompactionSummary: true,
-    _compactedMessageCount: messagesToRemove,
+    _compactedMessageCount: messagesToMarkCount,
   };
+  messages.splice(insertionIdx, 0, summaryMessage);
+  chat.messages = messages;
 
-  chat.messages = [firstMessage, summaryMessage, ...recentMessages];
-
-  // Calculate estimated token count of removed messages for tracking
   const estimatedRemovedTokens = removedMessages.reduce((sum, m) => {
     let tokens = estimateTokens(m.content);
-    if (m.role === "user" && m.images?.length) {
-      tokens += m.images.length * 256;
-    }
+    if (m.role === "user" && m.images?.length) tokens += m.images.length * 256;
     if (m.role === "assistant") {
       if (m.thinking) tokens += estimateTokens(m.thinking);
       if (m.toolCalls) tokens += m.toolCalls.length * 50;
       if (m.toolResults) {
-        for (const r of m.toolResults) {
-          tokens += estimateTokens(r.content) + 20;
-        }
+        for (const r of m.toolResults) tokens += estimateTokens(r.content) + 20;
       }
     }
     return sum + tokens;
   }, 0);
 
+  const inContextCount = chat.messages.filter(m => !m._outOfContext).length;
   console.log(
-    `[compaction] Pre-send truncated chat ${chat.id}: removed ${messagesToRemove} messages ` +
-    `(~${estimatedRemovedTokens} est. tokens) → ${chat.messages.length} messages`
+    `[compaction] Pre-send compacted chat ${chat.id}: marked ${messagesToMarkCount} messages out-of-context ` +
+    `(~${estimatedRemovedTokens} est. tokens) → ${inContextCount} in-context, ${chat.messages.length} total`
   );
 
-  // Regenerate title based on remaining messages to keep it current
+  // Regenerate title based on in-context messages to keep it current
   try {
-    const newTitle = await regenerateTitle(chat.messages);
+    const inContextMsgs = chat.messages.filter(m => !m._outOfContext);
+    const newTitle = await regenerateTitle(inContextMsgs);
     if (newTitle && newTitle !== chat.title) {
       await updateChatTitle(chat.id, newTitle);
       chat.title = newTitle;
@@ -220,7 +242,7 @@ export async function truncateBeforeSend(
     console.warn("[compaction] Title regeneration failed:", err);
   }
 
-  return { truncated: true, removedCount: messagesToRemove, estimatedTokenCount: estimatedRemovedTokens };
+  return { truncated: true, removedCount: messagesToMarkCount, removedMessages, estimatedTokenCount: estimatedRemovedTokens };
 }
 
 /**
@@ -589,8 +611,17 @@ export async function truncateChatHistory(
     }
   }
 
-  // Use character-based per-message estimation (consistent with truncateBeforeSend)
-  const messageTokenEstimates = messages.map((m) => {
+  // Build index of in-context messages (skip already out-of-context ones)
+  const inContextIndices: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    if (!messages[i]._outOfContext) inContextIndices.push(i);
+  }
+
+  if (inContextIndices.length <= 2) return noOp;
+
+  // Estimate tokens for each in-context message
+  const inContextEstimates = inContextIndices.map((idx) => {
+    const m = messages[idx];
     let tokens = estimateTokens(m.content);
     if (m.role === "user" && m.images?.length) {
       tokens += m.images.length * 256;
@@ -607,69 +638,98 @@ export async function truncateChatHistory(
     return tokens;
   });
 
-  // Iterate backwards to keep most recent messages that fit in target budget
-  let runningTotal = messageTokenEstimates[0]; // always keep first
-  let keepFromIndex = messages.length;
+  // Iterate backwards over in-context messages to find the keep boundary
+  let runningTotal = inContextEstimates[0]; // always keep first in-context message
+  let keepFromICIdx = inContextIndices.length; // index into inContextIndices
 
-  for (let i = messages.length - 1; i >= 1; i--) {
-    if (runningTotal + messageTokenEstimates[i] <= targetTokens) {
-      runningTotal += messageTokenEstimates[i];
-      keepFromIndex = i;
+  for (let ic = inContextIndices.length - 1; ic >= 1; ic--) {
+    if (runningTotal + inContextEstimates[ic] <= targetTokens) {
+      runningTotal += inContextEstimates[ic];
+      keepFromICIdx = ic;
     } else {
       break;
     }
   }
 
-  keepFromIndex = Math.min(keepFromIndex, messages.length - 1);
-  const messagesToRemove = keepFromIndex - 1;
+  keepFromICIdx = Math.min(keepFromICIdx, inContextIndices.length - 1);
+  const messagesToMarkCount = keepFromICIdx - 1; // exclude the first in-context message
 
-  if (messagesToRemove <= 0) return noOp;
+  if (messagesToMarkCount <= 0) return noOp;
 
   onCompacting?.();
 
-  const firstMessage = messages[0];
-  const removedMessages = messages.slice(1, keepFromIndex);
-  const recentMessages = messages.slice(keepFromIndex);
+  // Collect the messages being marked out (for archiving and estimation)
+  const removedMessages: ChatMessage[] = [];
+  const markedOriginalIndices: number[] = [];
+  for (let ic = 1; ic < keepFromICIdx; ic++) {
+    const origIdx = inContextIndices[ic];
+    removedMessages.push(messages[origIdx]);
+    markedOriginalIndices.push(origIdx);
+  }
 
   // Archive removed messages and generate indexed summary
   const indexedSummary = await archiveAndIndex(chat.id, removedMessages, chat.modelId, onKeepalive);
 
+  // Mark messages as out-of-context (preserve for UI, exclude from LLM)
+  // Also strip large content to limit storage growth.
+  const ARCHIVED_CONTENT_CAP = 500;
+  for (const origIdx of markedOriginalIndices) {
+    const m = messages[origIdx];
+    m._outOfContext = true;
+    // Strip tool results to save space (they're archived separately)
+    if (m.toolResults) {
+      for (const r of m.toolResults) {
+        if (r.content && r.content.length > ARCHIVED_CONTENT_CAP) {
+          r.content = r.content.slice(0, ARCHIVED_CONTENT_CAP) + "\n[archived]";
+        }
+      }
+    }
+    // Strip thinking content
+    if (m.thinking && m.thinking.length > ARCHIVED_CONTENT_CAP) {
+      m.thinking = m.thinking.slice(0, ARCHIVED_CONTENT_CAP) + "\n[archived]";
+    }
+    // Strip base64 images from user messages
+    if (m.images) {
+      m.images = m.images.map(img => ({ ...img, data: "" }));
+    }
+  }
+
+  // Insert the compaction summary right before the first kept in-context message
+  const insertionIndex = inContextIndices[keepFromICIdx];
   const summaryMessage: ChatMessage = {
     role: "assistant",
     content: indexedSummary,
     timestamp: Date.now(),
     _isCompactionSummary: true,
-    _compactedMessageCount: messagesToRemove,
+    _compactedMessageCount: messagesToMarkCount,
   };
+  messages.splice(insertionIndex, 0, summaryMessage);
+  chat.messages = messages;
 
-  chat.messages = [firstMessage, summaryMessage, ...recentMessages];
-
-  // Calculate estimated token count of removed messages for tracking
+  // Calculate estimated token count for logging
   const estimatedRemovedTokens = removedMessages.reduce((sum, m) => {
     let tokens = estimateTokens(m.content);
-    if (m.role === "user" && m.images?.length) {
-      tokens += m.images.length * 256;
-    }
+    if (m.role === "user" && m.images?.length) tokens += m.images.length * 256;
     if (m.role === "assistant") {
       if (m.thinking) tokens += estimateTokens(m.thinking);
       if (m.toolCalls) tokens += m.toolCalls.length * 50;
       if (m.toolResults) {
-        for (const r of m.toolResults) {
-          tokens += estimateTokens(r.content) + 20;
-        }
+        for (const r of m.toolResults) tokens += estimateTokens(r.content) + 20;
       }
     }
     return sum + tokens;
   }, 0);
 
+  const inContextCount = chat.messages.filter(m => !m._outOfContext).length;
   console.log(
-    `[compaction] Truncated chat ${chat.id}: removed ${messagesToRemove} messages ` +
-    `(~${estimatedRemovedTokens} est. tokens) → ${chat.messages.length} messages`
+    `[compaction] Compacted chat ${chat.id}: marked ${messagesToMarkCount} messages out-of-context ` +
+    `(~${estimatedRemovedTokens} est. tokens) → ${inContextCount} in-context, ${chat.messages.length} total`
   );
 
-  // Regenerate title based on remaining messages to keep it current
+  // Regenerate title based on in-context messages to keep it current
   try {
-    const newTitle = await regenerateTitle(chat.messages);
+    const inContextMsgs = chat.messages.filter(m => !m._outOfContext);
+    const newTitle = await regenerateTitle(inContextMsgs);
     if (newTitle && newTitle !== chat.title) {
       await updateChatTitle(chat.id, newTitle);
       chat.title = newTitle;
@@ -679,5 +739,5 @@ export async function truncateChatHistory(
     console.warn("[compaction] Title regeneration failed:", err);
   }
 
-  return { truncated: true, removedCount: messagesToRemove, removedMessages, estimatedTokenCount: estimatedRemovedTokens };
+  return { truncated: true, removedCount: messagesToMarkCount, removedMessages, estimatedTokenCount: estimatedRemovedTokens };
 }

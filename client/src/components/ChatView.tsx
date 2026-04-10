@@ -467,12 +467,6 @@ export function ChatView({
               </div>
             )}
             {(() => {
-              // Find the last compaction summary to determine context boundary
-              let lastCompactionIndex = -1;
-              for (let j = messages.length - 1; j >= 0; j--) {
-                if (messages[j]._isCompactionSummary) { lastCompactionIndex = j; break; }
-              }
-
               // Performance limit: only render the last 200 messages for long chats
               const MAX_RENDERED = 200;
               const startIndex = messages.length > MAX_RENDERED ? messages.length - MAX_RENDERED : 0;
@@ -480,13 +474,13 @@ export function ChatView({
               return messages.slice(startIndex).map((msg, sliceIdx) => {
                 const i = startIndex + sliceIdx;
                 const isLast = i === messages.length - 1;
-                const isOutOfContext = lastCompactionIndex >= 0 && i < lastCompactionIndex;
+                const isOutOfContext = !!msg._outOfContext;
                 const stableKey = `msg-${i}-${msg.timestamp}-${msg.role}`;
 
-                // Render "in context" divider after the compaction indicator
-                const showContextResume = lastCompactionIndex >= 0
-                  && i === lastCompactionIndex + 1
-                  && !messages[lastCompactionIndex + 1]?._isCompactionSummary;
+                // Show "In context" divider at the transition from out-of-context to in-context
+                const prevMsg = i > 0 ? messages[i - 1] : null;
+                const showContextResume = !isOutOfContext && !msg._isCompactionSummary
+                  && prevMsg && (prevMsg._outOfContext || prevMsg._isCompactionSummary);
 
                 return (
                   <div key={stableKey} className={!isLast ? "message-item" : undefined}>
@@ -497,7 +491,7 @@ export function ChatView({
                         <div className="flex-1 border-t border-green-400/20" />
                       </div>
                     )}
-                    <div className={isOutOfContext ? "opacity-45" : undefined}>
+                    <div className={isOutOfContext ? "opacity-40" : undefined}>
                       <MessageBubble
                         message={msg}
                         isStreaming={streaming}
@@ -509,7 +503,7 @@ export function ChatView({
                         activeTools={isLast ? activeTools : undefined}
                         artifacts={isLast && streaming ? artifacts : undefined}
                         generatedImages={isLast && streaming ? generatedImages : undefined}
-                        editable={msg.role === "user" && !streaming && isOnline}
+                        editable={msg.role === "user" && !streaming && isOnline && !isOutOfContext}
                         onEditMessage={msg.role === "user" ? onEditMessage : undefined}
                         messageIndex={i}
                         availableSkills={skills.length > 0 ? skills.map(s => s.name) : emptySkills}

@@ -59,6 +59,8 @@ export interface ChatMessage {
   segments?: MessageSegment[];
   /** Marks this message as a compaction summary (inserted when messages are removed due to context limits) */
   _isCompactionSummary?: boolean;
+  /** Message is preserved for UI display but excluded from the LLM context */
+  _outOfContext?: boolean;
   /** Number of messages that were compacted to create this summary */
   _compactedMessageCount?: number;
   /** Marks this message as in-progress (streaming/tool execution not yet complete) */

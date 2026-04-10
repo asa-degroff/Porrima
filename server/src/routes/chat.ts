@@ -998,7 +998,7 @@ async function handleChatStream(
               const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
               res.write(`event: compaction\ndata: ${JSON.stringify({
                 removedCount: compaction.removedCount,
-                remainingCount: chat.messages.length,
+                remainingCount: chat.messages.filter(m => !m._outOfContext).length,
                 summaryMessage: summaryMsg || null,
               })}\n\n`);
               
