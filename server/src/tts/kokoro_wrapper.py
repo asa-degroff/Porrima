@@ -22,6 +22,9 @@ def main():
     parser.add_argument("--lang", default="a", help="Language code: 'a'=American, 'b'=British (default: a)")
     args = parser.parse_args()
 
+    # Configuration for click prevention
+    FADE_DURATION = 0.05  # 50ms fade-out
+
     try:
         # Determine language code from voice prefix
         # af_* or am_* = American ('a'), bf_* or bm_* = British ('b')
@@ -50,6 +53,8 @@ def main():
         audio = np.concatenate(all_audio)
         
         # Convert float32 to int16 for WAV storage
+        # Note: We don't apply fade here when using ffmpeg path - ffmpeg will handle it
+        # with correct timing after atempo processing
         audio_int16 = (audio * 32767).clip(-32768, 32767).astype("int16")
         
         # Write native audio to an in-memory buffer
@@ -63,6 +68,36 @@ def main():
 
         # If speed is 1.0, just output the native audio directly
         if abs(args.speed - 1.0) < 0.01:
+            # Apply fade-out to prevent click at end
+            fade_samples = int(sample_rate * FADE_DURATION)
+            if len(audio) > fade_samples:
+                # Use exponential fade that reaches zero for natural sound
+                # exp(-3) ≈ 0.05, so we scale to ensure it reaches 0 at the end
+                fade_curve = np.ones(fade_samples)
+                exp_portion = np.exp(np.linspace(0, -3, fade_samples - 1))
+                fade_curve[:-1] = exp_portion
+                fade_curve[-1] = 0.0  # Ensure absolute zero at the very end
+                audio[-fade_samples:] *= fade_curve
+            elif len(audio) > 0:
+                fade_curve = np.zeros(len(audio))
+                if len(audio) > 1:
+                    exp_portion = np.exp(np.linspace(0, -3, len(audio) - 1))
+                    fade_curve[:-1] = exp_portion
+                fade_curve[-1] = 0.0
+                audio *= fade_curve
+            
+            # Convert float32 to int16 for WAV storage
+            audio_int16 = (audio * 32767).clip(-32768, 32767).astype("int16")
+            
+            # Write native audio to an in-memory buffer
+            native_buffer = io.BytesIO()
+            with wave.open(native_buffer, "wb") as wav_file:
+                wav_file.setnchannels(1)  # Mono
+                wav_file.setsampwidth(2)  # 16-bit
+                wav_file.setframerate(sample_rate)
+                wav_file.writeframes(audio_int16.tobytes())
+            native_buffer.seek(0)
+            
             sys.stdout.buffer.write(native_buffer.getvalue())
             sys.stdout.buffer.flush()
             duration = len(audio) / sample_rate
@@ -76,11 +111,10 @@ def main():
             print(json.dumps(metadata), file=sys.stderr)
         else:
             # Use ffmpeg to change speed with pitch correction (atempo)
-            # atempo filter works in range [0.5, 2.0]
-            # We handle the speed adjustment via a subprocess pipe
+            # We use a subprocess pipe to feed the native audio into ffmpeg
+            # NOTE: We do NOT apply fade in ffmpeg - we'll do it in numpy after processing
+            # because atempo changes the sample count and ffmpeg's afade timing is unreliable
             
-            # Construct the ffmpeg command
-            # We use -filter:a atempo=X to adjust speed without changing pitch
             cmd = [
                 "ffmpeg",
                 "-loglevel", "error",
@@ -102,21 +136,67 @@ def main():
             if process.returncode != 0:
                 raise RuntimeError(f"FFmpeg error: {err.decode()}")
 
-            # Write the processed audio to stdout
-            sys.stdout.buffer.write(out)
-            sys.stdout.buffer.flush()
-            
-            # Calculate expected duration (original duration / speed)
-            duration = (len(audio) / sample_rate) / args.speed
-            
-            metadata = {
-                "duration": duration,
-                "sample_rate": sample_rate,
-                "voice": args.voice,
-                "speed": args.speed,
-                "lang_code": lang_code,
-            }
-            print(json.dumps(metadata), file=sys.stderr)
+            # Parse the processed WAV to get the audio samples
+            # We need to apply the fade in numpy for precise control
+            processed_buffer = io.BytesIO(out)
+            with wave.open(processed_buffer, "rb") as wav_file:
+                n_channels = wav_file.getnchannels()
+                sample_width = wav_file.getsampwidth()
+                sample_rate = wav_file.getframerate()
+                n_frames = wav_file.getnframes()
+                
+                # Read all frames
+                raw_data = wav_file.readframes(n_frames)
+                
+                # Convert to numpy array (int16) and make a writable copy
+                processed_audio = np.frombuffer(raw_data, dtype=np.int16).copy()
+                
+                # Apply fade-out to the last FADE_DURATION seconds
+                fade_samples = int(sample_rate * FADE_DURATION)
+                if len(processed_audio) > fade_samples:
+                    # Create exponential fade curve that reaches exactly zero
+                    fade_curve = np.ones(fade_samples, dtype=np.float64)
+                    if fade_samples > 1:
+                        exp_portion = np.exp(np.linspace(0, -3, fade_samples - 1))
+                        fade_curve[:-1] = exp_portion
+                    fade_curve[-1] = 0.0  # Ensure absolute zero at the very end
+                    
+                    # Apply fade to the end of the audio
+                    processed_audio[-fade_samples:] = (
+                        processed_audio[-fade_samples:].astype(np.float64) * fade_curve
+                    ).astype(np.int16)
+                elif len(processed_audio) > 0:
+                    # Audio is shorter than fade duration, fade the whole thing
+                    fade_curve = np.zeros(len(processed_audio), dtype=np.float64)
+                    if len(processed_audio) > 1:
+                        exp_portion = np.exp(np.linspace(0, -3, len(processed_audio) - 1))
+                        fade_curve[:-1] = exp_portion
+                    fade_curve[-1] = 0.0
+                    processed_audio = (processed_audio.astype(np.float64) * fade_curve).astype(np.int16)
+                
+                # Write the faded audio to a new WAV buffer
+                output_buffer = io.BytesIO()
+                with wave.open(output_buffer, "wb") as out_wav:
+                    out_wav.setnchannels(n_channels)
+                    out_wav.setsampwidth(sample_width)
+                    out_wav.setframerate(sample_rate)
+                    out_wav.writeframes(processed_audio.tobytes())
+                
+                # Output the final audio
+                sys.stdout.buffer.write(output_buffer.getvalue())
+                sys.stdout.buffer.flush()
+                
+                # Calculate duration based on processed sample count
+                duration = len(processed_audio) / sample_rate
+                
+                metadata = {
+                    "duration": duration,
+                    "sample_rate": sample_rate,
+                    "voice": args.voice,
+                    "speed": args.speed,
+                    "lang_code": lang_code,
+                }
+                print(json.dumps(metadata), file=sys.stderr)
         
     except Exception as e:
         # Write error to stderr
