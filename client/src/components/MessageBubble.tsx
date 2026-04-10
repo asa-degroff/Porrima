@@ -662,16 +662,28 @@ function ScrollableToolContainer({
     const scroll = scrollRef.current;
     const content = contentRef.current;
     if (!scroll) return;
+    
     const observer = new ResizeObserver(() => {
-      // Only auto-scroll if near bottom AND user hasn't manually scrolled away
-      if (isNearBottomRef.current && !manualScrollOverrideRef.current) {
+      // Only auto-scroll during streaming if near bottom AND user hasn't manually scrolled away
+      if (isStreaming && isNearBottomRef.current && !manualScrollOverrideRef.current) {
         scroll.scrollTop = scroll.scrollHeight;
       }
     });
+    
     if (content) observer.observe(content);
     observer.observe(scroll);
     return () => observer.disconnect();
-  }, []);
+  }, [isStreaming]);
+  
+  // Ensure we're at bottom when streaming starts (initial load of streaming content)
+  useEffect(() => {
+    if (isStreaming && scrollRef.current && isNearBottomRef.current && !manualScrollOverrideRef.current) {
+      const scroll = scrollRef.current;
+      requestAnimationFrame(() => {
+        if (scroll) scroll.scrollTop = scroll.scrollHeight;
+      });
+    }
+  }, [isStreaming]);
   
   // Reset scroll pause state when streaming stops
   useEffect(() => {
@@ -695,8 +707,8 @@ function ScrollableToolContainer({
   return (
     <div className="my-2 rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden relative">
       {header}
-      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto">
-        <div ref={contentRef} className="max-h-[300px]">
+      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto max-h-[300px]">
+        <div ref={contentRef}>
           {children}
         </div>
       </div>
