@@ -501,6 +501,7 @@ export const MessageBubble = memo(function MessageBubble({
 /**
  * Renders message segments with automatic scrollable container for long sequences of tool calls.
  * When more than 6 consecutive tool calls are detected, they are wrapped in a scrollable box.
+ * Supports manual scroll override during streaming with "new output" button.
  */
 function MessageSegments({
   segments,
@@ -561,31 +562,36 @@ function MessageSegments({
             const groupStartIndex = globalIndex;
             globalIndex += group.segments.length;
             
+            // Check if this tool group is actively streaming
+            const isGroupStreaming = showStreaming && streamingSegmentIndex !== null;
+            const groupEndIndex = groupStartIndex + group.segments.length - 1;
+            const isActivelyStreaming = isGroupStreaming && streamingSegmentIndex >= groupStartIndex && streamingSegmentIndex <= groupEndIndex;
+            
             return (
-              <div
+              <ScrollableToolContainer
                 key={`group-${groupIndex}`}
-                className="my-2 rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden"
+                isStreaming={isActivelyStreaming}
+                header={
+                  <div className="px-3 py-1.5 text-xs text-white/40 border-b border-white/5 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                    </svg>
+                    <span>{toolCallCount} tool calls</span>
+                  </div>
+                }
               >
-                <div className="px-3 py-1.5 text-xs text-white/40 border-b border-white/5 flex items-center gap-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-                  </svg>
-                  <span>{toolCallCount} tool calls</span>
-                </div>
-                <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
-                  {group.segments.map((segment, i) => (
-                    <SegmentRenderer
-                      key={`${segment.type}-${segment.seq}-${i}`}
-                      segment={segment}
-                      index={groupStartIndex + i}
-                      allSegments={segments || []}
-                      showStreaming={showStreaming}
-                      isThinkingStreaming={isThinkingStreaming}
-                      streamingSegmentIndex={streamingSegmentIndex}
-                    />
-                  ))}
-                </div>
-              </div>
+                {group.segments.map((segment, i) => (
+                  <SegmentRenderer
+                    key={`${segment.type}-${segment.seq}-${i}`}
+                    segment={segment}
+                    index={groupStartIndex + i}
+                    allSegments={segments || []}
+                    showStreaming={showStreaming}
+                    isThinkingStreaming={isThinkingStreaming}
+                    streamingSegmentIndex={streamingSegmentIndex}
+                  />
+                ))}
+              </ScrollableToolContainer>
             );
           }
         }
@@ -607,6 +613,108 @@ function MessageSegments({
         ));
       })}
     </>
+  );
+}
+
+/**
+ * Scrollable container for tool calls with manual scroll override during streaming.
+ * Similar pattern to ChatView's scroll handling.
+ */
+function ScrollableToolContainer({
+  isStreaming,
+  header,
+  children,
+}: {
+  isStreaming: boolean;
+  header: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const manualScrollOverrideRef = useRef(false);
+  const [scrollPaused, setScrollPaused] = useState(false);
+  
+  // Track whether user is scrolled near the bottom
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const threshold = 40;
+    const wasNearBottom = isNearBottomRef.current;
+    isNearBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    
+    // If we're streaming and user scrolls away from bottom, enable manual override
+    if (isStreaming && wasNearBottom && !isNearBottomRef.current) {
+      manualScrollOverrideRef.current = true;
+      setScrollPaused(true);
+    }
+    
+    // If user scrolls back to bottom, disable override
+    if (isNearBottomRef.current && manualScrollOverrideRef.current) {
+      manualScrollOverrideRef.current = false;
+      setScrollPaused(false);
+    }
+  }, [isStreaming]);
+  
+  // Auto-scroll via ResizeObserver on the content div
+  useEffect(() => {
+    const scroll = scrollRef.current;
+    const content = contentRef.current;
+    if (!scroll) return;
+    const observer = new ResizeObserver(() => {
+      // Only auto-scroll if near bottom AND user hasn't manually scrolled away
+      if (isNearBottomRef.current && !manualScrollOverrideRef.current) {
+        scroll.scrollTop = scroll.scrollHeight;
+      }
+    });
+    if (content) observer.observe(content);
+    observer.observe(scroll);
+    return () => observer.disconnect();
+  }, []);
+  
+  // Reset scroll pause state when streaming stops
+  useEffect(() => {
+    if (!isStreaming && scrollPaused) {
+      setScrollPaused(false);
+      manualScrollOverrideRef.current = false;
+    }
+  }, [isStreaming, scrollPaused]);
+  
+  // Scroll to bottom handler
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      manualScrollOverrideRef.current = false;
+      isNearBottomRef.current = true;
+      setScrollPaused(false);
+    }
+  }, []);
+  
+  return (
+    <div className="my-2 rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden relative">
+      {header}
+      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto">
+        <div ref={contentRef} className="max-h-[300px]">
+          {children}
+        </div>
+      </div>
+      {/* Scroll to bottom button - appears when user scrolls away during streaming */}
+      {scrollPaused && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-2 right-2 z-10 flex items-center gap-1 px-2 py-1 rounded-full bg-white/10 border border-white/20 text-white/70 hover:text-white hover:bg-white/15 hover:border-white/30 transition-all shadow-lg backdrop-blur-sm"
+          title="Scroll to bottom"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14" />
+            <path d="m19 12-7 7-7-7" />
+          </svg>
+          <span className="text-[10px] font-medium">New</span>
+        </button>
+      )}
+    </div>
   );
 }
 
