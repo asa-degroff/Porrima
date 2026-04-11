@@ -5,7 +5,6 @@ import { homedir } from "os";
 import { streamChat } from "./agent.js";
 import { getSettings } from "./chat-storage.js";
 import { embedBatch } from "./embeddings.js";
-import { loadPersona } from "./persona-store.js";
 import {
   addMemory,
   updateMemory,
@@ -133,6 +132,28 @@ async function withRetry<T>(
   throw lastError;
 }
 
+/**
+ * Dedicated system prompt prefix for the extraction agent.
+ *
+ * Unlike the main chat persona (which describes identity, values, and communication style),
+ * this prefix frames the extraction mindset: noticing, archiving, and sorting information.
+ * It intentionally does NOT include the full persona because:
+ * 1. The extraction agent is a subagent operating in archival mode, not conversation mode
+ * 2. Loading the full persona causes the extraction agent to save persona content as memories
+ * 3. The persona's identity statements are already known to the agent and don't need archiving
+ *
+ * This prefix is shared by all extraction modes (immediate, delayed, pre-compaction).
+ */
+const EXTRACTION_AGENT_PREFIX = `# Archival Mode
+
+I am operating in archival mode. My task is to notice and preserve information worth remembering — I am not conversing, I am sorting and capturing.
+
+I know who I am. My identity, personality, values, communication style, and how I work are already part of me and do not need to be extracted or saved as memories. I do NOT archive statements about my own nature, characteristics, or operational style.
+
+What I capture: things worth remembering for future interactions — written in my own voice, as something I'd tell myself to remember. Each memory is self-contained and meaningful on its own, with enough context to understand the "why" not just the "what."
+
+What I skip: my own identity traits, broad preferences,anything already in existing knowledge blocks, and generic observations without specific context.`;
+
 const EXTRACTION_INSTRUCTIONS = `---
 
 ## Memory Extraction Task
@@ -167,8 +188,6 @@ If nothing is genuinely novel or significant, output: []
 IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 
 async function buildExtractionSystemPrompt(projectId?: string): Promise<string> {
-  const persona = await loadPersona();
-
   // Include loaded block summaries so extraction avoids redundant facts
   let blockContext = "";
   try {
@@ -182,7 +201,7 @@ async function buildExtractionSystemPrompt(projectId?: string): Promise<string> 
     }
   } catch { /* non-critical */ }
 
-  return `${persona.content}${blockContext}\n\n${EXTRACTION_INSTRUCTIONS}`;
+  return `${EXTRACTION_AGENT_PREFIX}${blockContext}\n\n${EXTRACTION_INSTRUCTIONS}`;
 }
 
 const DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS = `---
@@ -214,8 +233,7 @@ const DELAYED_EXTRACTION_USER_TEMPLATE = `PREVIOUSLY CAPTURED MEMORIES from this
 These memories are already saved. Do NOT duplicate them.`;
 
 async function buildDelayedExtractionSystemPrompt(): Promise<string> {
-  const persona = await loadPersona();
-  return `${persona.content}\n\n${DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS}`;
+  return `${EXTRACTION_AGENT_PREFIX}\n\n${DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS}`;
 }
 
 interface ExtractedFact {
@@ -451,8 +469,6 @@ Output a JSON array. Each item:
 Output ONLY the JSON array.`;
 
 async function buildPreCompactionSystemPrompt(projectId?: string): Promise<string> {
-  const persona = await loadPersona();
-  
   // Load existing blocks with space awareness
   let blockContext = "";
   try {
@@ -482,7 +498,7 @@ ${b.content}`;
     }
   } catch { /* non-critical */ }
   
-  return `${persona.content}${blockContext}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
+  return `${EXTRACTION_AGENT_PREFIX}${blockContext}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
 }
 
 /**
