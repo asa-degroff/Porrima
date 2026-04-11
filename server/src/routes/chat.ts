@@ -1427,7 +1427,7 @@ async function handleChatStream(
       }
       
       const followUpSystemPrompt = (chat.type === "agent" || chat.type === "bluesky")
-        ? await buildMemoryAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type, projectPath)
+        ? (await buildSplitAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type, projectPath)).systemPrompt
         : chat.systemPrompt || "You are a helpful assistant.";
       
       // Recursively handle the follow-up with a fresh turn abort controller
@@ -2241,10 +2241,20 @@ router.post("/edit", async (req, res) => {
 
   await saveChat(chat);
 
-  // Build context with skills
+  // Build context with skills (using delta-aware prompt builder for agent chats)
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
-  if (chat.type === "agent") {
-    systemPrompt = await buildMemoryAugmentedPrompt(systemPrompt, chat.messages, chat.id, chat.projectId, chat.type);
+  let editMemoriesDelta = "";
+  if (chat.type === "agent" || chat.type === "bluesky") {
+    let editProjectPath: string | undefined;
+    if (chat.projectId) {
+      const project = await getProject(chat.projectId);
+      editProjectPath = project?.path;
+    }
+    const split = await buildSplitAugmentedPrompt(
+      systemPrompt, chat.messages, chat.id, chat.projectId, chat.type, editProjectPath
+    );
+    systemPrompt = split.systemPrompt;
+    editMemoriesDelta = split.memoriesMessage;
   }
   
   // Load settings for context window resolution
@@ -2277,15 +2287,26 @@ router.post("/edit", async (req, res) => {
       const emitKeepalive = () => res.write(`: keepalive\n\n`);
       const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
       if (compaction && compaction.truncated) {
+        // Extract memories from removed messages and await completion so they're
+        // available for the system prompt rebuild below.
+        if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+          try {
+            await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+          } catch (err) {
+            console.error("[compaction] pre-send flush failed (edit):", err);
+          }
+        }
+
         await saveChat(chat);
-        // Rebuild system prompt after truncation
-        if (chat.type === "agent") {
+        // Rebuild system prompt after truncation with full memory reset
+        resetMemoryContext(chat.id);
+        if (chat.type === "agent" || chat.type === "bluesky") {
           let editProjectPath: string | undefined;
           if (chat.projectId) {
             const project = await getProject(chat.projectId);
             editProjectPath = project?.path;
           }
-          systemPrompt = await buildMemoryAugmentedPrompt(
+          const split = await buildSplitAugmentedPrompt(
             chat.systemPrompt || "You are a helpful assistant.",
             chat.messages,
             chat.id,
@@ -2293,6 +2314,8 @@ router.post("/edit", async (req, res) => {
             chat.type,
             editProjectPath
           );
+          systemPrompt = split.systemPrompt;
+          editMemoriesDelta = split.memoriesMessage;
         }
         // Emit compaction event for UI indicator
         res.write(`event: compaction\ndata: ${JSON.stringify({
@@ -2305,10 +2328,21 @@ router.post("/edit", async (req, res) => {
     }
   }
   
-  setCachedAugmentedPrompt(chat.id, systemPrompt);
+  setCachedAugmentedPrompt(chat.id, editMemoriesDelta ? `${systemPrompt}\n\n${editMemoriesDelta}` : systemPrompt);
 
   // Context = all messages EXCEPT the one we just added
   const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
+  
+  // Inject memory delta at end of context (only new memories not already in system prompt).
+  // This keeps the system prompt + conversation history stable for KV cache prefix
+  // matching — only the delta + new user message are reprocessed.
+  if (editMemoriesDelta) {
+    contextMessages.push({
+      role: "user",
+      content: `[System context — updated memories]\n${editMemoriesDelta}`,
+      timestamp: Date.now(),
+    });
+  }
   
   // Safety check: warn if context is empty for non-first messages
   if (contextMessages.length === 0 && chat.messages.length > 1) {
