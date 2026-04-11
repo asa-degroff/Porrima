@@ -40,7 +40,7 @@ export interface AutonomousGenerationConfig {
  * Optimized for z-image base model.
  */
 export const DEFAULT_AUTONOMOUS_CONFIG: AutonomousGenerationConfig = {
-  modelId: "z-image-BF16.gguf",
+  modelId: "z-image-Q4_0.gguf",
   steps: 35,
   cfgScale: 4.0,
   baseWidth: 1024,
