@@ -875,10 +875,22 @@ export function useChat(chatId: string | null) {
   // otherwise fall back to the last assistant message's usage.
   // This keeps the token indicator accurate during multi-iteration tool loops.
   // IMPORTANT: Skips compaction summaries since they don't have real usage data.
+  // ALSO IMPORTANT: Skips messages from before a compaction summary — their usage
+  // data reflects the pre-compaction context size and is stale.
   const totalUsage: MessageUsage = useMemo(() => {
     if (streamingUsage) return streamingUsage;
-    // Find the last REAL assistant message with usage (not compaction summaries)
+    // Find the index of the last compaction summary — any usage data before it
+    // is stale (reflects pre-compaction context size).
+    let lastCompactionIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]._isCompactionSummary) {
+        lastCompactionIdx = i;
+        break;
+      }
+    }
+    // Find the last REAL assistant message with usage that's AFTER any compaction
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (i <= lastCompactionIdx) break; // All messages before/at compaction are stale
       const msg = messages[i];
       if (msg.role === "assistant" && !msg._isCompactionSummary && msg.usage) {
         return msg.usage;
