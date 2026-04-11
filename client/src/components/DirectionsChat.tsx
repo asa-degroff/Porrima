@@ -167,7 +167,7 @@ export function DirectionsChat() {
       compacting={compacting}
       compaction={compaction}
       hasCompactionSummary={hasCompactionSummary}
-      contextWindow={chat.contextWindow || 4096}
+      contextWindow={chat.contextWindow || models.find((m) => m.id === chat.modelId)?.contextWindow || 32768}
       error={error}
       warning={warning}
       models={models}

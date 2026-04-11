@@ -259,13 +259,18 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     return filtered.length > 0 ? filtered : models;
   }, [models, settings.showOnlyFavorites, settings.favoriteModels, activeChat, settings.defaultModelId]);
 
-  // Find context window for active model (chat override takes precedence)
+  // Find context window for active model
+  // Priority: chat override → per-model setting → detected value → fallback
+  // Must match server-side getEffectiveContextWindow priority order
   const contextWindow = useMemo(() => {
     if (activeChat?.contextWindow) return activeChat.contextWindow;
     const modelId = activeChat?.modelId || settings.defaultModelId;
+    if (modelId && settings.modelContextWindows?.[modelId]) {
+      return settings.modelContextWindows[modelId];
+    }
     const model = models.find((m) => m.id === modelId);
     return model?.contextWindow || 32768;
-  }, [models, activeChat, settings.defaultModelId]);
+  }, [models, activeChat, settings.defaultModelId, settings.modelContextWindows]);
 
   // Fetch full chat when selecting one (we need messages)
   // Cache-first: show IDB cached data immediately, refresh from server in background
@@ -334,6 +339,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleNewChat = useCallback((type: ChatType = "quick", projectId?: string) => {
     const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
     const chat = createChat(modelId, type, projectId);
+    // Apply per-model context window override from settings, matching server-side behavior
+    if (!chat.contextWindow && modelId && settings.modelContextWindows?.[modelId]) {
+      chat.contextWindow = settings.modelContextWindows[modelId];
+    }
     // Track the previous chat as warm before switching
     if (activeChatId) {
       setLastActiveChatId(activeChatId);
@@ -342,7 +351,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     setActiveChat(chat);
     setActiveChatData(chat);
     loadMessages([]);
-  }, [activeChatId, settings.defaultModelId, models, createChat, loadMessages, setActiveChatData]);
+  }, [activeChatId, settings.defaultModelId, settings.modelContextWindows, models, createChat, loadMessages, setActiveChatData]);
 
   const handleDeleteChat = useCallback(
     async (id: string) => {
@@ -432,11 +441,15 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   );
 
   // Model default context window (for reset-to-default in editor)
+  // Same priority as contextWindow but without per-chat override
   const modelContextWindow = useMemo(() => {
     const modelId = activeChat?.modelId || settings.defaultModelId;
+    if (modelId && settings.modelContextWindows?.[modelId]) {
+      return settings.modelContextWindows[modelId];
+    }
     const model = models.find((m) => m.id === modelId);
     return model?.contextWindow || 32768;
-  }, [models, activeChat?.modelId, settings.defaultModelId]);
+  }, [models, activeChat?.modelId, settings.defaultModelId, settings.modelContextWindows]);
 
   const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
   const handleCloseSidebar = useCallback(() => setSidebarOpen(false), []);
