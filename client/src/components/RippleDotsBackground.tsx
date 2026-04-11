@@ -1,7 +1,12 @@
 import { useEffect, useRef } from "react";
 
-// Same noise algorithm as RippleGridBackground, but renders dots at grid intersections
-// instead of continuous lines. Tighter spacing creates a denser dot field.
+// Optimized dot-field variant of the ripple wave animation.
+// Key optimizations vs naive approach:
+// - fillRect instead of arc (no path overhead for sub-3px dots)
+// - Precomputed grid-to-noise-sample index mapping (no per-frame division)
+// - Precomputed world-space coordinates (no per-frame invScale multiply)
+// - Same separable noise trick as RippleGrid: ~600 trig calls total,
+//   then simple multiply-add per dot
 
 const RESOLUTION_SCALE = 0.75;
 const TARGET_FPS = 20;
@@ -23,10 +28,10 @@ export function RippleDotsBackground() {
 
     const speed = 0.3;
     const distortion = 2;
-    const spacing = 35; // Tighter spacing than ripple grid (55)
+    const spacing = 35;
     const step = 14;
     const maxDimension = 4096;
-    const dotRadius = 1.5; // Small dots
+    const dotSize = 3; // fillRect size (covers dotRadius=1.5 on each side)
 
     const scaledSpacing = spacing * RESOLUTION_SCALE;
     const scaledStep = step * RESOLUTION_SCALE;
@@ -35,7 +40,7 @@ export function RippleDotsBackground() {
     const dY = distortion * 3 * RESOLUTION_SCALE * 0.6;
     const invScale = 1 / RESOLUTION_SCALE;
 
-    // Pre-allocated typed arrays
+    // Noise sample arrays (same scheme as RippleGrid)
     let yPos: Float32Array;
     let cy1: Float32Array;
     let cy2: Float32Array;
@@ -47,9 +52,12 @@ export function RippleDotsBackground() {
     let canvasW = 0;
     let canvasH = 0;
 
-    // Grid intersection points
-    let gridPointsX: Float32Array;
-    let gridPointsY: Float32Array;
+    // Precomputed grid points with index mapping
+    // Each entry: [renderX, renderY, noiseXIdx, noiseYIdx]
+    let gridRenderX: Float32Array;
+    let gridRenderY: Float32Array;
+    let gridNoiseXIdx: Int32Array;
+    let gridNoiseYIdx: Int32Array;
     let numPoints = 0;
 
     function resize() {
@@ -77,6 +85,7 @@ export function RippleDotsBackground() {
       const yStart = -margin;
       const yEnd = canvasH + margin;
 
+      // Noise sample arrays
       numY = Math.floor((yEnd - yStart) / scaledStep) + 1;
       yPos = new Float32Array(numY);
       cy1 = new Float32Array(numY);
@@ -93,22 +102,37 @@ export function RippleDotsBackground() {
         xPos[i] = xStart + i * scaledStep;
       }
 
-      // Pre-calculate grid intersection points (where dots will be drawn)
-      const maxPoints = Math.floor((xEnd - xStart) / scaledSpacing) * 
-                        Math.floor((yEnd - yStart) / scaledSpacing) + 100;
-      gridPointsX = new Float32Array(maxPoints);
-      gridPointsY = new Float32Array(maxPoints);
+      // Precompute grid intersection points with their noise sample indices
+      const maxPoints =
+        Math.ceil((xEnd - xStart) / scaledSpacing) *
+        Math.ceil((yEnd - yStart) / scaledSpacing) + 10;
+
+      gridRenderX = new Float32Array(maxPoints);
+      gridRenderY = new Float32Array(maxPoints);
+      gridNoiseXIdx = new Int32Array(maxPoints);
+      gridNoiseYIdx = new Int32Array(maxPoints);
       numPoints = 0;
-      
+
+      const stepInverted = 1 / (scaledStep * invScale);
+
       for (let x = xStart; x <= xEnd; x += scaledSpacing) {
+        const wx = x * invScale;
+        // Map world X to nearest noise sample index (precomputed, no division in draw)
+        const xi = Math.round((wx - xPos[0] * invScale) * stepInverted);
+        const xIdx = Math.max(0, Math.min(numX - 1, xi));
+
         for (let y = yStart; y <= yEnd; y += scaledSpacing) {
-          gridPointsX[numPoints] = x;
-          gridPointsY[numPoints] = y;
+          const wy = y * invScale;
+          const yi = Math.round((wy - yPos[0] * invScale) * stepInverted);
+          const yIdx = Math.max(0, Math.min(numY - 1, yi));
+
+          gridRenderX[numPoints] = x;
+          gridRenderY[numPoints] = y;
+          gridNoiseXIdx[numPoints] = xIdx;
+          gridNoiseYIdx[numPoints] = yIdx;
           numPoints++;
         }
       }
-
-      ctx!.lineWidth = 0.8;
     }
 
     resize();
@@ -152,7 +176,7 @@ export function RippleDotsBackground() {
       const t13 = t * 1.3;
       const t091 = t07 * 1.3;
 
-      // Update precomputed trig arrays
+      // Update precomputed trig arrays (~600 trig calls total)
       for (let i = 0; i < numY; i++) {
         const wy = yPos[i] * invScale;
         cy1[i] = Math.cos(wy * 0.015 + t07);
@@ -166,39 +190,14 @@ export function RippleDotsBackground() {
 
       ctx!.clearRect(0, 0, canvasW, canvasH);
 
-      // Draw dots at grid intersections with wave distortion
-      // We need to interpolate noise values at each grid point
+      // Draw dots using fillRect — no path overhead, direct pixel blit
+      const halfDot = dotSize * 0.5;
       for (let i = 0; i < numPoints; i++) {
-        const baseX = gridPointsX[i];
-        const baseY = gridPointsY[i];
-        const wx = baseX * invScale;
-        const wy = baseY * invScale;
-
-        // Find nearest precomputed indices for interpolation
-        const xIdx = Math.floor((wx - xPos[0] * invScale) / (scaledStep * invScale));
-        const yIdx = Math.floor((wy - yPos[0] * invScale) / (scaledStep * invScale));
-
-        // Clamp to valid range
-        const xIdxClamped = Math.max(0, Math.min(numX - 1, xIdx));
-        const yIdxClamped = Math.max(0, Math.min(numY - 1, yIdx));
-
-        // Get noise from precomputed arrays
-        const lineSx1 = sx1[xIdxClamped];
-        const lineSx2 = sx2[xIdxClamped];
-        const lineCy1 = cy1[yIdxClamped];
-        const lineCy2 = cy2[yIdxClamped];
-
-        // Calculate noise at this point
-        const n = lineSx1 * lineCy1 + lineSx2 * lineCy2 * 0.5;
-        
-        // Apply distortion
-        const px = baseX + n * dX;
-        const py = baseY + n * dY;
-
-        // Draw dot
-        ctx!.beginPath();
-        ctx!.arc(px, py, dotRadius, 0, Math.PI * 2);
-        ctx!.fill();
+        const n = sx1[gridNoiseXIdx[i]] * cy1[gridNoiseYIdx[i]] +
+                  sx2[gridNoiseXIdx[i]] * cy2[gridNoiseYIdx[i]] * 0.5;
+        const px = gridRenderX[i] + n * dX;
+        const py = gridRenderY[i] + n * dY;
+        ctx!.fillRect(px - halfDot, py - halfDot, dotSize, dotSize);
       }
 
       time += delta * 0.0008;
