@@ -416,7 +416,17 @@ async function handleChatStream(
     if (sseKeepaliveInterval) return;
     sseKeepaliveInterval = setInterval(() => {
       if (!connectionClosed) {
-        res.write(`: keepalive\n\n`);
+        try {
+          const ok = res.write(`: keepalive\n\n`);
+          if (!ok) {
+            console.warn("[chat] keepalive write returned false — connection may be stalled");
+          }
+        } catch (e) {
+          console.warn("[chat] keepalive write failed — connection likely closed");
+          connectionClosed = true;
+          stopSSEKeepalive();
+          connectionAbortController.abort();
+        }
       }
     }, SSE_KEEPALIVE_INTERVAL_MS);
   };
@@ -1905,13 +1915,26 @@ router.post("/", async (req, res) => {
     await handleChatStream(chat, message, contextMessages, systemPrompt, null, req, res);
   } else {
     // NORMAL: add user message and build fresh context
-    const userMsg: ChatMessage = {
-      role: "user",
-      content: message,
-      images: persistedImages?.length ? persistedImages : (images?.length ? images : undefined),
-      timestamp: Date.now(),
-    };
-    chat.messages.push(userMsg);
+    // Deduplication: if the last message in chat is an identical user message
+    // (same content, sent within 60s), this is likely a retry from a timed-out
+    // client. Skip adding the duplicate and reuse the existing message.
+    const lastMsg = chat.messages[chat.messages.length - 1];
+    const isLikelyDuplicate = lastMsg?.role === "user" &&
+      lastMsg.content === message &&
+      lastMsg.images?.length === (persistedImages?.length || images?.length || 0) &&
+      (Date.now() - (lastMsg.timestamp || 0)) < 60_000;
+
+    if (isLikelyDuplicate) {
+      console.warn(`[chat] Deduplicating user message for chat ${chatId} — identical message sent within 60s`);
+    } else {
+      const userMsg: ChatMessage = {
+        role: "user",
+        content: message,
+        images: persistedImages?.length ? persistedImages : (images?.length ? images : undefined),
+        timestamp: Date.now(),
+      };
+      chat.messages.push(userMsg);
+    }
 
     // Auto-generate title from first message
     if (chat.messages.length === 1) {
