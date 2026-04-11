@@ -143,6 +143,15 @@ export function useChat(chatId: string | null) {
 
     const bg = chatId ? bgStreams.get(chatId) : undefined;
     if (bg) {
+      // Sync accumulated segments to the last assistant message before restoring,
+      // since the rAF flush that would normally do this was cancelled above
+      if (bg.streaming || bg.segments.length > 0) {
+        const last = bg.messages[bg.messages.length - 1];
+        if (last?.role === "assistant") {
+          last.content = bg.content;
+          last.segments = bg.segments.map(s => ({ ...s }));
+        }
+      }
       // Restore streaming state from background (chat was switched away from mid-stream)
       setMessages([...bg.messages]);
       setStreaming(bg.streaming);

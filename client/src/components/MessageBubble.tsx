@@ -571,6 +571,7 @@ function MessageSegments({
               <ScrollableToolContainer
                 key={`group-${groupIndex}`}
                 isStreaming={isActivelyStreaming}
+                childCount={group.segments.length}
                 header={
                   <div className="px-3 py-1.5 text-xs text-white/40 border-b border-white/5 flex items-center gap-2">
                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -622,20 +623,20 @@ function MessageSegments({
  */
 function ScrollableToolContainer({
   isStreaming,
+  childCount,
   header,
   children,
 }: {
   isStreaming: boolean;
+  childCount: number;
   header: React.ReactNode;
   children: React.ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const manualScrollOverrideRef = useRef(false);
   const [scrollPaused, setScrollPaused] = useState(false);
-  const childrenKeyRef = useRef<string | null>(null);
-  
+
   // Track whether user is scrolled near the bottom
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -644,53 +645,33 @@ function ScrollableToolContainer({
     const wasNearBottom = isNearBottomRef.current;
     isNearBottomRef.current =
       el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    
+
     // If we're streaming and user scrolls away from bottom, enable manual override
     if (isStreaming && wasNearBottom && !isNearBottomRef.current) {
       manualScrollOverrideRef.current = true;
       setScrollPaused(true);
     }
-    
+
     // If user scrolls back to bottom, disable override
     if (isNearBottomRef.current && manualScrollOverrideRef.current) {
       manualScrollOverrideRef.current = false;
       setScrollPaused(false);
     }
   }, [isStreaming]);
-  
-  // Detect when children change by watching the rendered content
+
+  // Auto-scroll when new children are added during streaming
   useEffect(() => {
-    if (!isStreaming || !contentRef.current) return;
-    
-    const content = contentRef.current;
-    const observer = new MutationObserver((mutations) => {
-      // Check if nodes were added
-      const hasAdditions = mutations.some(m => 
-        m.addedNodes.length > 0 || m.type === 'attributes' && m.attributeName === 'class'
-      );
-      
-      if (hasAdditions && isNearBottomRef.current && !manualScrollOverrideRef.current) {
-        const scroll = scrollRef.current;
-        if (scroll) {
-          scroll.scrollTop = scroll.scrollHeight;
-        }
+    if (!isStreaming || !scrollRef.current) return;
+    if (manualScrollOverrideRef.current) return;
+
+    const scroll = scrollRef.current;
+    requestAnimationFrame(() => {
+      if (scroll) {
+        scroll.scrollTop = scroll.scrollHeight;
       }
     });
-    
-    observer.observe(content, { childList: true, subtree: true, attributes: true });
-    return () => observer.disconnect();
-  }, [isStreaming]);
-  
-  // Ensure we're at bottom when streaming starts (initial load of streaming content)
-  useEffect(() => {
-    if (isStreaming && scrollRef.current && isNearBottomRef.current && !manualScrollOverrideRef.current) {
-      const scroll = scrollRef.current;
-      requestAnimationFrame(() => {
-        if (scroll) scroll.scrollTop = scroll.scrollHeight;
-      });
-    }
-  }, [isStreaming]);
-  
+  }, [childCount, isStreaming]);
+
   // Reset scroll pause state when streaming stops
   useEffect(() => {
     if (!isStreaming && scrollPaused) {
@@ -714,9 +695,7 @@ function ScrollableToolContainer({
     <div className="my-2 rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden relative">
       {header}
       <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto max-h-[300px]">
-        <div ref={contentRef}>
-          {children}
-        </div>
+        {children}
       </div>
       {/* Scroll to bottom button - appears when user scrolls away during streaming */}
       {scrollPaused && (
