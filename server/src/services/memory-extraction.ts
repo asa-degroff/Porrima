@@ -242,10 +242,10 @@ interface ExtractedFact {
   importance: number;
   blockUpdate?: {
     blockId?: string;  // Existing block to update
-    targetBlockName?: string;  // Or name of block to create
-    updateType: "append" | "replace_section" | "refine";
-    content: string;  // What to add/replace
-    section?: string;  // Which section to modify (for replace_section)
+    targetBlockName?: string;  // Name of block — only for creating NEW blocks
+    updateType: "append" | "replace_section";  // append = add text to end, replace_section = modify a section
+    content: string;  // The NEW text to add (NOT the entire block content)
+    section?: string;  // Which section header to modify (required for replace_section)
     reasoning: string;  // Why this block needs updating
   };
 }
@@ -432,7 +432,7 @@ Focus on:
 3. User context — preferences, instructions, corrections, expertise revealed
 4. Decisions & rationale — why approaches were chosen, tradeoffs considered, alternatives rejected
 
-Each memory should be self-contained and meaningful (2-5 sentences).
+Each atomic memory should be self-contained and meaningful (2-5 sentences).
 
 ### Memory Block Updates
 
@@ -443,6 +443,9 @@ You will be provided with existing memory blocks below. These are structured kno
 - New important details that expand on existing block content
 - Corrections or refinements to information in blocks
 
+**When to create a new block:**
+- Newly emerged, substantive topic that isn't directly covered by existing blocks but is still important to preserve
+
 **When to use atomic memories instead:**
 - Quick facts, preferences, or one-off details
 - Information that doesn't fit existing block topics
@@ -450,20 +453,21 @@ You will be provided with existing memory blocks below. These are structured kno
 
 **Block update guidelines:**
 - You will see remaining character space for each block (max 4000 chars)
-- If space is available (>500 chars remaining), use "append" to add new content
-- If space is limited, use "replace_section" or "refine" to make targeted edits
-- Keep edits focused and minimal — don't rewrite entire sections
+- Use "append" to add new content to an existing block when space allows (>500 chars remaining)
+- Use "replace_section" to modify a specific section when the block is nearly full
+- IMPORTANT: "content" for append/replace_section should contain ONLY the new text to add, NOT the entire block
+- Only create new blocks for genuinely new topics that don't match existing block names
 
 Output a JSON array. Each item:
 - "text": A standalone statement with sufficient context (2-5 sentences)
 - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
 - "importance": 1-10
 - "blockUpdate": Optional. If this fact warrants a block update:
-  - "blockId": ID of existing block to update (if modifying)
-  - "targetBlockName": Name of new block to create (if creating)
-  - "updateType": "append" (add to end), "replace_section" (modify specific section), or "refine" (general update)
-  - "content": The content to add or the modified content
-  - "section": Which section header to modify (for replace_section)
+  - "blockId": ID of existing block to update (use the ID from the block header, e.g. [blk-xxxxx])
+  - "targetBlockName": Name of block — only use this when creating a NEW block for a topic with no existing block
+  - "updateType": "append" (add text to end) or "replace_section" (modify specific section)
+  - "content": The NEW text to add — NOT the entire block content
+  - "section": Which section header to modify (required for replace_section)
   - "reasoning": Why this block needs updating
 
 Output ONLY the JSON array.`;
@@ -509,7 +513,7 @@ async function processBlockUpdates(
   facts: ExtractedFact[],
   projectId?: string
 ): Promise<boolean> {
-  const { getMemoryBlock, updateMemoryBlock, createMemoryBlock, supersedeBlock } = await import("./memory-storage.js");
+  const { getMemoryBlock, getMemoryBlocksByScope, updateMemoryBlock, createMemoryBlock } = await import("./memory-storage.js");
   
   const MAX_BLOCK_CHARS = 4000;
   const MIN_SPACE_FOR_APPEND = 500;
@@ -524,35 +528,46 @@ async function processBlockUpdates(
     const update = fact.blockUpdate;
     
     try {
-      if (update.targetBlockName && !update.blockId) {
-        // Create new block
-        const newBlockId = `blk-${Math.random().toString(36).substr(2, 9)}`;
-        createMemoryBlock({
-          id: newBlockId,
-          name: update.targetBlockName,
-          description: update.reasoning.slice(0, 200),  // Use reasoning as initial description
-          content: update.content,
-          scope: projectId ? "project" : "global",
-          projectId: projectId || "",
-          createdAt: now,
-          updatedAt: now,
-          updatedBy: "agent",
-        });
-        console.log(`[memory-blocks] Created new block "${update.targetBlockName}" (${newBlockId})`);
-        updatesMade = true;
-      } else if (update.blockId) {
-        // Update existing block
-        const existingBlock = getMemoryBlock(update.blockId);
+      // Normalize "refine" to "append" — the extraction LLM sometimes outputs
+      // "refine" but means "add this content". Previously "refine" was destructive
+      // (replacing the entire block), so we map it to append for safety.
+      if (update.updateType === "refine" as string) {
+        update.updateType = "append";
+        console.log(`[memory-blocks] Normalized "refine" updateType to "append" for block update`);
+      }
+      
+      // Resolve the target block: either by ID or by name lookup
+      let existingBlock: ReturnType<typeof getMemoryBlock> = null;
+      let resolvedBlockId: string | undefined = update.blockId;
+      
+      if (update.blockId) {
+        existingBlock = getMemoryBlock(update.blockId);
         if (!existingBlock) {
           console.warn(`[memory-blocks] Block ${update.blockId} not found, skipping update`);
           continue;
         }
-        
+      } else if (update.targetBlockName) {
+        // No blockId provided — look up by name in the appropriate scope.
+        // This prevents creating duplicate blocks when the LLM provides
+        // a targetBlockName without the blockId.
+        const scope = projectId ? "project" : "global";
+        const blocks = getMemoryBlocksByScope(scope as "global" | "project", projectId);
+        const match = blocks.find(b => b.name === update.targetBlockName);
+        if (match) {
+          existingBlock = match;
+          resolvedBlockId = match.id;
+          console.log(`[memory-blocks] Resolved targetBlockName "${update.targetBlockName}" to existing block ${match.id}`);
+        }
+      }
+      
+      if (existingBlock && resolvedBlockId) {
+        // Update existing block
         const remainingSpace = MAX_BLOCK_CHARS - existingBlock.content.length;
         
         if (update.updateType === "append") {
+          // Append new content to the existing block.
           if (remainingSpace < MIN_SPACE_FOR_APPEND) {
-            console.log(`[memory-blocks] Insufficient space for append on ${update.blockId} (${remainingSpace} chars remaining), skipping`);
+            console.log(`[memory-blocks] Insufficient space for append on ${resolvedBlockId} (${remainingSpace} chars remaining), skipping`);
             continue;
           }
           
@@ -562,11 +577,11 @@ async function processBlockUpdates(
             continue;
           }
           
-          updateMemoryBlock(update.blockId, {
+          updateMemoryBlock(resolvedBlockId, {
             content: newContent,
             updatedBy: "agent",
           });
-          console.log(`[memory-blocks] Appended to block ${update.blockId} (${newContent.length} chars total)`);
+          console.log(`[memory-blocks] Appended to block "${existingBlock.name}" ${resolvedBlockId} (${newContent.length} chars total)`);
           updatesMade = true;
         } else if (update.updateType === "replace_section" && update.section) {
           // Find and replace the section
@@ -574,7 +589,7 @@ async function processBlockUpdates(
           const sectionIndex = existingBlock.content.indexOf(sectionHeader);
           
           if (sectionIndex === -1) {
-            console.warn(`[memory-blocks] Section "${update.section}" not found in ${update.blockId}, skipping`);
+            console.warn(`[memory-blocks] Section "${update.section}" not found in ${resolvedBlockId}, skipping`);
             continue;
           }
           
@@ -591,36 +606,29 @@ async function processBlockUpdates(
             continue;
           }
           
-          updateMemoryBlock(update.blockId, {
+          updateMemoryBlock(resolvedBlockId, {
             content: newContent,
             updatedBy: "agent",
           });
-          console.log(`[memory-blocks] Replaced section "${update.section}" in block ${update.blockId}`);
-          updatesMade = true;
-        } else if (update.updateType === "refine") {
-          // General refinement - create superseded version
-          const newBlockId = `blk-${Math.random().toString(36).substr(2, 9)}`;
-          const newContent = update.content;
-          
-          if (newContent.length > MAX_BLOCK_CHARS) {
-            console.warn(`[memory-blocks] Refine content exceeds limit (${newContent.length} > ${MAX_BLOCK_CHARS}), skipping`);
-            continue;
-          }
-          
-          supersedeBlock(update.blockId, {
-            id: newBlockId,
-            name: existingBlock.name,
-            description: existingBlock.description,
-            content: newContent,
-            scope: existingBlock.scope,
-            projectId: existingBlock.projectId || "",
-            createdAt: now,
-            updatedAt: now,
-            updatedBy: "agent",
-          });
-          console.log(`[memory-blocks] Refined block ${update.blockId} → ${newBlockId}`);
+          console.log(`[memory-blocks] Replaced section "${update.section}" in block "${existingBlock.name}" ${resolvedBlockId}`);
           updatesMade = true;
         }
+      } else if (update.targetBlockName) {
+        // No existing block found with this name — create a new one
+        const newBlockId = `blk-${Math.random().toString(36).substr(2, 9)}`;
+        createMemoryBlock({
+          id: newBlockId,
+          name: update.targetBlockName,
+          description: update.reasoning.slice(0, 200),  // Use reasoning as initial description
+          content: update.content,
+          scope: projectId ? "project" : "global",
+          projectId: projectId || "",
+          createdAt: now,
+          updatedAt: now,
+          updatedBy: "agent",
+        });
+        console.log(`[memory-blocks] Created new block "${update.targetBlockName}" (${newBlockId})`);
+        updatesMade = true;
       }
     } catch (e) {
       console.error(`[memory-blocks] Failed to apply block update:`, e);
