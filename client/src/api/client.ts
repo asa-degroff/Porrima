@@ -1059,53 +1059,6 @@ export async function triggerAgentNotebookReview(): Promise<{ skipped?: boolean;
   return res.json();
 }
 
-// --- Corpus Directions API ---
-
-export interface CorpusDirection {
-  id: string;
-  type: "remix" | "explore" | "deepen" | "contrast" | "gap-fill";
-  description: string;
-  sourceClusters: string[];
-  noveltyScore: number;
-  proposedPrompt: string;
-  createdAt: number;
-}
-
-export interface DirectionsResponse {
-  directions: CorpusDirection[];
-  cached?: boolean;
-  cacheAge?: number;
-  jobRunning?: boolean;
-  jobId?: string;
-  message?: string;
-}
-
-export async function fetchDirections(refresh = false): Promise<DirectionsResponse> {
-  const url = `${BASE}/corpus/directions${refresh ? "?refresh=true" : ""}`;
-  const res = await apiFetch(url);
-  if (!res.ok) throw new Error("Failed to fetch directions");
-  return res.json();
-}
-
-export async function executeCorpusDirection(directionId: string): Promise<{
-  success: boolean;
-  imageId?: string;
-  imageUrl?: string;
-  generationId?: string;
-  error?: string;
-}> {
-  const res = await apiFetch(`${BASE}/corpus/execute`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ directionId, chatId: "manual-autonomous" }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as any).error || "Failed to execute direction");
-  }
-  return res.json();
-}
-
 export async function createChat(id: string, modelId: string, type: ChatType = "quick", projectId?: string): Promise<Chat> {
   const res = await apiFetch(`${BASE}/chats`, {
     method: "POST",

@@ -4,7 +4,7 @@ import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, CreativeDirectionSettings, BlueskySettings, PersonaStore, UserDocument } from "../types";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 
@@ -27,7 +27,6 @@ const SECTIONS = [
   { id: 'extraction', label: 'Extraction' },
   { id: 'bluesky', label: 'Bluesky' },
   { id: 'tts', label: 'TTS' },
-  { id: 'creative', label: 'Creative' },
   { id: 'passkeys', label: 'Security' },
 ] as const;
 
@@ -178,18 +177,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [ttsVoices, setTtsVoices] = useState<Array<{ label: string; voices: Array<{ id: string; name: string }> }>>([]);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsError, setTtsError] = useState<string | null>(null);
-  // Creative direction settings
-  const cdDefaults = settings.creativeDirections ?? {};
-  const [cdEnabled, setCdEnabled] = useState(cdDefaults.enabled ?? true);
-  const [cdModelId, setCdModelId] = useState(cdDefaults.modelId || "");
-  const [cdLimit, setCdLimit] = useState(cdDefaults.limit ?? 5);
-  const [cdMinNovelty, setCdMinNovelty] = useState(cdDefaults.minNovelty ?? 0.15);
-  const [cdMaxExecutions, setCdMaxExecutions] = useState(cdDefaults.maxExecutions ?? 4);
-  const [cdMaxReviewIterations, setCdMaxReviewIterations] = useState(cdDefaults.maxReviewIterations ?? 3);
-  const [cdSteps, setCdSteps] = useState(cdDefaults.steps ?? 35);
-  const [cdCfgScale, setCdCfgScale] = useState(cdDefaults.cfgScale ?? 4.0);
-  const [cdModelDropdownOpen, setCdModelDropdownOpen] = useState(false);
-
   // Bluesky settings
   const blueskyDefaults = settings.bluesky ?? ({} as Partial<BlueskySettings>);
   const [blueskyEnabled, setBlueskyEnabled] = useState(blueskyDefaults.enabled ?? false);
@@ -214,7 +201,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const backendDropdownRef = useRef<HTMLDivElement>(null);
   const boundaryTierDropdownRef = useRef<HTMLDivElement>(null);
   const extractionModelDropdownRef = useRef<HTMLDivElement>(null);
-  const cdModelDropdownRef = useRef<HTMLDivElement>(null);
+
 
   useClickOutside(modelDropdownRef, () => setModelDropdownOpen(false), modelDropdownOpen);
   useClickOutside(visionModelDropdownRef, () => setVisionModelDropdownOpen(false), visionModelDropdownOpen);
@@ -222,7 +209,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useClickOutside(backendDropdownRef, () => setBackendDropdownOpen(false), backendDropdownOpen);
   useClickOutside(boundaryTierDropdownRef, () => setBoundaryTierDropdownOpen(false), boundaryTierDropdownOpen);
   useClickOutside(extractionModelDropdownRef, () => setExtractionModelDropdownOpen(false), extractionModelDropdownOpen);
-  useClickOutside(cdModelDropdownRef, () => setCdModelDropdownOpen(false), cdModelDropdownOpen);
+
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -339,16 +326,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       extractionModelId,
       extractionModelUrl: extractionModelUrl.trim() || undefined,
       extractionFallbackEnabled,
-      creativeDirections: {
-        enabled: cdEnabled,
-        modelId: cdModelId || undefined,
-        limit: cdLimit,
-        minNovelty: cdMinNovelty,
-        maxExecutions: cdMaxExecutions,
-        maxReviewIterations: cdMaxReviewIterations,
-        steps: cdSteps,
-        cfgScale: cdCfgScale,
-      },
       bluesky: {
         ...settings.bluesky,
         enabled: blueskyEnabled,
@@ -2741,180 +2718,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Creative Directions Section */}
-          <div id="creative" className="space-y-3 pt-2 border-t border-white/10">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium text-white/70">Creative Directions</h3>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={cdEnabled}
-                  onChange={(e) => setCdEnabled(e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-9 h-5 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white/60 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-500/40" />
-              </label>
-            </div>
-            <p className="text-white/30 text-xs">
-              Autonomous creative direction generation and image creation during daily synthesis.
-            </p>
-
-            {cdEnabled && (
-              <div className="space-y-3 pl-1">
-                {/* Direction Model */}
-                <div>
-                  <label className="block text-sm text-white/50 mb-1">Direction Model</label>
-                  <div className="relative" ref={cdModelDropdownRef}>
-                    <button
-                      onClick={() => setCdModelDropdownOpen((o) => !o)}
-                      className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-                    >
-                      <span className="truncate flex-1 text-left">
-                        {(() => {
-                          const selected = models.find((m) => m.id === cdModelId);
-                          if (!selected) return cdModelId || "Default (qwen3.5:9b)";
-                          return selected.parameterSize ? `${selected.name} (${selected.parameterSize})` : selected.name;
-                        })()}
-                      </span>
-                      {chevronSvg(cdModelDropdownOpen)}
-                    </button>
-                    {cdModelDropdownOpen && (
-                      <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-                        style={{
-                          backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                          borderColor: `rgba(var(--theme-primary-border))`,
-                        }}>
-                        {models.map((model) => (
-                          <button
-                            key={model.id}
-                            onClick={() => {
-                              setCdModelId(model.id);
-                              setCdModelDropdownOpen(false);
-                            }}
-                            className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                              model.id === cdModelId
-                                ? "text-white"
-                                : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                            }`}
-                            style={{
-                              backgroundColor: model.id === cdModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                              color: model.id === cdModelId ? `rgba(var(--theme-secondary-text))` : '',
-                            }}
-                          >
-                            {model.parameterSize ? `${model.name} (${model.parameterSize})` : model.name}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <p className="text-white/25 text-xs mt-0.5">Ollama model used to generate direction prompts</p>
-                </div>
-
-                {/* Min Novelty */}
-                <div>
-                  <label className="block text-sm text-white/50">Min Novelty: {cdMinNovelty.toFixed(2)}</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="0.5"
-                    step="0.01"
-                    value={cdMinNovelty}
-                    onChange={(e) => setCdMinNovelty(parseFloat(e.target.value))}
-                    className="w-full accent-purple-400"
-                  />
-                  <div className="flex justify-between text-[10px] text-white/25">
-                    <span>0 (all)</span>
-                    <span>0.5 (strict)</span>
-                  </div>
-                </div>
-
-                {/* Direction Limit */}
-                <div>
-                  <label className="block text-sm text-white/50">Directions per cycle: {cdLimit}</label>
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    step="1"
-                    value={cdLimit}
-                    onChange={(e) => setCdLimit(parseInt(e.target.value))}
-                    className="w-full accent-purple-400"
-                  />
-                  <div className="flex justify-between text-[10px] text-white/25">
-                    <span>1</span>
-                    <span>10</span>
-                  </div>
-                </div>
-
-                {/* Max Executions */}
-                <div>
-                  <label className="block text-sm text-white/50">Max auto-generated images: {cdMaxExecutions}</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="10"
-                    step="1"
-                    value={cdMaxExecutions}
-                    onChange={(e) => setCdMaxExecutions(parseInt(e.target.value))}
-                    className="w-full accent-purple-400"
-                  />
-                  <div className="flex justify-between text-[10px] text-white/25">
-                    <span>0 (none)</span>
-                    <span>10</span>
-                  </div>
-                </div>
-
-                {/* Max Review Iterations */}
-                <div>
-                  <label className="block text-sm text-white/50">Review iterations per image: {cdMaxReviewIterations}</label>
-                  <input
-                    type="range"
-                    min="1"
-                    max="5"
-                    step="1"
-                    value={cdMaxReviewIterations}
-                    onChange={(e) => setCdMaxReviewIterations(parseInt(e.target.value))}
-                    className="w-full accent-purple-400"
-                  />
-                  <div className="flex justify-between text-[10px] text-white/25">
-                    <span>1 (fast)</span>
-                    <span>5 (thorough)</span>
-                  </div>
-                  <p className="text-xs text-white/40 mt-1">
-                    Higher values allow more refinement but use more GPU time per image.
-                  </p>
-                </div>
-
-                {/* Generation params */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm text-white/50">Steps: {cdSteps}</label>
-                    <input
-                      type="range"
-                      min="10"
-                      max="60"
-                      step="5"
-                      value={cdSteps}
-                      onChange={(e) => setCdSteps(parseInt(e.target.value))}
-                      className="w-full accent-purple-400"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-white/50">CFG: {cdCfgScale.toFixed(1)}</label>
-                    <input
-                      type="range"
-                      min="1"
-                      max="10"
-                      step="0.5"
-                      value={cdCfgScale}
-                      onChange={(e) => setCdCfgScale(parseFloat(e.target.value))}
-                      className="w-full accent-purple-400"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
           {/* Passkeys Section */}
           <div id="passkeys" className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">Passkeys</h3>

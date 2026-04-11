@@ -173,8 +173,6 @@ export interface Settings {
   extractionModelId?: string;
   extractionModelUrl?: string;      // Direct URL for dedicated extraction model (e.g., http://localhost:8083)
   extractionFallbackEnabled?: boolean;
-  // Creative direction settings
-  creativeDirections?: CreativeDirectionSettings;
   // llama.cpp server settings
   llamacppEnabled?: boolean;
   llamacppUrl?: string;         // default "http://localhost:8080"
@@ -190,18 +188,6 @@ export interface Settings {
   bluesky?: BlueskySettings;
   // Last active chat ID (for warm cache indicator)
   lastActiveChatId?: string;
-}
-
-export interface CreativeDirectionSettings {
-  enabled?: boolean;
-  modelId?: string;
-  limit?: number;
-  minNovelty?: number;
-  maxExecutions?: number;
-  maxReviewIterations?: number;
-  imageModelId?: string;
-  cfgScale?: number;
-  steps?: number;
 }
 
 export interface BlueskySettings {
@@ -297,7 +283,6 @@ export interface GeneratedImage {
   createdAt: string;
   chatId?: string;
   generatedBy?: 'user' | 'agent';  // Track generation source
-  directionId?: string;  // For agent generations: which creative direction was used
   description?: string;  // For analyzed images (search results may include these)
   type?: 'generated' | 'analyzed' | 'uploaded';  // For search results
   score?: number;  // For search results (relevance score)

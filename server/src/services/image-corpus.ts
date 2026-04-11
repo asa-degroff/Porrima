@@ -32,7 +32,6 @@ export interface ImageCorpusEntry {
   projectId?: string;
   generationId?: string;
   visionId?: string;
-  directionId?: string;
 }
 
 export interface CorpusStats {
@@ -77,8 +76,7 @@ function getDb(): Database.Database {
       chat_id TEXT,
       project_id TEXT,
       generation_id TEXT,
-      vision_id TEXT,
-      direction_id TEXT
+      vision_id TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_corpus_type ON corpus_entries(type);
@@ -124,10 +122,6 @@ function getDb(): Database.Database {
   // Column migrations (for existing databases)
   const cols = db.prepare("PRAGMA table_info(corpus_entries)").all() as Array<{ name: string }>;
   const colNames = new Set(cols.map(c => c.name));
-  if (!colNames.has("direction_id")) {
-    db.exec("ALTER TABLE corpus_entries ADD COLUMN direction_id TEXT");
-  }
-
   // ── Migrate from JSON ────────────────────────────────────────────
   if (needsMigration) {
     migrateFromJson(db);
@@ -153,8 +147,8 @@ function migrateFromJson(db: Database.Database): void {
     const insertEntry = db.prepare(`
       INSERT OR IGNORE INTO corpus_entries
         (id, type, image_path, thumbnail_path, prompt, description, elements,
-         created_at, updated_at, chat_id, project_id, generation_id, vision_id, direction_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         created_at, updated_at, chat_id, project_id, generation_id, vision_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertVec = db.prepare(
@@ -177,7 +171,6 @@ function migrateFromJson(db: Database.Database): void {
           e.projectId ?? null,
           e.generationId ?? null,
           e.visionId ?? null,
-          (e as any).directionId ?? null,
         );
 
         if (e.promptEmbedding && e.promptEmbedding.length === 1024) {
@@ -216,7 +209,6 @@ interface CorpusRow {
   project_id: string | null;
   generation_id: string | null;
   vision_id: string | null;
-  direction_id: string | null;
 }
 
 function rowToEntry(row: CorpusRow, embedding?: number[]): ImageCorpusEntry {
@@ -235,7 +227,6 @@ function rowToEntry(row: CorpusRow, embedding?: number[]): ImageCorpusEntry {
     projectId: row.project_id ?? undefined,
     generationId: row.generation_id ?? undefined,
     visionId: row.vision_id ?? undefined,
-    directionId: row.direction_id ?? undefined,
   };
 }
 
@@ -301,8 +292,8 @@ export async function addCorpusEntry(entry: ImageCorpusEntry): Promise<ImageCorp
     db.prepare(`
       INSERT OR REPLACE INTO corpus_entries
         (id, type, image_path, thumbnail_path, prompt, description, elements,
-         created_at, updated_at, chat_id, project_id, generation_id, vision_id, direction_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         created_at, updated_at, chat_id, project_id, generation_id, vision_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.id,
       entry.type,
@@ -317,7 +308,6 @@ export async function addCorpusEntry(entry: ImageCorpusEntry): Promise<ImageCorp
       entry.projectId ?? null,
       entry.generationId ?? null,
       entry.visionId ?? null,
-      (entry as any).directionId ?? null,
     );
 
     if (entry.promptEmbedding && entry.promptEmbedding.length === 1024) {
@@ -350,7 +340,7 @@ export async function updateCorpusEntry(
       UPDATE corpus_entries SET
         type = ?, image_path = ?, thumbnail_path = ?, prompt = ?, description = ?,
         elements = ?, updated_at = ?, chat_id = ?, project_id = ?,
-        generation_id = ?, vision_id = ?, direction_id = ?
+        generation_id = ?, vision_id = ?
       WHERE id = ?
     `).run(
       updates.type ?? existing.type,
@@ -364,7 +354,6 @@ export async function updateCorpusEntry(
       updates.projectId ?? existing.project_id,
       updates.generationId ?? existing.generation_id,
       updates.visionId ?? existing.vision_id,
-      (updates as any).directionId ?? existing.direction_id,
       id,
     );
 

@@ -14,7 +14,6 @@ interface ImageMetadata {
   createdAt: string;
   chatId?: string;
   generatedBy?: 'user' | 'agent';
-  directionId?: string;
   isFavorite?: boolean;
 }
 

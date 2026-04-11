@@ -6,10 +6,28 @@ import type { GeneratedImage } from "../types.js";
 import { generateImageWithState } from "./comfyui.js";
 import { saveGeneratedImage } from "./image-storage.js";
 import { createGeneration, linkComfyUIIds, updateProgress, completeGeneration } from "./image-generation.js";
-import { DEFAULT_AUTONOMOUS_CONFIG, type AutonomousGenerationConfig } from "./autonomous-generation.js";
-import { analyzeDimensions } from "./autonomous-generation.js";
 
 const IMAGES_DIR = join(homedir(), ".quje-agent", "images");
+
+export interface GenerationConfig {
+  modelId: string;
+  steps: number;
+  cfgScale: number;
+  width: number;
+  height: number;
+  sampler?: string;
+  scheduler?: string;
+}
+
+export const DEFAULT_GENERATION_CONFIG: GenerationConfig = {
+  modelId: "z-image-BF16.gguf",
+  steps: 35,
+  cfgScale: 4.0,
+  width: 1024,
+  height: 1365,
+  sampler: "euler",
+  scheduler: "beta",
+};
 
 /**
  * State for tracking generate_and_review iterations within a single tool call.
@@ -39,8 +57,7 @@ export interface GenerationReviewState {
 export async function generateForReview(
   prompt: string,
   chatId: string,
-  config: AutonomousGenerationConfig = DEFAULT_AUTONOMOUS_CONFIG,
-  options: { directionId?: string } = {}
+  config: GenerationConfig = DEFAULT_GENERATION_CONFIG,
 ): Promise<{
   success: boolean;
   imageData?: { base64: string; mimeType: string };
@@ -53,18 +70,14 @@ export async function generateForReview(
 }> {
   console.log(`[generate-review] Generating for review: ${prompt.slice(0, 80)}...`);
 
-  // Analyze dimensions based on prompt
-  const dims = analyzeDimensions(prompt, config);
-  console.log(`[generate-review] Dimensions: ${dims.width}x${dims.height}`);
-
   const generationParams = {
     positivePrompt: prompt,
     negativePrompt: "",
     model: config.modelId,
     steps: config.steps,
     cfgScale: config.cfgScale,
-    width: dims.width,
-    height: dims.height,
+    width: config.width,
+    height: config.height,
     sampler: config.sampler,
     scheduler: config.scheduler,
     seed: -1, // Random seed for each iteration
@@ -98,7 +111,6 @@ export async function generateForReview(
       createdAt: new Date().toISOString(),
       chatId,
       generatedBy: 'agent',
-      ...(options.directionId ? { directionId: options.directionId } : {}),
     });
 
     // Mark complete

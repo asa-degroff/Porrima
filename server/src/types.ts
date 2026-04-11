@@ -169,8 +169,6 @@ export interface Settings {
   extractionModelId?: string;
   extractionModelUrl?: string;  // Direct URL for dedicated extraction model (e.g., http://localhost:8083)
   extractionFallbackEnabled?: boolean;
-  // Creative direction settings
-  creativeDirections?: CreativeDirectionSettings;
   // llama.cpp server settings
   llamacppEnabled?: boolean;
   llamacppUrl?: string;         // default "http://localhost:8080"
@@ -196,27 +194,6 @@ export interface BlueskySettings {
   autoSendToAgent?: boolean;  // Auto-send notifications to Bluesky chat
   autoRespondToNotifications?: boolean;  // Agent autonomously responds to notifications
   blueskyChatId?: string;  // Dedicated chat for Bluesky interactions
-}
-
-export interface CreativeDirectionSettings {
-  /** Enable automatic direction generation during synthesis */
-  enabled?: boolean;
-  /** LLM model used to generate direction prompts */
-  modelId?: string;
-  /** Maximum directions to generate per cycle */
-  limit?: number;
-  /** Minimum novelty score (0-1) for a direction to be kept. Lower = more permissive */
-  minNovelty?: number;
-  /** Maximum directions to auto-execute per cycle */
-  maxExecutions?: number;
-  /** Maximum review iterations per direction (default: 3, range: 1-5) */
-  maxReviewIterations?: number;
-  /** Image generation model override (ComfyUI checkpoint) */
-  imageModelId?: string;
-  /** Default CFG scale for autonomous generations */
-  cfgScale?: number;
-  /** Default step count for autonomous generations */
-  steps?: number;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
@@ -284,7 +261,6 @@ export interface GeneratedImage {
   createdAt: string;
   chatId?: string;
   generatedBy?: 'user' | 'agent';  // Track generation source
-  directionId?: string;  // For agent generations: which creative direction was used
   description?: string;  // For analyzed images (search results may include these)
 }
 
