@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { execFile } from "child_process";
 import { getSettings } from "./chat-storage.js";
 import type { ImageGenerationParams, ComfyUIStatus } from "../types.js";
 
@@ -178,6 +179,11 @@ const MIN_FREE_VRAM_BYTES = 6 * 1024 * 1024 * 1024; // 6 GB
  * so they don't compete for the same VRAM. LLM unloading is kept as a
  * fallback for single-GPU configurations or when the 27B model spreads
  * across both GPUs.
+ *
+ * If ComfyUI has leaked VRAM due to PyTorch's HIP caching allocator on
+ * ROCm (which retains ~13GB after generation even after model unload),
+ * this function will restart the ComfyUI service to reclaim that VRAM.
+ *
  * Returns true if VRAM is available, false if timed out.
  */
 export async function waitForFreeVRAM(
@@ -188,6 +194,7 @@ export async function waitForFreeVRAM(
   const baseUrl = await getBaseUrl();
   const start = Date.now();
   let unloaded = false;
+  let restarted = false;
 
   // Check once before attempting any unloads
   const initialFree = await checkFreeVRAM(baseUrl);
@@ -232,6 +239,20 @@ export async function waitForFreeVRAM(
       return true;
     }
 
+    // If we've unloaded both ComfyUI models and LLM models but still don't
+    // have enough VRAM, the HIP caching allocator is likely holding leaked
+    // memory. On ROCm, torch.cuda.empty_cache() doesn't return freed VRAM
+    // to the driver. Restart ComfyUI to fully release the leaked memory.
+    if (!restarted && unloaded && freeVram < minFreeBytes * 0.8) {
+      console.log(`[comfyui] VRAM still only ${fmtGB(freeVram)} free after model unload — restarting ComfyUI to reclaim HIP allocator memory`);
+      restarted = true;
+      await restartComfyUIService();
+      // After restart, ComfyUI will be fresh with no leaked VRAM.
+      // Give it time to come back online and check again.
+      await new Promise((r) => setTimeout(r, 5000));
+      continue;
+    }
+
     await new Promise((r) => setTimeout(r, 3000));
   }
 
@@ -241,6 +262,48 @@ export async function waitForFreeVRAM(
 
 function fmtGB(bytes: number): string {
   return `${(bytes / (1024 ** 3)).toFixed(1)}GB`;
+}
+
+/**
+ * Restart ComfyUI via systemd to fully release VRAM.
+ *
+ * On ROCm, PyTorch's HIP caching allocator retains freed VRAM in an internal
+ * pool even after torch.cuda.empty_cache(). After a generation cycle, ~13GB
+ * of leaked VRAM remains on the GPU. Restarting the process is the only
+ * reliable way to reclaim this memory.
+ *
+ * The systemd service automatically restarts ComfyUI after the process exits.
+ * This function waits for ComfyUI to come back online before returning.
+ */
+async function restartComfyUIService(): Promise<void> {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      execFile("systemctl", ["--user", "restart", "comfyui.service"], (error) => {
+        if (error) reject(new Error(`systemctl restart failed: ${error.message}`));
+        else resolve();
+      });
+    });
+
+    // Wait for ComfyUI to come back online (typically ~5s)
+    const maxWait = 30_000;
+    const startTime = Date.now();
+    const baseUrl = await getBaseUrl();
+    while (Date.now() - startTime < maxWait) {
+      try {
+        const res = await fetch(`${baseUrl}/system_stats`, { signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          console.log("[comfyui] Restarted ComfyUI service, back online");
+          return;
+        }
+      } catch {
+        // Not ready yet
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    console.warn("[comfyui] Restart timed out waiting for ComfyUI to come back online");
+  } catch (err) {
+    console.warn("[comfyui] Failed to restart ComfyUI:", err);
+  }
 }
 
 /**

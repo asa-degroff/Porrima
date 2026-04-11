@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { execFile } from "child_process";
 import { shouldRunSynthesis, runDailySynthesis } from "./synthesis.js";
 import { getDb, getSettings, saveSettings, createChat, findBlueskyChatId } from "./chat-storage.js";
 import { v4 as uuidv4 } from "uuid";
@@ -95,6 +96,63 @@ async function unloadLlamaCppSlots(): Promise<void> {
     console.log("[scheduler] Unloaded llama.cpp model and erased slots to free VRAM on both GPUs");
   } catch (err) {
     console.warn("[scheduler] Failed to unload llama.cpp:", err);
+  }
+}
+
+/**
+ * Restart ComfyUI via systemd to fully release VRAM on GPU 1.
+ *
+ * PyTorch's HIP caching allocator on ROCm does not return freed VRAM to the
+ * driver after model unloading — torch.cuda.empty_cache() only releases
+ * blocks that are no longer tracked by PyTorch's allocator, but the HIP
+ * memory pool retains large allocations for potential reuse. After a
+ * generation cycle, ~13GB of "leaked" VRAM remains on GPU 1 even though
+ * ComfyUI reports only ~160MB of models loaded. Restarting the ComfyUI
+ * process is the only reliable way to reclaim this VRAM so the 27B chat
+ * model can load across both GPUs.
+ *
+ * The systemd service will automatically restart ComfyUI after the process
+ * exits, and it comes back in ~5 seconds ready for new requests.
+ */
+async function restartComfyUI(): Promise<void> {
+  console.log("[scheduler] Restarting ComfyUI to release leaked VRAM on GPU 1");
+  try {
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        "systemctl",
+        ["--user", "restart", "comfyui.service"],
+        (error, stdout, stderr) => {
+          if (error) {
+            reject(new Error(`systemctl restart failed: ${error.message}`));
+          } else {
+            resolve();
+          }
+        },
+      );
+    });
+
+    // Wait for ComfyUI to come back online (typically ~5s)
+    const maxWait = 30_000;
+    const startTime = Date.now();
+    while (Date.now() - startTime < maxWait) {
+      try {
+        const settings = await getSettings();
+        const comfyuiUrl = settings.comfyuiUrl || "http://127.0.0.1:8188";
+        const res = await fetch(`${comfyuiUrl}/system_stats`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (res.ok) {
+          console.log("[scheduler] ComfyUI restarted and back online");
+          return;
+        }
+      } catch {
+        // Not ready yet, wait and retry
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    console.warn("[scheduler] ComfyUI restart timed out waiting for it to come back online");
+  } catch (err) {
+    console.warn("[scheduler] Failed to restart ComfyUI:", err);
   }
 }
 
@@ -252,27 +310,16 @@ ${dir.proposedPrompt}
     }
 
     // Unload models after all directions are processed to free VRAM for
-    // the chat model to reload. Also free ComfyUI's cached models.
+    // the chat model to reload.
     await unloadOllamaModel(modelId);
     await unloadLlamaCppSlots();
 
-    // Ask ComfyUI to free its models — the idle-unload-timeout will handle
-    // this eventually, but we explicitly request it so the chat model can
-    // reclaim GPU 1's VRAM sooner if it needs both GPUs.
-    try {
-      const { getSettings } = await import("./chat-storage.js");
-      const settings = await getSettings();
-      const comfyuiUrl = settings.comfyuiUrl || "http://127.0.0.1:8188";
-      await fetch(`${comfyuiUrl}/free`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ unload_models: true, free_memory: true }),
-        signal: AbortSignal.timeout(10_000),
-      });
-      console.log("[scheduler] Freed ComfyUI models after creative cycle");
-    } catch {
-      // Non-critical — ComfyUI may not be running
-    }
+    // Restart ComfyUI to fully release VRAM on GPU 1.
+    // PyTorch's HIP caching allocator on ROCm does not return freed VRAM
+    // to the driver, even after torch.cuda.empty_cache(). The only reliable
+    // way to reclaim ~13GB of leaked VRAM is to restart the process.
+    // ComfyUI is a systemd service and will restart automatically.
+    await restartComfyUI();
 
     console.log("[scheduler] Corpus creative cycle complete");
   } catch (e) {
