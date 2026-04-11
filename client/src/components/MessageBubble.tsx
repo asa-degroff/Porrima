@@ -634,6 +634,7 @@ function ScrollableToolContainer({
   const isNearBottomRef = useRef(true);
   const manualScrollOverrideRef = useRef(false);
   const [scrollPaused, setScrollPaused] = useState(false);
+  const childrenKeyRef = useRef<string | null>(null);
   
   // Track whether user is scrolled near the bottom
   const handleScroll = useCallback(() => {
@@ -657,20 +658,26 @@ function ScrollableToolContainer({
     }
   }, [isStreaming]);
   
-  // Auto-scroll via ResizeObserver on the content div
+  // Detect when children change by watching the rendered content
   useEffect(() => {
-    const scroll = scrollRef.current;
-    const content = contentRef.current;
-    if (!scroll || !content) return;
+    if (!isStreaming || !contentRef.current) return;
     
-    const observer = new ResizeObserver(() => {
-      // Only auto-scroll during streaming if near bottom AND user hasn't manually scrolled away
-      if (isStreaming && isNearBottomRef.current && !manualScrollOverrideRef.current) {
-        scroll.scrollTop = scroll.scrollHeight;
+    const content = contentRef.current;
+    const observer = new MutationObserver((mutations) => {
+      // Check if nodes were added
+      const hasAdditions = mutations.some(m => 
+        m.addedNodes.length > 0 || m.type === 'attributes' && m.attributeName === 'class'
+      );
+      
+      if (hasAdditions && isNearBottomRef.current && !manualScrollOverrideRef.current) {
+        const scroll = scrollRef.current;
+        if (scroll) {
+          scroll.scrollTop = scroll.scrollHeight;
+        }
       }
     });
     
-    observer.observe(content);
+    observer.observe(content, { childList: true, subtree: true, attributes: true });
     return () => observer.disconnect();
   }, [isStreaming]);
   

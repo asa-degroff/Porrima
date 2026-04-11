@@ -57,7 +57,8 @@ export function ThinkingBlock({
     }
   }, [thinking, isStreaming, expanded]);
 
-  if (!thinking) return null;
+  // Show header during streaming even if thinking content is empty
+  if (!thinking && !isStreaming) return null;
 
   // Compute current elapsed thinking time
   let displayMs = 0;
