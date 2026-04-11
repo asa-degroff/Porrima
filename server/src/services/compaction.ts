@@ -285,58 +285,124 @@ function groupIntoBlocks(messages: ChatMessage[]): ChatMessage[][] {
   return blocks;
 }
 
-/** Format a block of messages into readable text for the index description. */
-function blockToText(block: ChatMessage[]): string {
+/**
+ * Format a block of messages into readable text for the index description.
+ * Prioritizes analytical content (findings, conclusions, decisions) over
+ * mechanical actions (tool call names, file paths). For long messages,
+ * includes both the beginning and end to capture introductions AND conclusions.
+ */
+function blockToText(block: ChatMessage[], maxPerMessage = 400): string {
   const parts: string[] = [];
   for (const m of block) {
     if (m.role === "user") {
-      parts.push(`user: ${m.content.slice(0, 200)}`);
+      // User messages are usually questions or requests — keep the full context
+      parts.push(`user: ${truncateMiddle(m.content, maxPerMessage)}`);
     } else if (m.role === "assistant") {
-      if (m.toolCalls?.length) {
-        for (const tc of m.toolCalls) {
-          parts.push(`tool: ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 100)})`);
-        }
-        if (m.toolResults?.length) {
-          for (const tr of m.toolResults) {
-            parts.push(`result [${tr.toolName}]: ${tr.content.slice(0, 200)}`);
-          }
-        }
-      }
+      // Assistant messages may contain analysis, conclusions, or findings
+      // that are far more valuable than tool call names
       if (m.content) {
-        parts.push(`assistant: ${m.content.slice(0, 200)}`);
+        const contentSnippet = truncateMiddle(m.content, maxPerMessage);
+        parts.push(`assistant: ${contentSnippet}`);
+      }
+      // Tool calls: include names and brief args for identification,
+      // but focus on results which contain the actual information
+      if (m.toolCalls?.length) {
+        const callSummary = m.toolCalls
+          .map(tc => `${tc.name}(${summarizeArgs(tc.arguments, 80)})`)
+          .join(", ");
+        parts.push(`tools: ${callSummary}`);
+      }
+      if (m.toolResults?.length) {
+        for (const tr of m.toolResults) {
+          // Tool results often contain the key findings (file contents, search results, etc.)
+          parts.push(`result [${tr.toolName}]: ${truncateMiddle(tr.content, 300)}`);
+        }
       }
     }
   }
   return parts.join("\n");
 }
 
+/**
+ * Truncate a string showing both the beginning and end, with a gap indicator.
+ * This captures introductions AND conclusions for long messages.
+ */
+function truncateMiddle(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const headLen = Math.ceil(maxLen * 0.6);
+  const tailLen = Math.floor(maxLen * 0.4) - 5; // -5 for " ... "
+  return `${text.slice(0, headLen)} ... ${text.slice(-tailLen)}`;
+}
+
+/**
+ * Summarize tool call arguments for the index — extracts key-value pairs
+ * rather than dumping raw JSON.
+ */
+function summarizeArgs(args: Record<string, unknown>, maxLen: number): string {
+  try {
+    const entries = Object.entries(args);
+    if (entries.length === 0) return "";
+    // For single simple values, just show the value
+    if (entries.length === 1 && typeof entries[0][1] === "string") {
+      const val = String(entries[0][1]);
+      return val.length > maxLen ? val.slice(0, maxLen) + "..." : val;
+    }
+    // For multiple args, show key=value pairs
+    const summary = entries
+      .map(([k, v]) => {
+        const val = typeof v === "string" ? v : JSON.stringify(v);
+        return `${k}=${val.length > 40 ? val.slice(0, 40) + "..." : val}`;
+      })
+      .join(", ");
+    return summary.length > maxLen ? summary.slice(0, maxLen) + "..." : summary;
+  } catch {
+    return JSON.stringify(args).slice(0, maxLen);
+  }
+}
+
 /** Generate a readable fallback description when the LLM index generation fails. */
 function generateFallbackDescription(block: ChatMessage[]): string {
-  // Summarize tool calls if present
+  // Try to find the most informative content in the block
+  let assistantAnalysis = "";
+  let userQuestion = "";
   const toolNames: string[] = [];
-  let userPreview = "";
-  let assistantPreview = "";
+  let resultPreview = "";
 
   for (const m of block) {
-    if (m.role === "user" && !userPreview) {
-      userPreview = m.content.slice(0, 80).replace(/\n/g, " ");
+    if (m.role === "user" && !userQuestion) {
+      userQuestion = m.content.slice(0, 120).replace(/\n/g, " ");
     }
     if (m.role === "assistant") {
+      // Prefer substantial analysis over short tool-call-only messages
+      if (m.content && m.content.length > 100) {
+        // For long responses, take the beginning and end to capture conclusions
+        const head = m.content.slice(0, 80).replace(/\n/g, " ");
+        const tail = m.content.length > 200
+          ? " ... " + m.content.slice(-60).replace(/\n/g, " ")
+          : "";
+        assistantAnalysis = head + tail;
+      } else if (m.content && !assistantAnalysis) {
+        assistantAnalysis = m.content.slice(0, 80).replace(/\n/g, " ");
+      }
       if (m.toolCalls?.length) {
         for (const tc of m.toolCalls) toolNames.push(tc.name);
       }
-      if (m.content && !assistantPreview) {
-        assistantPreview = m.content.slice(0, 80).replace(/\n/g, " ");
+      if (m.toolResults?.length && !resultPreview) {
+        // Extract a meaningful snippet from the first result
+        const firstResult = m.toolResults[0];
+        resultPreview = firstResult.content.slice(0, 100).replace(/\n/g, " ");
       }
     }
   }
 
+  // Prioritize: analysis > result > question > tool names
+  if (assistantAnalysis) return assistantAnalysis;
+  if (resultPreview) return resultPreview;
+  if (userQuestion) return `Question: ${userQuestion}`;
   if (toolNames.length > 0) {
     const unique = [...new Set(toolNames)];
     return `Tool calls: ${unique.join(", ")} (${toolNames.length} total)`;
   }
-  if (userPreview) return `User: ${userPreview}`;
-  if (assistantPreview) return `Assistant: ${assistantPreview}`;
   return "Conversation context";
 }
 
@@ -392,25 +458,38 @@ async function archiveAndIndex(
 
   // Generate index descriptions — prefer the dedicated extraction model (CPU, fast)
   // to avoid blocking the GPU chat model's KV cache.
+  // Budget more chars per block when there are fewer blocks, so analytical content
+  // gets enough context for meaningful descriptions.
   const { getSettings } = await import("./chat-storage.js");
   const settings = await getSettings();
   const extractionUrl = settings.extractionModelUrl;
 
+  const perBlockBudget = Math.min(1200, Math.max(500, Math.floor(6000 / blockDescriptions.length)));
   const inputParts = blockDescriptions.map(
-    (b) => `[${b.id}]\n${b.text.slice(0, 500)}`
+    (b) => `[${b.id}]\n${b.text.slice(0, perBlockBudget)}`
   ).join("\n\n---\n\n");
 
-  const systemPrompt = `You are generating a structured index of conversation content being archived.
-For each block below (identified by its archive ID), write a ONE-LINE description of what it contains.
+  const systemPrompt = `You are generating a structured index of conversation content being archived for future retrieval.
+For each block below (identified by its archive ID), write a one-line description.
 
 Format your response as exactly one line per block:
 ${blockDescriptions.map((b) => `- ${b.id} — <description>`).join("\n")}
 
-Focus on WHAT the block contains and WHY it might be useful later:
-- Tool outputs: what command/file/search was run and what it revealed
-- Code changes: what file was modified and what the change accomplished
-- Findings: what was discovered or decided
-- Conversations: what topic was discussed
+Descriptions should capture the SIGNIFICANCE of each block — what was learned, decided, or accomplished — not just what actions were taken. A good description answers "why would I need this later?"
+
+Good descriptions:
+- archive:abc:001 — Identified P0 bug in memory reset during compaction; /compact path skipped resetMemoryContext
+- archive:abc:002 — Reviewed indexed summary architecture; concluded lossless archival beats narrative summarization
+- archive:abc:003 — Read compaction.ts to understand truncation thresholds (75% pre-send, 50% post-response, 85% mid-turn)
+- archive:abc:004 — User prefers systems that preserve full-fidelity message storage with indexed access rather than lossy summarization
+
+Bad descriptions (too vague or action-focused):
+- archive:abc:001 — File reads and grep searches
+- archive:abc:002 — Tool calls: read_file, edit_file
+- archive:abc:004 — User asked about memory
+
+Prioritize: conclusions > findings > decisions > questions asked > tools used.
+If the agent analyzed something, describe the analysis result, not just the analysis process.
 
 Output ONLY the formatted lines, nothing else.`;
 
