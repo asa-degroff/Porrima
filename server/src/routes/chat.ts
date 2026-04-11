@@ -1142,17 +1142,17 @@ async function handleChatStream(
       state.needsMidTurnCompaction = false;
       console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: saving progress and compacting`);
 
-      // 1. Save current progress and build a handoff summary for the resumed agent
+      // 1. Save current progress and build progress summary for the resumed agent.
+      // Memory fetch happens AFTER compaction+flush so it includes newly extracted memories.
       flushThinkingTimer();
       const partialAssistant = buildCurrentAssistantMessage();
       partialAssistant._inProgress = true;
 
-      // Build a handoff message that gives the resumed agent continuity.
-      // Summarizes what was done, which tools were called, and what to do next.
-      const handoffParts: string[] = [];
-      handoffParts.push("[System: Context was compacted mid-turn. Here is a summary of your work so far — continue from where you left off.]");
+      // Build progress summary (content + tools) — memory section added after flush below
+      const progressParts: string[] = [];
+      progressParts.push("[System: Context was compacted mid-turn. Here is a summary of your work so far — continue from where you left off.]");
       if (partialAssistant.content) {
-        handoffParts.push(`Your progress so far:\n${partialAssistant.content.slice(0, 5000)}`);
+        progressParts.push(`Your progress so far:\n${partialAssistant.content.slice(0, 5000)}`);
       }
       if (partialAssistant.toolCalls?.length) {
         const toolSummary = partialAssistant.toolCalls.map((tc) => {
@@ -1160,22 +1160,9 @@ async function handleChatStream(
           const resultPreview = result ? result.content.slice(0, 200) : "no result";
           return `- ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 100)}) → ${resultPreview}`;
         }).join("\n");
-        handoffParts.push(`Tools you already called (${partialAssistant.toolCalls.length} total):\n${toolSummary}`);
+        progressParts.push(`Tools you already called (${partialAssistant.toolCalls.length} total):\n${toolSummary}`);
       }
-      // Include memories extracted from this conversation for continuity
-      try {
-        const { getMemoriesFromChat } = await import("../services/memory-storage.js");
-        const chatMemories = getMemoriesFromChat(chat.id, 10);
-        if (chatMemories.length > 0) {
-          const memoryLines = chatMemories.map(
-            (m) => `- ${m.text} [${m.category}]`
-          ).join("\n");
-          handoffParts.push(`Key context from this conversation (${chatMemories.length} memories):\n${memoryLines}`);
-        }
-      } catch { /* non-critical */ }
 
-      handoffParts.push("Continue the task from where you left off. Do not repeat work already done.");
-      const handoffText = handoffParts.join("\n\n");
       const lastMsg = chat.messages[chat.messages.length - 1];
       if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
         chat.messages[chat.messages.length - 1] = partialAssistant;
@@ -1194,10 +1181,15 @@ async function handleChatStream(
           await saveChat(chat);
           console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: removed ${compaction.removedCount} messages, estimated ${compaction.estimatedTokenCount} tokens remaining`);
 
-          // Extract memories from removed messages before they're lost
+          // Extract memories from removed messages and await completion so they're
+          // available for the system prompt rebuild below. Without awaiting, the
+          // rebuilt prompt would miss the freshly extracted memories from removed context.
           if (isAgent && compaction.removedMessages?.length) {
-            preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId)
-              .catch(err => console.error("[compaction] pre-flush failed:", err));
+            try {
+              await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+            } catch (err) {
+              console.error("[compaction] pre-flush failed:", err);
+            }
           }
         }
       } catch (compErr) {
@@ -1207,7 +1199,8 @@ async function handleChatStream(
 
       // 3. Rebuild system prompt and context
       // Full reset of memory context — compaction reshapes the entire context,
-      // so we need fresh retrieval with all memories frozen into the new system prompt.
+      // so we need fresh retrieval with all memories (including newly extracted
+      // ones from preCompactionFlush) frozen into the new system prompt.
       // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
       // the frozen context state is set up properly for subsequent turns.
       if (isAgent) {
@@ -1218,6 +1211,23 @@ async function handleChatStream(
         );
         systemPrompt = split.systemPrompt;
       }
+
+      // Build handoff message with progress summary + freshly extracted memories.
+      // This runs AFTER preCompactionFlush so memories from removed context are included.
+      const handoffParts = [...progressParts];
+      try {
+        const { getMemoriesFromChat } = await import("../services/memory-storage.js");
+        const chatMemories = getMemoriesFromChat(chat.id, 10);
+        if (chatMemories.length > 0) {
+          const memoryLines = chatMemories.map(
+            (m) => `- ${m.text} [${m.category}]`
+          ).join("\n");
+          handoffParts.push(`Key context from this conversation (${chatMemories.length} memories):\n${memoryLines}`);
+        }
+      } catch { /* non-critical */ }
+      handoffParts.push("Continue the task from where you left off. Do not repeat work already done.");
+      const handoffText = handoffParts.join("\n\n");
+
       // Strip trailing assistant messages (in-progress + compaction summaries).
       // agentLoopContinue requires the last message to be user or toolResult.
       let resumeEndIndex = chat.messages.length;
@@ -1672,10 +1682,15 @@ router.post("/", async (req, res) => {
     }
 
     if (compaction && compaction.truncated) {
-      // Extract memories from removed messages before they're lost (agent chats only)
+      // Extract memories from removed messages and await completion so they're
+      // available when the next buildSplitAugmentedPrompt runs (either in this
+      // handler's follow-up path or in the main handler).
       if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
-        preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId)
-          .catch(err => console.error("[compaction] /compact flush failed:", err));
+        try {
+          await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+        } catch (err) {
+          console.error("[compaction] /compact flush failed:", err);
+        }
       }
 
       // Full reset of memory context — compaction reshapes the entire context,
@@ -1889,10 +1904,15 @@ router.post("/", async (req, res) => {
         const emitKeepalive = () => res.write(`: keepalive\n\n`);
         const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
-          // Extract memories from removed messages before they're lost (agent chats only)
+          // Extract memories from removed messages and await completion so they're
+          // available for the system prompt rebuild below. Without awaiting, the
+          // rebuilt prompt would miss freshly extracted memories from removed context.
           if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
-            preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId)
-              .catch(err => console.error("[compaction] pre-send flush failed (resume):", err));
+            try {
+              await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+            } catch (err) {
+              console.error("[compaction] pre-send flush failed (resume):", err);
+            }
           }
 
           await saveChat(chat);
@@ -2038,10 +2058,15 @@ router.post("/", async (req, res) => {
         const emitKeepalive = () => res.write(`: keepalive\n\n`);
         const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
-          // Extract memories from removed messages before they're lost (agent chats only)
+          // Extract memories from removed messages and await completion so they're
+          // available for the system prompt rebuild below. Without awaiting, the
+          // rebuilt prompt would miss freshly extracted memories from removed context.
           if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
-            preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId)
-              .catch(err => console.error("[compaction] pre-send flush failed:", err));
+            try {
+              await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+            } catch (err) {
+              console.error("[compaction] pre-send flush failed:", err);
+            }
           }
 
           await saveChat(chat);
@@ -2051,7 +2076,7 @@ router.post("/", async (req, res) => {
           // the frozen context state is set up immediately, avoiding a redundant retrieval
           // on the next turn.
           resetMemoryContext(chat.id);
-          if (chat.type === "agent") {
+          if (chat.type === "agent" || chat.type === "bluesky") {
             let projectPath: string | undefined;
             if (chat.projectId) {
               const project = await getProject(chat.projectId);
