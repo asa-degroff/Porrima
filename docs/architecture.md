@@ -74,13 +74,14 @@ Compaction replaces narrative LLM summaries with **indexed archives** (inspired 
 2. **Post-response compaction** (50% target): Triggered after response if usage is high
 3. **Mid-turn compaction** (85% threshold): Detects overflow during tool loops, breaks the agent loop, compacts, and resumes with a handoff message. Multi-cycle (up to 5 cycles) for very long tasks.
 
-When compaction runs:
-- Messages are grouped into logical blocks (tool call+result pairs, user+assistant exchanges)
-- Blocks are archived in `context_archives` table with FTS5 indexing
-- An LLM generates one-line descriptions for each block
-- The indexed summary replaces removed messages: `[Compacted context — use read_archived_context to retrieve details]`
-- A handoff message summarizes the agent's progress and tool history for the resumed loop
-- `preCompactionFlush` extracts generalizable memories before archival (compaction summaries are filtered out)
+When compaction runs, it follows a strict sequence: **archive** → **flush** → **reset** → **rebuild**:
+
+1. **Archive & Index**: Messages grouped into logical blocks, stored in `context_archives` with FTS5. LLM generates one-line descriptions per block.
+2. **Memory Flush** (`preCompactionFlush`, awaited): Extracts atomic memories from removed messages, processes block updates (importance ≥ 7), deduplicates against existing memories.
+3. **Reset** (`resetMemoryContext`): Clears delta tracking state so the next prompt build does a full retrieval.
+4. **Rebuild** (`buildSplitAugmentedPrompt`): Full retrieval includes freshly extracted memories, frozen into system prompt.
+
+See [docs/compaction.md](compaction.md) for full details.
 
 **Context estimation** uses LLM-reported token usage as a baseline (from the last assistant message's `usage.totalTokens`), with character-based estimation as fallback. This is much more accurate than pure character estimation, which misses tool definitions, system prompt overhead, and message framing.
 

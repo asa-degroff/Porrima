@@ -65,6 +65,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Hoist remarkPlugins array to module scope in MarkdownRenderer (#1)
 
 ### Changed
+- All remaining buildMemoryAugmentedPrompt calls should be replaced with buildSplitAugmentedPrompt (#100)
 - P2: Dead code generateCompactionSummary (#98)
 - Test full agent loop with Ollama native provider (#94)
 - Notebook UI: unused imports across notebook components (#85)
