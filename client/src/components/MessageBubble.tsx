@@ -661,7 +661,7 @@ function ScrollableToolContainer({
   useEffect(() => {
     const scroll = scrollRef.current;
     const content = contentRef.current;
-    if (!scroll) return;
+    if (!scroll || !content) return;
     
     const observer = new ResizeObserver(() => {
       // Only auto-scroll during streaming if near bottom AND user hasn't manually scrolled away
@@ -670,8 +670,7 @@ function ScrollableToolContainer({
       }
     });
     
-    if (content) observer.observe(content);
-    observer.observe(scroll);
+    observer.observe(content);
     return () => observer.disconnect();
   }, [isStreaming]);
   
