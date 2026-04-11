@@ -421,9 +421,20 @@ export function useChat(chatId: string | null) {
         }
 
         if (activeChatIdRef.current === streamChatId) {
-          // Track which segment is actively streaming (text segments only)
+          // Track which segment is actively streaming
           if (segment.type === "text") {
             setStreamingSegmentIndex(bg.segments.length - 1);
+          } else if (segment.type === "tool_call") {
+            // Track tool_call segments so ScrollableToolContainer knows streaming is active
+            setStreamingSegmentIndex(bg.segments.length - 1);
+          } else if (segment.type === "tool_result" && segment.toolResult) {
+            // tool_result is spliced after its matching tool_call, find its actual index
+            const resultIdx = bg.segments.findIndex(
+              s => s.type === "tool_result" && s.toolResult?.toolCallId === segment.toolResult!.toolCallId
+            );
+            if (resultIdx >= 0) {
+              setStreamingSegmentIndex(resultIdx);
+            }
           }
           if (rafRef.current === null) {
             streamingContentRef.current = bg.content;
