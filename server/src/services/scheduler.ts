@@ -37,7 +37,7 @@ async function checkAndRunSynthesis() {
 }
 
 /**
- * Unload the Ollama model to free VRAM for ComfyUI.
+ * Unload the Ollama model to free VRAM for ComfyUI or the larger chat model.
  * Uses keep_alive: "0s" to immediately release GPU memory.
  */
 async function unloadOllamaModel(modelId: string): Promise<void> {
@@ -54,25 +54,47 @@ async function unloadOllamaModel(modelId: string): Promise<void> {
 }
 
 /**
- * Free llama.cpp server slots to release VRAM.
- * Only runs if llama.cpp is enabled and shares GPU.
+ * Unload llama.cpp model slots AND the loaded model to free VRAM on both GPUs.
+ * The 27B chat model needs both GPUs, so we must fully release it before
+ * ComfyUI can claim GPU 1, and before the 27B can reload after the cycle.
  */
 async function unloadLlamaCppSlots(): Promise<void> {
   try {
     const settings = await getSettings();
-    if (!settings.llamacppEnabled || !settings.llamacppSharesGpu) return;
+    if (!settings.llamacppEnabled) return;
     const baseUrl = settings.llamacppUrl || "http://localhost:8080";
+
+    // Erase context from slots to free KV cache memory
     await fetch(`${baseUrl}/slots`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "erase" }),
+      signal: AbortSignal.timeout(30_000),
     });
-    // Invalidate cached model state since slots were erased
+
+    // Unload any loaded model so VRAM is fully released on both GPUs
+    const modelsRes = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(3000) });
+    if (modelsRes.ok) {
+      const modelsData = await modelsRes.json();
+      for (const m of modelsData.data || []) {
+        if (m.status?.value === "loaded") {
+          console.log(`[scheduler] Unloading llama.cpp model: ${m.id}`);
+          await fetch(`${baseUrl}/models/unload`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: m.id }),
+            signal: AbortSignal.timeout(30_000),
+          });
+        }
+      }
+    }
+
+    // Invalidate cached model state
     const { invalidateLoadedModel } = await import("./openai-compat-provider.js");
     invalidateLoadedModel();
-    console.log(`[scheduler] Erased llama.cpp slots to free VRAM`);
-  } catch {
-    // Non-critical — llama.cpp may not be running
+    console.log("[scheduler] Unloaded llama.cpp model and erased slots to free VRAM on both GPUs");
+  } catch (err) {
+    console.warn("[scheduler] Failed to unload llama.cpp:", err);
   }
 }
 
@@ -80,11 +102,15 @@ async function unloadLlamaCppSlots(): Promise<void> {
  * Run the corpus creative cycle: rebuild clusters, generate directions, save as memories.
  * Called during daily synthesis to keep the creative engine fresh.
  *
- * GPU coordination: direction generation (Ollama LLM) and image execution (ComfyUI)
- * cannot run concurrently on a single GPU. This function runs them sequentially:
- * 1. Generate directions (LLM)
- * 2. Unload Ollama model (free VRAM)
- * 3. Execute image generation (ComfyUI)
+ * GPU coordination: with dual RX 7700 GPUs, ComfyUI runs on GPU 1 (via
+ * --cuda-device 1) and the review LLM runs on GPU 0 (via Ollama with
+ * HIP_VISIBLE_DEVICES=0). They can operate concurrently during the review
+ * loop. However, the larger chat model (27B) needs BOTH GPUs via
+ * llama-server (ROCR_VISIBLE_DEVICES=0,1). Before starting the creative
+ * cycle, we must ensure the 27B model is unloaded from both GPUs so that
+ * ComfyUI can claim GPU 1. After all directions complete, we unload the
+ * review model and free ComfyUI's GPU memory so the 27B model can reclaim
+ * both GPUs.
  */
 async function runCorpusCreativeCycle() {
   try {
@@ -225,9 +251,28 @@ ${dir.proposedPrompt}
       }
     }
 
-    // Unload models after all directions are processed to free VRAM
+    // Unload models after all directions are processed to free VRAM for
+    // the chat model to reload. Also free ComfyUI's cached models.
     await unloadOllamaModel(modelId);
     await unloadLlamaCppSlots();
+
+    // Ask ComfyUI to free its models — the idle-unload-timeout will handle
+    // this eventually, but we explicitly request it so the chat model can
+    // reclaim GPU 1's VRAM sooner if it needs both GPUs.
+    try {
+      const { getSettings } = await import("./chat-storage.js");
+      const settings = await getSettings();
+      const comfyuiUrl = settings.comfyuiUrl || "http://127.0.0.1:8188";
+      await fetch(`${comfyuiUrl}/free`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unload_models: true, free_memory: true }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      console.log("[scheduler] Freed ComfyUI models after creative cycle");
+    } catch {
+      // Non-critical — ComfyUI may not be running
+    }
 
     console.log("[scheduler] Corpus creative cycle complete");
   } catch (e) {

@@ -167,11 +167,17 @@ export interface GenerateProgress {
 
 // Minimum free VRAM (in bytes) required before starting generation.
 // Image generation typically needs 6-10GB depending on resolution and model.
+// With dual-GPU setup (ComfyUI on GPU 1), LLMs on GPU 0 don't compete
+// for the same VRAM, so the threshold can be lower.
 const MIN_FREE_VRAM_BYTES = 6 * 1024 * 1024 * 1024; // 6 GB
 
 /**
  * Wait until the ComfyUI GPU has enough free VRAM for image generation.
  * Polls /system_stats and unloads LLM models if VRAM is insufficient.
+ * With the dual-GPU setup, ComfyUI runs on GPU 1 and LLMs on GPU 0,
+ * so they don't compete for the same VRAM. LLM unloading is kept as a
+ * fallback for single-GPU configurations or when the 27B model spreads
+ * across both GPUs.
  * Returns true if VRAM is available, false if timed out.
  */
 export async function waitForFreeVRAM(
@@ -187,7 +193,10 @@ export async function waitForFreeVRAM(
   const initialFree = await checkFreeVRAM(baseUrl);
   if (initialFree === null) return false; // ComfyUI unreachable
   if (initialFree === -1) return true; // No GPU devices — CPU-only mode
-  if (initialFree >= minFreeBytes) return true;
+  if (initialFree >= minFreeBytes) {
+    console.log(`[comfyui] VRAM available: ${fmtGB(initialFree)} free (no unload needed)`);
+    return true;
+  }
 
   console.log(`[comfyui] Waiting for VRAM: ${fmtGB(initialFree)} free, need ${fmtGB(minFreeBytes)}`);
   onWaiting?.();
@@ -198,6 +207,18 @@ export async function waitForFreeVRAM(
       // Free ComfyUI's own cached models first — they may still be in VRAM
       // even if idle-unload-timeout hasn't fired yet
       await freeComfyUIModels(baseUrl);
+
+      // Check VRAM again after freeing ComfyUI's own models
+      const afterComfyUIFree = await checkFreeVRAM(baseUrl);
+      if (afterComfyUIFree !== null && afterComfyUIFree !== -1 && afterComfyUIFree >= minFreeBytes) {
+        console.log(`[comfyui] VRAM available after ComfyUI model unload: ${fmtGB(afterComfyUIFree)} free`);
+        return true;
+      }
+
+      // Only unload LLM models if ComfyUI's own models weren't enough.
+      // With dual-GPU setup, this shouldn't be needed, but serves as a fallback
+      // for single-GPU configs or when models spread across both GPUs.
+      console.log(`[comfyui] Still need ${fmtGB(minFreeBytes - (afterComfyUIFree ?? 0))} more VRAM, unloading LLM models`);
       await unloadLLMModels();
       // Give VRAM a moment to actually be released by the driver
       await new Promise((r) => setTimeout(r, 3000));
