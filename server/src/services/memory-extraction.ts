@@ -507,11 +507,14 @@ ${b.content}`;
 
 /**
  * Process block updates from extraction output.
- * Only applies updates for high-importance facts (≥8) with blockUpdate field.
+ * Only applies updates for facts with importance >= minImportance (default: 8) that have blockUpdate field.
+ * Pre-compaction flush passes a lower threshold (7) since messages are about to be removed and
+ * need more aggressive preservation.
  */
 async function processBlockUpdates(
   facts: ExtractedFact[],
-  projectId?: string
+  projectId?: string,
+  minImportance: number = 8
 ): Promise<boolean> {
   const { getMemoryBlock, getMemoryBlocksByScope, updateMemoryBlock, createMemoryBlock } = await import("./memory-storage.js");
   
@@ -522,8 +525,8 @@ async function processBlockUpdates(
   const now = new Date().toISOString();
   
   for (const fact of facts) {
-    // Only process high-importance facts with block updates
-    if (!fact.blockUpdate || fact.importance < 8) continue;
+    // Only process facts above the importance threshold with block updates
+    if (!fact.blockUpdate || fact.importance < minImportance) continue;
     
     const update = fact.blockUpdate;
     
@@ -702,7 +705,10 @@ export async function preCompactionFlush(
   await dedupAndSave(facts, embeddings, chatId, projectId);
 
   // Process block updates (only high-importance facts with blockUpdate field)
-  const blockUpdatesMade = await processBlockUpdates(facts, projectId);
+  // Use lower importance threshold (7) for pre-compaction flush since messages
+  // are about to be removed — moderate-importance architectural context that would
+  // normally stay in conversation needs more aggressive block preservation.
+  const blockUpdatesMade = await processBlockUpdates(facts, projectId, 7);
   if (blockUpdatesMade) {
     invalidateStablePrefixCache(chatId);  // Force reload of updated blocks
   }

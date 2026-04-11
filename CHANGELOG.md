@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Improve Python sandbox isolation (#18)
 
 ### Added
+- P2: Block update threshold too high for compaction flush (#99)
 - Increase model discovery timeout for large model libraries (#93)
 - Make Ollama runtime options configurable (keep_alive, num_gpu, num_predict) (#91)
 - Notebook UI: no delete confirmation (#80)
@@ -25,6 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Batch embeddings during memory extraction (#22)
 
 ### Fixed
+- P1: Pre-send truncation doesn't extract memories (#97)
+- P0: Mid-turn compaction uses legacy buildMemoryAugmentedPrompt (#96)
+- P0: /compact command skips memory reset and flush (#95)
 - Add vision capability detection for Ollama models (#92)
 - Notebook UI: composer clears before async completes (#81)
 - Notebook UI: no loading/error states displayed (#79)
@@ -61,6 +65,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Hoist remarkPlugins array to module scope in MarkdownRenderer (#1)
 
 ### Changed
+- P2: Dead code generateCompactionSummary (#98)
 - Test full agent loop with Ollama native provider (#94)
 - Notebook UI: unused imports across notebook components (#85)
 - Notebook UI: renderEntries dependency array over-specified (#84)

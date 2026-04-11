@@ -245,64 +245,6 @@ export async function truncateBeforeSend(
   return { truncated: true, removedCount: messagesToMarkCount, removedMessages, estimatedTokenCount: estimatedRemovedTokens };
 }
 
-/**
- * Generate a brief summary of messages being removed during compaction.
- * This preserves context continuity for the model.
- */
-async function generateCompactionSummary(
-  messages: Chat["messages"],
-  modelId: string,
-  onKeepalive?: () => void
-): Promise<string> {
-  if (messages.length === 0) return "";
-
-  const { streamChat } = await import("./agent.js");
-
-  // Build summary input with enough content for meaningful summarization.
-  // Cap total input to ~8k chars (~2k tokens) to avoid overloading the summarizer.
-  // Distribute budget evenly across all messages so later ones aren't excluded.
-  const MAX_SUMMARY_INPUT = 8000;
-  const perMessageBudget = Math.max(100, Math.floor(MAX_SUMMARY_INPUT / messages.length));
-
-  const summaryParts: string[] = [];
-  for (const m of messages) {
-    const truncated = m.content.slice(0, perMessageBudget);
-    summaryParts.push(
-      `${m.role}: ${truncated}${m.content.length > perMessageBudget ? "..." : ""}`
-    );
-  }
-  const summaryPrompt = summaryParts.join("\n").slice(0, MAX_SUMMARY_INPUT);
-
-  const systemPrompt = `You are summarizing conversation messages that will be removed due to context limits.
-Provide a concise summary of the key points, decisions, code discussed, and outcomes.
-Focus on what the assistant needs to know to continue the conversation coherently.
-
-Example: "The user asked for help debugging a TypeScript type error. The assistant identified a missing generic parameter and provided a fix using Record<string, unknown>. The user confirmed the fix worked."
-
-Output ONLY the summary, no introduction or formatting.`;
-
-  // Send keepalives every 10s so the client SSE inactivity timer doesn't fire
-  // while the summary model is generating
-  const keepaliveInterval = onKeepalive
-    ? setInterval(onKeepalive, 10_000)
-    : null;
-
-  try {
-    const result = await streamChat(
-      modelId,
-      [{ role: "user", content: summaryPrompt, timestamp: Date.now() }],
-      systemPrompt,
-      () => {}
-    );
-    return result.content.trim() || "Previous conversation context was truncated.";
-  } catch (err) {
-    console.error("[compaction] Summary generation failed:", err);
-    return "Previous conversation context was truncated.";
-  } finally {
-    if (keepaliveInterval) clearInterval(keepaliveInterval);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Indexed archival — replaces narrative summaries with structured indexes
 // ---------------------------------------------------------------------------

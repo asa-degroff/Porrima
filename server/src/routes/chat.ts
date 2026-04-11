@@ -1206,11 +1206,17 @@ async function handleChatStream(
       }
 
       // 3. Rebuild system prompt and context
+      // Full reset of memory context — compaction reshapes the entire context,
+      // so we need fresh retrieval with all memories frozen into the new system prompt.
+      // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
+      // the frozen context state is set up properly for subsequent turns.
       if (isAgent) {
-        systemPrompt = await buildMemoryAugmentedPrompt(
+        resetMemoryContext(chat.id);
+        const split = await buildSplitAugmentedPrompt(
           chat.systemPrompt || "You are a helpful assistant.",
           chat.messages, chat.id, chat.projectId, chat.type, projectPath
         );
+        systemPrompt = split.systemPrompt;
       }
       // Strip trailing assistant messages (in-progress + compaction summaries).
       // agentLoopContinue requires the last message to be user or toolResult.
@@ -1666,6 +1672,20 @@ router.post("/", async (req, res) => {
     }
 
     if (compaction && compaction.truncated) {
+      // Extract memories from removed messages before they're lost (agent chats only)
+      if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+        preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId)
+          .catch(err => console.error("[compaction] /compact flush failed:", err));
+      }
+
+      // Full reset of memory context — compaction reshapes the entire context,
+      // so the next buildSplitAugmentedPrompt call will do a full retrieval with
+      // all memories frozen into the new system prompt. No need to rebuild here
+      // because the main handler (or follow-up path) will call buildSplitAugmentedPrompt.
+      if (chat.type === "agent" || chat.type === "bluesky") {
+        resetMemoryContext(chat.id);
+      }
+
       // Build and save a confirmation assistant message
       const confirmText = `Context compacted. Removed ${compaction.removedCount} messages (~${compaction.estimatedTokenCount} tokens).`;
       const confirmMsg: ChatMessage = {
@@ -1869,23 +1889,30 @@ router.post("/", async (req, res) => {
         const emitKeepalive = () => res.write(`: keepalive\n\n`);
         const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
+          // Extract memories from removed messages before they're lost (agent chats only)
+          if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+            preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId)
+              .catch(err => console.error("[compaction] pre-send flush failed (resume):", err));
+          }
+
           await saveChat(chat);
-          // Rebuild system prompt after truncation
-          if (chat.type === "agent") {
-            // Get project path for AGENTS.md loading
-            let projectPath: string | undefined;
+          // Rebuild system prompt after truncation with full memory reset
+          resetMemoryContext(chat.id);
+          if (chat.type === "agent" || chat.type === "bluesky") {
+            let resumeProjectPath: string | undefined;
             if (chat.projectId) {
               const project = await getProject(chat.projectId);
-              projectPath = project?.path;
+              resumeProjectPath = project?.path;
             }
-            systemPrompt = await buildMemoryAugmentedPrompt(
+            const split = await buildSplitAugmentedPrompt(
               chat.systemPrompt || "You are a helpful assistant.",
               chat.messages,
               chat.id,
               chat.projectId,
-              undefined,
-              projectPath
+              chat.type,
+              resumeProjectPath
             );
+            systemPrompt = split.systemPrompt;
           }
           // Find the summary message that was inserted
           const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
@@ -2011,6 +2038,12 @@ router.post("/", async (req, res) => {
         const emitKeepalive = () => res.write(`: keepalive\n\n`);
         const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {
+          // Extract memories from removed messages before they're lost (agent chats only)
+          if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+            preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId)
+              .catch(err => console.error("[compaction] pre-send flush failed:", err));
+          }
+
           await saveChat(chat);
           // Full reset of memory context — compaction reshapes the entire context,
           // so we need fresh retrieval with all memories frozen into the new system prompt.
