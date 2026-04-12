@@ -148,13 +148,20 @@ export async function discoverOllamaModels(): Promise<OllamaModel[]> {
 // llama.cpp model discovery
 // ---------------------------------------------------------------------------
 
+interface LlamaCppModelEntry {
+  id: string;
+  object: string;
+  owned_by?: string;
+  meta?: { n_ctx_train?: number };
+  status?: {
+    value?: string;
+    args?: string[];
+    preset?: string;
+  };
+}
+
 interface LlamaCppModelsResponse {
-  data: Array<{
-    id: string;
-    object: string;
-    owned_by?: string;
-    meta?: { n_ctx_train?: number };
-  }>;
+  data: LlamaCppModelEntry[];
 }
 
 interface LlamaCppPropsResponse {
@@ -203,8 +210,8 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Ollam
 
     const DEFAULT_CONTEXT_WINDOW = 32768;
 
-    // Query per-model props for loaded models to get accurate modalities
-    const loadedModels = modelsData.data.filter((m) => (m as any).status?.value === "loaded");
+    // Query per-model props for loaded models to get accurate modalities and context window
+    const loadedModels = modelsData.data.filter((m) => m.status?.value === "loaded");
     const modelPropsMap = new Map<string, LlamaCppPropsResponse>();
     await Promise.all(
       loadedModels.map(async (m) => {
@@ -223,17 +230,49 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Ollam
       .filter((m) => !m.id.includes("/"))
       .map((m) => {
         const modelProps = modelPropsMap.get(m.id);
-        const contextWindow = modelProps?.default_generation_settings?.n_ctx ??
-          m.meta?.n_ctx_train ?? propsContextWindow ?? DEFAULT_CONTEXT_WINDOW;
 
-        // Use actual modalities from props if available, otherwise name heuristic
-        let supportsImages = modelProps?.modalities?.vision ?? false;
-        if (!supportsImages) {
+        // Model args and preset from the router status — available for all models,
+        // not just loaded ones. Contains --ctx-size, --mmproj, etc.
+        const modelArgs = m.status?.args ?? [];
+        const modelPreset = m.status?.preset ?? "";
+
+        // Context window detection — use model args --ctx-size as the most reliable
+        // source since the router-level /props returns n_ctx: 0. Per-model /props
+        // for loaded models is the next best source.
+        let contextWindow = modelProps?.default_generation_settings?.n_ctx ??
+          m.meta?.n_ctx_train ?? propsContextWindow ?? DEFAULT_CONTEXT_WINDOW;
+        const ctxSizeArgIdx = modelArgs.indexOf("--ctx-size");
+        if (ctxSizeArgIdx !== -1 && ctxSizeArgIdx + 1 < modelArgs.length) {
+          const parsed = parseInt(modelArgs[ctxSizeArgIdx + 1], 10);
+          if (!isNaN(parsed) && parsed > 0) {
+            contextWindow = parsed;
+          }
+        }
+
+        // Vision detection — three signals in priority order:
+        // 1. --mmproj flag in model args/preset (definitive — configured by the user)
+        // 2. /props modalities (only available for loaded models)
+        // 3. Name heuristic (fallback for models without mmproj data)
+        const hasMmproj = modelArgs.some(a => a === "--mmproj" || (typeof a === "string" && a.startsWith("--mmproj"))) ||
+          /\nmmproj\s*=/.test(modelPreset) ||
+          modelArgs.some(a => typeof a === "string" && a.includes("mmproj") && a.endsWith(".gguf"));
+
+        let supportsImages = false;
+        if (hasMmproj) {
+          // mmproj is configured — this model definitively supports vision
+          supportsImages = true;
+        } else if (modelProps?.modalities?.vision) {
+          // Loaded model reports vision support via /props
+          supportsImages = true;
+        } else {
+          // Name heuristic — catches models whose names indicate vision capability
+          // but that might not have mmproj configured yet (e.g., HF-repo models)
           const nameLower = m.id.toLowerCase();
           supportsImages = nameLower.includes("vision") || nameLower.includes("-vl") ||
-            nameLower.includes("llava") || nameLower.includes("pixtral") ||
-            nameLower.includes("qwen3.5") || nameLower.includes("gemma-4") ||
-            nameLower.includes("gemma4");
+            nameLower.includes("llava") || nameLower.includes("pixtral");
+          // Note: removed qwen3.5 and gemma-4 from the heuristic since those
+          // models are ONLY vision-capable when mmproj is configured. Without
+          // mmproj, they run as text-only models.
         }
         return {
           id: m.id,

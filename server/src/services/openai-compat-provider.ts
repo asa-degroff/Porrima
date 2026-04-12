@@ -97,9 +97,10 @@ function convertMessages(model: Model<Api>, context: Context): any[] {
             parts.push({ type: "text", text: sanitizeSurrogates(item.text) });
           } else if (item.type === "image") {
             if (model.input.includes("image")) {
+              const mimeType = (item as any).mimeType || "image/jpeg";
               parts.push({
                 type: "image_url",
-                image_url: { url: `data:image/jpeg;base64,${item.data}` },
+                image_url: { url: `data:${mimeType};base64,${(item as any).data}` },
               });
             }
           }
@@ -164,9 +165,10 @@ function convertMessages(model: Model<Api>, context: Context): any[] {
         if (hasImages && model.input.includes("image")) {
           for (const block of tr.content) {
             if (block.type === "image") {
+              const mimeType = (block as any).mimeType || "image/jpeg";
               imageParts.push({
                 type: "image_url",
-                image_url: { url: `data:image/jpeg;base64,${(block as any).data}` },
+                image_url: { url: `data:${mimeType};base64,${(block as any).data}` },
               });
             }
           }
@@ -643,10 +645,21 @@ export const streamOpenAICompat = (
           }
         }
       }
-      if (lastFetchError) throw lastFetchError;
+      if (lastFetchError) {
+        // Invalidate loaded model cache — connection failure likely means the child
+        // process crashed and the router can't proxy to it.
+        invalidateLoadedModel();
+        throw lastFetchError;
+      }
 
       if (!response || !response.ok) {
         const errorText = response ? await response.text().catch(() => "Unknown error") : "No response";
+        // Invalidate loaded model cache on server errors — the child process may have
+        // crashed (common with vision models on ROCm) and needs to be reloaded.
+        if (response && (response.status === 500 || response.status === 502 || response.status === 503)) {
+          console.warn(`[openai-compat] Server error ${response.status}, invalidating model cache`);
+          invalidateLoadedModel();
+        }
         throw new Error(`llama.cpp API error ${response?.status ?? "?"}: ${errorText}`);
       }
 
