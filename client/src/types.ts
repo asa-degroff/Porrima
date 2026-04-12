@@ -201,6 +201,22 @@ export interface BlueskySettings {
   blueskyChatId?: string;
 }
 
+export interface LlamaPathInfo {
+  currentPath: string;
+  version: string;
+  valid: boolean;
+  services?: Record<string, "active" | "inactive" | "failed" | "unknown">;
+}
+
+export interface LlamaPathUpdateResult {
+  previousPath: string;
+  currentPath: string;
+  version: string;
+  services: Record<string, "active" | "failed" | "unknown">;
+  rolledBack: boolean;
+  error?: string;
+}
+
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
 
 export type MemorySourceType = "chat" | "chat_delayed" | "chat_immediate" | "notebook" | "explicit";

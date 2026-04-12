@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi } from "../api/client";
+import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument } from "../types";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 
@@ -127,6 +127,14 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [rerankerEnabled, setRerankerEnabled] = useState(settings.rerankerEnabled ?? true);
   const [rerankerUrl, setRerankerUrl] = useState(settings.rerankerUrl || "http://localhost:8082");
   const [rerankerStatus, setRerankerStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
+  // Llama.cpp binary path management
+  const [llamaPathInfo, setLlamaPathInfo] = useState<LlamaPathInfo | null>(null);
+  const [llamaPathInput, setLlamaPathInput] = useState("");
+  const [llamaPathValidation, setLlamaPathValidation] = useState<{ valid: boolean; error?: string } | null>(null);
+  const [llamaPathValidating, setLlamaPathValidating] = useState(false);
+  const [llamaPathUpdating, setLlamaPathUpdating] = useState(false);
+  const [llamaPathMessage, setLlamaPathMessage] = useState<{ type: "ok" | "err" | "warn"; text: string } | null>(null);
+  const [llamaPathUpdateResult, setLlamaPathUpdateResult] = useState<LlamaPathUpdateResult | null>(null);
   const [favoriteModels, setFavoriteModels] = useState<Set<string>>(new Set(settings.favoriteModels || []));
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(settings.showOnlyFavorites ?? false);
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
@@ -283,6 +291,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       }
     }
   }, [ttsSettings?.backend]);
+
+  // Fetch llama.cpp binary path info
+  useEffect(() => {
+    getLlamaPath()
+      .then((data) => setLlamaPathInfo(data))
+      .catch(() => {});
+  }, []);
 
   // Fetch Bluesky status
   useEffect(() => {
@@ -475,6 +490,44 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setRerankerStatus("unavailable");
     }
   }, [rerankerUrl]);
+
+  const handleValidateLlamaPath = useCallback(async () => {
+    const path = llamaPathInput.trim();
+    if (!path) return;
+    setLlamaPathValidating(true);
+    setLlamaPathValidation(null);
+    try {
+      const result = await validateLlamaPathApi(path);
+      setLlamaPathValidation(result);
+    } catch (err: any) {
+      setLlamaPathValidation({ valid: false, error: err.message });
+    }
+    setLlamaPathValidating(false);
+  }, [llamaPathInput]);
+
+  const handleUpdateLlamaPath = useCallback(async () => {
+    const path = llamaPathInput.trim();
+    if (!path) return;
+    setLlamaPathUpdating(true);
+    setLlamaPathMessage(null);
+    setLlamaPathUpdateResult(null);
+    try {
+      const result = await updateLlamaPathApi(path);
+      setLlamaPathUpdateResult(result);
+      if (result.rolledBack) {
+        setLlamaPathMessage({ type: "warn", text: `Services failed with v${result.version}. Rolled back to previous build.` });
+      } else {
+        setLlamaPathMessage({ type: "ok", text: `Updated to build v${result.version}. All services restarted.` });
+      }
+      setLlamaPathInput("");
+      setLlamaPathValidation(null);
+      // Refresh the path info
+      getLlamaPath().then(setLlamaPathInfo).catch(() => {});
+    } catch (err: any) {
+      setLlamaPathMessage({ type: "err", text: err.message || "Failed to update binary path" });
+    }
+    setLlamaPathUpdating(false);
+  }, [llamaPathInput]);
 
   const handleRunSynthesis = useCallback(async () => {
     setSynthesisRunning(true);
@@ -793,6 +846,108 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           {/* llama.cpp Servers */}
           <div id="llamacpp" className="space-y-4">
             <h3 className="text-sm font-semibold text-white/80">llama.cpp Servers</h3>
+
+            {/* Binary Path (symlink management) */}
+            <div className="space-y-2">
+              <h4 className="text-sm text-white/80">Binary path</h4>
+              <div className="space-y-2 ml-2">
+                {/* Current version display */}
+                {llamaPathInfo && llamaPathInfo.valid && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-white/40">Current:</span>
+                    <span className="text-white/70 font-mono truncate" title={llamaPathInfo.currentPath}>
+                      {llamaPathInfo.currentPath.split("/").pop()}
+                    </span>
+                    {llamaPathInfo.version && (
+                      <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-400/20 text-[10px] font-medium">
+                        v{llamaPathInfo.version}
+                      </span>
+                    )}
+                    {/* Service health indicators */}
+                    {llamaPathInfo.services && (
+                      <div className="flex items-center gap-1.5 ml-1">
+                        {Object.entries(llamaPathInfo.services).map(([name, status]) => {
+                          const shortName = name.replace(".service", "").replace("llama-server", "inference").replace("reranker", "reranker").replace("extraction-model", "extraction");
+                          return (
+                            <div key={name} className="flex items-center gap-0.5" title={`${name}: ${status}`}>
+                              <div className={`w-1.5 h-1.5 rounded-full ${
+                                status === "active" ? "bg-green-400" : status === "failed" ? "bg-red-400" : "bg-amber-400"
+                              }`} />
+                              <span className="text-[9px] text-white/30">{shortName}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Update input */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={llamaPathInput}
+                    onChange={(e) => { setLlamaPathInput(e.target.value); setLlamaPathValidation(null); setLlamaPathMessage(null); }}
+                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                    placeholder="/home/asa/bin/llama-b8790"
+                    disabled={llamaPathUpdating}
+                  />
+                  <button
+                    onClick={handleValidateLlamaPath}
+                    disabled={!llamaPathInput.trim() || llamaPathValidating}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0"
+                  >
+                    {llamaPathValidating ? "Checking..." : "Validate"}
+                  </button>
+                  <button
+                    onClick={handleUpdateLlamaPath}
+                    disabled={!llamaPathInput.trim() || llamaPathUpdating || (llamaPathValidation !== null && !llamaPathValidation.valid)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
+                  >
+                    {llamaPathUpdating ? "Applying..." : "Apply & Restart"}
+                  </button>
+                </div>
+
+                {/* Validation result */}
+                {llamaPathValidation && (
+                  <div className="flex items-center gap-1.5">
+                    <div className={`w-2 h-2 rounded-full ${llamaPathValidation.valid ? "bg-green-400" : "bg-red-400"}`} />
+                    <span className={`text-xs ${llamaPathValidation.valid ? "text-green-400/80" : "text-red-400/80"}`}>
+                      {llamaPathValidation.valid ? "Valid — llama-server binary found" : llamaPathValidation.error || "Invalid path"}
+                    </span>
+                  </div>
+                )}
+
+                {/* Update status / messages */}
+                {llamaPathMessage && (
+                  <div className={`p-2 rounded-lg text-xs ${llamaPathMessage.type === "ok" ? "bg-green-500/10 border border-green-400/15 text-green-400/80" : llamaPathMessage.type === "warn" ? "bg-amber-500/10 border border-amber-400/15 text-amber-400/80" : "bg-red-500/10 border border-red-400/15 text-red-400/80"}`}>
+                    <p>{llamaPathMessage.text}</p>
+                    {llamaPathUpdateResult && llamaPathUpdateResult.services && (
+                      <div className="flex items-center gap-2 mt-1.5">
+                        {Object.entries(llamaPathUpdateResult.services).map(([name, status]) => {
+                          const shortName = name.replace(".service", "").replace("llama-server", "inference").replace("extraction-model", "extraction");
+                          return (
+                            <div key={name} className="flex items-center gap-0.5">
+                              <div className={`w-1.5 h-1.5 rounded-full ${
+                                status === "active" ? "bg-green-400" : status === "failed" ? "bg-red-400" : "bg-amber-400"
+                              }`} />
+                              <span className="text-[9px] text-white/40">{shortName}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {llamaPathUpdateResult?.rolledBack && (
+                      <p className="text-amber-400/70 mt-1">Rolled back to previous version.</p>
+                    )}
+                  </div>
+                )}
+
+                <p className="text-xs text-white/30">
+                  Path to the llama.cpp build directory. All three services (inference, reranker, extraction) share this binary via the <code className="text-white/50">~/bin/llama-current</code> symlink.
+                </p>
+              </div>
+            </div>
 
             {/* Inference Server */}
             <div className="space-y-2">

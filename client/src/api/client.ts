@@ -1,4 +1,4 @@
-import type { Artifact, Chat, ChatListItem, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
+import type { Artifact, Chat, ChatListItem, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
 
 const BASE = "/api";
 
@@ -1104,5 +1104,36 @@ export async function saveUserUIState(state: Partial<UserUIState>): Promise<User
 export async function fetchChat(id: string): Promise<Chat> {
   const res = await apiFetch(`${BASE}/chats/${id}`);
   if (!res.ok) throw new Error("Failed to fetch chat");
+  return res.json();
+}
+
+// --- Llama.cpp Path Management ---
+
+export async function getLlamaPath(): Promise<LlamaPathInfo> {
+  const res = await apiFetch(`${BASE}/settings/llama-path`);
+  if (!res.ok) throw new Error("Failed to fetch llama.cpp path info");
+  return res.json();
+}
+
+export async function updateLlamaPathApi(newPath: string): Promise<LlamaPathUpdateResult> {
+  const res = await apiFetch(`${BASE}/settings/llama-path`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: newPath }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to update llama.cpp path");
+  }
+  return res.json();
+}
+
+export async function validateLlamaPathApi(candidatePath: string): Promise<{ valid: boolean; error?: string }> {
+  const res = await apiFetch(`${BASE}/settings/llama-path/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: candidatePath }),
+  });
+  if (!res.ok) throw new Error("Failed to validate path");
   return res.json();
 }
