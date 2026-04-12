@@ -24,7 +24,7 @@ router.get("/:id", async (req, res) => {
 router.post("/", async (req, res) => {
   const { id: clientId, modelId, type, contextWindow, projectId } = req.body;
   const settings = await getSettings();
-  const effectiveModelId = modelId || settings.defaultModelId || "qwen3:8b";
+  const effectiveModelId = modelId || settings.defaultModelId;
   
   // Skip model validation on chat creation — it blocks for 1-2s due to Ollama discovery.
   // The model will be validated when the first message is sent (chat.ts validates there).

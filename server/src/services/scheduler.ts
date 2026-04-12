@@ -42,9 +42,10 @@ async function checkAndRunEnrichment() {
   try {
     const settings = await getSettings();
     const batchSize = settings.enrichmentBatchSize ?? DEFAULT_ENRICHMENT_BATCH_SIZE;
+    const extractionModelId = settings.extractionModelId || settings.defaultModelId;
     
-    console.log(`[scheduler] Running enrichment batch (size: ${batchSize})...`);
-    const enrichedCount = await enrichCorpusBatch(batchSize);
+    console.log(`[scheduler] Running enrichment batch (size: ${batchSize}, model: ${extractionModelId || 'default'})...`);
+    const enrichedCount = await enrichCorpusBatch(batchSize, extractionModelId);
     
     if (enrichedCount > 0) {
       console.log(`[scheduler] Enriched ${enrichedCount} corpus entries`);

@@ -9,6 +9,7 @@ import {
   getCorpusByProject,
   enrichCorpusBatch,
 } from "../services/image-corpus.js";
+import { getSettings } from "../services/chat-storage.js";
 
 const router = Router();
 
@@ -87,8 +88,10 @@ router.get("/project/:projectId", async (req, res) => {
 // POST /api/image-corpus/enrich - Trigger batch enrichment
 router.post("/enrich", async (req, res) => {
   try {
+    const settings = await getSettings();
+    const extractionModelId = settings.extractionModelId || settings.defaultModelId;
     const batchSize = req.body.batchSize || 10;
-    const enrichedCount = await enrichCorpusBatch(batchSize);
+    const enrichedCount = await enrichCorpusBatch(batchSize, extractionModelId);
     res.json({ enrichedCount, batchSize });
   } catch (err) {
     console.error("[image-corpus] enrich error:", err);

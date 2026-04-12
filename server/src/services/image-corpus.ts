@@ -550,7 +550,8 @@ export async function embedPrompt(prompt: string): Promise<number[]> {
 export async function enrichCorpusEntry(
   id: string,
   prompt?: string,
-  description?: string
+  description?: string,
+  modelId?: string
 ): Promise<ImageCorpusEntry | undefined> {
   const entry = await getCorpusEntry(id);
   if (!entry) return undefined;
@@ -568,13 +569,13 @@ export async function enrichCorpusEntry(
   // Extract elements from description or prompt
   if (description && Object.keys(entry.elements).length === 0) {
     const { extractElements } = await import("./element-extraction.js");
-    const elements = await extractElements(description, prompt);
+    const elements = await extractElements(description, prompt, modelId);
     if (Object.keys(elements).length > 0) {
       updates.elements = elements;
     }
   } else if (prompt && Object.keys(entry.elements).length === 0) {
     const { extractElements } = await import("./element-extraction.js");
-    const elements = await extractElements("", prompt);
+    const elements = await extractElements("", prompt, modelId);
     if (Object.keys(elements).length > 0) {
       updates.elements = elements;
     }
@@ -587,7 +588,7 @@ export async function enrichCorpusEntry(
   return entry;
 }
 
-export async function enrichCorpusBatch(batchSize = 10): Promise<number> {
+export async function enrichCorpusBatch(batchSize = 10, modelId?: string): Promise<number> {
   const db = getDb();
 
   // Find entries needing embeddings (have prompt but no embedding)
@@ -615,7 +616,7 @@ export async function enrichCorpusBatch(batchSize = 10): Promise<number> {
   let enrichedCount = 0;
   const batch = Array.from(toEnrich.values()).slice(0, batchSize);
   for (const item of batch) {
-    const result = await enrichCorpusEntry(item.id, item.prompt, item.description);
+    const result = await enrichCorpusEntry(item.id, item.prompt, item.description, modelId);
     if (result) enrichedCount++;
   }
 

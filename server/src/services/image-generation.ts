@@ -4,6 +4,7 @@ import { join } from "path";
 import { homedir } from "os";
 import type { ImageGenerationParams, GeneratedImage } from "../types.js";
 import { addCorpusEntry, enrichCorpusEntry } from "./image-corpus.js";
+import { getSettings } from "./chat-storage.js";
 
 const IMAGES_DIR = join(homedir(), ".quje-agent", "images");
 const GENERATIONS_FILE = join(IMAGES_DIR, "generations.json");
@@ -173,7 +174,9 @@ export async function completeGeneration(
     };
     
     // Enrich with embedding and elements (async, non-blocking)
-    enrichCorpusEntry(corpusEntry.id, updated.params.positivePrompt, undefined).catch(console.error);
+    const settings = await getSettings();
+    const extractionModelId = settings.extractionModelId || settings.defaultModelId;
+    enrichCorpusEntry(corpusEntry.id, updated.params.positivePrompt, undefined, extractionModelId).catch(console.error);
     
     await addCorpusEntry(corpusEntry);
   }

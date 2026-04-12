@@ -36,11 +36,10 @@ Example output:
   "mood": ["melancholic", "mysterious"]
 }`;
 
-const EXTRACTION_MODEL = "qwen3.5:9b";  // New improved model for better extraction quality
-
 export async function extractElements(
   description: string,
-  prompt?: string
+  prompt?: string,
+  modelId?: string
 ): Promise<ExtractedElements> {
   // For generated images without description, use prompt as description
   const input = prompt && !description
@@ -50,11 +49,15 @@ export async function extractElements(
     : `Image description: ${description}`;
 
   try {
-    const modelId = process.env.ELEMENT_EXTRACTION_MODEL || EXTRACTION_MODEL;
+    const resolvedModelId = process.env.ELEMENT_EXTRACTION_MODEL || modelId;
+    if (!resolvedModelId) {
+      console.error("[element-extraction] no model ID provided and ELEMENT_EXTRACTION_MODEL env var not set");
+      return {};
+    }
     let responseText = "";
     
     await streamChat(
-      modelId,
+      resolvedModelId!,
       [{ role: "user" as const, content: input, timestamp: Date.now() }],
       ELEMENT_EXTRACTION_PROMPT,
       (event) => {
@@ -92,12 +95,13 @@ export async function extractElements(
 }
 
 export async function extractElementsBatch(
-  items: Array<{ description: string; prompt?: string }>
+  items: Array<{ description: string; prompt?: string }>,
+  modelId?: string
 ): Promise<ExtractedElements[]> {
   const results: ExtractedElements[] = [];
   
   for (const item of items) {
-    const elements = await extractElements(item.description, item.prompt);
+    const elements = await extractElements(item.description, item.prompt, modelId);
     results.push(elements);
   }
   
@@ -107,7 +111,8 @@ export async function extractElementsBatch(
 // Re-extract elements for an existing entry if description changes
 export async function reExtractElements(
   description: string,
-  prompt?: string
+  prompt?: string,
+  modelId?: string
 ): Promise<ExtractedElements> {
-  return extractElements(description, prompt);
+  return extractElements(description, prompt, modelId);
 }

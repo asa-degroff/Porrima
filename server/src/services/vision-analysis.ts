@@ -4,6 +4,7 @@ import { join } from "path";
 import { existsSync } from "fs";
 import sharp from "sharp";
 import { addCorpusEntry, enrichCorpusEntry } from "./image-corpus.js";
+import { getSettings } from "./chat-storage.js";
 import { isLlamaCppModelLoaded } from "./openai-compat-provider.js";
 
 const VISION_DIR = join(process.env.HOME || process.env.USERPROFILE || ".", ".quje-agent", "vision");
@@ -538,7 +539,9 @@ export async function saveAnalyzedImage(
   };
 
   // Enrich with elements (async, non-blocking)
-  enrichCorpusEntry(corpusEntry.id, undefined, description).catch(console.error);
+  const settings = await getSettings();
+  const extractionModelId = settings.extractionModelId || settings.defaultModelId;
+  enrichCorpusEntry(corpusEntry.id, undefined, description, extractionModelId).catch(console.error);
   
   await addCorpusEntry(corpusEntry);
 
