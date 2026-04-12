@@ -195,6 +195,9 @@ function getToolIcon(name: string): string {
     case "search_memory": return "\u{1F50D}";
     case "forget_memory": return "\u{1F5D1}\u{FE0F}";
     case "ask_user": return "?";
+    case "web_fetch": return "\u{1F310}";
+    case "web_search": return "\u{1F50E}";
+    case "search_conversation": return "\u{1F50E}";
     default: return "\u{1F527}";
   }
 }
