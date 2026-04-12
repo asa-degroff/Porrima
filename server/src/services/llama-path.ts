@@ -83,7 +83,7 @@ export async function validateLlamaPath(dirPath: string): Promise<{ valid: boole
     if (!s.isDirectory()) {
       return { valid: false, error: "Not a directory" };
     }
-  } catch {
+  } catch (e: any) {
     return { valid: false, error: "Directory does not exist" };
   }
 
