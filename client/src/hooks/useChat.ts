@@ -631,9 +631,17 @@ export function useChat(chatId: string | null) {
           if (bg) {
             bg.streaming = false;
             bg.error = errorMsg;
-            // Find and enqueue the last user message
+
+            // Only enqueue for retry if the server never received the request.
+            // If we received any streaming data (text, thinking, tool calls, etc.),
+            // the server already processed the message — retrying would create
+            // a duplicate. Only the initial fetch failure (no data received)
+            // should be retried.
+            const receivedData = bg.content.length > 0 || bg.thinking.length > 0 || bg.tools.length > 0 || bg.segments.length > 0;
+
+            // Find and enqueue the last user message — only if no data was received
             const lastUserIdx = bg.messages.map((m) => m.role).lastIndexOf("user");
-            if (lastUserIdx >= 0) {
+            if (lastUserIdx >= 0 && !receivedData) {
               const userMsg = bg.messages[lastUserIdx];
               enqueueMessage(streamChatId, userMsg.content, userMsg.images).catch(() => {});
               // Remove empty assistant placeholder
@@ -644,6 +652,16 @@ export function useChat(chatId: string | null) {
               bg.messages = bg.messages.map((m, i) =>
                 i === lastUserIdx ? { ...m, queued: true } : m
               );
+            } else if (receivedData) {
+              // Server processed the message but connection dropped — don't retry.
+              // The message is already persisted on the server side.
+              // Remove the empty assistant placeholder to show the user message
+              // as the last thing in the chat (the server's partial response will
+              // be visible when they reconnect).
+              const lastMsg = bg.messages[bg.messages.length - 1];
+              if (lastMsg?.role === "assistant" && !lastMsg.content) {
+                bg.messages = bg.messages.slice(0, -1);
+              }
             }
           }
 

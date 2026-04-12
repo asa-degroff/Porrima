@@ -1962,17 +1962,22 @@ router.post("/", async (req, res) => {
     await handleChatStream(chat, message, contextMessages, systemPrompt, null, req, res);
   } else {
     // NORMAL: add user message and build fresh context
-    // Deduplication: if the last message in chat is an identical user message
+    // Deduplication: if any recent message in chat is an identical user message
     // (same content, sent within 60s), this is likely a retry from a timed-out
-    // client. Skip adding the duplicate and reuse the existing message.
-    const lastMsg = chat.messages[chat.messages.length - 1];
-    const isLikelyDuplicate = lastMsg?.role === "user" &&
-      lastMsg.content === message &&
-      lastMsg.images?.length === (persistedImages?.length || images?.length || 0) &&
-      (Date.now() - (lastMsg.timestamp || 0)) < 60_000;
+    // client or a server restart. Skip adding the duplicate and reuse the existing
+    // message. We check the last several messages (not just the last one) because
+    // after a server restart, the last message may be an assistant response
+    // (partial or in-progress) that was persisted before the crash.
+    const recentMessages = chat.messages.slice(-5);
+    const isLikelyDuplicate = recentMessages.some(m =>
+      m.role === "user" &&
+      m.content === message &&
+      m.images?.length === (persistedImages?.length || images?.length || 0) &&
+      (Date.now() - (m.timestamp || 0)) < 60_000
+    );
 
     if (isLikelyDuplicate) {
-      console.warn(`[chat] Deduplicating user message for chat ${chatId} — identical message sent within 60s`);
+      console.warn(`[chat] Deduplicating user message for chat ${chatId} — identical message found in recent history within 60s`);
     } else {
       const userMsg: ChatMessage = {
         role: "user",
