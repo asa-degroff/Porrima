@@ -18,6 +18,38 @@ import { transformMessages } from "@mariozechner/pi-ai/dist/providers/transform-
 import { sanitizeSurrogates } from "@mariozechner/pi-ai/dist/utils/sanitize-unicode.js";
 import { randomUUID } from "crypto";
 import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
+import sharp from "sharp";
+
+// llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
+// The client encodes uploads as WebP for size, so we re-encode unsupported formats
+// to JPEG here before forwarding.
+const LLAMACPP_SUPPORTED_IMAGE_MIME = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/gif",
+  "image/bmp",
+]);
+
+async function normalizeImageForLlamaCpp(
+  data: string,
+  mimeType: string
+): Promise<{ data: string; mimeType: string }> {
+  if (LLAMACPP_SUPPORTED_IMAGE_MIME.has(mimeType.toLowerCase())) {
+    return { data, mimeType };
+  }
+  try {
+    const buf = Buffer.from(data, "base64");
+    const out = await sharp(buf).jpeg({ quality: 90 }).toBuffer();
+    return { data: out.toString("base64"), mimeType: "image/jpeg" };
+  } catch (err) {
+    console.warn(
+      `[openai-compat] Failed to re-encode ${mimeType} image for llama.cpp:`,
+      err instanceof Error ? err.message : err
+    );
+    return { data, mimeType };
+  }
+}
 
 // Long-lived HTTP agent for llama.cpp SSE streaming.
 // Cold model load + large prompt processing can take 15-20 minutes before
@@ -68,7 +100,7 @@ interface OpenAIChatChunk {
 // Message conversion (OpenAI format)
 // ---------------------------------------------------------------------------
 
-function convertMessages(model: Model<Api>, context: Context): any[] {
+async function convertMessages(model: Model<Api>, context: Context): Promise<any[]> {
   const transformed = transformMessages(context.messages, model);
   const params: any[] = [];
 
@@ -97,10 +129,14 @@ function convertMessages(model: Model<Api>, context: Context): any[] {
             parts.push({ type: "text", text: sanitizeSurrogates(item.text) });
           } else if (item.type === "image") {
             if (model.input.includes("image")) {
-              const mimeType = (item as any).mimeType || "image/jpeg";
+              const rawMime = (item as any).mimeType || "image/jpeg";
+              const { data, mimeType } = await normalizeImageForLlamaCpp(
+                (item as any).data,
+                rawMime
+              );
               parts.push({
                 type: "image_url",
-                image_url: { url: `data:${mimeType};base64,${(item as any).data}` },
+                image_url: { url: `data:${mimeType};base64,${data}` },
               });
             }
           }
@@ -165,10 +201,14 @@ function convertMessages(model: Model<Api>, context: Context): any[] {
         if (hasImages && model.input.includes("image")) {
           for (const block of tr.content) {
             if (block.type === "image") {
-              const mimeType = (block as any).mimeType || "image/jpeg";
+              const rawMime = (block as any).mimeType || "image/jpeg";
+              const { data, mimeType } = await normalizeImageForLlamaCpp(
+                (block as any).data,
+                rawMime
+              );
               imageParts.push({
                 type: "image_url",
-                image_url: { url: `data:${mimeType};base64,${(block as any).data}` },
+                image_url: { url: `data:${mimeType};base64,${data}` },
               });
             }
           }
@@ -595,7 +635,7 @@ export const streamOpenAICompat = (
       // this endpoint doesn't exist, so we catch and ignore errors.
       await ensureModelLoaded(model.baseUrl, model.id, model.contextWindow);
 
-      const messages = convertMessages(model, context);
+      const messages = await convertMessages(model, context);
       const body: any = {
         model: model.id,
         messages,
