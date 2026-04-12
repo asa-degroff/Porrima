@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Batch embeddings during memory extraction (#22)
 
 ### Fixed
+- Token indicator showed stale pre-compaction usage data (#101)
 - P1: Pre-send truncation doesn't extract memories (#97)
 - P0: Mid-turn compaction uses legacy buildMemoryAugmentedPrompt (#96)
 - P0: /compact command skips memory reset and flush (#95)
