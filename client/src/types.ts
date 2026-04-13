@@ -142,6 +142,8 @@ export interface ConversationSearchResult {
 
 export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee";
 export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots";
+export type CornerShape = "round" | "squircle";
+export type CornerRadius = "compact" | "default" | "generous";
 
 export interface SystemPromptPreset {
   id: string;
@@ -160,6 +162,8 @@ export interface Settings {
   theme?: Theme;
   backgroundEffect?: BackgroundEffect;
   flatBackground?: boolean;
+  cornerShape?: CornerShape;
+  cornerRadius?: CornerRadius;
   systemPromptPresets?: SystemPromptPreset[];
   hapticsEnabled?: boolean;
   defaultVisionPreset?: string;

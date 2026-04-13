@@ -1,7 +1,40 @@
 @import "tailwindcss";
 @import "./themes.css";
+@plugin "@toolwind/corner-shape";
 
 @custom-variant dark (&:is(.dark *));
+
+/*
+ * Global corner shape control.
+ * When `data-corner="squircle"` is set on <html>, elements with rounded corners
+ * render using the CSS `corner-shape: squircle` superellipse curve instead of a
+ * circular arc. Elements using `rounded-full` (status dots, toggle knobs,
+ * avatars, slider thumbs) are preserved as true circles.
+ * `corner-shape` has no effect without a border-radius, so the universal
+ * selector is safe. Browsers without native support fall back to round corners.
+ */
+html[data-corner="squircle"] *:not([class*="rounded-full"]):not([class*="corner-"]) {
+  corner-shape: squircle;
+}
+
+/*
+ * Global corner radius scale. Scales Tailwind v4's --radius-* tokens by a
+ * single multiplier so the entire UI can be tightened or loosened together.
+ * Squircle corners visually read smaller than circular arcs at the same
+ * radius, so users can compensate by choosing a larger scale.
+ */
+html {
+  --radius-scale: 1;
+  --radius-md: calc(0.375rem * var(--radius-scale));
+  --radius-lg: calc(0.5rem * var(--radius-scale));
+  --radius-xl: calc(0.75rem * var(--radius-scale));
+  --radius-2xl: calc(1rem * var(--radius-scale));
+}
+html[data-radius="compact"] { --radius-scale: 0.5; }
+html[data-radius="generous"] { --radius-scale: 1.6; }
+
+/* Tailwind's base `.rounded` utility hardcodes 0.25rem, so scale it here too. */
+html .rounded { border-radius: calc(0.25rem * var(--radius-scale)); }
 
 :root {
   font-family: "Inter", system-ui, -apple-system, sans-serif;

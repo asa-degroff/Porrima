@@ -153,6 +153,16 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, [settings.flatBackground]);
 
+  // Apply corner shape
+  useEffect(() => {
+    document.documentElement.setAttribute('data-corner', settings.cornerShape || 'round');
+  }, [settings.cornerShape]);
+
+  // Apply corner radius scale
+  useEffect(() => {
+    document.documentElement.setAttribute('data-radius', settings.cornerRadius || 'default');
+  }, [settings.cornerRadius]);
+
   // Apply background effect
   useEffect(() => {
     if (settings.backgroundEffect === 'ripple-grid' && !imageSandboxOpen) {

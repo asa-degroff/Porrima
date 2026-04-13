@@ -4,7 +4,7 @@ import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 
@@ -141,6 +141,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [flatBackground, setFlatBackground] = useState(settings.flatBackground ?? false);
+  const [cornerShape, setCornerShape] = useState<CornerShape>(settings.cornerShape || "round");
+  const [cornerRadius, setCornerRadius] = useState<CornerRadius>(settings.cornerRadius || "default");
   const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editingPresetContent, setEditingPresetContent] = useState<string>("");
@@ -332,6 +334,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       theme,
       backgroundEffect,
       flatBackground,
+      cornerShape,
+      cornerRadius,
       systemPromptPresets: presets.length > 0 ? presets : undefined,
       hapticsEnabled,
       modelContextWindows: Object.keys(modelContextWindows).length > 0 ? modelContextWindows : undefined,
@@ -1333,6 +1337,66 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 />
               </button>
             </div>
+          </div>
+
+          {/* Corner Shape */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-white/60">Corner Shape</label>
+            <div className="flex gap-2">
+              {[
+                { value: "round" as CornerShape, label: "Round", swatch: "rounded-lg corner-round" },
+                { value: "squircle" as CornerShape, label: "Squircle", swatch: "rounded-lg corner-squircle" },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setCornerShape(opt.value)}
+                  className={`flex-1 px-3 py-3 rounded-lg text-sm font-medium border transition-all flex items-center justify-center gap-2 ${
+                    cornerShape === opt.value
+                      ? "border-white/30 bg-white/5"
+                      : "border-white/10 hover:border-white/20"
+                  }`}
+                >
+                  <span className={`inline-block w-4 h-4 border border-white/50 ${opt.swatch}`} />
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-white/30 text-xs">
+              {cornerShape === "squircle"
+                ? "Superellipse curves for a softer, iOS-style corner. Falls back to round on unsupported browsers."
+                : "Classic circular arcs on rounded elements."}
+            </p>
+          </div>
+
+          {/* Corner Radius */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-white/60">Corner Radius</label>
+            <div className="flex gap-2">
+              {[
+                { value: "compact" as CornerRadius, label: "Compact", swatchSize: "w-3 h-3", swatchRadius: "2px" },
+                { value: "default" as CornerRadius, label: "Default", swatchSize: "w-4 h-4", swatchRadius: "4px" },
+                { value: "generous" as CornerRadius, label: "Generous", swatchSize: "w-4 h-4", swatchRadius: "7px" },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setCornerRadius(opt.value)}
+                  className={`flex-1 px-3 py-3 rounded-lg text-sm font-medium border transition-all flex items-center justify-center gap-2 ${
+                    cornerRadius === opt.value
+                      ? "border-white/30 bg-white/5"
+                      : "border-white/10 hover:border-white/20"
+                  }`}
+                >
+                  <span
+                    className={`inline-block border border-white/50 ${opt.swatchSize} ${cornerShape === "squircle" ? "corner-squircle" : "corner-round"}`}
+                    style={{ borderRadius: opt.swatchRadius }}
+                  />
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-white/30 text-xs">
+              Scales all rounded corners. Squircle shape reads smaller at the same radius, so Generous is a good match for squircle.
+            </p>
           </div>
 
           {/* Background Effect */}
