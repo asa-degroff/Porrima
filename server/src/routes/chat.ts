@@ -791,7 +791,23 @@ async function handleChatStream(
 
           console.log(`[chat] turn_end: stopReason=${stopReason}, toolResults=${event.toolResults?.length || 0}, content=${state.fullText.length}ch`);
           if (stopReason === "error") {
-            console.error(`[chat] LLM error: ${msg.errorMessage || "(no error message)"}`);
+            const errMsg = msg.errorMessage || "(no error message)";
+            console.error(`[chat] LLM error: ${errMsg}`);
+            // Surface a user-visible warning so transient provider errors don't leave the UI silently truncated.
+            // Parse common HTTP status codes for a friendlier message.
+            const statusMatch = errMsg.match(/\b(5\d{2}|429|408)\b/);
+            const status = statusMatch?.[1];
+            let friendly: string;
+            if (status === "503") friendly = "Model provider is temporarily unavailable — response cut short";
+            else if (status === "502" || status === "504") friendly = "Model provider gateway error — response cut short";
+            else if (status === "429") friendly = "Model provider rate limited — response cut short";
+            else if (status === "408") friendly = "Model provider request timed out — response cut short";
+            else if (status) friendly = `Model provider error (${status}) — response cut short`;
+            else friendly = "Response cut short — model provider returned an error";
+            res.write(`event: warning\ndata: ${JSON.stringify({
+              type: "provider_error",
+              message: friendly,
+            })}\n\n`);
           }
           console.log(`[chat] turn_end event details:`, {
             stopReason,
