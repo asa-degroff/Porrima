@@ -1,4 +1,4 @@
-import { embed } from "./embeddings.js";
+import { embed, cosineSimilarity } from "./embeddings.js";
 import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, getAllMemoryBlocks, type MemoryBlock } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { loadPersona } from "./persona-store.js";
@@ -144,6 +144,45 @@ async function retrieveMemories(
     score,
   }));
 
+  // --- Topic-aware memory culling ---
+  // After compaction cycles, the memory store accumulates memories from every
+  // topic the conversation has touched. Compaction summaries capture what the
+  // conversation is about NOW. Use the most recent one as a topic anchor to
+  // favor memories relevant to the active topic and suppress stale ones from
+  // earlier phases of the conversation.
+  //
+  // This only activates after at least one compaction cycle (when summaries
+  // exist). Before compaction, retrieval is purely query-driven — which is
+  // correct since there's no topic drift yet.
+  const inContextSummaries = recentMessages
+    .filter(m => m._isCompactionSummary && !m._outOfContext)
+    .map(m => m.content);
+
+  if (inContextSummaries.length > 0 && rerankedResults.length > 0) {
+    const topicText = inContextSummaries[inContextSummaries.length - 1];
+    try {
+      const topicEmbedding = await embed(topicText);
+      // Multiplicative topic adjustment: on-topic memories retain most of
+      // their score, off-topic memories are dampened. TOPIC_BOOST_MIN is
+      // the floor multiplier for completely off-topic memories — they can
+      // still be retrieved if their relevance score is high enough, but
+      // they're significantly disadvantaged.
+      const TOPIC_BOOST_MIN = 0.3;
+
+      let minTopicSim = 1, maxTopicSim = 0;
+      for (const r of rerankedResults) {
+        const topicSim = cosineSimilarity(r.memory.embedding, topicEmbedding);
+        minTopicSim = Math.min(minTopicSim, topicSim);
+        maxTopicSim = Math.max(maxTopicSim, topicSim);
+        r.score *= (TOPIC_BOOST_MIN + (1 - TOPIC_BOOST_MIN) * topicSim);
+      }
+
+      log(`[memory-retrieval] topic-aware: ${inContextSummaries.length} compaction summaries, topic sim range: ${minTopicSim.toFixed(3)}–${maxTopicSim.toFixed(3)}`);
+    } catch (e) {
+      console.error("[memory-retrieval] topic embedding failed, skipping adjustment:", e);
+    }
+  }
+
   const currentMemories = rerankedResults.filter((r) => !r.memory.supersededBy);
   const supersededMemories = rerankedResults.filter((r) => r.memory.supersededBy);
 
@@ -192,9 +231,14 @@ function formatMemory(r: RetrievalResult, projectId?: string): string {
   return `- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10, saved: ${created}]${supersededNote}${projectNote}`;
 }
 
-function updateAccessMetadata(memories: RetrievalResult[]): void {
+function updateAccessMetadata(memories: RetrievalResult[], skipIds?: Set<string>): void {
   const now = new Date().toISOString();
   for (const r of memories) {
+    // Skip memories already in context (frozen or delta) — bumping their
+    // accessCount/lastAccessed creates a positive feedback loop where
+    // frequently-retrieved memories become harder to displace, even
+    // when they're no longer relevant to the current topic.
+    if (skipIds?.has(r.memory.id)) continue;
     updateMemory(r.memory.id, {
       lastAccessed: now,
       accessCount: r.memory.accessCount + 1,
@@ -413,9 +457,11 @@ export async function buildSplitAugmentedPrompt(
 
     // Case 3: State exists, dirty — re-retrieve and compute delta.
     const memories = await retrieveMemories(recentMessages, chatType, projectId);
-    updateAccessMetadata(memories);
-
     const inContextIds = new Set([...state.frozenIds, ...state.deltaIds]);
+    // Only bump access for memories NOT already in context — frozen memories
+    // get retrieved every turn and shouldn't have their recency signal inflated.
+    updateAccessMetadata(memories, inContextIds);
+
     const newMemories = memories.filter((r) => !inContextIds.has(r.memory.id));
 
     // Mark as clean
