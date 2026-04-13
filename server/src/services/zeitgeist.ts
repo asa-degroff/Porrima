@@ -2,14 +2,12 @@ import { v4 as uuid } from "uuid";
 import { streamChat } from "./agent.js";
 import { getSettings, updateChatZeitgeistSynthesisState } from "./chat-storage.js";
 import {
-  addMemory,
   getMemoryBlock,
   updateMemoryBlock,
   createMemoryBlock,
-  getMemoriesByChatId,
   getDb,
 } from "./memory-storage.js";
-import { invalidateAllMemoriesCaches } from "./memory-context.js";
+import { invalidateAllMemoriesCaches, invalidateAllStablePrefixCaches } from "./memory-context.js";
 import type { Memory } from "../types.js";
 
 const ZEITGEIST_BLOCK_ID = "blk-zeitgeist-continuity";
@@ -85,17 +83,30 @@ export async function synthesizeZeitgeist(
 
   // Step 7: Update zeitgeist block with new content
   if (parsed.newContent) {
+    // Enforce MAX_BLOCK_CHARS — if LLM generates oversized content, truncate
+    // and warn. Without this, oversized content triggers an archival loop.
+    let newContent = parsed.newContent;
+    if (newContent.length > MAX_BLOCK_CHARS) {
+      console.warn(
+        `[zeitgeist] Synthesis output (${newContent.length} chars) exceeds MAX_BLOCK_CHARS (${MAX_BLOCK_CHARS}), truncating`
+      );
+      newContent = newContent.slice(0, MAX_BLOCK_CHARS);
+    }
+
     if (currentBlock) {
-      updateMemoryBlock(ZEITGEIST_BLOCK_ID, {
-        content: parsed.newContent,
+      const updated = updateMemoryBlock(ZEITGEIST_BLOCK_ID, {
+        content: newContent,
         updatedBy: "agent",
       });
+      if (!updated) {
+        console.error("[zeitgeist] Failed to update zeitgeist block — block may have been deleted");
+      }
     } else {
       createMemoryBlock({
         id: ZEITGEIST_BLOCK_ID,
         name: ZEITGEIST_BLOCK_NAME,
         description: "Continuity block spanning all chats — narrative of who I am and where we are",
-        content: parsed.newContent,
+        content: newContent,
         scope: "global",
         projectId: "",
         createdAt: new Date().toISOString(),
@@ -103,11 +114,14 @@ export async function synthesizeZeitgeist(
         updatedBy: "agent",
       });
     }
-    console.log(`[zeitgeist] Updated zeitgeist block (${parsed.newContent.length} chars)`);
+    console.log(`[zeitgeist] Updated zeitgeist block (${newContent.length} chars)`);
   }
 
   // Step 8: Invalidate caches so active chats see the update
+  // Must clear both: the memory context dirty flags (for delta retrieval)
+  // and the stable prefix cache (since zeitgeist is embedded in it)
   invalidateAllMemoriesCaches();
+  invalidateAllStablePrefixCaches();
   
   // Update the trigger chat's zeitgeist synthesis tracking
   if (chatId) {
@@ -119,38 +133,82 @@ export async function synthesizeZeitgeist(
 
 /**
  * Load recent memories for zeitgeist synthesis.
- * If chatId is provided, load memories from that chat + recent global memories.
- * Otherwise, load all memories from the last 7 days.
+ * Always loads global recent memories (last 7 days, capped at 100).
+ * If chatId is provided, also includes recent memories from that chat
+ * to give context from the triggering conversation.
+ * The zeitgeist is global — it should synthesize across all chats, not just one.
  */
 async function loadRecentMemories(chatId?: string): Promise<Memory[]> {
   const db = getDb();
-  let memories: Memory[] = [];
+  const MEMORY_LIMIT = 100;
 
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+  // Always load global recent memories — zeitgeist is a global document
+  const globalStmt = db.prepare(`
+    SELECT id, text, category, importance, created_at as createdAt, source_chat_id as sourceChatId
+    FROM memories 
+    WHERE datetime(created_at) >= datetime(?)
+    ORDER BY created_at DESC
+    LIMIT ?
+  `);
+
+  const globalRows = globalStmt.all(sevenDaysAgo.toISOString(), MEMORY_LIMIT) as any[];
+  const memoryIds = new Set<string>();
+
+  const memories: Memory[] = globalRows.map(row => {
+    memoryIds.add(row.id);
+    return {
+      id: row.id,
+      text: row.text,
+      category: row.category,
+      importance: row.importance,
+      createdAt: row.createdAt,
+      sourceChatId: row.sourceChatId,
+      lastAccessed: "",
+      accessCount: 0,
+      embedding: [], // Not needed for synthesis
+    };
+  });
+
+  // If a chat triggered this, also pull recent memories from that specific chat
+  // that might not have appeared in the global 7-day window
   if (chatId) {
-    // Load memories from the triggering chat
-    const chatMemories = await getMemoriesByChatId(chatId);
-    memories = chatMemories.map(m => ({
-      ...m,
-      embedding: [], // Embeddings not needed for this use case
-    }));
-  } else {
-    // Load all memories from the last 7 days
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    
-    const stmt = db.prepare(`
-      SELECT * FROM memories 
-      WHERE datetime(createdAt) >= datetime(?)
-      ORDER BY createdAt DESC
-      LIMIT 100
+    const notInPlaceholder = memoryIds.size > 0
+      ? Array.from(memoryIds).map(() => "?").join(",")
+      : "NULL";
+    const chatStmt = db.prepare(`
+      SELECT id, text, category, importance, created_at as createdAt, source_chat_id as sourceChatId
+      FROM memories
+      WHERE source_chat_id = ?
+        AND id NOT IN (${notInPlaceholder})
+      ORDER BY created_at DESC
+      LIMIT 20
     `);
-    
-    const rows = stmt.all(sevenDaysAgo.toISOString()) as any[];
-    memories = rows.map(row => ({
-      ...row,
-      embedding: Array.from(new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4)),
-    }));
+
+    const chatArgs = memoryIds.size > 0
+      ? [chatId, ...Array.from(memoryIds)]
+      : [chatId];
+
+    const chatRows = chatStmt.all(...chatArgs) as any[];
+    for (const row of chatRows) {
+      memories.push({
+        id: row.id,
+        text: row.text,
+        category: row.category,
+        importance: row.importance,
+        createdAt: row.createdAt,
+        sourceChatId: row.sourceChatId,
+        lastAccessed: "",
+        accessCount: 0,
+        embedding: [],
+      });
+    }
   }
+
+  // Sort by recency for consistent prompt ordering
+  memories.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   return memories;
 }
@@ -246,8 +304,8 @@ function parseZeitgeistSynthesis(text: string): {
       archivalReasoning: parsed.archivalReasoning,
     };
   } catch {
-    console.error("[zeitgeist] Failed to parse synthesis output:", text.slice(0, 200));
-    return { newContent: text, archivalContent: undefined, archivalReasoning: undefined };
+    console.error("[zeitgeist] Failed to parse synthesis output, preserving existing content:", text.slice(0, 200));
+    return { newContent: "", archivalContent: undefined, archivalReasoning: undefined };
   }
 }
 
@@ -360,18 +418,31 @@ export function getZeitgeistContent(): string | null {
 
 /**
  * Check if zeitgeist synthesis should be triggered based on capacity.
+ * Uses a lightweight length query instead of loading the full block.
  */
 export function shouldTriggerZeitgeistSynthesis(): boolean {
-  const block = getMemoryBlock(ZEITGEIST_BLOCK_ID);
-  if (!block) return true; // No zeitgeist yet, should create one
-  return block.content.length > ARCHIVAL_THRESHOLD;
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT length(content) as contentLength FROM memory_blocks WHERE id = ?"
+  ).get(ZEITGEIST_BLOCK_ID) as { contentLength: number } | undefined;
+
+  if (!row) return true; // No zeitgeist yet, should create one
+  return row.contentLength > ARCHIVAL_THRESHOLD;
 }
 
 /**
  * Get instruction text for memory retrieval, telling the agent it can fetch
- * zeitgeist archives for temporal context.
+ * zeitgeist archives for temporal context. Only returns the hint if archives
+ * actually exist — avoids wasting ~250 tokens/conversation when there's nothing to find.
  */
 export function getZeitgeistArchiveInstruction(): string {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT 1 FROM memory_blocks WHERE name LIKE 'Zeitgeist Archive -%' LIMIT 1"
+  ).get() as any;
+
+  if (!row) return ""; // No archives exist yet — skip the hint
+
   return `## Temporal Context Access
 
 Zeitgeist archives are available for historical context. Each archive represents a snapshot of the continuity block from a specific date. When you retrieve memories from a particular date, you can search for the corresponding zeitgeist archive using:

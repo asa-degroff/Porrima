@@ -249,7 +249,7 @@ async function checkAndRunZeitgeistSynthesis() {
       return;
     }
     
-    console.log(`[scheduler] Found ${chatIds.length} chat(s) needing zeitgeist synthesis, triggering with oldest inactive chat`);
+    console.log(`[scheduler] Found ${chatIds.length} chat(s) needing zeitgeist synthesis, triggering with most recently inactive chat`);
     
     // Use the oldest inactive chat as the trigger (first in the list)
     const triggerChatId = chatIds[0];

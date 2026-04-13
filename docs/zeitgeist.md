@@ -49,6 +49,7 @@ The zeitgeist block has a **4000 character limit** (same as memory blocks). To p
 3. **Coherent narrative**: Archival content is a coherent snapshot, not random text
 4. **Reasoning included**: Each archive includes why it was archived and what it represents
 5. **Faithful representation**: The archival must be faithful to the original content
+6. **Size enforcement**: If the LLM generates content exceeding `MAX_BLOCK_CHARS` (4000), it is truncated with a warning to prevent archival loops
 
 ### Archival Naming
 
@@ -124,17 +125,18 @@ const needsArchival = forceArchive || currentContent.length > ARCHIVAL_THRESHOLD
 ### Core Functions
 
 **`synthesizeZeitgeist(modelId, chatId?, forceArchive?)`**
-- Loads recent memories (last 7 days, or from specific chat)
+- Loads recent memories (always global 7-day window; if chatId provided, also includes supplementary memories from that chat)
 - Loads current zeitgeist block
 - Calls LLM to synthesize new content (and archival if needed)
+- Validates content length against MAX_BLOCK_CHARS (truncates if exceeded)
 - Creates archival block if needed
 - Updates zeitgeist block with new content
-- Invalidates memory caches so active chats see the update
+- Invalidates both memory context caches and stable prefix cache so active chats see the update
 
 **`loadRecentMemories(chatId?)`**
-- If `chatId` provided: loads memories from that chat
-- Otherwise: loads all memories from the last 7 days
-- Caps at 100 memories to avoid context overflow
+- Always loads global memories from the last 7 days (capped at 100)
+- If `chatId` provided: also loads up to 20 supplementary memories from that chat not already in the global set
+- Zeitgeist is global — it synthesizes across all chats, not just the triggering one
 
 **`createArchivalBlock(content, reasoning)`**
 - Generates a title using `qwen3.5:0.8b`
@@ -187,17 +189,7 @@ try {
 const memoriesSection = buildMemoriesSection(memories, projectId, blockHint, zeitgeistHint);
 ```
 
-The archive instruction tells the agent:
-```
-## Temporal Context Access
-
-Zeitgeist archives are available for historical context. Each archive represents a snapshot of the continuity block from a specific date. When you retrieve memories from a particular date, you can search for the corresponding zeitgeist archive using:
-
-- Search query: "zeitgeist-archive-YYYY-MM-DD" (replace with the date)
-- Use memory block search tools to retrieve the full archive content
-
-This allows you to understand the narrative context from that period, not just isolated facts.
-```
+The archive instruction is only injected when zeitgeist archives actually exist (checked via a lightweight DB query). When no archives exist yet, the hint is omitted to save ~250 tokens per conversation turn.
 
 ## Configuration
 
@@ -288,7 +280,16 @@ When memories are retrieved, the system could automatically inject the correspon
 - Force context the agent might not need
 - Remove agent agency in deciding when temporal context matters
 
-Instead, the agent is **instructed** that archives exist and can fetch them when needed. This is cleaner and gives the agent control.
+Instead, the agent is **instructed** that archives exist (when they do) and can fetch them when needed. This is cleaner and gives the agent control.
+
+### Cache Invalidation After Synthesis
+
+Zeitgeist content is embedded in the **stable prefix** of the system prompt, which is cached per-chat for KV cache optimization. After synthesis updates the block, both caches must be invalidated:
+
+1. `invalidateAllMemoriesCaches()` — marks context states as dirty, causing delta memory re-retrieval on the next turn
+2. `invalidateAllStablePrefixCaches()` — clears the stable prefix cache entirely, forcing a rebuild that picks up the new zeitgeist content
+
+Without the stable prefix invalidation, active chats continue to see stale zeitgeist content until the cache expires for another reason (e.g., base prompt change).
 
 ### Why LLM-Decided Archival Split?
 
@@ -341,18 +342,28 @@ To monitor zeitgeist health:
 1. Check if synthesis has run: `grep "zeitgeist" ~/.quje-agent/server.log`
 2. Check if block exists: `list_memory_blocks` should show "Zeitgeist - Continuity Block"
 3. Check if synthesis is enabled: `zeitgeistEnabled` in settings
+4. Check stable prefix cache: If zeitgeist updated but active chats still see old content, the stable prefix cache may not have been invalidated. This should not happen after the cache invalidation fix, but if it does, restarting the server clears all caches.
 
-### Archival Not Triggering
+### Zeitgeist Not Updating in Active Chats
 
-1. Check block size: Should be > 2800 chars to trigger
-2. Check synthesis logs: Look for "needs archival" messages
-3. Check LLM output: Should include `archivalContent` field
+If the zeitgeist updates but the agent in an active conversation doesn't reflect the change:
+- The stable prefix cache is invalidated after every synthesis (`invalidateAllStablePrefixCaches()`)
+- The next chat turn will rebuild the prefix with the new zeitgeist content
+- If KV cache hit rates drop after zeitgeist updates, this is expected — the prefix changed
 
-### Archives Not Found
+### Synthesis Output Rejected
 
-1. Check naming pattern: Should be "Zeitgeist Archive - YYYY-MM-DD"
-2. Check search query: Use exact date format
-3. Check scope: Archives are global, not project-scoped
+If the LLM produces output that can't be parsed as JSON:
+- The system preserves the existing zeitgeist content (does not overwrite with raw text)
+- Check logs for: `[zeitgeist] Failed to parse synthesis output, preserving existing content`
+- The synthesis will be retried on the next trigger
+
+### Content Truncated
+
+If the LLM generates zeitgeist content exceeding 4000 characters:
+- The system truncates to `MAX_BLOCK_CHARS` and logs a warning
+- Check logs for: `[zeitgeist] Synthesis output (N chars) exceeds MAX_BLOCK_CHARS (4000), truncating`
+- This prevents an archival loop where oversized content immediately re-triggers archival
 
 ## Related Documentation
 
