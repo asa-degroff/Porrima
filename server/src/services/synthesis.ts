@@ -253,35 +253,43 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
             `# Daily Synthesis - ${today}\n\n**Memories: ${store.memories.length}** | Superseded: ${superseded.size}\n\n${finalSummary}`
           );
           console.log(`[synthesis] Daily log saved for ${today} (${finalSummary.length} chars)`);
-
-          // Step 5: Save synthesis summary directly as notebook entry and memory
-          try {
-            await saveSynthesisAsNotebookAndMemory(
-              finalSummary,
-              store.memories,
-              todaysDigest,
-              unreviewedUserEntries,
-              resolvedModelId
-            );
-          } catch (e) {
-            console.error("[synthesis] Failed to save synthesis as notebook/memory:", e);
-          }
-
-          // Step 6: Optional follow-up - give the agent a chance to explore something with tools
-          try {
-            await writeOptionalFollowupNotebookEntry(
-              finalSummary,
-              unreviewedUserEntries,
-              personaData?.content || '',
-              resolvedModelId
-            );
-          } catch (e) {
-            console.error("[synthesis] Optional follow-up failed:", e);
-          }
         } else {
+          // Build a minimal summary from what we have so the notebook entry isn't lost
+          const digestNote = todaysDigest
+            ? `Worked across ${todaysDigest.totalChats} chat(s) today. ${projectNames.length > 0 ? `Projects: ${projectNames.join(", ")}.` : ""}`
+            : "No agent chats since last synthesis.";
+          const notebookNote = notebookEntries.length > 0
+            ? ` ${notebookEntries.filter(e => e.author === "user").length} user notebook entries, ${notebookEntries.filter(e => e.author === "agent").length} agent entries.`
+            : "";
+          finalSummary = `# Daily Synthesis\n\n${digestNote}${notebookNote}\n\n*(LLM summary was empty — this is a fallback record to preserve the synthesis cycle.)*`;
           console.warn(
-            `[synthesis] LLM returned empty summary for ${today} (model: ${resolvedModelId}). Skipping daily log write.`
+            `[synthesis] LLM returned empty summary for ${today} (model: ${resolvedModelId}). Using fallback summary.`
           );
+        }
+
+        // Step 5: Save synthesis summary directly as notebook entry and memory
+        try {
+          await saveSynthesisAsNotebookAndMemory(
+            finalSummary,
+            store.memories,
+            todaysDigest,
+            unreviewedUserEntries,
+            resolvedModelId
+          );
+        } catch (e) {
+          console.error("[synthesis] Failed to save synthesis as notebook/memory:", e);
+        }
+
+        // Step 6: Optional follow-up - give the agent a chance to explore something with tools
+        try {
+          await writeOptionalFollowupNotebookEntry(
+            finalSummary,
+            unreviewedUserEntries,
+            personaData?.content || '',
+            resolvedModelId
+          );
+        } catch (e) {
+          console.error("[synthesis] Optional follow-up failed:", e);
         }
       } catch (e) {
         console.error("[synthesis] Summary generation failed:", e);
@@ -416,10 +424,11 @@ async function generateReflections(
   console.log(`[synthesis] Generated ${reflections.length} reflection(s), embedding...`);
 
   // Force category to "reflection" and clamp importance
+  // Default to 8 if LLM omitted importance (prevents NaN → NOT NULL constraint failure)
   const normalized = reflections.map((r) => ({
     ...r,
     category: "reflection" as const,
-    importance: Math.min(9, Math.max(7, r.importance)),
+    importance: Math.min(9, Math.max(7, typeof r.importance === "number" && !isNaN(r.importance) ? r.importance : 8)),
   }));
 
   let embeddings: number[][];
