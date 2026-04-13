@@ -288,6 +288,11 @@ export function getDb(): Database.Database {
     db.exec("ALTER TABLE chats ADD COLUMN lastDelayedExtractionMessageIndex INTEGER");
   }
 
+  // Auto-add zeitgeist synthesis tracking column
+  if (!cols.some((c) => c.name === "lastZeitgeistSynthesisAt")) {
+    db.exec("ALTER TABLE chats ADD COLUMN lastZeitgeistSynthesisAt TEXT");
+  }
+
   // Auto-add preview column to avoid json_extract on messages in list queries
   if (!cols.some((c) => c.name === "preview")) {
     db.exec("ALTER TABLE chats ADD COLUMN preview TEXT DEFAULT ''");
@@ -388,6 +393,7 @@ export async function getChat(id: string): Promise<Chat | null> {
         lastModified: string;
         lastDelayedExtractionAt: string | null;
         lastDelayedExtractionMessageIndex: number | null;
+        lastZeitgeistSynthesisAt: string | null;
       }
     | undefined;
 
@@ -407,6 +413,7 @@ export async function getChat(id: string): Promise<Chat | null> {
     ...(row.activeSkills ? { activeSkills: JSON.parse(row.activeSkills) } : {}),
     ...(row.lastDelayedExtractionAt ? { lastDelayedExtractionAt: row.lastDelayedExtractionAt } : {}),
     ...(row.lastDelayedExtractionMessageIndex !== null && row.lastDelayedExtractionMessageIndex !== undefined ? { lastDelayedExtractionMessageIndex: row.lastDelayedExtractionMessageIndex } : {}),
+    ...(row.lastZeitgeistSynthesisAt ? { lastZeitgeistSynthesisAt: row.lastZeitgeistSynthesisAt } : {}),
   };
 
   return chat;
@@ -468,6 +475,18 @@ export async function updateChatExtractionState(
     SET lastDelayedExtractionAt = ?, lastDelayedExtractionMessageIndex = ?
     WHERE id = ?
   `).run(extractionAt, messageIndex, chatId);
+}
+
+export async function updateChatZeitgeistSynthesisState(
+  chatId: string,
+  synthesisAt: string
+): Promise<void> {
+  const db = getDb();
+  db.prepare(`
+    UPDATE chats
+    SET lastZeitgeistSynthesisAt = ?
+    WHERE id = ?
+  `).run(synthesisAt, chatId);
 }
 
 export async function updateChatTitle(

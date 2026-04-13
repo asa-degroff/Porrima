@@ -6,12 +6,15 @@ import { extractDelayedMemories } from "./memory-extraction.js";
 import { getBlueskyPoller } from "./bluesky-poller.js";
 import { BLUESKY_SYSTEM_PROMPT } from "../routes/bluesky.js";
 import { enrichCorpusBatch } from "./image-corpus.js";
+import { synthesizeZeitgeist, shouldTriggerZeitgeistSynthesis } from "./zeitgeist.js";
 
 const SYNTHESIS_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 const ENRICHMENT_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const DEFAULT_ENRICHMENT_BATCH_SIZE = 5;
+const ZEITGEIST_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const DEFAULT_ZEITGEIST_INACTIVITY_THRESHOLD_HOURS = 4; // 4 hours
 
 
 // ---------------------------------------------------------------------------
@@ -162,6 +165,108 @@ async function checkAndRunDelayedExtractions() {
 }
 
 // ---------------------------------------------------------------------------
+// Zeitgeist Synthesis Check (Deferred Trigger)
+// ---------------------------------------------------------------------------
+
+/**
+ * Find agent chats that are inactive and need zeitgeist synthesis.
+ * Criteria:
+ * - Chat type is "agent"
+ * - lastModified < now - threshold (inactive for N hours)
+ * - (lastZeitgeistSynthesisAt IS NULL OR lastZeitgeistSynthesisAt < lastModified)
+ *   (synthesis hasn't run since last activity)
+ */
+async function findChatsNeedingZeitgeistSynthesis(thresholdMs: number): Promise<string[]> {
+  const db = getDb();
+  const thresholdDate = new Date(Date.now() - thresholdMs).toISOString();
+  
+  const rows = db.prepare(`
+    SELECT id, lastModified, lastZeitgeistSynthesisAt
+    FROM chats
+    WHERE type = 'agent'
+      AND lastModified < ?
+      AND (lastZeitgeistSynthesisAt IS NULL OR lastZeitgeistSynthesisAt < lastModified)
+    ORDER BY lastModified DESC
+  `).all(thresholdDate) as Array<{
+    id: string;
+    lastModified: string;
+    lastZeitgeistSynthesisAt: string | null;
+  }>;
+  
+  return rows.map(r => r.id);
+}
+
+/**
+ * Check and run zeitgeist synthesis for inactive chats.
+ * Called every 30 minutes to catch chats that cross the inactivity threshold.
+ * Zeitgeist is global, so we only run one synthesis per check (not per chat).
+ */
+async function checkAndRunZeitgeistSynthesis() {
+  try {
+    const settings = await getSettings();
+    const enabled = settings.zeitgeistEnabled ?? true;
+    const thresholdHours = settings.zeitgeistInactivityThresholdHours ?? DEFAULT_ZEITGEIST_INACTIVITY_THRESHOLD_HOURS;
+    const thresholdMs = thresholdHours * 60 * 60 * 1000;
+    
+    if (!enabled) {
+      console.log("[scheduler] Zeitgeist synthesis disabled in settings");
+      return;
+    }
+    
+    // Check if zeitgeist needs synthesis based on capacity
+    if (!shouldTriggerZeitgeistSynthesis()) {
+      console.log("[scheduler] Zeitgeist under capacity threshold, skipping deferred check");
+      return;
+    }
+    
+    // Determine synthesis model from settings
+    const configuredModelId = settings.extractionModelId || settings.defaultModelId;
+    const fallbackEnabled = settings.extractionFallbackEnabled ?? true;
+    
+    // Discover available models once per run
+    const { discoverOllamaModels } = await import("./models.js");
+    const availableModels = await discoverOllamaModels();
+    const availableModelIds = new Set(availableModels.map(m => m.id));
+    
+    // Resolve synthesis model
+    let synthesisModelId = configuredModelId;
+    if (!availableModelIds.has(synthesisModelId)) {
+      if (fallbackEnabled && availableModels.length > 0) {
+        console.log(`[scheduler] Configured synthesis model "${synthesisModelId}" not available, falling back to ${availableModels[0].id}`);
+        synthesisModelId = availableModels[0].id;
+      } else {
+        console.error(`[scheduler] Synthesis model "${synthesisModelId}" not available and fallback disabled, aborting`);
+        return;
+      }
+    }
+    
+    console.log(`[scheduler] Using zeitgeist synthesis model: ${synthesisModelId}`);
+    
+    // Find inactive chats (we only need one to trigger synthesis)
+    const chatIds = await findChatsNeedingZeitgeistSynthesis(thresholdMs);
+    if (chatIds.length === 0) {
+      console.log("[scheduler] No chats meet zeitgeist inactivity threshold");
+      return;
+    }
+    
+    console.log(`[scheduler] Found ${chatIds.length} chat(s) needing zeitgeist synthesis, triggering with oldest inactive chat`);
+    
+    // Use the oldest inactive chat as the trigger (first in the list)
+    const triggerChatId = chatIds[0];
+    
+    try {
+      console.log(`[scheduler] Running zeitgeist synthesis with model ${synthesisModelId}...`);
+      await synthesizeZeitgeist(synthesisModelId, triggerChatId, false);
+      console.log(`[scheduler] Zeitgeist synthesis complete`);
+    } catch (e) {
+      console.error(`[scheduler] Zeitgeist synthesis failed:`, e);
+    }
+  } catch (e) {
+    console.error("[scheduler] Zeitgeist check failed:", e);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Scheduler Startup
 // ---------------------------------------------------------------------------
 
@@ -181,8 +286,15 @@ export function startScheduler(): void {
     console.log("[scheduler] Running initial enrichment check (after 1min delay)...");
     checkAndRunEnrichment();
   }, 1 * 60 * 1000);
+  
+  // Zeitgeist: wait 5 minutes on startup before processing backlog
+  // This gives the server time to stabilize and avoids immediate resource spike
+  setTimeout(() => {
+    console.log("[scheduler] Running initial zeitgeist check (after 5min delay)...");
+    checkAndRunZeitgeistSynthesis();
+  }, 5 * 60 * 1000);
 
-  // Then check hourly for synthesis
+  // Then check every 15 minutes for synthesis
   setInterval(checkAndRunSynthesis, SYNTHESIS_CHECK_INTERVAL_MS);
   
   // Check every 5 minutes for delayed extractions
@@ -191,7 +303,10 @@ export function startScheduler(): void {
   // Check every 30 minutes for corpus enrichment
   setInterval(checkAndRunEnrichment, ENRICHMENT_CHECK_INTERVAL_MS);
   
-  console.log("[scheduler] Started (synthesis every 15min, delayed extraction every 5min, enrichment every 30min)");
+  // Check every 30 minutes for zeitgeist synthesis
+  setInterval(checkAndRunZeitgeistSynthesis, ZEITGEIST_CHECK_INTERVAL_MS);
+  
+  console.log("[scheduler] Started (synthesis every 15min, delayed extraction every 5min, enrichment every 30min, zeitgeist every 30min)");
 
   // Start Bluesky poller if enabled
   startBlueskyPoller();

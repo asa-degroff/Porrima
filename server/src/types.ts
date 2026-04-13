@@ -83,6 +83,8 @@ export interface Chat {
   // Delayed extraction tracking
   lastDelayedExtractionAt?: string;
   lastDelayedExtractionMessageIndex?: number;
+  // Zeitgeist synthesis tracking
+  lastZeitgeistSynthesisAt?: string;
   // Ollama runtime options (per-chat overrides)
   ollamaOptions?: {
     keepAlive?: string | number;  // e.g., "15m", "5m", 300, -1, 0
@@ -163,6 +165,9 @@ export interface Settings {
   delayedExtractionEnabled?: boolean;
   delayedExtractionThresholdMinutes?: number;
   delayedExtractionMessageCap?: number;
+  // Zeitgeist continuity block settings
+  zeitgeistEnabled?: boolean;
+  zeitgeistInactivityThresholdHours?: number;
   // Corpus enrichment batch size (how many entries to process per check)
   enrichmentBatchSize?: number;
   // Extraction model configuration

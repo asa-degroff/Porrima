@@ -246,10 +246,12 @@ function updateAccessMetadata(memories: RetrievalResult[], skipIds?: Set<string>
   }
 }
 
-function buildMemoriesSection(memories: RetrievalResult[], projectId?: string, blockHint?: string): string {
+function buildMemoriesSection(memories: RetrievalResult[], projectId?: string, blockHint?: string, zeitgeistHint?: string): string {
   if (memories.length === 0) return "";
   const memoriesBlock = memories.map((r) => formatMemory(r, projectId)).join("\n");
-  return `\n\n## My relevant memories to this chat:\n${memoriesBlock}\n\nUse these memories as needed — there's no need to list them unless asked.${blockHint || ""}`;
+  const hints = [blockHint, zeitgeistHint].filter(Boolean).join("\n\n");
+  const hintsSection = hints ? `\n\n${hints}` : "";
+  return `\n\n## My relevant memories to this chat:\n${memoriesBlock}\n\nUse these memories as needed — there's no need to list them unless asked.${hintsSection}`;
 }
 
 // ---- Stable prefix builder ----
@@ -348,7 +350,19 @@ async function buildStablePrefix(
     console.error("[memory] Failed to load memory blocks:", e);
   }
 
-  const stablePrefix = `${baseSystemPrompt}${personaSection}${userSection}${projectSection}${blocksSection}`;
+  // Load zeitgeist continuity block (global scope)
+  let zeitgeistSection = "";
+  try {
+    const { getZeitgeistContent, getZeitgeistArchiveInstruction } = await import("./zeitgeist.js");
+    const zeitgeistContent = getZeitgeistContent();
+    if (zeitgeistContent) {
+      zeitgeistSection = `\n\n## Continuity Context (Zeitgeist)\n\n${zeitgeistContent}`;
+    }
+  } catch (e) {
+    // Zeitgeist not available yet — this is fine on first run
+  }
+
+  const stablePrefix = `${baseSystemPrompt}${personaSection}${userSection}${projectSection}${blocksSection}${zeitgeistSection}`;
   stablePrefixCache.set(cacheKey, { basePrompt: baseSystemPrompt, prefix: stablePrefix, blocksSection });
 
   return { stablePrefix, blocksSection };
@@ -382,7 +396,14 @@ export async function buildMemoryAugmentedPrompt(
       ? "\n\nAdditional context may be available in memory blocks listed above — use read_memory_block(id) to read your full memories from that block."
       : "";
 
-    const memoriesSection = buildMemoriesSection(memories, projectId, blockHint);
+    // Add zeitgeist archive instruction
+    let zeitgeistHint = "";
+    try {
+      const { getZeitgeistArchiveInstruction } = await import("./zeitgeist.js");
+      zeitgeistHint = getZeitgeistArchiveInstruction();
+    } catch { /* zeitgeist not available */ }
+
+    const memoriesSection = buildMemoriesSection(memories, projectId, blockHint, zeitgeistHint);
     return `${stablePrefix}${memoriesSection}`;
   } catch (e) {
     console.error("[memory] Context augmentation failed, using base prompt:", e);
@@ -424,6 +445,13 @@ export async function buildSplitAugmentedPrompt(
       ? "\n\nAdditional context may be available in memory blocks listed above — use read_memory_block(id) to read your full memories from that block."
       : "";
 
+    // Add zeitgeist archive instruction
+    let zeitgeistHint = "";
+    try {
+      const { getZeitgeistArchiveInstruction } = await import("./zeitgeist.js");
+      zeitgeistHint = getZeitgeistArchiveInstruction();
+    } catch { /* zeitgeist not available */ }
+
     const state = chatId ? contextState.get(chatId) : undefined;
 
     // Case 1: No state — first turn or post-reset. Full retrieval into system prompt.
@@ -431,7 +459,7 @@ export async function buildSplitAugmentedPrompt(
       const memories = await retrieveMemories(recentMessages, chatType, projectId);
       updateAccessMetadata(memories);
 
-      const memoriesSection = buildMemoriesSection(memories, projectId, blockHint);
+      const memoriesSection = buildMemoriesSection(memories, projectId, blockHint, zeitgeistHint);
       const systemPrompt = `${stablePrefix}${memoriesSection}`;
 
       if (chatId) {
