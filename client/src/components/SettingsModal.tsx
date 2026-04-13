@@ -30,10 +30,11 @@ const SECTIONS = [
   { id: 'passkeys', label: 'Security' },
 ] as const;
 
-function useActiveSection(sectionIds: readonly string[]) {
+function useActiveSection(sectionIds: readonly string[], root: Element | null) {
   const [activeId, setActiveId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!root) return;
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -42,7 +43,7 @@ function useActiveSection(sectionIds: readonly string[]) {
           }
         });
       },
-      { rootMargin: '-20% 0% -70% 0%' }
+      { root, rootMargin: '0px 0px -70% 0px' }
     );
 
     sectionIds.forEach((id) => {
@@ -51,7 +52,7 @@ function useActiveSection(sectionIds: readonly string[]) {
     });
 
     return () => observer.disconnect();
-  }, [sectionIds]);
+  }, [sectionIds, root]);
 
   return activeId;
 }
@@ -721,25 +722,20 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     setUserDocSaving(false);
   }, []);
 
-  const activeSection = useActiveSection(SECTIONS.map(s => s.id));
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
+  const activeSection = useActiveSection(SECTIONS.map(s => s.id), scrollRoot);
 
   const scrollToSection = (id: string) => {
     const el = document.getElementById(id);
-    if (!el) return;
-    
-    const container = el.closest('.settings-content-scroll') as HTMLDivElement;
-    if (!container) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      return;
-    }
-    
-    // The section's offsetTop is relative to the scroll container
-    // We want to scroll so the section title sits with some padding from the top
-    // The container has py-5 (20px padding), so we account for that
-    const sectionTop = el.offsetTop;
-    const paddingFromTop = 8; // Small gap above the section title
-    const targetScroll = sectionTop - paddingFromTop;
-    
+    const container = scrollContainerRef.current;
+    if (!el || !container) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const paddingFromTop = 20; // Match container's py-5 top padding
+    const targetScroll = container.scrollTop + (elRect.top - containerRect.top) - paddingFromTop;
+
     container.scrollTo({
       top: targetScroll,
       behavior: 'smooth'
@@ -790,7 +786,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
           {/* Right - Settings content */}
-          <div className="flex-1 overflow-y-auto settings-content-scroll px-6 py-5 space-y-5">
+          <div
+            ref={(el) => { scrollContainerRef.current = el; setScrollRoot(el); }}
+            className="flex-1 overflow-y-auto settings-content-scroll px-6 py-5 space-y-5"
+          >
           {/* Default Model */}
           <div id="models" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Default Model</label>
