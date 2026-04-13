@@ -990,6 +990,15 @@ async function handleChatStream(
 
     // --- Post-loop: compaction check, then handle incomplete tool turns, ask_user, build message ---
 
+    // Signal that the agent's output is complete before any post-loop work
+    // (compaction, incomplete tool turns, etc.) so the client can stop the
+    // streaming indicator immediately rather than waiting for the `done` event
+    // which only fires after compaction finishes.
+    // Only emit when the agent is truly done — no pending continuation or mid-turn work.
+    if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && !state.incompleteToolTurn) {
+      res.write(`event: agent_output_complete\ndata: {}\n\n`);
+    }
+
     // End-of-turn compaction: if we crossed the 75% threshold during this turn,
     // compact NOW before building the final message. This prevents the user from
     // waiting on compaction after their response appears complete.

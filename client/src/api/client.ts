@@ -115,6 +115,7 @@ export interface StreamCallbacks {
   onWarning?: (warning: StreamWarning) => void;
   onCompacting?: () => void;
   onCompaction?: (info: { removedCount: number; remainingCount: number; summaryMessage?: import("../types").ChatMessage | null }) => void;
+  onAgentOutputComplete?: () => void;
   onTitleUpdate?: (chatId: string, title: string) => void;
   onMessageComplete?: (message: any) => void;
   onFollowUpStart?: (data: any) => void;
@@ -365,6 +366,9 @@ function processSSEEvent(
       break;
     case "compaction":
       callbacks.onCompaction?.(data);
+      break;
+    case "agent_output_complete":
+      callbacks.onAgentOutputComplete?.();
       break;
     case "title_update":
       callbacks.onTitleUpdate?.(data.chatId, data.title);

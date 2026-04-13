@@ -171,8 +171,8 @@ export function useChat(chatId: string | null) {
       doneCalledRef.current = bg.doneCalled;
       abortRef.current = bg.abortController;
 
-      if (!bg.streaming) {
-        // Stream finished while in background — clean up entry
+      if (!bg.streaming && bg.doneCalled) {
+        // Stream fully finished while in background — clean up entry
         bgStreams.delete(chatId!);
         setStreamingSegmentIndex(null);
       }
@@ -501,6 +501,17 @@ export function useChat(chatId: string | null) {
         if (activeChatIdRef.current === streamChatId) {
           setCompacting(true);
           // Don't show sidebar indicator — octahedron is shown inline in TokenIndicator
+        }
+      },
+      onAgentOutputComplete: () => {
+        // The agent finished generating — stop the streaming indicator so it
+        // doesn't overlap with the compaction progress indicator.
+        const bg = bgStreams.get(streamChatId);
+        if (bg) bg.streaming = false;
+        if (activeChatIdRef.current === streamChatId) {
+          setStreaming(false);
+          setStreamingThinkingActive(false);
+          setStreamingSegmentIndex(null);
         }
       },
       onCompaction: (info) => {
