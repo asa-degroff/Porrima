@@ -870,7 +870,11 @@ async function handleChatStream(
             console.log(`[chat] Accumulated state: ${state.allToolCalls.length} tool calls, ${state.allToolResults.length} tool results`);
           }
 
-          if (msg.usage) {
+          // Preserve prior usage on error: the provider initializes msg.usage
+          // to all-zeros and never updates it when the stream errors before
+          // reporting tokens. Overwriting state.finalUsage with that would
+          // wipe the token indicator even though the context is unchanged.
+          if (msg.usage && (msg.usage.totalTokens > 0 || stopReason !== "error")) {
             state.finalUsage = {
               input: msg.usage.input,
               output: msg.usage.output,
