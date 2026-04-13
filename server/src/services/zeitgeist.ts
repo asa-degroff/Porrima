@@ -14,23 +14,97 @@ const ZEITGEIST_BLOCK_ID = "blk-zeitgeist-continuity";
 const ZEITGEIST_BLOCK_NAME = "Zeitgeist - Continuity Block";
 const MAX_BLOCK_CHARS = 4000;
 const ARCHIVAL_THRESHOLD = 2800; // 70% of 4000
+const SYNTHESIS_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes between attempts
+
+// Process-level guards. Synthesis is global state — concurrent runs would
+// race on the read-modify-write of the block (lost archives, duplicate
+// creates). The cooldown prevents scheduler/compaction triggers from spamming
+// the LLM when an attempt didn't actually reduce content (e.g. parse failure).
+let inFlight: Promise<void> | null = null;
+let lastAttemptedAt = 0;
+
+/**
+ * Fire-and-forget trigger for zeitgeist synthesis.
+ *
+ * Resolves the synthesis model, respects `zeitgeistEnabled`, applies the
+ * global cooldown, and runs in the background. Safe to call from request
+ * handlers — never throws, never blocks.
+ */
+export function triggerZeitgeistSynthesis(opts: {
+  chatId?: string;
+  trigger: string;
+}): void {
+  void (async () => {
+    try {
+      const settings = await getSettings();
+      if (settings.zeitgeistEnabled === false) {
+        console.log(`[zeitgeist] Disabled in settings, skipping ${opts.trigger} trigger`);
+        return;
+      }
+      const modelId = await resolveSynthesisModel(settings);
+      if (!modelId) return;
+      await synthesizeZeitgeist(modelId, opts.chatId);
+    } catch (e) {
+      console.error(`[zeitgeist] Background synthesis (${opts.trigger}) failed:`, e);
+    }
+  })();
+}
+
+async function resolveSynthesisModel(settings: any): Promise<string | null> {
+  const configured = settings.extractionModelId || settings.defaultModelId;
+  if (!configured) {
+    console.error("[zeitgeist] No extraction or default model configured");
+    return null;
+  }
+  const fallbackEnabled = settings.extractionFallbackEnabled ?? true;
+  const { discoverOllamaModels } = await import("./models.js");
+  const available = await discoverOllamaModels();
+  const ids = new Set(available.map((m) => m.id));
+  if (ids.has(configured)) return configured;
+  if (fallbackEnabled && available.length > 0) {
+    console.log(
+      `[zeitgeist] Configured model "${configured}" unavailable, falling back to ${available[0].id}`
+    );
+    return available[0].id;
+  }
+  console.error(`[zeitgeist] Model "${configured}" unavailable and fallback disabled`);
+  return null;
+}
 
 /**
  * Synthesize the zeitgeist continuity block.
- * 
+ *
  * This is distinct from regular memory extraction (fact-focused) and daily synthesis (24h cycle).
  * The zeitgeist is a narrative document that captures "where we are right now" — active threads,
  * recent developments, context that matters, unresolved tensions.
- * 
+ *
+ * Concurrent calls are serialized via an in-flight promise; a global cooldown
+ * suppresses repeated attempts within `SYNTHESIS_COOLDOWN_MS`.
+ *
  * @param modelId - The model to use for synthesis
  * @param chatId - Optional chat that triggered this (for context)
- * @param forceArchive - Force archival even if under threshold
  */
 export async function synthesizeZeitgeist(
   modelId: string,
-  chatId?: string,
-  forceArchive: boolean = false
+  chatId?: string
 ): Promise<void> {
+  if (inFlight) {
+    console.log("[zeitgeist] Synthesis already in flight, joining existing run");
+    return inFlight;
+  }
+  if (Date.now() - lastAttemptedAt < SYNTHESIS_COOLDOWN_MS) {
+    const minutesAgo = Math.round((Date.now() - lastAttemptedAt) / 60000);
+    console.log(`[zeitgeist] Last attempt was ${minutesAgo}min ago (cooldown ${SYNTHESIS_COOLDOWN_MS / 60000}min), skipping`);
+    return;
+  }
+  lastAttemptedAt = Date.now();
+  inFlight = runSynthesis(modelId, chatId).finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+async function runSynthesis(modelId: string, chatId?: string): Promise<void> {
   console.log("[zeitgeist] Starting zeitgeist synthesis");
 
   // Step 1: Load recent memories (last 7 days, or from specific chat)
@@ -43,7 +117,7 @@ export async function synthesizeZeitgeist(
   // Step 2: Load current zeitgeist block (if exists)
   const currentBlock = getMemoryBlock(ZEITGEIST_BLOCK_ID);
   const currentContent = currentBlock?.content || "";
-  const needsArchival = forceArchive || currentContent.length > ARCHIVAL_THRESHOLD;
+  const needsArchival = currentContent.length > ARCHIVAL_THRESHOLD;
 
   console.log(
     `[zeitgeist] Current zeitgeist: ${currentContent.length} chars, ${needsArchival ? "needs archival" : "under threshold"}`
@@ -52,29 +126,33 @@ export async function synthesizeZeitgeist(
   // Step 3: Build synthesis prompt
   const prompt = buildZeitgeistSynthesisPrompt(recentMemories, currentContent, needsArchival);
 
-  // Step 4: Call LLM for synthesis
+  // Step 4: Call LLM for synthesis. Only collect text — thinking tokens are
+  // reasoning prose, not the JSON output we're asking for, so feeding them to
+  // the parser would silently corrupt synthesis from reasoning models.
   let synthesisText = "";
-  let thinkingText = "";
-  
+
   await streamChat(
     modelId,
     [{ role: "user", content: prompt, timestamp: Date.now() }],
     ZEITGEIST_SYSTEM_PROMPT,
     (event) => {
       if (event.type === "text_delta") synthesisText += event.delta;
-      else if (event.type === "thinking_delta") thinkingText += event.delta;
     },
     { signal: AbortSignal.timeout(180_000) }
   );
 
-  const finalSynthesis = (synthesisText || thinkingText).trim();
+  const finalSynthesis = synthesisText.trim();
   if (!finalSynthesis) {
-    console.warn("[zeitgeist] LLM returned empty synthesis");
+    console.warn("[zeitgeist] LLM returned empty synthesis (no text output)");
     return;
   }
 
   // Step 5: Parse synthesis output (JSON with newContent and optional archivalContent)
   const parsed = parseZeitgeistSynthesis(finalSynthesis);
+  if (!parsed.newContent) {
+    console.warn("[zeitgeist] Parsed output had no newContent — preserving existing block, skipping cache invalidation");
+    return;
+  }
 
   // Step 6: If archival is needed, create archival block first
   if (needsArchival && parsed.archivalContent) {
@@ -82,52 +160,52 @@ export async function synthesizeZeitgeist(
   }
 
   // Step 7: Update zeitgeist block with new content
-  if (parsed.newContent) {
-    // Enforce MAX_BLOCK_CHARS — if LLM generates oversized content, truncate
-    // and warn. Without this, oversized content triggers an archival loop.
-    let newContent = parsed.newContent;
-    if (newContent.length > MAX_BLOCK_CHARS) {
-      console.warn(
-        `[zeitgeist] Synthesis output (${newContent.length} chars) exceeds MAX_BLOCK_CHARS (${MAX_BLOCK_CHARS}), truncating`
-      );
-      newContent = newContent.slice(0, MAX_BLOCK_CHARS);
-    }
-
-    if (currentBlock) {
-      const updated = updateMemoryBlock(ZEITGEIST_BLOCK_ID, {
-        content: newContent,
-        updatedBy: "agent",
-      });
-      if (!updated) {
-        console.error("[zeitgeist] Failed to update zeitgeist block — block may have been deleted");
-      }
-    } else {
-      createMemoryBlock({
-        id: ZEITGEIST_BLOCK_ID,
-        name: ZEITGEIST_BLOCK_NAME,
-        description: "Continuity block spanning all chats — narrative of who I am and where we are",
-        content: newContent,
-        scope: "global",
-        projectId: "",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        updatedBy: "agent",
-      });
-    }
-    console.log(`[zeitgeist] Updated zeitgeist block (${newContent.length} chars)`);
+  // Enforce MAX_BLOCK_CHARS — if LLM generates oversized content, truncate
+  // and warn. Without this, oversized content triggers an archival loop.
+  let newContent = parsed.newContent;
+  if (newContent.length > MAX_BLOCK_CHARS) {
+    console.warn(
+      `[zeitgeist] Synthesis output (${newContent.length} chars) exceeds MAX_BLOCK_CHARS (${MAX_BLOCK_CHARS}), truncating`
+    );
+    newContent = newContent.slice(0, MAX_BLOCK_CHARS);
   }
 
-  // Step 8: Invalidate caches so active chats see the update
+  if (currentBlock) {
+    const updated = updateMemoryBlock(ZEITGEIST_BLOCK_ID, {
+      content: newContent,
+      updatedBy: "agent",
+    });
+    if (!updated) {
+      console.error("[zeitgeist] Failed to update zeitgeist block — block may have been deleted");
+      return;
+    }
+  } else {
+    createMemoryBlock({
+      id: ZEITGEIST_BLOCK_ID,
+      name: ZEITGEIST_BLOCK_NAME,
+      description: "Continuity block spanning all chats — narrative of who I am and where we are",
+      content: newContent,
+      scope: "global",
+      projectId: "",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      updatedBy: "agent",
+    });
+  }
+  console.log(`[zeitgeist] Updated zeitgeist block (${newContent.length} chars)`);
+
+  // Step 8: Invalidate caches so active chats see the update.
+  // Only runs on a successful write — failed/no-op syntheses preserve cache.
   // Must clear both: the memory context dirty flags (for delta retrieval)
-  // and the stable prefix cache (since zeitgeist is embedded in it)
+  // and the stable prefix cache (since zeitgeist is embedded in it).
   invalidateAllMemoriesCaches();
   invalidateAllStablePrefixCaches();
-  
+
   // Update the trigger chat's zeitgeist synthesis tracking
   if (chatId) {
     await updateChatZeitgeistSynthesisState(chatId, new Date().toISOString());
   }
-  
+
   console.log("[zeitgeist] Synthesis complete");
 }
 
@@ -175,23 +253,20 @@ async function loadRecentMemories(chatId?: string): Promise<Memory[]> {
   // If a chat triggered this, also pull recent memories from that specific chat
   // that might not have appeared in the global 7-day window
   if (chatId) {
-    const notInPlaceholder = memoryIds.size > 0
-      ? Array.from(memoryIds).map(() => "?").join(",")
-      : "NULL";
+    const ids = Array.from(memoryIds);
+    const notInClause = ids.length > 0
+      ? `AND id NOT IN (${ids.map(() => "?").join(",")})`
+      : "";
     const chatStmt = db.prepare(`
       SELECT id, text, category, importance, created_at as createdAt, source_chat_id as sourceChatId
       FROM memories
       WHERE source_chat_id = ?
-        AND id NOT IN (${notInPlaceholder})
+        ${notInClause}
       ORDER BY created_at DESC
       LIMIT 20
     `);
 
-    const chatArgs = memoryIds.size > 0
-      ? [chatId, ...Array.from(memoryIds)]
-      : [chatId];
-
-    const chatRows = chatStmt.all(...chatArgs) as any[];
+    const chatRows = chatStmt.all(chatId, ...ids) as any[];
     for (const row of chatRows) {
       memories.push({
         id: row.id,
@@ -317,12 +392,15 @@ async function createArchivalBlock(
   reasoning: string = ""
 ): Promise<void> {
   const archiveDate = new Date().toISOString().split("T")[0];
-  
+
   // Generate a one-line title based on the content
   const title = await generateArchiveTitle(content, archiveDate);
-  
-  const archiveName = `Zeitgeist Archive - ${archiveDate}`;
-  const archiveDescription = `${title}`;
+
+  // Include the title in the name so multiple archives on the same day stay
+  // distinguishable in listings. The "Zeitgeist Archive - YYYY-MM-DD" prefix
+  // is preserved so existing LIKE-prefix searches continue to match.
+  const archiveName = `Zeitgeist Archive - ${archiveDate}: ${title}`;
+  const archiveDescription = title;
 
   // Prepend reasoning to the archival content
   const fullContent = `# Zeitgeist Archive - ${archiveDate}
@@ -447,8 +525,9 @@ export function getZeitgeistArchiveInstruction(): string {
 
 Zeitgeist archives are available for historical context. Each archive represents a snapshot of the continuity block from a specific date. When you retrieve memories from a particular date, you can search for the corresponding zeitgeist archive using:
 
-- Search query: "zeitgeist-archive-YYYY-MM-DD" (replace with the date)
-- Use memory block search tools to retrieve the full archive content
+- list_memory_blocks with query: "Zeitgeist Archive - YYYY-MM-DD" (replace with the date)
+- Or just "Zeitgeist Archive" to list all archives chronologically
+- Then use read_memory_block(id) to retrieve the full archive content
 
 This allows you to understand the narrative context from that period, not just isolated facts.`;
 }

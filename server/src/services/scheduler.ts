@@ -6,7 +6,7 @@ import { extractDelayedMemories } from "./memory-extraction.js";
 import { getBlueskyPoller } from "./bluesky-poller.js";
 import { BLUESKY_SYSTEM_PROMPT } from "../routes/bluesky.js";
 import { enrichCorpusBatch } from "./image-corpus.js";
-import { synthesizeZeitgeist, shouldTriggerZeitgeistSynthesis } from "./zeitgeist.js";
+import { triggerZeitgeistSynthesis, shouldTriggerZeitgeistSynthesis } from "./zeitgeist.js";
 
 const SYNTHESIS_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -203,64 +203,29 @@ async function findChatsNeedingZeitgeistSynthesis(thresholdMs: number): Promise<
  */
 async function checkAndRunZeitgeistSynthesis() {
   try {
-    const settings = await getSettings();
-    const enabled = settings.zeitgeistEnabled ?? true;
-    const thresholdHours = settings.zeitgeistInactivityThresholdHours ?? DEFAULT_ZEITGEIST_INACTIVITY_THRESHOLD_HOURS;
-    const thresholdMs = thresholdHours * 60 * 60 * 1000;
-    
-    if (!enabled) {
-      console.log("[scheduler] Zeitgeist synthesis disabled in settings");
-      return;
-    }
-    
-    // Check if zeitgeist needs synthesis based on capacity
+    // Capacity gate first — cheap query, avoids loading settings/models when
+    // there's nothing to do. The wrapper handles enabled/model resolution.
     if (!shouldTriggerZeitgeistSynthesis()) {
       console.log("[scheduler] Zeitgeist under capacity threshold, skipping deferred check");
       return;
     }
-    
-    // Determine synthesis model from settings
-    const configuredModelId = settings.extractionModelId || settings.defaultModelId;
-    const fallbackEnabled = settings.extractionFallbackEnabled ?? true;
-    
-    // Discover available models once per run
-    const { discoverOllamaModels } = await import("./models.js");
-    const availableModels = await discoverOllamaModels();
-    const availableModelIds = new Set(availableModels.map(m => m.id));
-    
-    // Resolve synthesis model
-    let synthesisModelId = configuredModelId;
-    if (!availableModelIds.has(synthesisModelId)) {
-      if (fallbackEnabled && availableModels.length > 0) {
-        console.log(`[scheduler] Configured synthesis model "${synthesisModelId}" not available, falling back to ${availableModels[0].id}`);
-        synthesisModelId = availableModels[0].id;
-      } else {
-        console.error(`[scheduler] Synthesis model "${synthesisModelId}" not available and fallback disabled, aborting`);
-        return;
-      }
-    }
-    
-    console.log(`[scheduler] Using zeitgeist synthesis model: ${synthesisModelId}`);
-    
-    // Find inactive chats (we only need one to trigger synthesis)
+
+    const settings = await getSettings();
+    const thresholdHours = settings.zeitgeistInactivityThresholdHours ?? DEFAULT_ZEITGEIST_INACTIVITY_THRESHOLD_HOURS;
+    const thresholdMs = thresholdHours * 60 * 60 * 1000;
+
+    // Pick the most-recently-inactive chat (the chat that just crossed the
+    // threshold) — its memories are the freshest material to weave into the
+    // zeitgeist. Older inactive chats already had their chance on prior ticks.
     const chatIds = await findChatsNeedingZeitgeistSynthesis(thresholdMs);
     if (chatIds.length === 0) {
       console.log("[scheduler] No chats meet zeitgeist inactivity threshold");
       return;
     }
-    
-    console.log(`[scheduler] Found ${chatIds.length} chat(s) needing zeitgeist synthesis, triggering with most recently inactive chat`);
-    
-    // Use the oldest inactive chat as the trigger (first in the list)
+
     const triggerChatId = chatIds[0];
-    
-    try {
-      console.log(`[scheduler] Running zeitgeist synthesis with model ${synthesisModelId}...`);
-      await synthesizeZeitgeist(synthesisModelId, triggerChatId, false);
-      console.log(`[scheduler] Zeitgeist synthesis complete`);
-    } catch (e) {
-      console.error(`[scheduler] Zeitgeist synthesis failed:`, e);
-    }
+    console.log(`[scheduler] Triggering zeitgeist synthesis (${chatIds.length} candidate chats, using most-recently-inactive: ${triggerChatId})`);
+    triggerZeitgeistSynthesis({ chatId: triggerChatId, trigger: "scheduler" });
   } catch (e) {
     console.error("[scheduler] Zeitgeist check failed:", e);
   }

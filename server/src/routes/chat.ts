@@ -1034,14 +1034,13 @@ async function handleChatStream(
               // Extract memories from removed messages (agent chats only)
               if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
                 await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
-                
-                // Trigger zeitgeist synthesis after compaction
-                try {
-                  const { synthesizeZeitgeist } = await import("../services/zeitgeist.js");
-                  await synthesizeZeitgeist(chat.modelId, chat.id, false);
-                } catch (e) {
-                  console.warn("[chat] Zeitgeist synthesis after compaction failed:", e);
-                }
+
+                // Fire-and-forget: synthesis is a long LLM call (up to 180s).
+                // Awaiting it here would stall the user-visible response after
+                // every compaction. The wrapper handles settings gating, model
+                // resolution, mutex, and cooldown.
+                const { triggerZeitgeistSynthesis } = await import("../services/zeitgeist.js");
+                triggerZeitgeistSynthesis({ chatId: chat.id, trigger: "compaction" });
               }
               await saveChat(chat);
               
