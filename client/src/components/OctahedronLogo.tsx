@@ -11,12 +11,21 @@ interface Props {
 }
 
 const RESTING_X = -20
-const RESTING_Y = 15
+const RESTING_Y = 20
 
 // Regular octahedron geometry — tilt angle from CSS +Z axis to face normal
 const FACE_TILT = Math.asin(1 / Math.sqrt(3)) * 180 / Math.PI // ~35.26°
 
 interface Rotation { x: number; y: number }
+
+// Four quadrant resting states: lower-right, lower-left, upper-left, upper-right
+const QUADRANT_RESTING: Rotation[] = [
+  { x: -20, y: 20 },   // lower-right
+  { x: -20, y: -20 },  // lower-left
+  { x: 20, y: -20 },   // upper-left
+  { x: 20, y: 20 },    // upper-right
+]
+
 type Phase = 'idle' | 'spinning' | 'returning'
 
 const SNAP_ORIENTATIONS: Rotation[] = [
@@ -110,13 +119,17 @@ export const OctahedronLogo = memo(function OctahedronLogo({
   const half = size / 2
   const [rotations, setRotations] = useState<Rotation[] | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
+  const [quadrantIndex, setQuadrantIndex] = useState(0)
   const fallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pauseRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const activeRef = useRef(isActive)
 
   const resting = useMemo(
-    () => randomRestingOffsets(count).map(o => ({ x: RESTING_X + o.x, y: RESTING_Y + o.y })),
-    [count],
+    () => {
+      const base = QUADRANT_RESTING[quadrantIndex]
+      return randomRestingOffsets(count).map(o => ({ x: base.x + o.x, y: base.y + o.y }))
+    },
+    [count, quadrantIndex],
   )
 
   useEffect(() => { activeRef.current = isActive }, [isActive])
@@ -148,11 +161,14 @@ export const OctahedronLogo = memo(function OctahedronLogo({
       } else if (phase === 'returning') {
         if (activeRef.current) {
           pauseRef.current = setTimeout(() => {
+            // Cycle to next quadrant
+            setQuadrantIndex((q) => (q + 1) % 4)
             setPhase('spinning')
             setRotations(randomTargets(count))
           }, 120 / speed)
         } else {
           setPhase('idle')
+          setQuadrantIndex(0)
         }
       }
     }, ms)
@@ -170,11 +186,14 @@ export const OctahedronLogo = memo(function OctahedronLogo({
     } else if (phase === 'returning') {
       if (activeRef.current) {
         pauseRef.current = setTimeout(() => {
+          // Cycle to next quadrant
+          setQuadrantIndex((q) => (q + 1) % 4)
           setPhase('spinning')
           setRotations(randomTargets(count))
         }, 120 / speed)
       } else {
         setPhase('idle')
+        setQuadrantIndex(0)
       }
     }
   }, [phase, count, speed])
