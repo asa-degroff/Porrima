@@ -686,6 +686,15 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
 export default function App() {
   const { authState, error, register, login, logout } = useAuth();
+  const { settings: appSettings, loading: settingsLoading } = useSettings();
+
+  // Apply corner shape and radius as soon as settings are available (before auth)
+  useEffect(() => {
+    if (!settingsLoading) {
+      document.documentElement.setAttribute('data-corner', appSettings.cornerShape || 'round');
+      document.documentElement.setAttribute('data-radius', appSettings.cornerRadius || 'default');
+    }
+  }, [appSettings.cornerShape, appSettings.cornerRadius, settingsLoading]);
 
   if (authState === "loading") {
     return (
@@ -702,6 +711,7 @@ export default function App() {
         error={error}
         onRegister={register}
         onLogin={login}
+        cornerShape={appSettings.cornerShape || 'round'}
       />
     );
   }

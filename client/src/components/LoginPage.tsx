@@ -1,9 +1,10 @@
 import { lazy, Suspense } from "react";
 import type { AuthState } from "../hooks/useAuth";
+import type { CornerShape } from "../types";
 import { OctahedronLogo } from "./OctahedronLogo";
 
-const RippleGridBackground = lazy(() =>
-  import("./RippleGridBackground").then((m) => ({ default: m.RippleGridBackground }))
+const RippleDotsBackground = lazy(() =>
+  import("./RippleDotsBackground").then((m) => ({ default: m.RippleDotsBackground }))
 );
 
 interface Props {
@@ -11,15 +12,17 @@ interface Props {
   error: string | null;
   onRegister: () => void;
   onLogin: () => void;
+  cornerShape?: CornerShape;
 }
 
-export function LoginPage({ authState, error, onRegister, onLogin }: Props) {
+export function LoginPage({ authState, error, onRegister, onLogin, cornerShape = 'round' }: Props) {
   const isSetup = authState === "needs-setup";
+  const cornerClass = cornerShape === 'squircle' ? 'corner-squircle' : 'corner-round';
 
   return (
     <div className="flex flex-col md:flex-row items-center justify-center gap-6 h-full relative">
       <Suspense fallback={null}>
-        <RippleGridBackground />
+        <RippleDotsBackground />
       </Suspense>
       {/* Edge shadow vignette */}
       <div className="absolute inset-0 pointer-events-none z-10 shadow-[inset_0_16px_80px_-16px_rgba(0,0,0,0.35),inset_0px_-16px_80px_-16px_rgba(0,0,0,0.35)]" />
@@ -27,10 +30,10 @@ export function LoginPage({ authState, error, onRegister, onLogin }: Props) {
       <div className="flex justify-center">
         <OctahedronLogo isActive count={8} size={64} gap={8} cols={4} speed={0.5} />
       </div>
-      <div className="relative z-10 backdrop-blur-xl bg-white/[0.08] border border-white/10 rounded-2xl px-6 py-5 max-w-xs w-full mx-4">
+      <div className={`relative z-10 backdrop-blur-xl bg-white/[0.08] border border-white/10 rounded-2xl ${cornerClass} px-6 py-5 max-w-xs w-full mx-4`}>
 
         {error && (
-          <div className="mb-4 px-3 py-2 rounded-xl bg-red-500/10 border border-red-400/20 text-red-300 text-sm">
+          <div className={`mb-4 px-3 py-2 rounded-xl ${cornerClass} bg-red-500/10 border border-red-400/20 text-red-300 text-sm`}>
             {error}
           </div>
         )}
@@ -42,7 +45,7 @@ export function LoginPage({ authState, error, onRegister, onLogin }: Props) {
           </h1>
           <button
             onClick={isSetup ? onRegister : onLogin}
-            className="flex-1 px-4 py-2.5 rounded-xl bg-purple-500/20 border border-purple-400/30 text-purple-200 text-sm font-medium hover:bg-purple-500/30 transition-all flex items-center justify-center gap-2"
+            className={`flex-1 px-4 py-2.5 rounded-xl ${cornerClass} bg-purple-500/20 border border-purple-400/30 text-purple-200 text-sm font-medium hover:bg-purple-500/30 transition-all flex items-center justify-center gap-2`}
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
