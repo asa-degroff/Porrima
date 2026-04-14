@@ -218,7 +218,9 @@ export function useChat(chatId: string | null) {
     const bg = chatId ? bgStreams.get(chatId) : undefined;
     setMessages((prev) => {
       const last = prev[prev.length - 1];
-      if (last?.role === "assistant") {
+      // Skip flushing onto a steering placeholder — those deltas belong to the
+      // previous turn and will be finalized via message_complete.
+      if (last?.role === "assistant" && !last._steeringPending) {
         const segments = bg && bg.segments.length > 0 ? bg.segments.map(s => ({ ...s })) : undefined;
         const updated = prev.slice(0, -1);
         updated.push({ ...last, content, segments });
@@ -257,9 +259,10 @@ export function useChat(chatId: string | null) {
           bg.segments.push({ seq: bg.seqCounter++, type: "text", content: delta });
         }
 
-        // Update last message in bgStream
+        // Update last message in bgStream — but not a steering placeholder,
+        // since these deltas belong to the pre-steering generation.
         const last = bg.messages[bg.messages.length - 1];
-        if (last?.role === "assistant") {
+        if (last?.role === "assistant" && !last._steeringPending) {
           bg.messages[bg.messages.length - 1] = { ...last, content: bg.content };
         }
 
@@ -572,14 +575,30 @@ export function useChat(chatId: string | null) {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
 
-        // Finalize the second-to-last assistant message with complete data from server
+        // Finalize the assistant message that just completed on the server.
+        // Prefer an exact content match, but skip steering placeholders — when a
+        // user steered mid-stream, the previous assistant's visible content is
+        // frozen at the pre-steering text while bg.content kept accumulating,
+        // so the content match won't hit; fall back to the most recent
+        // non-placeholder assistant.
         const msgs = bg.messages;
-        // Find the assistant message that just completed (second-to-last assistant)
+        let matchedIdx = -1;
         for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].role === "assistant" && msgs[i].content === bg.content) {
-            msgs[i] = { ...msgs[i], ...message };
+          if (msgs[i].role === "assistant" && !msgs[i]._steeringPending && msgs[i].content === bg.content) {
+            matchedIdx = i;
             break;
           }
+        }
+        if (matchedIdx < 0) {
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            if (msgs[i].role === "assistant" && !msgs[i]._steeringPending) {
+              matchedIdx = i;
+              break;
+            }
+          }
+        }
+        if (matchedIdx >= 0) {
+          msgs[matchedIdx] = { ...msgs[matchedIdx], ...message };
         }
 
         // Reset streaming accumulators for the next response
@@ -608,16 +627,27 @@ export function useChat(chatId: string | null) {
         }
       },
       onFollowUpStart: (_data) => {
-        // The server has picked up a queued message — add assistant placeholder now
+        // The server has picked up a queued message. If the client already
+        // inserted a steering placeholder (via send() while streaming), just
+        // clear its pending flag so deltas start flowing into it. Otherwise
+        // this is a pure follow-up (e.g. queued while offline) — add a fresh
+        // placeholder.
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
 
-        const placeholder: ChatMessage = {
-          role: "assistant",
-          content: "",
-          timestamp: Date.now(),
-        };
-        bg.messages = [...bg.messages, placeholder];
+        const last = bg.messages[bg.messages.length - 1];
+        if (last?.role === "assistant" && last._steeringPending) {
+          const { _steeringPending, ...cleared } = last;
+          void _steeringPending;
+          bg.messages = [...bg.messages.slice(0, -1), cleared];
+        } else {
+          const placeholder: ChatMessage = {
+            role: "assistant",
+            content: "",
+            timestamp: Date.now(),
+          };
+          bg.messages = [...bg.messages, placeholder];
+        }
 
         if (activeChatIdRef.current === streamChatId) {
           setMessages([...bg.messages]);
@@ -740,10 +770,20 @@ export function useChat(chatId: string | null) {
       // If streaming, enqueue the message for follow-up
       if (streaming) {
         const bg = bgStreams.get(targetChatId);
+        // Append user msg + an empty assistant placeholder so the spinner stays
+        // visible and an empty bubble renders during the gap before the server
+        // picks up the queued message. _steeringPending gates delta application
+        // so in-flight content from the pre-steering generation doesn't leak in.
+        const placeholder: ChatMessage = {
+          role: "assistant",
+          content: "",
+          timestamp: Date.now(),
+          _steeringPending: true,
+        };
         if (bg) {
-          bg.messages = [...bg.messages, userMsg];
+          bg.messages = [...bg.messages, userMsg, placeholder];
         }
-        setMessages((prev) => [...prev, userMsg]);
+        setMessages((prev) => [...prev, userMsg, placeholder]);
         apiEnqueueMessage(targetChatId, text, images).catch((err) =>
           console.error("[chat] enqueue failed:", err)
         );

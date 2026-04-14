@@ -67,6 +67,10 @@ export interface ChatMessage {
   _inProgress?: boolean;
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
+  /** Empty assistant placeholder inserted when the user sends a steering message.
+   *  While set, streaming deltas from the pre-steering generation are not applied here
+   *  (they land on the previous assistant msg via message_complete). Cleared by follow_up_start. */
+  _steeringPending?: boolean;
 }
 
 export type ChatType = "agent" | "quick" | "bluesky";
