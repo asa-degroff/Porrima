@@ -10,6 +10,7 @@ const DEFAULT_HEIGHT = 400;
 interface Props {
   artifact: Artifact;
   onArtifactUpdate?: (artifactId: string, newVersion: number) => void;
+  isPinnedView?: boolean;
 }
 
 interface VersionInfo {
@@ -18,7 +19,7 @@ interface VersionInfo {
   changeSummary?: string;
 }
 
-export function ArtifactPanel({ artifact, onArtifactUpdate }: Props) {
+export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView }: Props) {
   const { pinArtifact, unpin, isPinned } = usePinnedItem();
   const isDesktop = useIsDesktop();
   const pinned = isPinned("artifact", artifact.id);
@@ -142,9 +143,9 @@ export function ArtifactPanel({ artifact, onArtifactUpdate }: Props) {
     : '';
 
   return (
-    <div className="mt-3 rounded-xl border border-white/10 overflow-hidden bg-black/20">
+    <div className={isPinnedView ? "flex-1 min-h-0 flex flex-col rounded-xl border border-white/10 overflow-hidden bg-black/20" : "mt-3 rounded-xl border border-white/10 overflow-hidden bg-black/20"}>
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-white/[0.03]">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-white/[0.03] shrink-0">
         <div className="flex items-center gap-2">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-blue-400">
             <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
@@ -241,14 +242,14 @@ export function ArtifactPanel({ artifact, onArtifactUpdate }: Props) {
 
       {/* Content */}
       {showCode ? (
-        <div className="p-3 max-h-[400px] overflow-auto">
+        <div className={isPinnedView ? "flex-1 min-h-0 overflow-auto p-3" : "p-3 max-h-[400px] overflow-auto"}>
           <pre className="text-xs text-white/70 font-mono whitespace-pre-wrap">
             {isLoadingVersion ? "Loading..." : (sourceCode ?? "Loading source...")}
           </pre>
         </div>
       ) : (
         <>
-          <div className={`transition-colors duration-150 ${iframeLoaded ? "bg-white" : "bg-black/20"}`}>
+          <div className={`transition-colors duration-150 ${iframeLoaded ? "bg-white" : "bg-black/20"} ${isPinnedView ? "flex-1 min-h-0 flex flex-col" : ""}`}>
             {iframeError ? (
               <div className="p-4 text-center text-sm text-gray-500">
                 Failed to load artifact preview
@@ -257,27 +258,29 @@ export function ArtifactPanel({ artifact, onArtifactUpdate }: Props) {
               <iframe
                 ref={iframeRef}
                 src={blobUrl}
-                className={`w-full border-0 transition-opacity duration-150 ${iframeLoaded ? "opacity-100" : "opacity-0"}`}
-                style={{ height: `${height}px`, colorScheme: "normal", background: "transparent", pointerEvents: dragging ? "none" : "auto" }}
+                className={`w-full border-0 transition-opacity duration-150 ${iframeLoaded ? "opacity-100" : "opacity-0"} ${isPinnedView ? "flex-1 min-h-0" : ""}`}
+                style={isPinnedView ? { colorScheme: "normal", background: "transparent", pointerEvents: dragging ? "none" : "auto" } : { height: `${height}px`, colorScheme: "normal", background: "transparent", pointerEvents: dragging ? "none" : "auto" }}
                 title={`${artifact.title} (v${selectedVersion})`}
                 onLoad={handleIframeLoad}
                 onError={() => setIframeError(true)}
               />
             ) : (
-              <div className="flex items-center justify-center" style={{ height: `${height}px` }}>
+              <div className="flex items-center justify-center" style={{ height: isPinnedView ? "100%" : `${height}px` }}>
                 <div className="text-sm text-white/40">
                   {isLoadingVersion ? `Loading version ${selectedVersion}...` : "Loading preview..."}
                 </div>
               </div>
             )}
           </div>
-          {/* Vertical resize handle */}
-          <div
-            onMouseDown={handleDragStart}
-            className="h-2 cursor-row-resize flex items-center justify-center bg-white/[0.03] hover:bg-white/[0.08] border-t border-white/10 rounded-b-xl transition-colors"
-          >
-            <div className="w-8 h-0.5 rounded-full bg-white/20" />
-          </div>
+          {/* Vertical resize handle — hidden when in pinned side panel */}
+          {!isPinnedView && (
+            <div
+              onMouseDown={handleDragStart}
+              className="h-2 cursor-row-resize flex items-center justify-center bg-white/[0.03] hover:bg-white/[0.08] border-t border-white/10 rounded-b-xl transition-colors"
+            >
+              <div className="w-8 h-0.5 rounded-full bg-white/20" />
+            </div>
+          )}
         </>
       )}
     </div>

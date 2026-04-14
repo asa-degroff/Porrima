@@ -9,9 +9,10 @@ const DEFAULT_HEIGHT = 450;
 
 interface Props {
   visual: InlineVisualType;
+  isPinnedView?: boolean;
 }
 
-export function InlineVisual({ visual }: Props) {
+export function InlineVisual({ visual, isPinnedView }: Props) {
   const { pinVisual, unpin, isPinned } = usePinnedItem();
   const isDesktop = useIsDesktop();
   const pinned = isPinned("visual", visual.id);
@@ -89,7 +90,7 @@ html, body { background: transparent !important; }
 
   return (
     <div
-      className="mt-3 rounded-xl overflow-hidden"
+      className={isPinnedView ? "flex-1 min-h-0 flex flex-col rounded-xl overflow-hidden" : "mt-3 rounded-xl overflow-hidden"}
       style={{
         border: "1px solid rgba(var(--theme-secondary), 0.2)",
         background: "rgba(var(--theme-secondary), 0.03)",
@@ -97,7 +98,7 @@ html, body { background: transparent !important; }
     >
       {/* Compact header */}
       <div
-        className="flex items-center justify-between px-3 py-1.5"
+        className="flex items-center justify-between px-3 py-1.5 shrink-0"
         style={{
           borderBottom: "1px solid rgba(var(--theme-secondary), 0.15)",
           background: "rgba(var(--theme-secondary), 0.05)",
@@ -144,18 +145,18 @@ html, body { background: transparent !important; }
       </div>
 
       {/* Iframe content */}
-      <div className={`transition-colors duration-150 ${iframeLoaded ? "bg-transparent" : "bg-black/10"}`}>
+      <div className={`transition-colors duration-150 ${iframeLoaded ? "bg-transparent" : "bg-black/10"} ${isPinnedView ? "flex-1 min-h-0 flex flex-col" : ""}`}>
         {blobUrl ? (
           <iframe
             ref={iframeRef}
             src={blobUrl}
-            className={`w-full border-0 transition-opacity duration-150 ${iframeLoaded ? "opacity-100" : "opacity-0"}`}
-            style={{ height: `${height}px`, colorScheme: "normal", background: "transparent" }}
+            className={`w-full border-0 transition-opacity duration-150 ${iframeLoaded ? "opacity-100" : "opacity-0"} ${isPinnedView ? "flex-1 min-h-0" : ""}`}
+            style={isPinnedView ? { colorScheme: "normal", background: "transparent" } : { height: `${height}px`, colorScheme: "normal", background: "transparent" }}
             title={visual.title}
             onLoad={handleIframeLoad}
           />
         ) : (
-          <div className="flex items-center justify-center" style={{ height: `${height}px` }}>
+          <div className="flex items-center justify-center" style={{ height: isPinnedView ? "100%" : `${height}px` }}>
             <div className="text-sm text-white/40">Loading...</div>
           </div>
         )}

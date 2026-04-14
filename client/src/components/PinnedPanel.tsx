@@ -7,11 +7,11 @@ export function PinnedPanel() {
   if (!pinnedItem) return null;
 
   return (
-    <div className="hidden lg:flex flex-col flex-1 min-w-0 min-h-0 overflow-y-auto px-3 md:px-4 py-3 md:py-4">
+    <div className="hidden lg:flex flex-col flex-1 min-w-0 min-h-0 px-3 md:px-4 py-3 md:py-4">
       {pinnedItem.kind === "artifact" ? (
-        <ArtifactPanel artifact={pinnedItem.artifact} />
+        <ArtifactPanel artifact={pinnedItem.artifact} isPinnedView />
       ) : (
-        <InlineVisual visual={pinnedItem.visual} />
+        <InlineVisual visual={pinnedItem.visual} isPinnedView />
       )}
     </div>
   );

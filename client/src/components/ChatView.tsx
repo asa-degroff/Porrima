@@ -130,7 +130,7 @@ export function ChatView({
   projectId,
   streamingSegmentIndex,
 }: Props) {
-  const { unpin } = usePinnedItem();
+  const { unpin, pinnedItem } = usePinnedItem();
   useEffect(() => {
     unpin();
   }, [chatId, unpin]);
@@ -552,8 +552,8 @@ export function ChatView({
         )}
       </div>
 
-        {/* Vertical divider between messages and pinned panel (desktop only) */}
-        <div className="hidden lg:block w-px bg-white/10" />
+        {/* Vertical divider between messages and pinned panel (desktop only, only when pinned) */}
+        {pinnedItem && <div className="hidden lg:block w-px bg-white/10" />}
 
         <PinnedPanel />
 
