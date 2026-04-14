@@ -163,6 +163,7 @@ export interface Settings {
   backgroundEffect?: BackgroundEffect;
   flatBackground?: boolean;
   chromaticAberration?: boolean;
+  mouseWarp?: boolean;
   cornerShape?: CornerShape;
   cornerRadius?: CornerRadius;
   systemPromptPresets?: SystemPromptPreset[];

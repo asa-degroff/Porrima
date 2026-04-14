@@ -159,8 +159,65 @@ export function RippleDotsBackground() {
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
 
-    // Radial chromatic aberration offset, quadratic falloff from center.
-    // sign = +1 outward (red), -1 inward (blue), 0 = no offset (base pass).
+    // Mouse-warp state: the ripple center lerps toward the cursor each frame
+    // so fast movement drags the distortion smoothly through intermediate
+    // positions. A decaying trail of breadcrumbs is dropped along the way so
+    // earlier positions keep rippling briefly — like a wake through water.
+    const WARP_FOLLOW = 0.2;
+    const TRAIL_CAPACITY = 5;
+    const TRAIL_MIN_DIST = 40 * RESOLUTION_SCALE;
+    const TRAIL_MIN_DIST_SQ = TRAIL_MIN_DIST * TRAIL_MIN_DIST;
+    const TRAIL_DECAY = 0.88;
+    const TRAIL_EPSILON = 0.03;
+    let targetMouseX = 0;
+    let targetMouseY = 0;
+    let committedMouseX = 0;
+    let committedMouseY = 0;
+    let warpTargetGate = 0;
+    let warpGate = 0;
+    let mouseEverSeen = false;
+
+    // Trail ring buffer (breadcrumbs along the cursor's path)
+    const trailX = new Float32Array(TRAIL_CAPACITY);
+    const trailY = new Float32Array(TRAIL_CAPACITY);
+    const trailS = new Float32Array(TRAIL_CAPACITY);
+    let trailLen = 0;
+    let lastDropX = 0;
+    let lastDropY = 0;
+    let hasDrop = false;
+
+    // Active warp centers each frame (primary lerped point + alive trail)
+    const CENTER_CAPACITY = TRAIL_CAPACITY + 1;
+    const centerX = new Float32Array(CENTER_CAPACITY);
+    const centerY = new Float32Array(CENTER_CAPACITY);
+    const centerS = new Float32Array(CENTER_CAPACITY);
+    let numCenters = 0;
+
+    function onMouseMove(e: MouseEvent) {
+      targetMouseX = e.clientX * RESOLUTION_SCALE;
+      targetMouseY = e.clientY * RESOLUTION_SCALE;
+      if (!mouseEverSeen) {
+        committedMouseX = targetMouseX;
+        committedMouseY = targetMouseY;
+        mouseEverSeen = true;
+      }
+      warpTargetGate = 1;
+    }
+    function onMouseLeave() {
+      warpTargetGate = 0;
+    }
+    window.addEventListener("mousemove", onMouseMove, { passive: true });
+    document.addEventListener("mouseleave", onMouseLeave);
+    window.addEventListener("blur", onMouseLeave);
+
+    // Per-frame warp params (populated in draw(), read by drawDots)
+    let warpActive = false;
+    let warpRadius = 0;
+    let warpR2 = 0;
+    let warpEffStrength = 0;
+
+    // Radial chromatic aberration + mouse-warp per dot.
+    // aberration sign = +1 outward (red), -1 inward (blue), 0 = no offset (base pass).
     function drawDots(strength: number, sign: number, cx: number, cy: number, invMaxR2: number, halfDot: number) {
       const hasAberration = strength !== 0;
       for (let i = 0; i < numPoints; i++) {
@@ -168,6 +225,32 @@ export function RippleDotsBackground() {
                   sx2[gridNoiseXIdx[i]] * cy2[gridNoiseYIdx[i]] * 0.5;
         let px = gridRenderX[i] + n * dX;
         let py = gridRenderY[i] + n * dY;
+        if (warpActive) {
+          // Blend overlapping ripples as a weighted average of push vectors,
+          // weighted by each center's influence (s²·strength). Prevents two
+          // overlapping ripples from producing an additive double-bump.
+          let sumPX = 0, sumPY = 0, sumW = 0;
+          for (let k = 0; k < numCenters; k++) {
+            const mdx = px - centerX[k];
+            const mdy = py - centerY[k];
+            const md2 = mdx * mdx + mdy * mdy;
+            if (md2 < warpR2) {
+              const md = Math.sqrt(md2);
+              // sin²(π·t) bump: 0 at cursor, peaks mid-radius, 0 at edge.
+              // Zero derivative at t=0 eliminates the flip artifact near the cursor.
+              const s = Math.sin(Math.PI * md / warpRadius);
+              const inf = s * s * centerS[k];
+              const pushMag = inf * warpEffStrength / (md + 1e-6);
+              sumPX += mdx * pushMag * inf;
+              sumPY += mdy * pushMag * inf;
+              sumW += inf;
+            }
+          }
+          if (sumW > 0) {
+            px += sumPX / sumW;
+            py += sumPY / sumW;
+          }
+        }
         if (hasAberration) {
           const ddx = px - cx;
           const ddy = py - cy;
@@ -192,6 +275,81 @@ export function RippleDotsBackground() {
       const gridOpacity = parseFloat(computedStyle.getPropertyValue('--theme-grid-opacity').trim() || '0.12');
       const aberrationCssPx = parseFloat(computedStyle.getPropertyValue('--theme-aberration-strength').trim() || '0');
       const aberrationStr = aberrationCssPx * RESOLUTION_SCALE;
+      const warpRadiusCssPx = parseFloat(computedStyle.getPropertyValue('--theme-warp-radius').trim() || '0');
+      const warpStrengthCssPx = parseFloat(computedStyle.getPropertyValue('--theme-warp-strength').trim() || '0');
+
+      if (mouseEverSeen) {
+        committedMouseX += (targetMouseX - committedMouseX) * WARP_FOLLOW;
+        committedMouseY += (targetMouseY - committedMouseY) * WARP_FOLLOW;
+      }
+      warpGate += (warpTargetGate - warpGate) * 0.08;
+
+      // Drop a trail breadcrumb when the primary has moved far enough.
+      // Gated by warpGate so we don't seed trail while the cursor is leaving.
+      if (mouseEverSeen && warpGate > 0.5) {
+        if (!hasDrop) {
+          lastDropX = committedMouseX;
+          lastDropY = committedMouseY;
+          hasDrop = true;
+        } else {
+          const ddx = committedMouseX - lastDropX;
+          const ddy = committedMouseY - lastDropY;
+          if (ddx * ddx + ddy * ddy > TRAIL_MIN_DIST_SQ) {
+            if (trailLen < TRAIL_CAPACITY) {
+              trailX[trailLen] = committedMouseX;
+              trailY[trailLen] = committedMouseY;
+              trailS[trailLen] = 1;
+              trailLen++;
+            } else {
+              for (let k = 0; k < TRAIL_CAPACITY - 1; k++) {
+                trailX[k] = trailX[k + 1];
+                trailY[k] = trailY[k + 1];
+                trailS[k] = trailS[k + 1];
+              }
+              trailX[TRAIL_CAPACITY - 1] = committedMouseX;
+              trailY[TRAIL_CAPACITY - 1] = committedMouseY;
+              trailS[TRAIL_CAPACITY - 1] = 1;
+            }
+            lastDropX = committedMouseX;
+            lastDropY = committedMouseY;
+          }
+        }
+      }
+
+      // Decay trail and compact in-place
+      {
+        let w = 0;
+        for (let r = 0; r < trailLen; r++) {
+          const s = trailS[r] * TRAIL_DECAY;
+          if (s >= TRAIL_EPSILON) {
+            trailX[w] = trailX[r];
+            trailY[w] = trailY[r];
+            trailS[w] = s;
+            w++;
+          }
+        }
+        trailLen = w;
+      }
+
+      // Assemble active centers: primary (if cursor present) + trail
+      numCenters = 0;
+      if (mouseEverSeen && warpGate > 0.01) {
+        centerX[numCenters] = committedMouseX;
+        centerY[numCenters] = committedMouseY;
+        centerS[numCenters] = warpGate;
+        numCenters++;
+      }
+      for (let k = 0; k < trailLen; k++) {
+        centerX[numCenters] = trailX[k];
+        centerY[numCenters] = trailY[k];
+        centerS[numCenters] = trailS[k];
+        numCenters++;
+      }
+
+      warpRadius = warpRadiusCssPx * RESOLUTION_SCALE;
+      warpR2 = warpRadius * warpRadius;
+      warpEffStrength = warpStrengthCssPx * RESOLUTION_SCALE;
+      warpActive = numCenters > 0 && warpR2 > 0 && warpEffStrength > 0;
 
       const t = time * speed;
       const t07 = t * 0.7;
@@ -242,6 +400,9 @@ export function RippleDotsBackground() {
       running = false;
       if (animId) cancelAnimationFrame(animId);
       window.removeEventListener("resize", resize);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("blur", onMouseLeave);
+      document.removeEventListener("mouseleave", onMouseLeave);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (window.visualViewport) {
         window.visualViewport.removeEventListener("resize", resize);

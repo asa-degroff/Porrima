@@ -20,6 +20,8 @@
   --theme-grid: 139, 92, 246;         /* purple-500 for grid lines */
   --theme-grid-opacity: 0.12;
   --theme-aberration-strength: 8;     /* chromatic aberration max offset in CSS px at corners; 0 = off. Overridden to 0 by [data-chromatic-aberration="off"]. */
+  --theme-warp-radius: 300;           /* mouse-warp radius of influence, CSS px. 0 = off. Zeroed by [data-mouse-warp="off"]. */
+  --theme-warp-strength: 4;          /* mouse-warp peak displacement, CSS px. Peak occurs mid-radius, not at cursor. */
 
   --theme-bg-gradient: linear-gradient(135deg, #0f172a 0%, #181845 25%, #1c1a49 38%, #1e1b4b 50%, #1c1a49 62%, #181845 75%, #0f172a 100%);
   --theme-bg-flat: #1e1b4b;
@@ -179,6 +181,11 @@
 /* Disable chromatic aberration globally when user toggles it off */
 [data-chromatic-aberration="off"] {
   --theme-aberration-strength: 0;
+}
+
+/* Disable mouse warp globally when user toggles it off */
+[data-mouse-warp="off"] {
+  --theme-warp-radius: 0;
 }
 
 /* Utility classes for theme colors */

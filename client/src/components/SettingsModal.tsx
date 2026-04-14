@@ -142,6 +142,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [flatBackground, setFlatBackground] = useState(settings.flatBackground ?? false);
   const [chromaticAberration, setChromaticAberration] = useState(settings.chromaticAberration ?? true);
+  const [mouseWarp, setMouseWarp] = useState(settings.mouseWarp ?? true);
   const [cornerShape, setCornerShape] = useState<CornerShape>(settings.cornerShape || "round");
   const [cornerRadius, setCornerRadius] = useState<CornerRadius>(settings.cornerRadius || "default");
   const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
@@ -336,6 +337,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       backgroundEffect,
       flatBackground,
       chromaticAberration,
+      mouseWarp,
       cornerShape,
       cornerRadius,
       systemPromptPresets: presets.length > 0 ? presets : undefined,
@@ -1455,6 +1457,32 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <div
                     className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white/80 transition-transform ${
                       chromaticAberration ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Mouse Warp */}
+          {(backgroundEffect === "ripple-grid" || backgroundEffect === "ripple-dots") && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="block text-sm font-medium text-white/60">Mouse Warp</label>
+                  <p className="text-white/30 text-xs mt-0.5">
+                    Subtle repulsion of grid/dots around the cursor.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setMouseWarp(!mouseWarp)}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    mouseWarp ? "bg-white/20" : "bg-white/10"
+                  }`}
+                >
+                  <div
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white/80 transition-transform ${
+                      mouseWarp ? "translate-x-5" : "translate-x-0"
                     }`}
                   />
                 </button>

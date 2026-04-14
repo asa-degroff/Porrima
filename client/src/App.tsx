@@ -164,6 +164,16 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, [settings.chromaticAberration]);
 
+  // Apply mouse warp toggle (default on when undefined)
+  useEffect(() => {
+    const enabled = settings.mouseWarp ?? true;
+    if (enabled) {
+      document.documentElement.removeAttribute('data-mouse-warp');
+    } else {
+      document.documentElement.setAttribute('data-mouse-warp', 'off');
+    }
+  }, [settings.mouseWarp]);
+
   // Apply corner shape
   useEffect(() => {
     document.documentElement.setAttribute('data-corner', settings.cornerShape || 'round');
