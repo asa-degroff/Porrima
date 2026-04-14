@@ -86,7 +86,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       });
   }, []);
 
-  // Persist lastActiveChatId to settings (only when it changes, not on every settings update)
+  // Persist lastActiveChatId to settings (debounced, so we don't churn writes)
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   useEffect(() => {
@@ -286,10 +286,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   // Cache-first: show IDB cached data immediately, refresh from server in background
   const selectChat = useCallback(
     async (id: string) => {
-      // Track the previous active chat before switching
-      if (activeChatId && activeChatId !== id) {
-        setLastActiveChatId(activeChatId);
-      }
       setActiveChatId(id);
 
       // If this chat has a background stream (active or recently completed),
@@ -353,15 +349,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     if (!chat.contextWindow && modelId && settings.modelContextWindows?.[modelId]) {
       chat.contextWindow = settings.modelContextWindows[modelId];
     }
-    // Track the previous chat as warm before switching
-    if (activeChatId) {
-      setLastActiveChatId(activeChatId);
-    }
     setActiveChatId(chat.id);
     setActiveChat(chat);
     setActiveChatData(chat);
     loadMessages([]);
-  }, [activeChatId, settings.defaultModelId, settings.modelContextWindows, models, createChat, loadMessages, setActiveChatData]);
+  }, [settings.defaultModelId, settings.modelContextWindows, models, createChat, loadMessages, setActiveChatData]);
 
   const handleDeleteChat = useCallback(
     async (id: string) => {
@@ -398,16 +390,18 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   const handleSend = useCallback(
     (text: string, images?: import("./types").ImageAttachment[]) => {
+      if (activeChatId) setLastActiveChatId(activeChatId);
       send(text, images);
     },
-    [send]
+    [activeChatId, send]
   );
 
   const handleEditMessage = useCallback(
     (index: number, newText: string, images?: import("./types").ImageAttachment[]) => {
+      if (activeChatId) setLastActiveChatId(activeChatId);
       editMessage(index, newText, images);
     },
-    [editMessage]
+    [activeChatId, editMessage]
   );
 
   const hasActiveChat = activeChat != null;

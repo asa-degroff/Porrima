@@ -57,12 +57,14 @@ export function ChatListItem({ chat, active, lastActive = false, onSelect, onDel
       onClick={onSelect}
       onContextMenu={handleContextMenu}
       {...longPressProps}
-      className={`w-full text-left px-2.5 py-2 rounded-xl transition-all group relative ${
-        active
-          ? "bg-white/15 border border-white/20"
-          : lastActive
-            ? "hover:bg-white/8 border border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
-            : "hover:bg-white/8 border border-transparent"
+      className={`w-full text-left px-2.5 py-2 rounded-xl transition-all group relative border ${
+        active ? "bg-white/15" : "hover:bg-white/8"
+      } ${
+        lastActive
+          ? "border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
+          : active
+            ? "border-white/20"
+            : "border-transparent"
       }`}
     >
       {/* Always-rendered content to maintain consistent height */}
