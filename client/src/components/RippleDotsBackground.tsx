@@ -164,13 +164,21 @@ export function RippleDotsBackground() {
     // positions. A decaying trail of breadcrumbs is dropped along the way so
     // earlier positions keep rippling briefly — like a wake through water.
     const WARP_FOLLOW = 0.2;
+    const WARP_GATE_EASE = 0.04; // slower ramp-in softens sudden cursor entry
     const TRAIL_CAPACITY = 5;
     const TRAIL_MIN_DIST = 40 * RESOLUTION_SCALE;
     const TRAIL_MIN_DIST_SQ = TRAIL_MIN_DIST * TRAIL_MIN_DIST;
     const TRAIL_DECAY = 0.88;
     const TRAIL_EPSILON = 0.03;
+    // Velocity damping: fast whips get a lower speedFactor, which scales down
+    // both the primary gate and new breadcrumbs' birth strength.
+    const SPEED_DAMP_K = 0.02;
+    const SPEED_SMOOTH = 0.3;
     let targetMouseX = 0;
     let targetMouseY = 0;
+    let prevTargetMouseX = 0;
+    let prevTargetMouseY = 0;
+    let smoothedSpeed = 0;
     let committedMouseX = 0;
     let committedMouseY = 0;
     let warpTargetGate = 0;
@@ -199,6 +207,8 @@ export function RippleDotsBackground() {
       if (!mouseEverSeen) {
         committedMouseX = targetMouseX;
         committedMouseY = targetMouseY;
+        prevTargetMouseX = targetMouseX;
+        prevTargetMouseY = targetMouseY;
         mouseEverSeen = true;
       }
       warpTargetGate = 1;
@@ -279,10 +289,17 @@ export function RippleDotsBackground() {
       const warpStrengthCssPx = parseFloat(computedStyle.getPropertyValue('--theme-warp-strength').trim() || '0');
 
       if (mouseEverSeen) {
+        const vdx = targetMouseX - prevTargetMouseX;
+        const vdy = targetMouseY - prevTargetMouseY;
+        const instantSpeed = Math.sqrt(vdx * vdx + vdy * vdy);
+        smoothedSpeed += (instantSpeed - smoothedSpeed) * SPEED_SMOOTH;
+        prevTargetMouseX = targetMouseX;
+        prevTargetMouseY = targetMouseY;
         committedMouseX += (targetMouseX - committedMouseX) * WARP_FOLLOW;
         committedMouseY += (targetMouseY - committedMouseY) * WARP_FOLLOW;
       }
-      warpGate += (warpTargetGate - warpGate) * 0.08;
+      warpGate += (warpTargetGate - warpGate) * WARP_GATE_EASE;
+      const speedFactor = 1 / (1 + smoothedSpeed * SPEED_DAMP_K);
 
       // Drop a trail breadcrumb when the primary has moved far enough.
       // Gated by warpGate so we don't seed trail while the cursor is leaving.
@@ -298,7 +315,7 @@ export function RippleDotsBackground() {
             if (trailLen < TRAIL_CAPACITY) {
               trailX[trailLen] = committedMouseX;
               trailY[trailLen] = committedMouseY;
-              trailS[trailLen] = 1;
+              trailS[trailLen] = speedFactor;
               trailLen++;
             } else {
               for (let k = 0; k < TRAIL_CAPACITY - 1; k++) {
@@ -308,7 +325,7 @@ export function RippleDotsBackground() {
               }
               trailX[TRAIL_CAPACITY - 1] = committedMouseX;
               trailY[TRAIL_CAPACITY - 1] = committedMouseY;
-              trailS[TRAIL_CAPACITY - 1] = 1;
+              trailS[TRAIL_CAPACITY - 1] = speedFactor;
             }
             lastDropX = committedMouseX;
             lastDropY = committedMouseY;
@@ -336,7 +353,7 @@ export function RippleDotsBackground() {
       if (mouseEverSeen && warpGate > 0.01) {
         centerX[numCenters] = committedMouseX;
         centerY[numCenters] = committedMouseY;
-        centerS[numCenters] = warpGate;
+        centerS[numCenters] = warpGate * speedFactor;
         numCenters++;
       }
       for (let k = 0; k < trailLen; k++) {
