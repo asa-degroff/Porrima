@@ -19,7 +19,8 @@
   
   --theme-grid: 139, 92, 246;         /* purple-500 for grid lines */
   --theme-grid-opacity: 0.12;
-  
+  --theme-aberration-strength: 8;     /* chromatic aberration max offset in CSS px at corners; 0 = off. Overridden to 0 by [data-chromatic-aberration="off"]. */
+
   --theme-bg-gradient: linear-gradient(135deg, #0f172a 0%, #181845 25%, #1c1a49 38%, #1e1b4b 50%, #1c1a49 62%, #181845 75%, #0f172a 100%);
   --theme-bg-flat: #1e1b4b;
   --theme-glow: rgba(162, 74, 255, 0.15);
@@ -173,6 +174,11 @@
   --theme-bg-gradient: linear-gradient(135deg, #0f0a07 0%, #1f1510 25%, #241812 38%, #2a1c14 50%, #241812 62%, #1f1510 75%, #0f0a07 100%);
   --theme-bg-flat: #2a1c14;
   --theme-glow: rgba(180, 120, 80, 0.15);
+}
+
+/* Disable chromatic aberration globally when user toggles it off */
+[data-chromatic-aberration="off"] {
+  --theme-aberration-strength: 0;
 }
 
 /* Utility classes for theme colors */

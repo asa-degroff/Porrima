@@ -162,6 +162,7 @@ export interface Settings {
   theme?: Theme;
   backgroundEffect?: BackgroundEffect;
   flatBackground?: boolean;
+  chromaticAberration?: boolean;
   cornerShape?: CornerShape;
   cornerRadius?: CornerRadius;
   systemPromptPresets?: SystemPromptPreset[];

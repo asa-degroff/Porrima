@@ -159,6 +159,27 @@ export function RippleDotsBackground() {
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
 
+    // Radial chromatic aberration offset, quadratic falloff from center.
+    // sign = +1 outward (red), -1 inward (blue), 0 = no offset (base pass).
+    function drawDots(strength: number, sign: number, cx: number, cy: number, invMaxR2: number, halfDot: number) {
+      const hasAberration = strength !== 0;
+      for (let i = 0; i < numPoints; i++) {
+        const n = sx1[gridNoiseXIdx[i]] * cy1[gridNoiseYIdx[i]] +
+                  sx2[gridNoiseXIdx[i]] * cy2[gridNoiseYIdx[i]] * 0.5;
+        let px = gridRenderX[i] + n * dX;
+        let py = gridRenderY[i] + n * dY;
+        if (hasAberration) {
+          const ddx = px - cx;
+          const ddy = py - cy;
+          const d2 = ddx * ddx + ddy * ddy;
+          const f = (d2 * invMaxR2) * strength * sign / (Math.sqrt(d2) + 1e-6);
+          px += ddx * f;
+          py += ddy * f;
+        }
+        ctx!.fillRect(px - halfDot, py - halfDot, dotSize, dotSize);
+      }
+    }
+
     function draw(now: number) {
       animId = requestAnimationFrame(draw);
 
@@ -168,8 +189,9 @@ export function RippleDotsBackground() {
 
       const computedStyle = getComputedStyle(document.documentElement);
       const gridRgb = computedStyle.getPropertyValue('--theme-grid').trim();
-      const gridOpacity = computedStyle.getPropertyValue('--theme-grid-opacity').trim() || '0.12';
-      ctx!.fillStyle = `rgba(${gridRgb}, ${gridOpacity})`;
+      const gridOpacity = parseFloat(computedStyle.getPropertyValue('--theme-grid-opacity').trim() || '0.12');
+      const aberrationCssPx = parseFloat(computedStyle.getPropertyValue('--theme-aberration-strength').trim() || '0');
+      const aberrationStr = aberrationCssPx * RESOLUTION_SCALE;
 
       const t = time * speed;
       const t07 = t * 0.7;
@@ -190,14 +212,25 @@ export function RippleDotsBackground() {
 
       ctx!.clearRect(0, 0, canvasW, canvasH);
 
-      // Draw dots using fillRect — no path overhead, direct pixel blit
+      const cx = canvasW * 0.5;
+      const cy = canvasH * 0.5;
+      const invMaxR2 = 1 / (cx * cx + cy * cy);
       const halfDot = dotSize * 0.5;
-      for (let i = 0; i < numPoints; i++) {
-        const n = sx1[gridNoiseXIdx[i]] * cy1[gridNoiseYIdx[i]] +
-                  sx2[gridNoiseXIdx[i]] * cy2[gridNoiseYIdx[i]] * 0.5;
-        const px = gridRenderX[i] + n * dX;
-        const py = gridRenderY[i] + n * dY;
-        ctx!.fillRect(px - halfDot, py - halfDot, dotSize, dotSize);
+
+      // Base pass: theme color, no offset
+      ctx!.globalCompositeOperation = 'source-over';
+      ctx!.fillStyle = `rgba(${gridRgb}, ${gridOpacity})`;
+      drawDots(0, 0, cx, cy, invMaxR2, halfDot);
+
+      // Chromatic aberration: additive red (outward) + blue (inward) passes
+      if (aberrationStr > 0) {
+        const fringeOpacity = gridOpacity * 0.6;
+        ctx!.globalCompositeOperation = 'lighter';
+        ctx!.fillStyle = `rgba(255, 40, 40, ${fringeOpacity})`;
+        drawDots(aberrationStr, +1, cx, cy, invMaxR2, halfDot);
+        ctx!.fillStyle = `rgba(40, 90, 255, ${fringeOpacity})`;
+        drawDots(aberrationStr, -1, cx, cy, invMaxR2, halfDot);
+        ctx!.globalCompositeOperation = 'source-over';
       }
 
       time += delta * 0.0008;

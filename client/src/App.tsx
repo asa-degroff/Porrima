@@ -154,6 +154,16 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, [settings.flatBackground]);
 
+  // Apply chromatic aberration toggle (default on when undefined)
+  useEffect(() => {
+    const enabled = settings.chromaticAberration ?? true;
+    if (enabled) {
+      document.documentElement.removeAttribute('data-chromatic-aberration');
+    } else {
+      document.documentElement.setAttribute('data-chromatic-aberration', 'off');
+    }
+  }, [settings.chromaticAberration]);
+
   // Apply corner shape
   useEffect(() => {
     document.documentElement.setAttribute('data-corner', settings.cornerShape || 'round');

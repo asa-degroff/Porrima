@@ -141,6 +141,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [flatBackground, setFlatBackground] = useState(settings.flatBackground ?? false);
+  const [chromaticAberration, setChromaticAberration] = useState(settings.chromaticAberration ?? true);
   const [cornerShape, setCornerShape] = useState<CornerShape>(settings.cornerShape || "round");
   const [cornerRadius, setCornerRadius] = useState<CornerRadius>(settings.cornerRadius || "default");
   const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
@@ -334,6 +335,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       theme,
       backgroundEffect,
       flatBackground,
+      chromaticAberration,
       cornerShape,
       cornerRadius,
       systemPromptPresets: presets.length > 0 ? presets : undefined,
@@ -1433,6 +1435,32 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 : "Plain static background with gradient overlay."}
             </p>
           </div>
+
+          {/* Chromatic Aberration */}
+          {(backgroundEffect === "ripple-grid" || backgroundEffect === "ripple-dots") && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="block text-sm font-medium text-white/60">Chromatic Aberration</label>
+                  <p className="text-white/30 text-xs mt-0.5">
+                    Red/blue fringing that grows toward the screen edges, like a lens.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setChromaticAberration(!chromaticAberration)}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    chromaticAberration ? "bg-white/20" : "bg-white/10"
+                  }`}
+                >
+                  <div
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white/80 transition-transform ${
+                      chromaticAberration ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Haptic Feedback */}
           <div id="haptics" className="space-y-2">
