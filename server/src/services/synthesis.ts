@@ -1,4 +1,5 @@
 import { streamChat } from "./agent.js";
+import { getAgentTools, executeTool, type ToolSideEffects } from "./agent-tools.js";
 import { cosineSimilarity, embedBatch } from "./embeddings.js";
 import { dedupAndSave, parseExtractionResponse } from "./memory-extraction.js";
 import {
@@ -23,7 +24,7 @@ import {
   createNotebookEntry,
   updateNotebookEntry,
 } from "./notebook-storage.js";
-import type { ChatMessage, Project, NotebookEntry } from "../types.js";
+import type { ChatMessage, Project, NotebookEntry, Artifact, InlineVisual, ChatToolCall, ChatToolResult } from "../types.js";
 
 const SYNTHESIS_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MERGE_THRESHOLD = 0.90;
@@ -222,25 +223,31 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
 
         let summaryText = "";
         let thinkingText = "";
-        await streamChat(
-          resolvedModelId,
-          [
-            {
-              role: "user",
-              content: promptParts,
-              timestamp: Date.now(),
+        let streamError: Error | null = null;
+        try {
+          await streamChat(
+            resolvedModelId,
+            [
+              {
+                role: "user",
+                content: promptParts,
+                timestamp: Date.now(),
+              },
+            ],
+            "You are the agent writing a daily synthesis of your shared work with the user. Distinguish clearly between what the user did or asked for and what you (the agent) accomplished, suggested, or produced. Use first person for your own actions (\"I implemented...\", \"I suggested...\") and third person for the user (\"the user asked...\", \"they decided...\"). When conversations are grouped by project, synthesize each project's progress separately before drawing cross-project themes. If the user wrote notebook entries, treat them as high-signal — they represent deliberate thoughts the user chose to write down, which may or may not relate to their projects. Write in English. Be concrete and specific — reference actual projects, decisions, and topics rather than vague generalizations. 3-5 paragraphs.",
+            (event) => {
+              if (event.type === "text_delta") {
+                summaryText += event.delta;
+              } else if (event.type === "thinking_delta") {
+                thinkingText += event.delta;
+              }
             },
-          ],
-          "You are the agent writing a daily synthesis of your shared work with the user. Distinguish clearly between what the user did or asked for and what you (the agent) accomplished, suggested, or produced. Use first person for your own actions (\"I implemented...\", \"I suggested...\") and third person for the user (\"the user asked...\", \"they decided...\"). When conversations are grouped by project, synthesize each project's progress separately before drawing cross-project themes. If the user wrote notebook entries, treat them as high-signal — they represent deliberate thoughts the user chose to write down, which may or may not relate to their projects. Write in English. Be concrete and specific — reference actual projects, decisions, and topics rather than vague generalizations. 3-5 paragraphs.",
-          (event) => {
-            if (event.type === "text_delta") {
-              summaryText += event.delta;
-            } else if (event.type === "thinking_delta") {
-              thinkingText += event.delta;
-            }
-          },
-          { signal: AbortSignal.timeout(180_000) }
-        );
+            { signal: AbortSignal.timeout(180_000) }
+          );
+        } catch (e) {
+          streamError = e instanceof Error ? e : new Error(String(e));
+          console.error(`[synthesis] Summary stream failed (model: ${resolvedModelId}):`, streamError.message);
+        }
 
         // Use thinking content as fallback if text output is empty
         // (qwen3 reasoning mode can put all content into thinking tokens)
@@ -254,16 +261,20 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           );
           console.log(`[synthesis] Daily log saved for ${today} (${finalSummary.length} chars)`);
         } else {
-          // Build a minimal summary from what we have so the notebook entry isn't lost
+          // Build a minimal summary from what we have so the notebook entry isn't lost.
+          // Distinguish stream errors from genuine empty output — they need different debugging.
           const digestNote = todaysDigest
             ? `Worked across ${todaysDigest.totalChats} chat(s) today. ${projectNames.length > 0 ? `Projects: ${projectNames.join(", ")}.` : ""}`
             : "No agent chats since last synthesis.";
           const notebookNote = notebookEntries.length > 0
             ? ` ${notebookEntries.filter(e => e.author === "user").length} user notebook entries, ${notebookEntries.filter(e => e.author === "agent").length} agent entries.`
             : "";
-          finalSummary = `# Daily Synthesis\n\n${digestNote}${notebookNote}\n\n*(LLM summary was empty — this is a fallback record to preserve the synthesis cycle.)*`;
+          const reason = streamError
+            ? `LLM stream failed: ${streamError.message}`
+            : "LLM returned no text or thinking content";
+          finalSummary = `# Daily Synthesis\n\n${digestNote}${notebookNote}\n\n*(${reason} — fallback record to preserve the synthesis cycle.)*`;
           console.warn(
-            `[synthesis] LLM returned empty summary for ${today} (model: ${resolvedModelId}). Using fallback summary.`
+            `[synthesis] ${reason} for ${today} (model: ${resolvedModelId}). Using fallback summary.`
           );
         }
 
@@ -978,35 +989,115 @@ async function writeOptionalFollowupNotebookEntry(
     "The synthesis above has been saved to your notebook. Now: is there anything you want to explore further? Perhaps something the user wrote that you'd like to respond to with more depth, or an idea that emerged that you'd like to investigate with tools (web search, artifact creation, etc.)?\n\nIf yes, write a follow-up notebook entry. If nothing calls to you, that's fine too - just output: [No follow-up needed]",
   ].filter(Boolean).join("\n\n");
 
-  const systemPrompt = "You're writing an optional follow-up to your daily synthesis. This is only if something genuinely sparks your curiosity or if you feel the user's notebook entries deserve a more thoughtful response. Don't force it.";
+  const systemPrompt = "You're writing an optional follow-up to your daily synthesis. This is only if something genuinely sparks your curiosity or if you feel the user's notebook entries deserve a more thoughtful response. Don't force it. You have access to tools (web search, artifact creation, memory, filesystem, etc.) — use them when you want to investigate something, then write up what you found.";
 
-  let responseText = "";
-  let thinkingText = "";
-  
+  // Accumulate text across tool-loop iterations. Each streamChat only produces
+  // text up to a tool call; after executing tools we iterate and the model
+  // resumes text generation. The full follow-up is the concatenation.
+  const textChunks: string[] = [];
+  let thinkingFallback = "";
+  const toolCalls: ChatToolCall[] = [];
+  const toolResults: ChatToolResult[] = [];
+  const artifacts: Artifact[] = [];
+  const visuals: InlineVisual[] = [];
+
+  const effects: ToolSideEffects = {
+    onArtifact: (a) => artifacts.push(a),
+    onVisual: (v) => visuals.push(v),
+    onGeneratedImage: () => {},
+    onPendingReviewImage: () => {},
+    onAskUser: () => {},
+  };
+
+  const toolsChatId = "synthesis-followup";
+  const tools = getAgentTools(toolsChatId, effects);
+
+  const messages: any[] = [
+    { role: "user", content: promptParts, timestamp: Date.now() },
+  ];
+
   try {
-    await streamChat(
-      modelId,
-      [{ role: "user", content: promptParts, timestamp: Date.now() }],
-      systemPrompt,
-      (event) => {
-        if (event.type === "text_delta") responseText += event.delta;
-        else if (event.type === "thinking_delta") thinkingText += event.delta;
-      },
-      { signal: AbortSignal.timeout(120_000) }
-    );
+    const MAX_ITERATIONS = 20;
+    let iterations = 0;
+    let lastStopReason: string | null = null;
 
-    const finalResponse = (responseText || thinkingText).trim();
-    
-    // Check if agent declined to write a follow-up
-    if (!finalResponse || finalResponse.includes("[No follow-up needed]") || finalResponse.length < 50) {
+    while (iterations < MAX_ITERATIONS) {
+      let iterationText = "";
+      let iterationThinking = "";
+      const iterationToolCalls: ChatToolCall[] = [];
+
+      const result = await streamChat(
+        modelId,
+        messages,
+        systemPrompt,
+        (event) => {
+          if (event.type === "text_delta") iterationText += event.delta;
+          else if (event.type === "thinking_delta") iterationThinking += event.delta;
+          else if (event.type === "toolcall_end") iterationToolCalls.push(event.toolCall);
+        },
+        { signal: AbortSignal.timeout(180_000), tools }
+      );
+
+      if (iterationText) textChunks.push(iterationText);
+      if (iterationThinking) thinkingFallback += iterationThinking;
+      toolCalls.push(...iterationToolCalls);
+      lastStopReason = result.stopReason;
+
+      if (result.stopReason !== "toolUse") {
+        break;
+      }
+
+      // Append the assistant turn (text + tool calls) then execute tools and
+      // append tool results, so the next iteration has full context.
+      if (result.assistantMessage) {
+        messages.push(result.assistantMessage);
+      }
+
+      for (const toolCall of iterationToolCalls) {
+        const tr = await executeTool(toolCall, toolsChatId, effects);
+        toolResults.push(tr);
+        messages.push({
+          role: "toolResult",
+          toolCallId: tr.toolCallId,
+          toolName: tr.toolName,
+          content: [{ type: "text", text: tr.content }],
+          isError: tr.isError,
+          timestamp: Date.now(),
+        });
+      }
+
+      iterations++;
+    }
+
+    if (iterations >= MAX_ITERATIONS) {
+      console.warn(`[synthesis] Follow-up hit tool iteration cap (${MAX_ITERATIONS}) with stopReason=${lastStopReason}`);
+    }
+
+    const finalResponse = (textChunks.join("\n\n") || thinkingFallback).trim();
+
+    // Check if agent declined to write a follow-up. The threshold is loose
+    // because the agent may have only used tools and written a brief wrap-up.
+    const declined = !finalResponse
+      || finalResponse.includes("[No follow-up needed]")
+      || (finalResponse.length < 50 && toolCalls.length === 0);
+
+    if (declined) {
       console.log("[synthesis] Agent declined optional follow-up");
       return;
     }
 
-    // Save the follow-up
     const entry = await createNotebookEntry("agent", finalResponse);
-    console.log(`[synthesis] Saved optional follow-up notebook entry: ${entry.id}`);
-
+    if (toolCalls.length || toolResults.length || artifacts.length || visuals.length) {
+      await updateNotebookEntry("agent", entry.id, {
+        toolCalls,
+        toolResults,
+        artifacts,
+        visuals,
+      });
+    }
+    console.log(
+      `[synthesis] Saved optional follow-up: ${entry.id} (${toolCalls.length} tool calls, ${artifacts.length} artifacts, ${visuals.length} visuals)`
+    );
   } catch (e) {
     console.error("[synthesis] Optional follow-up failed:", e);
   }

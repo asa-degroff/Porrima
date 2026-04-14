@@ -90,8 +90,10 @@ export async function updateNotebookEntry(
   if (updates.content !== undefined) safeUpdates.content = updates.content;
   if (updates.links !== undefined) safeUpdates.links = updates.links;
   if (updates.images !== undefined) safeUpdates.images = updates.images;
+  if (updates.toolCalls !== undefined) safeUpdates.toolCalls = updates.toolCalls;
   if (updates.toolResults !== undefined) safeUpdates.toolResults = updates.toolResults;
   if (updates.artifacts !== undefined) safeUpdates.artifacts = updates.artifacts;
+  if (updates.visuals !== undefined) safeUpdates.visuals = updates.visuals;
   
   Object.assign(entry, safeUpdates);
   await writeFile(entryPath(author, entry.id), JSON.stringify(entry, null, 2));

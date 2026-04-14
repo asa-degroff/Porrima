@@ -218,6 +218,17 @@ export async function streamChat(
     }
   }
 
+  // Surface provider errors to the caller. Without this, an error event gets
+  // silently recorded on the result and the caller can't distinguish a failed
+  // stream from a genuinely empty generation (which caused synthesis to write
+  // a bogus "LLM summary was empty" fallback when the model errored mid-stream).
+  if (stopReason === "error") {
+    const errMessage =
+      (assistantMessage as any)?.errorMessage ||
+      "Provider stream ended with error";
+    throw new Error(`[streamChat] ${modelId}: ${errMessage}`);
+  }
+
   // Ensure we have an assistant message even on empty responses
   if (!assistantMessage) {
     assistantMessage = {

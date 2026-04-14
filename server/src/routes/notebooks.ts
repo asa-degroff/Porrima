@@ -321,9 +321,10 @@ Current date: ${new Date().toLocaleDateString()}`;
     // Create agent entry with response
     const agentEntry = await createNotebookEntry('agent', finalContent);
     
-    // Attach tool results, artifacts, and visuals
-    if (allToolResults.length || allArtifacts.length || allVisuals.length) {
+    // Attach tool calls, results, artifacts, and visuals
+    if (allToolCalls.length || allToolResults.length || allArtifacts.length || allVisuals.length) {
       await updateNotebookEntry('agent', agentEntry.id, {
+        toolCalls: allToolCalls,
         toolResults: allToolResults,
         artifacts: allArtifacts,
         visuals: allVisuals,

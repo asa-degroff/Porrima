@@ -5,6 +5,7 @@ import type { ChatListItem } from "../types";
 import { ChatLinkPicker } from "./ChatLinkPicker";
 import { NotebookLinkPicker } from "./NotebookLinkPicker";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
+import { ToolCallDisplay } from "./ToolCallDisplay";
 
 const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -264,11 +265,21 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
               </div>
             )}
 
+        {/* Tool calls — shown when the agent used tools while writing this entry */}
+        {entry.toolCalls && entry.toolCalls.length > 0 && (
+          <div className="mt-2">
+            {entry.toolCalls.map((tc) => {
+              const tr = entry.toolResults?.find((r) => r.toolCallId === tc.id);
+              return <ToolCallDisplay key={tc.id} toolCall={tc} toolResult={tr} />;
+            })}
+          </div>
+        )}
+
         {/* Artifacts */}
         {entry.artifacts?.map((artifact) => (
           <ArtifactPanel key={artifact.id} artifact={artifact} />
         ))}
-        
+
         {/* Inline Visualizations */}
         {entry.visuals?.map((visual) => (
           <InlineVisualComponent key={visual.id} visual={visual} />

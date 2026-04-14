@@ -392,6 +392,7 @@ export interface NotebookEntry {
   content: string;
   links?: NotebookLink;
   images?: ImageAttachment[];
+  toolCalls?: ChatToolCall[];
   toolResults?: ChatToolResult[];
   artifacts?: Artifact[];
   visuals?: InlineVisual[];
