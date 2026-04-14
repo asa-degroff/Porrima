@@ -13,6 +13,8 @@ import { UserImage } from "./UserImage";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
 import { CompactionIndicator } from "./CompactionIndicator";
 import { OctahedronLogo } from "./OctahedronLogo";
+import { usePinnedItem } from "../contexts/PinnedItemContext";
+import { useIsDesktop } from "../hooks/useIsDesktop";
 
 const MarkdownRenderer = lazy(() =>
   import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
@@ -131,6 +133,8 @@ export const MessageBubble = memo(function MessageBubble({
     );
   }
 
+  const { isPinned: isItemPinned, unpin: unpinItem } = usePinnedItem();
+  const isDesktopView = useIsDesktop();
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
   const [editImages, setEditImages] = useState<ImageAttachment[]>([]);
@@ -381,9 +385,13 @@ export const MessageBubble = memo(function MessageBubble({
                     )}
 
                     {/* Inline artifacts - legacy fallback */}
-                    {(artifacts || message.artifacts)?.map((artifact) => (
-                      <ArtifactPanel key={artifact.id} artifact={artifact} />
-                    ))}
+                    {(artifacts || message.artifacts)?.map((artifact) =>
+                      isDesktopView && isItemPinned("artifact", artifact.id) ? (
+                        <PinnedPlaceholder key={artifact.id} title={artifact.title} onUnpin={unpinItem} />
+                      ) : (
+                        <ArtifactPanel key={artifact.id} artifact={artifact} />
+                      )
+                    )}
 
                     {/* Inline generated images - legacy fallback */}
                     {(generatedImages || message.generatedImages)?.map((img) => (
@@ -763,6 +771,38 @@ function ToolCallsList({
   return <>{renderToolCalls()}</>;
 }
 
+function PinnedPlaceholder({ title, onUnpin }: { title: string; onUnpin: () => void }) {
+  return (
+    <div className="mt-3 rounded-xl border border-blue-400/20 bg-blue-500/[0.06] px-3 py-2 flex items-center justify-between gap-2">
+      <div className="flex items-center gap-2 min-w-0">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="text-blue-300 shrink-0"
+        >
+          <path d="M12 17v5" />
+          <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+        </svg>
+        <span className="text-xs text-white/70 truncate">{title}</span>
+        <span className="text-[10px] text-blue-300/70 uppercase tracking-wider shrink-0">Pinned</span>
+      </div>
+      <button
+        onClick={onUnpin}
+        className="text-[10px] text-white/50 hover:text-white/80 px-2 py-0.5 rounded hover:bg-white/5 transition-colors shrink-0"
+      >
+        Unpin
+      </button>
+    </div>
+  );
+}
+
 /**
  * Renders an individual segment, handling tool_call/tool_result pairing.
  */
@@ -781,6 +821,8 @@ function SegmentRenderer({
   isThinkingStreaming: boolean;
   streamingSegmentIndex: number | null;
 }) {
+  const { isPinned, unpin } = usePinnedItem();
+  const isDesktop = useIsDesktop();
   switch (segment.type) {
     case "text": {
       // Only show cursor on the actively streaming text segment
@@ -812,14 +854,20 @@ function SegmentRenderer({
     }
     case "tool_result":
       return null;
-    case "artifact":
-      return segment.artifact ? (
-        <ArtifactPanel key={`artifact-${segment.artifact.id}`} artifact={segment.artifact} />
-      ) : null;
-    case "visual":
-      return segment.visual ? (
-        <InlineVisual key={`visual-${segment.visual.id}`} visual={segment.visual} />
-      ) : null;
+    case "artifact": {
+      if (!segment.artifact) return null;
+      if (isDesktop && isPinned("artifact", segment.artifact.id)) {
+        return <PinnedPlaceholder title={segment.artifact.title} onUnpin={unpin} />;
+      }
+      return <ArtifactPanel key={`artifact-${segment.artifact.id}`} artifact={segment.artifact} />;
+    }
+    case "visual": {
+      if (!segment.visual) return null;
+      if (isDesktop && isPinned("visual", segment.visual.id)) {
+        return <PinnedPlaceholder title={segment.visual.title} onUnpin={unpin} />;
+      }
+      return <InlineVisual key={`visual-${segment.visual.id}`} visual={segment.visual} />;
+    }
     case "generated_image":
       return segment.generatedImage ? (
         <GeneratedImagePanel key={`image-${segment.generatedImage.id}`} image={segment.generatedImage} />

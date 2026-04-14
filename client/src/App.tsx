@@ -32,6 +32,7 @@ import { useTTS } from "./hooks/useTTS";
 import { TTSControlBar } from "./components/TTSControlBar";
 import { useNotebooks } from "./hooks/useNotebooks";
 import { fetchUserUIState, saveUserUIState } from "./api/client";
+import { PinnedItemProvider } from "./contexts/PinnedItemContext";
 import type { Chat, ChatType } from "./types";
 
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
@@ -687,7 +688,9 @@ export default function App() {
 
   return (
     <HapticsProvider>
-      <AuthenticatedApp onLogout={logout} />
+      <PinnedItemProvider>
+        <AuthenticatedApp onLogout={logout} />
+      </PinnedItemProvider>
     </HapticsProvider>
   );
 }

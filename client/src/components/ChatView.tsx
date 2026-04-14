@@ -10,6 +10,7 @@ import { SystemPromptEditor } from "./SystemPromptEditor";
 import { OfflineIndicator } from "./OfflineIndicator";
 import { BlockIndicator } from "./BlockIndicator";
 import { SkillSelector } from "./SkillSelector";
+import { PinnedPanel } from "./PinnedPanel";
 
 const hamburgerIconLg = (
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -450,6 +451,9 @@ export function ChatView({
         isAgent={chatType === "agent" || chatType === "bluesky"}
       />
 
+      <div className="flex-1 flex flex-row min-h-0 min-w-0">
+        <div className="flex-1 flex flex-col min-w-0">
+
       {/* Messages */}
       <div className="flex-1 relative min-h-0">
         <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto overflow-x-hidden px-3 md:px-6 py-3 md:py-4" style={{ paddingBottom: ttsBarVisible ? "180px" : "140px", contentVisibility: "auto" }}>
@@ -559,6 +563,10 @@ export function ChatView({
           inputRef={inputRef}
           availableSkills={skills.map(s => s.name)}
         />
+      </div>
+
+        </div>
+        <PinnedPanel />
       </div>
 
       {/* Skill Selector Popup */}

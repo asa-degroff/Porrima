@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { InlineVisual as InlineVisualType } from "../types";
+import { usePinnedItem } from "../contexts/PinnedItemContext";
+import { useIsDesktop } from "../hooks/useIsDesktop";
 
 const MIN_HEIGHT = 80;
-const MAX_HEIGHT = 1000;
+const MAX_HEIGHT = 4000;
 const DEFAULT_HEIGHT = 450;
 
 interface Props {
@@ -10,6 +12,9 @@ interface Props {
 }
 
 export function InlineVisual({ visual }: Props) {
+  const { pinVisual, unpin, isPinned } = usePinnedItem();
+  const isDesktop = useIsDesktop();
+  const pinned = isPinned("visual", visual.id);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
@@ -124,6 +129,17 @@ html, body { background: transparent !important; }
           >
             Open
           </a>
+          {isDesktop && (
+            <button
+              onClick={() => (pinned ? unpin() : pinVisual(visual))}
+              className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
+                pinned ? "bg-blue-500/20 text-blue-300" : "text-white/40 hover:text-white/60"
+              }`}
+              title={pinned ? "Return visualization to inline view" : "Pin visualization to side panel"}
+            >
+              {pinned ? "Unpin" : "Pin"}
+            </button>
+          )}
         </div>
       </div>
 

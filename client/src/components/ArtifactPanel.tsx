@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { Artifact } from "../types";
+import { usePinnedItem } from "../contexts/PinnedItemContext";
+import { useIsDesktop } from "../hooks/useIsDesktop";
 
 const MIN_HEIGHT = 100;
-const MAX_HEIGHT = 1200;
+const MAX_HEIGHT = 4000;
 const DEFAULT_HEIGHT = 400;
 
 interface Props {
@@ -17,6 +19,9 @@ interface VersionInfo {
 }
 
 export function ArtifactPanel({ artifact, onArtifactUpdate }: Props) {
+  const { pinArtifact, unpin, isPinned } = usePinnedItem();
+  const isDesktop = useIsDesktop();
+  const pinned = isPinned("artifact", artifact.id);
   const [showCode, setShowCode] = useState(false);
   const [iframeError, setIframeError] = useState(false);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
@@ -220,6 +225,17 @@ export function ArtifactPanel({ artifact, onArtifactUpdate }: Props) {
           >
             Open
           </a>
+          {isDesktop && (
+            <button
+              onClick={() => (pinned ? unpin() : pinArtifact(artifact))}
+              className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
+                pinned ? "bg-blue-500/20 text-blue-300" : "text-white/40 hover:text-white/60"
+              }`}
+              title={pinned ? "Return artifact to inline view" : "Pin artifact to side panel"}
+            >
+              {pinned ? "Unpin" : "Pin"}
+            </button>
+          )}
         </div>
       </div>
 
