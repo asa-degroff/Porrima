@@ -304,6 +304,7 @@ export interface NotebookEntry {
   content: string;              // Markdown
   links?: NotebookLink;
   images?: ImageAttachment[];   // User entries only
+  toolCalls?: ChatToolCall[];       // Agent entries only — paired with toolResults by id
   toolResults?: ChatToolResult[];   // Agent entries only
   artifacts?: Artifact[];           // Agent entries only
   visuals?: InlineVisual[];         // Agent entries only (inline visualizations)

@@ -11,6 +11,7 @@ import { OfflineIndicator } from "./OfflineIndicator";
 import { BlockIndicator } from "./BlockIndicator";
 import { SkillSelector } from "./SkillSelector";
 import { PinnedPanel } from "./PinnedPanel";
+import { usePinnedItem } from "../contexts/PinnedItemContext";
 
 const hamburgerIconLg = (
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -129,6 +130,11 @@ export function ChatView({
   projectId,
   streamingSegmentIndex,
 }: Props) {
+  const { unpin } = usePinnedItem();
+  useEffect(() => {
+    unpin();
+  }, [chatId, unpin]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
@@ -451,11 +457,10 @@ export function ChatView({
         isAgent={chatType === "agent" || chatType === "bluesky"}
       />
 
-      <div className="flex-1 flex flex-row min-h-0 min-w-0">
-        <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-row min-h-0 min-w-0 relative">
 
       {/* Messages */}
-      <div className="flex-1 relative min-h-0">
+      <div className="flex-1 relative min-h-0 min-w-0">
         <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto overflow-x-hidden px-3 md:px-6 py-3 md:py-4" style={{ paddingBottom: ttsBarVisible ? "180px" : "140px", contentVisibility: "auto" }}>
           <div ref={contentRef}>
             {messages.length === 0 && (
@@ -545,6 +550,14 @@ export function ChatView({
             <span className="text-xs font-medium">New output</span>
           </button>
         )}
+      </div>
+
+        {/* Vertical divider between messages and pinned panel (desktop only) */}
+        <div className="hidden lg:block w-px bg-white/10" />
+
+        <PinnedPanel />
+
+        {/* Vignette overlay — spans both messages and pinned panel */}
         <div className="absolute inset-0 pointer-events-none z-10 shadow-[inset_0_16px_80px_-16px_rgba(0,0,0,0.35),inset_0px_-16px_80px_-16px_rgba(0,0,0,0.35)]" />
       </div>
 
@@ -563,10 +576,6 @@ export function ChatView({
           inputRef={inputRef}
           availableSkills={skills.map(s => s.name)}
         />
-      </div>
-
-        </div>
-        <PinnedPanel />
       </div>
 
       {/* Skill Selector Popup */}
