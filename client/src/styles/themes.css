@@ -48,7 +48,7 @@
   --theme-grid: 56, 189, 248;         /* sky-400 for grid lines */
   --theme-grid-opacity: 0.12;
   
-  --theme-bg-gradient: linear-gradient(135deg, #0c1929 0%, #172d4e 25%, #1b3458 38%, #1e3a5f 50%, #1b3458 62%, #172d4e 75%, #0c1929 100%);
+  --theme-bg-gradient: linear-gradient(135deg, #0c1929 0%, #172d4e 25%, #1a3255 38%, #1c3658 50%, #1a3255 62%, #172d4e 75%, #0c1929 100%);
   --theme-bg-flat: #1e3a5f;
   --theme-glow: rgba(56, 189, 248, 0.15);
 }
@@ -73,7 +73,7 @@
   --theme-grid: 134, 239, 172;        /* green-300 for grid lines */
   --theme-grid-opacity: 0.12;
   
-  --theme-bg-gradient: linear-gradient(135deg, #0a1a0f 0%, #132d20 25%, #173427 38%, #1a3a2a 50%, #173427 62%, #132d20 75%, #0a1a0f 100%);
+  --theme-bg-gradient: linear-gradient(135deg, #0a1a0f 0%, #132d20 25%, #153024 38%, #173526 50%, #153024 62%, #132d20 75%, #0a1a0f 100%);
   --theme-bg-flat: #1a3a2a;
   --theme-glow: rgba(134, 239, 172, 0.15);
 }
