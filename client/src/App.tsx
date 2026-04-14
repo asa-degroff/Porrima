@@ -33,7 +33,34 @@ import { TTSControlBar } from "./components/TTSControlBar";
 import { useNotebooks } from "./hooks/useNotebooks";
 import { fetchUserUIState, saveUserUIState } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
-import type { Chat, ChatType } from "./types";
+import type { Chat, ChatType, CornerShape, CornerRadius } from "./types";
+
+const CORNER_SHAPE_KEY = "quje-corner-shape";
+const CORNER_RADIUS_KEY = "quje-corner-radius";
+
+function readCachedCornerShape(): CornerShape {
+  try {
+    return localStorage.getItem(CORNER_SHAPE_KEY) === "squircle" ? "squircle" : "round";
+  } catch {
+    return "round";
+  }
+}
+
+function readCachedCornerRadius(): CornerRadius {
+  try {
+    const v = localStorage.getItem(CORNER_RADIUS_KEY);
+    return v === "compact" || v === "generous" ? v : "default";
+  } catch {
+    return "default";
+  }
+}
+
+// Apply cached appearance settings before first render so the login screen
+// reflects the user's choice without waiting for the (auth-gated) /api/settings.
+if (typeof document !== "undefined") {
+  document.documentElement.setAttribute("data-corner", readCachedCornerShape());
+  document.documentElement.setAttribute("data-radius", readCachedCornerRadius());
+}
 
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { models } = useModels();
@@ -174,14 +201,18 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, [settings.mouseWarp]);
 
-  // Apply corner shape
+  // Apply corner shape (and mirror to localStorage so the login screen can honor it)
   useEffect(() => {
-    document.documentElement.setAttribute('data-corner', settings.cornerShape || 'round');
+    const shape = settings.cornerShape || 'round';
+    document.documentElement.setAttribute('data-corner', shape);
+    try { localStorage.setItem(CORNER_SHAPE_KEY, shape); } catch {}
   }, [settings.cornerShape]);
 
-  // Apply corner radius scale
+  // Apply corner radius scale (and mirror to localStorage)
   useEffect(() => {
-    document.documentElement.setAttribute('data-radius', settings.cornerRadius || 'default');
+    const radius = settings.cornerRadius || 'default';
+    document.documentElement.setAttribute('data-radius', radius);
+    try { localStorage.setItem(CORNER_RADIUS_KEY, radius); } catch {}
   }, [settings.cornerRadius]);
 
   // Apply background effect
@@ -688,11 +719,14 @@ export default function App() {
   const { authState, error, register, login, logout } = useAuth();
   const { settings: appSettings, loading: settingsLoading } = useSettings();
 
-  // Apply corner shape and radius as soon as settings are available (before auth)
+  // Apply corner shape and radius as soon as settings are available.
+  // Before settings load (or when the user isn't authenticated yet and /api/settings
+  // returns 401), fall back to the cached value from localStorage so the login screen
+  // still reflects the saved preference.
   useEffect(() => {
     if (!settingsLoading) {
-      document.documentElement.setAttribute('data-corner', appSettings.cornerShape || 'round');
-      document.documentElement.setAttribute('data-radius', appSettings.cornerRadius || 'default');
+      document.documentElement.setAttribute('data-corner', appSettings.cornerShape || readCachedCornerShape());
+      document.documentElement.setAttribute('data-radius', appSettings.cornerRadius || readCachedCornerRadius());
     }
   }, [appSettings.cornerShape, appSettings.cornerRadius, settingsLoading]);
 
@@ -711,7 +745,7 @@ export default function App() {
         error={error}
         onRegister={register}
         onLogin={login}
-        cornerShape={appSettings.cornerShape || 'round'}
+        cornerShape={appSettings.cornerShape || readCachedCornerShape()}
       />
     );
   }
