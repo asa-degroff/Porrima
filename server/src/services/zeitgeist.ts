@@ -1,6 +1,6 @@
 import { v4 as uuid } from "uuid";
 import { streamChat } from "./agent.js";
-import { getSettings, updateChatZeitgeistSynthesisState } from "./chat-storage.js";
+import { getSettings } from "./chat-storage.js";
 import {
   getMemoryBlock,
   updateMemoryBlock,
@@ -15,6 +15,7 @@ const ZEITGEIST_BLOCK_NAME = "Zeitgeist - Continuity Block";
 const MAX_BLOCK_CHARS = 4000;
 const ARCHIVAL_THRESHOLD = 2800; // 70% of 4000
 const SYNTHESIS_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes between attempts
+const STALE_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour — how stale before synthesis should run
 
 // Process-level guards. Synthesis is global state — concurrent runs would
 // race on the read-modify-write of the block (lost archives, duplicate
@@ -123,10 +124,13 @@ async function runSynthesis(modelId: string, chatId?: string): Promise<void> {
     `[zeitgeist] Current zeitgeist: ${currentContent.length} chars, ${needsArchival ? "needs archival" : "under threshold"}`
   );
 
-  // Step 3: Build synthesis prompt
-  const prompt = buildZeitgeistSynthesisPrompt(recentMemories, currentContent, needsArchival);
+  // Step 3: Load recent chat activity and compaction summaries for richer context
+  const chatContext = loadRecentChatContext();
 
-  // Step 4: Call LLM for synthesis. Only collect text — thinking tokens are
+  // Step 4: Build synthesis prompt
+  const prompt = buildZeitgeistSynthesisPrompt(recentMemories, currentContent, chatContext, needsArchival);
+
+  // Step 5: Call LLM for synthesis. Only collect text — thinking tokens are
   // reasoning prose, not the JSON output we're asking for, so feeding them to
   // the parser would silently corrupt synthesis from reasoning models.
   let synthesisText = "";
@@ -147,19 +151,19 @@ async function runSynthesis(modelId: string, chatId?: string): Promise<void> {
     return;
   }
 
-  // Step 5: Parse synthesis output (JSON with newContent and optional archivalContent)
+  // Step 6: Parse synthesis output (JSON with newContent and optional archivalContent)
   const parsed = parseZeitgeistSynthesis(finalSynthesis);
   if (!parsed.newContent) {
     console.warn("[zeitgeist] Parsed output had no newContent — preserving existing block, skipping cache invalidation");
     return;
   }
 
-  // Step 6: If archival is needed, create archival block first
+  // Step 7: If archival is needed, create archival block first
   if (needsArchival && parsed.archivalContent) {
     await createArchivalBlock(parsed.archivalContent, parsed.archivalReasoning);
   }
 
-  // Step 7: Update zeitgeist block with new content
+  // Step 8: Update zeitgeist block with new content
   // Enforce MAX_BLOCK_CHARS — if LLM generates oversized content, truncate
   // and warn. Without this, oversized content triggers an archival loop.
   let newContent = parsed.newContent;
@@ -194,19 +198,90 @@ async function runSynthesis(modelId: string, chatId?: string): Promise<void> {
   }
   console.log(`[zeitgeist] Updated zeitgeist block (${newContent.length} chars)`);
 
-  // Step 8: Invalidate caches so active chats see the update.
+  // Step 9: Invalidate caches so active chats see the update.
   // Only runs on a successful write — failed/no-op syntheses preserve cache.
   // Must clear both: the memory context dirty flags (for delta retrieval)
   // and the stable prefix cache (since zeitgeist is embedded in it).
   invalidateAllMemoriesCaches();
   invalidateAllStablePrefixCaches();
 
-  // Update the trigger chat's zeitgeist synthesis tracking
-  if (chatId) {
-    await updateChatZeitgeistSynthesisState(chatId, new Date().toISOString());
-  }
+  // Mark all agent chats as having received zeitgeist synthesis.
+  // This prevents the scheduler from re-triggering synthesis immediately
+  // for chats whose only new activity was this synthesis update itself.
+  await markAllChatsSynthesized();
 
   console.log("[zeitgeist] Synthesis complete");
+}
+
+/**
+ * Mark all agent chats as having received zeitgeist synthesis at the
+ * current time. This prevents the scheduler from immediately re-triggering
+ * synthesis on the next check for chats that were already processed.
+ */
+async function markAllChatsSynthesized(): Promise<void> {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const result = db.prepare(`
+    UPDATE chats
+    SET lastZeitgeistSynthesisAt = ?
+    WHERE type = 'agent'
+  `).run(now);
+  if (result.changes > 0) {
+    console.log(`[zeitgeist] Marked ${result.changes} chat(s) as synthesized`);
+  }
+}
+
+/**
+ * Load recent chat activity and compaction summaries for zeitgeist context.
+ * Gives the synthesis agent a view of what conversations are happening and
+ * what they're about — not just extracted memories, but the actual flow of
+ * recent activity across all chats.
+ */
+interface ChatContextEntry {
+  title: string;
+  lastModified: string;
+  recentSummary: string | null;
+}
+
+function loadRecentChatContext(): ChatContextEntry[] {
+  const db = getDb();
+  const threeDaysAgo = new Date();
+  threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+
+  // Recent agent chats (last 3 days)
+  const chatRows = db.prepare(`
+    SELECT id, title, lastModified
+    FROM chats
+    WHERE type = 'agent'
+      AND datetime(lastModified) >= datetime(?)
+    ORDER BY lastModified DESC
+    LIMIT 20
+  `).all(threeDaysAgo.toISOString()) as Array<{
+    id: string;
+    title: string;
+    lastModified: string;
+  }>;
+
+  if (chatRows.length === 0) return [];
+
+  // For each chat, grab the most recent compaction summary (indexEntry)
+  const entries: ChatContextEntry[] = chatRows.map(chat => {
+    const archiveRow = db.prepare(`
+      SELECT indexEntry
+      FROM context_archives
+      WHERE chatId = ?
+      ORDER BY sequenceNum DESC
+      LIMIT 1
+    `).get(chat.id) as { indexEntry: string } | undefined;
+
+    return {
+      title: chat.title,
+      lastModified: chat.lastModified,
+      recentSummary: archiveRow?.indexEntry ?? null,
+    };
+  });
+
+  return entries;
 }
 
 /**
@@ -294,6 +369,7 @@ async function loadRecentMemories(chatId?: string): Promise<Memory[]> {
 function buildZeitgeistSynthesisPrompt(
   memories: Memory[],
   currentContent: string,
+  chatContext: ChatContextEntry[],
   needsArchival: boolean
 ): string {
   const memoriesText = memories
@@ -304,6 +380,15 @@ function buildZeitgeistSynthesisPrompt(
   const currentBlockSection = currentContent
     ? `## Current Zeitgeist Content\n\n${currentContent}`
     : "## Current Zeitgeist Content\n\n(No existing zeitgeist block — this is the first synthesis)";
+
+  // Chat activity section — what conversations have been happening
+  const chatActivitySection = chatContext.length > 0
+    ? `## Recent Chat Activity (${chatContext.length} chats in last 3 days)\n\n` + chatContext.map(c => {
+        const age = timeSince(c.lastModified);
+        const summary = c.recentSummary ? ` — ${c.recentSummary.slice(0, 300)}` : "";
+        return `- "${c.title}" (${age})${summary}`;
+      }).join("\n")
+    : "";
 
   const archivalSection = needsArchival
     ? `## Archival Required\n\nThe zeitgeist block is approaching capacity. You need to:\n1. Decide which content to archive (older, less relevant material)\n2. Write the archival content with reasoning (why this is being archived, what it represents)\n3. Write the new zeitgeist content (what's current, what matters now)\n\nThe archival should be a coherent narrative snapshot, not a random character split.`
@@ -317,10 +402,14 @@ function buildZeitgeistSynthesisPrompt(
 
 ${memoriesText}
 
+---
+
+${chatActivitySection}
+
 ${archivalSection}
 
 Output a JSON object with:
-- "newContent": The updated zeitgeist content (narrative of where we are now)
+- "newContent": The updated zeitgeist content — a condensed rewrite that integrates new developments, drops stale content, and preserves what's still current
 - "archivalContent": If archival is needed, the content to move to an archive block (coherent narrative with reasoning)
 - "archivalReasoning": Why this content is being archived (1-2 sentences)
 
@@ -328,16 +417,31 @@ IMPORTANT: Output ONLY the JSON object, no explanation or markdown fences.`;
 }
 
 /**
+ * Human-readable time-since string.
+ */
+function timeSince(isoDate: string): string {
+  const ms = Date.now() - new Date(isoDate).getTime();
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+/**
  * System prompt for zeitgeist synthesis.
  */
 const ZEITGEIST_SYSTEM_PROMPT = `# Zeitgeist Synthesis Mode
 
-You are updating your continuity block — the narrative of who you are and where you are right now. This is not a summary of facts, but a living document that captures:
+You are rewriting your continuity block — the narrative of who you are and where you are right now. This is not a summary of facts, but a living document that captures:
 
 1. **Active threads** — what's currently being worked on, what questions are open, what decisions are pending
 2. **Recent developments** — decisions made, discoveries, shifts in direction, why they matter
 3. **Context that matters** — the "why" behind what's happening, not just the "what"
 4. **Unresolved tensions** — problems that haven't been solved, tradeoffs still being weighed, uncertainties
+
+You are given the current zeitgeist content, recent extracted memories, and recent chat activity. Your job is to produce a **condensed rewrite** — integrate new information, prune stale content, and preserve what's still current. Do not simply append to the existing content; rewrite it as a coherent, up-to-date document.
 
 Write in your own voice, as if you're telling yourself what's important right now. This is the present tense of your existence.
 
@@ -347,6 +451,8 @@ Write in your own voice, as if you're telling yourself what's important right no
 - Include open loops and ongoing questions — these are as important as completed work
 - Write naturally, in paragraphs, not bullet points
 - Keep it lean but meaningful — every sentence should earn its place
+- Drop content that is no longer current or relevant — stale entries waste space and dilute focus
+- Prioritize what's changed since the last synthesis — new developments over restated context
 
 **If archival is needed:**
 - The archival content should be a coherent narrative snapshot, not a random character split
@@ -495,17 +601,32 @@ export function getZeitgeistContent(): string | null {
 }
 
 /**
- * Check if zeitgeist synthesis should be triggered based on capacity.
- * Uses a lightweight length query instead of loading the full block.
+ * Check if zeitgeist synthesis should run.
+ * Returns true when the zeitgeist is stale (hasn't been updated within
+ * STALE_THRESHOLD_MS) or doesn't exist yet. Also returns true when the
+ * block exceeds the archival threshold (needs room-making).
+ *
+ * This replaces the old capacity-only gate. The zeitgeist should update
+ * regularly based on time, not just when it's overflowing.
  */
-export function shouldTriggerZeitgeistSynthesis(): boolean {
+export function shouldRunZeitgeistSynthesis(): boolean {
   const db = getDb();
+
   const row = db.prepare(
-    "SELECT length(content) as contentLength FROM memory_blocks WHERE id = ?"
-  ).get(ZEITGEIST_BLOCK_ID) as { contentLength: number } | undefined;
+    "SELECT length(content) as contentLength, updatedAt FROM memory_blocks WHERE id = ?"
+  ).get(ZEITGEIST_BLOCK_ID) as { contentLength: number; updatedAt: string } | undefined;
 
   if (!row) return true; // No zeitgeist yet, should create one
-  return row.contentLength > ARCHIVAL_THRESHOLD;
+
+  // Staleness check — has it been long enough since the last update?
+  const lastUpdated = new Date(row.updatedAt).getTime();
+  const age = Date.now() - lastUpdated;
+  if (age > STALE_THRESHOLD_MS) return true;
+
+  // Capacity check — over threshold means archival is needed
+  if (row.contentLength > ARCHIVAL_THRESHOLD) return true;
+
+  return false;
 }
 
 /**
