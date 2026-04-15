@@ -504,7 +504,7 @@ Output ONLY the formatted lines, nothing else.`;
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "index-gen",
+          model: settings.extractionModelId || "index-gen",
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: inputParts },

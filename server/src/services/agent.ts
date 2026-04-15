@@ -9,7 +9,8 @@ import {
   type ToolResultMessage,
   type StopReason,
 } from "@mariozechner/pi-ai";
-import { createPiModelFromProvider, discoverAllModels } from "./models.js";
+import { createPiModelFromProvider, discoverAllModels, getExtractionRoute } from "./models.js";
+import type { Model } from "@mariozechner/pi-ai";
 import type { ChatMessage, MessageUsage } from "../types.js";
 
 export interface StreamChatResult {
@@ -164,11 +165,32 @@ export async function streamChat(
   onEvent: (event: AssistantMessageEvent) => void,
   options?: { signal?: AbortSignal; tools?: Tool[]; keepAlive?: string | number; numGpu?: number; numPredict?: number }
 ): Promise<StreamChatResult> {
-  const allModels = await discoverAllModels();
-  const model = allModels.find((m) => m.id === modelId);
-  if (!model) throw new Error(`Model not found: ${modelId}`);
-
-  const piModel = await createPiModelFromProvider(model);
+  // Extraction routing: if the requested model matches the configured extraction
+  // model and an extraction URL is set, route directly to that server (typically
+  // CPU-only) instead of hitting the chat router and contending with the GPU
+  // chat model. Background jobs (notebooks, corpus enrichment, zeitgeist, etc.)
+  // pass extractionModelId here and benefit automatically.
+  let piModel: Model<string>;
+  const extractionRoute = await getExtractionRoute();
+  if (extractionRoute && extractionRoute.modelId === modelId) {
+    piModel = {
+      id: extractionRoute.modelId,
+      name: extractionRoute.modelId,
+      api: "openai-compat",
+      provider: "llamacpp",
+      baseUrl: extractionRoute.baseUrl,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: extractionRoute.ctxSize,
+      maxTokens: 2048,
+    };
+  } else {
+    const allModels = await discoverAllModels();
+    const model = allModels.find((m) => m.id === modelId);
+    if (!model) throw new Error(`Model not found: ${modelId}`);
+    piModel = await createPiModelFromProvider(model);
+  }
 
   const context: Context = {
     systemPrompt,

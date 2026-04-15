@@ -108,21 +108,28 @@ async function checkAndRunDelayedExtractions() {
     // Determine extraction model from settings
     const configuredExtractionModelId = settings.extractionModelId || settings.defaultModelId;
     const fallbackEnabled = settings.extractionFallbackEnabled ?? true;
-    
-    // Discover available models once per run
-    const { discoverOllamaModels } = await import("./models.js");
-    const availableModels = await discoverOllamaModels();
-    const availableModelIds = new Set(availableModels.map(m => m.id));
-    
-    // Resolve extraction model
+
     let extractionModelId = configuredExtractionModelId;
-    if (!availableModelIds.has(extractionModelId)) {
-      if (fallbackEnabled && availableModels.length > 0) {
-        console.log(`[scheduler] Configured extraction model "${extractionModelId}" not available, falling back to ${availableModels[0].id}`);
-        extractionModelId = availableModels[0].id;
-      } else {
-        console.error(`[scheduler] Extraction model "${extractionModelId}" not available and fallback disabled, aborting`);
-        return;
+
+    // If a dedicated extraction server is configured, trust it as authoritative
+    // for the extraction model — streamChat will route to that URL directly.
+    // Skip the chat-router availability check entirely.
+    const { getExtractionRoute, discoverAllModels } = await import("./models.js");
+    const extractionRoute = await getExtractionRoute();
+
+    if (!extractionRoute) {
+      // No dedicated server: verify the model is loaded somewhere reachable
+      // (Ollama or chat-router llama.cpp) before dispatching work.
+      const availableModels = await discoverAllModels();
+      const availableModelIds = new Set(availableModels.map(m => m.id));
+      if (!availableModelIds.has(extractionModelId)) {
+        if (fallbackEnabled && availableModels.length > 0) {
+          console.log(`[scheduler] Configured extraction model "${extractionModelId}" not available, falling back to ${availableModels[0].id}`);
+          extractionModelId = availableModels[0].id;
+        } else {
+          console.error(`[scheduler] Extraction model "${extractionModelId}" not available and fallback disabled, aborting`);
+          return;
+        }
       }
     }
     

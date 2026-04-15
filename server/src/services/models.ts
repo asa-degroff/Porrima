@@ -339,6 +339,30 @@ export function invalidateModelCache() {
   llamacppCache = null;
 }
 
+export interface ExtractionRoute {
+  baseUrl: string;
+  modelId: string;
+  ctxSize: number;
+}
+
+/**
+ * Returns the dedicated extraction server's routing info if configured,
+ * otherwise null. Background tasks that match this modelId should route
+ * directly to baseUrl (typically a CPU-only llama.cpp instance) instead of
+ * going through the chat router and contending with the GPU chat model.
+ */
+export async function getExtractionRoute(): Promise<ExtractionRoute | null> {
+  const settings = await getSettings();
+  const baseUrl = settings.extractionModelUrl?.trim();
+  const modelId = settings.extractionModelId?.trim();
+  if (!baseUrl || !modelId) return null;
+  return {
+    baseUrl,
+    modelId,
+    ctxSize: settings.extractionCtxSize ?? 16384,
+  };
+}
+
 function supportsReasoning(family: string): boolean {
   return family.startsWith("qwen3") || family.startsWith("gemma4");
 }

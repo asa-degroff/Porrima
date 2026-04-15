@@ -51,7 +51,7 @@ async function callExtractionLLM(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "extraction",
+        model: settings.extractionModelId || "extraction",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: truncatedContent },

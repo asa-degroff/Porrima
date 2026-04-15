@@ -207,6 +207,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
   const [extractionModelUrl, setExtractionModelUrl] = useState(settings.extractionModelUrl || "");
   const [extractionModelStatus, setExtractionModelStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
+  const [extractionServerModels, setExtractionServerModels] = useState<DiscoveredModel[]>([]);
+  const [extractionServerModelsLoading, setExtractionServerModelsLoading] = useState(false);
+  const [extractionUseCustom, setExtractionUseCustom] = useState(false);
   const [extractionFallbackEnabled, setExtractionFallbackEnabled] = useState(settings.extractionFallbackEnabled ?? true);
   const [memorySearchQuery, setMemorySearchQuery] = useState("");
   const [memoryResults, setMemoryResults] = useState<(MemorySummary & { score?: number })[]>([]);
@@ -361,6 +364,25 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     }, 300);
     return () => { cancelled = true; clearTimeout(handle); };
   }, [embeddingProvider, embeddingUrl]);
+
+  // Discover models on the dedicated extraction server. Re-runs when URL changes.
+  // When the URL is empty, fall back to the chat-router models list (the prop).
+  useEffect(() => {
+    let cancelled = false;
+    const url = extractionModelUrl.trim();
+    if (!url) {
+      setExtractionServerModels([]);
+      return;
+    }
+    setExtractionServerModelsLoading(true);
+    const handle = setTimeout(() => {
+      discoverModels({ provider: "llamacpp", kind: "chat", url })
+        .then((r) => { if (!cancelled) setExtractionServerModels(r.models); })
+        .catch(() => { if (!cancelled) setExtractionServerModels([]); })
+        .finally(() => { if (!cancelled) setExtractionServerModelsLoading(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [extractionModelUrl]);
 
   // Discover reranker models for the dropdown. Re-runs when URL changes.
   useEffect(() => {
@@ -1233,51 +1255,97 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   </p>
                   <div>
                     <label className="block text-xs text-white/70 mb-1.5">Model</label>
-                    <div className="relative" ref={extractionModelDropdownRef}>
-                      <button
-                        onClick={() => setExtractionModelDropdownOpen((o) => !o)}
-                        className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-                      >
-                        <span className="truncate flex-1 text-left">
-                          {(() => {
-                            const selected = models.find((m) => m.id === extractionModelId);
-                            if (!selected) return extractionModelId;
-                            return selected.parameterSize ? `${selected.name} (${selected.parameterSize})` : selected.name;
-                          })()}
-                        </span>
-                        {chevronSvg(extractionModelDropdownOpen)}
-                      </button>
-                      {extractionModelDropdownOpen && (
-                        <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-                          style={{
-                            backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                            borderColor: `rgba(var(--theme-primary-border))`,
-                          }}>
-                          {models.map((model) => (
-                            <button
-                              key={model.id}
-                              onClick={() => {
-                                setExtractionModelId(model.id);
-                                setExtractionModelDropdownOpen(false);
-                              }}
-                              className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                                model.id === extractionModelId
-                                  ? "text-white"
-                                  : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                              }`}
+                    {(() => {
+                      const useServerList = extractionModelUrl.trim().length > 0;
+                      const sourceList: DiscoveredModel[] = useServerList
+                        ? extractionServerModels
+                        : models.map((m) => ({ id: m.id, name: m.parameterSize ? `${m.name} (${m.parameterSize})` : m.name }));
+                      const showSelect = !extractionUseCustom && sourceList.length > 0;
+                      const currentInList = sourceList.some((m) => m.id === extractionModelId);
+                      return showSelect ? (
+                        <div className="relative" ref={extractionModelDropdownRef}>
+                          <button
+                            onClick={() => setExtractionModelDropdownOpen((o) => !o)}
+                            className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+                          >
+                            <span className="truncate flex-1 text-left">
+                              {currentInList
+                                ? (sourceList.find((m) => m.id === extractionModelId)?.name ?? extractionModelId)
+                                : (extractionModelId
+                                    ? `${extractionModelId}${useServerList ? " (not on extraction server)" : ""}`
+                                    : "Select a model…")}
+                            </span>
+                            {chevronSvg(extractionModelDropdownOpen)}
+                          </button>
+                          {extractionModelDropdownOpen && (
+                            <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
                               style={{
-                                backgroundColor: model.id === extractionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                color: model.id === extractionModelId ? `rgba(var(--theme-secondary-text))` : '',
-                              }}
-                            >
-                              {model.parameterSize ? `${model.name} (${model.parameterSize})` : model.name}
-                            </button>
-                          ))}
+                                backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                                borderColor: `rgba(var(--theme-primary-border))`,
+                              }}>
+                              {sourceList.map((m) => (
+                                <button
+                                  key={m.id}
+                                  onClick={() => {
+                                    setExtractionModelId(m.id);
+                                    setExtractionModelDropdownOpen(false);
+                                  }}
+                                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                                    m.id === extractionModelId
+                                      ? "text-white"
+                                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                                  }`}
+                                  style={{
+                                    backgroundColor: m.id === extractionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                    color: m.id === extractionModelId ? `rgba(var(--theme-secondary-text))` : '',
+                                  }}
+                                >
+                                  {m.name}
+                                </button>
+                              ))}
+                              <button
+                                onClick={() => {
+                                  setExtractionUseCustom(true);
+                                  setExtractionModelDropdownOpen(false);
+                                }}
+                                className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
+                              >
+                                Custom…
+                              </button>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <input
+                            type="text"
+                            value={extractionModelId}
+                            onChange={(e) => setExtractionModelId(e.target.value)}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                            placeholder="model-name"
+                          />
+                          {sourceList.length > 0 && extractionUseCustom && (
+                            <button
+                              type="button"
+                              onClick={() => setExtractionUseCustom(false)}
+                              className="text-[11px] text-purple-300/70 hover:text-purple-200 transition-colors"
+                            >
+                              ← Choose from {sourceList.length} discovered model{sourceList.length === 1 ? "" : "s"}
+                            </button>
+                          )}
+                          {useServerList && extractionServerModelsLoading && extractionServerModels.length === 0 && (
+                            <p className="text-[11px] text-white/30">Looking for models on extraction server…</p>
+                          )}
+                          {useServerList && !extractionServerModelsLoading && extractionServerModels.length === 0 && (
+                            <p className="text-[11px] text-white/30">No models discovered on extraction server — enter the model name manually.</p>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <p className="text-xs text-white/40 mt-1.5">
-                      Defaults to the chat model if not set.
+                      {extractionModelUrl.trim()
+                        ? "Loaded model on the extraction server above. Background tasks (notebooks, corpus enrichment, scheduled extraction) route here automatically."
+                        : "Defaults to the chat model if not set. Configure the extraction server URL above to route background tasks to a CPU-only instance."}
                     </p>
                   </div>
 
