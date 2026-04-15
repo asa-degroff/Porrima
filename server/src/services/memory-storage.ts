@@ -19,6 +19,20 @@ const DAILY_DIR = join(MEMORY_DIR, "daily");
 
 let _db: Database.Database | null = null;
 
+export const DEFAULT_VEC_DIMENSION = 1024;
+
+function readStoredVecDimension(db: Database.Database): number {
+  try {
+    const row = db.prepare("SELECT value FROM metadata WHERE key = 'vec_dimension'").get() as
+      | { value: string }
+      | undefined;
+    const n = row ? parseInt(row.value, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_VEC_DIMENSION;
+  } catch {
+    return DEFAULT_VEC_DIMENSION;
+  }
+}
+
 export function getDb(): Database.Database {
   if (_db) return _db;
 
@@ -48,16 +62,17 @@ export function getDb(): Database.Database {
   `);
 
   db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
-      id TEXT PRIMARY KEY,
-      embedding float[1024] distance_metric=cosine
-    );
-  `);
-
-  db.exec(`
     CREATE TABLE IF NOT EXISTS metadata (
       key TEXT PRIMARY KEY,
       value TEXT
+    );
+  `);
+
+  const vecDim = readStoredVecDimension(db);
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
+      id TEXT PRIMARY KEY,
+      embedding float[${vecDim}] distance_metric=cosine
     );
   `);
 
@@ -241,6 +256,47 @@ function migrateFromJson(db: Database.Database): void {
 
 export function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   return fn();
+}
+
+/**
+ * Drop and recreate vec_memories at a new dimension. Clears all stored vectors
+ * — callers are responsible for re-embedding afterward. Updates the
+ * `vec_dimension` metadata entry so subsequent startups use the new dimension.
+ */
+export function rebuildVecMemoriesTable(newDim: number): void {
+  if (!Number.isInteger(newDim) || newDim <= 0) {
+    throw new Error(`Invalid embedding dimension: ${newDim}`);
+  }
+  const db = getDb();
+  db.exec(`DROP TABLE IF EXISTS vec_memories`);
+  db.exec(`
+    CREATE VIRTUAL TABLE vec_memories USING vec0(
+      id TEXT PRIMARY KEY,
+      embedding float[${newDim}] distance_metric=cosine
+    );
+  `);
+  db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('vec_dimension', ?)").run(
+    String(newDim)
+  );
+}
+
+export function getStoredVecDimension(): number {
+  return readStoredVecDimension(getDb());
+}
+
+export function closeMemoryDb(): void {
+  if (_db) {
+    try {
+      _db.close();
+    } catch (e) {
+      console.warn("[memory] close failed:", e);
+    }
+    _db = null;
+  }
+}
+
+export function getMemoryDbPath(): string {
+  return MEMORY_DB;
 }
 
 // ---------------------------------------------------------------------------

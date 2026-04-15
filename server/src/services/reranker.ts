@@ -7,6 +7,7 @@
 import { getSettings } from "./chat-storage.js";
 
 const DEFAULT_RERANKER_URL = "http://localhost:8082";
+const DEFAULT_RERANKER_MODEL = "qwen3-reranker";
 const RERANKER_TIMEOUT_MS = 15_000;
 
 /**
@@ -65,6 +66,7 @@ export async function rerank(
   }
 
   const rerankerUrl = settings.rerankerUrl || DEFAULT_RERANKER_URL;
+  const rerankerModel = settings.rerankerModelId || DEFAULT_RERANKER_MODEL;
 
   // Build the instruction-aware query in Qwen3-Reranker format
   const formattedQuery = instruction
@@ -76,7 +78,7 @@ export async function rerank(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "qwen3-reranker",
+        model: rerankerModel,
         query: formattedQuery,
         documents,
         top_n: topN ?? documents.length,

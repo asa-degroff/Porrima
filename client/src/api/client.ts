@@ -1141,3 +1141,116 @@ export async function validateLlamaPathApi(candidatePath: string): Promise<{ val
   if (!res.ok) throw new Error("Failed to validate path");
   return res.json();
 }
+
+// --- Embedding Migration ---
+
+export interface EmbeddingBackup {
+  id: string;
+  createdAt: string;
+  label?: string;
+  embedding: { provider: string; url: string; model: string; dimension?: number };
+  counts: { memories: number; corpus: number };
+  sourceSizes: { memoriesBytes: number; corpusBytes: number };
+}
+
+export interface MigrationProgressEvent {
+  phase: "probe" | "memories" | "corpus" | "commit" | "done" | "error";
+  processed?: number;
+  total?: number;
+  message?: string;
+}
+
+export async function listEmbeddingBackups(): Promise<EmbeddingBackup[]> {
+  const res = await apiFetch(`${BASE}/embedding/backups`);
+  if (!res.ok) throw new Error("Failed to list backups");
+  const data = await res.json();
+  return data.backups || [];
+}
+
+export async function createEmbeddingBackup(label?: string): Promise<EmbeddingBackup> {
+  const res = await apiFetch(`${BASE}/embedding/backup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to create backup");
+  }
+  const data = await res.json();
+  return data.manifest;
+}
+
+export async function deleteEmbeddingBackup(id: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/embedding/backup/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to delete backup");
+  }
+}
+
+export async function restoreEmbeddingBackup(id: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/embedding/restore/${encodeURIComponent(id)}`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to restore backup");
+  }
+}
+
+export interface EmbeddingMigrationCallbacks {
+  onProgress: (ev: MigrationProgressEvent) => void;
+  onComplete: (result: { memories: number; corpus: number; dimension: number }) => void;
+  onError: (message: string) => void;
+}
+
+export function runEmbeddingMigration(cb: EmbeddingMigrationCallbacks): () => void {
+  const controller = new AbortController();
+  (async () => {
+    try {
+      const res = await apiFetch(`${BASE}/embedding/migrate`, {
+        method: "POST",
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) {
+        cb.onError(`Failed to start migration (${res.status})`);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const block = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const lines = block.split("\n");
+          let event = "message";
+          let data = "";
+          for (const line of lines) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) data = line.slice(5).trim();
+          }
+          if (!data) continue;
+          try {
+            const payload = JSON.parse(data);
+            if (event === "progress") cb.onProgress(payload);
+            else if (event === "complete") cb.onComplete(payload);
+            else if (event === "error") cb.onError(payload.message || "Migration failed");
+          } catch {
+            // ignore malformed
+          }
+        }
+      }
+    } catch (e: any) {
+      if (e?.name !== "AbortError") cb.onError(e?.message || String(e));
+    }
+  })();
+  return () => controller.abort();
+}

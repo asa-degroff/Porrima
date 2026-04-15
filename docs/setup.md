@@ -5,7 +5,7 @@
 - [Node.js](https://nodejs.org/) v22+
 - [Ollama](https://ollama.ai/) running locally on port 11434
 - A chat model pulled in Ollama (e.g. `ollama pull qwen3:8b`)
-- The embedding model for memory: `ollama pull qwen3-embedding:0.6b`
+- An embedding model (default: `ollama pull qwen3-embedding:0.6b`). The provider, URL, and model name are configurable in Settings → Inference Servers → Embedding server. A llama.cpp server exposing `/v1/embeddings` works as an alternative backend.
 - **Creative Engine**: `ollama pull qwen3.5:9b` (recommended for direction generation with vision context)
 - (Optional) [llama.cpp](https://github.com/ggml-org/llama.cpp) server for direct GGUF inference with router mode
 - (Optional) ComfyUI for image generation
@@ -119,7 +119,7 @@ systemctl --user enable --now sync-llama-models.timer
 
 ### Reranker Service (Optional)
 
-For cross-encoder memory reranking. Download `ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF`, then create `~/.config/systemd/user/reranker.service`:
+For cross-encoder memory reranking. Download `ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF` (or another reranker model — the model identifier is configurable in Settings → Inference Servers → Reranker), then create `~/.config/systemd/user/reranker.service`:
 
 ```ini
 [Unit]
@@ -130,6 +130,7 @@ After=network-online.target
 Type=simple
 ExecStart=/path/to/llama-server \
     -m /path/to/qwen3-reranker-0.6b-q8_0.gguf \
+    --alias qwen3-reranker \
     --embedding --pooling rank --reranking \
     --port 8082 --host 127.0.0.1 \
     --n-gpu-layers 0 --ctx-size 4096
@@ -139,6 +140,44 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 ```
+
+The `--alias` flag must match the **Model name** configured in Settings — the reranker client sends that string as the `model` field in `/v1/rerank` requests.
+
+### Embedding Service (Optional, llama.cpp backend)
+
+If you prefer llama.cpp over Ollama for embeddings (for example, to avoid running Ollama at all), expose a llama.cpp server with `--embeddings` on its own port:
+
+```ini
+[Unit]
+Description=llama.cpp Embedding Server
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/path/to/llama-server \
+    -m /path/to/qwen3-embedding-0.6b.gguf \
+    --alias qwen3-embedding \
+    --embeddings --pooling cls \
+    --port 8084 --host 127.0.0.1 \
+    --n-gpu-layers 0 --ctx-size 8192
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+Then in Settings → Inference Servers → Embedding server, switch the provider toggle to **llama.cpp**, point the URL at `http://localhost:8084`, and set the model name to match `--alias`.
+
+### Changing the embedding model
+
+Embeddings from different models are not comparable — existing memory searches will return poor results until all vectors are regenerated. To switch models safely:
+
+1. Open Settings → Inference Servers → Embedding server → Migration & Backups.
+2. Click **Back up now** (optionally with a label). This writes `memories.db` and `corpus.db` under `~/.quje-agent/backups/<timestamp>/`.
+3. Change the provider / URL / model to the new embedding config and save.
+4. Click **Re-embed all memories & corpus**. The UI shows progress; the operation may take several minutes for large stores and the chat is unavailable while vectors are being rewritten.
+5. If anything goes wrong, the backup can be restored from the same panel (the restored config will also overwrite your current embedding settings).
 
 ### Enable Services
 

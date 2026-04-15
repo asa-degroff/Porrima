@@ -192,6 +192,12 @@ export interface Settings {
   // Reranker server (CPU-only llama.cpp instance)
   rerankerEnabled?: boolean;    // default true
   rerankerUrl?: string;         // default "http://localhost:8082"
+  rerankerModelId?: string;     // default "qwen3-reranker"
+  // Embedding server (Ollama or llama.cpp)
+  embeddingProvider?: "ollama" | "llamacpp";
+  embeddingUrl?: string;
+  embeddingModel?: string;
+  embeddingDimension?: number;
   // Model favorites
   favoriteModels?: string[];
   showOnlyFavorites?: boolean;

@@ -48,6 +48,57 @@ export interface CorpusStats {
 
 let _db: Database.Database | null = null;
 
+const DEFAULT_VEC_DIMENSION = 1024;
+
+function readStoredVecDimension(db: Database.Database): number {
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT);`);
+    const row = db.prepare("SELECT value FROM metadata WHERE key = 'vec_dimension'").get() as
+      | { value: string }
+      | undefined;
+    const n = row ? parseInt(row.value, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_VEC_DIMENSION;
+  } catch {
+    return DEFAULT_VEC_DIMENSION;
+  }
+}
+
+export function rebuildCorpusVecTable(newDim: number): void {
+  if (!Number.isInteger(newDim) || newDim <= 0) {
+    throw new Error(`Invalid embedding dimension: ${newDim}`);
+  }
+  const db = getDb();
+  db.exec(`DROP TABLE IF EXISTS vec_corpus`);
+  db.exec(`
+    CREATE VIRTUAL TABLE vec_corpus USING vec0(
+      id TEXT PRIMARY KEY,
+      embedding float[${newDim}] distance_metric=cosine
+    );
+  `);
+  db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('vec_dimension', ?)").run(
+    String(newDim)
+  );
+}
+
+export function getCorpusDb(): Database.Database {
+  return getDb();
+}
+
+export function closeCorpusDb(): void {
+  if (_db) {
+    try {
+      _db.close();
+    } catch (e) {
+      console.warn("[image-corpus] close failed:", e);
+    }
+    _db = null;
+  }
+}
+
+export function getCorpusDbPath(): string {
+  return CORPUS_DB;
+}
+
 function getDb(): Database.Database {
   if (_db) return _db;
 
@@ -85,11 +136,21 @@ function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_corpus_created ON corpus_entries(created_at);
   `);
 
+  // Metadata table (tracks vec dimension, migration state, etc.)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
+
+  const vecDim = readStoredVecDimension(db);
+
   // sqlite-vec virtual table for prompt embeddings
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS vec_corpus USING vec0(
       id TEXT PRIMARY KEY,
-      embedding float[1024] distance_metric=cosine
+      embedding float[${vecDim}] distance_metric=cosine
     );
   `);
 
