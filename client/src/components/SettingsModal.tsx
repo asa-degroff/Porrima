@@ -131,17 +131,19 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [rerankerModelId, setRerankerModelId] = useState(settings.rerankerModelId || "qwen3-reranker");
   const [rerankerStatus, setRerankerStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   // Embedding server settings
-  const [embeddingProvider, setEmbeddingProvider] = useState<"ollama" | "llamacpp">(settings.embeddingProvider ?? "ollama");
-  const [embeddingUrl, setEmbeddingUrl] = useState(
+  const savedEmbeddingProvider: "ollama" | "llamacpp" = settings.embeddingProvider ?? "ollama";
+  const savedEmbeddingUrl =
     settings.embeddingUrl ||
-      (settings.embeddingProvider === "llamacpp" ? "http://localhost:8084" : "http://localhost:11434")
-  );
-  const [embeddingModel, setEmbeddingModel] = useState(settings.embeddingModel || "qwen3-embedding:0.6b");
+    (savedEmbeddingProvider === "llamacpp" ? "http://localhost:8084" : "http://localhost:11434");
+  const savedEmbeddingModel = settings.embeddingModel || "qwen3-embedding:0.6b";
+  const [embeddingProvider, setEmbeddingProvider] = useState<"ollama" | "llamacpp">(savedEmbeddingProvider);
+  const [embeddingUrl, setEmbeddingUrl] = useState(savedEmbeddingUrl);
+  const [embeddingModel, setEmbeddingModel] = useState(savedEmbeddingModel);
   const storedEmbeddingDimension = settings.embeddingDimension;
   const embeddingConfigChanged =
-    embeddingProvider !== (settings.embeddingProvider ?? "ollama") ||
-    embeddingUrl.trim() !== (settings.embeddingUrl || "").trim() ||
-    embeddingModel.trim() !== (settings.embeddingModel || "qwen3-embedding:0.6b").trim();
+    embeddingProvider !== savedEmbeddingProvider ||
+    embeddingUrl.trim() !== savedEmbeddingUrl.trim() ||
+    embeddingModel.trim() !== savedEmbeddingModel.trim();
   // Embedding migration state
   const [backups, setBackups] = useState<EmbeddingBackup[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
@@ -1700,13 +1702,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               </div>
               <button
                 onClick={() => setFlatBackground(!flatBackground)}
-                className={`relative w-11 h-6 rounded-full transition-colors ${
-                  flatBackground ? "bg-white/20" : "bg-white/10"
+                className={`relative w-12 h-6 rounded-full transition-colors ${
+                  flatBackground ? "bg-blue-500/30" : "bg-white/10"
                 }`}
               >
                 <div
-                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white/80 transition-transform ${
-                    flatBackground ? "translate-x-5" : "translate-x-0"
+                  className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                    flatBackground ? "left-7" : "left-1"
                   }`}
                 />
               </button>
@@ -1820,13 +1822,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </div>
                 <button
                   onClick={() => setChromaticAberration(!chromaticAberration)}
-                  className={`relative w-11 h-6 rounded-full transition-colors ${
-                    chromaticAberration ? "bg-white/20" : "bg-white/10"
+                  className={`relative w-12 h-6 rounded-full transition-colors ${
+                    chromaticAberration ? "bg-blue-500/30" : "bg-white/10"
                   }`}
                 >
                   <div
-                    className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white/80 transition-transform ${
-                      chromaticAberration ? "translate-x-5" : "translate-x-0"
+                    className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                      chromaticAberration ? "left-7" : "left-1"
                     }`}
                   />
                 </button>
@@ -1846,13 +1848,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </div>
                 <button
                   onClick={() => setMouseWarp(!mouseWarp)}
-                  className={`relative w-11 h-6 rounded-full transition-colors ${
-                    mouseWarp ? "bg-white/20" : "bg-white/10"
+                  className={`relative w-12 h-6 rounded-full transition-colors ${
+                    mouseWarp ? "bg-blue-500/30" : "bg-white/10"
                   }`}
                 >
                   <div
-                    className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white/80 transition-transform ${
-                      mouseWarp ? "translate-x-5" : "translate-x-0"
+                    className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                      mouseWarp ? "left-7" : "left-1"
                     }`}
                   />
                 </button>
