@@ -70,6 +70,73 @@ router.get("/health/:modelId", async (req, res) => {
   }
 });
 
+// Discover models on a specific upstream server, filtered by kind.
+// Used by the settings UI to populate embedding/reranker model dropdowns.
+// Query params:
+//   - provider: "ollama" | "llamacpp" (required)
+//   - url: override the server URL (optional; defaults to provider's standard URL)
+//   - kind: "embedding" | "rerank" | "chat" (required)
+// Returns { models: Array<{ id: string; name: string }> }. On upstream failure
+// returns { models: [], error: string } with HTTP 200 so the UI can fall back
+// to a free-text input.
+router.get("/discover", async (req, res) => {
+  const provider = req.query.provider as string | undefined;
+  const kind = req.query.kind as string | undefined;
+  const urlOverride = req.query.url as string | undefined;
+
+  if (provider !== "ollama" && provider !== "llamacpp") {
+    return res.status(400).json({ models: [], error: "provider must be 'ollama' or 'llamacpp'" });
+  }
+  if (kind !== "embedding" && kind !== "rerank" && kind !== "chat") {
+    return res.status(400).json({ models: [], error: "kind must be 'embedding', 'rerank', or 'chat'" });
+  }
+
+  // Name-based heuristics — upstream APIs don't expose capability flags.
+  const matchesKind = (id: string, k: "embedding" | "rerank" | "chat"): boolean => {
+    const lower = id.toLowerCase();
+    const isEmbedding = /embed|bge|e5|nomic|mxbai|jina|gte/.test(lower);
+    const isRerank = /rerank|cross-encoder/.test(lower);
+    if (k === "embedding") return isEmbedding && !isRerank;
+    if (k === "rerank") return isRerank;
+    return !isEmbedding && !isRerank;
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    if (provider === "ollama") {
+      const baseUrl = urlOverride || "http://localhost:11434";
+      const response = await fetch(`${baseUrl}/api/tags`, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (!response.ok) {
+        return res.json({ models: [], error: `Ollama returned ${response.status}` });
+      }
+      const data = (await response.json()) as { models: Array<{ name: string }> };
+      const models = data.models
+        .filter((m) => matchesKind(m.name, kind))
+        .map((m) => ({ id: m.name, name: m.name }));
+      return res.json({ models });
+    }
+
+    // llama.cpp
+    const baseUrl = urlOverride || "http://localhost:8080";
+    const response = await fetch(`${baseUrl}/v1/models`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!response.ok) {
+      return res.json({ models: [], error: `llama.cpp returned ${response.status}` });
+    }
+    const data = (await response.json()) as { data: Array<{ id: string }> };
+    const models = data.data
+      .filter((m) => m.id && !m.id.includes("/"))
+      .filter((m) => matchesKind(m.id, kind))
+      .map((m) => ({ id: m.id, name: m.id }));
+    return res.json({ models });
+  } catch (e: any) {
+    return res.json({ models: [], error: e.message || "discovery failed" });
+  }
+});
+
 // llama.cpp server health check (proxied to avoid CORS issues)
 router.get("/llamacpp/health", async (req, res) => {
   try {

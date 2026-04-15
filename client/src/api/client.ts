@@ -36,6 +36,23 @@ export async function fetchModels(): Promise<OllamaModel[]> {
   return res.json();
 }
 
+export interface DiscoveredModel {
+  id: string;
+  name: string;
+}
+
+export async function discoverModels(params: {
+  provider: "ollama" | "llamacpp";
+  kind: "embedding" | "rerank" | "chat";
+  url?: string;
+}): Promise<{ models: DiscoveredModel[]; error?: string }> {
+  const qs = new URLSearchParams({ provider: params.provider, kind: params.kind });
+  if (params.url) qs.set("url", params.url);
+  const res = await apiFetch(`${BASE}/models/discover?${qs.toString()}`);
+  if (!res.ok) return { models: [], error: `HTTP ${res.status}` };
+  return res.json();
+}
+
 export async function fetchChats(): Promise<ChatListItem[]> {
   const res = await apiFetch(`${BASE}/chats`);
   if (!res.ok) throw new Error("Failed to fetch chats");

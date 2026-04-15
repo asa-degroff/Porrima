@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration } from "../api/client";
-import type { EmbeddingBackup, MigrationProgressEvent } from "../api/client";
+import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels } from "../api/client";
+import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
 import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
@@ -130,6 +130,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [rerankerUrl, setRerankerUrl] = useState(settings.rerankerUrl || "http://localhost:8082");
   const [rerankerModelId, setRerankerModelId] = useState(settings.rerankerModelId || "qwen3-reranker");
   const [rerankerStatus, setRerankerStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
+  const [rerankerModels, setRerankerModels] = useState<DiscoveredModel[]>([]);
+  const [rerankerModelsLoading, setRerankerModelsLoading] = useState(false);
+  const [rerankerUseCustom, setRerankerUseCustom] = useState(false);
   // Embedding server settings
   const savedEmbeddingProvider: "ollama" | "llamacpp" = settings.embeddingProvider ?? "ollama";
   const savedEmbeddingUrl =
@@ -139,6 +142,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [embeddingProvider, setEmbeddingProvider] = useState<"ollama" | "llamacpp">(savedEmbeddingProvider);
   const [embeddingUrl, setEmbeddingUrl] = useState(savedEmbeddingUrl);
   const [embeddingModel, setEmbeddingModel] = useState(savedEmbeddingModel);
+  const [embeddingModels, setEmbeddingModels] = useState<DiscoveredModel[]>([]);
+  const [embeddingModelsLoading, setEmbeddingModelsLoading] = useState(false);
+  const [embeddingUseCustom, setEmbeddingUseCustom] = useState(false);
   const storedEmbeddingDimension = settings.embeddingDimension;
   const embeddingConfigChanged =
     embeddingProvider !== savedEmbeddingProvider ||
@@ -236,12 +242,16 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [backendDropdownOpen, setBackendDropdownOpen] = useState(false);
   const [boundaryTierDropdownOpen, setBoundaryTierDropdownOpen] = useState(false);
   const [extractionModelDropdownOpen, setExtractionModelDropdownOpen] = useState(false);
+  const [embeddingModelDropdownOpen, setEmbeddingModelDropdownOpen] = useState(false);
+  const [rerankerModelDropdownOpen, setRerankerModelDropdownOpen] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const visionModelDropdownRef = useRef<HTMLDivElement>(null);
   const voiceDropdownRef = useRef<HTMLDivElement>(null);
   const backendDropdownRef = useRef<HTMLDivElement>(null);
   const boundaryTierDropdownRef = useRef<HTMLDivElement>(null);
   const extractionModelDropdownRef = useRef<HTMLDivElement>(null);
+  const embeddingModelDropdownRef = useRef<HTMLDivElement>(null);
+  const rerankerModelDropdownRef = useRef<HTMLDivElement>(null);
 
 
   useClickOutside(modelDropdownRef, () => setModelDropdownOpen(false), modelDropdownOpen);
@@ -250,6 +260,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useClickOutside(backendDropdownRef, () => setBackendDropdownOpen(false), backendDropdownOpen);
   useClickOutside(boundaryTierDropdownRef, () => setBoundaryTierDropdownOpen(false), boundaryTierDropdownOpen);
   useClickOutside(extractionModelDropdownRef, () => setExtractionModelDropdownOpen(false), extractionModelDropdownOpen);
+  useClickOutside(embeddingModelDropdownRef, () => setEmbeddingModelDropdownOpen(false), embeddingModelDropdownOpen);
+  useClickOutside(rerankerModelDropdownRef, () => setRerankerModelDropdownOpen(false), rerankerModelDropdownOpen);
 
 
   useEffect(() => {
@@ -331,6 +343,43 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       .then((data) => setLlamaPathInfo(data))
       .catch(() => {});
   }, []);
+
+  // Discover embedding models for the dropdown. Re-runs when provider/url change.
+  useEffect(() => {
+    let cancelled = false;
+    const url = embeddingUrl.trim();
+    if (!url) {
+      setEmbeddingModels([]);
+      return;
+    }
+    setEmbeddingModelsLoading(true);
+    const handle = setTimeout(() => {
+      discoverModels({ provider: embeddingProvider, kind: "embedding", url })
+        .then((r) => { if (!cancelled) setEmbeddingModels(r.models); })
+        .catch(() => { if (!cancelled) setEmbeddingModels([]); })
+        .finally(() => { if (!cancelled) setEmbeddingModelsLoading(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [embeddingProvider, embeddingUrl]);
+
+  // Discover reranker models for the dropdown. Re-runs when URL changes.
+  useEffect(() => {
+    if (!rerankerEnabled) return;
+    let cancelled = false;
+    const url = rerankerUrl.trim();
+    if (!url) {
+      setRerankerModels([]);
+      return;
+    }
+    setRerankerModelsLoading(true);
+    const handle = setTimeout(() => {
+      discoverModels({ provider: "llamacpp", kind: "rerank", url })
+        .then((r) => { if (!cancelled) setRerankerModels(r.models); })
+        .catch(() => { if (!cancelled) setRerankerModels([]); })
+        .finally(() => { if (!cancelled) setRerankerModelsLoading(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [rerankerEnabled, rerankerUrl]);
 
   // Fetch Bluesky status
   useEffect(() => {
@@ -1157,6 +1206,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     </span>
                   </div>
                 )}
+                <p className="text-xs text-white/30">
+                  Dedicated CPU instance for memory extraction. Keeps chat model KV cache intact.
+                </p>
                 <div>
                   <label className="block text-xs text-white/70 mb-1">Context window</label>
                   <input
@@ -1169,10 +1221,85 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     className="w-32 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
                   />
                   <span className="text-xs text-white/30 ml-2">tokens</span>
+                  <p className="text-xs text-white/30 mt-1">
+                    Used client-side to truncate input before sending. Set this to match the server's <code className="text-white/50">--ctx-size</code> to avoid overflow. Changing it here does not reconfigure the server.
+                  </p>
                 </div>
-                <p className="text-xs text-white/30">
-                  Dedicated CPU instance for memory extraction. Keeps chat model KV cache intact. Must match the server's <code className="text-white/50">--ctx-size</code>.
-                </p>
+
+                <div className="pt-3 border-t border-white/5 space-y-3">
+                  <h5 className="text-xs font-medium text-white/60 uppercase tracking-wider">Extraction Model</h5>
+                  <p className="text-xs text-white/30">
+                    Used for background extraction and enrichment tasks (notebooks, corpus enrichment, image captioning, scheduled memory extraction). When a dedicated extraction URL is set above, it handles memory extraction directly; this model still runs the other background jobs.
+                  </p>
+                  <div>
+                    <label className="block text-xs text-white/70 mb-1.5">Model</label>
+                    <div className="relative" ref={extractionModelDropdownRef}>
+                      <button
+                        onClick={() => setExtractionModelDropdownOpen((o) => !o)}
+                        className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+                      >
+                        <span className="truncate flex-1 text-left">
+                          {(() => {
+                            const selected = models.find((m) => m.id === extractionModelId);
+                            if (!selected) return extractionModelId;
+                            return selected.parameterSize ? `${selected.name} (${selected.parameterSize})` : selected.name;
+                          })()}
+                        </span>
+                        {chevronSvg(extractionModelDropdownOpen)}
+                      </button>
+                      {extractionModelDropdownOpen && (
+                        <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                          style={{
+                            backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                            borderColor: `rgba(var(--theme-primary-border))`,
+                          }}>
+                          {models.map((model) => (
+                            <button
+                              key={model.id}
+                              onClick={() => {
+                                setExtractionModelId(model.id);
+                                setExtractionModelDropdownOpen(false);
+                              }}
+                              className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                                model.id === extractionModelId
+                                  ? "text-white"
+                                  : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                              }`}
+                              style={{
+                                backgroundColor: model.id === extractionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                color: model.id === extractionModelId ? `rgba(var(--theme-secondary-text))` : '',
+                              }}
+                            >
+                              {model.parameterSize ? `${model.name} (${model.parameterSize})` : model.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-xs text-white/40 mt-1.5">
+                      Defaults to the chat model if not set.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-sm font-medium text-white/60">Fallback to available model</label>
+                      <p className="text-xs text-white/30 mt-0.5">Use first available model if selected model is not loaded</p>
+                    </div>
+                    <button
+                      onClick={() => setExtractionFallbackEnabled(!extractionFallbackEnabled)}
+                      className={`relative w-12 h-6 rounded-full transition-colors ${
+                        extractionFallbackEnabled ? "bg-purple-500/30" : "bg-white/10"
+                      }`}
+                    >
+                      <div
+                        className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
+                          extractionFallbackEnabled ? "left-7" : "left-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1215,13 +1342,85 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   )}
                   <div>
                     <label className="block text-xs text-white/70 mb-1">Model name</label>
-                    <input
-                      type="text"
-                      value={rerankerModelId}
-                      onChange={(e) => setRerankerModelId(e.target.value)}
-                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
-                      placeholder="qwen3-reranker"
-                    />
+                    {(() => {
+                      const showSelect = !rerankerUseCustom && rerankerModels.length > 0;
+                      const currentInList = rerankerModels.some((m) => m.id === rerankerModelId);
+                      return showSelect ? (
+                        <div className="relative" ref={rerankerModelDropdownRef}>
+                          <button
+                            onClick={() => setRerankerModelDropdownOpen((o) => !o)}
+                            className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+                          >
+                            <span className="truncate flex-1 text-left">
+                              {currentInList ? rerankerModelId : (rerankerModelId ? `${rerankerModelId} (not on server)` : "Select a model…")}
+                            </span>
+                            {chevronSvg(rerankerModelDropdownOpen)}
+                          </button>
+                          {rerankerModelDropdownOpen && (
+                            <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                              style={{
+                                backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                                borderColor: `rgba(var(--theme-primary-border))`,
+                              }}>
+                              {rerankerModels.map((m) => (
+                                <button
+                                  key={m.id}
+                                  onClick={() => {
+                                    setRerankerModelId(m.id);
+                                    setRerankerModelDropdownOpen(false);
+                                  }}
+                                  className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${
+                                    m.id === rerankerModelId
+                                      ? "text-white"
+                                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                                  }`}
+                                  style={{
+                                    backgroundColor: m.id === rerankerModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                    color: m.id === rerankerModelId ? `rgba(var(--theme-secondary-text))` : '',
+                                  }}
+                                >
+                                  {m.name}
+                                </button>
+                              ))}
+                              <button
+                                onClick={() => {
+                                  setRerankerUseCustom(true);
+                                  setRerankerModelDropdownOpen(false);
+                                }}
+                                className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
+                              >
+                                Custom…
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <input
+                            type="text"
+                            value={rerankerModelId}
+                            onChange={(e) => setRerankerModelId(e.target.value)}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                            placeholder="qwen3-reranker"
+                          />
+                          {rerankerModels.length > 0 && rerankerUseCustom && (
+                            <button
+                              type="button"
+                              onClick={() => setRerankerUseCustom(false)}
+                              className="text-[11px] text-purple-300/70 hover:text-purple-200 transition-colors"
+                            >
+                              ← Choose from {rerankerModels.length} discovered model{rerankerModels.length === 1 ? "" : "s"}
+                            </button>
+                          )}
+                          {rerankerModelsLoading && rerankerModels.length === 0 && (
+                            <p className="text-[11px] text-white/30">Looking for models on server…</p>
+                          )}
+                          {!rerankerModelsLoading && rerankerModels.length === 0 && rerankerUrl.trim() && (
+                            <p className="text-[11px] text-white/30">No reranker models discovered — enter the model name manually.</p>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <p className="text-xs text-white/30 mt-1">Model identifier sent in the <code className="text-white/50">/v1/rerank</code> request.</p>
                   </div>
                   <p className="text-xs text-white/30">
@@ -1268,13 +1467,85 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </div>
                 <div>
                   <label className="block text-xs text-white/70 mb-1">Model</label>
-                  <input
-                    type="text"
-                    value={embeddingModel}
-                    onChange={(e) => setEmbeddingModel(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
-                    placeholder="qwen3-embedding:0.6b"
-                  />
+                  {(() => {
+                    const showSelect = !embeddingUseCustom && embeddingModels.length > 0;
+                    const currentInList = embeddingModels.some((m) => m.id === embeddingModel);
+                    return showSelect ? (
+                      <div className="relative" ref={embeddingModelDropdownRef}>
+                        <button
+                          onClick={() => setEmbeddingModelDropdownOpen((o) => !o)}
+                          className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+                        >
+                          <span className="truncate flex-1 text-left">
+                            {currentInList ? embeddingModel : (embeddingModel ? `${embeddingModel} (not on server)` : "Select a model…")}
+                          </span>
+                          {chevronSvg(embeddingModelDropdownOpen)}
+                        </button>
+                        {embeddingModelDropdownOpen && (
+                          <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                            style={{
+                              backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                              borderColor: `rgba(var(--theme-primary-border))`,
+                            }}>
+                            {embeddingModels.map((m) => (
+                              <button
+                                key={m.id}
+                                onClick={() => {
+                                  setEmbeddingModel(m.id);
+                                  setEmbeddingModelDropdownOpen(false);
+                                }}
+                                className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${
+                                  m.id === embeddingModel
+                                    ? "text-white"
+                                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                                }`}
+                                style={{
+                                  backgroundColor: m.id === embeddingModel ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                  color: m.id === embeddingModel ? `rgba(var(--theme-secondary-text))` : '',
+                                }}
+                              >
+                                {m.name}
+                              </button>
+                            ))}
+                            <button
+                              onClick={() => {
+                                setEmbeddingUseCustom(true);
+                                setEmbeddingModelDropdownOpen(false);
+                              }}
+                              className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
+                            >
+                              Custom…
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        <input
+                          type="text"
+                          value={embeddingModel}
+                          onChange={(e) => setEmbeddingModel(e.target.value)}
+                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                          placeholder="qwen3-embedding:0.6b"
+                        />
+                        {embeddingModels.length > 0 && embeddingUseCustom && (
+                          <button
+                            type="button"
+                            onClick={() => setEmbeddingUseCustom(false)}
+                            className="text-[11px] text-purple-300/70 hover:text-purple-200 transition-colors"
+                          >
+                            ← Choose from {embeddingModels.length} discovered model{embeddingModels.length === 1 ? "" : "s"}
+                          </button>
+                        )}
+                        {embeddingModelsLoading && embeddingModels.length === 0 && (
+                          <p className="text-[11px] text-white/30">Looking for models on server…</p>
+                        )}
+                        {!embeddingModelsLoading && embeddingModels.length === 0 && embeddingUrl.trim() && (
+                          <p className="text-[11px] text-white/30">No embedding models discovered — enter the model name manually.</p>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {storedEmbeddingDimension && (
                     <p className="text-xs text-white/30 mt-1">
                       Stored vector dimension: <span className="text-white/50">{storedEmbeddingDimension}</span>
@@ -2760,95 +3031,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <p className="text-xs text-white/30">How many unenriched images to process every 10 minutes</p>
               </div>
 
-              {/* Extraction model configuration */}
-              <div className="border-t border-white/5 pt-4 mt-4">
-                <h4 className="text-xs font-medium text-white/60 uppercase tracking-wider mb-3">Extraction Model</h4>
-
-                <div className="space-y-3">
-                  {extractionModelUrl ? (
-                    <p className="text-xs text-white/40">
-                      Using dedicated extraction server at <code className="text-white/60">{extractionModelUrl}</code>. Configure in Inference Servers.
-                    </p>
-                  ) : (
-                    <p className="text-xs text-white/40">
-                      No dedicated extraction server configured. Falls back to the selected model below.
-                    </p>
-                  )}
-
-                  {/* Model selection (fallback when no dedicated server) */}
-                  <div>
-                    <label className="block text-xs text-white/70 mb-1.5">Model</label>
-                    <div className="relative" ref={extractionModelDropdownRef}>
-                      <button
-                        onClick={() => setExtractionModelDropdownOpen((o) => !o)}
-                        disabled={!delayedExtractionEnabled}
-                        className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <span className="truncate flex-1 text-left">
-                          {(() => {
-                            const selected = models.find((m) => m.id === extractionModelId);
-                            if (!selected) return extractionModelId;
-                            return selected.parameterSize ? `${selected.name} (${selected.parameterSize})` : selected.name;
-                          })()}
-                        </span>
-                        {chevronSvg(extractionModelDropdownOpen)}
-                      </button>
-                      {extractionModelDropdownOpen && (
-                        <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-                          style={{
-                            backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                            borderColor: `rgba(var(--theme-primary-border))`,
-                          }}>
-                          {models.map((model) => (
-                            <button
-                              key={model.id}
-                              onClick={() => {
-                                setExtractionModelId(model.id);
-                                setExtractionModelDropdownOpen(false);
-                              }}
-                              disabled={!delayedExtractionEnabled}
-                              className={`w-full text-left px-3 py-2 text-xs transition-all disabled:opacity-50 ${
-                                model.id === extractionModelId
-                                  ? "text-white"
-                                  : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                              }`}
-                              style={{
-                                backgroundColor: model.id === extractionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                color: model.id === extractionModelId ? `rgba(var(--theme-secondary-text))` : '',
-                              }}
-                            >
-                              {model.parameterSize ? `${model.name} (${model.parameterSize})` : model.name}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <p className="text-xs text-white/40 mt-1.5">
-                      Model used for memory extraction. Defaults to chat model if not set.
-                    </p>
-                  </div>
-                  
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <label className="block text-sm font-medium text-white/60">Fallback to available model</label>
-                      <p className="text-xs text-white/30 mt-0.5">Use first available model if selected model is not loaded</p>
-                    </div>
-                    <button
-                      onClick={() => setExtractionFallbackEnabled(!extractionFallbackEnabled)}
-                      className={`relative w-12 h-6 rounded-full transition-colors ${
-                        extractionFallbackEnabled ? "bg-purple-500/30" : "bg-white/10"
-                      }`}
-                      disabled={!delayedExtractionEnabled}
-                    >
-                      <div
-                        className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                          extractionFallbackEnabled ? "left-7" : "left-1"
-                        }`}
-                      />
-                    </button>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
 
