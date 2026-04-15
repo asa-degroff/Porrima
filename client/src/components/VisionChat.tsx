@@ -2,7 +2,8 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import type { AnalyzedImage, VisionMessage } from "../api/client";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessageInput } from "./MessageInput";
-import { OctahedronLogo } from "./OctahedronLogo";
+import { PolyhedronLogo } from "./PolyhedronLogo";
+import { useActivityShape } from "../hooks/useActivityShape";
 
 interface Props {
   image: AnalyzedImage;
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export function VisionChat({ image, analyzing, streamingDescription, chatting, onChat, onReanalyze, onCopyDescription, onSendToGenerate }: Props) {
+  const activityShape = useActivityShape();
   const [messages, setMessages] = useState<VisionMessage[]>(image.conversation);
   const [presetSelectOpen, setPresetSelectOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -198,7 +200,7 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
           {analyzing ? (
             <div className="space-y-3">
               <div className="flex items-center gap-2.5">
-                <OctahedronLogo isActive={true} count={3} size={20} gap={2} speed={0.8} />
+                <PolyhedronLogo isActive={true} count={3} size={20} gap={2} speed={0.8} shape={activityShape} />
                 <span className="text-xs text-white/40">Re-analyzing...</span>
               </div>
               {streamingDescription && (

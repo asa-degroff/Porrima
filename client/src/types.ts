@@ -148,6 +148,7 @@ export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "straw
 export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots";
 export type CornerShape = "round" | "squircle";
 export type CornerRadius = "compact" | "default" | "generous";
+export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
 
 export interface SystemPromptPreset {
   id: string;
@@ -170,6 +171,7 @@ export interface Settings {
   mouseWarp?: boolean;
   cornerShape?: CornerShape;
   cornerRadius?: CornerRadius;
+  activityShape?: ActivityShape;
   systemPromptPresets?: SystemPromptPreset[];
   hapticsEnabled?: boolean;
   defaultVisionPreset?: string;

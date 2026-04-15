@@ -143,6 +143,7 @@ export interface OllamaModel {
 
 export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono";
 export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots";
+export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
 
 export interface SystemPromptPreset {
   id: string;
@@ -159,6 +160,7 @@ export interface Settings {
   comfyuiUrl?: string;
   modelContextWindows?: Record<string, number>;
   theme?: Theme;
+  activityShape?: ActivityShape;
   systemPromptPresets?: SystemPromptPreset[];
   defaultVisionPreset?: string;
   // Delayed memory extraction settings

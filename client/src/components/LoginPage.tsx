@@ -1,7 +1,7 @@
 import { lazy, Suspense } from "react";
 import type { AuthState } from "../hooks/useAuth";
 import type { CornerShape } from "../types";
-import { OctahedronLogo } from "./OctahedronLogo";
+import { OctahedronLogo } from "./PolyhedronLogo";
 
 const RippleDotsBackground = lazy(() =>
   import("./RippleDotsBackground").then((m) => ({ default: m.RippleDotsBackground }))

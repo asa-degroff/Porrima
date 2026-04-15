@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, memo, useMemo } from "react";
-import type { GeneratedImage, GenerationState } from "../types";
+import type { GeneratedImage, GenerationState, ActivityShape } from "../types";
 import { precacheImages } from "../utils/imageCache";
-import { OctahedronLogo } from "./OctahedronLogo";
+import { PolyhedronLogo } from "./PolyhedronLogo";
+import { useActivityShape } from "../hooks/useActivityShape";
 
 interface Props {
   images: GeneratedImage[];
@@ -144,6 +145,7 @@ const ImageGrid = memo(function ImageGrid({
   onDelete,
   onToggleFavorite,
   activeGenerations,
+  activityShape,
 }: {
   images: GeneratedImage[];
   selectedImage: GeneratedImage | null;
@@ -151,6 +153,7 @@ const ImageGrid = memo(function ImageGrid({
   onDelete?: (id: string) => void;
   onToggleFavorite?: (id: string) => Promise<void>;
   activeGenerations: GenerationState[];
+  activityShape: ActivityShape;
 }) {
   return (
     <div className="columns-2 md:columns-3 lg:columns-4 gap-3 space-y-3">
@@ -175,12 +178,12 @@ const ImageGrid = memo(function ImageGrid({
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-4">
               {gen.status === "queued" ? (
                 <>
-                  <OctahedronLogo isActive={true} count={1} size={40} gap={0} speed={0.6} />
+                  <PolyhedronLogo isActive={true} count={1} size={40} gap={0} speed={0.6} shape={activityShape} />
                   <span className="text-xs text-purple-300/70 font-medium">Queued</span>
                 </>
               ) : gen.status === "processing" && gen.progress ? (
                 <>
-                  <OctahedronLogo isActive={true} count={3} size={40} gap={0} speed={0.5} />
+                  <PolyhedronLogo isActive={true} count={3} size={40} gap={0} speed={0.5} shape={activityShape} />
                   <div className="w-full max-w-[120px] space-y-1.5">
                     <div className="h-1.5 bg-purple-500/20 rounded-full overflow-hidden">
                       <div
@@ -196,7 +199,7 @@ const ImageGrid = memo(function ImageGrid({
                 </>
               ) : (
                 <>
-                  <OctahedronLogo isActive={true} count={1} size={40} gap={0} speed={0.8} />
+                  <PolyhedronLogo isActive={true} count={1} size={40} gap={0} speed={0.8} shape={activityShape} />
                   <span className="text-xs text-purple-300/70 font-medium">Starting...</span>
                 </>
               )}
@@ -226,6 +229,7 @@ const ImageGrid = memo(function ImageGrid({
 });
 
 export function ImageGallery({ images, selectedImage, onSelect, onDelete, onToggleFavorite, activeGenerations = [], searchResults, isSearching, showAgentOnly = false, showFavoritesOnly = false }: Props) {
+  const activityShape = useActivityShape();
   const hasSearch = searchResults !== undefined;
   const selectedImageUrl = selectedImage?.url;
 
@@ -295,6 +299,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, onTogg
             onDelete={onDelete}
             onToggleFavorite={onToggleFavorite}
             activeGenerations={activeGenerations}
+            activityShape={activityShape}
           />
         )}
       </div>
@@ -314,6 +319,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, onTogg
             onDelete={onDelete}
             onToggleFavorite={onToggleFavorite}
             activeGenerations={activeGenerations}
+            activityShape={activityShape}
           />
         )}
       </div>
@@ -333,6 +339,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, onTogg
             onDelete={onDelete}
             onToggleFavorite={onToggleFavorite}
             activeGenerations={activeGenerations}
+            activityShape={activityShape}
           />
         )}
       </div>
@@ -350,6 +357,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, onTogg
               onDelete={onDelete}
               onToggleFavorite={onToggleFavorite}
               activeGenerations={[]}
+              activityShape={activityShape}
             />
           )}
         </div>

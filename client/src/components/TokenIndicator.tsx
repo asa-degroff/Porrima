@@ -1,5 +1,6 @@
 import type { MessageUsage } from "../types";
-import { OctahedronLogo } from "./OctahedronLogo";
+import { PolyhedronLogo } from "./PolyhedronLogo";
+import { useActivityShape } from "../hooks/useActivityShape";
 
 interface CompactionInfo {
   removedCount: number;
@@ -28,6 +29,7 @@ export function TokenIndicator({
   hasCompactionSummary,
   onClick
 }: Props) {
+  const activityShape = useActivityShape();
   // Determine if we have real usage data or are in a post-compaction state
   // Real usage comes from Ollama's prompt_eval_count on assistant messages
   const hasRealUsage = usage.totalTokens > 0;
@@ -82,7 +84,7 @@ export function TokenIndicator({
       </div>
       {compacting ? (
         <div className="flex items-center gap-2 text-purple-300/80 cursor-default" title="Summarizing older messages to free context space">
-          <OctahedronLogo isActive={true} count={3} size={14} gap={2} speed={0.8} />
+          <PolyhedronLogo isActive={true} count={3} size={14} gap={2} speed={0.8} shape={activityShape} />
           <span className="animate-pulse">compacting...</span>
         </div>
       ) : compaction ? (

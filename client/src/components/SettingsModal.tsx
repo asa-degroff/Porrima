@@ -5,9 +5,10 @@ import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fet
 import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
+import { PolyhedronLogo } from "./PolyhedronLogo";
 
 const SECTIONS = [
   { id: 'models', label: 'Models' },
@@ -179,6 +180,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [mouseWarp, setMouseWarp] = useState(settings.mouseWarp ?? true);
   const [cornerShape, setCornerShape] = useState<CornerShape>(settings.cornerShape || "round");
   const [cornerRadius, setCornerRadius] = useState<CornerRadius>(settings.cornerRadius || "default");
+  const [activityShape, setActivityShape] = useState<ActivityShape>(settings.activityShape || "octahedron");
   const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editingPresetContent, setEditingPresetContent] = useState<string>("");
@@ -443,6 +445,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       mouseWarp,
       cornerShape,
       cornerRadius,
+      activityShape,
       systemPromptPresets: presets.length > 0 ? presets : undefined,
       hapticsEnabled,
       modelContextWindows: Object.keys(modelContextWindows).length > 0 ? modelContextWindows : undefined,
@@ -2116,6 +2119,40 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             </div>
             <p className="text-white/30 text-xs">
               Scales all rounded corners. Squircle shape reads smaller at the same radius, so Generous is a good match for squircle.
+            </p>
+          </div>
+
+          {/* Activity Shape */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-white/60">Activity Shape</label>
+            <div className="flex gap-2">
+              {([
+                { value: "octahedron" as ActivityShape, label: "Octahedron" },
+                { value: "cube" as ActivityShape, label: "Cube" },
+                { value: "tetrahedron" as ActivityShape, label: "Tetrahedron" },
+              ]).map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setActivityShape(opt.value)}
+                  className={`flex-1 px-3 py-3 rounded-lg text-sm font-medium border transition-all flex flex-col items-center gap-1.5 ${
+                    activityShape === opt.value
+                      ? "border-white/30 bg-white/5"
+                      : "border-white/10 hover:border-white/20"
+                  }`}
+                >
+                  <PolyhedronLogo
+                    isActive={true}
+                    shape={opt.value}
+                    count={1}
+                    size={20}
+                    speed={0.6}
+                  />
+                  <span>{opt.label}</span>
+                </button>
+              ))}
+            </div>
+            <p className="text-white/30 text-xs">
+              The 3D shape used for activity indicators throughout the interface.
             </p>
           </div>
 

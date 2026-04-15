@@ -1,7 +1,8 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import type { ChatListItem as ChatListItemType, ChatType, Project } from "../types";
 import { ChatListItem } from "./ChatListItem";
-import { OctahedronLogo } from "./OctahedronLogo";
+import { PolyhedronLogo } from "./PolyhedronLogo";
+import { useActivityShape } from "../hooks/useActivityShape";
 import { BlueskySection } from "./BlueskySection";
 import { useSidebarState } from "../hooks/useSidebarState";
 import { useGestureDrawer } from "../hooks/useGestureDrawer";
@@ -423,6 +424,7 @@ export function Sidebar({
     getProjectExpanded,
     setProjectExpanded,
   } = useSidebarState();
+  const activityShape = useActivityShape();
 
   const [projectsEditMode, setProjectsEditMode] = useState(false);
   const [previousExpandedStates, setPreviousExpandedStates] = useState<Record<string, boolean>>({});
@@ -597,7 +599,7 @@ export function Sidebar({
               </div>
               {/* Background activity indicator — octahedron for memory extraction, synthesis, creative directions */}
               <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${hasBackgroundActivity ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-                <OctahedronLogo isActive={true} />
+                <PolyhedronLogo isActive={true} shape={activityShape} />
               </div>
             </div>
             <button

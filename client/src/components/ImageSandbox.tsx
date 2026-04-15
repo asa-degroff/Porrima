@@ -9,7 +9,8 @@ import { ProgressiveImage } from "./ProgressiveImage";
 import { VisionControls } from "./VisionControls";
 import { VisionChat } from "./VisionChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
-import { OctahedronLogo } from "./OctahedronLogo";
+import { PolyhedronLogo } from "./PolyhedronLogo";
+import { useActivityShape } from "../hooks/useActivityShape";
 import { DragHandle } from "./DragHandle";
 import { ImageSearch } from "./ImageSearch";
 import CorpusView from "./CorpusView";
@@ -30,6 +31,7 @@ function isVisionCapable(family: string): boolean {
 }
 
 export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisionModelId, onClose }: Props) {
+  const activityShape = useActivityShape();
   const {
     images,
     selectedImage,
@@ -880,7 +882,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                       className="max-w-sm max-h-80 rounded-lg object-contain shadow-lg shadow-black/30"
                     />
                     <div className="flex items-center gap-2.5">
-                      <OctahedronLogo isActive={true} count={3} size={20} gap={2} speed={0.8} />
+                      <PolyhedronLogo isActive={true} count={3} size={20} gap={2} speed={0.8} shape={activityShape} />
                       <span className="text-xs text-white/40">Analyzing...</span>
                     </div>
                   </div>

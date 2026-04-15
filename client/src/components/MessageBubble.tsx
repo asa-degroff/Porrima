@@ -12,7 +12,8 @@ import { SpeakerButton } from "./SpeakerButton";
 import { UserImage } from "./UserImage";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
 import { CompactionIndicator } from "./CompactionIndicator";
-import { OctahedronLogo } from "./OctahedronLogo";
+import { PolyhedronLogo } from "./PolyhedronLogo";
+import { useActivityShape } from "../hooks/useActivityShape";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { useIsDesktop } from "../hooks/useIsDesktop";
 
@@ -116,6 +117,7 @@ export const MessageBubble = memo(function MessageBubble({
   streamingSegmentIndex,
   showStreamingIndicator,
 }: Props) {
+  const activityShape = useActivityShape();
   const isUser = message.role === "user";
   const showStreaming = isStreaming && isLast && !isUser;
 
@@ -442,7 +444,7 @@ export const MessageBubble = memo(function MessageBubble({
           {!isUser && showStreamingIndicator && (
             <div className="mt-2 ml-1 self-start">
               <div className="w-4 h-4">
-                <OctahedronLogo isActive={true} />
+                <PolyhedronLogo isActive={true} shape={activityShape} />
               </div>
             </div>
           )}
