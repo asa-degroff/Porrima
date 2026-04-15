@@ -284,3 +284,8 @@ body::before {
 .drawer-slide-up {
   animation: slideUp 0.3s ease-out forwards;
 }
+
+/* Scrollbar gutter utility - reserves space for scrollbar to prevent layout shifts */
+.scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
+}

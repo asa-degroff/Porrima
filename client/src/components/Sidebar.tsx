@@ -759,18 +759,6 @@ export function Sidebar({
                 <span className="text-[10px] text-white/20 ml-auto">{agentChats.length}</span>
               )}
             </button>
-            {agentExpanded && (
-              <button
-                onClick={() => { onNewChat("agent"); onClose(); }}
-                className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 5v14" />
-                  <path d="M5 12h14" />
-                </svg>
-                New Agent Chat
-              </button>
-            )}
           </div>
           {/* Recent chat when collapsed */}
           {!agentExpanded && agentChats.length > 0 && (
@@ -785,8 +773,18 @@ export function Sidebar({
           )}
            {/* Scrollable chat list */}
           {agentExpanded && (
-            <div className="flex-1 overflow-y-auto pb-1">
-              <div className="space-y-0.5 pl-3 pr-2">
+            <div className="flex-1 overflow-y-auto overflow-x-hidden pb-1">
+              <div className="space-y-0.5 px-3">
+                <button
+                  onClick={() => { onNewChat("agent"); onClose(); }}
+                  className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2 mb-2"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                  </svg>
+                  New Agent Chat
+                </button>
                 {agentChats.map((chat) => (
                   <ChatListItem
                     key={chat.id}
@@ -826,18 +824,6 @@ export function Sidebar({
                 <span className="text-[10px] text-white/20 ml-auto">{quickChats.length}</span>
               )}
             </button>
-            {quickExpanded && (
-              <button
-                onClick={() => { onNewChat("quick"); onClose(); }}
-                className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-sm font-medium hover:bg-blue-500/25 transition-all flex items-center justify-center gap-2"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 5v14" />
-                  <path d="M5 12h14" />
-                </svg>
-                New Quick Chat
-              </button>
-            )}
           </div>
           {/* Recent chat when collapsed */}
           {!quickExpanded && quickChats.length > 0 && (
@@ -852,8 +838,18 @@ export function Sidebar({
           )}
           {/* Scrollable chat list */}
           {quickExpanded && (
-            <div className="flex-1 overflow-y-auto pb-2">
-              <div className="space-y-0.5 pl-3 pr-2">
+            <div className="flex-1 overflow-y-auto overflow-x-hidden pb-2">
+              <div className="space-y-0.5 px-3">
+                <button
+                  onClick={() => { onNewChat("quick"); onClose(); }}
+                  className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-sm font-medium hover:bg-blue-500/25 transition-all flex items-center justify-center gap-2 mb-2"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                  </svg>
+                  New Quick Chat
+                </button>
                 {quickChats.map((chat) => (
                   <ChatListItem
                     key={chat.id}
