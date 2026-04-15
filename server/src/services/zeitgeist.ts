@@ -58,7 +58,15 @@ async function resolveSynthesisModel(settings: any): Promise<string | null> {
     return null;
   }
   const fallbackEnabled = settings.extractionFallbackEnabled ?? true;
-  const { discoverOllamaModels } = await import("./models.js");
+  const { getExtractionRoute, discoverOllamaModels } = await import("./models.js");
+
+  // If a dedicated extraction server is configured and matches the requested
+  // model, trust it — streamChat will route directly to that URL.
+  const extractionRoute = await getExtractionRoute();
+  if (extractionRoute && extractionRoute.modelId === configured) {
+    return configured;
+  }
+
   const available = await discoverOllamaModels();
   const ids = new Set(available.map((m) => m.id));
   if (ids.has(configured)) return configured;
