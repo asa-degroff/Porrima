@@ -72,11 +72,6 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
     }
   }, [onAddLink]);
 
-  const handleDeleteClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setConfirmDelete(true);
-  }, []);
-
   const handleConfirmDelete = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (onDelete) {
@@ -142,18 +137,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
               </svg>
             </button>
           )}
-          {!confirmDelete && onDelete && (
-            <button
-              onClick={handleDeleteClick}
-              className="text-white/30 hover:text-red-400 transition-colors p-1 rounded hover:bg-white/5"
-              title="Delete"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 6h18" />
-                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-              </svg>
-            </button>
-          )}
+
         </div>
       </div>
 
