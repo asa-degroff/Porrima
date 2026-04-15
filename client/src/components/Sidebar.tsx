@@ -431,6 +431,30 @@ export function Sidebar({
   const [searchResults, setSearchResults] = useState<ConversationSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const headerRef = useRef<HTMLDivElement>(null);
+  const agentScrollRef = useRef<HTMLDivElement>(null);
+  const quickScrollRef = useRef<HTMLDivElement>(null);
+  const [agentScrolled, setAgentScrolled] = useState(false);
+  const [quickScrolled, setQuickScrolled] = useState(false);
+
+  useEffect(() => {
+    if (!agentExpanded) { setAgentScrolled(false); return; }
+    const el = agentScrollRef.current;
+    if (!el) return;
+    const onScroll = () => setAgentScrolled(el.scrollTop > 0);
+    onScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [agentExpanded]);
+
+  useEffect(() => {
+    if (!quickExpanded) { setQuickScrolled(false); return; }
+    const el = quickScrollRef.current;
+    if (!el) return;
+    const onScroll = () => setQuickScrolled(el.scrollTop > 0);
+    onScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [quickExpanded]);
 
   // Click outside to close search
   useEffect(() => {
@@ -744,10 +768,10 @@ export function Sidebar({
         {/* Agent Chats Section */}
         <div className={`flex flex-col min-h-0 border-b border-white/5 ${agentExpanded ? "flex-1" : "shrink-0"}`}>
           {/* Section header — always visible */}
-          <div className="px-3 pt-3 pb-1 shrink-0">
+          <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center">
             <button
               onClick={() => setAgentExpanded(!agentExpanded)}
-              className="flex items-center gap-1.5 px-1 mb-1.5 group cursor-pointer"
+              className="flex items-center gap-1.5 px-1 mb-1 group cursor-pointer flex-1 min-w-0"
             >
               <span className="text-white/30 group-hover:text-white/50 transition-colors">
                 <ChevronIcon expanded={agentExpanded} />
@@ -758,6 +782,19 @@ export function Sidebar({
               {!agentExpanded && agentChats.length > 0 && (
                 <span className="text-[10px] text-white/20 ml-auto">{agentChats.length}</span>
               )}
+            </button>
+            <button
+              onClick={() => { onNewChat("agent"); onClose(); }}
+              aria-label="New agent chat"
+              title="New agent chat"
+              aria-hidden={!(agentExpanded && agentScrolled)}
+              tabIndex={agentExpanded && agentScrolled ? 0 : -1}
+              className={`mb-1 ml-1 w-5 h-5 flex items-center justify-center rounded-md text-purple-300/70 hover:text-purple-200 hover:bg-purple-500/15 transition-opacity cursor-pointer ${agentExpanded && agentScrolled ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14" />
+                <path d="M5 12h14" />
+              </svg>
             </button>
           </div>
           {/* Recent chat when collapsed */}
@@ -773,7 +810,7 @@ export function Sidebar({
           )}
            {/* Scrollable chat list */}
           {agentExpanded && (
-            <div className="flex-1 overflow-y-auto overflow-x-hidden pb-1">
+            <div ref={agentScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-1">
               <div className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("agent"); onClose(); }}
@@ -809,10 +846,10 @@ export function Sidebar({
         {/* Quick Chats Section */}
         <div className={`flex flex-col min-h-0 ${quickExpanded ? "flex-1" : "shrink-0"}`}>
           {/* Section header — always visible */}
-          <div className="px-3 pt-3 pb-1 shrink-0">
+          <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center">
             <button
               onClick={() => setQuickExpanded(!quickExpanded)}
-              className="flex items-center gap-1.5 px-1 mb-1.5 group cursor-pointer"
+              className="flex items-center gap-1.5 px-1 mb-1 group cursor-pointer flex-1 min-w-0"
             >
               <span className="text-white/30 group-hover:text-white/50 transition-colors">
                 <ChevronIcon expanded={quickExpanded} />
@@ -823,6 +860,19 @@ export function Sidebar({
               {!quickExpanded && quickChats.length > 0 && (
                 <span className="text-[10px] text-white/20 ml-auto">{quickChats.length}</span>
               )}
+            </button>
+            <button
+              onClick={() => { onNewChat("quick"); onClose(); }}
+              aria-label="New quick chat"
+              title="New quick chat"
+              aria-hidden={!(quickExpanded && quickScrolled)}
+              tabIndex={quickExpanded && quickScrolled ? 0 : -1}
+              className={`mb-1 ml-1 w-5 h-5 flex items-center justify-center rounded-md text-blue-300/70 hover:text-blue-200 hover:bg-blue-500/15 transition-opacity cursor-pointer ${quickExpanded && quickScrolled ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14" />
+                <path d="M5 12h14" />
+              </svg>
             </button>
           </div>
           {/* Recent chat when collapsed */}
@@ -838,7 +888,7 @@ export function Sidebar({
           )}
           {/* Scrollable chat list */}
           {quickExpanded && (
-            <div className="flex-1 overflow-y-auto overflow-x-hidden pb-2">
+            <div ref={quickScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-2">
               <div className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("quick"); onClose(); }}
