@@ -1,11 +1,11 @@
 import { v4 as uuid } from "uuid";
 import { streamChat } from "./agent.js";
-import { getSettings } from "./chat-storage.js";
+import { getSettings, getDb as getChatsDb } from "./chat-storage.js";
 import {
   getMemoryBlock,
   updateMemoryBlock,
   createMemoryBlock,
-  getDb,
+  getDb as getMemoryDb,
 } from "./memory-storage.js";
 import { invalidateAllMemoriesCaches, invalidateAllStablePrefixCaches } from "./memory-context.js";
 import type { Memory } from "../types.js";
@@ -219,7 +219,7 @@ async function runSynthesis(modelId: string, chatId?: string): Promise<void> {
  * synthesis on the next check for chats that were already processed.
  */
 async function markAllChatsSynthesized(): Promise<void> {
-  const db = getDb();
+  const db = getChatsDb();
   const now = new Date().toISOString();
   const result = db.prepare(`
     UPDATE chats
@@ -244,7 +244,7 @@ interface ChatContextEntry {
 }
 
 function loadRecentChatContext(): ChatContextEntry[] {
-  const db = getDb();
+  const db = getChatsDb();
   const threeDaysAgo = new Date();
   threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
 
@@ -292,7 +292,7 @@ function loadRecentChatContext(): ChatContextEntry[] {
  * The zeitgeist is global — it should synthesize across all chats, not just one.
  */
 async function loadRecentMemories(chatId?: string): Promise<Memory[]> {
-  const db = getDb();
+  const db = getMemoryDb();
   const MEMORY_LIMIT = 100;
 
   const sevenDaysAgo = new Date();
@@ -610,7 +610,7 @@ export function getZeitgeistContent(): string | null {
  * regularly based on time, not just when it's overflowing.
  */
 export function shouldRunZeitgeistSynthesis(): boolean {
-  const db = getDb();
+  const db = getMemoryDb();
 
   const row = db.prepare(
     "SELECT length(content) as contentLength, updatedAt FROM memory_blocks WHERE id = ?"
@@ -635,7 +635,7 @@ export function shouldRunZeitgeistSynthesis(): boolean {
  * actually exist — avoids wasting ~250 tokens/conversation when there's nothing to find.
  */
 export function getZeitgeistArchiveInstruction(): string {
-  const db = getDb();
+  const db = getMemoryDb();
   const row = db.prepare(
     "SELECT 1 FROM memory_blocks WHERE name LIKE 'Zeitgeist Archive -%' LIMIT 1"
   ).get() as any;

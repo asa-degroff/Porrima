@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { shouldRunSynthesis, runDailySynthesis } from "./synthesis.js";
 import { getDb, getSettings, saveSettings, createChat, findBlueskyChatId } from "./chat-storage.js";
+import { getDb as getMemoryDb } from "./memory-storage.js";
 import { v4 as uuidv4 } from "uuid";
 import { extractDelayedMemories } from "./memory-extraction.js";
 import { getBlueskyPoller } from "./bluesky-poller.js";
@@ -220,7 +221,7 @@ async function checkAndRunZeitgeistSynthesis() {
       // No chats with new activity — still run synthesis if the block is
       // over capacity (archival needed) or doesn't exist yet. The staleness
       // check above already confirmed one of these conditions.
-      const db = getDb();
+      const db = getMemoryDb();
       const row = db.prepare(
         "SELECT length(content) as contentLength FROM memory_blocks WHERE id = ?"
       ).get("blk-zeitgeist-continuity") as { contentLength: number } | undefined;
