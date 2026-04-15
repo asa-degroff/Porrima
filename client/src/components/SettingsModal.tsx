@@ -1507,11 +1507,16 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <button
                       key={p}
                       onClick={() => {
+                        if (embeddingProvider === p) return;
                         setEmbeddingProvider(p);
-                        // Flip to the matching default URL if the user hasn't customized.
-                        if (!settings.embeddingUrl) {
-                          setEmbeddingUrl(p === "llamacpp" ? "http://localhost:8084" : "http://localhost:11434");
-                        }
+                        // Always reset to the matching default URL on provider switch —
+                        // the same URL serving Ollama also responds to llama.cpp's
+                        // /v1/models endpoint (Ollama is OpenAI-compatible), which would
+                        // otherwise conflate the two and show Ollama models in the
+                        // llama.cpp dropdown. Users with custom URLs can re-enter them.
+                        setEmbeddingUrl(p === "llamacpp" ? "http://localhost:8084" : "http://localhost:11434");
+                        setEmbeddingModels([]);
+                        setEmbeddingUseCustom(false);
                       }}
                       className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
                         embeddingProvider === p
