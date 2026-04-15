@@ -1072,7 +1072,11 @@ async function writeOptionalFollowupNotebookEntry(
       toolCalls.push(...iterationToolCalls);
       lastStopReason = result.stopReason;
 
-      if (result.stopReason !== "toolUse") {
+      // Continue the tool loop when tools were emitted, even if the provider
+      // reported stopReason="stop" (some Ollama models do this). Without
+      // this, tool calls get saved but are never executed.
+      const hasToolsToExecute = iterationToolCalls.length > 0;
+      if (result.stopReason !== "toolUse" && !hasToolsToExecute) {
         break;
       }
 

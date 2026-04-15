@@ -905,6 +905,13 @@ export const streamOpenAICompat = (
         throw new Error("Request was aborted");
       }
 
+      // Defensive: if tool calls were emitted but finish_reason wasn't
+      // "tool_calls" (some models / proxies report "stop" instead), promote
+      // to "toolUse" so the caller's loop executes them.
+      if (output.stopReason === "stop" && output.content.some((b) => b.type === "toolCall")) {
+        output.stopReason = "toolUse";
+      }
+
       stream.push({ type: "done", reason: output.stopReason, message: output } as AssistantMessageEvent);
       stream.end();
     } catch (error) {

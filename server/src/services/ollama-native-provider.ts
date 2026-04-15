@@ -497,6 +497,14 @@ export const streamOllamaNative = (
         throw new Error("An unknown error occurred");
       }
 
+      // Some Ollama models emit tool_calls but finish with done_reason="stop"
+      // instead of "tool_calls". Callers rely on stopReason === "toolUse" to
+      // continue the tool loop; without this promotion, tools are emitted but
+      // never executed and their results never written.
+      if (output.stopReason === "stop" && output.content.some((b) => b.type === "toolCall")) {
+        output.stopReason = "toolUse";
+      }
+
       stream.push({ type: "done", reason: output.stopReason, message: output } as AssistantMessageEvent);
       stream.end();
     } catch (error) {
