@@ -16,6 +16,7 @@ import {
 import { discoverAllModels } from "./models.js";
 import { invalidateAllMemoriesCaches } from "./memory-context.js";
 import { loadPersona } from "./persona-store.js";
+import { getZeitgeistContent } from "./zeitgeist.js";
 import { getSettings, listChats, getChat, getProject } from "./chat-storage.js";
 import { readAgentsMd } from "./project-storage.js";
 import {
@@ -194,15 +195,42 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
           }
         }
 
-        const memoriesText = store.memories
-          .map(
-            (m) => {
-              const projName = m.projectId ? projectNameMap.get(m.projectId) : undefined;
-              const proj = projName ? ` [project: ${projName}]` : "";
-              return `- [${m.category}] ${m.text} (importance: ${m.importance}/10, accessed: ${m.accessCount} times)${proj}`;
-            }
-          )
-          .join("\n");
+        // Condensed memory context: zeitgeist narrative + today's new memories + top-importance anchors.
+        // Dumping all stored memories (can be 4000+) blew past context limits.
+        const formatMemory = (m: typeof store.memories[number]) => {
+          const projName = m.projectId ? projectNameMap.get(m.projectId) : undefined;
+          const proj = projName ? ` [project: ${projName}]` : "";
+          return `- [${m.category}] ${m.text} (importance: ${m.importance}/10)${proj}`;
+        };
+
+        const newMemories = store.memories
+          .filter((m) => new Date(m.createdAt).getTime() >= sinceMs)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        const newMemoriesText = newMemories.map(formatMemory).join("\n");
+
+        const newIds = new Set(newMemories.map((m) => m.id));
+        const TOP_ANCHOR_COUNT = 30;
+        const topAnchors = [...store.memories]
+          .filter((m) => !newIds.has(m.id))
+          .sort((a, b) => b.importance - a.importance || b.accessCount - a.accessCount)
+          .slice(0, TOP_ANCHOR_COUNT);
+        const topAnchorsText = topAnchors.map(formatMemory).join("\n");
+
+        const zeitgeistContent = getZeitgeistContent();
+        const zeitgeistSection = zeitgeistContent
+          ? `---\n\n## Zeitgeist (current continuity narrative)\n\n${zeitgeistContent}`
+          : "";
+
+        const memorySection = [
+          `---\n\n## Memory Context`,
+          `Total stored memories: ${store.memories.length}. Showing new memories from this cycle and top-importance anchors — the zeitgeist above captures the broader narrative.`,
+          newMemoriesText
+            ? `### New memories this cycle (${newMemories.length})\n${newMemoriesText}`
+            : `### New memories this cycle\n(none)`,
+          topAnchorsText
+            ? `### Top-importance anchors (top ${topAnchors.length})\n${topAnchorsText}`
+            : "",
+        ].filter(Boolean).join("\n\n");
 
         // Only include unreviewed entries in a dedicated section if there are any
         // They're already in notebookSection, so we only add a highlighted section for truly new ones
@@ -216,7 +244,8 @@ export async function runDailySynthesis(modelId?: string): Promise<void> {
             : "## Today's Conversations\n\nNo agent chats since last synthesis.",
           notebookSection ? `---\n\n## Notebook Entries Today\n\n${notebookSection}` : "",
           unreviewedSection,
-          `---\n\n## Stored Memories (${store.memories.length} total)\n\n${memoriesText}`,
+          zeitgeistSection,
+          memorySection,
           `---\n\n## Your Persona\n\n${personaData?.content || ''}`,
           `Write a daily synthesis of your shared work with the user. Cover what the user worked on, what you accomplished together, and any patterns or themes that emerged. If the user wrote notebook entries, respond to their thoughts. Write naturally in first person for your actions, third person for the user.`,
         ].filter(Boolean).join("\n\n");
