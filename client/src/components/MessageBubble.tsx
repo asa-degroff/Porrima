@@ -50,6 +50,7 @@ interface Props {
   artifacts?: Artifact[];
   generatedImages?: GeneratedImage[];
   onEditMessage?: (index: number, newText: string, images?: ImageAttachment[]) => void;
+  onRetryMessage?: (index: number) => void;
   messageIndex?: number;
   editable?: boolean;
   onReadAloud?: (text: string) => void;
@@ -150,6 +151,13 @@ export const MessageBubble = memo(function MessageBubble({
     if (isUser && editable && !editing) setContextMenu(pos);
   }, [isUser, editable, editing]);
   const longPressProps = useLongPress(openContextMenu);
+
+  const handleRetry = () => {
+    if (messageIndex != null) {
+      onRetryMessage?.(messageIndex);
+    }
+    setContextMenu(null);
+  };
 
   useEffect(() => {
     if (editing && textareaRef.current) {

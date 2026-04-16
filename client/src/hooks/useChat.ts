@@ -853,6 +853,16 @@ export function useChat(chatId: string | null) {
     [chatId, streaming, messages, prepareStream, makeStreamCallbacks]
   );
 
+  const retryMessage = useCallback(
+    (index: number) => {
+      const msg = messages[index];
+      if (msg) {
+        editMessage(index, msg.content, msg.images);
+      }
+    },
+    [editMessage, messages]
+  );
+
   const abort = useCallback(async () => {
     if (chatId) {
       const bg = bgStreams.get(chatId);
@@ -993,6 +1003,7 @@ export function useChat(chatId: string | null) {
     hasBackgroundActivity,
     send,
     editMessage,
+    retryMessage,
     abort,
     loadMessages,
     setActiveChatData,
