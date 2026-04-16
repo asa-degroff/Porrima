@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { ActivityStyleContext } from '../hooks/useActivityStyle'
 
 // ---- Shape type ----
 export type ActivityShape = 'octahedron' | 'cube' | 'tetrahedron'
@@ -7,6 +8,7 @@ export type ActivityShape = 'octahedron' | 'cube' | 'tetrahedron'
 interface Props {
   isActive: boolean
   shape?: ActivityShape
+  hue?: number           // base hue 0–360; if omitted, reads from ActivityStyle context
   className?: string
   count?: number
   size?: number
@@ -55,6 +57,11 @@ function randomRestingOffsets(count: number): Rotation[] {
   }))
 }
 
+/** Read the default hue from ActivityStyle context. Used when no hue prop is provided. */
+function usePolyhedronHue(): number {
+  return useContext(ActivityStyleContext).hue
+}
+
 function randomTargets(count: number): Rotation[] {
   return Array.from({ length: count }, () => {
     const o = SNAP_ORIENTATIONS[Math.floor(Math.random() * SNAP_ORIENTATIONS.length)]
@@ -83,13 +90,13 @@ const OCT_FACE_CONFIGS = [
   { ry: 315, rx: -OCT_FACE_TILT, up: false, lightness: 42 },
 ]
 
-const OctahedronShape = memo(function OctahedronShape({ half, colorIndex }: { half: number; colorIndex: number }) {
+const OctahedronShape = memo(function OctahedronShape({ half, colorIndex, baseHue }: { half: number; colorIndex: number; baseHue: number }) {
   const faceDist = half / Math.sqrt(3)
   const faceW = half * Math.SQRT2
   const faceH = half * Math.sqrt(6) / 2
   const overlap = 0.5
   const adjustedFaceH = faceH + overlap
-  const hue = 38 + (colorIndex - 2) * 3
+  const hue = baseHue + (colorIndex - 2) * 3
   return (
     <>
       {OCT_FACE_CONFIGS.map((f, i) => (
@@ -136,14 +143,14 @@ const CUBE_FACE_CONFIGS = [
   { ry: 0, rx: 90, lightness: 35 },
 ]
 
-const CubeShape = memo(function CubeShape({ half, colorIndex }: { half: number; colorIndex: number }) {
+const CubeShape = memo(function CubeShape({ half, colorIndex, baseHue }: { half: number; colorIndex: number; baseHue: number }) {
   // Scale cube down to ~70% so the 3D projection fits within the container.
   // A cube at 3/4 view projects wider than its edge length.
   const scale = 0.7
   const faceDist = half * scale
   // Slightly oversize faces to prevent sub-pixel seams
   const faceSize = half * 2 * scale + 1
-  const hue = 38 + (colorIndex - 2) * 3
+  const hue = baseHue + (colorIndex - 2) * 3
   return (
     <>
       {CUBE_FACE_CONFIGS.map((f, i) => (
@@ -189,7 +196,7 @@ const TET_FACE_CONFIGS = [
   { ry: -90, rx: -90, lightness: 35 },
 ]
 
-const TetrahedronShape = memo(function TetrahedronShape({ half, colorIndex }: { half: number; colorIndex: number }) {
+const TetrahedronShape = memo(function TetrahedronShape({ half, colorIndex, baseHue }: { half: number; colorIndex: number; baseHue: number }) {
   // Scale tetrahedron to ~75% so the projected vertex-view fits within the container.
   const scale = 0.75
   // Edge length: sized to fit within container when viewed vertex-first
@@ -199,7 +206,7 @@ const TetrahedronShape = memo(function TetrahedronShape({ half, colorIndex }: { 
   // Slight overlap for seams
   const overlap = 0.5
   const adjustedFaceH = faceH + overlap
-  const hue = 38 + (colorIndex - 2) * 3
+  const hue = baseHue + (colorIndex - 2) * 3
   return (
     <>
       {TET_FACE_CONFIGS.map((f, i) => (
@@ -234,6 +241,7 @@ const TetrahedronShape = memo(function TetrahedronShape({ half, colorIndex }: { 
 export const PolyhedronLogo = memo(function PolyhedronLogo({
   isActive,
   shape = 'octahedron',
+  hue: hueProp,
   className = '',
   count = 5,
   size = 20,
@@ -242,6 +250,8 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
   speed = 1,
 }: Props) {
   const half = size / 2
+  const ctxHue = usePolyhedronHue()
+  const baseHue = hueProp ?? ctxHue
   const [rotations, setRotations] = useState<Rotation[] | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
   const [quadrantIndex, setQuadrantIndex] = useState(0)
@@ -365,7 +375,7 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
               }}
               onTransitionEnd={i === count - 1 ? handleTransitionEnd : undefined}
             >
-              <ShapeComponent half={half} colorIndex={i} />
+              <ShapeComponent half={half} colorIndex={i} baseHue={baseHue} />
             </div>
           </div>
         )
@@ -374,7 +384,7 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
   )
 })
 
-// Backward-compatible re-export
-export const OctahedronLogo = memo(function OctahedronLogo(props: Omit<Props, 'shape'>) {
+// Backward-compatible re-export (always octahedron, default hue)
+export const OctahedronLogo = memo(function OctahedronLogo(props: Omit<Props, 'shape' | 'hue'>) {
   return <PolyhedronLogo {...props} shape="octahedron" />
 })

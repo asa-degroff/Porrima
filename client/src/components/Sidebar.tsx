@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import type { ChatListItem as ChatListItemType, ChatType, Project } from "../types";
 import { ChatListItem } from "./ChatListItem";
 import { PolyhedronLogo } from "./PolyhedronLogo";
-import { useActivityShape } from "../hooks/useActivityShape";
+import { useActivityShape } from "../hooks/useActivityStyle";
 import { BlueskySection } from "./BlueskySection";
 import { useSidebarState } from "../hooks/useSidebarState";
 import { useGestureDrawer } from "../hooks/useGestureDrawer";

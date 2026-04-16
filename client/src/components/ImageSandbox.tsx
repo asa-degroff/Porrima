@@ -10,7 +10,7 @@ import { VisionControls } from "./VisionControls";
 import { VisionChat } from "./VisionChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PolyhedronLogo } from "./PolyhedronLogo";
-import { useActivityShape } from "../hooks/useActivityShape";
+import { useActivityShape } from "../hooks/useActivityStyle";
 import { DragHandle } from "./DragHandle";
 import { ImageSearch } from "./ImageSearch";
 import CorpusView from "./CorpusView";

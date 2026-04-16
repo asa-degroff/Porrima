@@ -3,7 +3,7 @@ import type { AnalyzedImage, VisionMessage } from "../api/client";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessageInput } from "./MessageInput";
 import { PolyhedronLogo } from "./PolyhedronLogo";
-import { useActivityShape } from "../hooks/useActivityShape";
+import { useActivityShape } from "../hooks/useActivityStyle";
 
 interface Props {
   image: AnalyzedImage;

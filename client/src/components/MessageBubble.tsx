@@ -13,7 +13,7 @@ import { UserImage } from "./UserImage";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
 import { CompactionIndicator } from "./CompactionIndicator";
 import { PolyhedronLogo } from "./PolyhedronLogo";
-import { useActivityShape } from "../hooks/useActivityShape";
+import { useActivityShape } from "../hooks/useActivityStyle";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { useIsDesktop } from "../hooks/useIsDesktop";
 

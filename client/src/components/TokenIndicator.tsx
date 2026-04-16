@@ -1,6 +1,6 @@
 import type { MessageUsage } from "../types";
 import { PolyhedronLogo } from "./PolyhedronLogo";
-import { useActivityShape } from "../hooks/useActivityShape";
+import { useActivityShape } from "../hooks/useActivityStyle";
 
 interface CompactionInfo {
   removedCount: number;

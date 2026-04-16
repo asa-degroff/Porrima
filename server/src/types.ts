@@ -161,6 +161,7 @@ export interface Settings {
   modelContextWindows?: Record<string, number>;
   theme?: Theme;
   activityShape?: ActivityShape;
+  activityHue?: number;
   systemPromptPresets?: SystemPromptPreset[];
   defaultVisionPreset?: string;
   // Delayed memory extraction settings

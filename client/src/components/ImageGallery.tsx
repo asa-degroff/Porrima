@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, memo, useMemo } from "react";
 import type { GeneratedImage, GenerationState, ActivityShape } from "../types";
 import { precacheImages } from "../utils/imageCache";
 import { PolyhedronLogo } from "./PolyhedronLogo";
-import { useActivityShape } from "../hooks/useActivityShape";
+import { useActivityShape } from "../hooks/useActivityStyle";
 
 interface Props {
   images: GeneratedImage[];

@@ -28,7 +28,7 @@ import { useKeyboardInset } from "./hooks/useKeyboardInset";
 import { updateChat as apiUpdateChat } from "./api/client";
 import { setCachedChat, getCachedChat, clearCachedChat } from "./lib/db";
 import { HapticsProvider } from "./hooks/useHaptics";
-import { ActivityShapeProvider } from "./hooks/useActivityShape";
+import { ActivityStyleProvider } from "./hooks/useActivityStyle";
 import { useTTS } from "./hooks/useTTS";
 import { TTSControlBar } from "./components/TTSControlBar";
 import { useNotebooks } from "./hooks/useNotebooks";
@@ -559,10 +559,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   // Keyboard inset only - TTS bar is handled within ChatView
   const totalBottomInset = keyboardInset || 0;
 
-  const activityShape = settings.activityShape || 'octahedron'
+  const activityStyle = {
+    shape: settings.activityShape || 'octahedron',
+    hue: settings.activityHue ?? 38,
+  }
 
   return (
-    <ActivityShapeProvider value={activityShape}>
+    <ActivityStyleProvider value={activityStyle}>
     <div className="flex h-full overflow-hidden relative" style={totalBottomInset ? { paddingBottom: totalBottomInset } : undefined}>
       {settings.backgroundEffect === "ripple-grid" && (
         <Suspense fallback={null}>
@@ -716,7 +719,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         </div>
       )}
     </div>
-    </ActivityShapeProvider>
+    </ActivityStyleProvider>
   );
 }
 
