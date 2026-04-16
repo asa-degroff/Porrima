@@ -709,6 +709,79 @@ export const streamOpenAICompat = (
 
       stream.push({ type: "start", partial: output } as AssistantMessageEvent);
 
+      // Gemma 4 channel token filter — strips <|channel>thought\n...<channel|>
+      // blocks that leak into delta.content when llama.cpp doesn't route them
+      // to reasoning_content. Stateful to handle tokens split across chunks.
+      const isGemma = model.id.toLowerCase().includes("gemma");
+      let gemmaChannelState: "text" | "maybe-open" | "thinking" | "maybe-close" = "text";
+      let gemmaChannelBuffer = "";
+
+      const filterGemmaChannelTokens = (text: string): string => {
+        if (!isGemma) return text;
+
+        let result = "";
+        for (let i = 0; i < text.length; i++) {
+          const ch = text[i];
+          gemmaChannelBuffer += ch;
+
+          switch (gemmaChannelState) {
+            case "text":
+              // Look for start of <|channel>
+              if (gemmaChannelBuffer.endsWith("<")) {
+                gemmaChannelState = "maybe-open";
+              } else {
+                result += gemmaChannelBuffer;
+                gemmaChannelBuffer = "";
+              }
+              break;
+
+            case "maybe-open":
+              // Building up <|channel>thought\n
+              if ("<|channel>thought\n".startsWith(gemmaChannelBuffer)) {
+                if (gemmaChannelBuffer === "<|channel>thought\n") {
+                  // Full opening tag matched — enter thinking state, discard buffer
+                  gemmaChannelState = "thinking";
+                  gemmaChannelBuffer = "";
+                }
+                // else keep buffering
+              } else {
+                // Not a match — flush buffer as regular text
+                result += gemmaChannelBuffer;
+                gemmaChannelBuffer = "";
+                gemmaChannelState = "text";
+              }
+              break;
+
+            case "thinking":
+              // Inside thinking block — look for <channel|>
+              if (gemmaChannelBuffer.endsWith("<")) {
+                gemmaChannelState = "maybe-close";
+              } else {
+                // Discard thinking content
+                gemmaChannelBuffer = "";
+              }
+              break;
+
+            case "maybe-close":
+              // Building up <channel|>
+              if ("<channel|>".startsWith(gemmaChannelBuffer)) {
+                if (gemmaChannelBuffer === "<channel|>") {
+                  // Full closing tag matched — return to text state
+                  gemmaChannelState = "text";
+                  gemmaChannelBuffer = "";
+                }
+                // else keep buffering
+              } else {
+                // Not a closing tag — discard (still in thinking) and reset
+                gemmaChannelBuffer = "";
+                gemmaChannelState = "thinking";
+              }
+              break;
+          }
+        }
+        return result;
+      };
+
       let currentBlock: any = null;
       const blocks = output.content;
       const blockIndex = () => blocks.length - 1;
@@ -798,23 +871,27 @@ export const streamOpenAICompat = (
 
         // Handle content tokens
         if (delta.content) {
-          if (!currentBlock || currentBlock.type !== "text") {
-            finishCurrentBlock(currentBlock);
-            currentBlock = { type: "text", text: "" };
-            output.content.push(currentBlock);
+          // Filter Gemma 4 channel tokens that leak into content
+          const filteredContent = filterGemmaChannelTokens(delta.content);
+          if (filteredContent) {
+            if (!currentBlock || currentBlock.type !== "text") {
+              finishCurrentBlock(currentBlock);
+              currentBlock = { type: "text", text: "" };
+              output.content.push(currentBlock);
+              stream.push({
+                type: "text_start",
+                contentIndex: blockIndex(),
+                partial: output,
+              } as AssistantMessageEvent);
+            }
+            currentBlock.text += filteredContent;
             stream.push({
-              type: "text_start",
+              type: "text_delta",
               contentIndex: blockIndex(),
+              delta: filteredContent,
               partial: output,
             } as AssistantMessageEvent);
           }
-          currentBlock.text += delta.content;
-          stream.push({
-            type: "text_delta",
-            contentIndex: blockIndex(),
-            delta: delta.content,
-            partial: output,
-          } as AssistantMessageEvent);
         }
 
         // Handle tool calls (streamed incrementally by index)
@@ -873,6 +950,15 @@ export const streamOpenAICompat = (
             }
           }
         }
+      }
+
+      // Flush any Gemma channel filter buffer left over at stream end
+      // (e.g. a trailing "<" that wasn't part of a channel tag)
+      if (isGemma && gemmaChannelBuffer && (gemmaChannelState === "text" || gemmaChannelState === "maybe-open")) {
+        if (currentBlock?.type === "text") {
+          currentBlock.text += gemmaChannelBuffer;
+        }
+        gemmaChannelBuffer = "";
       }
 
       // Finish any remaining tool calls

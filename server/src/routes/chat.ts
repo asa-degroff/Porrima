@@ -1213,7 +1213,7 @@ async function handleChatStream(
 
       // 2. Run compaction to free context space
       const effectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
-      const emitCompacting = () => res.write(`event: compaction\ndata: ${JSON.stringify({ type: "mid_turn", cycle: compactionCycle })}\n\n`);
+      const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
       const emitKeepalive = () => res.write(`: keepalive\n\n`);
       try {
         const compaction = await truncateChatHistory(chat, effectiveCW, true, emitCompacting, emitKeepalive);
@@ -1231,6 +1231,17 @@ async function handleChatStream(
               console.error("[compaction] pre-flush failed:", err);
             }
           }
+
+          // Emit compaction completion event AFTER all compaction work is done
+          // (memory extraction, save) so the client can safely sync state.
+          const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
+          res.write(`event: compaction\ndata: ${JSON.stringify({
+            removedCount: compaction.removedCount,
+            remainingCount: chat.messages.filter(m => !m._outOfContext).length,
+            summaryMessage: summaryMsg || null,
+            midTurn: true,
+            cycle: compactionCycle,
+          })}\n\n`);
         }
       } catch (compErr) {
         console.error(`[chat] Mid-turn compaction cycle ${compactionCycle} failed:`, compErr);
