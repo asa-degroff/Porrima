@@ -6,6 +6,17 @@ interface Props {
   projectId?: string;
 }
 
+// Hide blocks that are NOT loaded into the chat's system prompt. The zeitgeist
+// continuity block IS loaded (as the "Continuity Context" section), so it
+// stays visible. Archives, synthesis, and notebook-cycle blocks are only
+// reachable via search/read_memory_block and shouldn't appear here.
+function isUserBlock(b: MemoryBlock): boolean {
+  if (b.id.startsWith("blk-archive-")) return false;
+  if (b.id.startsWith("blk-synth-")) return false;
+  if (b.id.startsWith("blk-notebook-")) return false;
+  return true;
+}
+
 export function BlockIndicator({ projectId }: Props) {
   const [open, setOpen] = useState(false);
   const [blocks, setBlocks] = useState<MemoryBlock[] | null>(null);
@@ -48,7 +59,7 @@ export function BlockIndicator({ projectId }: Props) {
         fetchMemoryBlocks("global"),
         projectId ? fetchMemoryBlocks("project", projectId) : Promise.resolve([]),
       ])
-        .then(([global, project]) => setBlocks([...global, ...project]))
+        .then(([global, project]) => setBlocks([...global, ...project].filter(isUserBlock)))
         .catch(() => setBlocks([]))
         .finally(() => setLoading(false));
     }

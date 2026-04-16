@@ -1018,7 +1018,8 @@ async function writeOptionalFollowupNotebookEntry(
     onAskUser: () => {},
   };
 
-  const toolsChatId = "synthesis-followup";
+  const { NOTEBOOK_CYCLE_CHAT_ID } = await import("./notebook-storage.js");
+  const toolsChatId = NOTEBOOK_CYCLE_CHAT_ID;
   const tools = getAgentTools(toolsChatId, effects);
 
   const messages: any[] = [

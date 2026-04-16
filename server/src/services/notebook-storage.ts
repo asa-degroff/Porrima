@@ -9,6 +9,19 @@ const NOTEBOOKS_DIR = join(BASE_DIR, "notebooks");
 const USER_ENTRIES_DIR = join(NOTEBOOKS_DIR, "user", "entries");
 const AGENT_ENTRIES_DIR = join(NOTEBOOKS_DIR, "agent", "entries");
 
+// Synthetic chatId used by the synthesis follow-up tool loop. Also used by
+// memory-tools.ts to route create_memory_block calls through the notebook
+// naming convention so follow-up blocks get the same system-block exclusion
+// as blocks created via createNotebookBlock.
+export const NOTEBOOK_CYCLE_CHAT_ID = "synthesis-followup";
+
+/** Generate a notebook-prefixed block ID matching createNotebookBlock's format. */
+export function generateNotebookBlockId(type: 'synthesis' | 'notebook' = 'notebook', date?: string): string {
+  const blockDate = (date || new Date().toISOString().split('T')[0]).replace(/-/g, "");
+  const prefix = type === 'synthesis' ? 'blk-synth' : 'blk-notebook';
+  return `${prefix}-${blockDate}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
 async function ensureDirs() {
   await mkdir(USER_ENTRIES_DIR, { recursive: true });
   await mkdir(AGENT_ENTRIES_DIR, { recursive: true });
@@ -186,9 +199,7 @@ export function createNotebookBlock(
   date?: string
 ): string {
   const blockDate = date || new Date().toISOString().split('T')[0];
-  const id = type === 'synthesis'
-    ? `blk-synth-${blockDate.replace(/-/g, "")}-${crypto.randomUUID().slice(0, 8)}`
-    : `blk-notebook-${blockDate.replace(/-/g, "")}-${crypto.randomUUID().slice(0, 8)}`;
+  const id = generateNotebookBlockId(type, blockDate);
 
   const prefix = type === 'synthesis' ? 'Synthesis' : 'Notebook';
   const description = extractBlockDescription(content);

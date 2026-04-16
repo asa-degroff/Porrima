@@ -301,16 +301,14 @@ async function buildStablePrefix(
 
   let blocksSection = "";
   try {
-    // The zeitgeist continuity block and its archives are global blocks but
-    // have dedicated handling: the zeitgeist gets its own "Continuity Context"
-    // section below, and archives are surfaced on demand via list_memory_blocks
-    // (see getZeitgeistArchiveInstruction). Exclude them here so they don't
-    // get eagerly attached twice or eat into the blocks token budget.
-    // Exclude system-managed blocks from automatic context loading:
-    // - Zeitgeist continuity block (loaded separately as "Continuity Context")
-    // - Zeitgeist archives (accessible via search/read_memory_block)
-    // - Synthesis entries (daily summaries, accessible via search)
-    // - Notebook blocks (agent reflections, accessible via search)
+    // System-managed blocks are excluded from both auto-loading and the
+    // "Available Memory Blocks" index — they have dedicated discovery paths
+    // and would otherwise grow unboundedly and bloat every chat's context:
+    // - Zeitgeist continuity block: loaded separately as "Continuity Context"
+    // - Zeitgeist archives: surfaced via getZeitgeistArchiveInstruction
+    // - Synthesis (blk-synth-*) and notebook (blk-notebook-*) blocks: still
+    //   FTS-searchable via search_memory and discoverable via list_memory_blocks,
+    //   but not pinned into the system prompt.
     const isSystemBlock = (b: MemoryBlock) =>
       b.id === "blk-zeitgeist-continuity" ||
       b.id.startsWith("blk-archive-") ||
@@ -321,7 +319,7 @@ async function buildStablePrefix(
     const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemBlock(b));
     loadedBlocks.push(...globalBlocks);
     if (projectId) {
-      const projectBlocks = getMemoryBlocksByScope("project", projectId);
+      const projectBlocks = getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemBlock(b));
       loadedBlocks.push(...projectBlocks);
     }
 
@@ -332,10 +330,10 @@ async function buildStablePrefix(
     // - Global blocks that weren't loaded (token budget)
     // - Project-scoped blocks from the current project that weren't loaded
     // Exclude project-scoped blocks from other projects
-    // Exclude zeitgeist and its archives (handled separately)
+    // Exclude system-managed blocks (handled separately or via dedicated tools)
     const indexedBlocks = allBlocks.filter((b) => {
       if (loadedIds.has(b.id)) return false; // Already loaded
-      if (isSystemBlock(b)) return false; // Handled by dedicated sections / search
+      if (isSystemBlock(b)) return false; // Dedicated handling / on-demand discovery
       if (b.scope === "global") return true; // Global blocks are always indexable
       if (b.scope === "project" && b.projectId === projectId) return true; // Current project blocks
       return false; // Other projects' blocks are excluded

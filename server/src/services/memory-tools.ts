@@ -459,7 +459,14 @@ export async function executeMemoryTool(
         return { content: `Content exceeds ${MAX_BLOCK_CHARS} character limit (${content.length} chars). Please shorten or split into multiple blocks.`, isError: true };
       }
       const { v4: uuid } = await import("uuid");
-      const id = `blk-${uuid()}`;
+      // Route blocks created during the notebook cycle through the notebook
+      // prefix so they inherit the same system-block exclusion as blocks
+      // created via createNotebookBlock (kept out of the stable prefix and
+      // the "Available Memory Blocks" index).
+      const { NOTEBOOK_CYCLE_CHAT_ID, generateNotebookBlockId } = await import("./notebook-storage.js");
+      const id = chatId === NOTEBOOK_CYCLE_CHAT_ID
+        ? generateNotebookBlockId("notebook")
+        : `blk-${uuid()}`;
       const now = new Date().toISOString();
       
       // Auto-assign projectId for project-scoped blocks when created in a project chat
@@ -498,9 +505,16 @@ export async function executeMemoryTool(
 
       const finalContent = newContent ?? existing.content;
       if (finalContent.length > MAX_BLOCK_CHARS) {
-        // Content too large — create a superseding block instead
+        // Content too large — create a superseding block instead.
+        // Preserve notebook/synthesis prefix so the replacement inherits the
+        // same system-block exclusion as the original.
         const { v4: uuid } = await import("uuid");
-        const newId = `blk-${uuid()}`;
+        const { generateNotebookBlockId } = await import("./notebook-storage.js");
+        const newId = existing.id.startsWith("blk-notebook-")
+          ? generateNotebookBlockId("notebook")
+          : existing.id.startsWith("blk-synth-")
+          ? generateNotebookBlockId("synthesis")
+          : `blk-${uuid()}`;
         const now = new Date().toISOString();
         const newBlock = supersedeBlock(existing.id, {
           id: newId,
