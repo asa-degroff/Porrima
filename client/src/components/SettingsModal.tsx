@@ -1047,7 +1047,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           <div id="inference" className="space-y-4">
             <h3 className="text-sm font-semibold text-white/80">Inference Servers</h3>
             <p className="text-xs text-white/40 -mt-2">
-              Four distinct model roles: the main chat/inference server, a CPU extraction server for memory extraction, a cross-encoder reranker, and an embedding server. Each can point at a separate llama.cpp instance (or Ollama, for embeddings).
+              Four model roles: the main chat inference server, a server for memory extraction, a cross-encoder reranker, and an embedding server. Each can point at a separate llama.cpp instance.
             </p>
 
             {/* Binary Path (symlink management) */}
@@ -1147,7 +1147,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 )}
 
                 <p className="text-xs text-white/30">
-                  Path to the llama.cpp build directory. All three services (inference, reranker, extraction) share this binary via the <code className="text-white/50">~/bin/llama-current</code> symlink.
+                  Path to the llama.cpp build directory. All llama.cpp services share this binary via the <code className="text-white/50">~/bin/llama-current</code> symlink.
                 </p>
               </div>
             </div>
@@ -1196,7 +1196,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       onChange={(e) => setLlamacppSharesGpu(e.target.checked)}
                       className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
                     />
-                    <span className="text-xs text-white/60">Shares GPU with Ollama</span>
                   </label>
                   <p className="text-xs text-white/30">Main GPU inference server (router mode). Models are loaded on demand.</p>
                 </div>
@@ -1234,7 +1233,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   </div>
                 )}
                 <p className="text-xs text-white/30">
-                  Dedicated CPU instance for memory extraction. Keeps chat model KV cache intact.
+                  Dedicated instance for memory extraction.
                 </p>
                 <div>
                   <label className="block text-xs text-white/70 mb-1">Context window</label>
@@ -1256,7 +1255,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <div className="pt-3 border-t border-white/5 space-y-3">
                   <h5 className="text-xs font-medium text-white/60 uppercase tracking-wider">Extraction Model</h5>
                   <p className="text-xs text-white/30">
-                    Used for background extraction and enrichment tasks (notebooks, corpus enrichment, image captioning, scheduled memory extraction). When a dedicated extraction URL is set above, it handles memory extraction directly; this model still runs the other background jobs.
+                    Used for background extraction tasks.
                   </p>
                   <div>
                     <label className="block text-xs text-white/70 mb-1.5">Model</label>
@@ -1497,7 +1496,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <p className="text-xs text-white/30 mt-1">Model identifier sent in the <code className="text-white/50">/v1/rerank</code> request.</p>
                   </div>
                   <p className="text-xs text-white/30">
-                    Cross-encoder reranker for memory retrieval quality. Typically a CPU-only llama.cpp instance.
+                    Cross-encoder reranker for memory retrieval quality.
                   </p>
                 </div>
               )}
@@ -2120,7 +2119,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               ))}
             </div>
             <p className="text-white/30 text-xs">
-              Scales all rounded corners. Squircle shape reads smaller at the same radius, so Generous is a good match for squircle.
+              Scales all rounded corners. 
             </p>
           </div>
 
@@ -2238,7 +2237,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <div>
                   <label className="block text-sm font-medium text-white/60">Chromatic Aberration</label>
                   <p className="text-white/30 text-xs mt-0.5">
-                    Red/blue fringing that grows toward the screen edges, like a lens.
+                    Red/blue fringing that grows toward the screen edges
                   </p>
                 </div>
                 <button
@@ -2264,7 +2263,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <div>
                   <label className="block text-sm font-medium text-white/60">Mouse Warp</label>
                   <p className="text-white/30 text-xs mt-0.5">
-                    Subtle repulsion of grid/dots around the cursor.
+                    Subtle repulsion of grid/dots around the cursor
                   </p>
                 </div>
                 <button
@@ -2380,7 +2379,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           <div id="user-doc" className="space-y-3 pt-2 border-t border-white/10">
             <label className="block text-sm font-medium text-white/60">About You</label>
             <p className="text-white/30 text-xs -mt-2">
-              Optional. Share your name, preferences, and context. Helps me understand you better.
+              Optional. Share your name, preferences, and context.
             </p>
 
             <div className="space-y-2">
@@ -2476,7 +2475,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               </button>
             </div>
             <p className="text-white/30 text-xs -mt-2">
-              Mode-specific prompts that append to the base agent prompt.
+              Prompts that append to the base agent prompt.
             </p>
 
             {presetMessage && (
@@ -3292,8 +3291,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             ) : (
               <div className="space-y-3">
                 <p className="text-xs text-white/40">
-                  Connect your Bluesky account to receive notifications and interact with the platform.
-                  You'll need to create an app password in your Bluesky settings.
+                  Connect the agent's Bluesky account to receive notifications and interact with the platform.
+                  You'll need to create an app password in Bluesky settings.
                 </p>
                 
                 <div className="space-y-2">
