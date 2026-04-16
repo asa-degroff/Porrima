@@ -897,7 +897,7 @@ function formatNotebookEntries(entries: NotebookEntry[]): string {
         if (content.length > MAX_NOTEBOOK_ENTRY_CHARS) {
           content = content.slice(0, MAX_NOTEBOOK_ENTRY_CHARS) + "...";
         }
-        return `**[${time}] User wrote:**\n${content}`;
+        return `**[${time}] The user wrote:**\n${content}`;
       })
       .join("\n\n");
     sections.push(formatted);
@@ -914,7 +914,7 @@ function formatNotebookEntries(entries: NotebookEntry[]): string {
         if (content.length > MAX_NOTEBOOK_ENTRY_CHARS) {
           content = content.slice(0, MAX_NOTEBOOK_ENTRY_CHARS) + "...";
         }
-        return `**[${time}] Agent wrote:**\n${content}`;
+        return `**[${time}] You wrote:**\n${content}`;
       })
       .join("\n\n");
     sections.push(formatted);
@@ -950,34 +950,14 @@ async function saveSynthesisAsNotebookAndMemory(
   const entry = await createNotebookEntry("agent", summary);
   console.log(`[synthesis] Saved synthesis as notebook entry: ${entry.id}`);
 
-  // Save as memory (context category, high importance)
+  // Create a memory block for the full synthesis text (replaces truncated atomic memory)
+  // This makes the synthesis searchable via FTS5 and retrievable via read_memory_block
   try {
-    const { embed } = await import("./embeddings.js");
-    const { addMemory } = await import("./memory-storage.js");
-    const { v4: uuid } = await import("uuid");
-    
-    const embedding = await embed(summary);
-    const projectId = todaysDigest && todaysDigest.projectSections.length === 1 
-      ? todaysDigest.projectSections[0].project.id 
-      : undefined;
-    
-    const now = new Date().toISOString();
-    await addMemory({
-      id: uuid(),
-      text: `Daily synthesis: ${summary.slice(0, 500)}${summary.length > 500 ? '...' : ''}`,
-      category: "context",
-      importance: 8,
-      embedding,
-      createdAt: now,
-      lastAccessed: now,
-      accessCount: 0,
-      projectId,
-      sourceType: "synthesis",
-      sourceId: entry.id,
-    });
-    console.log(`[synthesis] Saved synthesis summary as memory`);
+    const { createNotebookBlock } = await import("./notebook-storage.js");
+    const blockId = createNotebookBlock(summary, 'synthesis');
+    console.log(`[synthesis] Created synthesis memory block: ${blockId}`);
   } catch (e) {
-    console.error("[synthesis] Failed to save synthesis as memory:", e);
+    console.error("[synthesis] Failed to create synthesis memory block:", e);
   }
 
   // Mark unreviewed entries as reviewed
@@ -1131,6 +1111,15 @@ async function writeOptionalFollowupNotebookEntry(
     console.log(
       `[synthesis] Saved optional follow-up: ${entry.id} (${toolCalls.length} tool calls, ${artifacts.length} artifacts, ${visuals.length} visuals)`
     );
+
+    // Create a memory block for the follow-up entry for searchability
+    try {
+      const { createNotebookBlock } = await import("./notebook-storage.js");
+      const blockId = createNotebookBlock(finalResponse, 'notebook');
+      console.log(`[synthesis] Created follow-up memory block: ${blockId}`);
+    } catch (e) {
+      console.error("[synthesis] Failed to create follow-up memory block:", e);
+    }
   } catch (e) {
     console.error("[synthesis] Optional follow-up failed:", e);
   }

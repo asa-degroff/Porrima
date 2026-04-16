@@ -628,24 +628,47 @@ export function shouldRunZeitgeistSynthesis(): boolean {
 
 /**
  * Get instruction text for memory retrieval, telling the agent it can fetch
- * zeitgeist archives for temporal context. Only returns the hint if archives
- * actually exist — avoids wasting ~250 tokens/conversation when there's nothing to find.
+ * historical context blocks (zeitgeist archives, synthesis entries, notebook entries).
+ * Only returns the hint if at least one historical block exists — avoids wasting
+ * ~250 tokens/conversation when there's nothing to find.
  */
 export function getZeitgeistArchiveInstruction(): string {
   const db = getMemoryDb();
-  const row = db.prepare(
+
+  // Check for any historical context blocks
+  const hasArchives = db.prepare(
     "SELECT 1 FROM memory_blocks WHERE name LIKE 'Zeitgeist Archive -%' LIMIT 1"
   ).get() as any;
 
-  if (!row) return ""; // No archives exist yet — skip the hint
+  const hasSynthesis = db.prepare(
+    "SELECT 1 FROM memory_blocks WHERE id LIKE 'blk-synth-%' LIMIT 1"
+  ).get() as any;
 
-  return `## Temporal Context Access
+  const hasNotebook = db.prepare(
+    "SELECT 1 FROM memory_blocks WHERE id LIKE 'blk-notebook-%' LIMIT 1"
+  ).get() as any;
 
-Zeitgeist archives are available for historical context. Each archive represents a snapshot of the continuity block from a specific date. When you retrieve memories from a particular date, you can search for the corresponding zeitgeist archive using:
+  if (!hasArchives && !hasSynthesis && !hasNotebook) return ""; // No historical blocks yet
 
-- list_memory_blocks with query: "Zeitgeist Archive - YYYY-MM-DD" (replace with the date)
-- Or just "Zeitgeist Archive" to list all archives chronologically
-- Then use read_memory_block(id) to retrieve the full archive content
+  const sections: string[] = [];
 
-This allows you to understand the narrative context from that period, not just isolated facts.`;
+  if (hasArchives) {
+    sections.push(`- **Zeitgeist archives** — snapshots of the continuity block from specific dates. Use list_memory_blocks with query "Zeitgeist Archive" to browse, or "Zeitgeist Archive - YYYY-MM-DD" for a specific date.`);
+  }
+
+  if (hasSynthesis) {
+    sections.push(`- **Synthesis entries** — your daily synthesis summaries. Use list_memory_blocks with query "Synthesis" to browse.`);
+  }
+
+  if (hasNotebook) {
+    sections.push(`- **Notebook entries** — your reflective notebook writing. Use list_memory_blocks with query "Notebook" to browse.`);
+  }
+
+  return `## Historical Context Access
+
+You have access to historical context through memory blocks:
+
+${sections.join("\n")}
+
+Use search_memory with a relevant query to find blocks about specific topics, then read_memory_block(id) to retrieve the full content. This allows you to understand the narrative context from that period, not just isolated facts.`;
 }

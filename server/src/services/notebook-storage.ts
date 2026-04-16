@@ -2,6 +2,7 @@ import { readFile, writeFile, readdir, unlink, mkdir, access } from "fs/promises
 import { join } from "path";
 import { homedir } from "os";
 import type { NotebookEntry, NotebookIndex } from "../types.js";
+import { createMemoryBlock, MAX_BLOCK_CHARS } from "./memory-storage.js";
 
 const BASE_DIR = join(homedir(), ".quje-agent");
 const NOTEBOOKS_DIR = join(BASE_DIR, "notebooks");
@@ -158,4 +159,54 @@ export async function getUserEntriesToday(): Promise<NotebookEntry[]> {
   }
   
   return entries;
+}
+
+/**
+ * Extract a brief description from notebook content for use as a memory block description.
+ * Strips leading markdown headers and takes the first ~150 characters.
+ */
+export function extractBlockDescription(content: string): string {
+  // Strip leading markdown headers (e.g., "# Daily Synthesis - 2026-04-15")
+  const stripped = content.replace(/^#+\s+.*\n?/, '').trim();
+  // Take first ~150 chars, collapse whitespace
+  const excerpt = stripped.slice(0, 150).replace(/\n+/g, ' ').trim();
+  return excerpt.length < stripped.length ? excerpt + '...' : excerpt;
+}
+
+/**
+ * Create a memory block from notebook content for searchability.
+ * Makes the entry discoverable via memory search and retrievable via read_memory_block,
+ * without loading it in every context window.
+ *
+ * Returns the block ID for reference.
+ */
+export function createNotebookBlock(
+  content: string,
+  type: 'synthesis' | 'notebook',
+  date?: string
+): string {
+  const blockDate = date || new Date().toISOString().split('T')[0];
+  const id = type === 'synthesis'
+    ? `blk-synth-${blockDate.replace(/-/g, "")}-${crypto.randomUUID().slice(0, 8)}`
+    : `blk-notebook-${blockDate.replace(/-/g, "")}-${crypto.randomUUID().slice(0, 8)}`;
+
+  const prefix = type === 'synthesis' ? 'Synthesis' : 'Notebook';
+  const description = extractBlockDescription(content);
+  const truncatedContent = content.length > MAX_BLOCK_CHARS
+    ? content.slice(0, MAX_BLOCK_CHARS)
+    : content;
+
+  createMemoryBlock({
+    id,
+    name: `${prefix} - ${blockDate}: ${description.slice(0, 50)}`,
+    description,
+    content: truncatedContent,
+    scope: 'global',
+    projectId: '',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    updatedBy: 'agent',
+  });
+
+  return id;
 }

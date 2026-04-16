@@ -306,11 +306,19 @@ async function buildStablePrefix(
     // section below, and archives are surfaced on demand via list_memory_blocks
     // (see getZeitgeistArchiveInstruction). Exclude them here so they don't
     // get eagerly attached twice or eat into the blocks token budget.
-    const isZeitgeistBlock = (b: MemoryBlock) =>
-      b.id === "blk-zeitgeist-continuity" || b.id.startsWith("blk-archive-");
+    // Exclude system-managed blocks from automatic context loading:
+    // - Zeitgeist continuity block (loaded separately as "Continuity Context")
+    // - Zeitgeist archives (accessible via search/read_memory_block)
+    // - Synthesis entries (daily summaries, accessible via search)
+    // - Notebook blocks (agent reflections, accessible via search)
+    const isSystemBlock = (b: MemoryBlock) =>
+      b.id === "blk-zeitgeist-continuity" ||
+      b.id.startsWith("blk-archive-") ||
+      b.id.startsWith("blk-synth-") ||
+      b.id.startsWith("blk-notebook-");
 
     const loadedBlocks: MemoryBlock[] = [];
-    const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isZeitgeistBlock(b));
+    const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemBlock(b));
     loadedBlocks.push(...globalBlocks);
     if (projectId) {
       const projectBlocks = getMemoryBlocksByScope("project", projectId);
@@ -327,7 +335,7 @@ async function buildStablePrefix(
     // Exclude zeitgeist and its archives (handled separately)
     const indexedBlocks = allBlocks.filter((b) => {
       if (loadedIds.has(b.id)) return false; // Already loaded
-      if (isZeitgeistBlock(b)) return false; // Handled by dedicated zeitgeist section / archive hint
+      if (isSystemBlock(b)) return false; // Handled by dedicated sections / search
       if (b.scope === "global") return true; // Global blocks are always indexable
       if (b.scope === "project" && b.projectId === projectId) return true; // Current project blocks
       return false; // Other projects' blocks are excluded

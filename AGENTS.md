@@ -57,7 +57,7 @@ See [docs/artifacts-and-images.md](docs/artifacts-and-images.md) for full detail
 
 See [docs/integrations.md](docs/integrations.md) for full details.
 
-- **Notebooks**: Dual user/agent notebook with linking and attachments. Synthesis integration.
+- **Notebooks**: Dual user/agent notebook with linking and attachments. Synthesis integration. Agent entries are dual-represented as filesystem JSON (for UI) and memory blocks (for searchability).
 - **Bluesky**: AT Protocol with encrypted sessions, notification polling, auto-respond, thread splitting.
 - **TTS**: Kokoro + Qwen3-TTS backends. Generator-based streaming with 3-tier boundary detection.
 - **User Images**: Upload, thumbnails, vision analysis. Stored in `~/.quje-agent/user-images/`.

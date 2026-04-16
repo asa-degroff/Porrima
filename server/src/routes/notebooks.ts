@@ -330,6 +330,15 @@ Current date: ${new Date().toLocaleDateString()}`;
         visuals: allVisuals,
       });
     }
+
+    // Create a memory block from the agent entry for searchability
+    try {
+      const { createNotebookBlock } = await import("../services/notebook-storage.js");
+      const blockId = createNotebookBlock(agentEntry.content, 'notebook');
+      console.log(`[notebook] Created memory block for agent entry: ${blockId}`);
+    } catch (e) {
+      console.error("[notebook] Failed to create memory block for agent entry:", e);
+    }
     
     // Extract memories from agent entry
     await extractMemoriesFromText(modelId, agentEntry.content, 'agent', agentEntry.id);
