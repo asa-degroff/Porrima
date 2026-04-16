@@ -3,7 +3,7 @@ import { shouldRunSynthesis, runDailySynthesis } from "./synthesis.js";
 import { getDb, getSettings, saveSettings, createChat, findBlueskyChatId } from "./chat-storage.js";
 import { getDb as getMemoryDb } from "./memory-storage.js";
 import { v4 as uuidv4 } from "uuid";
-import { extractDelayedMemories } from "./memory-extraction.js";
+import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
 import { getBlueskyPoller } from "./bluesky-poller.js";
 import { BLUESKY_SYSTEM_PROMPT } from "../routes/bluesky.js";
 import { enrichCorpusBatch } from "./image-corpus.js";
@@ -44,13 +44,20 @@ async function checkAndRunSynthesis() {
  */
 async function checkAndRunEnrichment() {
   try {
+    // Skip if a chat is actively streaming — enrichment uses the same
+    // extraction server and would just queue behind compaction work.
+    if (hasActiveChats()) {
+      console.log("[scheduler] Skipping enrichment — active chat(s) in progress");
+      return;
+    }
+
     const settings = await getSettings();
     const batchSize = settings.enrichmentBatchSize ?? DEFAULT_ENRICHMENT_BATCH_SIZE;
     const extractionModelId = settings.extractionModelId || settings.defaultModelId;
-    
+
     console.log(`[scheduler] Running enrichment batch (size: ${batchSize}, model: ${extractionModelId || 'default'})...`);
     const enrichedCount = await enrichCorpusBatch(batchSize, extractionModelId);
-    
+
     if (enrichedCount > 0) {
       console.log(`[scheduler] Enriched ${enrichedCount} corpus entries`);
     }
@@ -134,38 +141,42 @@ async function checkAndRunDelayedExtractions() {
     }
     
     console.log(`[scheduler] Using extraction model: ${extractionModelId}`);
-    
+
+    // Skip entirely if a chat is actively running — its compaction cycles
+    // already use the extraction server for preCompactionFlush and index
+    // generation. Running scheduled extraction concurrently wastes the
+    // single-slot server and piles up memory.
+    if (hasActiveChats()) {
+      console.log("[scheduler] Skipping delayed extraction — active chat(s) in progress");
+      return;
+    }
+
     const chatIds = await findChatsNeedingDelayedExtraction(thresholdMs);
     if (chatIds.length === 0) {
       return; // No chats need extraction
     }
-    
+
     console.log(`[scheduler] Found ${chatIds.length} chat(s) needing delayed extraction`);
-    
-    // Process in batches of 3 to avoid overwhelming the LLM API
-    const BATCH_SIZE = 3;
-    for (let i = 0; i < chatIds.length; i += BATCH_SIZE) {
-      const batch = chatIds.slice(i, i + BATCH_SIZE);
-      console.log(`[scheduler] Processing batch ${Math.floor(i / BATCH_SIZE) + 1}: ${batch.join(", ")}`);
-      
-      await Promise.all(
-        batch.map(async (chatId) => {
-          try {
-            console.log(`[scheduler] Running delayed extraction for chat ${chatId} with model ${extractionModelId}...`);
-            await extractDelayedMemories(chatId, extractionModelId);
-            console.log(`[scheduler] Delayed extraction complete for chat ${chatId}`);
-          } catch (e) {
-            console.error(`[scheduler] Delayed extraction failed for chat ${chatId}:`, e);
-          }
-        })
-      );
-      
-      // Small delay between batches to give LLM time to recover
-      if (i + BATCH_SIZE < chatIds.length) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Process sequentially — the extraction server is --parallel 1, so
+    // concurrent requests just queue in Node.js memory. Sequential processing
+    // avoids holding multiple request bodies simultaneously.
+    for (let i = 0; i < chatIds.length; i++) {
+      const chatId = chatIds[i];
+      // Re-check: a chat may have become active since we started
+      if (isChatActive(chatId)) {
+        console.log(`[scheduler] Skipping chat ${chatId} — now active`);
+        continue;
+      }
+      try {
+        console.log(`[scheduler] Running delayed extraction for chat ${chatId} (${i + 1}/${chatIds.length}) with model ${extractionModelId}...`);
+        await extractDelayedMemories(chatId, extractionModelId);
+        console.log(`[scheduler] Delayed extraction complete for chat ${chatId}`);
+      } catch (e) {
+        console.error(`[scheduler] Delayed extraction failed for chat ${chatId}:`, e);
       }
     }
-    
+
     console.log(`[scheduler] Delayed extraction backlog complete (${chatIds.length} chats processed)`);
   } catch (e) {
     console.error("[scheduler] Delayed extraction check failed:", e);

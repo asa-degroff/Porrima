@@ -22,6 +22,65 @@ import type { ChatMessage, Memory, MemoryCategory, Chat } from "../types.js";
 
 const LOG_DIR = join(homedir(), ".quje-agent", "logs");
 
+// ---------------------------------------------------------------------------
+// Extraction server mutex
+// ---------------------------------------------------------------------------
+// The dedicated extraction server (llama.cpp, --parallel 1) can only process
+// one request at a time. Without coordination, multiple callers (preCompaction
+// Flush, scheduler delayed extraction, enrichment batch, compaction index
+// generation, zeitgeist synthesis) queue HTTP requests concurrently. Each
+// pending request holds its full request body in Node.js memory while waiting,
+// and the server's single slot means all but one are blocked anyway. Under
+// heavy compaction cycles this piles up enough resident memory to OOM.
+//
+// This mutex serializes all extraction server access so at most one request
+// is in flight. Callers that don't need the extraction server (fallback to
+// main model via streamChat) bypass the mutex automatically.
+// ---------------------------------------------------------------------------
+
+let _extractionMutexQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Serialize a callback through the extraction server mutex.
+ * If the extraction server is busy, the caller awaits until the previous
+ * call completes before starting. This prevents memory pile-up from
+ * concurrent queued HTTP requests.
+ */
+export function withExtractionMutex<T>(fn: () => Promise<T>): Promise<T> {
+  let release: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const waiting = _extractionMutexQueue.then(() => fn());
+  // Chain: next caller waits for this one to finish (success or failure)
+  _extractionMutexQueue = waiting.then(() => {}, () => {});
+  return waiting;
+}
+
+// ---------------------------------------------------------------------------
+// Active-chat tracking for scheduler coordination
+// ---------------------------------------------------------------------------
+// When a chat is actively running (especially during compaction cycles),
+// the scheduler should skip extraction for that chat to avoid redundant
+// work and memory pressure. The chat route sets/clears this.
+// ---------------------------------------------------------------------------
+
+const _activeChats = new Set<string>();
+
+export function markChatActive(chatId: string): void {
+  _activeChats.add(chatId);
+}
+
+export function markChatInactive(chatId: string): void {
+  _activeChats.delete(chatId);
+}
+
+export function isChatActive(chatId: string): boolean {
+  return _activeChats.has(chatId);
+}
+
+export function hasActiveChats(): boolean {
+  return _activeChats.size > 0;
+}
+
 /**
  * Call the extraction LLM — uses dedicated CPU extraction model if configured,
  * otherwise falls back to streamChat with the main model.
@@ -37,38 +96,42 @@ async function callExtractionLLM(
   const extractionUrl = settings.extractionModelUrl;
 
   if (extractionUrl) {
-    // Truncate input to fit within the extraction model's context window.
-    // Reserve tokens for system prompt, max_tokens output (2000), and overhead.
-    // Use 3 chars/token (conservative — 4 underestimates for dense/code-heavy content).
-    const ctxSize = settings.extractionCtxSize ?? 16384;
-    const reservedTokens = 4000;
-    const maxInputChars = Math.max(4000, (ctxSize - reservedTokens) * 3);
-    const truncatedContent = userContent.length > maxInputChars
-      ? userContent.slice(0, maxInputChars) + `\n[Truncated: ${(userContent.length / 1024).toFixed(0)}KB → ${(maxInputChars / 1024).toFixed(0)}KB to fit extraction context]`
-      : userContent;
+    // Serialize through the mutex — the dedicated extraction server is
+    // --parallel 1, so concurrent requests just pile up in Node.js memory.
+    return withExtractionMutex(async () => {
+      // Truncate input to fit within the extraction model's context window.
+      // Reserve tokens for system prompt, max_tokens output (2000), and overhead.
+      // Use 3 chars/token (conservative — 4 underestimates for dense/code-heavy content).
+      const ctxSize = settings.extractionCtxSize ?? 16384;
+      const reservedTokens = 4000;
+      const maxInputChars = Math.max(4000, (ctxSize - reservedTokens) * 3);
+      const truncatedContent = userContent.length > maxInputChars
+        ? userContent.slice(0, maxInputChars) + `\n[Truncated: ${(userContent.length / 1024).toFixed(0)}KB → ${(maxInputChars / 1024).toFixed(0)}KB to fit extraction context]`
+        : userContent;
 
-    // Direct call to dedicated extraction endpoint (CPU-only, no provider pipeline)
-    const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: settings.extractionModelId || "extraction",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: truncatedContent },
-        ],
-        max_tokens: 2000,
-        temperature: 0.3,
-        stream: false,
-      }),
-      signal: signal ?? AbortSignal.timeout(600_000),
+      // Direct call to dedicated extraction endpoint (CPU-only, no provider pipeline)
+      const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: settings.extractionModelId || "extraction",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: truncatedContent },
+          ],
+          max_tokens: 2000,
+          temperature: 0.3,
+          stream: false,
+        }),
+        signal: signal ?? AbortSignal.timeout(600_000),
+      });
+      if (!res.ok) {
+        const err = await res.text().catch(() => "");
+        throw new Error(`Extraction model error ${res.status}: ${err}`);
+      }
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content?.trim() || "";
     });
-    if (!res.ok) {
-      const err = await res.text().catch(() => "");
-      throw new Error(`Extraction model error ${res.status}: ${err}`);
-    }
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content?.trim() || "";
   }
 
   // Fallback: use streamChat with the main model

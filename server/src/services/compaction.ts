@@ -1,6 +1,7 @@
 import type { Chat, ChatMessage } from "../types.js";
 import { getNextArchiveSequence, saveArchives, type ContextArchive, updateChatTitle } from "./chat-storage.js";
 import { regenerateTitle } from "./title-generation.js";
+import { withExtractionMutex } from "./memory-extraction.js";
 
 export interface CompactionResult {
   truncated: boolean;
@@ -499,26 +500,31 @@ Output ONLY the formatted lines, nothing else.`;
     let outputText = "";
 
     if (extractionUrl) {
-      // Use dedicated CPU extraction model — fast, no GPU contention
-      const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: settings.extractionModelId || "index-gen",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: inputParts },
-          ],
-          max_tokens: 1000,
-          temperature: 0.3,
-          stream: false,
-        }),
-        signal: AbortSignal.timeout(60_000),
+      // Use dedicated CPU extraction model — fast, no GPU contention.
+      // Serialize through the extraction mutex to prevent memory pile-up
+      // from concurrent queued requests on the --parallel 1 server.
+      outputText = await withExtractionMutex(async () => {
+        const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: settings.extractionModelId || "index-gen",
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: inputParts },
+            ],
+            max_tokens: 1000,
+            temperature: 0.3,
+            stream: false,
+          }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          return data.choices?.[0]?.message?.content?.trim() || "";
+        }
+        return "";
       });
-      if (res.ok) {
-        const data = await res.json();
-        outputText = data.choices?.[0]?.message?.content?.trim() || "";
-      }
     }
 
     if (!outputText) {

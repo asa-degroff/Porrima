@@ -1,4 +1,5 @@
 import { streamChat } from "./agent.js";
+import { withExtractionMutex } from "./memory-extraction.js";
 
 export interface ExtractedElements {
   [elementType: string]: string[];
@@ -55,16 +56,20 @@ export async function extractElements(
       return {};
     }
     let responseText = "";
-    
-    await streamChat(
-      resolvedModelId!,
-      [{ role: "user" as const, content: input, timestamp: Date.now() }],
-      ELEMENT_EXTRACTION_PROMPT,
-      (event) => {
-        if (event.type === "text_delta") {
-          responseText += event.delta;
+
+    // Serialize through the extraction mutex — element extraction routes to
+    // the same dedicated CPU extraction server (--parallel 1).
+    await withExtractionMutex(() =>
+      streamChat(
+        resolvedModelId!,
+        [{ role: "user" as const, content: input, timestamp: Date.now() }],
+        ELEMENT_EXTRACTION_PROMPT,
+        (event) => {
+          if (event.type === "text_delta") {
+            responseText += event.delta;
+          }
         }
-      }
+      )
     );
     
     // Parse JSON from response

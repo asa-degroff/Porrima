@@ -8,7 +8,7 @@ import { getChat, saveChat, getSettings, loadPendingState, savePendingState, cle
 import { chatMessagesToPiMessages } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { OllamaModel } from "../types.js";
-import { extractMemories, preCompactionFlush } from "../services/memory-extraction.js";
+import { extractMemories, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
 import { generateTitle } from "../services/title-generation.js";
 import { truncateChatHistory, truncateBeforeSend, triggerCompaction } from "../services/compaction.js";
 import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
@@ -251,6 +251,10 @@ async function handleChatStream(
   req: Request,
   res: Response
 ) {
+  // Mark chat as active so the scheduler skips extraction for it —
+  // compaction cycles already use the extraction server heavily.
+  markChatActive(chat.id);
+
   // Safety check: log if context is unexpectedly empty for non-first messages
   if (contextMessages.length === 0 && chat.messages.length > 1) {
     console.error(`[chat] CRITICAL: context is empty but chat has ${chat.messages.length} messages - agent will respond without conversation history`);
@@ -1663,6 +1667,7 @@ async function handleChatStream(
       }
     }
   } finally {
+    markChatInactive(chat.id);
     stopSSEKeepalive();
     res.end();
   }

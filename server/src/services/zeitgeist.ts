@@ -1,6 +1,7 @@
 import { v4 as uuid } from "uuid";
 import { streamChat } from "./agent.js";
 import { getSettings, getDb as getChatsDb } from "./chat-storage.js";
+import { withExtractionMutex } from "./memory-extraction.js";
 import {
   getMemoryBlock,
   updateMemoryBlock,
@@ -143,14 +144,19 @@ async function runSynthesis(modelId: string, chatId?: string): Promise<void> {
   // the parser would silently corrupt synthesis from reasoning models.
   let synthesisText = "";
 
-  await streamChat(
-    modelId,
-    [{ role: "user", content: prompt, timestamp: Date.now() }],
-    ZEITGEIST_SYSTEM_PROMPT,
-    (event) => {
-      if (event.type === "text_delta") synthesisText += event.delta;
-    },
-    { signal: AbortSignal.timeout(180_000) }
+  // Serialize through the extraction mutex — zeitgeist uses the same dedicated
+  // CPU extraction server (--parallel 1) and would otherwise queue behind
+  // preCompactionFlush/index generation, holding request data in Node.js memory.
+  await withExtractionMutex(() =>
+    streamChat(
+      modelId,
+      [{ role: "user", content: prompt, timestamp: Date.now() }],
+      ZEITGEIST_SYSTEM_PROMPT,
+      (event) => {
+        if (event.type === "text_delta") synthesisText += event.delta;
+      },
+      { signal: AbortSignal.timeout(180_000) }
+    )
   );
 
   const finalSynthesis = synthesisText.trim();
