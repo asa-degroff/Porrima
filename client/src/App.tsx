@@ -145,6 +145,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     hasBackgroundActivity,
     send,
     editMessage,
+    retryMessage,
     abort,
     loadMessages,
     setActiveChatData,
@@ -457,6 +458,14 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     [activeChatId, editMessage]
   );
 
+  const handleRetryMessage = useCallback(
+    (index: number) => {
+      if (activeChatId) setLastActiveChatId(activeChatId);
+      retryMessage(index);
+    },
+    [activeChatId, retryMessage]
+  );
+
   const hasActiveChat = activeChat != null;
 
   const handleModelChange = useCallback(
@@ -672,6 +681,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onReadAloud={playTts}
         onSend={handleSend}
         onEditMessage={handleEditMessage}
+        onRetryMessage={handleRetryMessage}
         onAbort={abort}
         onModelChange={handleModelChange}
         onSystemPromptChange={handleSystemPromptChange}

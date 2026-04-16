@@ -70,6 +70,7 @@ interface Props {
   ttsBarVisible?: boolean;
   onSend: (text: string, images?: import("../types").ImageAttachment[]) => void;
   onEditMessage: (index: number, newText: string, images?: import("../types").ImageAttachment[]) => void;
+  onRetryMessage?: (index: number) => void;
   onAbort: () => void;
   onModelChange: (modelId: string) => void;
   onSystemPromptChange: (value: string) => void;
@@ -116,6 +117,7 @@ export function ChatView({
   onReadAloud,
   onSend,
   onEditMessage,
+  onRetryMessage,
   onAbort,
   onModelChange,
   onSystemPromptChange,
@@ -514,6 +516,7 @@ export function ChatView({
                         generatedImages={isLast && streaming ? generatedImages : undefined}
                         editable={msg.role === "user" && !streaming && isOnline && !isOutOfContext}
                         onEditMessage={msg.role === "user" ? onEditMessage : undefined}
+                        onRetryMessage={msg.role === "user" ? onRetryMessage : undefined}
                         messageIndex={i}
                         availableSkills={skills.length > 0 ? skills.map(s => s.name) : emptySkills}
                         streamingSegmentIndex={streamingSegmentIndex}
