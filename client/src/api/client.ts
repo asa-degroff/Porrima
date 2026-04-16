@@ -140,8 +140,10 @@ export interface StreamCallbacks {
 }
 
 /** Inactivity timeout for SSE streams — server sends keepalive pings every 30s,
- *  so 65s means we tolerate up to one missed ping before timing out. */
-const SSE_INACTIVITY_TIMEOUT_MS = 65_000;
+ *  so 95s means we tolerate up to two missed pings before timing out. This gives
+ *  more headroom for event loop jitter during heavy operations (e.g., SQLite queries,
+ *  large context processing, memory extraction). */
+const SSE_INACTIVITY_TIMEOUT_MS = 95_000;
 
 function streamSSE(
   url: string,

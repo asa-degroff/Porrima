@@ -281,6 +281,11 @@ async function handleChatStream(
   // instead of batching small SSE events into fewer TCP packets
   res.socket?.setNoDelay(true);
 
+  // Send an immediate SSE comment so the client's reader.read() resolves
+  // right away, giving it a fresh inactivity timer baseline before any
+  // potentially slow setup work (model discovery, memory augmentation, etc.)
+  res.write(`: connected\n\n`);
+
   const connectionAbortController = new AbortController();
   let connectionClosed = false;
   
@@ -441,6 +446,11 @@ async function handleChatStream(
       sseKeepaliveInterval = null;
     }
   };
+
+  // Start SSE keepalive immediately — model discovery, memory augmentation,
+  // and other setup can take significant time before the agent loop begins.
+  // Without early keepalive, the client's inactivity timer could fire during setup.
+  startSSEKeepalive();
 
   // Side-effects bridge between tool execution and SSE output
   const effects: ToolSideEffects = {
@@ -655,10 +665,6 @@ async function handleChatStream(
       chunkSize: ttsSettings.streamingChunkSize ?? 50,
       boundaryTier: ttsSettings.streamingBoundaryTier ?? 'clause',
     }) : null;
-
-    // Start SSE keepalive to prevent client timeout during model loading,
-    // tool execution, or any other gap in SSE output
-    startSSEKeepalive();
 
     // Process LLM events → SSE (main loop)
     for await (const event of eventStream) {
