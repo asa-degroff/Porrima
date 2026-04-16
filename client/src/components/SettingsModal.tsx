@@ -10,6 +10,44 @@ import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 
+// Reusable toggle switch with spring animation
+const ACCENT_COLORS: Record<string, { on: string; off: string }> = {
+  purple:  { on: "bg-purple-500/30", off: "bg-white/10" },
+  blue:    { on: "bg-blue-500/30",   off: "bg-white/10" },
+  emerald: { on: "bg-emerald-500/30", off: "bg-white/10" },
+};
+
+interface ToggleSwitchProps {
+  checked: boolean;
+  onChange: () => void;
+  accentColor: "purple" | "blue" | "emerald";
+  disabled?: boolean;
+}
+
+function ToggleSwitch({ checked, onChange, accentColor, disabled }: ToggleSwitchProps) {
+  const colors = ACCENT_COLORS[accentColor];
+  return (
+    <button
+      onClick={onChange}
+      disabled={disabled}
+      className={`group relative w-12 h-6 rounded-full 
+        transition-[background-color] ease-[cubic-bezier(0.4,0,0.2,1)] duration-200
+        ${checked ? colors.on : colors.off} 
+        ${disabled ? "opacity-40 cursor-not-allowed pointer-events-none" : "cursor-pointer"}`}
+      role="switch"
+      aria-checked={checked}
+    >
+      <span
+        className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 
+          transition-[left,transform] duration-200 
+          ease-[cubic-bezier(0.34,1.56,0.64,1)]
+          ${checked ? "left-7" : "left-1"} 
+          group-active:scale-90`}
+      />
+    </button>
+  );
+}
+
 const SECTIONS = [
   { id: 'models', label: 'Models' },
   { id: 'inference', label: 'Inference Servers' },
@@ -1358,18 +1396,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       <label className="block text-sm font-medium text-white/60">Fallback to available model</label>
                       <p className="text-xs text-white/30 mt-0.5">Use first available model if selected model is not loaded</p>
                     </div>
-                    <button
-                      onClick={() => setExtractionFallbackEnabled(!extractionFallbackEnabled)}
-                      className={`relative w-12 h-6 rounded-full transition-colors ${
-                        extractionFallbackEnabled ? "bg-purple-500/30" : "bg-white/10"
-                      }`}
-                    >
-                      <div
-                        className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                          extractionFallbackEnabled ? "left-7" : "left-1"
-                        }`}
-                      />
-                    </button>
+                    <ToggleSwitch
+                      checked={extractionFallbackEnabled}
+                      onChange={() => setExtractionFallbackEnabled(!extractionFallbackEnabled)}
+                      accentColor="purple"
+                    />
                   </div>
                 </div>
               </div>
@@ -2048,18 +2079,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     : "Diagonal gradient background is active."}
                 </p>
               </div>
-              <button
-                onClick={() => setFlatBackground(!flatBackground)}
-                className={`relative w-12 h-6 rounded-full transition-colors ${
-                  flatBackground ? "bg-blue-500/30" : "bg-white/10"
-                }`}
-              >
-                <div
-                  className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                    flatBackground ? "left-7" : "left-1"
-                  }`}
-                />
-              </button>
+              <ToggleSwitch
+                checked={flatBackground}
+                onChange={() => setFlatBackground(!flatBackground)}
+                accentColor="blue"
+              />
             </div>
           </div>
 
@@ -2240,18 +2264,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     Red/blue fringing that grows toward the screen edges
                   </p>
                 </div>
-                <button
-                  onClick={() => setChromaticAberration(!chromaticAberration)}
-                  className={`relative w-12 h-6 rounded-full transition-colors ${
-                    chromaticAberration ? "bg-blue-500/30" : "bg-white/10"
-                  }`}
-                >
-                  <div
-                    className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                      chromaticAberration ? "left-7" : "left-1"
-                    }`}
-                  />
-                </button>
+                <ToggleSwitch
+                  checked={chromaticAberration}
+                  onChange={() => setChromaticAberration(!chromaticAberration)}
+                  accentColor="blue"
+                />
               </div>
             </div>
           )}
@@ -2266,18 +2283,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     Subtle repulsion of grid/dots around the cursor
                   </p>
                 </div>
-                <button
-                  onClick={() => setMouseWarp(!mouseWarp)}
-                  className={`relative w-12 h-6 rounded-full transition-colors ${
-                    mouseWarp ? "bg-blue-500/30" : "bg-white/10"
-                  }`}
-                >
-                  <div
-                    className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                      mouseWarp ? "left-7" : "left-1"
-                    }`}
-                  />
-                </button>
+                <ToggleSwitch
+                  checked={mouseWarp}
+                  onChange={() => setMouseWarp(!mouseWarp)}
+                  accentColor="blue"
+                />
               </div>
             </div>
           )}
@@ -2289,18 +2299,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <label className="block text-sm font-medium text-white/60">Haptic Feedback</label>
                 <p className="text-xs text-white/30 mt-0.5">Vibration feedback for interactions (mobile only)</p>
               </div>
-              <button
-                onClick={() => setHapticsEnabled(!hapticsEnabled)}
-                className={`relative w-12 h-6 rounded-full transition-colors ${
-                  hapticsEnabled ? "bg-blue-500/30" : "bg-white/10"
-                }`}
-              >
-                <div
-                  className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                    hapticsEnabled ? "left-7" : "left-1"
-                  }`}
-                />
-              </button>
+              <ToggleSwitch
+                checked={hapticsEnabled}
+                onChange={() => setHapticsEnabled(!hapticsEnabled)}
+                accentColor="blue"
+              />
             </div>
           </div>
 
@@ -3110,18 +3113,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <label className="block text-sm font-medium text-white/60">Enable delayed extraction</label>
                   <p className="text-xs text-white/30 mt-0.5">Extract memories from chats after inactivity</p>
                 </div>
-                <button
-                  onClick={() => setDelayedExtractionEnabled(!delayedExtractionEnabled)}
-                  className={`relative w-12 h-6 rounded-full transition-colors ${
-                    delayedExtractionEnabled ? "bg-purple-500/30" : "bg-white/10"
-                  }`}
-                >
-                  <div
-                    className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                      delayedExtractionEnabled ? "left-7" : "left-1"
-                    }`}
-                  />
-                </button>
+                <ToggleSwitch
+                  checked={delayedExtractionEnabled}
+                  onChange={() => setDelayedExtractionEnabled(!delayedExtractionEnabled)}
+                  accentColor="purple"
+                />
               </div>
 
               {/* Inactivity threshold slider */}
@@ -3205,18 +3201,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <label className="block text-sm font-medium text-white/60">Enable Bluesky integration</label>
                     <p className="text-xs text-white/30 mt-0.5">Poll for notifications and send to agent</p>
                   </div>
-                  <button
-                    onClick={() => setBlueskyEnabled(!blueskyEnabled)}
-                    className={`relative w-12 h-6 rounded-full transition-colors ${
-                      blueskyEnabled ? "bg-emerald-500/30" : "bg-white/10"
-                    }`}
-                  >
-                    <div
-                      className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                        blueskyEnabled ? "left-7" : "left-1"
-                      }`}
-                    />
-                  </button>
+                  <ToggleSwitch
+                    checked={blueskyEnabled}
+                    onChange={() => setBlueskyEnabled(!blueskyEnabled)}
+                    accentColor="emerald"
+                  />
                 </div>
 
                 <div className="space-y-2">
@@ -3242,18 +3231,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <label className="block text-sm font-medium text-white/60">Auto-send to agent</label>
                     <p className="text-xs text-white/30 mt-0.5">Automatically send notifications to Bluesky chat</p>
                   </div>
-                  <button
-                    onClick={() => setBlueskyAutoSendToAgent(!blueskyAutoSendToAgent)}
-                    className={`relative w-12 h-6 rounded-full transition-colors ${
-                      blueskyAutoSendToAgent ? "bg-emerald-500/30" : "bg-white/10"
-                    }`}
-                  >
-                    <div
-                      className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                        blueskyAutoSendToAgent ? "left-7" : "left-1"
-                      }`}
-                    />
-                  </button>
+                  <ToggleSwitch
+                    checked={blueskyAutoSendToAgent}
+                    onChange={() => setBlueskyAutoSendToAgent(!blueskyAutoSendToAgent)}
+                    accentColor="emerald"
+                  />
                 </div>
 
                 <div className="flex items-center justify-between">
@@ -3261,19 +3243,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <label className={`block text-sm font-medium ${blueskyAutoSendToAgent ? "text-white/60" : "text-white/30"}`}>Auto-respond to notifications</label>
                     <p className="text-xs text-white/30 mt-0.5">Agent autonomously reviews and replies to mentions/replies</p>
                   </div>
-                  <button
-                    onClick={() => setBlueskyAutoRespond(!blueskyAutoRespond)}
+                  <ToggleSwitch
+                    checked={blueskyAutoRespond && blueskyAutoSendToAgent}
+                    onChange={() => setBlueskyAutoRespond(!blueskyAutoRespond)}
+                    accentColor="emerald"
                     disabled={!blueskyAutoSendToAgent}
-                    className={`relative w-12 h-6 rounded-full transition-colors ${
-                      blueskyAutoRespond && blueskyAutoSendToAgent ? "bg-emerald-500/30" : "bg-white/10"
-                    } disabled:opacity-40 disabled:cursor-not-allowed`}
-                  >
-                    <div
-                      className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                        blueskyAutoRespond && blueskyAutoSendToAgent ? "left-7" : "left-1"
-                      }`}
-                    />
-                  </button>
+                  />
                 </div>
 
                 <button
@@ -3438,21 +3413,14 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         <label className="block text-sm font-medium text-white/60">Streaming Mode</label>
                         <p className="text-xs text-white/30 mt-0.5">Speak while generating (lower latency)</p>
                       </div>
-                      <button
-                        onClick={async () => {
+                      <ToggleSwitch
+                        checked={ttsSettings.streamingEnabled}
+                        onChange={async () => {
                           const updated = await updateTTSSettings({ streamingEnabled: !ttsSettings.streamingEnabled });
                           if (updated) setTtsSettings(updated);
                         }}
-                        className={`relative w-12 h-6 rounded-full transition-colors ${
-                          ttsSettings.streamingEnabled ? "bg-purple-500/30" : "bg-white/10"
-                        }`}
-                      >
-                        <div
-                          className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                            ttsSettings.streamingEnabled ? "left-7" : "left-1"
-                          }`}
-                        />
-                      </button>
+                        accentColor="purple"
+                      />
                     </div>
 
                     {/* Streaming chunk size */}
@@ -3542,21 +3510,14 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <label className="block text-sm font-medium text-white/60">Auto-read responses</label>
                     <p className="text-xs text-white/30 mt-0.5">Automatically read new assistant messages aloud</p>
                   </div>
-                  <button
-                    onClick={async () => {
+                  <ToggleSwitch
+                    checked={ttsSettings.autoReadEnabled}
+                    onChange={async () => {
                       const updated = await updateTTSSettings({ autoReadEnabled: !ttsSettings.autoReadEnabled });
                       if (updated) setTtsSettings(updated);
                     }}
-                    className={`relative w-12 h-6 rounded-full transition-colors ${
-                      ttsSettings.autoReadEnabled ? "bg-blue-500/30" : "bg-white/10"
-                    }`}
-                  >
-                    <div
-                      className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 transition-transform ${
-                        ttsSettings.autoReadEnabled ? "left-7" : "left-1"
-                      }`}
-                    />
-                  </button>
+                    accentColor="blue"
+                  />
                 </div>
 
                 {/* Test button */}
