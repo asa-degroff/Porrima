@@ -168,7 +168,7 @@ async function runSynthesis(modelId: string, chatId?: string): Promise<void> {
 
   // Step 7: If archival is needed, create archival block first
   if (needsArchival && parsed.archivalContent) {
-    await createArchivalBlock(parsed.archivalContent, parsed.archivalReasoning);
+    await createArchivalBlock(parsed.archivalContent);
   }
 
   // Step 8: Update zeitgeist block with new content
@@ -399,7 +399,7 @@ function buildZeitgeistSynthesisPrompt(
     : "";
 
   const archivalSection = needsArchival
-    ? `## Archival Required\n\nThe zeitgeist block is approaching capacity. You need to:\n1. Decide which content to archive (older, less relevant material)\n2. Write the archival content with reasoning (why this is being archived, what it represents)\n3. Write the new zeitgeist content (what's current, what matters now)\n\nThe archival should be a coherent narrative snapshot, not a random character split.`
+    ? `## Archival Required\n\nThe zeitgeist block is over ${ARCHIVAL_THRESHOLD} chars — it needs room for new content. Move the older, less current portions into the archive so the zeitgeist stays focused on what's active now.\n\nHow to do this:\n1. Identify the older content in the current zeitgeist that is no longer active\n2. Put that older content into "archivalContent" — copy it as-is, preserving the original narrative\n3. Write the new zeitgeist in "newContent" — a condensed rewrite that keeps only what's current and adds new developments\n\nThe archive is a historical snapshot. Don't rewrite or interpret the old content — just move it out intact so the zeitgeist has room to breathe.`
     : "";
 
   return `${currentBlockSection}
@@ -416,10 +416,9 @@ ${chatActivitySection}
 
 ${archivalSection}
 
-Output a JSON object with:
-- "newContent": The updated zeitgeist content — a condensed rewrite that integrates new developments, drops stale content, and preserves what's still current
-- "archivalContent": If archival is needed, the content to move to an archive block (coherent narrative with reasoning)
-- "archivalReasoning": Why this content is being archived (1-2 sentences)
+Output a JSON object with these fields:
+- "newContent": The updated zeitgeist — a condensed rewrite integrating new developments and keeping only what's current. This is the primary output.
+- "archivalContent": Only if archival is required. The older content being moved out of the zeitgeist to make room. Preserve it as-is; don't rewrite or add commentary.
 
 IMPORTANT: Output ONLY the JSON object, no explanation or markdown fences.`;
 }
@@ -463,10 +462,10 @@ Write in your own voice, as if you're telling yourself what's important right no
 - Prioritize what's changed since the last synthesis — new developments over restated context
 
 **If archival is needed:**
-- The archival content should be a coherent narrative snapshot, not a random character split
-- Include reasoning in the archival — why this is being archived, what it represents, how it connects to the current state
-- Be faithful to the original content — don't distort or misrepresent what was there
-- The archival is a historical record, the zeitgeist is the current state
+- Move older, stale content out of the zeitgeist into the archive — the reason is simply that it's old and the block needs room
+- Preserve the archived content as-is — don't rewrite, interpret, or add reasoning to it
+- The archive is a historical snapshot; the zeitgeist is the current state. Keep them distinct
+- Focus your effort on writing an excellent "newContent" — that's the primary output
 
 Output ONLY the JSON object as specified in the user prompt.`;
 
@@ -476,7 +475,6 @@ Output ONLY the JSON object as specified in the user prompt.`;
 function parseZeitgeistSynthesis(text: string): {
   newContent: string;
   archivalContent?: string;
-  archivalReasoning?: string;
 } {
   // Strip markdown code fences if present
   let cleaned = text.trim();
@@ -490,21 +488,17 @@ function parseZeitgeistSynthesis(text: string): {
     return {
       newContent: parsed.newContent || "",
       archivalContent: parsed.archivalContent,
-      archivalReasoning: parsed.archivalReasoning,
     };
   } catch {
     console.error("[zeitgeist] Failed to parse synthesis output, preserving existing content:", text.slice(0, 200));
-    return { newContent: "", archivalContent: undefined, archivalReasoning: undefined };
+    return { newContent: "", archivalContent: undefined };
   }
 }
 
 /**
  * Create an archival block from zeitgeist content.
  */
-async function createArchivalBlock(
-  content: string,
-  reasoning: string = ""
-): Promise<void> {
+async function createArchivalBlock(content: string): Promise<void> {
   const archiveDate = new Date().toISOString().split("T")[0];
 
   // Generate a one-line title based on the content
@@ -516,12 +510,7 @@ async function createArchivalBlock(
   const archiveName = `Zeitgeist Archive - ${archiveDate}: ${title}`;
   const archiveDescription = title;
 
-  // Prepend reasoning to the archival content
   const fullContent = `# Zeitgeist Archive - ${archiveDate}
-
-**Why this was archived:** ${reasoning}
-
----
 
 ${content}`;
 

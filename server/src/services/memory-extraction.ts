@@ -38,10 +38,11 @@ async function callExtractionLLM(
 
   if (extractionUrl) {
     // Truncate input to fit within the extraction model's context window.
-    // Reserve tokens for system prompt (~500), output (2000), and overhead (~500).
+    // Reserve tokens for system prompt, max_tokens output (2000), and overhead.
+    // Use 3 chars/token (conservative — 4 underestimates for dense/code-heavy content).
     const ctxSize = settings.extractionCtxSize ?? 16384;
-    const reservedTokens = 3000;
-    const maxInputChars = Math.max(4000, (ctxSize - reservedTokens) * 4);
+    const reservedTokens = 4000;
+    const maxInputChars = Math.max(4000, (ctxSize - reservedTokens) * 3);
     const truncatedContent = userContent.length > maxInputChars
       ? userContent.slice(0, maxInputChars) + `\n[Truncated: ${(userContent.length / 1024).toFixed(0)}KB → ${(maxInputChars / 1024).toFixed(0)}KB to fit extraction context]`
       : userContent;
@@ -60,7 +61,7 @@ async function callExtractionLLM(
         temperature: 0.3,
         stream: false,
       }),
-      signal: signal ?? AbortSignal.timeout(90_000),
+      signal: signal ?? AbortSignal.timeout(600_000),
     });
     if (!res.ok) {
       const err = await res.text().catch(() => "");
@@ -79,7 +80,7 @@ async function callExtractionLLM(
     (event) => {
       if (event.type === "text_delta") responseText += event.delta;
     },
-    { signal: signal ?? AbortSignal.timeout(90_000) }
+    { signal: signal ?? AbortSignal.timeout(600_000) }
   );
   return responseText;
 }
