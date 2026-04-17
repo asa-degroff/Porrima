@@ -208,6 +208,10 @@ export interface Settings {
   // Model favorites
   favoriteModels?: string[];
   showOnlyFavorites?: boolean;
+  // Per-model llama.cpp chat_template_kwargs. When true, passes
+  // preserve_thinking:true so the model sees its own historical reasoning
+  // traces (Qwen3.6+ feature). Ignored by models that don't recognize the kwarg.
+  modelPreserveThinking?: Record<string, boolean>;
   bluesky?: BlueskySettings;
   // Last active chat ID (for warm cache indicator)
   lastActiveChatId?: string;

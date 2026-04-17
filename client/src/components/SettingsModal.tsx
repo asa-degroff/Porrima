@@ -255,6 +255,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [presetMessage, setPresetMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [hapticsEnabled, setHapticsEnabled] = useState(settings.hapticsEnabled ?? true);
   const [modelContextWindows, setModelContextWindows] = useState<Record<string, number>>(settings.modelContextWindows || {});
+  const [modelPreserveThinking, setModelPreserveThinking] = useState<Record<string, boolean>>(settings.modelPreserveThinking || {});
   const [ctxWindowsExpanded, setCtxWindowsExpanded] = useState(false);
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
   const [synthesisRunning, setSynthesisRunning] = useState(false);
@@ -531,6 +532,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       systemPromptPresets: presets.length > 0 ? presets : undefined,
       hapticsEnabled,
       modelContextWindows: Object.keys(modelContextWindows).length > 0 ? modelContextWindows : undefined,
+      modelPreserveThinking: Object.keys(modelPreserveThinking).length > 0 ? modelPreserveThinking : undefined,
       delayedExtractionEnabled,
       delayedExtractionThresholdMinutes: delayedExtractionThreshold,
       delayedExtractionMessageCap: delayedExtractionCap,
@@ -2065,22 +2067,54 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <polyline points="9 18 15 12 9 6" />
                 </svg>
                 Model Context Windows
-                {Object.keys(modelContextWindows).length > 0 && (
-                  <span className="text-xs text-blue-300/60 font-normal">
-                    ({Object.keys(modelContextWindows).length} override{Object.keys(modelContextWindows).length !== 1 ? "s" : ""})
-                  </span>
-                )}
+                {(() => {
+                  const ctx = Object.keys(modelContextWindows).length;
+                  const pt = Object.values(modelPreserveThinking).filter(Boolean).length;
+                  const total = ctx + pt;
+                  return total > 0 ? (
+                    <span className="text-xs text-blue-300/60 font-normal">
+                      ({total} override{total !== 1 ? "s" : ""})
+                    </span>
+                  ) : null;
+                })()}
               </button>
               {ctxWindowsExpanded && (
                 <>
-                  <p className="text-white/30 text-xs">Override the default context window per model. Applies to new chats.</p>
+                  <p className="text-white/30 text-xs">Override the default context window per model. Applies to new chats. Preserve Thinking (llama.cpp only) retains historical reasoning traces — Qwen3.6+ feature, ignored by other models.</p>
                   <div className="space-y-1.5">
                     {models.map((m) => {
                       const override = modelContextWindows[m.id];
                       const hasOverride = override !== undefined;
+                      const isLlamacpp = m.provider === "llamacpp";
+                      const preserveThinking = modelPreserveThinking[m.id] === true;
                       return (
                         <div key={m.id} className="flex items-center gap-2">
                           <span className="text-xs text-white/50 truncate flex-1 min-w-0" title={m.id}>{m.name}</span>
+                          {isLlamacpp && (
+                            <button
+                              onClick={() =>
+                                setModelPreserveThinking((prev) => {
+                                  const next = { ...prev };
+                                  if (preserveThinking) delete next[m.id];
+                                  else next[m.id] = true;
+                                  return next;
+                                })
+                              }
+                              title={preserveThinking ? "Preserve thinking: on — historical reasoning traces retained in context" : "Preserve thinking: off"}
+                              className={`shrink-0 text-[10px] px-2 py-1 rounded border transition-all ${
+                                preserveThinking
+                                  ? "border-white/20 text-white/80"
+                                  : "border-white/10 text-white/30 hover:text-white/50"
+                              }`}
+                              style={preserveThinking ? {
+                                backgroundColor: `rgba(var(--theme-primary), 0.15)`,
+                                borderColor: `rgba(var(--theme-primary-border))`,
+                                color: `rgba(var(--theme-primary-text))`,
+                              } : undefined}
+                            >
+                              Preserve thinking
+                            </button>
+                          )}
                           <input
                             type="number"
                             value={hasOverride ? override : ""}

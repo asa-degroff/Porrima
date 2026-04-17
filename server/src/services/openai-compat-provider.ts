@@ -662,6 +662,21 @@ export const streamOpenAICompat = (
         body.chat_template_kwargs = { enable_thinking: true };
       }
 
+      // Per-model preserve_thinking (Qwen3.6+ feature). Retains reasoning
+      // traces from historical messages so the model can see its own prior
+      // thinking. Read from settings at request time — UI toggle lives in
+      // SettingsModal's per-model context window section.
+      try {
+        const { getSettings } = await import("./chat-storage.js");
+        const settings = await getSettings();
+        if (settings.modelPreserveThinking?.[model.id]) {
+          body.chat_template_kwargs = {
+            ...(body.chat_template_kwargs ?? {}),
+            preserve_thinking: true,
+          };
+        }
+      } catch { /* non-critical */ }
+
       const url = `${model.baseUrl}/v1/chat/completions`;
 
       // Retry on transient connection failures (fetch failed / ECONNRESET).
