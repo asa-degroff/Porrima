@@ -31,7 +31,7 @@ const LLAMACPP_SUPPORTED_IMAGE_MIME = new Set([
   "image/bmp",
 ]);
 
-async function normalizeImageForLlamaCpp(
+export async function normalizeImageForLlamaCpp(
   data: string,
   mimeType: string
 ): Promise<{ data: string; mimeType: string }> {
@@ -417,7 +417,7 @@ async function getActualLoadedModel(baseUrl: string): Promise<string | null> {
  * If the context window changed, the model is reloaded with the new size.
  * In single-model mode, the endpoint doesn't exist — we catch and ignore 404s.
  */
-async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow?: number): Promise<void> {
+export async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow?: number): Promise<void> {
   // Skip if we already loaded this model — context window is set on first load only.
   // We don't reload for context window changes because:
   // 1. Background callers (extraction, title gen) may request a different ctx than the active chat

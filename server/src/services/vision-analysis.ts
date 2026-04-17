@@ -5,13 +5,53 @@ import { existsSync } from "fs";
 import sharp from "sharp";
 import { addCorpusEntry, enrichCorpusEntry } from "./image-corpus.js";
 import { getSettings } from "./chat-storage.js";
-import { isLlamaCppModelLoaded } from "./openai-compat-provider.js";
+import {
+  isLlamaCppModelLoaded,
+  ensureModelLoaded,
+  normalizeImageForLlamaCpp,
+} from "./openai-compat-provider.js";
 import { getOllamaUrl } from "./ollama-url.js";
+import { discoverAllModels } from "./models.js";
+import type { OllamaModel } from "../types.js";
 
 const VISION_DIR = join(process.env.HOME || process.env.USERPROFILE || ".", ".quje-agent", "vision");
+const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
 
 async function resolveOllamaBase(): Promise<string> {
   return getOllamaUrl(await getSettings());
+}
+
+type VisionBackend =
+  | { provider: "ollama"; baseUrl: string }
+  | { provider: "llamacpp"; baseUrl: string; contextWindow?: number };
+
+async function resolveVisionBackend(modelId: string): Promise<VisionBackend> {
+  const settings = await getSettings();
+  let match: OllamaModel | undefined;
+  try {
+    const models = await discoverAllModels();
+    match = models.find((m) => m.id === modelId);
+  } catch {
+    // Discovery failed — fall through to Ollama default
+  }
+  if (match?.provider === "llamacpp") {
+    return {
+      provider: "llamacpp",
+      baseUrl: settings.llamacppUrl?.trim() || LLAMACPP_DEFAULT_URL,
+      contextWindow: match.contextWindow,
+    };
+  }
+  return { provider: "ollama", baseUrl: getOllamaUrl(settings) };
+}
+
+/**
+ * Parse a data URL like `data:image/webp;base64,AAA...` into parts.
+ * Falls back to treating the whole input as base64 with an assumed mime type.
+ */
+function parseImageDataUrl(input: string): { base64: string; mimeType: string } {
+  const match = input.match(/^data:(image\/[\w+.-]+);base64,(.+)$/);
+  if (match) return { mimeType: match[1].toLowerCase(), base64: match[2] };
+  return { mimeType: "image/jpeg", base64: input };
 }
 
 export interface VisionPreset {
@@ -276,6 +316,18 @@ export async function analyzeImage(
 
   const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
   const modelName = model || getVLMModel();
+  const backend = await resolveVisionBackend(modelName);
+
+  if (backend.provider === "llamacpp") {
+    const description = await analyzeViaLlamaCpp(
+      imageData,
+      preset.prompt,
+      modelName,
+      backend.baseUrl,
+      backend.contextWindow
+    );
+    return { description, preset: presetKey, model: modelName };
+  }
 
   const ollamaReady = await waitForOllama();
   if (!ollamaReady) {
@@ -287,8 +339,7 @@ export async function analyzeImage(
   const visionOptions: Record<string, any> = { temperature: 0.7 };
   if (isLlamaCppModelLoaded()) visionOptions.num_gpu = 0;
 
-  const ollamaBase = await resolveOllamaBase();
-  const res = await fetch(`${ollamaBase}/api/chat`, {
+  const res = await fetch(`${backend.baseUrl}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -328,6 +379,23 @@ export async function analyzeImageStream(
 
   const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
   const modelName = model || getVLMModel();
+  const backend = await resolveVisionBackend(modelName);
+
+  // Send initial keepalive to show we're starting
+  onEvent({ event: "keepalive", data: { status: "starting", timestamp: Date.now() } });
+
+  if (backend.provider === "llamacpp") {
+    const description = await analyzeViaLlamaCpp(
+      imageData,
+      preset.prompt,
+      modelName,
+      backend.baseUrl,
+      backend.contextWindow,
+      (delta) => onEvent({ event: "text_delta", data: { delta } })
+    );
+    onEvent({ event: "description_complete", data: { description, preset: presetKey, model: modelName } });
+    return { description, preset: presetKey, model: modelName };
+  }
 
   const ollamaReady = await waitForOllama();
   if (!ollamaReady) {
@@ -335,15 +403,11 @@ export async function analyzeImageStream(
     throw new Error("Cannot reach Ollama. Is it running?");
   }
 
-  // Send initial keepalive to show we're starting
-  onEvent({ event: "keepalive", data: { status: "starting", timestamp: Date.now() } });
-
   const imageBuffer = base64ToBuffer(imageData).toString("base64");
   const streamOptions: Record<string, any> = { temperature: 0.7 };
   if (isLlamaCppModelLoaded()) streamOptions.num_gpu = 0;
 
-  const ollamaBase = await resolveOllamaBase();
-  const res = await fetch(`${ollamaBase}/api/chat`, {
+  const res = await fetch(`${backend.baseUrl}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -426,10 +490,25 @@ export async function chatAboutImage(
   maxHistoryTurns = 10
 ): Promise<string> {
   const modelName = model || getVLMModel();
+  const backend = await resolveVisionBackend(modelName);
+  const systemPrompt = buildChatSystemPrompt(presetKey, currentDescription);
+
+  if (backend.provider === "llamacpp") {
+    return chatAboutImageViaLlamaCpp(
+      imageData,
+      conversation.slice(-maxHistoryTurns),
+      userMessage,
+      systemPrompt,
+      modelName,
+      backend.baseUrl,
+      backend.contextWindow
+    );
+  }
+
   const imageBuffer = base64ToBuffer(imageData).toString("base64");
 
   const messages: any[] = [
-    { role: "system", content: buildChatSystemPrompt(presetKey, currentDescription) },
+    { role: "system", content: systemPrompt },
     {
       role: "user",
       content: "Analyze this image.",
@@ -445,8 +524,7 @@ export async function chatAboutImage(
   const chatOptions: Record<string, any> = { temperature: 0.7 };
   if (isLlamaCppModelLoaded()) chatOptions.num_gpu = 0;
 
-  const ollamaBase = await resolveOllamaBase();
-  const res = await fetch(`${ollamaBase}/api/chat`, {
+  const res = await fetch(`${backend.baseUrl}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -465,6 +543,147 @@ export async function chatAboutImage(
 
   const response = await res.json();
   return cleanOutput(response.message.content);
+}
+
+// ---------------------------------------------------------------------------
+// llama.cpp (OpenAI-compatible /v1/chat/completions) path
+// ---------------------------------------------------------------------------
+
+async function buildImageDataUrl(imageData: string): Promise<string> {
+  const { base64, mimeType } = parseImageDataUrl(imageData);
+  const norm = await normalizeImageForLlamaCpp(base64, mimeType);
+  return `data:${norm.mimeType};base64,${norm.data}`;
+}
+
+async function analyzeViaLlamaCpp(
+  imageData: string,
+  systemPrompt: string,
+  modelId: string,
+  baseUrl: string,
+  contextWindow: number | undefined,
+  onDelta?: (delta: string) => void
+): Promise<string> {
+  await ensureModelLoaded(baseUrl, modelId, contextWindow);
+  const dataUrl = await buildImageDataUrl(imageData);
+
+  const body = {
+    model: modelId,
+    stream: Boolean(onDelta),
+    temperature: 0.7,
+    messages: [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this image." },
+          { type: "image_url", image_url: { url: dataUrl } },
+        ],
+      },
+    ],
+  };
+
+  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => res.statusText);
+    throw new Error(`Vision analysis failed (${res.status}): ${errorText}`);
+  }
+
+  if (!onDelta) {
+    const json = await res.json();
+    return cleanOutput(json.choices?.[0]?.message?.content ?? "");
+  }
+
+  return cleanOutput(await streamLlamaCppContent(res, onDelta));
+}
+
+async function chatAboutImageViaLlamaCpp(
+  imageData: string,
+  history: VisionMessage[],
+  userMessage: string,
+  systemPrompt: string,
+  modelId: string,
+  baseUrl: string,
+  contextWindow: number | undefined
+): Promise<string> {
+  await ensureModelLoaded(baseUrl, modelId, contextWindow);
+  const dataUrl = await buildImageDataUrl(imageData);
+
+  const messages: any[] = [
+    { role: "system", content: systemPrompt },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Analyze this image." },
+        { type: "image_url", image_url: { url: dataUrl } },
+      ],
+    },
+    ...history.map((m) => ({ role: m.role, content: m.content })),
+    { role: "user", content: userMessage },
+  ];
+
+  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: modelId,
+      stream: false,
+      temperature: 0.7,
+      messages,
+    }),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => res.statusText);
+    throw new Error(`Vision chat failed (${res.status}): ${errorText}`);
+  }
+
+  const json = await res.json();
+  return cleanOutput(json.choices?.[0]?.message?.content ?? "");
+}
+
+/**
+ * Parse OpenAI-format SSE stream, forwarding content deltas and returning the
+ * full concatenated text. Ignores reasoning/thinking tokens — vision output is
+ * presentation-only and we don't surface a thinking pane in the analyze UI.
+ */
+async function streamLlamaCppContent(
+  res: Response,
+  onDelta: (delta: string) => void
+): Promise<string> {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let full = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(":")) continue;
+      if (trimmed === "data: [DONE]") return full;
+      if (!trimmed.startsWith("data: ")) continue;
+      try {
+        const chunk = JSON.parse(trimmed.slice(6));
+        const delta = chunk.choices?.[0]?.delta?.content;
+        if (typeof delta === "string" && delta.length > 0) {
+          full += delta;
+          onDelta(delta);
+        }
+      } catch {
+        // skip malformed
+      }
+    }
+  }
+  return full;
 }
 
 function cleanOutput(text: string): string {
