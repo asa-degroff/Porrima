@@ -120,7 +120,7 @@ export interface StreamWarning {
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number }) => void;
+  onDone: (message: { content?: string; thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number; thinkingPromoted?: boolean }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
   onArtifact?: (artifact: Artifact) => void;
@@ -338,6 +338,7 @@ function processSSEEvent(
       break;
     case "done":
       callbacks.onDone({
+        content: data.message?.content,
         thinking: data.message?.thinking,
         thinkingDurationMs: data.message?.thinkingDurationMs,
         usage: data.message?.usage,
@@ -349,6 +350,7 @@ function processSSEEvent(
         segments: data.message?.segments,
         waitingForInput: data.waitingForInput,
         iterations: data.iterations,
+        thinkingPromoted: data.message?._thinkingPromoted,
       });
       break;
     case "tool_status":

@@ -330,19 +330,34 @@ export function useChat(chatId: string | null) {
           }
         }
       },
-      onDone: ({ thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi }) => {
+      onDone: ({ content: serverContent, thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi, thinkingPromoted }) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg || bg.doneCalled) return;
         bg.doneCalled = true;
         bg.streaming = false;
+
+        // If the server finalized with longer content than we streamed (e.g.
+        // reasoning model emitted thinking only and the server promoted it to
+        // content), trust the server's message over our local accumulator —
+        // otherwise the user has to refresh to see the response.
+        const finalContent =
+          typeof serverContent === "string" && serverContent.length > bg.content.length
+            ? serverContent
+            : bg.content;
+        if (finalContent !== bg.content) {
+          bg.content = finalContent;
+          if (activeChatIdRef.current === streamChatId) {
+            streamingContentRef.current = finalContent;
+          }
+        }
 
         // Finalize last message with full metadata
         const last = bg.messages[bg.messages.length - 1];
         if (last?.role === "assistant") {
           bg.messages[bg.messages.length - 1] = {
             ...last,
-            content: bg.content,
-            thinking: thinking || undefined,
+            content: finalContent,
+            thinking: thinkingPromoted ? undefined : (thinking || undefined),
             thinkingDurationMs: thinkingDurationMs || undefined,
             usage: usage || undefined,
             artifacts: doneArtifacts || undefined,
