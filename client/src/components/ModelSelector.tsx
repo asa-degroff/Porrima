@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import type { OllamaModel } from "../types";
 import { ProviderIcon } from "./ProviderIcon";
+import { DropdownPanel } from "./SettingsModal";
 
 interface Props {
   models: OllamaModel[];
@@ -66,48 +67,45 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
           <path d="M6 9l6 6 6-6" />
         </svg>
       </button>
-      {open && (
-        <div className="absolute right-0 top-full mt-1 z-30 min-w-[200px] max-h-[320px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-          style={{
-            backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-            borderColor: `rgba(var(--theme-primary-border))`,
-          }}>
-          {groups.map((group) => (
-            <div key={group.provider}>
-              {hasMultipleProviders && (
-                <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-white/30 font-medium border-b border-white/5">
-                  {group.label}
-                </div>
-              )}
-              {group.models.map((m) => (
-                <button
-                  key={`${m.provider || "ollama"}-${m.id}`}
-                  onClick={() => {
-                    onChange(m.id);
-                    setOpen(false);
-                  }}
-                  className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                    m.id === selectedId
-                      ? "text-white"
-                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                  }`}
-                  style={{
-                    backgroundColor: m.id === selectedId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                    color: m.id === selectedId ? `rgba(var(--theme-secondary-text))` : '',
-                  }}
-                >
-                  <span className="truncate flex-1">{m.name}</span>
-                  {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
-                  <ProviderIcon
-                    provider={m.provider}
-                    className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
-                  />
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
+      <DropdownPanel
+        open={open}
+        className="right-0 top-full mt-1 min-w-[200px] max-h-[320px] overflow-y-auto"
+      >
+        {groups.map((group) => (
+          <div key={group.provider}>
+            {hasMultipleProviders && (
+              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-white/30 font-medium border-b border-white/5">
+                {group.label}
+              </div>
+            )}
+            {group.models.map((m) => (
+              <button
+                key={`${m.provider || "ollama"}-${m.id}`}
+                onClick={() => {
+                  onChange(m.id);
+                  setOpen(false);
+                }}
+                className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                  m.id === selectedId
+                    ? "text-white"
+                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                }`}
+                style={{
+                  backgroundColor: m.id === selectedId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                  color: m.id === selectedId ? `rgba(var(--theme-secondary-text))` : '',
+                }}
+              >
+                <span className="truncate flex-1">{m.name}</span>
+                {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
+                <ProviderIcon
+                  provider={m.provider}
+                  className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                />
+              </button>
+            ))}
+          </div>
+        ))}
+      </DropdownPanel>
     </div>
   );
 }
