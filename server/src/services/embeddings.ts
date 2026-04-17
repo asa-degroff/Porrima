@@ -1,6 +1,6 @@
 import { getSettings } from "./chat-storage.js";
+import { getOllamaUrl } from "./ollama-url.js";
 
-const OLLAMA_DEFAULT_URL = "http://localhost:11434";
 const LLAMACPP_DEFAULT_URL = "http://localhost:8084";
 const DEFAULT_EMBEDDING_MODEL = "qwen3-embedding:0.6b";
 
@@ -13,7 +13,7 @@ interface EmbeddingConfig {
 async function getEmbeddingConfig(): Promise<EmbeddingConfig> {
   const s = await getSettings();
   const provider = s.embeddingProvider ?? "ollama";
-  const url = s.embeddingUrl || (provider === "llamacpp" ? LLAMACPP_DEFAULT_URL : OLLAMA_DEFAULT_URL);
+  const url = s.embeddingUrl || (provider === "llamacpp" ? LLAMACPP_DEFAULT_URL : getOllamaUrl(s));
   const model = s.embeddingModel || DEFAULT_EMBEDDING_MODEL;
   return { provider, url, model };
 }

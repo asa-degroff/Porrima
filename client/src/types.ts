@@ -186,6 +186,10 @@ export interface Settings {
   extractionModelId?: string;
   extractionModelUrl?: string;      // Direct URL for dedicated extraction model (e.g., http://localhost:8083)
   extractionFallbackEnabled?: boolean;
+  // Ollama server URL (shared by model discovery, title gen, zeitgeist, vision,
+  // GPU coordination, and the default embedding URL when embeddingProvider is
+  // "ollama"). default "http://localhost:11434".
+  ollamaUrl?: string;
   // llama.cpp server settings
   llamacppEnabled?: boolean;
   llamacppUrl?: string;         // default "http://localhost:8080"

@@ -1130,6 +1130,23 @@ export async function fetchChat(id: string): Promise<Chat> {
   return res.json();
 }
 
+// --- Inference Server Health ---
+
+export type ServerHealth = "ok" | "unavailable";
+export interface ServerHealthMap {
+  inference: ServerHealth;
+  extraction: ServerHealth;
+  reranker: ServerHealth;
+  embedding: ServerHealth;
+  ollama: ServerHealth;
+}
+
+export async function getAllServerHealth(): Promise<ServerHealthMap> {
+  const res = await apiFetch(`${BASE}/models/health-all`);
+  if (!res.ok) throw new Error("Failed to fetch server health");
+  return res.json();
+}
+
 // --- Llama.cpp Path Management ---
 
 export async function getLlamaPath(): Promise<LlamaPathInfo> {

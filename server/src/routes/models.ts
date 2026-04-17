@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { discoverAllModels } from "../services/models.js";
 import { getSettings } from "../services/chat-storage.js";
+import { getOllamaUrl } from "../services/ollama-url.js";
 
 const router = Router();
 
@@ -42,9 +43,11 @@ router.get("/health/:modelId", async (req, res) => {
 
   // Default: Ollama health check
   try {
+    const settings = await getSettings();
+    const ollamaBase = getOllamaUrl(settings);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const response = await fetch(`http://localhost:11434/api/show`, {
+    const response = await fetch(`${ollamaBase}/api/show`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: modelId }),
@@ -106,7 +109,8 @@ router.get("/discover", async (req, res) => {
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
     if (provider === "ollama") {
-      const baseUrl = urlOverride || "http://localhost:11434";
+      const settings = await getSettings();
+      const baseUrl = urlOverride || getOllamaUrl(settings);
       const response = await fetch(`${baseUrl}/api/tags`, { signal: controller.signal });
       clearTimeout(timeoutId);
       if (!response.ok) {
@@ -135,6 +139,46 @@ router.get("/discover", async (req, res) => {
   } catch (e: any) {
     return res.json({ models: [], error: e.message || "discovery failed" });
   }
+});
+
+// Aggregate health check for all configured inference servers.
+// Parallel HTTP pings; returns reachability (not systemd state).
+router.get("/health-all", async (_req, res) => {
+  const settings = await getSettings();
+  const ollamaUrl = getOllamaUrl(settings);
+  const inferenceUrl = settings.llamacppUrl?.trim() || "http://localhost:8080";
+  const extractionUrl = settings.extractionModelUrl?.trim() || "http://localhost:8083";
+  const rerankerUrl = settings.rerankerUrl?.trim() || "http://localhost:8082";
+  const embeddingProvider = settings.embeddingProvider ?? "ollama";
+  const embeddingUrl = settings.embeddingUrl?.trim()
+    || (embeddingProvider === "llamacpp" ? "http://localhost:8084" : ollamaUrl);
+
+  const pingLlamaCpp = async (url: string) => {
+    try {
+      const r = await fetch(`${url}/health`, { signal: AbortSignal.timeout(3000) });
+      return r.ok ? "ok" : "unavailable";
+    } catch {
+      return "unavailable";
+    }
+  };
+  const pingOllama = async (url: string) => {
+    try {
+      const r = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(3000) });
+      return r.ok ? "ok" : "unavailable";
+    } catch {
+      return "unavailable";
+    }
+  };
+
+  const [inference, extraction, reranker, embedding, ollama] = await Promise.all([
+    pingLlamaCpp(inferenceUrl),
+    pingLlamaCpp(extractionUrl),
+    pingLlamaCpp(rerankerUrl),
+    embeddingProvider === "llamacpp" ? pingLlamaCpp(embeddingUrl) : pingOllama(embeddingUrl),
+    pingOllama(ollamaUrl),
+  ]);
+
+  res.json({ inference, extraction, reranker, embedding, ollama });
 });
 
 // llama.cpp server health check (proxied to avoid CORS issues)

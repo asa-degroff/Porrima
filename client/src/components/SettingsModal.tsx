@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels } from "../api/client";
-import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel } from "../api/client";
+import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth } from "../api/client";
+import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
 import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
@@ -180,6 +180,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [comfyuiUrl, setComfyuiUrl] = useState(settings.comfyuiUrl || "http://127.0.0.1:8188");
   const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
+  // Ollama server settings
+  const [ollamaUrl, setOllamaUrl] = useState(settings.ollamaUrl || "http://localhost:11434");
   // llama.cpp server settings
   const [llamacppEnabled, setLlamacppEnabled] = useState(settings.llamacppEnabled ?? false);
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || "http://localhost:8080");
@@ -226,6 +228,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const migrationAbortRef = useRef<null | (() => void)>(null);
   // Llama.cpp binary path management
   const [llamaPathInfo, setLlamaPathInfo] = useState<LlamaPathInfo | null>(null);
+  // Aggregate HTTP-ping health for all five configured servers
+  const [serverHealth, setServerHealth] = useState<ServerHealthMap | null>(null);
   const [llamaPathInput, setLlamaPathInput] = useState("");
   const [llamaPathValidation, setLlamaPathValidation] = useState<{ valid: boolean; error?: string } | null>(null);
   const [llamaPathValidating, setLlamaPathValidating] = useState(false);
@@ -311,6 +315,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [extractionModelDropdownOpen, setExtractionModelDropdownOpen] = useState(false);
   const [embeddingModelDropdownOpen, setEmbeddingModelDropdownOpen] = useState(false);
   const [rerankerModelDropdownOpen, setRerankerModelDropdownOpen] = useState(false);
+  const [favoritesDropdownOpen, setFavoritesDropdownOpen] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const visionModelDropdownRef = useRef<HTMLDivElement>(null);
   const voiceDropdownRef = useRef<HTMLDivElement>(null);
@@ -319,6 +324,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const extractionModelDropdownRef = useRef<HTMLDivElement>(null);
   const embeddingModelDropdownRef = useRef<HTMLDivElement>(null);
   const rerankerModelDropdownRef = useRef<HTMLDivElement>(null);
+  const favoritesDropdownRef = useRef<HTMLDivElement>(null);
 
 
   useClickOutside(modelDropdownRef, () => setModelDropdownOpen(false), modelDropdownOpen);
@@ -329,6 +335,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useClickOutside(extractionModelDropdownRef, () => setExtractionModelDropdownOpen(false), extractionModelDropdownOpen);
   useClickOutside(embeddingModelDropdownRef, () => setEmbeddingModelDropdownOpen(false), embeddingModelDropdownOpen);
   useClickOutside(rerankerModelDropdownRef, () => setRerankerModelDropdownOpen(false), rerankerModelDropdownOpen);
+  useClickOutside(favoritesDropdownRef, () => setFavoritesDropdownOpen(false), favoritesDropdownOpen);
 
 
   useEffect(() => {
@@ -411,6 +418,16 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       .catch(() => {});
   }, []);
 
+  // Aggregate health pings for all five configured servers. Re-runs when URL
+  // fields change so the dots update as the user edits settings.
+  useEffect(() => {
+    let cancelled = false;
+    getAllServerHealth()
+      .then((h) => { if (!cancelled) setServerHealth(h); })
+      .catch(() => { if (!cancelled) setServerHealth(null); });
+    return () => { cancelled = true; };
+  }, [ollamaUrl, llamacppUrl, rerankerUrl, embeddingUrl, embeddingProvider, extractionModelUrl]);
+
   // Discover embedding models for the dropdown. Re-runs when provider/url change.
   useEffect(() => {
     let cancelled = false;
@@ -488,6 +505,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       defaultSystemPrompt: effectivePrompt,
       braveApiKey: braveApiKey.trim(),
       comfyuiUrl: comfyuiUrl.trim() || undefined,
+      ollamaUrl: ollamaUrl.trim() || undefined,
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
       llamacppSharesGpu,
@@ -1105,8 +1123,52 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           <div id="inference" className="space-y-4">
             <h3 className="text-sm font-semibold text-white/80">Inference Servers</h3>
             <p className="text-xs text-white/40 -mt-2">
-              Four model roles: the main chat inference server, a server for memory extraction, a cross-encoder reranker, and an embedding server. Each can point at a separate llama.cpp instance.
+              Four llama.cpp model roles (main chat inference, memory extraction, cross-encoder reranker, embedding) plus the Ollama server (model discovery, title generation, vision). Each URL can point at a separate instance.
             </p>
+
+            {/* Server health (HTTP pings against each configured URL) */}
+            <div className="space-y-2">
+              <h4 className="text-sm text-white/80">Server health</h4>
+              <div className="ml-2 flex items-center gap-3 text-xs">
+                {([
+                  ["inference", "Inference"],
+                  ["extraction", "Extraction"],
+                  ["reranker", "Reranker"],
+                  ["embedding", "Embedding"],
+                  ["ollama", "Ollama"],
+                ] as const).map(([key, label]) => {
+                  const status = serverHealth?.[key];
+                  const dotClass =
+                    status === "ok" ? "bg-green-400" :
+                    status === "unavailable" ? "bg-red-400" :
+                    "bg-white/20";
+                  const title = status ? `${label}: ${status}` : `${label}: checking…`;
+                  return (
+                    <div key={key} className="flex items-center gap-1" title={title}>
+                      <div className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+                      <span className="text-[10px] text-white/50">{label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Ollama server URL */}
+            <div className="space-y-2">
+              <h4 className="text-sm text-white/80">Ollama server</h4>
+              <div className="space-y-2 ml-2">
+                <input
+                  type="text"
+                  value={ollamaUrl}
+                  onChange={(e) => setOllamaUrl(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                  placeholder="http://localhost:11434"
+                />
+                <p className="text-xs text-white/30">
+                  Used for Ollama model discovery, chat-title generation, vision analysis, and GPU coordination. Also the default embedding URL when embedding provider is Ollama.
+                </p>
+              </div>
+            </div>
 
             {/* Binary Path (symlink management) */}
             <div className="space-y-2">
@@ -1123,22 +1185,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-400/20 text-[10px] font-medium">
                         v{llamaPathInfo.version}
                       </span>
-                    )}
-                    {/* Service health indicators */}
-                    {llamaPathInfo.services && (
-                      <div className="flex items-center gap-1.5 ml-1">
-                        {Object.entries(llamaPathInfo.services).map(([name, status]) => {
-                          const shortName = name.replace(".service", "").replace("llama-server", "inference").replace("reranker", "reranker").replace("extraction-model", "extraction");
-                          return (
-                            <div key={name} className="flex items-center gap-0.5" title={`${name}: ${status}`}>
-                              <div className={`w-1.5 h-1.5 rounded-full ${
-                                status === "active" ? "bg-green-400" : status === "failed" ? "bg-red-400" : "bg-amber-400"
-                              }`} />
-                              <span className="text-[9px] text-white/30">{shortName}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
                     )}
                   </div>
                 )}
@@ -1877,15 +1923,27 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <span className="text-xs text-white/50">Show only favorites in chat</span>
               </label>
             </div>
-            <div className="max-h-[200px] overflow-y-auto rounded-lg border border-white/10 bg-white/[0.02]">
-              {models.map((m) => {
-                const isFav = favoriteModels.has(m.id);
-                return (
-                  <div
-                    key={`${m.provider || "ollama"}-${m.id}`}
-                    className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-white/5 transition-colors"
-                  >
+            <div className="relative" ref={favoritesDropdownRef}>
+              <button
+                onClick={() => setFavoritesDropdownOpen((o) => !o)}
+                className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+              >
+                <span className="truncate flex-1 text-left">
+                  {favoriteModels.size === 0
+                    ? "No favorites selected"
+                    : `${favoriteModels.size} favorite${favoriteModels.size === 1 ? "" : "s"} selected`}
+                </span>
+                {chevronSvg(favoritesDropdownOpen)}
+              </button>
+              <DropdownPanel
+                open={favoritesDropdownOpen}
+                className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+              >
+                {models.map((m) => {
+                  const isFav = favoriteModels.has(m.id);
+                  return (
                     <button
+                      key={`${m.provider || "ollama"}-${m.id}`}
                       onClick={() => {
                         setFavoriteModels((prev) => {
                           const next = new Set(prev);
@@ -1894,21 +1952,32 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                           return next;
                         });
                       }}
-                      className={`shrink-0 transition-colors ${isFav ? "text-amber-400" : "text-white/20 hover:text-white/40"}`}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-white/10 transition-all"
                       title={isFav ? "Remove from favorites" : "Add to favorites"}
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill={isFav ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill={isFav ? "currentColor" : "none"}
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className={`shrink-0 transition-colors ${isFav ? "text-amber-400" : "text-white/30"}`}
+                      >
                         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                       </svg>
+                      <span className="truncate flex-1 text-white/70">{m.name}</span>
+                      {m.provider === "llamacpp" && (
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-400/20 shrink-0">LC</span>
+                      )}
+                      {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
                     </button>
-                    <span className="truncate flex-1 text-white/70">{m.name}</span>
-                    {m.provider === "llamacpp" && (
-                      <span className="text-[9px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-400/20 shrink-0">LC</span>
-                    )}
-                    {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </DropdownPanel>
             </div>
           </div>
 

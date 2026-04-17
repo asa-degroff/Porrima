@@ -461,12 +461,15 @@ async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow
     // Free Ollama GPU VRAM before loading — Ollama models sitting in VRAM
     // can prevent llama.cpp from offloading layers to GPU, causing CPU fallback.
     try {
-      const psRes = await fetch("http://localhost:11434/api/ps", { signal: AbortSignal.timeout(3000) });
+      const { getSettings } = await import("./chat-storage.js");
+      const { getOllamaUrl } = await import("./ollama-url.js");
+      const ollamaBase = getOllamaUrl(await getSettings());
+      const psRes = await fetch(`${ollamaBase}/api/ps`, { signal: AbortSignal.timeout(3000) });
       if (psRes.ok) {
         const psData = await psRes.json();
         const loadedModels: string[] = (psData.models || []).map((m: any) => m.name || m.model).filter(Boolean);
         for (const ollamaModel of loadedModels) {
-          await fetch("http://localhost:11434/api/generate", {
+          await fetch(`${ollamaBase}/api/generate`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ model: ollamaModel, prompt: "", keep_alive: "0s" }),

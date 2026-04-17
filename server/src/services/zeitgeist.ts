@@ -542,7 +542,9 @@ ${content}`;
  * Uses qwen3.5:0.8b via Ollama (same as chat title generation, CPU-only).
  */
 async function generateArchiveTitle(content: string, date: string): Promise<string> {
-  const OLLAMA_BASE = "http://localhost:11434";
+  const { getSettings } = await import("./chat-storage.js");
+  const { getOllamaUrl } = await import("./ollama-url.js");
+  const OLLAMA_BASE = getOllamaUrl(await getSettings());
   const TITLE_MODEL = "qwen3.5:0.8b";
   
   const prompt = `Based on the following zeitgeist archive content from ${date}, generate a concise one-line title (max 50 chars) that captures the essence of this period:

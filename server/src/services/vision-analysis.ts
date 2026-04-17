@@ -6,9 +6,13 @@ import sharp from "sharp";
 import { addCorpusEntry, enrichCorpusEntry } from "./image-corpus.js";
 import { getSettings } from "./chat-storage.js";
 import { isLlamaCppModelLoaded } from "./openai-compat-provider.js";
+import { getOllamaUrl } from "./ollama-url.js";
 
 const VISION_DIR = join(process.env.HOME || process.env.USERPROFILE || ".", ".quje-agent", "vision");
-const OLLAMA_BASE = process.env.OLLAMA_URL || "http://localhost:11434";
+
+async function resolveOllamaBase(): Promise<string> {
+  return getOllamaUrl(await getSettings());
+}
 
 export interface VisionPreset {
   key: string;
@@ -249,10 +253,11 @@ function base64ToBuffer(base64: string): Buffer {
 }
 
 async function waitForOllama(timeout = 30000): Promise<boolean> {
+  const ollamaBase = await resolveOllamaBase();
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${OLLAMA_BASE}/api/ps`);
+      const res = await fetch(`${ollamaBase}/api/ps`);
       if (res.ok) return true;
     } catch {
       // Ollama not reachable yet
@@ -282,7 +287,8 @@ export async function analyzeImage(
   const visionOptions: Record<string, any> = { temperature: 0.7 };
   if (isLlamaCppModelLoaded()) visionOptions.num_gpu = 0;
 
-  const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+  const ollamaBase = await resolveOllamaBase();
+  const res = await fetch(`${ollamaBase}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -336,7 +342,8 @@ export async function analyzeImageStream(
   const streamOptions: Record<string, any> = { temperature: 0.7 };
   if (isLlamaCppModelLoaded()) streamOptions.num_gpu = 0;
 
-  const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+  const ollamaBase = await resolveOllamaBase();
+  const res = await fetch(`${ollamaBase}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -438,7 +445,8 @@ export async function chatAboutImage(
   const chatOptions: Record<string, any> = { temperature: 0.7 };
   if (isLlamaCppModelLoaded()) chatOptions.num_gpu = 0;
 
-  const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+  const ollamaBase = await resolveOllamaBase();
+  const res = await fetch(`${ollamaBase}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

@@ -348,11 +348,13 @@ async function freeComfyUIModels(baseUrl: string): Promise<void> {
  */
 async function unloadLLMModels(): Promise<void> {
   const { getSettings } = await import("./chat-storage.js");
+  const { getOllamaUrl } = await import("./ollama-url.js");
   const settings = await getSettings();
+  const ollamaBase = getOllamaUrl(settings);
 
   // Unload all loaded Ollama models (not just the default)
   try {
-    const psRes = await fetch("http://localhost:11434/api/ps", {
+    const psRes = await fetch(`${ollamaBase}/api/ps`, {
       signal: AbortSignal.timeout(5000),
     });
     if (psRes.ok) {
@@ -360,7 +362,7 @@ async function unloadLLMModels(): Promise<void> {
       const loadedModels: string[] = (psData.models || []).map((m: any) => m.name || m.model).filter(Boolean);
       for (const modelName of loadedModels) {
         console.log(`[comfyui] Unloading Ollama model: ${modelName}`);
-        await fetch("http://localhost:11434/api/generate", {
+        await fetch(`${ollamaBase}/api/generate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ model: modelName, prompt: "", keep_alive: "0s" }),

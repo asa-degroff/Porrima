@@ -1,8 +1,8 @@
 import type { Model } from "@mariozechner/pi-ai";
 import type { OllamaModel, Settings } from "../types.js";
 import { getSettings } from "./chat-storage.js";
+import { getOllamaUrl } from "./ollama-url.js";
 
-const OLLAMA_BASE = "http://localhost:11434";
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
 
 interface OllamaTagResponse {
@@ -21,7 +21,7 @@ interface ModelInfoResult {
   supportsImages: boolean;
 }
 
-async function getModelCapabilities(modelName: string): Promise<ModelInfoResult> {
+async function getModelCapabilities(modelName: string, ollamaBase: string): Promise<ModelInfoResult> {
   // Safe default for cloud models and models with failed /api/show calls.
   // When detection succeeds, the model's actual context_length is used.
   // Users can set a lower limit per-model in settings if KV cache is a concern.
@@ -41,7 +41,7 @@ async function getModelCapabilities(modelName: string): Promise<ModelInfoResult>
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
-    const res = await fetch(`${OLLAMA_BASE}/api/show`, {
+    const res = await fetch(`${ollamaBase}/api/show`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: modelName }),
@@ -91,11 +91,14 @@ export async function discoverOllamaModels(): Promise<OllamaModel[]> {
     return modelCache.models;
   }
 
+  const settings = await getSettings();
+  const ollamaBase = getOllamaUrl(settings);
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout for discovery (handles 50+ models)
 
   try {
-    const res = await fetch(`${OLLAMA_BASE}/api/tags`, { signal: controller.signal });
+    const res = await fetch(`${ollamaBase}/api/tags`, { signal: controller.signal });
     clearTimeout(timeoutId);
     if (!res.ok) throw new Error(`Ollama not reachable: ${res.status}`);
     const data = (await res.json()) as OllamaTagResponse;
@@ -106,7 +109,7 @@ export async function discoverOllamaModels(): Promise<OllamaModel[]> {
     // A single broken model shouldn't take down all model discovery
     const results = await Promise.allSettled(
       filtered.map(async (m) => {
-        const capabilities = await getModelCapabilities(m.name);
+        const capabilities = await getModelCapabilities(m.name, ollamaBase);
         return {
           id: m.name,
           name: formatModelName(m.name, m.details.parameter_size),
@@ -395,7 +398,8 @@ export function getEffectiveContextWindow(
 }
 
 export function createPiModel(
-  ollamaModel: OllamaModel
+  ollamaModel: OllamaModel,
+  ollamaBase: string
 ): Model<"ollama-native"> {
   const reasoning = supportsReasoning(ollamaModel.family);
   // Only advertise image support if the model actually has vision capabilities
@@ -405,7 +409,7 @@ export function createPiModel(
     name: ollamaModel.name,
     api: "ollama-native",
     provider: "ollama",
-    baseUrl: OLLAMA_BASE,
+    baseUrl: ollamaBase,
     reasoning,
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -438,7 +442,8 @@ export async function createPiModelFromProvider(
       maxTokens: 32768,
     };
   }
-  return createPiModel(model);
+  const settings = await getSettings();
+  return createPiModel(model, getOllamaUrl(settings));
 }
 
 function formatModelName(id: string, paramSize: string): string {

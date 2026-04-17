@@ -1,8 +1,8 @@
 import type { ChatMessage } from "../types.js";
 import { discoverAllModels } from "./models.js";
 import { getSettings } from "./chat-storage.js";
+import { getOllamaUrl } from "./ollama-url.js";
 
-const OLLAMA_BASE = "http://localhost:11434";
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
 const TITLE_MODEL = "qwen3.5:0.8b";
 
@@ -59,7 +59,9 @@ export async function generateTitle(
       const data = await res.json();
       title = data.choices?.[0]?.message?.content?.trim() ?? null;
     } else {
-      const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+      const settings = await getSettings();
+      const ollamaBase = getOllamaUrl(settings);
+      const res = await fetch(`${ollamaBase}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -168,7 +170,9 @@ export async function regenerateTitle(
       const data = await res.json();
       title = data.choices?.[0]?.message?.content?.trim() ?? null;
     } else {
-      const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+      const settings = await getSettings();
+      const ollamaBase = getOllamaUrl(settings);
+      const res = await fetch(`${ollamaBase}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
