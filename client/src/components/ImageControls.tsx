@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { ImageGenerationParams, GenerationState } from "../types";
+import { DropdownPanel } from "./SettingsModal";
 
 const chevronSvg = (open: boolean) => (
   <svg
@@ -301,34 +302,31 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
             <span className="truncate flex-1 text-left">{model || "No models found"}</span>
             {chevronSvg(modelOpen)}
           </button>
-          {modelOpen && (
-            <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[320px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-              style={{
-                backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                borderColor: `rgba(var(--theme-primary-border))`,
-              }}>
-              {models.map((m) => (
-                <button
-                  key={m}
-                  onClick={() => { setModel(m); setModelOpen(false); }}
-                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                    m === model
-                      ? "text-white"
-                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                  }`}
-                  style={{
-                    backgroundColor: m === model ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
-                    color: m === model ? `rgba(var(--theme-accent-text))` : '',
-                  }}
-                >
-                  {m}
-                </button>
-              ))}
-              {models.length === 0 && (
-                <div className="px-3 py-2 text-xs text-white/40">No models found</div>
-              )}
-            </div>
-          )}
+          <DropdownPanel
+            open={modelOpen}
+            className="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
+          >
+            {models.map((m) => (
+              <button
+                key={m}
+                onClick={() => { setModel(m); setModelOpen(false); }}
+                className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                  m === model
+                    ? "text-white"
+                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                }`}
+                style={{
+                  backgroundColor: m === model ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
+                  color: m === model ? `rgba(var(--theme-accent-text))` : '',
+                }}
+              >
+                {m}
+              </button>
+            ))}
+            {models.length === 0 && (
+              <div className="px-3 py-2 text-xs text-white/40">No models found</div>
+            )}
+          </DropdownPanel>
         </div>
       </div>
 
@@ -500,31 +498,28 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
               <span className="truncate flex-1 text-left">{sampler}</span>
               {chevronSvg(samplerOpen)}
             </button>
-            {samplerOpen && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[240px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-                style={{
-                  backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                  borderColor: `rgba(var(--theme-primary-border))`,
-                }}>
-                {["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => { setSampler(s); setSamplerOpen(false); }}
-                    className={`w-full text-left px-3 py-1.5 text-xs transition-all ${
-                      s === sampler
-                        ? "text-white"
-                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`}
-                    style={{
-                      backgroundColor: s === sampler ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
-                      color: s === sampler ? `rgba(var(--theme-accent-text))` : '',
-                    }}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
+            <DropdownPanel
+              open={samplerOpen}
+              className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+            >
+              {["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"].map((s) => (
+                <button
+                  key={s}
+                  onClick={() => { setSampler(s); setSamplerOpen(false); }}
+                  className={`w-full text-left px-3 py-1.5 text-xs transition-all ${
+                    s === sampler
+                      ? "text-white"
+                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  }`}
+                  style={{
+                    backgroundColor: s === sampler ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
+                    color: s === sampler ? `rgba(var(--theme-accent-text))` : '',
+                  }}
+                >
+                  {s}
+                </button>
+              ))}
+            </DropdownPanel>
           </div>
         </div>
         <div className="space-y-1">
@@ -537,31 +532,28 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
               <span className="truncate flex-1 text-left">{scheduler}</span>
               {chevronSvg(schedulerOpen)}
             </button>
-            {schedulerOpen && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[240px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-                style={{
-                  backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                  borderColor: `rgba(var(--theme-primary-border))`,
-                }}>
-                {["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform", "beta"].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => { setScheduler(s); setSchedulerOpen(false); }}
-                    className={`w-full text-left px-3 py-1.5 text-xs transition-all ${
-                      s === scheduler
-                        ? "text-white"
-                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`}
-                    style={{
-                      backgroundColor: s === scheduler ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
-                      color: s === scheduler ? `rgba(var(--theme-accent-text))` : '',
-                    }}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
+            <DropdownPanel
+              open={schedulerOpen}
+              className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+            >
+              {["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform", "beta"].map((s) => (
+                <button
+                  key={s}
+                  onClick={() => { setScheduler(s); setSchedulerOpen(false); }}
+                  className={`w-full text-left px-3 py-1.5 text-xs transition-all ${
+                    s === scheduler
+                      ? "text-white"
+                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  }`}
+                  style={{
+                    backgroundColor: s === scheduler ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
+                    color: s === scheduler ? `rgba(var(--theme-accent-text))` : '',
+                  }}
+                >
+                  {s}
+                </button>
+              ))}
+            </DropdownPanel>
           </div>
         </div>
       </div>

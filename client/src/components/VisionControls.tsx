@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import type { VisionPreset, AnalyzedImage } from "../api/client";
 import type { OllamaModel } from "../types";
 import { ProviderIcon } from "./ProviderIcon";
+import { DropdownPanel } from "./SettingsModal";
 
 const MAX_DIMENSION = 2048;
 const TARGET_BYTES = 2 * 1024 * 1024; // 2 MB
@@ -166,36 +167,33 @@ export function VisionControls({
               <span className="truncate flex-1 text-left">{selectedModelObj?.name || selectedModel}</span>
               {chevronSvg(modelOpen)}
             </button>
-            {modelOpen && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[320px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-                style={{
-                  backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                  borderColor: `rgba(var(--theme-primary-border))`,
-                }}>
-                {models.map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => { onModelChange(m.id); setModelOpen(false); }}
-                    className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                      m.id === selectedModel
-                        ? "text-white"
-                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`}
-                    style={{
-                      backgroundColor: m.id === selectedModel ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                      color: m.id === selectedModel ? `rgba(var(--theme-secondary-text))` : '',
-                    }}
-                  >
-                    <span className="truncate flex-1">{m.name}</span>
-                    <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
-                    <ProviderIcon
-                      provider={m.provider}
-                      className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
-                    />
-                  </button>
-                ))}
-              </div>
-            )}
+            <DropdownPanel
+              open={modelOpen}
+              className="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
+            >
+              {models.map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => { onModelChange(m.id); setModelOpen(false); }}
+                  className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                    m.id === selectedModel
+                      ? "text-white"
+                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  }`}
+                  style={{
+                    backgroundColor: m.id === selectedModel ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                    color: m.id === selectedModel ? `rgba(var(--theme-secondary-text))` : '',
+                  }}
+                >
+                  <span className="truncate flex-1">{m.name}</span>
+                  <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
+                  <ProviderIcon
+                    provider={m.provider}
+                    className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                  />
+                </button>
+              ))}
+            </DropdownPanel>
           </div>
         </div>
 
@@ -211,31 +209,28 @@ export function VisionControls({
               <span className="truncate flex-1 text-left">{selectedPresetObj?.name || selectedPreset}</span>
               {chevronSvg(presetOpen)}
             </button>
-            {presetOpen && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[320px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-                style={{
-                  backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                  borderColor: `rgba(var(--theme-primary-border))`,
-                }}>
-                {presets.map((p) => (
-                  <button
-                    key={p.key}
-                    onClick={() => { setSelectedPreset(p.key); setPresetOpen(false); }}
-                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                      p.key === selectedPreset
-                        ? "text-white"
-                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`}
-                    style={{
-                      backgroundColor: p.key === selectedPreset ? `rgba(var(--theme-primary), 0.15)` : 'transparent',
-                      color: p.key === selectedPreset ? `rgba(var(--theme-primary-text))` : '',
-                    }}
-                  >
-                    {p.name}
-                  </button>
-                ))}
-              </div>
-            )}
+            <DropdownPanel
+              open={presetOpen}
+              className="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
+            >
+              {presets.map((p) => (
+                <button
+                  key={p.key}
+                  onClick={() => { setSelectedPreset(p.key); setPresetOpen(false); }}
+                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                    p.key === selectedPreset
+                      ? "text-white"
+                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  }`}
+                  style={{
+                    backgroundColor: p.key === selectedPreset ? `rgba(var(--theme-primary), 0.15)` : 'transparent',
+                    color: p.key === selectedPreset ? `rgba(var(--theme-primary-text))` : '',
+                  }}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </DropdownPanel>
           </div>
         </div>
 
