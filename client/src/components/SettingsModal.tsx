@@ -9,6 +9,7 @@ import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, Bac
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
+import { ProviderIcon } from "./ProviderIcon";
 
 // Reusable toggle switch with spring animation
 const ACCENT_COLORS: Record<string, { on: string; off: string }> = {
@@ -1113,6 +1114,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   >
                     <span className="truncate flex-1">{m.name}</span>
                     <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
+                    <ProviderIcon
+                      provider={m.provider}
+                      className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                    />
                   </button>
                 ))}
               </DropdownPanel>
@@ -1970,10 +1975,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                       </svg>
                       <span className="truncate flex-1 text-white/70">{m.name}</span>
-                      {m.provider === "llamacpp" && (
-                        <span className="text-[9px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-400/20 shrink-0">LC</span>
-                      )}
                       {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
+                      <ProviderIcon
+                        provider={m.provider}
+                        className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                      />
                     </button>
                   );
                 })}
@@ -2024,6 +2030,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   >
                     <span className="truncate flex-1">{m.name}</span>
                     <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
+                    <ProviderIcon
+                      provider={m.provider}
+                      className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                    />
                   </button>
                 ))}
               </DropdownPanel>

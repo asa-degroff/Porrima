@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import type { OllamaModel } from "../types";
+import { ProviderIcon } from "./ProviderIcon";
 
 interface Props {
   models: OllamaModel[];
@@ -44,8 +45,11 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
         className="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 md:px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all disabled:opacity-40 cursor-pointer max-w-[120px] md:max-w-none"
       >
         <span className="truncate">{selected?.name || selectedId}</span>
-        {selected?.provider === "llamacpp" && (
-          <span className="text-[9px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-400/20 shrink-0">LC</span>
+        {selected && (
+          <ProviderIcon
+            provider={selected.provider}
+            className={selected.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/60 shrink-0"}
+          />
         )}
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -94,6 +98,10 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
                 >
                   <span className="truncate flex-1">{m.name}</span>
                   {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
+                  <ProviderIcon
+                    provider={m.provider}
+                    className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                  />
                 </button>
               ))}
             </div>

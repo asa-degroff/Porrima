@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { VisionPreset, AnalyzedImage } from "../api/client";
 import type { OllamaModel } from "../types";
+import { ProviderIcon } from "./ProviderIcon";
 
 const MAX_DIMENSION = 2048;
 const TARGET_BYTES = 2 * 1024 * 1024; // 2 MB
@@ -187,6 +188,10 @@ export function VisionControls({
                   >
                     <span className="truncate flex-1">{m.name}</span>
                     <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
+                    <ProviderIcon
+                      provider={m.provider}
+                      className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                    />
                   </button>
                 ))}
               </div>
