@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import type { SystemPromptPreset } from "../types";
+import { DropdownPanel } from "./SettingsModal";
 
 interface Props {
   value: string;
@@ -124,57 +125,54 @@ export function SystemPromptEditor({ value, onChange, disabled, presets, isAgent
                 <path d="M6 9l6 6 6-6" />
               </svg>
             </button>
-            {dropdownOpen && (
-              <div className="absolute right-0 top-full mt-1 z-30 min-w-[180px] backdrop-blur-xl border rounded-xl shadow-2xl py-1 overflow-hidden"
-                style={{
-                  backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                  borderColor: `rgba(var(--theme-primary-border))`,
-                }}>
-                {isAgent && (
-                  <button
-                    onClick={() => handlePresetSelect(null)}
-                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                      isNoneSelected
-                        ? "text-white"
-                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`}
-                    style={{
-                      backgroundColor: isNoneSelected ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                      color: isNoneSelected ? `rgba(var(--theme-secondary-text))` : '',
-                    }}
-                  >
-                    None (persona only)
-                  </button>
-                )}
-                {presets.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => handlePresetSelect(p.id)}
-                    className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                      matchingPreset?.id === p.id
-                        ? "text-white"
-                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`}
-                    style={{
-                      backgroundColor: matchingPreset?.id === p.id ? `rgba(var(--theme-primary), 0.15)` : 'transparent',
-                      color: matchingPreset?.id === p.id ? `rgba(var(--theme-primary-text))` : '',
-                    }}
-                  >
-                    <span className="truncate flex-1">{p.name || "Untitled"}</span>
-                    {p.isDefault && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
-                        style={{
-                          backgroundColor: `rgba(var(--theme-primary), 0.15)`,
-                          color: `rgba(var(--theme-primary-text))`,
-                          borderColor: `rgba(var(--theme-primary-border))`,
-                        }}>
-                        default
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
+            <DropdownPanel
+              open={dropdownOpen}
+              className="right-0 top-full mt-1 min-w-[180px] overflow-hidden"
+            >
+              {isAgent && (
+                <button
+                  onClick={() => handlePresetSelect(null)}
+                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                    isNoneSelected
+                      ? "text-white"
+                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  }`}
+                  style={{
+                    backgroundColor: isNoneSelected ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                    color: isNoneSelected ? `rgba(var(--theme-secondary-text))` : '',
+                  }}
+                >
+                  None (persona only)
+                </button>
+              )}
+              {presets.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => handlePresetSelect(p.id)}
+                  className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                    matchingPreset?.id === p.id
+                      ? "text-white"
+                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  }`}
+                  style={{
+                    backgroundColor: matchingPreset?.id === p.id ? `rgba(var(--theme-primary), 0.15)` : 'transparent',
+                    color: matchingPreset?.id === p.id ? `rgba(var(--theme-primary-text))` : '',
+                  }}
+                >
+                  <span className="truncate flex-1">{p.name || "Untitled"}</span>
+                  {p.isDefault && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
+                      style={{
+                        backgroundColor: `rgba(var(--theme-primary), 0.15)`,
+                        color: `rgba(var(--theme-primary-text))`,
+                        borderColor: `rgba(var(--theme-primary-border))`,
+                      }}>
+                      default
+                    </span>
+                  )}
+                </button>
+              ))}
+            </DropdownPanel>
           </div>
         )}
       </div>

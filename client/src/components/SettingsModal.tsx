@@ -48,6 +48,29 @@ function ToggleSwitch({ checked, onChange, accentColor, disabled }: ToggleSwitch
   );
 }
 
+// Dropdown panel — owns the visual chrome (backdrop, border, shadow) and the
+// slide-down reveal animation. Callers pass positioning/sizing classes via
+// `className` (e.g. "left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto").
+export function DropdownPanel({ open, className = "", children }: {
+  open: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  if (!open) return null;
+
+  return (
+    <div
+      className={`absolute z-30 backdrop-blur-xl border rounded-xl shadow-2xl py-1 animate-dropdown-enter ${className}`}
+      style={{
+        backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+        borderColor: `rgba(var(--theme-primary-border))`,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 const SECTIONS = [
   { id: 'models', label: 'Models' },
   { id: 'inference', label: 'Inference Servers' },
@@ -1042,42 +1065,39 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </span>
                 {chevronSvg(modelDropdownOpen)}
               </button>
-              {modelDropdownOpen && (
-                <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+              <DropdownPanel
+                open={modelDropdownOpen}
+                className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+              >
+                <button
+                  onClick={() => { setDefaultModelId(""); setModelDropdownOpen(false); }}
+                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                    !defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  }`}
                   style={{
-                    backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                    borderColor: `rgba(var(--theme-primary-border))`,
-                  }}>
+                    backgroundColor: !defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                    color: !defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
+                  }}
+                >
+                  Auto (first available)
+                </button>
+                {models.map((m) => (
                   <button
-                    onClick={() => { setDefaultModelId(""); setModelDropdownOpen(false); }}
-                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                      !defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    key={m.id}
+                    onClick={() => { setDefaultModelId(m.id); setModelDropdownOpen(false); }}
+                    className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                      m.id === defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                     }`}
                     style={{
-                      backgroundColor: !defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                      color: !defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
+                      backgroundColor: m.id === defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                      color: m.id === defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
                     }}
                   >
-                    Auto (first available)
+                    <span className="truncate flex-1">{m.name}</span>
+                    <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
                   </button>
-                  {models.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => { setDefaultModelId(m.id); setModelDropdownOpen(false); }}
-                      className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                        m.id === defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                      }`}
-                      style={{
-                        backgroundColor: m.id === defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                        color: m.id === defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
-                      }}
-                    >
-                      <span className="truncate flex-1">{m.name}</span>
-                      <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+                ))}
+              </DropdownPanel>
             </div>
           </div>
 
@@ -1319,43 +1339,40 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                             </span>
                             {chevronSvg(extractionModelDropdownOpen)}
                           </button>
-                          {extractionModelDropdownOpen && (
-                            <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-                              style={{
-                                backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                                borderColor: `rgba(var(--theme-primary-border))`,
-                              }}>
-                              {sourceList.map((m) => (
-                                <button
-                                  key={m.id}
-                                  onClick={() => {
-                                    setExtractionModelId(m.id);
-                                    setExtractionModelDropdownOpen(false);
-                                  }}
-                                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                                    m.id === extractionModelId
-                                      ? "text-white"
-                                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                                  }`}
-                                  style={{
-                                    backgroundColor: m.id === extractionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                    color: m.id === extractionModelId ? `rgba(var(--theme-secondary-text))` : '',
-                                  }}
-                                >
-                                  {m.name}
-                                </button>
-                              ))}
+                          <DropdownPanel
+                            open={extractionModelDropdownOpen}
+                            className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+                          >
+                            {sourceList.map((m) => (
                               <button
+                                key={m.id}
                                 onClick={() => {
-                                  setExtractionUseCustom(true);
+                                  setExtractionModelId(m.id);
                                   setExtractionModelDropdownOpen(false);
                                 }}
-                                className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
+                                className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                                  m.id === extractionModelId
+                                    ? "text-white"
+                                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                                }`}
+                                style={{
+                                  backgroundColor: m.id === extractionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                  color: m.id === extractionModelId ? `rgba(var(--theme-secondary-text))` : '',
+                                }}
                               >
-                                Custom…
+                                {m.name}
                               </button>
-                            </div>
-                          )}
+                            ))}
+                            <button
+                              onClick={() => {
+                                setExtractionUseCustom(true);
+                                setExtractionModelDropdownOpen(false);
+                              }}
+                              className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
+                            >
+                              Custom…
+                            </button>
+                          </DropdownPanel>
                         </div>
                       ) : (
                         <div className="space-y-1">
@@ -1459,43 +1476,40 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                             </span>
                             {chevronSvg(rerankerModelDropdownOpen)}
                           </button>
-                          {rerankerModelDropdownOpen && (
-                            <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-                              style={{
-                                backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                                borderColor: `rgba(var(--theme-primary-border))`,
-                              }}>
-                              {rerankerModels.map((m) => (
-                                <button
-                                  key={m.id}
-                                  onClick={() => {
-                                    setRerankerModelId(m.id);
-                                    setRerankerModelDropdownOpen(false);
-                                  }}
-                                  className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${
-                                    m.id === rerankerModelId
-                                      ? "text-white"
-                                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                                  }`}
-                                  style={{
-                                    backgroundColor: m.id === rerankerModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                    color: m.id === rerankerModelId ? `rgba(var(--theme-secondary-text))` : '',
-                                  }}
-                                >
-                                  {m.name}
-                                </button>
-                              ))}
+                          <DropdownPanel
+                            open={rerankerModelDropdownOpen}
+                            className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+                          >
+                            {rerankerModels.map((m) => (
                               <button
+                                key={m.id}
                                 onClick={() => {
-                                  setRerankerUseCustom(true);
+                                  setRerankerModelId(m.id);
                                   setRerankerModelDropdownOpen(false);
                                 }}
-                                className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
+                                className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${
+                                  m.id === rerankerModelId
+                                    ? "text-white"
+                                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                                }`}
+                                style={{
+                                  backgroundColor: m.id === rerankerModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                  color: m.id === rerankerModelId ? `rgba(var(--theme-secondary-text))` : '',
+                                }}
                               >
-                                Custom…
+                                {m.name}
                               </button>
-                            </div>
-                          )}
+                            ))}
+                            <button
+                              onClick={() => {
+                                setRerankerUseCustom(true);
+                                setRerankerModelDropdownOpen(false);
+                              }}
+                              className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
+                            >
+                              Custom…
+                            </button>
+                          </DropdownPanel>
                         </div>
                       ) : (
                         <div className="space-y-1">
@@ -1589,43 +1603,40 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                           </span>
                           {chevronSvg(embeddingModelDropdownOpen)}
                         </button>
-                        {embeddingModelDropdownOpen && (
-                          <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-                            style={{
-                              backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                              borderColor: `rgba(var(--theme-primary-border))`,
-                            }}>
-                            {embeddingModels.map((m) => (
-                              <button
-                                key={m.id}
-                                onClick={() => {
-                                  setEmbeddingModel(m.id);
-                                  setEmbeddingModelDropdownOpen(false);
-                                }}
-                                className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${
-                                  m.id === embeddingModel
-                                    ? "text-white"
-                                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                                }`}
-                                style={{
-                                  backgroundColor: m.id === embeddingModel ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                  color: m.id === embeddingModel ? `rgba(var(--theme-secondary-text))` : '',
-                                }}
-                              >
-                                {m.name}
-                              </button>
-                            ))}
+                        <DropdownPanel
+                          open={embeddingModelDropdownOpen}
+                          className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+                        >
+                          {embeddingModels.map((m) => (
                             <button
+                              key={m.id}
                               onClick={() => {
-                                setEmbeddingUseCustom(true);
+                                setEmbeddingModel(m.id);
                                 setEmbeddingModelDropdownOpen(false);
                               }}
-                              className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
+                              className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${
+                                m.id === embeddingModel
+                                  ? "text-white"
+                                  : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                              }`}
+                              style={{
+                                backgroundColor: m.id === embeddingModel ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                color: m.id === embeddingModel ? `rgba(var(--theme-secondary-text))` : '',
+                              }}
                             >
-                              Custom…
+                              {m.name}
                             </button>
-                          </div>
-                        )}
+                          ))}
+                          <button
+                            onClick={() => {
+                              setEmbeddingUseCustom(true);
+                              setEmbeddingModelDropdownOpen(false);
+                            }}
+                            className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
+                          >
+                            Custom…
+                          </button>
+                        </DropdownPanel>
                       </div>
                     ) : (
                       <div className="space-y-1">
@@ -1914,42 +1925,39 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </span>
                 {chevronSvg(visionModelDropdownOpen)}
               </button>
-              {visionModelDropdownOpen && (
-                <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+              <DropdownPanel
+                open={visionModelDropdownOpen}
+                className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+              >
+                <button
+                  onClick={() => { setDefaultVisionModelId(""); setVisionModelDropdownOpen(false); }}
+                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                    !defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  }`}
                   style={{
-                    backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                    borderColor: `rgba(var(--theme-primary-border))`,
-                  }}>
+                    backgroundColor: !defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                    color: !defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
+                  }}
+                >
+                  Auto (first vision model)
+                </button>
+                {models.map((m) => (
                   <button
-                    onClick={() => { setDefaultVisionModelId(""); setVisionModelDropdownOpen(false); }}
-                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                      !defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    key={m.id}
+                    onClick={() => { setDefaultVisionModelId(m.id); setVisionModelDropdownOpen(false); }}
+                    className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                      m.id === defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                     }`}
                     style={{
-                      backgroundColor: !defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                      color: !defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
+                      backgroundColor: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                      color: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
                     }}
                   >
-                    Auto (first vision model)
+                    <span className="truncate flex-1">{m.name}</span>
+                    <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
                   </button>
-                  {models.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => { setDefaultVisionModelId(m.id); setVisionModelDropdownOpen(false); }}
-                      className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                        m.id === defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                      }`}
-                      style={{
-                        backgroundColor: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                        color: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
-                      }}
-                    >
-                      <span className="truncate flex-1">{m.name}</span>
-                      <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+                ))}
+              </DropdownPanel>
             </div>
             <p className="text-white/30 text-xs">
               Model used for image analysis in the Vision sandbox.
@@ -3357,46 +3365,43 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       </span>
                       {chevronSvg(backendDropdownOpen)}
                     </button>
-                    {backendDropdownOpen && (
-                      <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                    <DropdownPanel
+                      open={backendDropdownOpen}
+                      className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+                    >
+                      <button
+                        onClick={async () => {
+                          const updated = await updateTTSSettings({ backend: "kokoro", voice: "af_heart" });
+                          if (updated) setTtsSettings(updated);
+                          setBackendDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                          ttsSettings.backend === "kokoro" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                        }`}
                         style={{
-                          backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                          borderColor: `rgba(var(--theme-primary-border))`,
-                        }}>
-                        <button
-                          onClick={async () => {
-                            const updated = await updateTTSSettings({ backend: "kokoro", voice: "af_heart" });
-                            if (updated) setTtsSettings(updated);
-                            setBackendDropdownOpen(false);
-                          }}
-                          className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                            ttsSettings.backend === "kokoro" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                          }`}
-                          style={{
-                            backgroundColor: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                            color: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary-text))` : '',
-                          }}
-                        >
-                          Kokoro (Standard)
-                        </button>
-                        <button
-                          onClick={async () => {
-                            const updated = await updateTTSSettings({ backend: "qwen3-tts", voice: "Ryan" });
-                            if (updated) setTtsSettings(updated);
-                            setBackendDropdownOpen(false);
-                          }}
-                          className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                            ttsSettings.backend === "qwen3-tts" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                          }`}
-                          style={{
-                            backgroundColor: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                            color: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary-text))` : '',
-                          }}
-                        >
-                          Qwen3-TTS (Streaming)
-                        </button>
-                      </div>
-                    )}
+                          backgroundColor: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                          color: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary-text))` : '',
+                        }}
+                      >
+                        Kokoro (Standard)
+                      </button>
+                      <button
+                        onClick={async () => {
+                          const updated = await updateTTSSettings({ backend: "qwen3-tts", voice: "Ryan" });
+                          if (updated) setTtsSettings(updated);
+                          setBackendDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                          ttsSettings.backend === "qwen3-tts" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                        }`}
+                        style={{
+                          backgroundColor: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                          color: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary-text))` : '',
+                        }}
+                      >
+                        Qwen3-TTS (Streaming)
+                      </button>
+                    </DropdownPanel>
                   </div>
                   <p className="text-white/30 text-xs">
                     {ttsSettings.backend === "kokoro" 
@@ -3459,46 +3464,43 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                           </span>
                           {chevronSvg(boundaryTierDropdownOpen)}
                         </button>
-                        {boundaryTierDropdownOpen && (
-                          <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
+                        <DropdownPanel
+                          open={boundaryTierDropdownOpen}
+                          className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+                        >
+                          <button
+                            onClick={async () => {
+                              const updated = await updateTTSSettings({ streamingBoundaryTier: "clause" });
+                              if (updated) setTtsSettings(updated);
+                              setBoundaryTierDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                              ttsSettings.streamingBoundaryTier === "clause" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                            }`}
                             style={{
-                              backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                              borderColor: `rgba(var(--theme-primary-border))`,
-                            }}>
-                            <button
-                              onClick={async () => {
-                                const updated = await updateTTSSettings({ streamingBoundaryTier: "clause" });
-                                if (updated) setTtsSettings(updated);
-                                setBoundaryTierDropdownOpen(false);
-                              }}
-                              className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                                ttsSettings.streamingBoundaryTier === "clause" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                              }`}
-                              style={{
-                                backgroundColor: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                color: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary-text))` : '',
-                              }}
-                            >
-                              Clause (faster, ~1ms)
-                            </button>
-                            <button
-                              onClick={async () => {
-                                const updated = await updateTTSSettings({ streamingBoundaryTier: "sentence" });
-                                if (updated) setTtsSettings(updated);
-                                setBoundaryTierDropdownOpen(false);
-                              }}
-                              className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                                ttsSettings.streamingBoundaryTier === "sentence" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                              }`}
-                              style={{
-                                backgroundColor: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                color: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary-text))` : '',
-                              }}
-                            >
-                              Sentence (better prosody, ~5ms)
-                            </button>
-                          </div>
-                        )}
+                              backgroundColor: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                              color: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary-text))` : '',
+                            }}
+                          >
+                            Clause (faster, ~1ms)
+                          </button>
+                          <button
+                            onClick={async () => {
+                              const updated = await updateTTSSettings({ streamingBoundaryTier: "sentence" });
+                              if (updated) setTtsSettings(updated);
+                              setBoundaryTierDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                              ttsSettings.streamingBoundaryTier === "sentence" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                            }`}
+                            style={{
+                              backgroundColor: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                              color: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary-text))` : '',
+                            }}
+                          >
+                            Sentence (better prosody, ~5ms)
+                          </button>
+                        </DropdownPanel>
                       </div>
                     </div>
                   </>
@@ -3569,42 +3571,39 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       </span>
                       {chevronSvg(voiceDropdownOpen)}
                     </button>
-                    {voiceDropdownOpen && (
-                      <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-[280px] overflow-y-auto backdrop-blur-xl border rounded-xl shadow-2xl py-1"
-                        style={{
-                          backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-                          borderColor: `rgba(var(--theme-primary-border))`,
-                        }}>
-                        {ttsVoices.map((category) => (
-                          <div key={category.label}>
-                            <div className="px-3 py-1.5 text-[10px] font-medium text-white/30 uppercase tracking-wider">
-                              {category.label}
-                            </div>
-                            {category.voices.map((voice) => (
-                              <button
-                                key={voice.id}
-                                onClick={async () => {
-                                  const updated = await updateTTSSettings({ voice: voice.id });
-                                  if (updated) setTtsSettings(updated);
-                                  setVoiceDropdownOpen(false);
-                                }}
-                                className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                                  voice.id === ttsSettings.voice
-                                    ? "text-white"
-                                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                                }`}
-                                style={{
-                                  backgroundColor: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                  color: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary-text))` : '',
-                                }}
-                              >
-                                {voice.name} ({voice.id})
-                              </button>
-                            ))}
+                    <DropdownPanel
+                      open={voiceDropdownOpen}
+                      className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+                    >
+                      {ttsVoices.map((category) => (
+                        <div key={category.label}>
+                          <div className="px-3 py-1.5 text-[10px] font-medium text-white/30 uppercase tracking-wider">
+                            {category.label}
                           </div>
-                        ))}
-                      </div>
-                    )}
+                          {category.voices.map((voice) => (
+                            <button
+                              key={voice.id}
+                              onClick={async () => {
+                                const updated = await updateTTSSettings({ voice: voice.id });
+                                if (updated) setTtsSettings(updated);
+                                setVoiceDropdownOpen(false);
+                              }}
+                              className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                                voice.id === ttsSettings.voice
+                                  ? "text-white"
+                                  : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                              }`}
+                              style={{
+                                backgroundColor: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                                color: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary-text))` : '',
+                              }}
+                            >
+                              {voice.name} ({voice.id})
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                    </DropdownPanel>
                   </div>
                 </div>
 
