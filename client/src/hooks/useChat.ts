@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat } from "../api/client";
+import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, getChatStatus, reconnectChat } from "../api/client";
 import type { StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InlineVisual, MessageSegment, MessageUsage } from "../types";
 import { useStreamingTTS } from "./useStreamingTTS";
@@ -196,6 +196,42 @@ export function useChat(chatId: string | null) {
       setStreamingSegmentIndex(null);
       setStreamingUsage(null);
     }
+  }, [chatId]);
+
+  // Reconnect to a server-side in-flight stream. Runs after the chat-switch
+  // effect resets state. If the server reports an active stream for this chat
+  // and nothing is tracked locally, attach via the reconnect endpoint — the
+  // server replays buffered SSE events then continues live.
+  useEffect(() => {
+    if (!chatId) return;
+    if (bgStreams.has(chatId)) return;
+
+    let cancelled = false;
+    (async () => {
+      const status = await getChatStatus(chatId);
+      if (cancelled) return;
+      if (!status.active) return;
+      // Chat may have switched away during the async check.
+      if (chatId !== activeChatIdRef.current) return;
+      if (bgStreams.has(chatId)) return;
+
+      console.log(`[chat] reconnecting to in-flight stream for ${chatId} (${status.bufferedChunks} buffered chunks)`);
+      const bg = createBgStream(activeChatRef.current);
+      bgStreams.set(chatId, bg);
+      prepareStream();
+      setStreaming(true);
+
+      const callbacks = makeStreamCallbacks(chatId);
+      const controller = reconnectChat(chatId, callbacks);
+      bg.abortController = controller;
+      abortRef.current = controller;
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // makeStreamCallbacks/prepareStream are stable via useCallback; chatId is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
 
   const loadMessages = useCallback((msgs: ChatMessage[]) => {

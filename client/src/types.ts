@@ -63,6 +63,8 @@ export interface ChatMessage {
   _outOfContext?: boolean;
   /** Number of messages that were compacted to create this summary */
   _compactedMessageCount?: number;
+  /** Archive IDs represented by this compaction summary (used by deferred enrichment) */
+  _archiveIds?: string[];
   /** Marks this message as in-progress (streaming/tool execution not yet complete) */
   _inProgress?: boolean;
   /** Marks this message as a system-generated message (not from agent response) */

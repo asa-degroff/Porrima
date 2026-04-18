@@ -60,6 +60,12 @@ export interface ChatMessage {
   _outOfContext?: boolean;
   /** Number of messages that were compacted to create this summary */
   _compactedMessageCount?: number;
+  /**
+   * Archive IDs represented by this compaction summary. Used by deferred LLM
+   * enrichment to locate the summary and rewrite its content with upgraded
+   * descriptions once the (CPU) extraction model finishes.
+   */
+  _archiveIds?: string[];
   /** Marks this message's content as promoted from thinking (not useful for previews) */
   _thinkingPromoted?: boolean;
   /** Marks this message as a system-generated message (not from agent response) */

@@ -145,6 +145,85 @@ export interface StreamCallbacks {
  *  large context processing, memory extraction). */
 const SSE_INACTIVITY_TIMEOUT_MS = 95_000;
 
+/**
+ * Read an SSE response body: parse events and forward them to callbacks.
+ * Shared by both the POST send path and the GET reconnect path. Handles
+ * inactivity timeout (aborting via `controller`), trailing buffer, and the
+ * "no done/error event received" safety net.
+ */
+async function readSSEBody(
+  res: Response,
+  callbacks: StreamCallbacks,
+  controller: AbortController
+): Promise<void> {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let currentEvent = "";
+  let receivedDoneOrError = false;
+
+  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+  const resetInactivityTimer = () => {
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+      console.warn("[SSE] inactivity timeout — aborting stream");
+      controller.abort();
+      callbacks.onError("Model appears unresponsive — try again or switch models");
+    }, SSE_INACTIVITY_TIMEOUT_MS);
+  };
+  resetInactivityTimer();
+
+  const handleLine = (line: string) => {
+    if (line.startsWith("event: ")) {
+      currentEvent = line.slice(7).trim();
+      return;
+    }
+    if (line.startsWith("data: ")) {
+      try {
+        const data = JSON.parse(line.slice(6));
+        if (currentEvent === "done" || currentEvent === "error") {
+          receivedDoneOrError = true;
+        }
+        if (currentEvent === "description_complete" || currentEvent === "reanalyze_complete") {
+          receivedDoneOrError = true;
+          console.log("[SSE] Vision completion event received:", currentEvent);
+        }
+        processSSEEvent(currentEvent, data, callbacks);
+      } catch {
+        // skip malformed
+      }
+      currentEvent = "";
+      return;
+    }
+    if (line.trim() === "") {
+      currentEvent = "";
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    resetInactivityTimer();
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) handleLine(line);
+  }
+
+  if (inactivityTimer) clearTimeout(inactivityTimer);
+
+  if (buffer.trim()) {
+    for (const line of buffer.split("\n")) handleLine(line);
+  }
+
+  console.log("[SSE] Stream ended, receivedDoneOrError:", receivedDoneOrError);
+
+  if (!receivedDoneOrError) {
+    callbacks.onError("Connection lost — no response received from model");
+  }
+}
+
 function streamSSE(
   url: string,
   body: Record<string, unknown>,
@@ -171,103 +250,12 @@ function streamSSE(
         try {
           err = JSON.parse(errText);
         } catch {
-          // Response wasn't JSON (e.g., HTML error page)
           err = { error: errText || res.statusText };
         }
         callbacks.onError(err.error || "Request failed");
         return;
       }
-
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let currentEvent = "";
-      let receivedDoneOrError = false;
-
-      // Inactivity timeout — abort if no data received for too long
-      // (e.g., Ollama stuck loading a model)
-      let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
-      const resetInactivityTimer = () => {
-        if (inactivityTimer) clearTimeout(inactivityTimer);
-        inactivityTimer = setTimeout(() => {
-          console.warn("[SSE] inactivity timeout — aborting stream");
-          controller.abort();
-          callbacks.onError("Model appears unresponsive — try again or switch models");
-        }, SSE_INACTIVITY_TIMEOUT_MS);
-      };
-      resetInactivityTimer();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        resetInactivityTimer();
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            currentEvent = line.slice(7).trim();
-            continue;
-          }
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (currentEvent === "done" || currentEvent === "error") {
-                receivedDoneOrError = true;
-              }
-              // Vision streams use description_complete/reanalyze_complete instead of "done"
-              if (currentEvent === "description_complete" || currentEvent === "reanalyze_complete") {
-                receivedDoneOrError = true;
-                console.log("[SSE] Vision completion event received:", currentEvent);
-              }
-              processSSEEvent(currentEvent, data, callbacks);
-            } catch {
-              // skip malformed
-            }
-            currentEvent = "";
-            continue;
-          }
-          // Empty line resets event type
-          if (line.trim() === "") {
-            currentEvent = "";
-          }
-        }
-      }
-
-      if (inactivityTimer) clearTimeout(inactivityTimer);
-
-      // Process remaining buffer
-      if (buffer.trim()) {
-        for (const line of buffer.split("\n")) {
-          if (line.startsWith("event: ")) {
-            currentEvent = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (currentEvent === "done" || currentEvent === "error") {
-                receivedDoneOrError = true;
-              }
-              // Vision streams use description_complete/reanalyze_complete instead of "done"
-              if (currentEvent === "description_complete" || currentEvent === "reanalyze_complete") {
-                receivedDoneOrError = true;
-                console.log("[SSE] Vision completion event received:", currentEvent);
-              }
-              processSSEEvent(currentEvent, data, callbacks);
-            } catch {}
-            currentEvent = "";
-          }
-        }
-      }
-
-      console.log("[SSE] Stream ended, receivedDoneOrError:", receivedDoneOrError);
-
-      // Safety net: if the stream ended without a done or error event,
-      // the client would stay stuck in streaming state forever
-      if (!receivedDoneOrError) {
-        callbacks.onError("Connection lost — no response received from model");
-      }
+      await readSSEBody(res, callbacks, controller);
     })
     .catch((e) => {
       if (e.name === "AbortError") return;
@@ -288,6 +276,67 @@ export function sendMessage(
   images?: ImageAttachment[]
 ): AbortController {
   return streamSSE(`${BASE}/chat`, { chatId, message, images: images?.length ? images : undefined }, callbacks);
+}
+
+/**
+ * Check whether the server has an in-flight stream for a chat. Used on mount /
+ * page reload to decide whether to reconnect to a live stream.
+ */
+export async function getChatStatus(
+  chatId: string
+): Promise<{ active: boolean; bufferedChunks: number; subscribers: number }> {
+  try {
+    const res = await apiFetch(`${BASE}/chat/status/${encodeURIComponent(chatId)}`);
+    if (!res.ok) return { active: false, bufferedChunks: 0, subscribers: 0 };
+    return res.json();
+  } catch {
+    return { active: false, bufferedChunks: 0, subscribers: 0 };
+  }
+}
+
+/**
+ * Attach to a server-side in-flight stream via the reconnect endpoint. The
+ * server replays buffered SSE events then streams live events until the turn
+ * ends. Returns the AbortController the caller can use to disconnect early.
+ *
+ * 404 responses (no active stream) are silent — the caller should check
+ * getChatStatus first, but races are expected.
+ */
+export function reconnectChat(chatId: string, callbacks: StreamCallbacks): AbortController {
+  const controller = new AbortController();
+
+  fetch(`${BASE}/chat/reconnect/${encodeURIComponent(chatId)}`, {
+    method: "GET",
+    signal: controller.signal,
+    credentials: "include",
+  })
+    .then(async (res) => {
+      if (res.status === 401) {
+        emitUnauthorized();
+        callbacks.onError("Authentication required");
+        return;
+      }
+      if (res.status === 404) {
+        // No active stream — normal case when the turn ended between status
+        // check and reconnect. Silent no-op.
+        return;
+      }
+      if (!res.ok) {
+        callbacks.onError(`Reconnect failed: HTTP ${res.status}`);
+        return;
+      }
+      await readSSEBody(res, callbacks, controller);
+    })
+    .catch((e) => {
+      if (e.name === "AbortError") return;
+      if (e instanceof TypeError || e.name === "TypeError") {
+        callbacks.onError("__OFFLINE__:" + e.message);
+      } else {
+        callbacks.onError(e.message);
+      }
+    });
+
+  return controller;
 }
 
 export async function enqueueMessage(

@@ -1,5 +1,5 @@
 import type { Chat, ChatMessage } from "../types.js";
-import { getNextArchiveSequence, saveArchives, type ContextArchive, updateChatTitle } from "./chat-storage.js";
+import { getNextArchiveSequence, saveArchives, getArchive, getChat, saveChat, type ContextArchive, updateChatTitle } from "./chat-storage.js";
 import { regenerateTitle } from "./title-generation.js";
 import { withExtractionMutex } from "./memory-extraction.js";
 
@@ -175,8 +175,12 @@ export async function truncateBeforeSend(
     markedIndices.push(origIdx);
   }
 
-  // Archive and generate summary
-  const indexedSummary = await archiveAndIndex(chat.id, removedMessages, chat.modelId, onKeepalive);
+  // Archive in deferred mode — mechanical descriptions now, LLM enrichment
+  // runs in the background so the user turn isn't blocked on a CPU model call.
+  const { summaryText, archiveIds } = await archiveAndIndex(chat.id, removedMessages, chat.modelId, {
+    mode: "deferred",
+    onKeepalive,
+  });
 
   // Mark messages as out-of-context, strip large content
   const ARCHIVED_CONTENT_CAP = 500;
@@ -202,11 +206,12 @@ export async function truncateBeforeSend(
   const insertionIdx = icIndices[keepFromIC];
   const summaryMessage: ChatMessage = {
     role: "assistant",
-    content: indexedSummary,
+    content: summaryText,
     thinking: undefined,
     timestamp: Date.now(),
     _isCompactionSummary: true,
     _compactedMessageCount: messagesToMarkCount,
+    _archiveIds: archiveIds,
   };
   messages.splice(insertionIdx, 0, summaryMessage);
   chat.messages = messages;
@@ -407,68 +412,18 @@ function generateFallbackDescription(block: ChatMessage[]): string {
   return "Conversation context";
 }
 
-/**
- * Archive removed messages and generate an indexed summary.
- * Returns the summary text to insert into the chat in place of removed messages.
- */
-async function archiveAndIndex(
-  chatId: string,
-  removedMessages: ChatMessage[],
-  modelId: string,
-  onKeepalive?: () => void,
-): Promise<string> {
-  if (removedMessages.length === 0) return "";
+/** Build the indexed-summary text inserted into the chat from an archive set. */
+function buildSummaryText(archives: Pick<ContextArchive, "id" | "indexEntry">[]): string {
+  const indexLines = archives.map((a) => `- ${a.id} — ${a.indexEntry}`).join("\n");
+  return `[Compacted context — use read_archived_context to retrieve details]\nArchived blocks:\n${indexLines}`;
+}
 
-  // Filter out compaction summary messages — they contain archive indices and
-  // system metadata, not actual conversation content worth archiving.
-  const substantiveMessages = removedMessages.filter((m) => !m._isCompactionSummary);
-  if (substantiveMessages.length === 0) return "";
-
-  const blocks = groupIntoBlocks(substantiveMessages);
-  if (blocks.length === 0) return "";
-
-  // Assign archive IDs
-  let seq = getNextArchiveSequence(chatId);
-  const shortChatId = chatId.slice(0, 8);
-  const archives: ContextArchive[] = [];
-  const blockDescriptions: Array<{ id: string; text: string }> = [];
-
-  for (const block of blocks) {
-    const id = `archive:${shortChatId}:${String(seq).padStart(3, "0")}`;
-    const text = blockToText(block);
-    const tokens = block.reduce((sum, m) => {
-      let t = estimateTokens(m.content);
-      if (m.toolResults) for (const r of m.toolResults) t += estimateTokens(r.content);
-      if (m.thinking) t += estimateTokens(m.thinking);
-      return sum + t;
-    }, 0);
-
-    archives.push({
-      id,
-      chatId,
-      sequenceNum: seq,
-      messages: block,
-      indexEntry: "", // filled by LLM below
-      messageCount: block.length,
-      estimatedTokens: tokens,
-      createdAt: new Date().toISOString(),
-    });
-    blockDescriptions.push({ id, text });
-    seq++;
-  }
-
-  // Generate index descriptions — prefer the dedicated extraction model (CPU, fast)
-  // to avoid blocking the GPU chat model's KV cache.
-  // Budget more chars per block when there are fewer blocks, so analytical content
-  // gets enough context for meaningful descriptions.
-  const { getSettings } = await import("./chat-storage.js");
-  const settings = await getSettings();
-  const extractionUrl = settings.extractionModelUrl;
-
+/** Build the LLM prompt that generates one-line descriptions for an archive batch. */
+function buildIndexPrompt(blockDescriptions: Array<{ id: string; text: string }>): { systemPrompt: string; inputParts: string } {
   const perBlockBudget = Math.min(1200, Math.max(500, Math.floor(6000 / blockDescriptions.length)));
-  const inputParts = blockDescriptions.map(
-    (b) => `[${b.id}]\n${b.text.slice(0, perBlockBudget)}`
-  ).join("\n\n---\n\n");
+  const inputParts = blockDescriptions
+    .map((b) => `[${b.id}]\n${b.text.slice(0, perBlockBudget)}`)
+    .join("\n\n---\n\n");
 
   const systemPrompt = `You are generating a structured index of conversation content being archived for future retrieval.
 For each block below (identified by its archive ID), write a one-line description.
@@ -494,15 +449,28 @@ If the agent analyzed something, describe the analysis result, not just the anal
 
 Output ONLY the formatted lines, nothing else.`;
 
-  const keepaliveInterval = onKeepalive ? setInterval(onKeepalive, 10_000) : null;
+  return { systemPrompt, inputParts };
+}
 
+/**
+ * Call the extraction model (or fallback to main chat model) to produce index
+ * descriptions. Returns the raw LLM output text. Empty string on failure.
+ */
+async function runIndexGeneration(
+  blockDescriptions: Array<{ id: string; text: string }>,
+  modelId: string,
+  onKeepalive?: () => void,
+): Promise<string> {
+  const { getSettings } = await import("./chat-storage.js");
+  const settings = await getSettings();
+  const extractionUrl = settings.extractionModelUrl;
+  const { systemPrompt, inputParts } = buildIndexPrompt(blockDescriptions);
+
+  const keepaliveInterval = onKeepalive ? setInterval(onKeepalive, 10_000) : null;
   try {
     let outputText = "";
 
     if (extractionUrl) {
-      // Use dedicated CPU extraction model — fast, no GPU contention.
-      // Serialize through the extraction mutex to prevent memory pile-up
-      // from concurrent queued requests on the --parallel 1 server.
       outputText = await withExtractionMutex(async () => {
         const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
           method: "POST",
@@ -528,7 +496,6 @@ Output ONLY the formatted lines, nothing else.`;
     }
 
     if (!outputText) {
-      // Fallback: use main chat model via streamChat
       const { streamChat } = await import("./agent.js");
       const result = await streamChat(
         modelId,
@@ -539,48 +506,184 @@ Output ONLY the formatted lines, nothing else.`;
       outputText = result.content.trim() || result.thinking?.trim() || "";
     }
     console.log(`[compaction] Index LLM output (${outputText.length}ch): ${outputText.slice(0, 300)}`);
+    return outputText;
+  } catch (err) {
+    console.error("[compaction] Index generation failed:", err);
+    return "";
+  } finally {
+    if (keepaliveInterval) clearInterval(keepaliveInterval);
+  }
+}
 
-    const lines = outputText.split("\n");
-    for (const line of lines) {
-      // Match: "- archive:xxx:001 — description" with various dash types
-      const match = line.match(/^[-*]?\s*(archive:\S+)\s*[—–\-:]\s*(.+)$/);
-      if (match) {
-        const archive = archives.find((a) => a.id === match[1]);
-        if (archive) archive.indexEntry = match[2].trim();
+/** Parse LLM index output and assign indexEntry to each archive by ID match. */
+function applyIndexOutput(archives: ContextArchive[], outputText: string): number {
+  let assigned = 0;
+  for (const line of outputText.split("\n")) {
+    const match = line.match(/^[-*]?\s*(archive:\S+)\s*[—–\-:]\s*(.+)$/);
+    if (match) {
+      const archive = archives.find((a) => a.id === match[1]);
+      if (archive) {
+        archive.indexEntry = match[2].trim();
+        assigned++;
       }
     }
+  }
+  return assigned;
+}
 
-    // Fill any missing entries with a readable fallback description
-    let filled = 0;
+/**
+ * Archive removed messages and generate an indexed summary.
+ *
+ * Two modes:
+ * - `sync` (default): run the LLM index generation inline, then return the
+ *   rich summary text. Keeps compaction simple when the caller is not
+ *   time-sensitive.
+ * - `deferred`: assign mechanical fallback descriptions immediately so the
+ *   chat can proceed with minimal latency, persist archives, and kick off
+ *   `enrichArchiveDescriptions` in the background. The background task
+ *   upgrades both the archive rows (for FTS retrieval) and the chat's
+ *   compaction-summary message (located via `_archiveIds`).
+ *
+ * Returns the summary text + archive IDs so callers can stamp `_archiveIds`
+ * on the summary message for later enrichment patching.
+ */
+async function archiveAndIndex(
+  chatId: string,
+  removedMessages: ChatMessage[],
+  modelId: string,
+  opts: { mode?: "sync" | "deferred"; onKeepalive?: () => void } = {},
+): Promise<{ summaryText: string; archiveIds: string[] }> {
+  const mode = opts.mode ?? "sync";
+  if (removedMessages.length === 0) return { summaryText: "", archiveIds: [] };
+
+  // Filter out compaction summary messages — they contain archive indices and
+  // system metadata, not actual conversation content worth archiving.
+  const substantiveMessages = removedMessages.filter((m) => !m._isCompactionSummary);
+  if (substantiveMessages.length === 0) return { summaryText: "", archiveIds: [] };
+
+  const blocks = groupIntoBlocks(substantiveMessages);
+  if (blocks.length === 0) return { summaryText: "", archiveIds: [] };
+
+  // Assign archive IDs + initial (empty) rows
+  let seq = getNextArchiveSequence(chatId);
+  const shortChatId = chatId.slice(0, 8);
+  const archives: ContextArchive[] = [];
+  const blockDescriptions: Array<{ id: string; text: string }> = [];
+
+  for (const block of blocks) {
+    const id = `archive:${shortChatId}:${String(seq).padStart(3, "0")}`;
+    const text = blockToText(block);
+    const tokens = block.reduce((sum, m) => {
+      let t = estimateTokens(m.content);
+      if (m.toolResults) for (const r of m.toolResults) t += estimateTokens(r.content);
+      if (m.thinking) t += estimateTokens(m.thinking);
+      return sum + t;
+    }, 0);
+
+    archives.push({
+      id,
+      chatId,
+      sequenceNum: seq,
+      messages: block,
+      indexEntry: "",
+      messageCount: block.length,
+      estimatedTokens: tokens,
+      createdAt: new Date().toISOString(),
+    });
+    blockDescriptions.push({ id, text });
+    seq++;
+  }
+
+  if (mode === "sync") {
+    const outputText = await runIndexGeneration(blockDescriptions, modelId, opts.onKeepalive);
+    const assigned = applyIndexOutput(archives, outputText);
+    const filled = archives.length - assigned;
     for (const a of archives) {
-      if (!a.indexEntry) {
-        a.indexEntry = generateFallbackDescription(a.messages);
-        filled++;
-      }
+      if (!a.indexEntry) a.indexEntry = generateFallbackDescription(a.messages);
     }
     if (filled > 0) {
       console.log(`[compaction] ${filled}/${archives.length} index entries used fallback descriptions`);
     }
-  } catch (err) {
-    console.error("[compaction] Index generation failed, using fallback descriptions:", err);
-    for (const a of archives) {
-      const preview = blockToText(a.messages).slice(0, 80);
-      a.indexEntry = preview || "conversation context";
-    }
-  } finally {
-    if (keepaliveInterval) clearInterval(keepaliveInterval);
+  } else {
+    // Deferred: mechanical descriptions now, LLM enrichment later.
+    for (const a of archives) a.indexEntry = generateFallbackDescription(a.messages);
   }
 
-  // Persist archives
   saveArchives(archives);
-  console.log(`[compaction] Archived ${archives.length} blocks for chat ${chatId}`);
+  console.log(`[compaction] Archived ${archives.length} blocks for chat ${chatId} (mode=${mode})`);
 
-  // Build the indexed summary text
-  const indexLines = archives
-    .map((a) => `- ${a.id} — ${a.indexEntry}`)
-    .join("\n");
+  const archiveIds = archives.map((a) => a.id);
+  const summaryText = buildSummaryText(archives);
 
-  return `[Compacted context — use read_archived_context to retrieve details]\nArchived blocks:\n${indexLines}`;
+  if (mode === "deferred") {
+    // Fire-and-forget: upgrade descriptions once the CPU extraction model is free.
+    void enrichArchiveDescriptions(chatId, archiveIds, modelId);
+  }
+
+  return { summaryText, archiveIds };
+}
+
+/**
+ * Background task (for `deferred` mode): load archives by ID, call the LLM to
+ * generate rich descriptions, and write them back both to the archive rows and
+ * to the chat's compaction-summary message (matched by `_archiveIds`).
+ *
+ * Best-effort — failures log but do not throw. The chat continues to function
+ * with the mechanical fallback descriptions if enrichment never runs.
+ */
+export async function enrichArchiveDescriptions(
+  chatId: string,
+  archiveIds: string[],
+  modelId: string,
+): Promise<void> {
+  if (archiveIds.length === 0) return;
+
+  const archives: ContextArchive[] = [];
+  for (const id of archiveIds) {
+    const a = getArchive(id);
+    if (a) archives.push(a);
+  }
+  if (archives.length === 0) {
+    console.warn(`[compaction] Enrichment skipped for ${chatId}: no archives found for ${archiveIds.length} IDs`);
+    return;
+  }
+
+  const blockDescriptions = archives.map((a) => ({ id: a.id, text: blockToText(a.messages) }));
+  const outputText = await runIndexGeneration(blockDescriptions, modelId);
+  if (!outputText) {
+    console.warn(`[compaction] Enrichment produced no output for chat ${chatId} — keeping fallback descriptions`);
+    return;
+  }
+
+  const assigned = applyIndexOutput(archives, outputText);
+  if (assigned === 0) {
+    console.warn(`[compaction] Enrichment parsed 0 lines for chat ${chatId} — keeping fallback descriptions`);
+    return;
+  }
+
+  // Persist upgraded descriptions (INSERT OR REPLACE on primary key).
+  saveArchives(archives);
+  console.log(`[compaction] Enriched ${assigned}/${archives.length} archives for chat ${chatId}`);
+
+  // Patch the chat's compaction-summary message so future context uses the richer text.
+  try {
+    const chat = await getChat(chatId);
+    if (!chat) return;
+    const targetKey = [...archiveIds].sort().join(",");
+    const summaryIdx = chat.messages.findIndex(
+      (m) => m._isCompactionSummary && m._archiveIds && [...m._archiveIds].sort().join(",") === targetKey,
+    );
+    if (summaryIdx === -1) {
+      // Summary may have been compacted further or removed — acceptable drop.
+      return;
+    }
+    const updated = { ...chat.messages[summaryIdx], content: buildSummaryText(archives) };
+    chat.messages[summaryIdx] = updated;
+    await saveChat(chat);
+    console.log(`[compaction] Patched summary message for chat ${chatId} at index ${summaryIdx}`);
+  } catch (err) {
+    console.error(`[compaction] Failed to patch summary message for chat ${chatId}:`, err);
+  }
 }
 
 /**
@@ -710,8 +813,14 @@ export async function truncateChatHistory(
     markedOriginalIndices.push(origIdx);
   }
 
-  // Archive removed messages and generate indexed summary
-  const indexedSummary = await archiveAndIndex(chat.id, removedMessages, chat.modelId, onKeepalive);
+  // Archive removed messages and generate indexed summary (post-response
+  // path uses sync mode — the agent loop may consume the summary immediately).
+  const { summaryText: indexedSummary, archiveIds } = await archiveAndIndex(
+    chat.id,
+    removedMessages,
+    chat.modelId,
+    { mode: "sync", onKeepalive },
+  );
 
   // Mark messages as out-of-context (preserve for UI, exclude from LLM)
   // Also strip large content to limit storage growth.
@@ -745,6 +854,7 @@ export async function truncateChatHistory(
     timestamp: Date.now(),
     _isCompactionSummary: true,
     _compactedMessageCount: messagesToMarkCount,
+    _archiveIds: archiveIds,
   };
   messages.splice(insertionIndex, 0, summaryMessage);
   chat.messages = messages;

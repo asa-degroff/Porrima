@@ -23,13 +23,164 @@ import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
 import { log } from "../services/logger.js";
 
+// ---------------------------------------------------------------------------
+// Live stream registry — supports reconnect and grace-on-disconnect.
+//
+// Every chat turn gets a LiveStream keyed by chatId. res.write() is patched
+// to route through emitToStream, which fans out to all attached subscribers
+// (typically one: the primary res) AND appends to a bounded replay buffer.
+// If the primary client disconnects mid-stream, the stream is NOT immediately
+// aborted — a grace timer fires if no subscriber reattaches within the window.
+// The /reconnect/:chatId endpoint attaches a new subscriber, replays the
+// buffer, and continues live. At end-of-turn the stream is closed and kept
+// briefly so late reconnecters can see the final events.
+// ---------------------------------------------------------------------------
+
+interface LiveStreamSubscriber {
+  /** Native write captured before res.write was patched. */
+  write: (chunk: string) => boolean;
+  res: Response;
+  isPrimary: boolean;
+}
+
+interface LiveStream {
+  chatId: string;
+  abort: AbortController;
+  /** Bounded replay buffer — chunks are SSE frames already formatted. */
+  buffer: string[];
+  bufferBytes: number;
+  subscribers: Set<LiveStreamSubscriber>;
+  graceTimer: NodeJS.Timeout | null;
+  ended: boolean;
+}
+
+const liveStreams: Map<string, LiveStream> = (globalThis as any)._liveStreams || new Map();
+(globalThis as any)._liveStreams = liveStreams;
+
+// Legacy alias so /stop and other callers keep working without churn.
+// Points at the same map but exposes the AbortController per chat.
+const activeStreams = (globalThis as any)._activeChatStreams || new Map<string, AbortController>();
+(globalThis as any)._activeChatStreams = activeStreams;
+
+const LIVE_BUFFER_MAX_BYTES = 10 * 1024 * 1024; // 10MB cap per chat
+const LIVE_GRACE_MS = 30_000;
+const LIVE_END_RETENTION_MS = 60_000;
+
+function emitToStream(stream: LiveStream, chunk: string): void {
+  if (stream.ended) return;
+  stream.buffer.push(chunk);
+  stream.bufferBytes += chunk.length;
+  while (stream.bufferBytes > LIVE_BUFFER_MAX_BYTES && stream.buffer.length > 1) {
+    stream.bufferBytes -= stream.buffer.shift()!.length;
+  }
+  for (const sub of stream.subscribers) {
+    if (sub.res.writableEnded || sub.res.destroyed) {
+      stream.subscribers.delete(sub);
+      continue;
+    }
+    try {
+      sub.write(chunk);
+    } catch {
+      stream.subscribers.delete(sub);
+    }
+  }
+}
+
+function detachSubscriber(stream: LiveStream, sub: LiveStreamSubscriber): void {
+  stream.subscribers.delete(sub);
+  if (stream.ended) return;
+  if (stream.subscribers.size > 0) return;
+  // No subscribers left — start grace timer. Generation continues in the
+  // background so a refreshing client can reconnect and resume watching.
+  if (stream.graceTimer) clearTimeout(stream.graceTimer);
+  stream.graceTimer = setTimeout(() => {
+    if (stream.subscribers.size === 0 && !stream.ended) {
+      console.log(`[chat] grace period expired for ${stream.chatId} — aborting stream`);
+      stream.abort.abort();
+    }
+  }, LIVE_GRACE_MS);
+}
+
+function endLiveStream(chatId: string): void {
+  const stream = liveStreams.get(chatId);
+  if (!stream || stream.ended) return;
+  stream.ended = true;
+  if (stream.graceTimer) clearTimeout(stream.graceTimer);
+  for (const sub of stream.subscribers) {
+    try { sub.res.end(); } catch {}
+  }
+  stream.subscribers.clear();
+  // Retain briefly so late reconnecters get the final buffer + close signal.
+  setTimeout(() => {
+    if (liveStreams.get(chatId) === stream) {
+      liveStreams.delete(chatId);
+      activeStreams.delete(chatId);
+    }
+  }, LIVE_END_RETENTION_MS);
+}
+
 /**
- * Initialize an SSE response: write headers, disable Nagle, emit a keepalive.
- * Idempotent — safe to call before pre-send compaction and again inside
- * handleChatStream. Required before the first res.write() so that pre-stream
- * work (compaction, model discovery) can flush progress events to the client.
+ * Install the live-stream plumbing on a response. Patches res.write to route
+ * through emitToStream (buffer + fan-out), registers a primary subscriber,
+ * and sets up grace-on-disconnect. Replaces any existing live stream for this
+ * chat (fresh turn = new stream). Idempotent per response object.
  */
-function ensureSSEStream(res: Response) {
+function installLiveStream(res: Response, req: Request, chatId: string): LiveStream {
+  if ((res as any)._liveStreamInstalled) {
+    return liveStreams.get(chatId)!;
+  }
+
+  // If a prior live stream exists for this chat (e.g., a dropped connection
+  // whose grace timer hasn't fired), abort it so the new turn takes over.
+  const existing = liveStreams.get(chatId);
+  if (existing && !existing.ended) {
+    console.warn(`[chat] replacing existing live stream for chat ${chatId} (new turn starting)`);
+    existing.abort.abort();
+    endLiveStream(chatId);
+  }
+
+  const abort = new AbortController();
+  const primaryWrite = res.write.bind(res) as (chunk: string) => boolean;
+
+  const stream: LiveStream = {
+    chatId,
+    abort,
+    buffer: [],
+    bufferBytes: 0,
+    subscribers: new Set(),
+    graceTimer: null,
+    ended: false,
+  };
+  liveStreams.set(chatId, stream);
+  activeStreams.set(chatId, abort);
+
+  const primarySub: LiveStreamSubscriber = { write: primaryWrite, res, isPrimary: true };
+  stream.subscribers.add(primarySub);
+
+  // Patch res.write to route everything through the stream. Callers keep
+  // writing to res as before; we fan out + buffer transparently.
+  (res as any).write = ((chunk: any, encoding?: any, cb?: any) => {
+    const str = typeof chunk === "string" ? chunk : chunk?.toString?.() ?? "";
+    emitToStream(stream, str);
+    if (typeof encoding === "function") encoding();
+    else if (typeof cb === "function") cb();
+    return true;
+  }) as any;
+
+  req.on("close", () => {
+    detachSubscriber(stream, primarySub);
+  });
+
+  (res as any)._liveStreamInstalled = true;
+  return stream;
+}
+
+/**
+ * Initialize an SSE response: write headers, disable Nagle, install the live
+ * stream, and emit a keepalive. Idempotent — safe to call before pre-send
+ * compaction and again inside handleChatStream.
+ */
+function ensureSSEStream(res: Response, req: Request, chatId: string) {
   if (!res.headersSent) {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -39,6 +190,7 @@ function ensureSSEStream(res: Response) {
     });
   }
   res.socket?.setNoDelay(true);
+  installLiveStream(res, req, chatId);
   res.write(`: connected\n\n`);
 }
 
@@ -286,30 +438,22 @@ async function handleChatStream(
     projectPath = project?.path;
   }
 
-  // Ensure SSE headers + keepalive are flushed. Idempotent: a caller that ran
-  // pre-send compaction already initialized the stream, and this is a no-op
-  // re-flush. Required here for recursive follow-up calls and direct entries.
-  ensureSSEStream(res);
+  // Ensure SSE headers are set and the live-stream registry is wired up.
+  // Idempotent: a caller that ran pre-send compaction already installed the
+  // live stream; a second call here is a no-op for the registry and just
+  // re-flushes a keepalive.
+  ensureSSEStream(res, req, chat.id);
 
-  const connectionAbortController = new AbortController();
+  // Reuse the live stream's abort controller so that the grace timer and
+  // /stop endpoint share a single cancellation signal. `connectionClosed` is
+  // only flipped when the stream is genuinely aborted (grace expired, /stop,
+  // or server-initiated), NOT on transient client disconnect — the live
+  // stream keeps generation running while a refreshing client reconnects.
+  const liveStream = liveStreams.get(chat.id)!;
+  const connectionAbortController = liveStream.abort;
   let connectionClosed = false;
-  
-  // Store the abort controller in a map so it can be accessed by the stop endpoint.
-  // If there's already an active stream for this chat (e.g., from a dropped SSE connection
-  // that didn't fire req.close), abort it first to prevent duplicate processing.
-  const activeStreams = (globalThis as any)._activeChatStreams || new Map<string, AbortController>();
-  (globalThis as any)._activeChatStreams = activeStreams;
-  const existingController = activeStreams.get(chat.id);
-  if (existingController) {
-    console.warn(`[chat] aborting existing stream for chat ${chat.id} (new stream starting)`);
-    existingController.abort();
-  }
-  activeStreams.set(chat.id, connectionAbortController);
-  
-  req.on("close", () => {
+  connectionAbortController.signal.addEventListener("abort", () => {
     connectionClosed = true;
-    connectionAbortController.abort();
-    activeStreams.delete(chat.id);
   });
 
   const MAX_ITERATIONS = 500;
@@ -1691,6 +1835,7 @@ async function handleChatStream(
   } finally {
     markChatInactive(chat.id);
     stopSSEKeepalive();
+    endLiveStream(chat.id);
     res.end();
   }
 }
@@ -1963,7 +2108,7 @@ router.post("/", async (req, res) => {
     // Pre-send context protection for resume path.
     // Initialize SSE stream BEFORE compaction so `compacting` and keepalive
     // events reach the client while the (CPU) extraction model is generating.
-    ensureSSEStream(res);
+    ensureSSEStream(res, req, chat.id);
     if (model) {
       try {
         const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
@@ -2115,7 +2260,7 @@ router.post("/", async (req, res) => {
     // Pre-send context protection: truncate BEFORE sending if >75% of context window.
     // Initialize SSE stream early so compaction progress events (and the extraction
     // model's 10s keepalive) reach the client while pre-send compaction is running.
-    ensureSSEStream(res);
+    ensureSSEStream(res, req, chat.id);
     if (model) {
       try {
         const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
@@ -2240,14 +2385,13 @@ router.post("/enqueue", async (req, res) => {
 // Stop an in-progress chat stream
 router.post("/stop", async (req, res) => {
   const { chatId } = req.body as { chatId: string };
-  
+
   if (!chatId) {
     return res.status(400).json({ error: "chatId is required" });
   }
-  
-  const activeStreams = (globalThis as any)._activeChatStreams as Map<string, AbortController> | undefined;
-  const controller = activeStreams?.get(chatId);
-  
+
+  const controller = activeStreams.get(chatId);
+
   if (controller) {
     controller.abort();
     console.log(`[chat] stop: aborted stream for chat ${chatId}`);
@@ -2256,6 +2400,64 @@ router.post("/stop", async (req, res) => {
     console.log(`[chat] stop: no active stream found for chat ${chatId}`);
     res.json({ stopped: false, reason: "no_active_stream" });
   }
+});
+
+// Check whether a chat has a live in-flight stream (used by clients to decide
+// whether to reconnect on mount or page refresh).
+router.get("/status/:chatId", async (req, res) => {
+  const { chatId } = req.params;
+  const stream = liveStreams.get(chatId);
+  const active = !!stream && !stream.ended && !stream.abort.signal.aborted;
+  res.json({
+    active,
+    bufferedChunks: stream?.buffer.length ?? 0,
+    subscribers: stream?.subscribers.size ?? 0,
+  });
+});
+
+// Reconnect to a live in-flight chat stream. Replays the buffered SSE events
+// and then streams subsequent events until the turn ends. Responds 404 if no
+// live stream exists (caller should fall back to normal chat load).
+router.get("/reconnect/:chatId", async (req, res) => {
+  const { chatId } = req.params;
+  const stream = liveStreams.get(chatId);
+  if (!stream || stream.ended) {
+    return res.status(404).json({ error: "no_active_stream" });
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.socket?.setNoDelay(true);
+  res.write(`: reconnected\n\n`);
+
+  // Replay the buffered events so the client catches up on what it missed.
+  for (const chunk of stream.buffer) {
+    try { res.write(chunk); } catch { return; }
+  }
+
+  // Attach as a non-primary subscriber. Future events from emitToStream will
+  // fan out here too. On disconnect we simply drop — the primary subscriber
+  // (or the grace timer) governs the stream's lifetime.
+  const subWrite = res.write.bind(res) as (chunk: string) => boolean;
+  const sub: LiveStreamSubscriber = { write: subWrite, res, isPrimary: false };
+  stream.subscribers.add(sub);
+
+  // If the primary had disconnected and the grace timer was running, reattach
+  // cancels it — the refreshing client is now watching again.
+  if (stream.graceTimer && stream.subscribers.size > 0) {
+    clearTimeout(stream.graceTimer);
+    stream.graceTimer = null;
+  }
+
+  req.on("close", () => {
+    detachSubscriber(stream, sub);
+  });
+
+  console.log(`[chat] reconnect: attached to live stream for ${chatId} (replayed ${stream.buffer.length} chunks)`);
 });
 
 // Edit message at index and regenerate response via SSE
@@ -2347,7 +2549,7 @@ router.post("/edit", async (req, res) => {
   // Pre-send context protection for edit path.
   // Initialize SSE stream BEFORE compaction so `compacting` and keepalive
   // events reach the client while the (CPU) extraction model is generating.
-  ensureSSEStream(res);
+  ensureSSEStream(res, req, chat.id);
   if (model) {
     try {
       const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
