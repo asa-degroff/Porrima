@@ -69,7 +69,9 @@ const SYSTEM_CHAT_TITLE = "System - Synthesis & Reflection";
 // Addendum appended to the user's default system prompt during synthesis runs.
 // Kept separate so chat.systemPrompt stays voice/persona-only — consistent with
 // how other chats are authored — and only synthesis gets the extra framing.
-const SYNTHESIS_INSTRUCTIONS = `## Synthesis Mode
+// Exported so the rendered-prompt viewer (routes/chats.ts) can reproduce the
+// same composition runSystemSynthesis uses.
+export const SYNTHESIS_INSTRUCTIONS = `## Synthesis Mode
 
 You are operating in your internal synthesis and reflection space. This chat retains history across synthesis cycles — previous cycles' reflections and ongoing threads of thought are visible above. Treat this as a persistent workspace, not a one-shot invocation. Each cycle begins when a synthesis trigger message is injected with a context package.
 
@@ -113,15 +115,6 @@ The user can read and send messages here between cycles. Treat earlier entries i
 const LEGACY_SYSTEM_PROMPT_PREFIX =
   "You are the agent's internal synthesis and reflection space.";
 
-/**
- * Compose the full synthesis-mode system prompt: user's stored voice/persona
- * prompt for the chat, followed by the synthesis instructions addendum.
- */
-function buildSynthesisSystemPrompt(basePrompt: string): string {
-  const base = (basePrompt || "You are a helpful assistant.").trim();
-  return `${base}\n\n${SYNTHESIS_INSTRUCTIONS}`;
-}
-
 export async function createSystemChat(): Promise<void> {
   const { getDb, createChat, saveChat, getChat, getSettings } = await import(
     "./chat-storage.js"
@@ -136,15 +129,38 @@ export async function createSystemChat(): Promise<void> {
   const defaultPrompt = settings.defaultSystemPrompt || "You are a helpful assistant.";
 
   if (existing) {
-    // One-shot migration: pre-split system chats stored the full synthesis
-    // prompt as chat.systemPrompt. Replace it with the user's default so the
-    // voice tracks `settings.defaultSystemPrompt` going forward. Respect any
-    // user-customized prompt (anything not starting with the legacy prefix).
     const loaded = await getChat(SYSTEM_CHAT_ID);
-    if (loaded && loaded.systemPrompt.startsWith(LEGACY_SYSTEM_PROMPT_PREFIX)) {
-      console.log("[system-chat] Migrating legacy system chat prompt to default");
-      loaded.systemPrompt = defaultPrompt;
-      await saveChat(loaded);
+    if (loaded) {
+      let dirty = false;
+
+      // One-shot migration: pre-split system chats stored the full synthesis
+      // prompt as chat.systemPrompt. Replace it with the user's default so the
+      // voice tracks `settings.defaultSystemPrompt` going forward. Respect any
+      // user-customized prompt (anything not starting with the legacy prefix).
+      if (loaded.systemPrompt.startsWith(LEGACY_SYSTEM_PROMPT_PREFIX)) {
+        console.log("[system-chat] Migrating legacy system chat prompt to default");
+        loaded.systemPrompt = defaultPrompt;
+        dirty = true;
+      }
+
+      // Keep the system chat's modelId in sync with the user's current default.
+      // Regular chats stamp modelId at creation and the UI forbids changing it
+      // afterward, but the system chat is meant to ride whatever model is the
+      // agent's current main — not something the user picks per-chat. Re-sync
+      // on every startup so default-model changes propagate automatically.
+      // The model is re-checked at each synthesis run too (getSynthesisModelId).
+      if (settings.defaultModelId && loaded.modelId !== settings.defaultModelId) {
+        console.log(
+          `[system-chat] Syncing modelId ${loaded.modelId || "(empty)"} → ${settings.defaultModelId}`,
+        );
+        loaded.modelId = settings.defaultModelId;
+        // Clear any saved per-model context window override — the new model's
+        // detected default should take over. Mirrors PATCH /api/chats/:id.
+        delete loaded.contextWindow;
+        dirty = true;
+      }
+
+      if (dirty) await saveChat(loaded);
     }
     return;
   }
@@ -183,9 +199,11 @@ async function buildSynthesisTriggerContent(
 ): Promise<string> {
   const { getChat } = await import("./chat-storage.js");
   const { listNotebookEntries, getNotebookEntry } = await import("./notebook-storage.js");
-  const { loadPersona } = await import("./persona-store.js");
-  const { getZeitgeistContent } = await import("./zeitgeist.js");
   const { loadMemoryStore } = await import("./memory-storage.js");
+  // Persona, user doc, memory blocks, and zeitgeist are injected via the
+  // stable system-prompt prefix (see runSystemSynthesis → buildStablePrefix),
+  // not the trigger body — keeps them byte-identical across cycles so KV
+  // caching works, and avoids the text accumulating in chat history.
 
   const parts: string[] = [];
   const stamp = new Date().toLocaleString("en-US", {
@@ -268,12 +286,6 @@ async function buildSynthesisTriggerContent(
     );
   }
 
-  // --- Zeitgeist ---
-  const zeitgeist = getZeitgeistContent();
-  if (zeitgeist) {
-    parts.push(`## Zeitgeist (Current Continuity)\n\n${zeitgeist}`);
-  }
-
   // --- Notebook entries ---
   const agentEntries: any[] = [];
   const userEntries: any[] = [];
@@ -332,14 +344,6 @@ async function buildSynthesisTriggerContent(
     parts.push(`## Notebook Entries\n\n${sub.join("\n\n")}`);
   }
 
-  // --- Persona ---
-  try {
-    const p = await loadPersona();
-    if (p?.content) parts.push(`## Your Persona\n\n${p.content}`);
-  } catch (e) {
-    console.warn("[system-chat] persona load failed:", e);
-  }
-
   parts.push(
     `---\n\nPerform your synthesis cycle. Write a daily summary as a notebook entry, update your zeitgeist memory block (\`blk-zeitgeist-continuity\`) if needed, generate reflections, and review unreviewed user entries. This chat retains history from previous cycles — reference earlier reflections when useful and note shifts or continuities.`,
   );
@@ -351,14 +355,14 @@ async function buildSynthesisTriggerContent(
 // Model resolution
 // ---------------------------------------------------------------------------
 
+// System chat always tracks the user's current default model: if the default
+// changes, the next synthesis picks it up. The stored chat.modelId is kept in
+// sync by runSystemSynthesis (it writes the resolved id back after each run)
+// and is only used as a fallback here when no default is configured or the
+// default isn't currently available.
 async function getSynthesisModelId(storedModelId?: string): Promise<string | null> {
   const { discoverAllModels } = await import("./models.js");
   const models = await discoverAllModels();
-
-  if (storedModelId) {
-    const found = models.find((m) => m.id === storedModelId);
-    if (found) return found.id;
-  }
 
   try {
     const { getSettings } = await import("./chat-storage.js");
@@ -367,11 +371,16 @@ async function getSynthesisModelId(storedModelId?: string): Promise<string | nul
       const found = models.find((m) => m.id === settings.defaultModelId);
       if (found) return found.id;
       console.warn(
-        `[synthesis] Configured model "${settings.defaultModelId}" not available, falling back`,
+        `[synthesis] Default model "${settings.defaultModelId}" not available, falling back`,
       );
     }
   } catch {
     console.warn("[synthesis] Could not load settings, falling back to model discovery");
+  }
+
+  if (storedModelId) {
+    const found = models.find((m) => m.id === storedModelId);
+    if (found) return found.id;
   }
 
   if (models.length === 0) {
@@ -469,11 +478,17 @@ export async function runSystemSynthesis(options?: {
     if (chat.modelId !== modelId) chat.modelId = modelId;
     await saveChat(chat);
 
-    // Compose the full synthesis-mode prompt: user's voice/persona (stored on
-    // the chat and editable like any other chat) followed by synthesis-only
-    // instructions. Computed once and reused below for compaction sizing and
-    // the streaming call so budgeting stays consistent.
-    const synthesisPrompt = buildSynthesisSystemPrompt(chat.systemPrompt);
+    // Compose the full synthesis-mode prompt. Uses the same stable prefix
+    // as regular agent chats (chat.systemPrompt + persona + user doc +
+    // memory blocks + zeitgeist), then appends the synthesis instructions
+    // addendum. This keeps voice/identity consistent with every other
+    // surface and is byte-identical across cycles for KV caching.
+    const { buildStablePrefix } = await import("./memory-context.js");
+    const { stablePrefix } = await buildStablePrefix(
+      chat.systemPrompt || "You are a helpful assistant.",
+      SYSTEM_CHAT_ID,
+    );
+    const synthesisPrompt = `${stablePrefix}\n\n${SYNTHESIS_INSTRUCTIONS}`;
 
     // --- Pre-send compaction keeps history bounded ---
     const compactionResult = await truncateBeforeSend(

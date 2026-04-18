@@ -256,7 +256,7 @@ function buildMemoriesSection(memories: RetrievalResult[], projectId?: string, b
 
 // ---- Stable prefix builder ----
 
-async function buildStablePrefix(
+export async function buildStablePrefix(
   baseSystemPrompt: string,
   chatId: string,
   projectId?: string,

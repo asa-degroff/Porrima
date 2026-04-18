@@ -114,6 +114,15 @@ router.get("/:id/rendered-prompt", async (req, res) => {
         projectPath
       );
     }
+  } else if (chat.type === "system") {
+    // Mirror runSystemSynthesis's composition: stable prefix (persona + user
+    // doc + memory blocks + zeitgeist) followed by the synthesis instructions
+    // addendum. No memory delta — synthesis uses importance anchors injected
+    // into each cycle's trigger message, not conversational retrieval.
+    const { buildStablePrefix } = await import("../services/memory-context.js");
+    const { SYNTHESIS_INSTRUCTIONS } = await import("../services/system-chat.js");
+    const { stablePrefix } = await buildStablePrefix(systemPrompt, chat.id);
+    systemPrompt = `${stablePrefix}\n\n${SYNTHESIS_INSTRUCTIONS}`;
   }
 
   // Inject active skills into the rendered prompt (matches chat.ts behavior)
@@ -127,7 +136,7 @@ router.get("/:id/rendered-prompt", async (req, res) => {
     systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
   }
 
-  const tools = (chat.type === "agent" || chat.type === "bluesky")
+  const tools = (chat.type === "agent" || chat.type === "bluesky" || chat.type === "system")
     ? getAgentToolDefinitions(chat.type)
     : [];
 
