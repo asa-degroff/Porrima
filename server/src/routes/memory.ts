@@ -21,7 +21,7 @@ import {
   getBlockHistory,
   MAX_BLOCK_CHARS,
 } from "../services/memory-storage.js";
-import { runDailySynthesis } from "../services/synthesis.js";
+import { runSystemSynthesis } from "../services/system-chat.js";
 import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
 import { invalidateAllMemoriesCaches, invalidateAllStablePrefixCaches } from "../services/memory-context.js";
 import type { Memory, MemorySummary } from "../types.js";
@@ -50,22 +50,57 @@ router.get("/status", async (_req, res) => {
 router.get("/synthesis/status", async (_req, res) => {
   const memoryCount = await getMemoryCount();
   const lastSynthesis = await getLastSynthesis();
+  const { isSynthesisActive } = await import("../services/system-chat.js");
   res.json({
     lastSynthesis,
     memoryCount,
+    isSynthesizing: isSynthesisActive(),
   });
 });
 
 // Manually trigger synthesis
 router.post("/synthesis/run", async (_req, res) => {
   try {
-    await runDailySynthesis();
+    const result = await runSystemSynthesis();
+    const { getMemoryCount, getLastSynthesis } = await import("../services/memory-storage.js");
     const memoryCount = await getMemoryCount();
     const lastSynthesis = await getLastSynthesis();
     res.json({
-      success: true,
+      success: result.success,
       lastSynthesis,
       memoryCount,
+      summaryLength: result.summary.length,
+      toolCalls: result.toolCalls.length,
+      error: result.error,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Sleep mode — trigger synthesis and suppress periodic cycles for 2 hours.
+// The flag is a timestamp, not a latch: the scheduler skips while
+// Date.now() - sleepModeTriggeredAt < 2h, so the cooldown self-expires
+// without the endpoint needing to clear it.
+router.post("/synthesis/sleep", async (_req, res) => {
+  try {
+    const { getSettings, saveSettings } = await import("../services/chat-storage.js");
+    const settings = await getSettings();
+    settings.sleepModeTriggeredAt = new Date().toISOString();
+    await saveSettings(settings);
+
+    const result = await runSystemSynthesis();
+
+    const { getMemoryCount, getLastSynthesis } = await import("../services/memory-storage.js");
+    const memoryCount = await getMemoryCount();
+    const lastSynthesis = await getLastSynthesis();
+    res.json({
+      success: result.success,
+      lastSynthesis,
+      memoryCount,
+      summaryLength: result.summary.length,
+      toolCalls: result.toolCalls.length,
+      error: result.error,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

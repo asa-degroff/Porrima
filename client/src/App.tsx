@@ -32,7 +32,7 @@ import { ActivityStyleProvider } from "./hooks/useActivityStyle";
 import { useTTS } from "./hooks/useTTS";
 import { TTSControlBar } from "./components/TTSControlBar";
 import { useNotebooks } from "./hooks/useNotebooks";
-import { fetchUserUIState, saveUserUIState } from "./api/client";
+import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
 import type { Chat, ChatType, CornerShape, CornerRadius } from "./types";
 
@@ -94,6 +94,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [imageSandboxOpen, setImageSandboxOpen] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [uiStateSynced, setUiStateSynced] = useState(false);
+  const [isSynthesizing, setIsSynthesizing] = useState(false);
+  const [synthesisComplete, setSynthesisComplete] = useState(false);
+  const [sleepModeActive, setSleepModeActive] = useState(false);
 
   // Load UI state from server on mount
   useEffect(() => {
@@ -113,6 +116,24 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         }
         setUiStateSynced(true);
       });
+  }, []);
+
+  // Poll synthesis status
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const status = await fetchSynthesisStatus();
+        setIsSynthesizing(status.isSynthesizing);
+        if (status.isSynthesizing) {
+          setSynthesisComplete(false);
+        }
+      } catch {
+        // Ignore polling errors
+      }
+    };
+    poll();
+    const interval = setInterval(poll, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   // Persist lastActiveChatId to settings (debounced, so we don't churn writes)
@@ -544,11 +565,41 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleSwitchView = useCallback((view: 'chats' | 'notebooks') => {
     setActiveView(view);
     setSidebarOpen(false);
-    // Close image sandbox when switching views
-    if (view === 'notebooks' && imageSandboxOpen) {
+  }, []);
+
+  // Synthesis handlers
+  const handleSynthesisSleep = useCallback(async () => {
+    if (isSynthesizing) return;
+    setSleepModeActive(true);
+    setSynthesisComplete(false);
+    try {
+      await triggerSleepMode();
+      setSynthesisComplete(true);
+    } catch (e: any) {
+      console.error("Sleep mode failed:", e.message);
+    } finally {
+      setTimeout(() => setSleepModeActive(false), 5000);
+    }
+  }, [isSynthesizing]);
+
+  const handleSynthesisRun = useCallback(async () => {
+    if (isSynthesizing) return;
+    try {
+      await triggerSynthesis();
+      setSynthesisComplete(true);
+    } catch (e: any) {
+      console.error("Synthesis failed:", e.message);
+    } finally {
+      setTimeout(() => setSynthesisComplete(false), 5000);
+    }
+  }, [isSynthesizing]);
+
+  // Close image sandbox when switching to notebooks
+  useEffect(() => {
+    if (activeView === 'notebooks' && imageSandboxOpen) {
       setImageSandboxOpen(false);
     }
-  }, [imageSandboxOpen]);
+  }, [activeView, imageSandboxOpen]);
 
   const handleSendToNotebook = useCallback(async (chatId: string, chatTitle: string) => {
     try {
@@ -614,6 +665,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         blueskyChatId={settings.bluesky?.blueskyChatId}
         hasBackgroundActivity={hasBackgroundActivity}
         lastActiveChatId={lastActiveChatId}
+        isSynthesizing={isSynthesizing}
+        synthesisComplete={synthesisComplete}
+        sleepModeActive={sleepModeActive}
+        onSynthesisSleep={handleSynthesisSleep}
+        onSynthesisRun={handleSynthesisRun}
       />
       {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}
       {imageSandboxOpen ? (
@@ -665,6 +721,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}
         systemPromptPresets={settings.systemPromptPresets}
         chatType={activeChat?.type}
+        isSynthesizing={isSynthesizing}
         ttsAutoReadEnabled={playbackState.isPlaying || playbackState.isPaused}
         playbackState={playbackState}
         ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}

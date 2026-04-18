@@ -33,6 +33,11 @@ interface Props {
   blueskyChatId?: string;
   hasBackgroundActivity?: boolean;
   lastActiveChatId?: string | null;
+  isSynthesizing?: boolean;
+  synthesisComplete?: boolean;
+  sleepModeActive?: boolean;
+  onSynthesisSleep?: () => void;
+  onSynthesisRun?: () => void;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -413,6 +418,11 @@ export function Sidebar({
   blueskyChatId,
   hasBackgroundActivity = false,
   lastActiveChatId = null,
+  isSynthesizing = false,
+  synthesisComplete = false,
+  sleepModeActive = false,
+  onSynthesisSleep,
+  onSynthesisRun,
 }: Props) {
   const {
     projectsExpanded,
@@ -518,6 +528,10 @@ export function Sidebar({
   );
   const quickChats = useMemo(
     () => chats.filter((c) => c.type === "quick" && !c.projectId),
+    [chats]
+  );
+  const systemChats = useMemo(
+    () => chats.filter((c) => c.type === "system" && !c.projectId),
     [chats]
   );
 
@@ -925,6 +939,94 @@ export function Sidebar({
 
         {/* Bluesky Section */}
         <BlueskySection onOpenSettings={onOpenSettings} onSelectChat={(id) => { onSelectChat(id); onClose(); }} />
+        {/* System Chat Section */}
+        {systemChats.length > 0 && (
+          <div className="px-3 pb-1 shrink-0 border-b border-white/5">
+            <div className="flex items-center gap-1.5 px-1 mb-1 group cursor-pointer">
+              <span className="text-amber-400/30 group-hover:text-amber-300/50 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2a4 4 0 0 1 4 4c0 1.95-2 4-4 8-2-4-4-6.05-4-8a4 4 0 0 1 4-4Z"/>
+                  <path d="M10.5 11.5a2.5 2.5 0 0 0 3 0"/>
+                </svg>
+              </span>
+              <span className="text-[10px] font-semibold tracking-wider uppercase text-amber-300/40 group-hover:text-amber-300/60 transition-colors">
+                System
+              </span>
+            </div>
+            <div className="px-1 pb-1">
+              {systemChats.map((chat) => (
+                <button
+                  key={chat.id}
+                  onClick={() => { onSelectChat(chat.id); onClose(); }}
+                  className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors ${
+                    chat.id === activeChatId
+                      ? 'bg-amber-500/15 text-amber-200 border border-amber-400/20'
+                      : 'text-white/50 hover:text-white/70 hover:bg-white/5'
+                  }`}
+                >
+                  <span className="truncate block">{chat.title}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Synthesis Section */}
+        <div className="px-3 pb-2 shrink-0">
+          <div className="flex items-center gap-2">
+            {/* Status indicator */}
+            <div className="flex-1 flex items-center gap-2 text-[10px] text-white/30">
+              <span className="font-semibold tracking-wider uppercase">Synthesis</span>
+              <div className="flex items-center gap-1.5 ml-auto">
+                {isSynthesizing ? (
+                  <>
+                    <PolyhedronLogo isActive={true} shape={activityShape} />
+                    <span className="text-amber-300/60">Synthesizing</span>
+                  </>
+                ) : synthesisComplete ? (
+                  <>
+                    <span className="text-emerald-400/60">●</span>
+                    <span className="text-emerald-300/60">Complete</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-white/20">●</span>
+                    <span className="text-white/20">Idle</span>
+                  </>
+                )}
+              </div>
+            </div>
+            {/* Actions */}
+            <div className="flex items-center gap-1">
+              {onSynthesisSleep && !isSynthesizing && (
+                <button
+                  onClick={onSynthesisSleep}
+                  disabled={sleepModeActive}
+                  className={`p-1.5 rounded-md transition-all cursor-pointer ${
+                    sleepModeActive
+                      ? 'text-amber-400/80 bg-amber-500/15 animate-pulse'
+                      : 'text-white/30 hover:text-white/60 hover:bg-white/5'
+                  }`}
+                  title="Sleep Mode — trigger synthesis and skip next periodic cycle"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+                  </svg>
+                </button>
+              )}
+              {onSynthesisRun && !isSynthesizing && (
+                <button
+                  onClick={onSynthesisRun}
+                  className={`p-1.5 rounded-md transition-all cursor-pointer text-white/30 hover:text-white/60 hover:bg-white/5`}
+                  title="Run synthesis now"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Image Sandbox */}
@@ -941,7 +1043,21 @@ export function Sidebar({
           Image Sandbox
         </button>
       </div>
-      {/* Spacer for TTS bar */}
+      {/* System Chat */}
+        <div className="px-3 pb-3 shrink-0">
+          <button
+            onClick={() => { onSelectChat("system"); onClose(); }}
+            className="w-full px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-400/15 text-amber-200/60 text-sm font-medium hover:bg-amber-500/20 hover:text-amber-200/80 transition-all flex items-center justify-center gap-2"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 16v-4"/>
+              <path d="M12 8h.01"/>
+            </svg>
+            Synthesis & Reflection
+          </button>
+        </div>
+        {/* Spacer for TTS bar */}
       {ttsBarVisible && <div className="h-[56px] shrink-0" />}
       </div>
     </>

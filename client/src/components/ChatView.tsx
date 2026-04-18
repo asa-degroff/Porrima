@@ -63,6 +63,7 @@ interface Props {
   systemPrompt: string;
   systemPromptPresets?: SystemPromptPreset[];
   chatType?: string;
+  isSynthesizing?: boolean;
   ttsAutoReadEnabled?: boolean;
   onTtsAutoReadToggle?: (enabled: boolean) => void;
   onReadAloud?: (text: string) => void;
@@ -110,6 +111,7 @@ export function ChatView({
   systemPrompt,
   systemPromptPresets,
   chatType,
+  isSynthesizing = false,
   ttsAutoReadEnabled = false,
   playbackState,
   ttsBarVisible,
@@ -486,6 +488,7 @@ export function ChatView({
                 const i = startIndex + sliceIdx;
                 const isLast = i === messages.length - 1;
                 const isOutOfContext = !!msg._outOfContext;
+                const isSystemMessage = !!msg._isSystemMessage;
                 const stableKey = `msg-${i}-${msg.timestamp}-${msg.role}`;
 
                 // Show "In context" divider at the transition from out-of-context to in-context
@@ -503,6 +506,11 @@ export function ChatView({
                       </div>
                     )}
                     <div className={isOutOfContext ? "opacity-40" : undefined}>
+                      {isSystemMessage ? (
+                        <div className="mx-2 my-1 rounded-lg bg-amber-500/5 border border-amber-400/10 px-3 py-2 text-[10px] text-amber-200/40 font-medium uppercase tracking-wider">
+                          System Message
+                        </div>
+                      ) : undefined}
                       <MessageBubble
                         message={msg}
                         isStreaming={streaming}
@@ -569,7 +577,7 @@ export function ChatView({
         <MessageInput
           chatId={chatId}
           onSend={onSend}
-          disabled={!chatId || !!compacting}
+          disabled={!chatId || !!compacting || (chatType === "system" && isSynthesizing)}
           onAbort={onAbort}
           streaming={streaming}
           waitingForInput={waitingForInput}

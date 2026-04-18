@@ -961,6 +961,45 @@ export async function searchConversations(query: string, chatId?: string, limit?
   return res.json();
 }
 
+// --- Synthesis API ---
+
+export interface SynthesisStatus {
+  lastSynthesis: string | null;
+  memoryCount: number;
+  isSynthesizing: boolean;
+}
+
+export interface SynthesisResult {
+  success: boolean;
+  lastSynthesis: string | null;
+  memoryCount: number;
+  summaryLength: number;
+  toolCalls: number;
+  error?: string;
+}
+
+export async function fetchSynthesisStatus(): Promise<SynthesisStatus> {
+  const res = await apiFetch(`${BASE}/memory/synthesis/status`);
+  if (!res.ok) throw new Error("Failed to fetch synthesis status");
+  return res.json();
+}
+
+export async function triggerSynthesis(): Promise<SynthesisResult> {
+  const res = await apiFetch(`${BASE}/memory/synthesis/run`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error("Failed to trigger synthesis");
+  return res.json();
+}
+
+export async function triggerSleepMode(): Promise<SynthesisResult> {
+  const res = await apiFetch(`${BASE}/memory/synthesis/sleep`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error("Failed to trigger sleep mode");
+  return res.json();
+}
+
 // --- Skills API ---
 
 export interface SkillInfo {

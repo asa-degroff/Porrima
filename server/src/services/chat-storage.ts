@@ -369,7 +369,7 @@ export async function listChats(): Promise<ChatListItem[]> {
   return rows.map((r) => ({
     id: r.id,
     title: r.title,
-    type: r.type as "agent" | "quick",
+    type: r.type as "agent" | "quick" | "system" | "bluesky",
     lastModified: r.lastModified,
     preview: r.preview || "",
     ...(r.projectId ? { projectId: r.projectId } : {}),
@@ -402,7 +402,7 @@ export async function getChat(id: string): Promise<Chat | null> {
   const chat: Chat = {
     id: row.id,
     title: row.title,
-    type: (row.type as "agent" | "quick") || "quick",
+    type: (row.type as "agent" | "quick" | "system" | "bluesky") || "quick",
     modelId: row.modelId,
     systemPrompt: row.systemPrompt || "You are a helpful assistant.",
     ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),

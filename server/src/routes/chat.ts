@@ -13,6 +13,7 @@ import { generateTitle } from "../services/title-generation.js";
 import { truncateChatHistory, truncateBeforeSend, triggerCompaction } from "../services/compaction.js";
 import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
+import { getSynthesisLock } from "../services/system-chat.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
 import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
 import type { Skill } from "../services/skills.js";
@@ -627,7 +628,7 @@ async function handleChatStream(
     },
   };
 
-  const isAgent = chat.type === "agent" || chat.type === "bluesky";
+  const isAgent = chat.type === "agent" || chat.type === "bluesky" || chat.type === "system";
 
   // Load TTS settings
   const settings = await getSettings();
@@ -1852,6 +1853,17 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: "chatId and message (or images) are required" });
   }
 
+  // Wait for any running system synthesis to complete before processing user messages.
+  // This prevents race conditions where synthesis modifies memories/context while a
+  // user message is being processed with stale context.
+  const pendingSynthesis = getSynthesisLock();
+  if (pendingSynthesis) {
+    console.log(
+      `[chat] Waiting for system synthesis to complete before processing message for chat ${chatId}`,
+    );
+    await pendingSynthesis;
+  }
+
   const chat = await getChat(chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
@@ -2212,6 +2224,8 @@ router.post("/", async (req, res) => {
     // Build system prompt with delta-based memory injection for KV cache optimization.
     // Frozen memories live in the system prompt (byte-identical between turns).
     // When extraction adds new memories, only the delta is appended at end of context.
+    // For the system chat, skip memory augmentation — context is injected directly
+    // as messages during synthesis runs.
     let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
     let memoriesDelta = "";
     if (chat.type === "agent" || chat.type === "bluesky") {

@@ -75,7 +75,7 @@ export interface ChatMessage {
   _steeringPending?: boolean;
 }
 
-export type ChatType = "agent" | "quick" | "bluesky";
+export type ChatType = "agent" | "quick" | "bluesky" | "system";
 
 export interface Chat {
   id: string;
@@ -217,6 +217,8 @@ export interface Settings {
   bluesky?: BlueskySettings;
   // Last active chat ID (for warm cache indicator)
   lastActiveChatId?: string;
+  // Sleep mode — tracks when the user manually triggered synthesis
+  sleepModeTriggeredAt?: string;
 }
 
 export interface BlueskySettings {

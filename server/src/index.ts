@@ -30,6 +30,7 @@ import { requireAuth } from "./middleware/auth.js";
 import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
 import { initializePersona } from "./services/persona-store.js";
+import { createSystemChat } from "./services/system-chat.js";
 import { registerOllamaNativeProvider } from "./services/ollama-native-provider.js";
 import { registerOpenAICompatProvider } from "./services/openai-compat-provider.js";
 
@@ -50,6 +51,9 @@ const sessionSecret = await getSessionSecret();
 
 // Initialize persona system on startup
 await initializePersona();
+
+// Create system chat for synthesis/reflection
+await createSystemChat();
 
 const app = express();
 

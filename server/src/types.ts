@@ -72,7 +72,7 @@ export interface ChatMessage {
   _isSystemMessage?: boolean;
 }
 
-export type ChatType = "agent" | "quick" | "bluesky";
+export type ChatType = "agent" | "quick" | "bluesky" | "system";
 
 export interface Chat {
   id: string;
@@ -211,6 +211,8 @@ export interface Settings {
   modelPreserveThinking?: Record<string, boolean>;
   // Bluesky integration settings
   bluesky?: BlueskySettings;
+  // Sleep mode — tracks when the user manually triggered synthesis, skips next periodic
+  sleepModeTriggeredAt?: string;
 }
 
 export interface BlueskySettings {

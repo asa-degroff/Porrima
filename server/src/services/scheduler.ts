@@ -1,5 +1,9 @@
 import crypto from "crypto";
-import { shouldRunSynthesis, runDailySynthesis } from "./synthesis.js";
+import {
+  shouldRunSystemSynthesis,
+  runSystemSynthesis,
+  isSynthesisActive,
+} from "./system-chat.js";
 import { getDb, getSettings, saveSettings, createChat, findBlueskyChatId } from "./chat-storage.js";
 import { getDb as getMemoryDb } from "./memory-storage.js";
 import { v4 as uuidv4 } from "uuid";
@@ -24,9 +28,31 @@ const DEFAULT_ZEITGEIST_INACTIVITY_THRESHOLD_HOURS = 1; // 1 hour
 
 async function checkAndRunSynthesis() {
   try {
-    if (await shouldRunSynthesis()) {
-      console.log("[scheduler] Synthesis due, starting...");
-      await runDailySynthesis();
+    // Skip if a system synthesis is already running (manual trigger may have locked)
+    if (isSynthesisActive()) {
+      console.log("[scheduler] Skipping synthesis check — system synthesis already active");
+      return;
+    }
+    // Respect sleep mode cooldown — the /sleep endpoint triggers synthesis
+    // manually and stamps a timestamp; we skip periodic runs for 2 hours
+    // after that so we don't immediately re-synthesize.
+    const { getSettings } = await import("./chat-storage.js");
+    const settings = await getSettings();
+    if (settings.sleepModeTriggeredAt) {
+      const elapsedMs = Date.now() - new Date(settings.sleepModeTriggeredAt).getTime();
+      if (elapsedMs < 2 * 60 * 60 * 1000) {
+        console.log("[scheduler] Skipping synthesis check — sleep mode cooldown active");
+        return;
+      }
+    }
+    if (await shouldRunSystemSynthesis()) {
+      console.log("[scheduler] Synthesis due, starting system synthesis...");
+      const result = await runSystemSynthesis();
+      if (result.success) {
+        console.log(`[scheduler] System synthesis complete: ${result.summary.length} chars`);
+      } else {
+        console.error(`[scheduler] System synthesis failed: ${result.error}`);
+      }
     }
   } catch (e) {
     console.error("[scheduler] Synthesis check failed:", e);
@@ -48,6 +74,12 @@ async function checkAndRunEnrichment() {
     // extraction server and would just queue behind compaction work.
     if (hasActiveChats()) {
       console.log("[scheduler] Skipping enrichment — active chat(s) in progress");
+      return;
+    }
+    // Skip if system synthesis is running — it uses the main model and
+    // should have priority over background enrichment.
+    if (isSynthesisActive()) {
+      console.log("[scheduler] Skipping enrichment — system synthesis active");
       return;
     }
 
@@ -148,6 +180,11 @@ async function checkAndRunDelayedExtractions() {
     // single-slot server and piles up memory.
     if (hasActiveChats()) {
       console.log("[scheduler] Skipping delayed extraction — active chat(s) in progress");
+      return;
+    }
+    // Also skip if system synthesis is running
+    if (isSynthesisActive()) {
+      console.log("[scheduler] Skipping delayed extraction — system synthesis active");
       return;
     }
 

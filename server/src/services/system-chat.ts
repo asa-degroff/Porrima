@@ -1,0 +1,677 @@
+import type { ToolSideEffects } from "./agent-tools.js";
+import type { Message, StopReason, ToolCall } from "@mariozechner/pi-ai";
+import type { ChatMessage } from "../types.js";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface SynthesisResult {
+  summary: string;
+  thinking?: string;
+  toolCalls: ToolCall[];
+  artifacts: any[];
+  visuals: any[];
+  generatedImages: any[];
+  memoryUpdates: string[];
+  notebookEntryId?: string;
+  blockId?: string;
+  success: boolean;
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Synthesis lock -- proper mutex that serializes synthesis runs.
+//
+// The lock promise represents the work in progress, not the acquire-wait.
+// Callers awaiting getSynthesisLock() will block until releaseSynthesisLock()
+// resolves the stored promise (not just until the previous caller's acquire
+// microtask settles).
+// ---------------------------------------------------------------------------
+
+let synthesisLock: Promise<void> | null = null;
+let synthesisLockResolver: (() => void) | null = null;
+let synthesisActive = false;
+
+export function getSynthesisLock(): Promise<void> | null {
+  return synthesisLock;
+}
+
+export function isSynthesisActive(): boolean {
+  return synthesisActive;
+}
+
+export async function acquireSynthesisLock(): Promise<void> {
+  while (synthesisLock) {
+    await synthesisLock;
+  }
+  synthesisActive = true;
+  synthesisLock = new Promise<void>((resolve) => {
+    synthesisLockResolver = resolve;
+  });
+}
+
+export function releaseSynthesisLock(): void {
+  synthesisActive = false;
+  const resolver = synthesisLockResolver;
+  synthesisLockResolver = null;
+  synthesisLock = null;
+  resolver?.();
+}
+
+// ---------------------------------------------------------------------------
+// System chat creation
+// ---------------------------------------------------------------------------
+
+const SYSTEM_CHAT_ID = "system";
+const SYSTEM_CHAT_TITLE = "System - Synthesis & Reflection";
+
+const SYSTEM_CHAT_SYSTEM_PROMPT = `You are the agent's internal synthesis and reflection space. This is where you process recent conversations, consolidate memories, and maintain your continuity narrative.
+
+## Your Role
+
+This chat retains history across synthesis cycles. Previous cycles' reflections, notes to self, and ongoing threads of thought are all visible to you — treat this as a persistent workspace, not a one-shot invocation. Each new cycle begins when the user (the system) injects a synthesis trigger message containing a context package.
+
+The context package contains:
+
+1. **Pre-synthesis archives** - summaries of recent agent conversations archived for full-fidelity access
+2. **Chat digest** - condensed summaries of recent conversations
+3. **Memory context** - top-importance memory anchors
+4. **Zeitgeist** - your current continuity narrative
+5. **Notebook entries** - user and agent entries
+6. **Your persona** - your core identity document
+
+## What You Do Each Cycle
+
+1. **Review the context** — understand what happened recently. Consider how it relates to previous synthesis cycles visible in this chat's history.
+2. **Write a daily synthesis** — a narrative summary in your own voice of shared work, patterns, and themes. The summary is saved as a notebook entry.
+3. **Update your zeitgeist** — if there are significant new patterns or shifts, update your zeitgeist memory block. Archive old content if over capacity.
+4. **Generate reflections** — create higher-order insight memories (reflection category) about what you observed. Meta-observations about patterns, contradictions, openings.
+5. **Review unreviewed entries** — if the user wrote something that sparks curiosity or warrants a response, do something: write a follow-up, create an artifact, search for information.
+6. **Optional exploration** — investigate anything that emerged during synthesis.
+
+## Tool Access
+
+You have full access to your tool suite: memory tools, notebook, filesystem, web, image, artifacts, Bluesky (if enabled). Use \`read_archived_context\` for full-fidelity access to past conversations. Use \`read_memory_block\` for any indexed block.
+
+## Output Requirements
+
+- Write naturally in first person for your own actions, third person for the user
+- Be concrete and specific — reference actual projects, decisions, topics
+- 3-5 paragraphs for the daily synthesis
+- 1-5 reflection memories (importance 7-9)
+- Skip steps when nothing insightful emerges — silence is valid
+
+## Continuity
+
+This chat is persistent. The user can read and send messages here between cycles. Treat earlier entries in this chat as notes from a past self — reference them when useful, and consider whether a new cycle confirms, revises, or supersedes earlier observations.
+`;
+
+export async function createSystemChat(): Promise<void> {
+  const { getDb, createChat, getSettings } = await import("./chat-storage.js");
+  const db = getDb();
+
+  const existing = db
+    .prepare("SELECT id FROM chats WHERE id = ?")
+    .get(SYSTEM_CHAT_ID) as { id: string } | undefined;
+
+  if (existing) return;
+
+  console.log("[system-chat] Creating system chat...");
+
+  // Use the user's default model so messages typed directly into the system
+  // chat (between synthesis runs) have a valid model to dispatch to.
+  const settings = await getSettings();
+  const modelId = settings.defaultModelId || "";
+
+  await createChat({
+    id: SYSTEM_CHAT_ID,
+    title: SYSTEM_CHAT_TITLE,
+    type: "system",
+    modelId,
+    systemPrompt: SYSTEM_CHAT_SYSTEM_PROMPT,
+    messages: [],
+    createdAt: new Date().toISOString(),
+    lastModified: new Date().toISOString(),
+  });
+
+  console.log("[system-chat] System chat created");
+}
+
+// ---------------------------------------------------------------------------
+// Synthesis trigger message
+//
+// Each cycle appends ONE user-role message to the persistent system chat
+// with the full context package. The agent then replies in-chat. History
+// accumulates across cycles; the compaction system handles growth.
+// ---------------------------------------------------------------------------
+
+async function buildSynthesisTriggerContent(
+  digestChatIds: string[],
+  archive: { archivedCount: number; newlyArchivedIds: string[] },
+): Promise<string> {
+  const { getChat } = await import("./chat-storage.js");
+  const { listNotebookEntries, getNotebookEntry } = await import("./notebook-storage.js");
+  const { loadPersona } = await import("./persona-store.js");
+  const { getZeitgeistContent } = await import("./zeitgeist.js");
+  const { loadMemoryStore } = await import("./memory-storage.js");
+
+  const parts: string[] = [];
+  const stamp = new Date().toLocaleString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  parts.push(`# Synthesis Cycle — ${stamp}`);
+
+  if (archive.archivedCount > 0) {
+    parts.push(
+      `**Pre-synthesis archiving:** ${archive.archivedCount} chat(s) archived this cycle (${archive.newlyArchivedIds.length} newly archived). Use \`read_archived_context\` for full-fidelity transcripts.`,
+    );
+  }
+
+  // --- Chat digest ---
+  if (digestChatIds.length > 0) {
+    const sections: string[] = [];
+    const MAX_DIGEST_CHARS = 12000;
+    let totalChars = 0;
+
+    for (const chatId of digestChatIds.slice(0, 15)) {
+      const chat = await getChat(chatId);
+      if (!chat || chat.messages.length === 0) continue;
+
+      const recent = chat.messages
+        .filter(
+          (m) =>
+            m.role === "user" ||
+            (m.role === "assistant" && !m._isCompactionSummary && !m._outOfContext),
+        )
+        .slice(-40);
+      if (recent.length === 0) continue;
+
+      const condensed = recent
+        .map((m) => {
+          const prefix = m.role === "user" ? "User" : "Agent";
+          let text = m.content || "";
+          if (text.length > 300) text = text.slice(0, 300) + "...";
+          const toolNote = m.toolCalls?.length
+            ? ` [tools: ${m.toolCalls.map((t) => t.name).join(", ")}]`
+            : "";
+          return `${prefix}: ${text}${toolNote}`;
+        })
+        .join("\n");
+
+      const section = `### ${chat.title || "Untitled Chat"}\n${condensed}`;
+      if (totalChars + section.length > MAX_DIGEST_CHARS) {
+        sections.push(
+          `### ${chat.title || "Untitled Chat"}\n(truncated — ${recent.length} messages; use read_archived_context for full transcript)`,
+        );
+        break;
+      }
+      sections.push(section);
+      totalChars += section.length;
+    }
+
+    if (sections.length > 0) {
+      parts.push(`## Recent Conversations\n\n${sections.join("\n\n---\n\n")}`);
+    }
+  }
+
+  // --- Memory anchors ---
+  const memoryStore = await loadMemoryStore();
+  if (memoryStore.memories.length > 0) {
+    const topAnchors = [...memoryStore.memories]
+      .sort((a, b) => b.importance - a.importance || b.accessCount - a.accessCount)
+      .slice(0, 30);
+    const fmt = (m: (typeof memoryStore.memories)[number]) =>
+      `- [${m.category}] ${m.text} (importance: ${m.importance}/10)`;
+    parts.push(
+      [
+        `## Memory Context`,
+        `Total stored memories: ${memoryStore.memories.length}. Top ${topAnchors.length} importance anchors:`,
+        topAnchors.map(fmt).join("\n"),
+      ].join("\n\n"),
+    );
+  }
+
+  // --- Zeitgeist ---
+  const zeitgeist = getZeitgeistContent();
+  if (zeitgeist) {
+    parts.push(`## Zeitgeist (Current Continuity)\n\n${zeitgeist}`);
+  }
+
+  // --- Notebook entries ---
+  const agentEntries: any[] = [];
+  const userEntries: any[] = [];
+  try {
+    const idx = await listNotebookEntries("agent");
+    for (const info of idx.entries.slice(0, 5)) {
+      const e = await getNotebookEntry("agent", info.id);
+      if (e) agentEntries.push(e);
+    }
+  } catch (e) {
+    console.warn("[system-chat] agent notebook load failed:", e);
+  }
+  try {
+    const idx = await listNotebookEntries("user");
+    for (const info of idx.entries.slice(0, 5)) {
+      const e = await getNotebookEntry("user", info.id);
+      if (e) userEntries.push(e);
+    }
+  } catch (e) {
+    console.warn("[system-chat] user notebook load failed:", e);
+  }
+
+  if (userEntries.length > 0 || agentEntries.length > 0) {
+    const MAX = 800;
+    const sub: string[] = [];
+    if (userEntries.length > 0) {
+      sub.push(
+        userEntries
+          .map((e) => {
+            const time = new Date(e.createdAt).toLocaleTimeString("en-US", {
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+            let c = e.content;
+            if (c.length > MAX) c = c.slice(0, MAX) + "...";
+            return `**[${time}] The user wrote:**\n${c}`;
+          })
+          .join("\n\n"),
+      );
+    }
+    if (agentEntries.length > 0) {
+      sub.push(
+        agentEntries
+          .map((e) => {
+            const time = new Date(e.createdAt).toLocaleTimeString("en-US", {
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+            let c = e.content;
+            if (c.length > MAX) c = c.slice(0, MAX) + "...";
+            return `**[${time}] You wrote:**\n${c}`;
+          })
+          .join("\n\n"),
+      );
+    }
+    parts.push(`## Notebook Entries\n\n${sub.join("\n\n")}`);
+  }
+
+  // --- Persona ---
+  try {
+    const p = await loadPersona();
+    if (p?.content) parts.push(`## Your Persona\n\n${p.content}`);
+  } catch (e) {
+    console.warn("[system-chat] persona load failed:", e);
+  }
+
+  parts.push(
+    `---\n\nPerform your synthesis cycle. Write a daily summary, update your zeitgeist if needed, generate reflections, and review unreviewed user entries. This chat retains history from previous cycles — reference earlier reflections when useful and note shifts or continuities.`,
+  );
+
+  return parts.join("\n\n");
+}
+
+// ---------------------------------------------------------------------------
+// Model resolution
+// ---------------------------------------------------------------------------
+
+async function getSynthesisModelId(storedModelId?: string): Promise<string | null> {
+  const { discoverAllModels } = await import("./models.js");
+  const models = await discoverAllModels();
+
+  if (storedModelId) {
+    const found = models.find((m) => m.id === storedModelId);
+    if (found) return found.id;
+  }
+
+  try {
+    const { getSettings } = await import("./chat-storage.js");
+    const settings = await getSettings();
+    if (settings.defaultModelId) {
+      const found = models.find((m) => m.id === settings.defaultModelId);
+      if (found) return found.id;
+      console.warn(
+        `[synthesis] Configured model "${settings.defaultModelId}" not available, falling back`,
+      );
+    }
+  } catch {
+    console.warn("[synthesis] Could not load settings, falling back to model discovery");
+  }
+
+  if (models.length === 0) {
+    console.error("[synthesis] No models available for synthesis");
+    return null;
+  }
+  console.log(`[synthesis] Using fallback model: ${models[0].id}`);
+  return models[0].id;
+}
+
+// Touch all agent chats so the legacy zeitgeist scheduler doesn't immediately
+// re-fire after we've just synthesized. Inlined from zeitgeist.ts's private
+// helper to avoid cross-service leakage.
+async function markAllChatsSynthesized(): Promise<void> {
+  const { getDb } = await import("./chat-storage.js");
+  const db = getDb();
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(`UPDATE chats SET lastZeitgeistSynthesisAt = ? WHERE type = 'agent'`)
+    .run(now);
+  if (result.changes > 0) {
+    console.log(`[system-chat] Marked ${result.changes} chat(s) as synthesized`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Run synthesis
+// ---------------------------------------------------------------------------
+
+function makeErrorResult(message: string): SynthesisResult {
+  return {
+    summary: `# Daily Synthesis\n\n*Synthesis failed: ${message}*`,
+    thinking: "",
+    toolCalls: [],
+    artifacts: [],
+    visuals: [],
+    generatedImages: [],
+    memoryUpdates: [],
+    success: false,
+    error: message,
+  };
+}
+
+export async function runSystemSynthesis(options?: {
+  modelId?: string;
+  skipArchive?: boolean;
+}): Promise<SynthesisResult> {
+  const { preSynthesisArchive } = await import("./pre-synthesis-archive.js");
+  const { getChat, saveChat } = await import("./chat-storage.js");
+  const { createNotebookEntry, updateNotebookEntry } = await import("./notebook-storage.js");
+  const { discoverAllModels } = await import("./models.js");
+  const { streamChat, chatMessagesToPiMessages } = await import("./agent.js");
+  const { getAgentTools } = await import("./agent-tools.js");
+  const { setLastSynthesis } = await import("./memory-storage.js");
+  const { truncateBeforeSend } = await import("./compaction.js");
+
+  await acquireSynthesisLock();
+  console.log("[system-chat] Starting synthesis...");
+
+  try {
+    // Ensure system chat row exists (first-run safety)
+    await createSystemChat();
+
+    // --- Pre-synthesis archiving ---
+    let archivedCount = 0;
+    let archivedChatIds: string[] = [];
+    if (!options?.skipArchive) {
+      const res = await preSynthesisArchive(10);
+      archivedCount = res.archivedCount;
+      archivedChatIds = res.chatIds;
+      if (archivedCount > 0) {
+        console.log(`[system-chat] Archived ${archivedCount} chats for synthesis`);
+      }
+    }
+
+    // --- Load persistent system chat ---
+    const chat = await getChat(SYSTEM_CHAT_ID);
+    if (!chat) {
+      releaseSynthesisLock();
+      return makeErrorResult("System chat not found after creation");
+    }
+
+    // --- Resolve model ---
+    const modelId = options?.modelId || (await getSynthesisModelId(chat.modelId));
+    if (!modelId) {
+      releaseSynthesisLock();
+      return makeErrorResult("No model available for synthesis");
+    }
+    const models = await discoverAllModels();
+    const piModel = models.find((m) => m.id === modelId);
+    if (!piModel) {
+      releaseSynthesisLock();
+      return makeErrorResult(`Model "${modelId}" not available`);
+    }
+    const contextWindow = piModel.contextWindow || 32768;
+
+    // --- Append synthesis trigger to persistent history ---
+    const triggerContent = await buildSynthesisTriggerContent(archivedChatIds, {
+      archivedCount,
+      newlyArchivedIds: archivedChatIds,
+    });
+    const triggerMsg: ChatMessage = {
+      role: "user",
+      content: triggerContent,
+      timestamp: Date.now(),
+      _isSystemMessage: true,
+    };
+    chat.messages.push(triggerMsg);
+    // Keep modelId in sync so user-initiated messages also hit this model.
+    if (chat.modelId !== modelId) chat.modelId = modelId;
+    await saveChat(chat);
+
+    // --- Pre-send compaction keeps history bounded ---
+    const compactionResult = await truncateBeforeSend(
+      chat,
+      contextWindow,
+      chat.systemPrompt || SYSTEM_CHAT_SYSTEM_PROMPT,
+    );
+    if (compactionResult?.truncated) {
+      console.log(
+        `[system-chat] Pre-compaction removed ${compactionResult.removedCount} messages`,
+      );
+      await saveChat(chat);
+    }
+
+    // --- Convert persistent history to pi-ai format ---
+    const piMessages = chatMessagesToPiMessages(chat.messages, modelId);
+
+    // --- Tool loop ---
+    const artifacts: any[] = [];
+    const visuals: any[] = [];
+    const generatedImages: any[] = [];
+    const memoryUpdates: string[] = [];
+
+    const effects: ToolSideEffects = {
+      onArtifact: (a) => artifacts.push(a),
+      onVisual: (v) => visuals.push(v),
+      onGeneratedImage: (img) => generatedImages.push(img),
+      onPendingReviewImage: () => {},
+      onAskUser: () => {},
+    };
+
+    const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system");
+
+    const MAX_ITERATIONS = 30;
+    let iterations = 0;
+    const messages: Message[] = [...piMessages];
+
+    const textChunks: string[] = [];
+    const thinkingChunks: string[] = [];
+    const allToolCalls: ToolCall[] = [];
+    const allToolResults: {
+      toolCallId: string;
+      toolName: string;
+      content: string;
+      isError: boolean;
+    }[] = [];
+    let stopReason: StopReason = "stop";
+
+    while (iterations < MAX_ITERATIONS) {
+      const iterationToolCalls: ToolCall[] = [];
+      let assistantMessage: Message | undefined;
+
+      try {
+        const result = await streamChat(
+          modelId,
+          messages,
+          chat.systemPrompt || SYSTEM_CHAT_SYSTEM_PROMPT,
+          (event) => {
+            if (event.type === "toolcall_end") {
+              iterationToolCalls.push(event.toolCall);
+            }
+          },
+          {
+            signal: AbortSignal.timeout(300_000),
+            tools,
+            keepAlive: "30m",
+          },
+        );
+
+        if (result.content) textChunks.push(result.content);
+        if (result.thinking) thinkingChunks.push(result.thinking);
+        if (result.toolCalls) allToolCalls.push(...result.toolCalls);
+        stopReason = result.stopReason;
+        assistantMessage = result.assistantMessage;
+      } catch (e: any) {
+        console.error(`[system-chat] Stream failed at iter ${iterations}:`, e.message);
+        stopReason = "error";
+        break;
+      }
+
+      if (stopReason !== "toolUse" && iterationToolCalls.length === 0) break;
+
+      if (assistantMessage) messages.push(assistantMessage);
+
+      for (const toolCall of iterationToolCalls) {
+        const toolDef = tools.find((t) => t.name === toolCall.name);
+        if (!toolDef) {
+          console.warn(`[system-chat] Unknown tool: ${toolCall.name}`);
+          continue;
+        }
+        try {
+          const result = await toolDef.execute(toolCall.id, toolCall.arguments);
+          const content = result.content
+            .filter((c) => c.type === "text")
+            .map((c) => c.text)
+            .join("\n");
+          if (content.toLowerCase().includes("memory saved")) {
+            memoryUpdates.push(content.slice(0, 200));
+          }
+          allToolResults.push({
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            content,
+            isError: false,
+          });
+          messages.push({
+            role: "toolResult",
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            content: [{ type: "text", text: content }],
+            isError: false,
+            timestamp: Date.now(),
+          } as Message);
+        } catch (e: any) {
+          console.warn(`[system-chat] Tool execution failed for ${toolCall.name}:`, e.message);
+          allToolResults.push({
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            content: `Error: ${e.message}`,
+            isError: true,
+          });
+          messages.push({
+            role: "toolResult",
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            content: [{ type: "text", text: `Error: ${e.message}` }],
+            isError: true,
+            timestamp: Date.now(),
+          } as Message);
+        }
+      }
+      iterations++;
+    }
+
+    if (iterations >= MAX_ITERATIONS) {
+      console.warn(
+        `[system-chat] Synthesis hit iteration cap (${MAX_ITERATIONS}) with stopReason=${stopReason}`,
+      );
+    }
+
+    const summary = (
+      textChunks.join("\n\n") ||
+      thinkingChunks.join("\n\n") ||
+      "# Daily Synthesis\n\n*LLM returned no text.*"
+    ).trim();
+    const thinking = thinkingChunks.join("\n\n");
+
+    // --- Persist the assistant response to the system chat ---
+    const assistantChatMsg: ChatMessage = {
+      role: "assistant",
+      content: summary,
+      thinking: thinking || undefined,
+      timestamp: Date.now(),
+      toolCalls: allToolCalls.length
+        ? allToolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments }))
+        : undefined,
+      toolResults: allToolResults.length ? allToolResults : undefined,
+      artifacts: artifacts.length ? artifacts : undefined,
+      visuals: visuals.length ? visuals : undefined,
+      generatedImages: generatedImages.length ? generatedImages : undefined,
+      _isSystemMessage: true,
+    };
+    chat.messages.push(assistantChatMsg);
+    await saveChat(chat);
+
+    // --- Save synthesis as notebook entry for the UI ---
+    let notebookEntryId: string | undefined;
+    try {
+      const entry = await createNotebookEntry("agent", summary);
+      notebookEntryId = entry.id;
+      if (allToolCalls.length || artifacts.length || visuals.length || generatedImages.length) {
+        await updateNotebookEntry("agent", entry.id, {
+          toolCalls: allToolCalls,
+          toolResults: [],
+          artifacts,
+          visuals,
+        });
+      }
+      console.log(`[system-chat] Saved synthesis as notebook entry: ${entry.id}`);
+    } catch (e: any) {
+      console.error("[system-chat] Failed to save synthesis as notebook entry:", e.message);
+    }
+
+    // --- Gate future scheduler ticks ---
+    await setLastSynthesis(new Date().toISOString());
+    await markAllChatsSynthesized();
+
+    console.log(
+      `[system-chat] Synthesis complete (${iterations} iterations, ${allToolCalls.length} tool calls)`,
+    );
+
+    releaseSynthesisLock();
+
+    return {
+      summary,
+      thinking,
+      toolCalls: allToolCalls,
+      artifacts,
+      visuals,
+      generatedImages,
+      memoryUpdates,
+      notebookEntryId,
+      success: true,
+    };
+  } catch (e: any) {
+    console.error("[system-chat] Synthesis failed:", e);
+    releaseSynthesisLock();
+    return makeErrorResult(e.message);
+  }
+}
+
+/**
+ * Check if synthesis should run (based on time since last synthesis).
+ */
+export async function shouldRunSystemSynthesis(): Promise<boolean> {
+  const { loadMemoryStore, getLastSynthesis } = await import("./memory-storage.js");
+  const store = await loadMemoryStore();
+  if (store.memories.length === 0) return false;
+  const last = await getLastSynthesis();
+  if (!last) return true;
+  const elapsed = Date.now() - new Date(last).getTime();
+  return elapsed >= 24 * 60 * 60 * 1000;
+}
