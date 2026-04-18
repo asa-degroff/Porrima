@@ -24,6 +24,25 @@ import type { TTSSettings } from "../types/tts.js";
 import { log } from "../services/logger.js";
 
 /**
+ * Initialize an SSE response: write headers, disable Nagle, emit a keepalive.
+ * Idempotent — safe to call before pre-send compaction and again inside
+ * handleChatStream. Required before the first res.write() so that pre-stream
+ * work (compaction, model discovery) can flush progress events to the client.
+ */
+function ensureSSEStream(res: Response) {
+  if (!res.headersSent) {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+  }
+  res.socket?.setNoDelay(true);
+  res.write(`: connected\n\n`);
+}
+
+/**
  * Parse /compact command from user message.
  * Returns { compact: true, followUpMessage: string | null } if found.
  * /compact alone → followUpMessage is null
@@ -267,24 +286,10 @@ async function handleChatStream(
     projectPath = project?.path;
   }
 
-  // Only set headers if not already sent (recursive follow-up calls reuse the same response)
-  if (!res.headersSent) {
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    });
-  }
-
-  // Disable Nagle's algorithm so each res.write() sends immediately
-  // instead of batching small SSE events into fewer TCP packets
-  res.socket?.setNoDelay(true);
-
-  // Send an immediate SSE comment so the client's reader.read() resolves
-  // right away, giving it a fresh inactivity timer baseline before any
-  // potentially slow setup work (model discovery, memory augmentation, etc.)
-  res.write(`: connected\n\n`);
+  // Ensure SSE headers + keepalive are flushed. Idempotent: a caller that ran
+  // pre-send compaction already initialized the stream, and this is a no-op
+  // re-flush. Required here for recursive follow-up calls and direct entries.
+  ensureSSEStream(res);
 
   const connectionAbortController = new AbortController();
   let connectionClosed = false;
@@ -1955,7 +1960,10 @@ router.post("/", async (req, res) => {
       model = undefined; // Skip truncation if providers are unreachable
     }
 
-    // Pre-send context protection for resume path
+    // Pre-send context protection for resume path.
+    // Initialize SSE stream BEFORE compaction so `compacting` and keepalive
+    // events reach the client while the (CPU) extraction model is generating.
+    ensureSSEStream(res);
     if (model) {
       try {
         const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
@@ -2104,17 +2112,10 @@ router.post("/", async (req, res) => {
       model = undefined; // Skip truncation if providers are unreachable
     }
     
-    // Pre-send context protection: truncate BEFORE sending if >75% of context window
-    // Set SSE headers early so compaction progress events reach the client.
-    // handleChatStream checks headersSent and won't set them again.
-    if (!res.headersSent) {
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no",
-      });
-    }
+    // Pre-send context protection: truncate BEFORE sending if >75% of context window.
+    // Initialize SSE stream early so compaction progress events (and the extraction
+    // model's 10s keepalive) reach the client while pre-send compaction is running.
+    ensureSSEStream(res);
     if (model) {
       try {
         const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
@@ -2343,7 +2344,10 @@ router.post("/edit", async (req, res) => {
     model = undefined; // Skip truncation if providers are unreachable
   }
   
-  // Pre-send context protection for edit path
+  // Pre-send context protection for edit path.
+  // Initialize SSE stream BEFORE compaction so `compacting` and keepalive
+  // events reach the client while the (CPU) extraction model is generating.
+  ensureSSEStream(res);
   if (model) {
     try {
       const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
