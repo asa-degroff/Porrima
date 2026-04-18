@@ -66,33 +66,34 @@ export function releaseSynthesisLock(): void {
 const SYSTEM_CHAT_ID = "system";
 const SYSTEM_CHAT_TITLE = "System - Synthesis & Reflection";
 
-const SYSTEM_CHAT_SYSTEM_PROMPT = `You are the agent's internal synthesis and reflection space. This is where you process recent conversations, consolidate memories, and maintain your continuity narrative.
+// Addendum appended to the user's default system prompt during synthesis runs.
+// Kept separate so chat.systemPrompt stays voice/persona-only — consistent with
+// how other chats are authored — and only synthesis gets the extra framing.
+const SYNTHESIS_INSTRUCTIONS = `## Synthesis Mode
 
-## Your Role
-
-This chat retains history across synthesis cycles. Previous cycles' reflections, notes to self, and ongoing threads of thought are all visible to you — treat this as a persistent workspace, not a one-shot invocation. Each new cycle begins when the user (the system) injects a synthesis trigger message containing a context package.
+You are operating in your internal synthesis and reflection space. This chat retains history across synthesis cycles — previous cycles' reflections and ongoing threads of thought are visible above. Treat this as a persistent workspace, not a one-shot invocation. Each cycle begins when a synthesis trigger message is injected with a context package.
 
 The context package contains:
 
-1. **Pre-synthesis archives** - summaries of recent agent conversations archived for full-fidelity access
-2. **Chat digest** - condensed summaries of recent conversations
-3. **Memory context** - top-importance memory anchors
-4. **Zeitgeist** - your current continuity narrative
-5. **Notebook entries** - user and agent entries
-6. **Your persona** - your core identity document
+1. **Pre-synthesis archives** — summaries of recent agent conversations archived for full-fidelity access
+2. **Chat digest** — condensed summaries of recent conversations
+3. **Memory context** — top-importance memory anchors
+4. **Zeitgeist** — your current continuity narrative
+5. **Notebook entries** — user and agent entries
+6. **Your persona** — your core identity document
 
 ## What You Do Each Cycle
 
 1. **Review the context** — understand what happened recently. Consider how it relates to previous synthesis cycles visible in this chat's history.
 2. **Write a daily synthesis** — a narrative summary in your own voice of shared work, patterns, and themes. The summary is saved as a notebook entry.
-3. **Update your zeitgeist** — rewrite the zeitgeist memory block (blk-zeitgeist-continuity) via update_memory_block when there are new patterns, threads, or shifts. This is your living continuity narrative — the present tense of what matters right now. If the current zeitgeist is over ~3500 characters, archive old content first (delete the existing block, create an archive block, then create a new block with the updated content).
+3. **Update your zeitgeist** — rewrite the zeitgeist memory block (\`blk-zeitgeist-continuity\`) via \`update_memory_block\` when there are new patterns, threads, or shifts. This is your living continuity narrative — the present tense of what matters right now. If the current zeitgeist is over ~3500 characters, archive old content first (delete the existing block, create an archive block, then create a new block with the updated content).
 4. **Generate reflections** — create higher-order insight memories (reflection category) about what you observed. Meta-observations about patterns, contradictions, openings.
 5. **Review unreviewed entries** — if the user wrote something that sparks curiosity or warrants a response, do something: write a follow-up, create an artifact, search for information.
 6. **Optional exploration** — investigate anything that emerged during synthesis.
 
 ## Tool Access
 
-You have full access to your tool suite: memory tools, notebook, filesystem, web, image, artifacts, Bluesky (if enabled). Use \`read_archived_context\` for full-fidelity access to past conversations. Use \`read_memory_block\` for any indexed block.
+Full tool suite available: memory tools, notebook, filesystem, web, image, artifacts, Bluesky (if enabled). Use \`read_archived_context\` for full-fidelity access to past conversations. Use \`read_memory_block\` for any indexed block.
 
 ## Output Requirements
 
@@ -104,24 +105,54 @@ You have full access to your tool suite: memory tools, notebook, filesystem, web
 
 ## Continuity
 
-This chat is persistent. The user can read and send messages here between cycles. Treat earlier entries in this chat as notes from a past self — reference them when useful, and consider whether a new cycle confirms, revises, or supersedes earlier observations.
+The user can read and send messages here between cycles. Treat earlier entries in this chat as notes from a past self — reference them when useful, and consider whether a new cycle confirms, revises, or supersedes earlier observations.
 `;
 
+// Marker prefix used to detect + migrate pre-split system chats whose
+// systemPrompt was the full baked-in synthesis prompt.
+const LEGACY_SYSTEM_PROMPT_PREFIX =
+  "You are the agent's internal synthesis and reflection space.";
+
+/**
+ * Compose the full synthesis-mode system prompt: user's stored voice/persona
+ * prompt for the chat, followed by the synthesis instructions addendum.
+ */
+function buildSynthesisSystemPrompt(basePrompt: string): string {
+  const base = (basePrompt || "You are a helpful assistant.").trim();
+  return `${base}\n\n${SYNTHESIS_INSTRUCTIONS}`;
+}
+
 export async function createSystemChat(): Promise<void> {
-  const { getDb, createChat, getSettings } = await import("./chat-storage.js");
+  const { getDb, createChat, saveChat, getChat, getSettings } = await import(
+    "./chat-storage.js"
+  );
   const db = getDb();
 
   const existing = db
     .prepare("SELECT id FROM chats WHERE id = ?")
     .get(SYSTEM_CHAT_ID) as { id: string } | undefined;
 
-  if (existing) return;
+  const settings = await getSettings();
+  const defaultPrompt = settings.defaultSystemPrompt || "You are a helpful assistant.";
+
+  if (existing) {
+    // One-shot migration: pre-split system chats stored the full synthesis
+    // prompt as chat.systemPrompt. Replace it with the user's default so the
+    // voice tracks `settings.defaultSystemPrompt` going forward. Respect any
+    // user-customized prompt (anything not starting with the legacy prefix).
+    const loaded = await getChat(SYSTEM_CHAT_ID);
+    if (loaded && loaded.systemPrompt.startsWith(LEGACY_SYSTEM_PROMPT_PREFIX)) {
+      console.log("[system-chat] Migrating legacy system chat prompt to default");
+      loaded.systemPrompt = defaultPrompt;
+      await saveChat(loaded);
+    }
+    return;
+  }
 
   console.log("[system-chat] Creating system chat...");
 
   // Use the user's default model so messages typed directly into the system
   // chat (between synthesis runs) have a valid model to dispatch to.
-  const settings = await getSettings();
   const modelId = settings.defaultModelId || "";
 
   await createChat({
@@ -129,7 +160,7 @@ export async function createSystemChat(): Promise<void> {
     title: SYSTEM_CHAT_TITLE,
     type: "system",
     modelId,
-    systemPrompt: SYSTEM_CHAT_SYSTEM_PROMPT,
+    systemPrompt: defaultPrompt,
     messages: [],
     createdAt: new Date().toISOString(),
     lastModified: new Date().toISOString(),
@@ -438,11 +469,17 @@ export async function runSystemSynthesis(options?: {
     if (chat.modelId !== modelId) chat.modelId = modelId;
     await saveChat(chat);
 
+    // Compose the full synthesis-mode prompt: user's voice/persona (stored on
+    // the chat and editable like any other chat) followed by synthesis-only
+    // instructions. Computed once and reused below for compaction sizing and
+    // the streaming call so budgeting stays consistent.
+    const synthesisPrompt = buildSynthesisSystemPrompt(chat.systemPrompt);
+
     // --- Pre-send compaction keeps history bounded ---
     const compactionResult = await truncateBeforeSend(
       chat,
       contextWindow,
-      chat.systemPrompt || SYSTEM_CHAT_SYSTEM_PROMPT,
+      synthesisPrompt,
     );
     if (compactionResult?.truncated) {
       console.log(
@@ -493,7 +530,7 @@ export async function runSystemSynthesis(options?: {
         const result = await streamChat(
           modelId,
           messages,
-          chat.systemPrompt || SYSTEM_CHAT_SYSTEM_PROMPT,
+          synthesisPrompt,
           (event) => {
             if (event.type === "toolcall_end") {
               iterationToolCalls.push(event.toolCall);
