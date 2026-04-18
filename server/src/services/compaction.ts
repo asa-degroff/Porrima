@@ -25,9 +25,14 @@ function estimateTokens(text: string): number {
  */
 export { estimateContextSize as estimateContextTokens };
 function estimateContextSize(messages: Chat["messages"], systemPrompt: string): number {
-  // If the most recent assistant message has actual LLM-reported usage,
-  // use that as a baseline — it includes tool definitions, system prompt,
-  // and framing overhead that character estimation misses.
+  // Prefer the LLM's own reported usage — it's the authoritative token count
+  // at that point in the conversation, already including system prompt, tool
+  // definitions, and framing overhead. Character-based estimation double-counts
+  // against that (e.g., it would re-add the system prompt and thinking traces)
+  // and can spuriously exceed the real context size by 30%+ on code/tool-heavy
+  // chats, which used to trigger pre-send compaction below the true threshold.
+  //
+  // Find the latest in-context assistant message with reported usage.
   let lastKnownUsage = 0;
   let lastUsageIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -39,43 +44,45 @@ function estimateContextSize(messages: Chat["messages"], systemPrompt: string): 
     }
   }
 
-  // Character-based estimation for comparison / messages after last usage
-  // Only count in-context messages (skip _outOfContext ones)
+  if (lastKnownUsage > 0 && lastUsageIndex >= 0) {
+    // Anchor on the reported usage, then add a char-based estimate for
+    // anything added since (the user's newest message, any tool results
+    // that were already integrated into chat.messages after the last
+    // assistant's usage was captured).
+    let additionalTokens = 0;
+    for (let i = lastUsageIndex + 1; i < messages.length; i++) {
+      const m = messages[i];
+      if (m._outOfContext) continue;
+      additionalTokens += estimateTokens(m.content);
+      if (m.images?.length) additionalTokens += m.images.length * 256;
+      if (m.role === "assistant") {
+        if (m.thinking) additionalTokens += estimateTokens(m.thinking);
+        if (m.toolCalls) additionalTokens += m.toolCalls.length * 50;
+        if (m.toolResults) {
+          for (const r of m.toolResults) additionalTokens += estimateTokens(r.content) + 20;
+        }
+      }
+    }
+    return lastKnownUsage + additionalTokens;
+  }
+
+  // Cold start / first turn — no prior usage to anchor on. Fall back to
+  // character-based estimation across the whole context.
   let charEstimate = estimateTokens(systemPrompt);
   for (const m of messages) {
     if (m._outOfContext) continue;
     if (m.role === "user") {
       charEstimate += estimateTokens(m.content);
-      if (m.images?.length) {
-        // Rough estimate: ~256 tokens per image
-        charEstimate += m.images.length * 256;
-      }
+      if (m.images?.length) charEstimate += m.images.length * 256;
     } else if (m.role === "assistant") {
       charEstimate += estimateTokens(m.content);
       if (m.thinking) charEstimate += estimateTokens(m.thinking);
-      // Tool calls/results add overhead
       if (m.toolCalls) charEstimate += m.toolCalls.length * 50;
       if (m.toolResults) {
-        for (const r of m.toolResults) {
-          charEstimate += estimateTokens(r.content) + 20; // content + framing overhead
-        }
+        for (const r of m.toolResults) charEstimate += estimateTokens(r.content) + 20;
       }
     }
   }
-
-  if (lastKnownUsage > 0 && lastUsageIndex >= 0) {
-    // Add character estimate for messages AFTER the last usage checkpoint
-    let additionalTokens = 0;
-    for (let i = lastUsageIndex + 1; i < messages.length; i++) {
-      const m = messages[i];
-      additionalTokens += estimateTokens(m.content);
-      if (m.images?.length) additionalTokens += m.images.length * 256;
-    }
-    const usageBased = lastKnownUsage + additionalTokens;
-    // Use the higher of the two estimates
-    return Math.max(charEstimate, usageBased);
-  }
-
   return charEstimate;
 }
 
@@ -107,8 +114,20 @@ export async function truncateBeforeSend(
 
   onCompacting?.();
 
+  // Record which anchor drove the estimate so spurious triggers are
+  // diagnosable: a `usage=N` prefix means we trusted the LLM's count,
+  // `charEst` means there was no prior usage to anchor on.
+  let lastUsage = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]._outOfContext) continue;
+    if (messages[i].role === "assistant" && messages[i].usage?.totalTokens) {
+      lastUsage = messages[i].usage!.totalTokens;
+      break;
+    }
+  }
+  const anchor = lastUsage > 0 ? `usage=${lastUsage}` : "charEst";
   console.log(
-    `[compaction] Pre-send truncation triggered: ${estimatedTokens} tokens > ${threshold} threshold`
+    `[compaction] Pre-send truncation triggered: ${estimatedTokens} tokens > ${threshold} threshold (anchor=${anchor}, ctx=${contextWindow})`
   );
 
   // Build index of in-context messages for budget calculation
