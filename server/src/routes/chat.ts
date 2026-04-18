@@ -791,7 +791,22 @@ async function handleChatStream(
 
     // Start the agent loop (uses turnAbortController declared earlier)
     console.log(`[chat] Starting agent loop: userPiMessage=${!!userPiMessage}, context.messages.length=${context.messages.length}, tools=${context.tools?.length || 0}`);
-    console.log(`[chat] Context messages: ${context.messages.map(m => `${m.role}:${m.content?.length || 0}ch`).join(", ")}`);
+    console.log(`[chat] Context messages: ${context.messages.map(m => {
+      const c: any = m.content;
+      if (typeof c === "string") return `${m.role}:${c.length}ch`;
+      if (Array.isArray(c)) {
+        let chars = 0;
+        let imgs = 0;
+        for (const b of c) {
+          if (b?.type === "text" && typeof b.text === "string") chars += b.text.length;
+          else if (b?.type === "thinking" && typeof b.thinking === "string") chars += b.thinking.length;
+          else if (b?.type === "image") imgs++;
+          else if (b?.type === "toolCall") chars += JSON.stringify(b.arguments ?? {}).length;
+        }
+        return `${m.role}:${chars}ch${imgs ? `+${imgs}img` : ""}`;
+      }
+      return `${m.role}:?`;
+    }).join(", ")}`);
     const eventStream = userPiMessage
       ? agentLoop([userPiMessage], context, config, turnAbortController.signal, safeStreamFn)
       : agentLoopContinue(context, config, turnAbortController.signal, safeStreamFn);
