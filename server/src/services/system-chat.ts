@@ -85,7 +85,7 @@ The context package contains:
 
 1. **Review the context** — understand what happened recently. Consider how it relates to previous synthesis cycles visible in this chat's history.
 2. **Write a daily synthesis** — a narrative summary in your own voice of shared work, patterns, and themes. The summary is saved as a notebook entry.
-3. **Update your zeitgeist** — if there are significant new patterns or shifts, update your zeitgeist memory block. Archive old content if over capacity.
+3. **Update your zeitgeist** — rewrite the zeitgeist memory block (blk-zeitgeist-continuity) via update_memory_block when there are new patterns, threads, or shifts. This is your living continuity narrative — the present tense of what matters right now. If the current zeitgeist is over ~3500 characters, archive old content first (delete the existing block, create an archive block, then create a new block with the updated content).
 4. **Generate reflections** — create higher-order insight memories (reflection category) about what you observed. Meta-observations about patterns, contradictions, openings.
 5. **Review unreviewed entries** — if the user wrote something that sparks curiosity or warrants a response, do something: write a follow-up, create an artifact, search for information.
 6. **Optional exploration** — investigate anything that emerged during synthesis.
@@ -310,7 +310,7 @@ async function buildSynthesisTriggerContent(
   }
 
   parts.push(
-    `---\n\nPerform your synthesis cycle. Write a daily summary, update your zeitgeist if needed, generate reflections, and review unreviewed user entries. This chat retains history from previous cycles — reference earlier reflections when useful and note shifts or continuities.`,
+    `---\n\nPerform your synthesis cycle. Write a daily summary as a notebook entry, update your zeitgeist memory block (\`blk-zeitgeist-continuity\`) if needed, generate reflections, and review unreviewed user entries. This chat retains history from previous cycles — reference earlier reflections when useful and note shifts or continuities.`,
   );
 
   return parts.join("\n\n");
@@ -349,21 +349,6 @@ async function getSynthesisModelId(storedModelId?: string): Promise<string | nul
   }
   console.log(`[synthesis] Using fallback model: ${models[0].id}`);
   return models[0].id;
-}
-
-// Touch all agent chats so the legacy zeitgeist scheduler doesn't immediately
-// re-fire after we've just synthesized. Inlined from zeitgeist.ts's private
-// helper to avoid cross-service leakage.
-async function markAllChatsSynthesized(): Promise<void> {
-  const { getDb } = await import("./chat-storage.js");
-  const db = getDb();
-  const now = new Date().toISOString();
-  const result = db
-    .prepare(`UPDATE chats SET lastZeitgeistSynthesisAt = ? WHERE type = 'agent'`)
-    .run(now);
-  if (result.changes > 0) {
-    console.log(`[system-chat] Marked ${result.changes} chat(s) as synthesized`);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -637,7 +622,6 @@ export async function runSystemSynthesis(options?: {
 
     // --- Gate future scheduler ticks ---
     await setLastSynthesis(new Date().toISOString());
-    await markAllChatsSynthesized();
 
     console.log(
       `[system-chat] Synthesis complete (${iterations} iterations, ${allToolCalls.length} tool calls)`,

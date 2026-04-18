@@ -5,21 +5,16 @@ import {
   isSynthesisActive,
 } from "./system-chat.js";
 import { getDb, getSettings, saveSettings, createChat, findBlueskyChatId } from "./chat-storage.js";
-import { getDb as getMemoryDb } from "./memory-storage.js";
 import { v4 as uuidv4 } from "uuid";
 import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
 import { getBlueskyPoller } from "./bluesky-poller.js";
 import { BLUESKY_SYSTEM_PROMPT } from "../routes/bluesky.js";
 import { enrichCorpusBatch } from "./image-corpus.js";
-import { triggerZeitgeistSynthesis, shouldRunZeitgeistSynthesis } from "./zeitgeist.js";
 
 const SYNTHESIS_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 const ENRICHMENT_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const DEFAULT_ENRICHMENT_BATCH_SIZE = 5;
-const ZEITGEIST_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
-const DEFAULT_ZEITGEIST_INACTIVITY_THRESHOLD_HOURS = 1; // 1 hour
 
 
 // ---------------------------------------------------------------------------
@@ -221,88 +216,6 @@ async function checkAndRunDelayedExtractions() {
 }
 
 // ---------------------------------------------------------------------------
-// Zeitgeist Synthesis Check
-// ---------------------------------------------------------------------------
-
-/**
- * Find agent chats that have had activity since the last zeitgeist synthesis.
- * Used to determine whether there's new material to weave into the zeitgeist.
- * Criteria:
- * - Chat type is "agent"
- * - Inactive for at least the threshold period
- * - Has activity newer than the last zeitgeist synthesis for that chat
- */
-async function findChatsNeedingZeitgeistSynthesis(thresholdMs: number): Promise<string[]> {
-  const db = getDb();
-  const thresholdDate = new Date(Date.now() - thresholdMs).toISOString();
-  
-  const rows = db.prepare(`
-    SELECT id, lastModified, lastZeitgeistSynthesisAt
-    FROM chats
-    WHERE type = 'agent'
-      AND lastModified < ?
-      AND (lastZeitgeistSynthesisAt IS NULL OR lastZeitgeistSynthesisAt < lastModified)
-    ORDER BY lastModified DESC
-  `).all(thresholdDate) as Array<{
-    id: string;
-    lastModified: string;
-    lastZeitgeistSynthesisAt: string | null;
-  }>;
-  
-  return rows.map(r => r.id);
-}
-
-/**
- * Check and run zeitgeist synthesis.
- * Called every 15 minutes. Runs when the zeitgeist block is stale
- * (hasn't been updated recently) or needs archival. The zeitgeist is
- * global, so we only run one synthesis per check.
- */
-async function checkAndRunZeitgeistSynthesis() {
-  try {
-    // Staleness/capacity check — replaces the old capacity-only gate.
-    // Returns true when the block hasn't been updated in an hour, or
-    // needs archival, or doesn't exist yet.
-    if (!shouldRunZeitgeistSynthesis()) {
-      return;
-    }
-
-    const settings = await getSettings();
-    const thresholdHours = settings.zeitgeistInactivityThresholdHours ?? DEFAULT_ZEITGEIST_INACTIVITY_THRESHOLD_HOURS;
-    const thresholdMs = thresholdHours * 60 * 60 * 1000;
-
-    const chatIds = await findChatsNeedingZeitgeistSynthesis(thresholdMs);
-    if (chatIds.length === 0) {
-      // No chats with new activity — still run synthesis if the block is
-      // over capacity (archival needed) or doesn't exist yet. The staleness
-      // check above already confirmed one of these conditions.
-      const db = getMemoryDb();
-      const row = db.prepare(
-        "SELECT length(content) as contentLength FROM memory_blocks WHERE id = ?"
-      ).get("blk-zeitgeist-continuity") as { contentLength: number } | undefined;
-
-      if (!row) {
-        // Block doesn't exist yet — create it even without chat activity
-        console.log("[scheduler] Zeitgeist block missing, triggering creation");
-        triggerZeitgeistSynthesis({ trigger: "scheduler" });
-      } else if (row.contentLength > 2800) {
-        // Over capacity — run synthesis for archival
-        console.log("[scheduler] Zeitgeist over capacity threshold, triggering archival synthesis");
-        triggerZeitgeistSynthesis({ trigger: "scheduler" });
-      }
-      // Otherwise: stale but no new chat activity — wait for new material
-      return;
-    }
-
-    const triggerChatId = chatIds[0];
-    console.log(`[scheduler] Triggering zeitgeist synthesis (${chatIds.length} candidate chats, using most-recently-inactive: ${triggerChatId})`);
-    triggerZeitgeistSynthesis({ chatId: triggerChatId, trigger: "scheduler" });
-  } catch (e) {
-    console.error("[scheduler] Zeitgeist check failed:", e);
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Scheduler Startup
 // ---------------------------------------------------------------------------
 
@@ -323,13 +236,6 @@ export function startScheduler(): void {
     checkAndRunEnrichment();
   }, 1 * 60 * 1000);
   
-  // Zeitgeist: wait 5 minutes on startup before processing backlog
-  // This gives the server time to stabilize and avoids immediate resource spike
-  setTimeout(() => {
-    console.log("[scheduler] Running initial zeitgeist check (after 5min delay)...");
-    checkAndRunZeitgeistSynthesis();
-  }, 5 * 60 * 1000);
-
   // Then check every 15 minutes for synthesis
   setInterval(checkAndRunSynthesis, SYNTHESIS_CHECK_INTERVAL_MS);
   
@@ -339,10 +245,7 @@ export function startScheduler(): void {
   // Check every 30 minutes for corpus enrichment
   setInterval(checkAndRunEnrichment, ENRICHMENT_CHECK_INTERVAL_MS);
   
-  // Check every 15 minutes for zeitgeist synthesis
-  setInterval(checkAndRunZeitgeistSynthesis, ZEITGEIST_CHECK_INTERVAL_MS);
-  
-  console.log("[scheduler] Started (synthesis every 15min, delayed extraction every 5min, enrichment every 30min, zeitgeist every 15min)");
+  console.log("[scheduler] Started (synthesis every 15min, delayed extraction every 5min, enrichment every 30min)");
 
   // Start Bluesky poller if enabled
   startBlueskyPoller();

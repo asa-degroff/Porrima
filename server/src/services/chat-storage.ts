@@ -477,18 +477,6 @@ export async function updateChatExtractionState(
   `).run(extractionAt, messageIndex, chatId);
 }
 
-export async function updateChatZeitgeistSynthesisState(
-  chatId: string,
-  synthesisAt: string
-): Promise<void> {
-  const db = getDb();
-  db.prepare(`
-    UPDATE chats
-    SET lastZeitgeistSynthesisAt = ?
-    WHERE id = ?
-  `).run(synthesisAt, chatId);
-}
-
 export async function updateChatTitle(
   chatId: string,
   title: string

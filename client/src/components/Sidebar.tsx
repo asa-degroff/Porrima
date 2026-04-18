@@ -1043,21 +1043,7 @@ export function Sidebar({
           Image Sandbox
         </button>
       </div>
-      {/* System Chat */}
-        <div className="px-3 pb-3 shrink-0">
-          <button
-            onClick={() => { onSelectChat("system"); onClose(); }}
-            className="w-full px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-400/15 text-amber-200/60 text-sm font-medium hover:bg-amber-500/20 hover:text-amber-200/80 transition-all flex items-center justify-center gap-2"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M12 16v-4"/>
-              <path d="M12 8h.01"/>
-            </svg>
-            Synthesis & Reflection
-          </button>
-        </div>
-        {/* Spacer for TTS bar */}
+      {/* Spacer for TTS bar */}
       {ttsBarVisible && <div className="h-[56px] shrink-0" />}
       </div>
     </>
