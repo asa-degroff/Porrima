@@ -969,13 +969,12 @@ export interface SynthesisStatus {
   isSynthesizing: boolean;
 }
 
-export interface SynthesisResult {
-  success: boolean;
-  lastSynthesis: string | null;
-  memoryCount: number;
-  summaryLength: number;
-  toolCalls: number;
-  error?: string;
+// Response from POST /synthesis/run and /synthesis/sleep. Synthesis is
+// dispatched asynchronously (202 Accepted); completion is observed via
+// /synthesis/status polling.
+export interface SynthesisDispatchResult {
+  started: boolean;
+  sleepModeTriggeredAt?: string;
 }
 
 export async function fetchSynthesisStatus(): Promise<SynthesisStatus> {
@@ -984,19 +983,25 @@ export async function fetchSynthesisStatus(): Promise<SynthesisStatus> {
   return res.json();
 }
 
-export async function triggerSynthesis(): Promise<SynthesisResult> {
+export async function triggerSynthesis(): Promise<SynthesisDispatchResult> {
   const res = await apiFetch(`${BASE}/memory/synthesis/run`, {
     method: "POST",
   });
-  if (!res.ok) throw new Error("Failed to trigger synthesis");
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to trigger synthesis");
+  }
   return res.json();
 }
 
-export async function triggerSleepMode(): Promise<SynthesisResult> {
+export async function triggerSleepMode(): Promise<SynthesisDispatchResult> {
   const res = await apiFetch(`${BASE}/memory/synthesis/sleep`, {
     method: "POST",
   });
-  if (!res.ok) throw new Error("Failed to trigger sleep mode");
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to trigger sleep mode");
+  }
   return res.json();
 }
 

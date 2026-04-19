@@ -118,14 +118,24 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       });
   }, []);
 
-  // Poll synthesis status
+  // Poll synthesis status. Synthesis runs server-side as a background task
+  // (the HTTP trigger returns 202 Accepted immediately and can outlast any
+  // proxy idle timeout), so the UI watches for the isSynthesizing flag going
+  // true → false to know when a run finished and flash "Complete".
+  const wasSynthesizingRef = useRef(false);
   useEffect(() => {
     const poll = async () => {
       try {
         const status = await fetchSynthesisStatus();
+        const prev = wasSynthesizingRef.current;
+        wasSynthesizingRef.current = status.isSynthesizing;
         setIsSynthesizing(status.isSynthesizing);
         if (status.isSynthesizing) {
           setSynthesisComplete(false);
+        } else if (prev) {
+          // Transition from active → idle: synthesis just finished.
+          setSynthesisComplete(true);
+          setTimeout(() => setSynthesisComplete(false), 5000);
         }
       } catch {
         // Ignore polling errors
@@ -567,14 +577,19 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     setSidebarOpen(false);
   }, []);
 
-  // Synthesis handlers
+  // Synthesis handlers. Trigger dispatches the run server-side (202 Accepted)
+  // and returns immediately. The polling effect watches isSynthesizing to
+  // reflect progress and to flash "Complete" on finish.
   const handleSynthesisSleep = useCallback(async () => {
     if (isSynthesizing) return;
     setSleepModeActive(true);
     setSynthesisComplete(false);
     try {
       await triggerSleepMode();
-      setSynthesisComplete(true);
+      // Optimistically reflect that a run is starting so the button updates
+      // before the next poll tick; the poll will confirm within ~10s.
+      setIsSynthesizing(true);
+      wasSynthesizingRef.current = true;
     } catch (e: any) {
       console.error("Sleep mode failed:", e.message);
     } finally {
@@ -584,13 +599,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   const handleSynthesisRun = useCallback(async () => {
     if (isSynthesizing) return;
+    setSynthesisComplete(false);
     try {
       await triggerSynthesis();
-      setSynthesisComplete(true);
+      setIsSynthesizing(true);
+      wasSynthesizingRef.current = true;
     } catch (e: any) {
       console.error("Synthesis failed:", e.message);
-    } finally {
-      setTimeout(() => setSynthesisComplete(false), 5000);
     }
   }, [isSynthesizing]);
 

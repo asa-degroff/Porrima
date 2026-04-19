@@ -58,21 +58,37 @@ router.get("/synthesis/status", async (_req, res) => {
   });
 });
 
-// Manually trigger synthesis
+// Kick off synthesis in the background and log any failure.
+// Synthesis runs can take minutes — far longer than any reasonable HTTP idle
+// timeout (the Cloudflare tunnel drops at 100s). Callers observe completion
+// by polling /synthesis/status (isSynthesizing goes false, lastSynthesis
+// advances).
+function dispatchSynthesis(origin: string): void {
+  runSystemSynthesis()
+    .then((result) => {
+      if (!result.success) {
+        console.error(`[synthesis/${origin}] failed:`, result.error);
+      } else {
+        console.log(
+          `[synthesis/${origin}] complete: ${result.summary.length}ch summary, ${result.toolCalls.length} tool calls`,
+        );
+      }
+    })
+    .catch((e: any) => {
+      console.error(`[synthesis/${origin}] threw:`, e?.message || e);
+    });
+}
+
+// Manually trigger synthesis. Returns 202 Accepted immediately; clients poll
+// /synthesis/status for completion.
 router.post("/synthesis/run", async (_req, res) => {
   try {
-    const result = await runSystemSynthesis();
-    const { getMemoryCount, getLastSynthesis } = await import("../services/memory-storage.js");
-    const memoryCount = await getMemoryCount();
-    const lastSynthesis = await getLastSynthesis();
-    res.json({
-      success: result.success,
-      lastSynthesis,
-      memoryCount,
-      summaryLength: result.summary.length,
-      toolCalls: result.toolCalls.length,
-      error: result.error,
-    });
+    const { isSynthesisActive } = await import("../services/system-chat.js");
+    if (isSynthesisActive()) {
+      return res.status(409).json({ error: "Synthesis already in progress" });
+    }
+    dispatchSynthesis("run");
+    res.status(202).json({ started: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -82,26 +98,22 @@ router.post("/synthesis/run", async (_req, res) => {
 // The flag is a timestamp, not a latch: the scheduler skips while
 // Date.now() - sleepModeTriggeredAt < 2h, so the cooldown self-expires
 // without the endpoint needing to clear it.
+//
+// Like /run, returns 202 immediately to survive proxy idle timeouts; the
+// /status poll surfaces completion.
 router.post("/synthesis/sleep", async (_req, res) => {
   try {
+    const { isSynthesisActive } = await import("../services/system-chat.js");
+    if (isSynthesisActive()) {
+      return res.status(409).json({ error: "Synthesis already in progress" });
+    }
     const { getSettings, saveSettings } = await import("../services/chat-storage.js");
     const settings = await getSettings();
     settings.sleepModeTriggeredAt = new Date().toISOString();
     await saveSettings(settings);
 
-    const result = await runSystemSynthesis();
-
-    const { getMemoryCount, getLastSynthesis } = await import("../services/memory-storage.js");
-    const memoryCount = await getMemoryCount();
-    const lastSynthesis = await getLastSynthesis();
-    res.json({
-      success: result.success,
-      lastSynthesis,
-      memoryCount,
-      summaryLength: result.summary.length,
-      toolCalls: result.toolCalls.length,
-      error: result.error,
-    });
+    dispatchSynthesis("sleep");
+    res.status(202).json({ started: true, sleepModeTriggeredAt: settings.sleepModeTriggeredAt });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
