@@ -197,7 +197,7 @@ async function buildSynthesisTriggerContent(
   digestChatIds: string[],
   archive: { archivedCount: number; newlyArchivedIds: string[] },
 ): Promise<string> {
-  const { getChat } = await import("./chat-storage.js");
+  const { getDb } = await import("./chat-storage.js");
   const { listNotebookEntries, getNotebookEntry } = await import("./notebook-storage.js");
   const { loadMemoryStore } = await import("./memory-storage.js");
   // Persona, user doc, memory blocks, and zeitgeist are injected via the
@@ -218,54 +218,61 @@ async function buildSynthesisTriggerContent(
 
   if (archive.archivedCount > 0) {
     parts.push(
-      `**Pre-synthesis archiving:** ${archive.archivedCount} chat(s) archived this cycle (${archive.newlyArchivedIds.length} newly archived). Use \`read_archived_context\` for full-fidelity transcripts.`,
+      `**Pre-synthesis archiving:** ${archive.archivedCount} chat(s) archived this cycle.`,
     );
   }
 
-  // --- Chat digest ---
+  // --- Recent conversations (archive index) ---
+  // Each archive block has an LLM-generated one-line `indexEntry` describing
+  // its significance — that's our data source. Previously this section was a
+  // raw dump of the last 40 messages per chat (truncated to 300 chars each,
+  // with tool names spelled out). That was a lot of token spend on noise:
+  // the messages were too short to be useful but long enough to degrade
+  // attention across the whole context. The archive index gives the same
+  // coverage in a fraction of the tokens, and the agent can drill in with
+  // read_archived_context when a specific block warrants full fidelity.
   if (digestChatIds.length > 0) {
-    const sections: string[] = [];
-    const MAX_DIGEST_CHARS = 12000;
-    let totalChars = 0;
+    const db = getDb();
+    const placeholders = digestChatIds.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT a.chatId, a.indexEntry, a.sequenceNum, c.title, c.lastModified
+         FROM context_archives a
+         LEFT JOIN chats c ON c.id = a.chatId
+         WHERE a.chatId IN (${placeholders})
+         ORDER BY c.lastModified DESC, a.chatId, a.sequenceNum ASC`,
+      )
+      .all(...digestChatIds) as Array<{
+        chatId: string;
+        indexEntry: string;
+        sequenceNum: number;
+        title: string | null;
+        lastModified: string | null;
+      }>;
 
-    for (const chatId of digestChatIds.slice(0, 15)) {
-      const chat = await getChat(chatId);
-      if (!chat || chat.messages.length === 0) continue;
-
-      const recent = chat.messages
-        .filter(
-          (m) =>
-            m.role === "user" ||
-            (m.role === "assistant" && !m._isCompactionSummary && !m._outOfContext),
-        )
-        .slice(-40);
-      if (recent.length === 0) continue;
-
-      const condensed = recent
-        .map((m) => {
-          const prefix = m.role === "user" ? "User" : "Agent";
-          let text = m.content || "";
-          if (text.length > 300) text = text.slice(0, 300) + "...";
-          const toolNote = m.toolCalls?.length
-            ? ` [tools: ${m.toolCalls.map((t) => t.name).join(", ")}]`
-            : "";
-          return `${prefix}: ${text}${toolNote}`;
-        })
-        .join("\n");
-
-      const section = `### ${chat.title || "Untitled Chat"}\n${condensed}`;
-      if (totalChars + section.length > MAX_DIGEST_CHARS) {
-        sections.push(
-          `### ${chat.title || "Untitled Chat"}\n(truncated — ${recent.length} messages; use read_archived_context for full transcript)`,
-        );
-        break;
+    const byChat = new Map<string, { title: string; entries: string[] }>();
+    for (const row of rows) {
+      if (!byChat.has(row.chatId)) {
+        byChat.set(row.chatId, {
+          title: row.title || "Untitled Chat",
+          entries: [],
+        });
       }
-      sections.push(section);
-      totalChars += section.length;
+      byChat.get(row.chatId)!.entries.push(row.indexEntry.trim());
     }
 
-    if (sections.length > 0) {
-      parts.push(`## Recent Conversations\n\n${sections.join("\n\n---\n\n")}`);
+    if (byChat.size > 0) {
+      const sections: string[] = [];
+      for (const { title, entries } of byChat.values()) {
+        sections.push(`### ${title}\n${entries.join("\n")}`);
+      }
+      parts.push(
+        [
+          `## Recent Conversations`,
+          `Archive index for chats touched this cycle — each line identifies one archive block. Call \`read_archived_context(archive_id)\` for a full transcript, or \`search_conversations\` to search across all archives.`,
+          sections.join("\n\n"),
+        ].join("\n\n"),
+      );
     }
   }
 
@@ -274,14 +281,12 @@ async function buildSynthesisTriggerContent(
   if (memoryStore.memories.length > 0) {
     const topAnchors = [...memoryStore.memories]
       .sort((a, b) => b.importance - a.importance || b.accessCount - a.accessCount)
-      .slice(0, 30);
-    const fmt = (m: (typeof memoryStore.memories)[number]) =>
-      `- [${m.category}] ${m.text} (importance: ${m.importance}/10)`;
+      .slice(0, 20);
     parts.push(
       [
         `## Memory Context`,
-        `Total stored memories: ${memoryStore.memories.length}. Top ${topAnchors.length} importance anchors:`,
-        topAnchors.map(fmt).join("\n"),
+        `Top ${topAnchors.length} anchors (of ${memoryStore.memories.length} stored):`,
+        topAnchors.map((m) => `- [${m.category}] ${m.text}`).join("\n"),
       ].join("\n\n"),
     );
   }
@@ -629,12 +634,30 @@ export async function runSystemSynthesis(options?: {
       );
     }
 
-    const summary = (
-      textChunks.join("\n\n") ||
-      thinkingChunks.join("\n\n") ||
-      "# Daily Synthesis\n\n*LLM returned no text.*"
-    ).trim();
+    const textSummary = textChunks.join("\n\n").trim();
     const thinking = thinkingChunks.join("\n\n");
+    const textLen = textSummary.length;
+    const thinkLen = thinking.length;
+
+    console.log(
+      `[system-chat] Tool loop done: iters=${iterations}, tools=${allToolCalls.length}, text=${textLen}ch, thinking=${thinkLen}ch, stopReason=${stopReason}`,
+    );
+
+    // No-text outcomes used to fall back to promoting thinking into the
+    // message content, which masked the real failure — you'd see a thinking
+    // trace in the notebook entry and assume synthesis worked. Now we keep
+    // thinking as thinking and surface an explicit placeholder + warning so
+    // the no-output case is diagnosable.
+    if (textLen === 0) {
+      console.warn(
+        `[system-chat] Synthesis produced no text content. thinking=${thinkLen}ch, stopReason=${stopReason}, tools=${allToolCalls.length}. ` +
+        `If stopReason='length' the model exhausted maxTokens mid-output; if 'stop' with zero tools the chat template may not be transitioning from reasoning to content.`,
+      );
+    }
+
+    const summary =
+      textSummary ||
+      `# Daily Synthesis\n\n*The model produced no visible output this cycle (stopReason=${stopReason}, thinking=${thinkLen}ch, tools=${allToolCalls.length}). The thinking trace is preserved on the system chat's last assistant message.*`;
 
     // --- Persist the assistant response to the system chat ---
     const assistantChatMsg: ChatMessage = {
@@ -655,21 +678,28 @@ export async function runSystemSynthesis(options?: {
     await saveChat(chat);
 
     // --- Save synthesis as notebook entry for the UI ---
+    // Only save to notebook when we actually have synthesis text. A no-output
+    // run has nothing useful for the notebook; persisting the placeholder
+    // pollutes the agent's own notebook history with filler entries.
     let notebookEntryId: string | undefined;
-    try {
-      const entry = await createNotebookEntry("agent", summary);
-      notebookEntryId = entry.id;
-      if (allToolCalls.length || artifacts.length || visuals.length || generatedImages.length) {
-        await updateNotebookEntry("agent", entry.id, {
-          toolCalls: allToolCalls,
-          toolResults: [],
-          artifacts,
-          visuals,
-        });
+    if (textLen === 0) {
+      console.log("[system-chat] Skipping notebook entry — no text content produced");
+    } else {
+      try {
+        const entry = await createNotebookEntry("agent", summary);
+        notebookEntryId = entry.id;
+        if (allToolCalls.length || artifacts.length || visuals.length || generatedImages.length) {
+          await updateNotebookEntry("agent", entry.id, {
+            toolCalls: allToolCalls,
+            toolResults: [],
+            artifacts,
+            visuals,
+          });
+        }
+        console.log(`[system-chat] Saved synthesis as notebook entry: ${entry.id}`);
+      } catch (e: any) {
+        console.error("[system-chat] Failed to save synthesis as notebook entry:", e.message);
       }
-      console.log(`[system-chat] Saved synthesis as notebook entry: ${entry.id}`);
-    } catch (e: any) {
-      console.error("[system-chat] Failed to save synthesis as notebook entry:", e.message);
     }
 
     // --- Gate future scheduler ticks ---
