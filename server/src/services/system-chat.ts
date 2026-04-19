@@ -713,8 +713,19 @@ export async function runSystemSynthesis(options?: {
         notebookEntryId = entry.id;
         if (allToolCalls.length || artifacts.length || visuals.length || generatedImages.length) {
           await updateNotebookEntry("agent", entry.id, {
-            toolCalls: allToolCalls,
-            toolResults: [],
+            // Map to ChatToolCall shape explicitly — the notebook storage
+            // expects `{ id, name, arguments }` and we were passing the raw
+            // pi-ai ToolCall through by accident. Same mapping used when
+            // writing the system chat's assistant message above.
+            toolCalls: allToolCalls.map((tc) => ({
+              id: tc.id,
+              name: tc.name,
+              arguments: tc.arguments as Record<string, any>,
+            })),
+            // Without the matched results, the notebook renderer keys each
+            // tool call's "in progress" state on the absence of a result with
+            // the same toolCallId — so every call was stuck pending forever.
+            toolResults: allToolResults,
             artifacts,
             visuals,
           });
