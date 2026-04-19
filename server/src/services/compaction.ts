@@ -20,19 +20,53 @@ function estimateTokens(text: string): number {
 }
 
 /**
+ * Pure character-based estimate of all in-context messages + system prompt.
+ * Does not rely on LLM-reported usage. Cheap, deterministic, and unaffected
+ * by stale anchors when the system prompt or tool schemas change between turns.
+ */
+function charEstimateContextSize(messages: Chat["messages"], systemPrompt: string): number {
+  let total = estimateTokens(systemPrompt);
+  for (const m of messages) {
+    if (m._outOfContext) continue;
+    if (m.role === "user") {
+      total += estimateTokens(m.content);
+      if (m.images?.length) total += m.images.length * 256;
+    } else if (m.role === "assistant") {
+      total += estimateTokens(m.content);
+      if (m.thinking) total += estimateTokens(m.thinking);
+      if (m.toolCalls) total += m.toolCalls.length * 50;
+      if (m.toolResults) {
+        for (const r of m.toolResults) total += estimateTokens(r.content) + 20;
+      }
+    }
+  }
+  return total;
+}
+
+/**
  * Estimate total context size including system prompt and all messages.
  * Exported as `estimateContextTokens` for use in chat route fallback compaction.
+ *
+ * Returns the MAX of two estimates:
+ * - Path A (usage anchor): LLM-reported `usage.totalTokens` on the last
+ *   in-context assistant message, plus char-estimates for anything added
+ *   since. Accurate when the system prompt, tool schemas, and in-context
+ *   message set haven't materially changed since that usage was captured.
+ * - Path B (char-based): pure char-count of systemPrompt + all in-context
+ *   messages. Unaffected by changes to system prompt / tools between turns.
+ *
+ * Taking the max protects against Path A going stale — common on resume
+ * (contextState reset → fresh memory retrieval grows systemPrompt), after
+ * AGENTS.md / persona / memory-block changes, or when tool schemas grow.
+ * In steady state Path A wins (since it includes framing overhead that
+ * char estimation doesn't). When the prompt grows, Path B wins.
  */
 export { estimateContextSize as estimateContextTokens };
 function estimateContextSize(messages: Chat["messages"], systemPrompt: string): number {
-  // Prefer the LLM's own reported usage — it's the authoritative token count
-  // at that point in the conversation, already including system prompt, tool
-  // definitions, and framing overhead. Character-based estimation double-counts
-  // against that (e.g., it would re-add the system prompt and thinking traces)
-  // and can spuriously exceed the real context size by 30%+ on code/tool-heavy
-  // chats, which used to trigger pre-send compaction below the true threshold.
-  //
-  // Find the latest in-context assistant message with reported usage.
+  // Path B: pure char-based estimate across the whole in-context set + prompt.
+  const pathBTokens = charEstimateContextSize(messages, systemPrompt);
+
+  // Path A: anchor on the latest in-context assistant's reported usage.
   let lastKnownUsage = 0;
   let lastUsageIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -44,46 +78,28 @@ function estimateContextSize(messages: Chat["messages"], systemPrompt: string): 
     }
   }
 
-  if (lastKnownUsage > 0 && lastUsageIndex >= 0) {
-    // Anchor on the reported usage, then add a char-based estimate for
-    // anything added since (the user's newest message, any tool results
-    // that were already integrated into chat.messages after the last
-    // assistant's usage was captured).
-    let additionalTokens = 0;
-    for (let i = lastUsageIndex + 1; i < messages.length; i++) {
-      const m = messages[i];
-      if (m._outOfContext) continue;
-      additionalTokens += estimateTokens(m.content);
-      if (m.images?.length) additionalTokens += m.images.length * 256;
-      if (m.role === "assistant") {
-        if (m.thinking) additionalTokens += estimateTokens(m.thinking);
-        if (m.toolCalls) additionalTokens += m.toolCalls.length * 50;
-        if (m.toolResults) {
-          for (const r of m.toolResults) additionalTokens += estimateTokens(r.content) + 20;
-        }
-      }
-    }
-    return lastKnownUsage + additionalTokens;
+  if (lastKnownUsage === 0 || lastUsageIndex < 0) {
+    // Cold start / first turn — no prior usage to anchor on.
+    return pathBTokens;
   }
 
-  // Cold start / first turn — no prior usage to anchor on. Fall back to
-  // character-based estimation across the whole context.
-  let charEstimate = estimateTokens(systemPrompt);
-  for (const m of messages) {
+  let additionalTokens = 0;
+  for (let i = lastUsageIndex + 1; i < messages.length; i++) {
+    const m = messages[i];
     if (m._outOfContext) continue;
-    if (m.role === "user") {
-      charEstimate += estimateTokens(m.content);
-      if (m.images?.length) charEstimate += m.images.length * 256;
-    } else if (m.role === "assistant") {
-      charEstimate += estimateTokens(m.content);
-      if (m.thinking) charEstimate += estimateTokens(m.thinking);
-      if (m.toolCalls) charEstimate += m.toolCalls.length * 50;
+    additionalTokens += estimateTokens(m.content);
+    if (m.images?.length) additionalTokens += m.images.length * 256;
+    if (m.role === "assistant") {
+      if (m.thinking) additionalTokens += estimateTokens(m.thinking);
+      if (m.toolCalls) additionalTokens += m.toolCalls.length * 50;
       if (m.toolResults) {
-        for (const r of m.toolResults) charEstimate += estimateTokens(r.content) + 20;
+        for (const r of m.toolResults) additionalTokens += estimateTokens(r.content) + 20;
       }
     }
   }
-  return charEstimate;
+  const pathATokens = lastKnownUsage + additionalTokens;
+
+  return Math.max(pathATokens, pathBTokens);
 }
 
 /**
@@ -108,15 +124,24 @@ export async function truncateBeforeSend(
   if (messages.length <= 2) return noOp;
 
   const estimatedTokens = estimateContextSize(messages, systemPrompt);
+  const charEstimate = charEstimateContextSize(messages, systemPrompt);
   const threshold = contextWindow * 0.75;
 
-  if (estimatedTokens <= threshold) return noOp;
+  // Fallthrough target: if the primary estimator says we're safe, we still
+  // enforce a hard-cap check at the bottom (see "Hard-cap safety pass"). This
+  // catches cases where the usage-anchor path understates the real payload
+  // (e.g., the system prompt grew since the anchor was captured — common on
+  // resume after contextState reset re-freezes memories into the prompt).
+  if (estimatedTokens <= threshold) {
+    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive);
+  }
 
   onCompacting?.();
 
-  // Record which anchor drove the estimate so spurious triggers are
-  // diagnosable: a `usage=N` prefix means we trusted the LLM's count,
-  // `charEst` means there was no prior usage to anchor on.
+  // Record which path drove the estimate so spurious triggers are diagnosable.
+  // `usage=N` means the LLM-reported token count dominated; `charEst` means
+  // char-based estimation did (typically when system prompt grew between turns
+  // or no prior usage exists).
   let lastUsage = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]._outOfContext) continue;
@@ -125,9 +150,14 @@ export async function truncateBeforeSend(
       break;
     }
   }
-  const anchor = lastUsage > 0 ? `usage=${lastUsage}` : "charEst";
+  // drivingPath indicates which estimator path won the max():
+  // "usage=N" → Path A (usage anchor) dominated — steady state
+  // "charEst" → Path B (char-based) dominated — prompt/tools grew, or no anchor
+  const drivingPath = lastUsage > 0 && estimatedTokens !== charEstimate
+    ? `usage=${lastUsage}`
+    : `charEst`;
   console.log(
-    `[compaction] Pre-send truncation triggered: ${estimatedTokens} tokens > ${threshold} threshold (anchor=${anchor}, ctx=${contextWindow})`
+    `[compaction] Pre-send truncation triggered: ${estimatedTokens} tokens > ${threshold} threshold (drivingPath=${drivingPath}, charEst=${charEstimate}, ctx=${contextWindow})`
   );
 
   // Build index of in-context messages for budget calculation
@@ -135,7 +165,12 @@ export async function truncateBeforeSend(
   for (let i = 0; i < messages.length; i++) {
     if (!messages[i]._outOfContext) icIndices.push(i);
   }
-  if (icIndices.length <= 2) return noOp;
+  if (icIndices.length <= 2) {
+    // Too few in-context messages to compact conventionally; still run the
+    // hard-cap pass so the breach is logged (and, if forcible, aggressively
+    // truncated via truncateChatHistory).
+    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive);
+  }
 
   // Per-message token estimates for in-context messages
   const icEstimates = icIndices.map((idx) => {
@@ -183,7 +218,12 @@ export async function truncateBeforeSend(
   const messagesToMarkCount = keepFromIC - 1;
   console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFromIC=${keepFromIC} marking=${messagesToMarkCount}/${icIndices.length} in-context`);
 
-  if (messagesToMarkCount <= 0) return noOp;
+  if (messagesToMarkCount <= 0) {
+    // Budget planning says keep everything, but the estimator said we're over
+    // the threshold. Run the hard-cap pass so it can force aggressive
+    // compaction if the actual payload still exceeds the cap.
+    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive);
+  }
 
   // Collect removed messages for archiving
   const removedMessages: ChatMessage[] = [];
@@ -267,7 +307,91 @@ export async function truncateBeforeSend(
     console.warn("[compaction] Title regeneration failed:", err);
   }
 
-  return { truncated: true, removedCount: messagesToMarkCount, removedMessages, estimatedTokenCount: estimatedRemovedTokens };
+  const primaryResult: CompactionResult = {
+    truncated: true,
+    removedCount: messagesToMarkCount,
+    removedMessages,
+    estimatedTokenCount: estimatedRemovedTokens,
+  };
+
+  // Hard-cap safety pass: even after primary truncation, verify the actual
+  // payload fits. Handles cases where the budget planning used a scale factor
+  // that under-counted (e.g., tool schemas bloat the real payload beyond
+  // what char estimation sees).
+  const additional = await hardCapSafetyPass(chat, contextWindow, systemPrompt, undefined, onKeepalive);
+  if (additional && additional.truncated) {
+    return {
+      truncated: true,
+      removedCount: primaryResult.removedCount + additional.removedCount,
+      removedMessages: [...(primaryResult.removedMessages || []), ...(additional.removedMessages || [])],
+      estimatedTokenCount: (primaryResult.estimatedTokenCount || 0) + (additional.estimatedTokenCount || 0),
+    };
+  }
+  return primaryResult;
+}
+
+/**
+ * Hard-cap safety pass. Runs a pure char-based estimate of the current
+ * in-context payload and, if it exceeds 90% of the context window, forces
+ * aggressive compaction via `truncateChatHistory(forceCompact=true)` which
+ * targets 50% of the window.
+ *
+ * This is a defensive net for cases where the primary estimator's usage
+ * anchor has gone stale — e.g., the system prompt grew between turns (new
+ * memories frozen after contextState reset, expanded AGENTS.md, added
+ * memory blocks), or tool schemas grew. Without this, the primary estimator
+ * can return a value under the 75% threshold while the real payload exceeds
+ * the model's context size, causing llama.cpp to hang during prompt ingest.
+ *
+ * Returns null if the payload is already under the hard cap, otherwise the
+ * result of the forced compaction.
+ */
+async function hardCapSafetyPass(
+  chat: Chat,
+  contextWindow: number,
+  systemPrompt: string,
+  onCompacting?: () => void,
+  onKeepalive?: () => void,
+): Promise<CompactionResult | null> {
+  const charEstimate = charEstimateContextSize(chat.messages, systemPrompt);
+  const hardCap = contextWindow * 0.90;
+  if (charEstimate <= hardCap) return null;
+
+  const icCount = chat.messages.filter((m) => !m._outOfContext).length;
+  if (icCount <= 2) {
+    console.error(
+      `[compaction] Hard-cap breach but only ${icCount} in-context messages — cannot compact further. ` +
+      `charEstimate=${charEstimate}/${contextWindow} (${((charEstimate / contextWindow) * 100).toFixed(0)}%). ` +
+      `The payload will be sent anyway and may be truncated or rejected by the model.`
+    );
+    return null;
+  }
+
+  console.warn(
+    `[compaction] Hard-cap safety triggered: charEstimate=${charEstimate} > ${hardCap.toFixed(0)} ` +
+    `(90% of ctx=${contextWindow}) — running aggressive compaction (target 50%)`
+  );
+
+  // Force compaction targeting 50% of the context window. This is the same
+  // code path used by post-response compaction and manual /compact, so it
+  // archives properly and generates index summaries.
+  // truncateChatHistory fires onCompacting internally when it starts marking
+  // messages, so don't double-fire from here.
+  const aggressive = await truncateChatHistory(chat, contextWindow, true, onCompacting, onKeepalive);
+  if (!aggressive.truncated) {
+    console.error(
+      `[compaction] Aggressive compaction failed to reduce context further. ` +
+      `charEstimate=${charEstimate}/${contextWindow}. Proceeding with current payload.`
+    );
+    return null;
+  }
+
+  const postCharEstimate = charEstimateContextSize(chat.messages, systemPrompt);
+  console.log(
+    `[compaction] Hard-cap safety pass complete: removed ${aggressive.removedCount} more messages, ` +
+    `charEstimate ${charEstimate} → ${postCharEstimate} (${((postCharEstimate / contextWindow) * 100).toFixed(0)}% of ctx)`
+  );
+  return aggressive;
 }
 
 // ---------------------------------------------------------------------------
