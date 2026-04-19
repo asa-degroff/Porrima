@@ -103,10 +103,27 @@ This separates two complementary retrieval needs:
 - **Memories** (existing): distill generalizable knowledge across conversations
 - **Archives** (new): preserve specific artifacts (exact tool outputs, code, reasoning) for precise retrieval
 
-## Daily Synthesis (`synthesis.ts`)
+## Synthesis (`system-chat.ts`)
 
-Only runs when agent chats occurred that day (inactive days skipped). Groups today's chats by project, loads AGENTS.md for each active project. Loads today's notebook entries (user + agent, excluding prior synthesis entries). Uses `defaultModelId` from settings (not first Ollama model); captures `thinking_delta` as fallback for qwen3 reasoning mode. Generates reflections (1-5 per day, saved as `reflection` memories with importance 7-9). Writes an agent notebook entry with the synthesis summary. Includes persona pattern analysis (suggestions logged, not auto-applied). System prompt uses first-person for agent actions, third-person for user.
+Synthesis runs the main model inside a persistent **system chat** (`chat.type === "system"`, id `"system"`). Each cycle, the server:
+
+1. **Pre-archives** recent unarchived agent chats via `pre-synthesis-archive.ts` — creates `context_archives` rows with LLM-generated one-line `indexEntry` descriptions so the synthesis agent can pull full transcripts via `read_archived_context`.
+2. **Builds a synthesis trigger** — a single user-role `ChatMessage` containing: archive index entries grouped by chat, memories written since the last synthesis (delta-based, not importance-based; fallback to last 24h on first run; capped at 50), recent notebook entries. Persona, user doc, memory blocks, and zeitgeist are injected via the stable system-prompt prefix instead, not the trigger body — keeps them byte-identical across cycles for KV caching.
+3. **Appends the trigger** to the persistent system chat and runs the tool loop with the full agent tool suite (memory, filesystem, web, image, artifacts, notebook). `truncateBeforeSend` handles history growth.
+4. **Composes the system prompt** as: `chat.systemPrompt` (the user's `defaultSystemPrompt`) → `buildStablePrefix(...)` (persona + user doc + memory blocks + zeitgeist) → `SYNTHESIS_INSTRUCTIONS` addendum.
+5. **Persists output** — writes the assistant response to the system chat (with `_isSystemMessage: true`) and, when text is produced, creates a matching agent notebook entry with paired `toolCalls` + `toolResults`.
+6. **Marks the cycle** — calls `setLastSynthesis(now)` so the next `shouldRunSystemSynthesis()` check respects the 24h gate.
+
+Synthesis owns both the daily narrative (notebook entry) and zeitgeist maintenance (the agent calls `update_memory_block` on `blk-zeitgeist-continuity` when the continuity narrative has shifted). See [zeitgeist.md](zeitgeist.md).
+
+**Triggers:**
+- Scheduler: `checkAndRunSynthesis()` runs every 15 min; fires `runSystemSynthesis()` if `shouldRunSystemSynthesis()` returns true (more than 24h since last) and no sleep-mode cooldown is active.
+- Manual: `POST /api/memory/synthesis/run` and `POST /api/memory/synthesis/sleep` dispatch the run asynchronously (202 Accepted) and return immediately. Clients poll `/api/memory/synthesis/status` (which exposes `isSynthesizing`) to observe progress. `/sleep` stamps `settings.sleepModeTriggeredAt` so the scheduler skips periodic runs for 2 hours.
+
+**Synthesis lock:** `system-chat.ts` exports `acquireSynthesisLock` / `releaseSynthesisLock` / `getSynthesisLock` / `isSynthesisActive`. The chat route waits on `getSynthesisLock()` before processing a user message, so synthesis and user chat are strictly serialized on the main model. Enrichment and delayed-extraction checks in the scheduler also skip while synthesis is active.
+
+**Reflections:** `reflection` memories (importance 7–9) are created by the agent via `save_memory` calls during synthesis, not batch-generated post-hoc.
 
 ## Creative Cycle Integration
 
-After daily synthesis, scheduler runs `runCorpusCreativeCycle()` — rebuilds clusters, generates creative directions via LLM, saves top directions as `context` memories, then executes top directions as autonomous image generations.
+After synthesis, the scheduler runs `runCorpusCreativeCycle()` — rebuilds clusters, generates creative directions via LLM, saves top directions as `context` memories, then executes top directions as autonomous image generations.

@@ -4,7 +4,7 @@
 |--------|----------|-------------|
 | GET | `/api/models` | List available Ollama models |
 | GET | `/api/chats` | List all chats |
-| POST | `/api/chats` | Create chat (`{ modelId, type: "agent"\|"quick", projectId? }`) |
+| POST | `/api/chats` | Create chat (`{ modelId, type: "agent"\|"quick", projectId? }`). The `system` chat is created automatically on server startup — clients don't POST it. |
 | PATCH | `/api/chats/:id` | Update chat metadata |
 | DELETE | `/api/chats/:id` | Delete a chat |
 | GET | `/api/chats/:id` | Get single chat with messages |
@@ -15,8 +15,9 @@
 | POST | `/api/memory` | Create memory |
 | POST | `/api/memory/search` | Semantic search (`{ query, topK? }`) |
 | GET | `/api/memory/status` | Embedding model status + memory count + extraction metrics |
-| GET | `/api/memory/synthesis/status` | Last synthesis timestamp + memory count |
-| POST | `/api/memory/synthesis/run` | Manually trigger synthesis |
+| GET | `/api/memory/synthesis/status` | Last synthesis timestamp + memory count + `isSynthesizing` flag |
+| POST | `/api/memory/synthesis/run` | Dispatch a synthesis run. Returns **202 Accepted** `{ started: true }` immediately and runs in the background (synthesis can take minutes; longer than any reasonable HTTP idle timeout). Clients poll `/synthesis/status` for completion. Returns **409 Conflict** if a run is already active. |
+| POST | `/api/memory/synthesis/sleep` | Same as `/run`, but also stamps `settings.sleepModeTriggeredAt` so the scheduler suppresses periodic runs for 2 hours. Returns **202** `{ started: true, sleepModeTriggeredAt }`. |
 | POST | `/api/memory/conversations/search` | Conversation search (`{ query, chatId?, limit? }`) — FTS5 on chat history |
 | GET | `/api/projects` | List all projects |
 | POST | `/api/projects` | Create project (`{ name, path }`) |

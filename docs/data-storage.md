@@ -21,7 +21,7 @@ All data is stored in `~/.quje-agent/`:
 │   └── corpus.json.bak # Legacy JSON (migrated on first startup)
 └── memory/
     ├── memories.db     # SQLite database (memories + vector embeddings via sqlite-vec)
-    └── daily/          # Daily synthesis logs (YYYY-MM-DD.md)
+    └── daily/          # Legacy — daily synthesis markdown logs from the pre-system-chat era. Not written anymore; synthesis output now lives in the system chat + agent notebook entries.
 ```
 
 ## SQLite Schemas

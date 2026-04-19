@@ -2,7 +2,7 @@
 
 ## Chat Types
 
-Three chat types: **agent** (memory-augmented), **quick** (standalone), and **bluesky** (social media integration). Existing chats without a `type` field default to "quick".
+Four chat types: **agent** (memory-augmented), **quick** (standalone), **bluesky** (social media integration), and **system** (synthesis and reflection). The system chat is a singleton (id `"system"`) created on server startup; synthesis cycles append to it, and the user can view/interact with it through the sidebar like any other chat. Existing chats without a `type` field default to "quick".
 
 The server is the integration hub. The chat route (`server/src/routes/chat.ts`) orchestrates:
 1. Memory context augmentation (agent chats only)
@@ -56,12 +56,14 @@ Memory services are in `server/src/services/memory-*.ts`. They share the pi-ai `
 
 **Memory extraction** is deferred during active tool loops — queued and executed after the agent loop completes to prevent concurrent LLM calls from interfering with the active conversation (e.g., triggering model reloads on llama.cpp).
 
+**Synthesis** runs inside the persistent system chat (`server/src/services/system-chat.ts`) using the main model with full tool access. Synthesis is serialized against user chat via the `synthesisLock` mutex: the chat route awaits `getSynthesisLock()` before processing user messages, and the scheduler's enrichment/delayed-extraction passes skip while `isSynthesisActive()` is true. See [memory-system.md](memory-system.md) § Synthesis.
+
 ## Chat Storage
 
 Chat storage uses SQLite (`server/src/services/chat-storage.ts`). The `app.db` database stores:
 - **Chats** — metadata + JSON `messages` column (hybrid approach: normalized metadata, JSON for nested arrays)
 - **Chat messages** — denormalized `chat_messages` table with FTS5 virtual table for full-text search
-- **Context archives** — `context_archives` table with FTS5 for indexed compaction (cross-chat searchable)
+- **Context archives** — `context_archives` table with FTS5 for indexed compaction (cross-chat searchable). Archives are created two ways: (a) during compaction, when messages are rolled out of the active context, and (b) by `pre-synthesis-archive.ts` before each synthesis cycle, which writes archives (with LLM-generated one-line `indexEntry` descriptions) for recent unarchived agent chats so the synthesis agent has full-fidelity access via `read_archived_context`.
 - **Projects, settings, pending states** — SQLite tables
 
 **FTS5 search**: `chat_messages_fts` and `context_archives_fts` both support phrase match with fallback to term search. The `search_conversation` tool searches both current messages AND archived context, with archive results showing dereferenceable IDs.
