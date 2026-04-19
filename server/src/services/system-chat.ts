@@ -276,19 +276,42 @@ async function buildSynthesisTriggerContent(
     }
   }
 
-  // --- Memory anchors ---
+  // --- New memories since last synthesis ---
+  // Importance-based anchors were a bad cut: importance is a noisy scale and
+  // top-N skews to the same saturated 10/10 entries every cycle (many of
+  // which are stale). What actually wants review is what's been written
+  // *since* the last cycle — that's the delta the agent should integrate.
+  // The agent can always reach for older memories via `search_memory`.
   const memoryStore = await loadMemoryStore();
   if (memoryStore.memories.length > 0) {
-    const topAnchors = [...memoryStore.memories]
-      .sort((a, b) => b.importance - a.importance || b.accessCount - a.accessCount)
-      .slice(0, 20);
-    parts.push(
-      [
-        `## Memory Context`,
-        `Top ${topAnchors.length} anchors (of ${memoryStore.memories.length} stored):`,
-        topAnchors.map((m) => `- [${m.category}] ${m.text}`).join("\n"),
-      ].join("\n\n"),
-    );
+    const lastSynthesisMs = memoryStore.lastSynthesis
+      ? new Date(memoryStore.lastSynthesis).getTime()
+      : 0;
+    // Fresh install / first run: fall back to a 24h window so we have
+    // *something* to review instead of dumping the entire store.
+    const cutoffMs = lastSynthesisMs || Date.now() - 24 * 60 * 60 * 1000;
+
+    const newMemories = memoryStore.memories
+      .filter((m) => new Date(m.createdAt).getTime() > cutoffMs)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    // Cap at 50 so a burst doesn't swamp the trigger. Ordered chronologically
+    // so the agent reads the delta in the order it happened.
+    const CAP = 50;
+    const shown = newMemories.slice(0, CAP);
+
+    if (shown.length > 0) {
+      const header = memoryStore.lastSynthesis
+        ? `${shown.length} memor${shown.length === 1 ? "y" : "ies"} written since last synthesis${newMemories.length > CAP ? ` (showing first ${CAP} of ${newMemories.length})` : ""}:`
+        : `${shown.length} memor${shown.length === 1 ? "y" : "ies"} from the last 24 hours (no prior synthesis):`;
+      parts.push(
+        [
+          `## New Memories`,
+          header,
+          shown.map((m) => `- [${m.category}] ${m.text}`).join("\n"),
+        ].join("\n\n"),
+      );
+    }
   }
 
   // --- Notebook entries ---
