@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { fetchMemoryBlocks, fetchBlockHistory } from "../api/client";
+import { fetchMemoryBlocks, fetchBlockHistory, updateMemoryBlockApi } from "../api/client";
 import type { MemoryBlock } from "../types";
 
 interface Props {
@@ -24,6 +24,8 @@ export function BlockIndicator({ projectId }: Props) {
   const [expandedBlockId, setExpandedBlockId] = useState<string | null>(null);
   const [history, setHistory] = useState<MemoryBlock[] | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const [editBlockContent, setEditBlockContent] = useState("");
   const ref = useRef<HTMLDivElement>(null);
 
   // Close on outside click
@@ -34,6 +36,7 @@ export function BlockIndicator({ projectId }: Props) {
         setOpen(false);
         setExpandedBlockId(null);
         setHistory(null);
+        setEditingBlockId(null);
       }
     };
     document.addEventListener("mousedown", handler);
@@ -70,9 +73,13 @@ export function BlockIndicator({ projectId }: Props) {
     if (expandedBlockId === blockId) {
       setExpandedBlockId(null);
       setHistory(null);
+      setEditingBlockId(null);
+      setEditBlockContent("");
     } else {
       setExpandedBlockId(blockId);
       setHistory(null);
+      setEditingBlockId(null);
+      setEditBlockContent("");
     }
   }, [expandedBlockId]);
 
@@ -100,10 +107,33 @@ export function BlockIndicator({ projectId }: Props) {
     }
   }, []);
 
-  const handleEditBlock = useCallback((block: MemoryBlock, e: React.MouseEvent) => {
-    e.stopPropagation();
-    // TODO: Open edit modal - for now, just log
-    console.log("Edit block:", block.id);
+  const handleEditBlock = useCallback((block: MemoryBlock) => {
+    if (editingBlockId === block.id) {
+      setEditingBlockId(null);
+      setEditBlockContent("");
+    } else {
+      setEditingBlockId(block.id);
+      setEditBlockContent(block.content);
+      setExpandedBlockId(block.id);
+    }
+  }, [editingBlockId]);
+
+  const handleSaveBlock = useCallback(async (blockId: string) => {
+    try {
+      const updated = await updateMemoryBlockApi(blockId, { content: editBlockContent });
+      setBlocks((prev) =>
+        prev ? prev.map((b) => (b.id === blockId ? updated : b)) : []
+      );
+      setEditingBlockId(null);
+      setEditBlockContent("");
+    } catch {
+      // Silent fail
+    }
+  }, [editBlockContent]);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingBlockId(null);
+    setEditBlockContent("");
   }, []);
 
   const count = blocks?.length;
@@ -209,7 +239,7 @@ export function BlockIndicator({ projectId }: Props) {
                             History
                           </button>
                           <button
-                            onClick={(e) => handleEditBlock(block, e)}
+                            onClick={() => handleEditBlock(block)}
                             className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white/60 hover:text-white/80 transition-colors"
                             title="Edit block"
                           >
@@ -223,6 +253,32 @@ export function BlockIndicator({ projectId }: Props) {
                             Copy
                           </button>
                         </div>
+
+                        {/* Inline editor */}
+                        {editingBlockId === block.id ? (
+                          <div className="mb-2 space-y-2">
+                            <textarea
+                              className="w-full bg-white/5 border border-white/10 rounded px-1.5 py-1 text-[10px] text-white/80 resize-y outline-none focus:border-white/20 font-mono"
+                              value={editBlockContent}
+                              onChange={(e) => setEditBlockContent(e.target.value)}
+                              rows={6}
+                            />
+                            <div className="flex gap-1.5 justify-end">
+                              <button
+                                onClick={handleCancelEdit}
+                                className="text-[9px] px-1.5 py-0.5 text-white/40 hover:text-white/60 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => handleSaveBlock(block.id)}
+                                className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 transition-colors"
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
 
                         {/* History view */}
                         {history !== null && (
