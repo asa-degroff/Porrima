@@ -23,7 +23,7 @@ const READ_FILE_TOOL: Tool = {
   name: "read_file",
   description: "Read the contents of a file. Returns content with line numbers.",
   parameters: Type.Object({
-    path: Type.String({ description: "File path (relative to $HOME or absolute)" }),
+    path: Type.String({ description: "File path (relative to working directory or absolute)" }),
     offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-based)" })),
     limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
   }),
@@ -33,7 +33,7 @@ const WRITE_FILE_TOOL: Tool = {
   name: "write_file",
   description: "Create or overwrite a file with the given content. Creates parent directories if needed.",
   parameters: Type.Object({
-    path: Type.String({ description: "File path (relative to $HOME or absolute)" }),
+    path: Type.String({ description: "File path (relative to working directory or absolute)" }),
     content: Type.String({ description: "Content to write to the file" }),
   }),
 };
@@ -42,7 +42,7 @@ const EDIT_FILE_TOOL: Tool = {
   name: "edit_file",
   description: "Edit a file by replacing an exact string match. The old_string must appear exactly once in the file.",
   parameters: Type.Object({
-    path: Type.String({ description: "File path (relative to $HOME or absolute)" }),
+    path: Type.String({ description: "File path (relative to working directory or absolute)" }),
     old_string: Type.String({ description: "The exact text to find and replace (must be unique in the file)" }),
     new_string: Type.String({ description: "The replacement text" }),
   }),
@@ -52,14 +52,14 @@ const LIST_FILES_TOOL: Tool = {
   name: "list_files",
   description: "List files in a directory or match a glob pattern.",
   parameters: Type.Object({
-    path: Type.Optional(Type.String({ description: "Directory path (defaults to $HOME)" })),
+    path: Type.Optional(Type.String({ description: "Directory path (defaults to working directory)" })),
     pattern: Type.Optional(Type.String({ description: "Glob pattern to match (e.g. '**/*.ts')" })),
   }),
 };
 
 const BASH_TOOL: Tool = {
   name: "bash",
-  description: "Execute a bash command and return stdout and stderr. Use for system commands, installing packages, running scripts, etc.",
+  description: "Execute a bash command and return stdout and stderr. Commands run in the working directory (project root for project chats, $HOME for others). Use for system commands, installing packages, running scripts, etc.",
   parameters: Type.Object({
     command: Type.String({ description: "The bash command to execute" }),
     timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (default 30)" })),

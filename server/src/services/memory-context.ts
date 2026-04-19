@@ -292,7 +292,7 @@ export async function buildStablePrefix(
     try {
       const agentsMd = await readAgentsMd(projectPath);
       if (agentsMd) {
-        projectSection = `\n\n## Project Context\nYou are working on the project with the following context from AGENTS.md:\n${agentsMd}`;
+        projectSection = `\n\n## Project Context\nYour working directory is: ${projectPath}\nYou are working on the project with the following context from AGENTS.md:\n${agentsMd}`;
       }
     } catch (e) {
       console.error("[memory] Failed to load AGENTS.md:", e);
