@@ -125,7 +125,7 @@ export async function truncateBeforeSend(
 
   const estimatedTokens = estimateContextSize(messages, systemPrompt);
   const charEstimate = charEstimateContextSize(messages, systemPrompt);
-  const threshold = contextWindow * 0.75;
+  const threshold = contextWindow * 0.80;
 
   // Fallthrough target: if the primary estimator says we're safe, we still
   // enforce a hard-cap check at the bottom (see "Hard-cap safety pass"). This

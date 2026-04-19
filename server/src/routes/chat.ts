@@ -1117,7 +1117,7 @@ async function handleChatStream(
             }
           }
 
-          // Mid-turn context protection: if usage > 85% during tool loop, break for compaction
+          // Mid-turn context protection: if usage > 90% during tool loop, break for compaction
           if (stopReason === "toolUse" && !hitContextLimit) {
             const effectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
             let currentTokens = state.finalUsage?.totalTokens ?? 0;
@@ -1128,7 +1128,7 @@ async function handleChatStream(
             }
             if (effectiveCW > 0 && currentTokens > 0) {
               const usageRatio = currentTokens / effectiveCW;
-              if (usageRatio > 0.85) {
+              if (usageRatio > 0.90) {
                 console.warn(`[chat] Mid-turn context overflow: ${currentTokens}/${effectiveCW} (${(usageRatio * 100).toFixed(0)}%) at iteration ${iterations} — breaking for compaction`);
                 turnAbortController.abort();
                 state.needsMidTurnCompaction = true;
@@ -1220,10 +1220,10 @@ async function handleChatStream(
       res.write(`event: agent_output_complete\ndata: {}\n\n`);
     }
 
-    // End-of-turn compaction: if we crossed the 75% threshold during this turn,
+    // End-of-turn compaction: if we crossed the 80% threshold during this turn,
     // compact NOW before building the final message. This prevents the user from
     // waiting on compaction after their response appears complete.
-    // Mid-turn compaction (85% during tool loops) is handled separately above.
+    // Mid-turn compaction (90% during tool loops) is handled separately above.
     if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput) {
       try {
         const model = allModels.find((m: OllamaModel) => m.id === chat.modelId);
@@ -1232,15 +1232,15 @@ async function handleChatStream(
           const lastUsage = state.finalUsage?.totalTokens ?? 0;
           const usageRatio = lastUsage > 0 ? lastUsage / effectiveContextWindow : 0;
 
-          // Check if we crossed the 75% threshold
-          let needsCompaction = hitContextLimit || usageRatio > 0.75;
+          // Check if we crossed the 80% threshold
+          let needsCompaction = hitContextLimit || usageRatio > 0.80;
           
           // Fallback to character estimation if usage is missing
           if (!needsCompaction && lastUsage === 0 && chat.messages.length > 4) {
             const { estimateContextTokens } = await import("../services/compaction.js");
             const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt);
             const estimatedRatio = estimatedTokens / effectiveContextWindow;
-            if (estimatedRatio > 0.75) {
+            if (estimatedRatio > 0.80) {
               console.log(`[compaction] End-of-turn: usage missing but estimation shows ${estimatedTokens} tokens (${(estimatedRatio * 100).toFixed(0)}%) — forcing compaction`);
               needsCompaction = true;
             }
