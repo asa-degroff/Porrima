@@ -196,6 +196,32 @@ function ensureSSEStream(res: Response, req: Request, chatId: string) {
 }
 
 /**
+ * Run `fn` while periodically emitting SSE keepalive comments to prevent the
+ * client's inactivity timeout from firing. Use this to wrap compaction work:
+ * preCompactionFlush (CPU-only extraction LLM), buildSplitAugmentedPrompt
+ * (embed + rerank), and archive index generation can each take several
+ * seconds with no other SSE events flowing. Without this, the client's
+ * 95s timeout fires a spurious "Model appears unresponsive" error mid-compaction.
+ *
+ * Pings every 10s. SSE comment lines (`: text\n\n`) are discarded by the client
+ * parser but reset its inactivity timer because bytes arrived on the stream.
+ */
+async function withSSEKeepalive<T>(res: Response, fn: () => Promise<T>): Promise<T> {
+  const interval = setInterval(() => {
+    try {
+      res.write(`: keepalive\n\n`);
+    } catch {
+      // Connection closed — the live-stream registry handles fan-out; ignore.
+    }
+  }, 10_000);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(interval);
+  }
+}
+
+/**
  * Parse /compact command from user message.
  * Returns { compact: true, followUpMessage: string | null } if found.
  * /compact alone → followUpMessage is null
@@ -1224,37 +1250,41 @@ async function handleChatStream(
             console.log(`[compaction] End-of-turn compaction triggered: ${lastUsage}/${effectiveContextWindow} (${(usageRatio * 100).toFixed(0)}%)`);
             const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
             const emitKeepalive = () => res.write(`: keepalive\n\n`);
-            const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive, lastUsage);
-            if (compaction.truncated) {
-              // Extract memories from removed messages (agent chats only)
-              if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
-                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
-              }
-              await saveChat(chat);
-              
-              // Find the summary message that was inserted
-              const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
-              res.write(`event: compaction\ndata: ${JSON.stringify({
-                removedCount: compaction.removedCount,
-                remainingCount: chat.messages.filter(m => !m._outOfContext).length,
-                summaryMessage: summaryMsg || null,
-              })}\n\n`);
-              
-              // Full reset of memory context after compaction — rebuild with
-              // fresh retrieval, all memories frozen into the new system prompt.
-              if (chat.type === "agent" || chat.type === "bluesky") {
-                resetMemoryContext(chat.id);
-                const split = await buildSplitAugmentedPrompt(
-                  chat.systemPrompt || "You are a helpful assistant.",
-                  chat.messages, chat.id, chat.projectId, chat.type, projectPath
-                );
-                systemPrompt = split.systemPrompt;
-              }
+            // Wrap in keepalive loop so the client's 95s inactivity timeout
+            // doesn't fire during slow extraction/embed/rerank steps.
+            await withSSEKeepalive(res, async () => {
+              const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive, lastUsage);
+              if (compaction.truncated) {
+                // Extract memories from removed messages (agent chats only)
+                if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+                  await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+                }
+                await saveChat(chat);
 
-              // Clear usage so the token indicator reflects the compacted state
-              // rather than showing stale pre-compaction numbers
-              state.finalUsage = undefined;
-            }
+                // Find the summary message that was inserted
+                const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
+                res.write(`event: compaction\ndata: ${JSON.stringify({
+                  removedCount: compaction.removedCount,
+                  remainingCount: chat.messages.filter(m => !m._outOfContext).length,
+                  summaryMessage: summaryMsg || null,
+                })}\n\n`);
+
+                // Full reset of memory context after compaction — rebuild with
+                // fresh retrieval, all memories frozen into the new system prompt.
+                if (chat.type === "agent" || chat.type === "bluesky") {
+                  resetMemoryContext(chat.id);
+                  const split = await buildSplitAugmentedPrompt(
+                    chat.systemPrompt || "You are a helpful assistant.",
+                    chat.messages, chat.id, chat.projectId, chat.type, projectPath
+                  );
+                  systemPrompt = split.systemPrompt;
+                }
+
+                // Clear usage so the token indicator reflects the compacted state
+                // rather than showing stale pre-compaction numbers
+                state.finalUsage = undefined;
+              }
+            });
           }
         }
       } catch (err) {
@@ -1379,53 +1409,60 @@ async function handleChatStream(
       const effectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
       const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
       const emitKeepalive = () => res.write(`: keepalive\n\n`);
-      try {
-        const compaction = await truncateChatHistory(chat, effectiveCW, true, emitCompacting, emitKeepalive);
-        if (compaction?.truncated) {
-          await saveChat(chat);
-          console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: removed ${compaction.removedCount} messages, estimated ${compaction.estimatedTokenCount} tokens remaining`);
+      // Wrap all compaction work in a keepalive ping loop so the client's
+      // 95s inactivity timeout doesn't fire during slow LLM/embed steps.
+      let compactionAborted = false;
+      await withSSEKeepalive(res, async () => {
+        try {
+          const compaction = await truncateChatHistory(chat, effectiveCW, true, emitCompacting, emitKeepalive);
+          if (compaction?.truncated) {
+            await saveChat(chat);
+            console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: removed ${compaction.removedCount} messages, estimated ${compaction.estimatedTokenCount} tokens remaining`);
 
-          // Extract memories from removed messages and await completion so they're
-          // available for the system prompt rebuild below. Without awaiting, the
-          // rebuilt prompt would miss the freshly extracted memories from removed context.
-          if (isAgent && compaction.removedMessages?.length) {
-            try {
-              await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
-            } catch (err) {
-              console.error("[compaction] pre-flush failed:", err);
+            // Extract memories from removed messages and await completion so they're
+            // available for the system prompt rebuild below. Without awaiting, the
+            // rebuilt prompt would miss the freshly extracted memories from removed context.
+            if (isAgent && compaction.removedMessages?.length) {
+              try {
+                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+              } catch (err) {
+                console.error("[compaction] pre-flush failed:", err);
+              }
             }
+
+            // Emit compaction completion event AFTER all compaction work is done
+            // (memory extraction, save) so the client can safely sync state.
+            const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
+            res.write(`event: compaction\ndata: ${JSON.stringify({
+              removedCount: compaction.removedCount,
+              remainingCount: chat.messages.filter(m => !m._outOfContext).length,
+              summaryMessage: summaryMsg || null,
+              midTurn: true,
+              cycle: compactionCycle,
+            })}\n\n`);
           }
-
-          // Emit compaction completion event AFTER all compaction work is done
-          // (memory extraction, save) so the client can safely sync state.
-          const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
-          res.write(`event: compaction\ndata: ${JSON.stringify({
-            removedCount: compaction.removedCount,
-            remainingCount: chat.messages.filter(m => !m._outOfContext).length,
-            summaryMessage: summaryMsg || null,
-            midTurn: true,
-            cycle: compactionCycle,
-          })}\n\n`);
+        } catch (compErr) {
+          console.error(`[chat] Mid-turn compaction cycle ${compactionCycle} failed:`, compErr);
+          compactionAborted = true;
+          return;
         }
-      } catch (compErr) {
-        console.error(`[chat] Mid-turn compaction cycle ${compactionCycle} failed:`, compErr);
-        break;
-      }
 
-      // 3. Rebuild system prompt and context
-      // Full reset of memory context — compaction reshapes the entire context,
-      // so we need fresh retrieval with all memories (including newly extracted
-      // ones from preCompactionFlush) frozen into the new system prompt.
-      // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
-      // the frozen context state is set up properly for subsequent turns.
-      if (isAgent) {
-        resetMemoryContext(chat.id);
-        const split = await buildSplitAugmentedPrompt(
-          chat.systemPrompt || "You are a helpful assistant.",
-          chat.messages, chat.id, chat.projectId, chat.type, projectPath
-        );
-        systemPrompt = split.systemPrompt;
-      }
+        // 3. Rebuild system prompt and context
+        // Full reset of memory context — compaction reshapes the entire context,
+        // so we need fresh retrieval with all memories (including newly extracted
+        // ones from preCompactionFlush) frozen into the new system prompt.
+        // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
+        // the frozen context state is set up properly for subsequent turns.
+        if (isAgent) {
+          resetMemoryContext(chat.id);
+          const split = await buildSplitAugmentedPrompt(
+            chat.systemPrompt || "You are a helpful assistant.",
+            chat.messages, chat.id, chat.projectId, chat.type, projectPath
+          );
+          systemPrompt = split.systemPrompt;
+        }
+      });
+      if (compactionAborted) break;
 
       // Build handoff message with progress summary + freshly extracted memories.
       // This runs AFTER preCompactionFlush so memories from removed context are included.
@@ -1895,39 +1932,40 @@ router.post("/", async (req, res) => {
     const ollamaModel = allModels.find(m => m.id === chat.modelId);
     const contextWindow = getEffectiveContextWindow(chat, ollamaModel, settings);
     
-    // Trigger compaction
-    const compaction = await triggerCompaction(chat, contextWindow);
-    
-    // Set SSE headers early for compaction progress events
-    if (!res.headersSent) {
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no",
-      });
-      res.socket?.setNoDelay(true);
-    }
+    // Set up SSE stream BEFORE triggering compaction so keepalive pings can
+    // flow while the (CPU) extraction model runs index generation. Without
+    // this, the client's fetch() would hang until the first byte, and its
+    // subsequent SSE inactivity timer could fire during preCompactionFlush.
+    ensureSSEStream(res, req, chat.id);
+    res.write(`event: compacting\ndata: {}\n\n`);
 
-    if (compaction && compaction.truncated) {
-      // Extract memories from removed messages and await completion so they're
-      // available when the next buildSplitAugmentedPrompt runs (either in this
-      // handler's follow-up path or in the main handler).
-      if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
-        try {
-          await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
-        } catch (err) {
-          console.error("[compaction] /compact flush failed:", err);
+    // Wrap the whole compaction + flush in a keepalive ping loop.
+    const compaction = await withSSEKeepalive(res, async () => {
+      const result = await triggerCompaction(chat, contextWindow);
+      if (result && result.truncated) {
+        // Extract memories from removed messages and await completion so they're
+        // available when the next buildSplitAugmentedPrompt runs (either in this
+        // handler's follow-up path or in the main handler).
+        if ((chat.type === "agent" || chat.type === "bluesky") && result.removedMessages?.length) {
+          try {
+            await preCompactionFlush(chat.modelId, chat.id, result.removedMessages, chat.projectId);
+          } catch (err) {
+            console.error("[compaction] /compact flush failed:", err);
+          }
+        }
+
+        // Full reset of memory context — compaction reshapes the entire context,
+        // so the next buildSplitAugmentedPrompt call will do a full retrieval with
+        // all memories frozen into the new system prompt. No need to rebuild here
+        // because the main handler (or follow-up path) will call buildSplitAugmentedPrompt.
+        if (chat.type === "agent" || chat.type === "bluesky") {
+          resetMemoryContext(chat.id);
         }
       }
+      return result;
+    });
 
-      // Full reset of memory context — compaction reshapes the entire context,
-      // so the next buildSplitAugmentedPrompt call will do a full retrieval with
-      // all memories frozen into the new system prompt. No need to rebuild here
-      // because the main handler (or follow-up path) will call buildSplitAugmentedPrompt.
-      if (chat.type === "agent" || chat.type === "bluesky") {
-        resetMemoryContext(chat.id);
-      }
+    if (compaction && compaction.truncated) {
 
       // Build and save a confirmation assistant message
       const confirmText = `Context compacted. Removed ${compaction.removedCount} messages (~${compaction.estimatedTokenCount} tokens).`;
@@ -2130,53 +2168,58 @@ router.post("/", async (req, res) => {
     // events reach the client while the (CPU) extraction model is generating.
     ensureSSEStream(res, req, chat.id);
     if (model) {
-      try {
-        const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
-        const emitKeepalive = () => res.write(`: keepalive\n\n`);
-        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
-        if (compaction && compaction.truncated) {
-          // Extract memories from removed messages and await completion so they're
-          // available for the system prompt rebuild below. Without awaiting, the
-          // rebuilt prompt would miss freshly extracted memories from removed context.
-          if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
-            try {
-              await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
-            } catch (err) {
-              console.error("[compaction] pre-send flush failed (resume):", err);
+      // Wrap compaction + post-compaction rebuild in a keepalive loop so the
+      // client's 95s inactivity timeout doesn't fire during slow extraction/
+      // embed/rerank steps.
+      await withSSEKeepalive(res, async () => {
+        try {
+          const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
+          const emitKeepalive = () => res.write(`: keepalive\n\n`);
+          const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
+          if (compaction && compaction.truncated) {
+            // Extract memories from removed messages and await completion so they're
+            // available for the system prompt rebuild below. Without awaiting, the
+            // rebuilt prompt would miss freshly extracted memories from removed context.
+            if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+              try {
+                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+              } catch (err) {
+                console.error("[compaction] pre-send flush failed (resume):", err);
+              }
             }
-          }
 
-          await saveChat(chat);
-          // Rebuild system prompt after truncation with full memory reset
-          resetMemoryContext(chat.id);
-          if (chat.type === "agent" || chat.type === "bluesky") {
-            let resumeProjectPath: string | undefined;
-            if (chat.projectId) {
-              const project = await getProject(chat.projectId);
-              resumeProjectPath = project?.path;
+            await saveChat(chat);
+            // Rebuild system prompt after truncation with full memory reset
+            resetMemoryContext(chat.id);
+            if (chat.type === "agent" || chat.type === "bluesky") {
+              let resumeProjectPath: string | undefined;
+              if (chat.projectId) {
+                const project = await getProject(chat.projectId);
+                resumeProjectPath = project?.path;
+              }
+              const split = await buildSplitAugmentedPrompt(
+                chat.systemPrompt || "You are a helpful assistant.",
+                chat.messages,
+                chat.id,
+                chat.projectId,
+                chat.type,
+                resumeProjectPath
+              );
+              systemPrompt = split.systemPrompt;
             }
-            const split = await buildSplitAugmentedPrompt(
-              chat.systemPrompt || "You are a helpful assistant.",
-              chat.messages,
-              chat.id,
-              chat.projectId,
-              chat.type,
-              resumeProjectPath
-            );
-            systemPrompt = split.systemPrompt;
+            // Find the summary message that was inserted
+            const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
+            // Emit compaction event for UI indicator
+            res.write(`event: compaction\ndata: ${JSON.stringify({
+              removedCount: compaction.removedCount,
+              remainingCount: chat.messages.filter(m => !m._outOfContext).length,
+              summaryMessage: summaryMsg || null,
+            })}\n\n`);
           }
-          // Find the summary message that was inserted
-          const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
-          // Emit compaction event for UI indicator
-          res.write(`event: compaction\ndata: ${JSON.stringify({
-            removedCount: compaction.removedCount,
-            remainingCount: chat.messages.filter(m => !m._outOfContext).length,
-            summaryMessage: summaryMsg || null,
-          })}\n\n`);
+        } catch (err) {
+          console.error("[compaction] pre-send truncation failed (resume):", err);
         }
-      } catch (err) {
-        console.error("[compaction] pre-send truncation failed (resume):", err);
-      }
+      });
     }
 
     // Safety check: warn if context is empty for resume
@@ -2284,58 +2327,63 @@ router.post("/", async (req, res) => {
     // model's 10s keepalive) reach the client while pre-send compaction is running.
     ensureSSEStream(res, req, chat.id);
     if (model) {
-      try {
-        const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
-        const emitKeepalive = () => res.write(`: keepalive\n\n`);
-        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
-        if (compaction && compaction.truncated) {
-          // Extract memories from removed messages and await completion so they're
-          // available for the system prompt rebuild below. Without awaiting, the
-          // rebuilt prompt would miss freshly extracted memories from removed context.
-          if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
-            try {
-              await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
-            } catch (err) {
-              console.error("[compaction] pre-send flush failed:", err);
+      // Wrap compaction + post-compaction rebuild in a keepalive loop so the
+      // client's 95s inactivity timeout doesn't fire during slow extraction/
+      // embed/rerank steps.
+      await withSSEKeepalive(res, async () => {
+        try {
+          const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
+          const emitKeepalive = () => res.write(`: keepalive\n\n`);
+          const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
+          if (compaction && compaction.truncated) {
+            // Extract memories from removed messages and await completion so they're
+            // available for the system prompt rebuild below. Without awaiting, the
+            // rebuilt prompt would miss freshly extracted memories from removed context.
+            if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+              try {
+                await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+              } catch (err) {
+                console.error("[compaction] pre-send flush failed:", err);
+              }
             }
-          }
 
-          await saveChat(chat);
-          // Full reset of memory context — compaction reshapes the entire context,
-          // so we need fresh retrieval with all memories frozen into the new system prompt.
-          // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
-          // the frozen context state is set up immediately, avoiding a redundant retrieval
-          // on the next turn.
-          resetMemoryContext(chat.id);
-          if (chat.type === "agent" || chat.type === "bluesky") {
-            let projectPath: string | undefined;
-            if (chat.projectId) {
-              const project = await getProject(chat.projectId);
-              projectPath = project?.path;
+            await saveChat(chat);
+            // Full reset of memory context — compaction reshapes the entire context,
+            // so we need fresh retrieval with all memories frozen into the new system prompt.
+            // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
+            // the frozen context state is set up immediately, avoiding a redundant retrieval
+            // on the next turn.
+            resetMemoryContext(chat.id);
+            if (chat.type === "agent" || chat.type === "bluesky") {
+              let projectPath: string | undefined;
+              if (chat.projectId) {
+                const project = await getProject(chat.projectId);
+                projectPath = project?.path;
+              }
+              const split = await buildSplitAugmentedPrompt(
+                chat.systemPrompt || "You are a helpful assistant.",
+                chat.messages,
+                chat.id,
+                chat.projectId,
+                chat.type,
+                projectPath
+              );
+              systemPrompt = split.systemPrompt;
+              // split.memoriesMessage is always empty after reset (case 1: full retrieval)
             }
-            const split = await buildSplitAugmentedPrompt(
-              chat.systemPrompt || "You are a helpful assistant.",
-              chat.messages,
-              chat.id,
-              chat.projectId,
-              chat.type,
-              projectPath
-            );
-            systemPrompt = split.systemPrompt;
-            // split.memoriesMessage is always empty after reset (case 1: full retrieval)
+            // Find the summary message that was inserted
+            const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
+            // Emit compaction event for UI indicator
+            res.write(`event: compaction\ndata: ${JSON.stringify({
+              removedCount: compaction.removedCount,
+              remainingCount: chat.messages.filter(m => !m._outOfContext).length,
+              summaryMessage: summaryMsg || null,
+            })}\n\n`);
           }
-          // Find the summary message that was inserted
-          const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
-          // Emit compaction event for UI indicator
-          res.write(`event: compaction\ndata: ${JSON.stringify({
-            removedCount: compaction.removedCount,
-            remainingCount: chat.messages.filter(m => !m._outOfContext).length,
-            summaryMessage: summaryMsg || null,
-          })}\n\n`);
+        } catch (err) {
+          console.error("[compaction] pre-send truncation failed:", err);
         }
-      } catch (err) {
-        console.error("[compaction] pre-send truncation failed:", err);
-      }
+      });
     }
 
     setCachedAugmentedPrompt(chat.id, memoriesDelta ? `${systemPrompt}\n\n${memoriesDelta}` : systemPrompt);
@@ -2573,50 +2621,55 @@ router.post("/edit", async (req, res) => {
   // events reach the client while the (CPU) extraction model is generating.
   ensureSSEStream(res, req, chat.id);
   if (model) {
-    try {
-      const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
-      const emitKeepalive = () => res.write(`: keepalive\n\n`);
-      const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
-      if (compaction && compaction.truncated) {
-        // Extract memories from removed messages and await completion so they're
-        // available for the system prompt rebuild below.
-        if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
-          try {
-            await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
-          } catch (err) {
-            console.error("[compaction] pre-send flush failed (edit):", err);
+    // Wrap compaction + post-compaction rebuild in a keepalive loop so the
+    // client's 95s inactivity timeout doesn't fire during slow extraction/
+    // embed/rerank steps.
+    await withSSEKeepalive(res, async () => {
+      try {
+        const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
+        const emitKeepalive = () => res.write(`: keepalive\n\n`);
+        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
+        if (compaction && compaction.truncated) {
+          // Extract memories from removed messages and await completion so they're
+          // available for the system prompt rebuild below.
+          if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+            try {
+              await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
+            } catch (err) {
+              console.error("[compaction] pre-send flush failed (edit):", err);
+            }
           }
-        }
 
-        await saveChat(chat);
-        // Rebuild system prompt after truncation with full memory reset
-        resetMemoryContext(chat.id);
-        if (chat.type === "agent" || chat.type === "bluesky") {
-          let editProjectPath: string | undefined;
-          if (chat.projectId) {
-            const project = await getProject(chat.projectId);
-            editProjectPath = project?.path;
+          await saveChat(chat);
+          // Rebuild system prompt after truncation with full memory reset
+          resetMemoryContext(chat.id);
+          if (chat.type === "agent" || chat.type === "bluesky") {
+            let editProjectPath: string | undefined;
+            if (chat.projectId) {
+              const project = await getProject(chat.projectId);
+              editProjectPath = project?.path;
+            }
+            const split = await buildSplitAugmentedPrompt(
+              chat.systemPrompt || "You are a helpful assistant.",
+              chat.messages,
+              chat.id,
+              chat.projectId,
+              chat.type,
+              editProjectPath
+            );
+            systemPrompt = split.systemPrompt;
+            editMemoriesDelta = split.memoriesMessage;
           }
-          const split = await buildSplitAugmentedPrompt(
-            chat.systemPrompt || "You are a helpful assistant.",
-            chat.messages,
-            chat.id,
-            chat.projectId,
-            chat.type,
-            editProjectPath
-          );
-          systemPrompt = split.systemPrompt;
-          editMemoriesDelta = split.memoriesMessage;
+          // Emit compaction event for UI indicator
+          res.write(`event: compaction\ndata: ${JSON.stringify({
+            removedCount: compaction.removedCount,
+            remainingCount: chat.messages.length,
+          })}\n\n`);
         }
-        // Emit compaction event for UI indicator
-        res.write(`event: compaction\ndata: ${JSON.stringify({
-          removedCount: compaction.removedCount,
-          remainingCount: chat.messages.length,
-        })}\n\n`);
+      } catch (err) {
+        console.error("[compaction] pre-send truncation failed (edit):", err);
       }
-    } catch (err) {
-      console.error("[compaction] pre-send truncation failed (edit):", err);
-    }
+    });
   }
   
   setCachedAugmentedPrompt(chat.id, editMemoriesDelta ? `${systemPrompt}\n\n${editMemoriesDelta}` : systemPrompt);
