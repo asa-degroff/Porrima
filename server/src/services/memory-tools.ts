@@ -84,14 +84,14 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "search_conversation",
     description:
-      "Search past conversations for specific details. Use when a memory lacks the detail you need — this lets you find the original exchange. Can search a specific conversation (by memory_id or chat_id) or across all conversations.",
+      "Search past chats for specific details. Use when a memory lacks the detail you need — this lets you find the original exchange. Can search a specific chat (by memory_id or chat_id) or across all chats.",
     parameters: Type.Object({
-      query: Type.String({ description: "Search terms to find in past conversation messages" }),
+      query: Type.String({ description: "Search terms to find in past chat messages" }),
       memory_id: Type.Optional(
-        Type.String({ description: "Memory ID — automatically looks up the source conversation" })
+        Type.String({ description: "Memory ID — automatically looks up the source chat" })
       ),
       chat_id: Type.Optional(
-        Type.String({ description: "Chat ID to search within a specific conversation" })
+        Type.String({ description: "Chat ID to search within a specific chat" })
       ),
       limit: Type.Optional(
         Type.Number({ description: "Max matches to return (default 5)", minimum: 1, maximum: 50 })
