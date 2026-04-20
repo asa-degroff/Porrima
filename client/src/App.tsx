@@ -378,8 +378,15 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       // overwriting with stale data from cache/server.
       const hasBg = hasBackgroundStream(id);
 
-      // Show cached data immediately for instant feel
-      const cached = await getCachedChat(id);
+      // Show cached data immediately for instant feel.
+      // Chromium can throw UnknownError ("Failed to read large IndexedDB value")
+      // on oversized entries — treat any failure as a cache miss and self-heal.
+      let cached: Chat | null = null;
+      try {
+        cached = await getCachedChat(id);
+      } catch {
+        clearCachedChat(id).catch(() => {});
+      }
       if (cached) {
         setActiveChat(cached);
         setActiveChatData(cached);
