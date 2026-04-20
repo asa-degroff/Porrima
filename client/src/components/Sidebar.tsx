@@ -637,16 +637,6 @@ export function Sidebar({
                 <span className="absolute top-1 right-2 w-2 h-2 rounded-full bg-purple-400" />
               )}
             </button>
-            <button
-              onClick={() => onOpenSettings()}
-              className="p-1.5 text-white/30 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors shrink-0"
-              title="Settings"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
-            </button>
           </div>
         )}
 
@@ -665,30 +655,27 @@ export function Sidebar({
       <div className="flex-1 flex flex-col min-h-0">
         {/* Synthesis Section */}
         <div className="px-3 pb-2 shrink-0">
-          <div className="flex items-center gap-2">
-            {/* Status indicator */}
-            <div className="flex-1 flex items-center gap-2 text-[10px] text-white/30">
-              <span className="font-semibold tracking-wider uppercase">Synthesis</span>
-              <div className="flex items-center gap-1.5 ml-auto">
-                {isSynthesizing ? (
-                  <>
-                    <PolyhedronLogo isActive={true} shape={activityShape} />
-                    <span className="text-amber-300/60">Synthesizing</span>
-                  </>
-                ) : synthesisComplete ? (
-                  <>
-                    <span className="text-emerald-400/60">●</span>
-                    <span className="text-emerald-300/60">Complete</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-white/20">●</span>
-                    <span className="text-white/20">Idle</span>
-                  </>
-                )}
-              </div>
+          <div className="flex items-center gap-1.5">
+            {/* Status indicator — left */}
+            <div className="flex items-center gap-1.5 text-[10px] text-white/30">
+              {isSynthesizing ? (
+                <>
+                  <PolyhedronLogo isActive={true} shape={activityShape} />
+                  <span className="text-amber-300/60">Synthesizing</span>
+                </>
+              ) : synthesisComplete ? (
+                <>
+                  <span className="text-emerald-400/60">●</span>
+                  <span className="text-emerald-300/60">Complete</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-white/20">●</span>
+                  <span className="text-white/20">Idle</span>
+                </>
+              )}
             </div>
-            {/* Actions */}
+            {/* Actions — next to status */}
             <div className="flex items-center gap-1">
               {onSynthesisSleep && !isSynthesizing && (
                 <button
@@ -718,6 +705,19 @@ export function Sidebar({
                 </button>
               )}
             </div>
+            {/* Spacer */}
+            <div className="flex-1" />
+            {/* Settings — far right */}
+            <button
+              onClick={() => onOpenSettings()}
+              className="p-1.5 text-white/20 hover:text-white/50 hover:bg-white/5 rounded-lg transition-colors shrink-0"
+              title="Settings"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
           </div>
         </div>
         {/* System Chat Section */}
