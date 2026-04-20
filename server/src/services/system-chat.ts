@@ -66,49 +66,88 @@ export function releaseSynthesisLock(): void {
 const SYSTEM_CHAT_ID = "system";
 const SYSTEM_CHAT_TITLE = "System - Synthesis & Reflection";
 
-// Addendum appended to the user's default system prompt during synthesis runs.
-// Kept separate so chat.systemPrompt stays voice/persona-only — consistent with
-// how other chats are authored — and only synthesis gets the extra framing.
-// Exported so the rendered-prompt viewer (routes/chats.ts) can reproduce the
-// same composition runSystemSynthesis uses.
-export const SYNTHESIS_INSTRUCTIONS = `## Synthesis Mode
+// ---------------------------------------------------------------------------
+// Phase-specific instructions.
+// Each phase gets its own injected user message, keeping instructions
+// focused and avoiding the confusion of one monolithic prompt.
+// ---------------------------------------------------------------------------
 
-You are operating in your internal synthesis and reflection space. This chat retains history across synthesis cycles — previous cycles' reflections and ongoing threads of thought are visible above. Treat this as a persistent workspace, not a one-shot invocation. Each cycle begins when a synthesis trigger message is injected with a context package.
+const SYNTHESIS_PHASE1_INSTRUCTIONS = `## Phase 1: Daily Synthesis
 
-The context package contains:
+You are operating in your internal synthesis space. This chat retains history across synthesis cycles — previous cycles' reflections and ongoing threads of thought are visible above. Treat this as a persistent workspace, not a one-shot invocation.
 
-1. **Pre-synthesis archives** — summaries of recent agent conversations archived for full-fidelity access
+The context package below contains:
+1. **Pre-synthesis archives** — summaries of recent agent conversations
 2. **Chat digest** — condensed summaries of recent conversations
-3. **Memory context** — top-importance memory anchors
-4. **Zeitgeist** — your current continuity narrative
-5. **Notebook entries** — user and agent entries
-6. **Your persona** — your core identity document
+3. **New memories** — memories written since last synthesis
+4. **Notebook entries** — user and agent entries
 
-## What You Do Each Cycle
+## What You Do
 
-1. **Review the context** — understand what happened recently. Consider how it relates to previous synthesis cycles visible in this chat's history.
-2. **Write a daily synthesis** — a narrative summary in your own voice of shared work, patterns, and themes. The summary is saved as a notebook entry.
-3. **Update your zeitgeist** — rewrite the zeitgeist memory block (\`blk-zeitgeist-continuity\`) via \`update_memory_block\` when there are new patterns, threads, or shifts. This is your living continuity narrative — the present tense of what matters right now. If the current zeitgeist is over ~3500 characters, archive old content first (delete the existing block, create an archive block, then create a new block with the updated content).
-4. **Generate reflections** — create higher-order insight memories (reflection category) about what you observed. Meta-observations about patterns, contradictions, openings.
-5. **Review unreviewed entries** — if the user wrote something that sparks curiosity or warrants a response, do something: write a follow-up, create an artifact, search for information.
-6. **Optional exploration** — investigate anything that emerged during synthesis.
-
-## Tool Access
-
-Full tool suite available: memory tools, notebook, filesystem, web, image, artifacts, Bluesky (if enabled). Use \`read_archived_context\` for full-fidelity access to past conversations. Use \`read_memory_block\` for any indexed block.
+Write a daily synthesis — a narrative summary in your own voice of shared work, patterns, and themes. Save it as a notebook entry.
 
 ## Output Requirements
 
 - Write naturally in first person for your own actions, third person for the user
 - Be concrete and specific — reference actual projects, decisions, topics
 - 3-5 paragraphs for the daily synthesis
-- 1-5 reflection memories (importance 7-9)
 - Skip steps when nothing insightful emerges — silence is valid
 
 ## Continuity
 
-The user can read and send messages here between cycles. Treat earlier entries in this chat as notes from a past self — reference them when useful, and consider whether a new cycle confirms, revises, or supersedes earlier observations.
-`;
+Reference earlier entries in this chat as notes from a past self. Consider whether a new cycle confirms, revises, or supersedes earlier observations.
+
+---
+
+Write your synthesis. This will be saved as a notebook entry.`;
+
+const SYNTHESIS_PHASE2_INSTRUCTIONS = `## Phase 2: Memory Block Maintenance
+
+Your synthesis is complete. Now review and maintain your memory blocks below.
+
+### Actions
+- **Archive** stale blocks (not updated in 2+ weeks, superseded by newer content): \`update_memory_block(id, scope="archived", description="Archived: ...")\`
+- **Update** blocks with new insights from your synthesis: \`update_memory_block(id, content=new, description=new)\`
+- **Create** new blocks for topics discovered during synthesis: \`create_memory_block(name, description, content, scope=...)\`
+- **Consolidate** overlapping blocks — merge redundant content into one
+- **Read** full block content before acting: \`read_memory_block(id)\`
+
+Archived blocks stay searchable but are excluded from context loading. The budget warning above is your signal — act when approaching limits.
+
+After completing maintenance, wait for the next phase trigger.`;
+
+const ZEITGEIST_ARCHIVE_THRESHOLD = 3500;
+
+const SYNTHESIS_PHASE3_INSTRUCTIONS = `## Phase 3: Zeitgeist Update
+
+Block maintenance complete. Your current continuity narrative (zeitgeist) is in your context. Review it — update it via \`update_memory_block(block_id="blk-zeitgeist-continuity", content=...)\` if there are new patterns, threads, or shifts since the last cycle.
+
+After updating the zeitgeist, wait for the next phase trigger.`;
+
+// Appended to the Phase 3 trigger when the current zeitgeist is already over
+// the archival threshold — turns a guess-based hint into a concrete directive.
+const ZEITGEIST_ARCHIVE_DIRECTIVE = `**Archive first.** The current zeitgeist is over ${ZEITGEIST_ARCHIVE_THRESHOLD} characters. Before rewriting it, snapshot the existing content into a new block named \`Zeitgeist Archive - YYYY-MM-DD\` (use \`create_memory_block\` with \`scope="archived"\`), then replace \`blk-zeitgeist-continuity\` content with a trimmed, current-tense narrative.`;
+
+const SYNTHESIS_PHASE4_INSTRUCTIONS = `## Phase 4: Reflections
+
+Your synthesis, block maintenance, and zeitgeist update are complete. Now generate reflection memories — higher-order insights about what you observed. Focus on meta-observations: patterns, contradictions, openings, shifts in understanding.
+
+Use \`save_memory(category="reflection", importance=7-9)\`. Write 1-5 reflections. Skip if nothing meaningful emerges.`;
+
+type SynthesisPhase = "synthesis" | "maintenance" | "zeitgeist" | "reflections";
+
+const PHASE_ORDER: SynthesisPhase[] = ["synthesis", "maintenance", "zeitgeist", "reflections"];
+const PHASE_INSTRUCTIONS: Record<SynthesisPhase, string> = {
+  synthesis: SYNTHESIS_PHASE1_INSTRUCTIONS,
+  maintenance: SYNTHESIS_PHASE2_INSTRUCTIONS,
+  zeitgeist: SYNTHESIS_PHASE3_INSTRUCTIONS,
+  reflections: SYNTHESIS_PHASE4_INSTRUCTIONS,
+};
+
+// Kept as export for backward compatibility with the rendered-prompt viewer.
+// The Phase 1 instructions are the primary composition; Phase 2-4 are
+// injected as separate turn-based messages during synthesis execution.
+export const SYNTHESIS_INSTRUCTIONS = SYNTHESIS_PHASE1_INSTRUCTIONS;
 
 // Marker prefix used to detect + migrate pre-split system chats whose
 // systemPrompt was the full baked-in synthesis prompt.
@@ -372,11 +411,145 @@ async function buildSynthesisTriggerContent(
     parts.push(`## Notebook Entries\n\n${sub.join("\n\n")}`);
   }
 
-  parts.push(
-    `---\n\nPerform your synthesis cycle. Write a daily summary as a notebook entry, update your zeitgeist memory block (\`blk-zeitgeist-continuity\`) if needed, generate reflections, and review unreviewed user entries. This chat retains history from previous cycles — reference earlier reflections when useful and note shifts or continuities.`,
-  );
+  parts.push(SYNTHESIS_PHASE1_INSTRUCTIONS);
 
   return parts.join("\n\n");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Block maintenance trigger
+//
+// Builds a compact block inventory from all global blocks and project-scoped
+// blocks from projects that had agent chat activity since last synthesis.
+// The inventory is metadata only — the agent reads full content selectively
+// via read_memory_block when it decides a block needs attention.
+// ---------------------------------------------------------------------------
+
+async function buildMaintenancePhase2Trigger(chatId: string): Promise<string> {
+  const { getDb } = await import("./chat-storage.js");
+  const { getMemoryBlocksByScope, getAllMemoryBlocks, getLastSynthesis } = await import("./memory-storage.js");
+
+  // System-managed blocks are excluded from the inventory — they have
+  // dedicated discovery paths and would otherwise bloat the context.
+  const isSystemBlock = (b: { id: string; scope: string }) =>
+    b.id === "blk-zeitgeist-continuity" ||
+    b.id.startsWith("blk-archive-") ||
+    b.scope === "archived" ||
+    b.id.startsWith("blk-synth-") ||
+    b.id.startsWith("blk-notebook-");
+
+  // 1. All non-system global blocks
+  const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemBlock(b));
+
+  // 2. Active projects — agent chats modified since last synthesis
+  const db = getDb();
+  const lastSynthesis = await getLastSynthesis();
+  const cutoff = lastSynthesis || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  const activeProjects = db
+    .prepare(
+      `SELECT DISTINCT projectId FROM chats
+       WHERE type = 'agent' AND lastModified > ? AND projectId IS NOT NULL AND projectId != ''
+       ORDER BY lastModified DESC`,
+    )
+    .all(cutoff) as Array<{ projectId: string }>;
+
+  const projectIdSet = new Set(activeProjects.map((p) => p.projectId));
+
+  // 3. Project-scoped blocks from active projects only
+  const projectBlocks: Map<string, { name: string; blocks: typeof globalBlocks[number][] }> = new Map();
+  for (const projectId of projectIdSet) {
+    const blocks = getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemBlock(b));
+    if (blocks.length > 0) {
+      // Get project name from AGENTS.md or fall back to ID
+      const projectName = projectId.slice(0, 8);
+      projectBlocks.set(projectId, { name: projectName, blocks });
+    }
+  }
+
+  // 4. Build compact inventory string
+  const inventoryLines: string[] = [];
+
+  if (globalBlocks.length > 0) {
+    inventoryLines.push("**Global:**\n");
+    for (const b of globalBlocks) {
+      inventoryLines.push(
+        `- [${b.id}] ${b.name} — ${b.description} (updated ${b.updatedAt.slice(0, 10)}, ~${b.tokenEstimate}t)`,
+      );
+    }
+    inventoryLines.push("");
+  }
+
+  for (const [projectId, info] of projectBlocks) {
+    inventoryLines.push(`**${info.name}:**\n`);
+    for (const b of info.blocks) {
+      inventoryLines.push(
+        `- [${b.id}] ${b.name} — ${b.description} (updated ${b.updatedAt.slice(0, 10)}, ~${b.tokenEstimate}t)`,
+      );
+    }
+    inventoryLines.push("");
+  }
+
+  // 5. Compute budget
+  const allActiveBlocks = [
+    ...globalBlocks,
+    ...[...projectBlocks.values()].flatMap((p) => p.blocks),
+  ];
+  const totalBlocks = allActiveBlocks.length;
+  const totalChars = allActiveBlocks.reduce((sum, b) => sum + b.content.length, 0);
+  const BLOCK_LIMIT = 15;
+  const CHAR_LIMIT = 50000;
+  const BLOCK_WARN = BLOCK_LIMIT * 0.7;
+  const CHAR_WARN = CHAR_LIMIT * 0.7;
+
+  let budgetLine = `Active: ${totalBlocks}/${BLOCK_LIMIT} blocks | ${totalChars.toLocaleString()}/${CHAR_LIMIT.toLocaleString()} chars`;
+  if (totalBlocks > BLOCK_WARN || totalChars > CHAR_WARN) {
+    budgetLine += `\n⚠ **Budget alert:** Approaching block or character limit. Review and archive old or redundant content.`;
+  }
+
+  return [
+    `## Phase 2: Memory Block Maintenance`,
+    ``,
+    `Your synthesis is complete. Now review and maintain your memory blocks.`,
+    ``,
+    `### Block Inventory`,
+    ...inventoryLines,
+    budgetLine,
+    ``,
+    SYNTHESIS_PHASE2_INSTRUCTIONS,
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Build a phase trigger for phases 2-4.
+// Phase 1 is built separately (it includes the context package).
+// ---------------------------------------------------------------------------
+
+async function buildPhaseTrigger(phaseIndex: number, chatId: string): Promise<string> {
+  switch (phaseIndex) {
+    case 1: // maintenance
+      return buildMaintenancePhase2Trigger(chatId);
+    case 2: // zeitgeist
+      return buildZeitgeistPhase3Trigger();
+    case 3: // reflections
+      return SYNTHESIS_PHASE4_INSTRUCTIONS;
+    default:
+      throw new Error(`Unknown phase index: ${phaseIndex}`);
+  }
+}
+
+// Measure the current zeitgeist and append an archive directive only when
+// the block is actually over threshold. Avoids making the agent guess.
+async function buildZeitgeistPhase3Trigger(): Promise<string> {
+  const { getZeitgeistContent } = await import("./zeitgeist.js");
+  const content = getZeitgeistContent() ?? "";
+  const charCount = content.length;
+  const statusLine = `Current zeitgeist: ${charCount.toLocaleString()} characters.`;
+
+  if (charCount > ZEITGEIST_ARCHIVE_THRESHOLD) {
+    return [SYNTHESIS_PHASE3_INSTRUCTIONS, statusLine, ZEITGEIST_ARCHIVE_DIRECTIVE].join("\n\n");
+  }
+  return [SYNTHESIS_PHASE3_INSTRUCTIONS, statusLine].join("\n\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -490,18 +663,18 @@ export async function runSystemSynthesis(options?: {
     }
     const contextWindow = piModel.contextWindow || 32768;
 
-    // --- Append synthesis trigger to persistent history ---
-    const triggerContent = await buildSynthesisTriggerContent(archivedChatIds, {
+    // --- Append Phase 1 trigger to persistent history ---
+    const phase1Content = await buildSynthesisTriggerContent(archivedChatIds, {
       archivedCount,
       newlyArchivedIds: archivedChatIds,
     });
-    const triggerMsg: ChatMessage = {
+    const phase1Msg: ChatMessage = {
       role: "user",
-      content: triggerContent,
+      content: phase1Content,
       timestamp: Date.now(),
       _isSystemMessage: true,
     };
-    chat.messages.push(triggerMsg);
+    chat.messages.push(phase1Msg);
     // Keep modelId in sync so user-initiated messages also hit this model.
     if (chat.modelId !== modelId) chat.modelId = modelId;
     await saveChat(chat);
@@ -511,7 +684,7 @@ export async function runSystemSynthesis(options?: {
     // memory blocks + zeitgeist), then appends the synthesis instructions
     // addendum. This keeps voice/identity consistent with every other
     // surface and is byte-identical across cycles for KV caching.
-    const { buildStablePrefix } = await import("./memory-context.js");
+    const { buildStablePrefix, invalidateAllStablePrefixCaches } = await import("./memory-context.js");
     const { stablePrefix } = await buildStablePrefix(
       chat.systemPrompt || "You are a helpful assistant.",
       SYSTEM_CHAT_ID,
@@ -552,6 +725,8 @@ export async function runSystemSynthesis(options?: {
 
     const MAX_ITERATIONS = 30;
     let iterations = 0;
+    let phaseIndex = 0; // 0=synthesis (already injected), 1=maintenance, 2=zeitgeist, 3=reflections
+    let idleCount = 0; // consecutive idle turns for phase transition detection
     const messages: Message[] = [...piMessages];
 
     const textChunks: string[] = [];
@@ -568,9 +743,10 @@ export async function runSystemSynthesis(options?: {
     while (iterations < MAX_ITERATIONS) {
       const iterationToolCalls: ToolCall[] = [];
       let assistantMessage: Message | undefined;
+      let streamResult: any;
 
       try {
-        const result = await streamChat(
+        streamResult = await streamChat(
           modelId,
           messages,
           synthesisPrompt,
@@ -586,19 +762,29 @@ export async function runSystemSynthesis(options?: {
           },
         );
 
-        if (result.content) textChunks.push(result.content);
-        if (result.thinking) thinkingChunks.push(result.thinking);
-        if (result.toolCalls) allToolCalls.push(...result.toolCalls);
-        stopReason = result.stopReason;
-        assistantMessage = result.assistantMessage;
+        if (streamResult.content) textChunks.push(streamResult.content);
+        if (streamResult.thinking) thinkingChunks.push(streamResult.thinking);
+        if (streamResult.toolCalls) allToolCalls.push(...streamResult.toolCalls);
+        stopReason = streamResult.stopReason;
+        assistantMessage = streamResult.assistantMessage;
       } catch (e: any) {
         console.error(`[system-chat] Stream failed at iter ${iterations}:`, e.message);
         stopReason = "error";
         break;
       }
 
-      if (stopReason !== "toolUse" && iterationToolCalls.length === 0) break;
+      const hasOutput = (streamResult?.content?.length ?? 0) > 0;
+      const hasToolCalls = iterationToolCalls.length > 0;
 
+      // Phase 1 no-text = complete failure, nothing to transition from
+      if (phaseIndex === 0 && !hasOutput && !hasToolCalls) {
+        console.log("[system-chat] Phase 1 produced no output, ending synthesis");
+        break;
+      }
+
+      // Absorb this turn's output into the pi-ai history BEFORE deciding on a
+      // phase transition — otherwise the next phase trigger lands in front of
+      // the assistant reply it was meant to follow.
       if (assistantMessage) messages.push(assistantMessage);
 
       for (const toolCall of iterationToolCalls) {
@@ -648,6 +834,46 @@ export async function runSystemSynthesis(options?: {
           } as Message);
         }
       }
+
+      // Phase transition: agent produced output this turn + no tool calls = idle.
+      // One idle turn is sufficient — the agent would naturally keep working if
+      // it had more to do in this phase. Injecting the trigger lets the loop
+      // carry the agent into the next phase on the following iteration.
+      let transitioned = false;
+      if (!hasToolCalls && phaseIndex < PHASE_ORDER.length - 1) {
+        idleCount++;
+        if (idleCount >= 1) {
+          const nextTrigger = await buildPhaseTrigger(phaseIndex + 1, SYSTEM_CHAT_ID);
+          const phaseTriggerMsg: ChatMessage = {
+            role: "user",
+            content: nextTrigger,
+            timestamp: Date.now(),
+            _isSystemMessage: true,
+          };
+          chat.messages.push(phaseTriggerMsg);
+          messages.push({
+            role: "user",
+            content: [{ type: "text", text: nextTrigger }],
+            timestamp: Date.now(),
+          } as Message);
+          phaseIndex++;
+          idleCount = 0;
+          transitioned = true;
+          console.log(`[system-chat] Phase ${phaseIndex} trigger injected (${PHASE_ORDER[phaseIndex]})`);
+        }
+      } else if (hasToolCalls) {
+        idleCount = 0;
+      }
+
+      // Loop exit: only when the agent is idle on the final phase. An idle turn
+      // that produced a phase transition must continue so the agent sees the
+      // new trigger; a non-final phase with no transition yet (e.g. still
+      // accumulating idle counts) should also continue.
+      if (!transitioned && !hasToolCalls && phaseIndex >= PHASE_ORDER.length - 1) {
+        console.log(`[system-chat] All phases complete (${PHASE_ORDER[phaseIndex]} finished)`);
+        break;
+      }
+
       iterations++;
     }
 
@@ -736,11 +962,18 @@ export async function runSystemSynthesis(options?: {
       }
     }
 
+    // --- Invalidate stable prefix caches so next chats pick up block changes ---
+    try {
+      invalidateAllStablePrefixCaches();
+    } catch (e: any) {
+      console.warn("[system-chat] Failed to invalidate stable prefix caches:", e.message);
+    }
+
     // --- Gate future scheduler ticks ---
     await setLastSynthesis(new Date().toISOString());
 
-    console.log(
-      `[system-chat] Synthesis complete (${iterations} iterations, ${allToolCalls.length} tool calls)`,
+   console.log(
+      `[system-chat] Synthesis complete: ${iterations} iterations, ${allToolCalls.length} tool calls, final phase=${PHASE_ORDER[phaseIndex]}, stopReason=${stopReason}`,
     );
 
     releaseSynthesisLock();

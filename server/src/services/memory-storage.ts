@@ -1326,7 +1326,7 @@ export interface MemoryBlock {
   name: string;
   description: string;
   content: string;
-  scope: "global" | "project";
+  scope: "global" | "project" | "archived";
   projectId: string;
   createdAt: string;
   updatedAt: string;
@@ -1357,7 +1357,13 @@ export function createMemoryBlock(block: Omit<MemoryBlock, "tokenEstimate">): Me
   return full;
 }
 
-export function updateMemoryBlock(id: string, updates: { content?: string; description?: string; name?: string; updatedBy?: "agent" | "user" }): boolean {
+export function updateMemoryBlock(id: string, updates: {
+  content?: string;
+  description?: string;
+  name?: string;
+  scope?: "global" | "project" | "archived";
+  updatedBy?: "agent" | "user";
+}): boolean {
   const db = getDb();
   const existing = getMemoryBlock(id);
   if (!existing) return false;
@@ -1365,16 +1371,18 @@ export function updateMemoryBlock(id: string, updates: { content?: string; descr
   const content = updates.content ?? existing.content;
   const tokenEstimate = estimateBlockTokens(content);
   const now = new Date().toISOString();
+  const newScope = updates.scope ?? existing.scope;
 
   db.prepare(`
     UPDATE memory_blocks SET
-      content = ?, description = ?, name = ?,
+      content = ?, description = ?, name = ?, scope = ?,
       updatedAt = ?, updatedBy = ?, tokenEstimate = ?
     WHERE id = ?
   `).run(
     content,
     updates.description ?? existing.description,
     updates.name ?? existing.name,
+    newScope,
     now,
     updates.updatedBy ?? "agent",
     tokenEstimate,
@@ -1395,10 +1403,14 @@ export function getMemoryBlock(id: string): MemoryBlock | null {
   };
 }
 
-export function getMemoryBlocksByScope(scope: "global" | "project", projectId?: string): MemoryBlock[] {
+export function getMemoryBlocksByScope(scope: "global" | "project" | "archived", projectId?: string): MemoryBlock[] {
   const db = getDb();
   let rows: any[];
-  if (scope === "project" && projectId) {
+  if (scope === "archived") {
+    rows = db.prepare(
+      "SELECT * FROM memory_blocks WHERE scope = 'archived' AND supersededBy IS NULL ORDER BY updatedAt DESC"
+    ).all();
+  } else if (scope === "project" && projectId) {
     rows = db.prepare(
       "SELECT * FROM memory_blocks WHERE scope = 'project' AND projectId = ? AND supersededBy IS NULL ORDER BY updatedAt DESC"
     ).all(projectId);
@@ -1502,7 +1514,7 @@ function extractExcerpt(text: string, query: string, radius = 400): string {
 }
 
 /** List blocks with optional filtering. */
-export function listMemoryBlocks(opts: { scope?: "global" | "project"; projectId?: string; query?: string } = {}): MemoryBlock[] {
+export function listMemoryBlocks(opts: { scope?: "global" | "project" | "archived"; projectId?: string; query?: string } = {}): MemoryBlock[] {
   const db = getDb();
   let querySQL = "SELECT * FROM memory_blocks WHERE supersededBy IS NULL";
   const params: any[] = [];

@@ -114,7 +114,7 @@ export const MEMORY_TOOLS: Tool[] = [
       name: Type.String({ description: "Block name (e.g. 'Tech Stack', 'User Preferences', 'Architecture', 'Topic Details')" }),
       description: Type.String({ description: "One-line summary of what this block covers — used for retrieval and indexing" }),
       content: Type.String({ description: "Full block content — structured text, up to ~4000 characters" }),
-      scope: Type.Optional(StringEnum(["global", "project"], { description: "Scope: 'global' (all chats) or 'project' (project-scoped). Default: global" })),
+      scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Scope: 'global' (all chats), 'project' (project-scoped), or 'archived' (hidden from context, searchable). Default: global" })),
       project_id: Type.Optional(Type.String({ description: "Project ID for project-scoped blocks" })),
     }),
   },
@@ -126,6 +126,7 @@ export const MEMORY_TOOLS: Tool[] = [
       block_id: Type.String({ description: "Block ID (e.g. blk-...)" }),
       content: Type.Optional(Type.String({ description: "New content to replace the block's content" })),
       description: Type.Optional(Type.String({ description: "Updated one-line description" })),
+      scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Change scope (e.g. 'archived' to hide from context while keeping searchable)" })),
     }),
   },
   {
@@ -141,7 +142,7 @@ export const MEMORY_TOOLS: Tool[] = [
     description:
       "List available memory blocks by scope or search. Use this to discover what knowledge blocks exist before reading or creating new ones.",
     parameters: Type.Object({
-      scope: Type.Optional(StringEnum(["global", "project"], { description: "Filter by scope" })),
+      scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Filter by scope" })),
       project_id: Type.Optional(Type.String({ description: "Project ID for project-scoped blocks" })),
       query: Type.Optional(Type.String({ description: "Optional search query to filter blocks by name/description" })),
     }),
@@ -497,12 +498,13 @@ export async function executeMemoryTool(
     }
 
     case "update_memory_block": {
-      const { block_id, content: newContent, description: newDesc } = toolCall.arguments;
+      const { block_id, content: newContent, description: newDesc, scope: newScope } = toolCall.arguments;
       if (!block_id) return { content: "Missing block_id", isError: true };
 
       const existing = getMemoryBlock(block_id);
       if (!existing) return { content: `Block not found: ${block_id}`, isError: false };
 
+      const scopeChanged = newScope !== undefined && newScope !== existing.scope;
       const finalContent = newContent ?? existing.content;
       if (finalContent.length > MAX_BLOCK_CHARS) {
         // Content too large — create a superseding block instead.
@@ -521,7 +523,7 @@ export async function executeMemoryTool(
           name: existing.name,
           description: newDesc ?? existing.description,
           content: finalContent.slice(0, MAX_BLOCK_CHARS),
-          scope: existing.scope,
+          scope: newScope ?? existing.scope,
           projectId: existing.projectId || "",
           createdAt: now,
           updatedAt: now,
@@ -538,9 +540,11 @@ export async function executeMemoryTool(
       updateMemoryBlock(block_id, {
         content: newContent,
         description: newDesc,
+        scope: newScope,
         updatedBy: "agent",
       });
-      return { content: `Updated block [${block_id}] "${existing.name}"`, isError: false };
+      const scopeNote = scopeChanged ? ` scope: ${existing.scope} → ${newScope}` : "";
+      return { content: `Updated block [${block_id}] "${existing.name}"${scopeNote}`, isError: false };
     }
 
     case "read_memory_block": {

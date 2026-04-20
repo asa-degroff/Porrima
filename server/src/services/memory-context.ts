@@ -312,6 +312,7 @@ export async function buildStablePrefix(
     const isSystemBlock = (b: MemoryBlock) =>
       b.id === "blk-zeitgeist-continuity" ||
       b.id.startsWith("blk-archive-") ||
+      b.scope === "archived" ||
       b.id.startsWith("blk-synth-") ||
       b.id.startsWith("blk-notebook-");
 
