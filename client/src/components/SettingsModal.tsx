@@ -1,4 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia(query).matches
+  );
+  useEffect(() => {
+    const mql = window.matchMedia(query);
+    const handler = (e: MediaQueryListEvent) => setMatches(e.matches);
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, [query]);
+  return matches;
+}
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth } from "../api/client";
@@ -179,6 +192,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [userDocSaving, setUserDocSaving] = useState(false);
   const [userDocMessage, setUserDocMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
+  const [exaApiKey, setExaApiKey] = useState(settings.exaApiKey || "");
   const [comfyuiUrl, setComfyuiUrl] = useState(settings.comfyuiUrl || "http://127.0.0.1:8188");
   const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   // Ollama server settings
@@ -509,6 +523,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       defaultVisionModelId: defaultVisionModelId || undefined,
       defaultSystemPrompt: effectivePrompt,
       braveApiKey: braveApiKey.trim(),
+      exaApiKey: exaApiKey.trim(),
       comfyuiUrl: comfyuiUrl.trim() || undefined,
       ollamaUrl: ollamaUrl.trim() || undefined,
       llamacppEnabled,
@@ -1008,13 +1023,20 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     setUserDocSaving(false);
   }, []);
 
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
+  const isDesktop = useMediaQuery("(min-width: 768px)");
+
+  // Sync scrollRoot when the media query changes (ref callbacks don't fire on resize)
+  useEffect(() => {
+    setScrollRoot(scrollContainerRef.current);
+  }, [isDesktop]);
+
   const activeSection = useActiveSection(SECTIONS.map(s => s.id), scrollRoot);
 
   const scrollToSection = (id: string) => {
     const el = document.getElementById(id);
-    const container = scrollContainerRef.current;
+    const container = scrollRoot;
     if (!el || !container) return;
 
     const containerRect = container.getBoundingClientRect();
@@ -1050,10 +1072,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </button>
         </div>
 
-        {/* Body - Single column with collapsible ToC */}
+        {/* Mobile body — single column with collapsible ToC dropdown */}
         <div className="flex flex-1 overflow-hidden flex-col">
-          {/* Collapsible ToC bar */}
-          <div className="shrink-0 border-b border-white/10">
+          {/* Collapsible ToC bar — mobile only */}
+          <div className="shrink-0 md:hidden border-b border-white/10">
             <div ref={tocRef} className="relative">
               <button
                 onClick={() => setTocOpen((o) => !o)}
@@ -1110,11 +1132,32 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             </div>
           </div>
 
-          {/* Settings content */}
-          <div
-            ref={(el) => { scrollContainerRef.current = el; setScrollRoot(el); }}
-            className="flex-1 overflow-x-hidden overflow-y-auto settings-content-scroll px-6 py-5 space-y-5"
-          >
+         {/* Shared content area — sidebar on desktop, no sidebar on mobile */}
+          <div className="flex flex-1 min-h-0">
+            {/* Left sidebar - Table of Contents — desktop only */}
+            <div className="w-48 shrink-0 border-r border-white/10 overflow-y-auto py-4 hidden md:block">
+              <nav className="px-3 space-y-1">
+                {SECTIONS.map((section) => (
+                  <button
+                    key={section.id}
+                    onClick={() => scrollToSection(section.id)}
+                    className={`block w-full text-left px-3 py-2 text-xs rounded-lg transition-all ${
+                      activeSection === section.id
+                        ? 'bg-white/15 text-white font-medium'
+                        : 'text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
+                  >
+                    {section.label}
+                  </button>
+                ))}
+              </nav>
+            </div>
+
+            {/* Right - Settings content — shared scroll container */}
+            <div
+              ref={scrollContainerRef}
+              className="flex-1 overflow-x-hidden overflow-y-auto settings-content-scroll px-6 py-5 space-y-5"
+            >
           {/* Default Model */}
           <div id="models" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Default Model</label>
@@ -2788,6 +2831,23 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </a>
               </p>
             </div>
+            <div className="space-y-2">
+              <label className="block text-sm text-white/50">Exa Search API Key</label>
+              <input
+                type="password"
+                value={exaApiKey}
+                onChange={(e) => setExaApiKey(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
+                placeholder="exa_api_key..."
+                autoComplete="off"
+              />
+              <p className="text-white/30 text-xs">
+                Required for Exa-powered web search. Provides richer results with highlights, summaries, and deep reasoning. Get a key at{" "}
+                <a href="https://exa.ai" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
+                  exa.ai
+                </a>
+              </p>
+            </div>
           </div>
 
           {/* Image Generation (ComfyUI) */}
@@ -3853,8 +3913,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
           </div>
         </div>
+      </div>
 
-        {/* Footer */}
+      {/* Footer */}
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-white/10 shrink-0">
           <button
             onClick={onClose}

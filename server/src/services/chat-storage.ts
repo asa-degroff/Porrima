@@ -629,6 +629,7 @@ const DEFAULT_SETTINGS: Settings = {
   defaultModelId: "",
   defaultSystemPrompt: "You are a helpful assistant.",
   braveApiKey: "",
+  exaApiKey: "",
 };
 
 export async function getSettings(): Promise<Settings> {

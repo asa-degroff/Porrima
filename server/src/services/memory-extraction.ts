@@ -261,7 +261,7 @@ async function buildExtractionSystemPrompt(projectId?: string): Promise<string> 
     const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId) : [];
     const allBlocks = [...globalBlocks, ...projectBlocks];
     if (allBlocks.length > 0) {
-      const summaries = allBlocks.map((b) => `- ${b.name}: ${b.content.slice(0, 300)}`).join("\n");
+      const summaries = allBlocks.map((b) => `- ${b.name}: ${b.content.slice(0, 4000)}`).join("\n");
       blockContext = `\n\n## Existing Knowledge Blocks\nThe following memory blocks already contain relevant context — do NOT extract information that is already covered here:\n${summaries}\n`;
     }
   } catch { /* non-critical */ }

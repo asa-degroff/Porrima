@@ -164,6 +164,7 @@ export interface Settings {
   defaultVisionModelId?: string;
   defaultSystemPrompt: string;
   braveApiKey: string;
+  exaApiKey: string;
   comfyuiUrl?: string;
   modelContextWindows?: Record<string, number>;
   theme?: Theme;

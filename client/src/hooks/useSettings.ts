@@ -6,6 +6,7 @@ const DEFAULT_SETTINGS: Settings = {
   defaultModelId: "",
   defaultSystemPrompt: "You are a helpful assistant.",
   braveApiKey: "",
+  exaApiKey: "",
   hapticsEnabled: true,
 };
 

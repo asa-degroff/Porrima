@@ -31,7 +31,7 @@ function findChromePath(): string | null {
 const WEB_SEARCH_TOOL: Tool = {
   name: "web_search",
   description:
-    "Search the web using Brave Search. Returns a list of results with titles, URLs, and snippets.",
+    "Search the web. Supports Brave Search and Exa as providers. Brave returns simple snippets; Exa supports rich content extraction (highlights, summaries), date/domain filters, and deep reasoning search.",
   parameters: Type.Object({
     query: Type.String({ description: "Search query" }),
     count: Type.Optional(
@@ -40,6 +40,25 @@ const WEB_SEARCH_TOOL: Tool = {
         minimum: 1,
         maximum: 20,
       })
+    ),
+    provider: Type.Optional(Type.String({ description: "Search provider: 'brave' or 'exa' (default: brave)" })),
+    // Exa-specific parameters (only effective when provider is "exa")
+    searchType: Type.Optional(Type.String({ description: "Exa search type: auto, neural, keyword, hybrid, fast, deep, deep-lite, deep-reasoning, magic, instant (default: auto)" })),
+    contents: Type.Optional(
+      Type.Object({
+        text: Type.Optional(Type.Any({ description: "true or object with includeHtmlTags/maxCharacters" })),
+        highlights: Type.Optional(Type.Any({ description: "object with maxCharacters and optional query" })),
+        summary: Type.Optional(Type.Boolean()),
+      })
+    ),
+    startPublishedDate: Type.Optional(
+      Type.String({ description: "Exa only: earliest publication date (YYYY-MM-DD)" })
+    ),
+    endPublishedDate: Type.Optional(
+      Type.String({ description: "Exa only: latest publication date (YYYY-MM-DD)" })
+    ),
+    includeDomains: Type.Optional(
+      Type.Array(Type.String(), { description: "Exa only: domains to include in results" })
     ),
   }),
 };
@@ -91,14 +110,32 @@ async function getBraveApiKey(): Promise<string> {
   return settings.braveApiKey || "";
 }
 
+async function getExaApiKey(): Promise<string> {
+  if (process.env.EXA_API_KEY) return process.env.EXA_API_KEY;
+  const settings = await getSettings();
+  return settings.exaApiKey || "";
+}
+
 async function executeWebSearch(
+  args: Record<string, any>
+): Promise<{ content: string; isError: boolean }> {
+  const provider = args.provider || "brave";
+
+  if (provider === "exa") {
+    return executeExaSearch(args);
+  }
+
+  return executeBraveSearch(args);
+}
+
+async function executeBraveSearch(
   args: Record<string, any>
 ): Promise<{ content: string; isError: boolean }> {
   const apiKey = await getBraveApiKey();
   if (!apiKey) {
     return {
       content:
-        "Web search is unavailable: no Brave API key configured. Add one in Settings or set the BRAVE_API_KEY environment variable.",
+        "Brave Search is unavailable: no API key configured. Add one in Settings or set the BRAVE_API_KEY environment variable.",
       isError: true,
     };
   }
@@ -146,7 +183,108 @@ async function executeWebSearch(
 
     return { content: formatted, isError: false };
   } catch (e: any) {
-    return { content: `Web search failed: ${e.message}`, isError: true };
+    return { content: `Brave Search failed: ${e.message}`, isError: true };
+  }
+}
+
+async function executeExaSearch(
+  args: Record<string, any>
+): Promise<{ content: string; isError: boolean }> {
+  const apiKey = await getExaApiKey();
+  if (!apiKey) {
+    return {
+      content:
+        "Exa Search is unavailable: no API key configured. Add one in Settings or set the EXA_API_KEY environment variable.",
+      isError: true,
+    };
+  }
+
+  const query = args.query;
+  if (!query) {
+    return { content: "Missing required parameter: query", isError: true };
+  }
+
+  const numResults = Math.min(50, Math.max(1, args.count || 5));
+
+  try {
+    const body: Record<string, any> = {
+      query,
+      numResults,
+      type: args.searchType || "auto",
+    };
+
+    // Exa-specific filters
+    if (args.startPublishedDate) body.startPublishedDate = args.startPublishedDate;
+    if (args.endPublishedDate) body.endPublishedDate = args.endPublishedDate;
+    if (args.includeDomains && args.includeDomains.length > 0) body.includeDomains = args.includeDomains;
+
+    // Exa content options — don't enable by default to avoid token bloat
+    // Only include if explicitly set
+    if (args.contents) {
+      const contents: Record<string, any> = {};
+      if (args.contents.text !== undefined) contents.text = args.contents.text;
+      if (args.contents.highlights !== undefined) contents.highlights = args.contents.highlights;
+      if (args.contents.summary !== undefined) contents.summary = args.contents.summary;
+      if (Object.keys(contents).length > 0) body.contents = contents;
+    }
+
+    const response = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        content: `Exa Search API error: ${response.status} ${response.statusText} — ${errorText.slice(0, 500)}`,
+        isError: true,
+      };
+    }
+
+    const data = await response.json();
+    const results = data.results || [];
+
+    if (results.length === 0) {
+      return { content: "No search results found.", isError: false };
+    }
+
+    const formatted = results
+      .map((r: any, i: number) => {
+        const parts: string[] = [];
+        parts.push(`${i + 1}. **${r.title || "(no title)"}**`);
+        parts.push(`   ${r.url}`);
+
+        // Highlights are the best Exa-specific feature for quick scanning
+        if (r.highlights && r.highlights.length > 0) {
+          for (const h of r.highlights) {
+            parts.push(`   > ${h}`);
+          }
+        } else if (r.summary) {
+          parts.push(`   ${r.summary}`);
+        } else if (r.text) {
+          // Fall back to first 200 chars of extracted text
+          parts.push(`   ${(r.text as string).slice(0, 200)}...`);
+        }
+
+        // Optional metadata
+        const meta: string[] = [];
+        if (r.publishedDate) meta.push(r.publishedDate.slice(0, 10));
+        if (r.author) meta.push(r.author.split(",")[0].trim());
+        if (meta.length > 0) {
+          parts.push(`   — ${meta.join(", ")}`);
+        }
+
+        return parts.join("\n");
+      })
+      .join("\n\n");
+
+    return { content: formatted, isError: false };
+  } catch (e: any) {
+    return { content: `Exa Search failed: ${e.message}`, isError: true };
   }
 }
 
