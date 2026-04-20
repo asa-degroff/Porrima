@@ -168,6 +168,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     generatedImages,
     waitingForInput,
     totalUsage,
+    isUsageEstimated,
     compacting,
     compaction,
     error,
@@ -732,6 +733,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         artifacts={artifacts}
         generatedImages={generatedImages}
         totalUsage={totalUsage}
+        isUsageEstimated={isUsageEstimated}
         compacting={compacting}
         compaction={compaction}
         hasCompactionSummary={hasCompactionSummary}

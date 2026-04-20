@@ -117,6 +117,11 @@ export function useChat(chatId: string | null) {
   const [warning, setWarning] = useState<StreamWarning | null>(null);
   const [compacting, setCompacting] = useState(false);
   const [compaction, setCompaction] = useState<{ removedCount: number; remainingCount: number } | null>(null);
+  // Provisional token count from the most recent compaction event — used to
+  // show an accurate (if approximate) context size between compaction and the
+  // next assistant's real usage, so the indicator never reverts to
+  // "context reset" while the chat still holds meaningful context.
+  const [postCompactionEstimate, setPostCompactionEstimate] = useState<number | null>(null);
   const [queueProcessing, setQueueProcessing] = useState(false);
   const [titleUpdate, setTitleUpdate] = useState<{ chatId: string; title: string } | null>(null);
   const [streamingSegmentIndex, setStreamingSegmentIndex] = useState<number | null>(null);
@@ -193,6 +198,7 @@ export function useChat(chatId: string | null) {
       setWarning(null);
       setCompacting(false);
       setCompaction(null);
+      setPostCompactionEstimate(null);
       setStreamingSegmentIndex(null);
       setStreamingUsage(null);
     }
@@ -626,6 +632,9 @@ export function useChat(chatId: string | null) {
         if (activeChatIdRef.current === streamChatId) {
           setCompacting(false);
           setCompaction(info);
+          if (typeof info.estimatedTokens === "number" && info.estimatedTokens > 0) {
+            setPostCompactionEstimate(info.estimatedTokens);
+          }
         }
       },
       onMessageComplete: (message) => {
@@ -796,6 +805,7 @@ export function useChat(chatId: string | null) {
     setError(null);
     setWarning(null);
     setCompaction(null);
+    setPostCompactionEstimate(null);
     doneCalledRef.current = false;
     streamingContentRef.current = "";
     if (rafRef.current !== null) {
@@ -1013,8 +1023,12 @@ export function useChat(chatId: string | null) {
   // IMPORTANT: Skips compaction summaries since they don't have real usage data.
   // ALSO IMPORTANT: Skips messages from before a compaction summary — their usage
   // data reflects the pre-compaction context size and is stale.
-  const totalUsage: MessageUsage = useMemo(() => {
-    if (streamingUsage) return streamingUsage;
+  // Derive both the usage value and a flag for whether it's a post-compaction
+  // estimate (vs. a real LLM-reported count). The flag lets the indicator
+  // mark the number as provisional instead of rendering it identically to a
+  // confirmed count.
+  const { totalUsage, isUsageEstimated }: { totalUsage: MessageUsage; isUsageEstimated: boolean } = useMemo(() => {
+    if (streamingUsage) return { totalUsage: streamingUsage, isUsageEstimated: false };
     // Find the index of the last compaction summary — any usage data before it
     // is stale (reflects pre-compaction context size).
     let lastCompactionIdx = -1;
@@ -1029,11 +1043,21 @@ export function useChat(chatId: string | null) {
       if (i <= lastCompactionIdx) break; // All messages before/at compaction are stale
       const msg = messages[i];
       if (msg.role === "assistant" && !msg._isCompactionSummary && msg.usage) {
-        return msg.usage;
+        return { totalUsage: msg.usage, isUsageEstimated: false };
       }
     }
-    return { input: 0, output: 0, totalTokens: 0 };
-  }, [messages, streamingUsage]);
+    // No real usage yet (typical between compaction and next assistant reply).
+    // Fall back to the server's post-compaction estimate — unlike the old
+    // zeroed-out fallback, this gives an accurate provisional count so the
+    // indicator doesn't mislead the user with "context reset".
+    if (lastCompactionIdx !== -1 && postCompactionEstimate && postCompactionEstimate > 0) {
+      return {
+        totalUsage: { input: postCompactionEstimate, output: 0, totalTokens: postCompactionEstimate },
+        isUsageEstimated: true,
+      };
+    }
+    return { totalUsage: { input: 0, output: 0, totalTokens: 0 }, isUsageEstimated: false };
+  }, [messages, streamingUsage, postCompactionEstimate]);
 
   // Check if the chat has a compaction summary (for UI state)
   const hasCompactionSummary = useMemo(() => {
@@ -1052,6 +1076,7 @@ export function useChat(chatId: string | null) {
     generatedImages,
     waitingForInput,
     totalUsage,
+    isUsageEstimated,
     compacting,
     compaction,
     error,

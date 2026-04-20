@@ -52,6 +52,7 @@ interface Props {
   artifacts: Artifact[];
   generatedImages: GeneratedImage[];
   totalUsage: MessageUsage;
+  isUsageEstimated?: boolean;
   compacting?: boolean;
   compaction?: { removedCount: number; remainingCount: number } | null;
   hasCompactionSummary?: boolean;
@@ -100,6 +101,7 @@ export function ChatView({
   artifacts,
   generatedImages,
   totalUsage,
+  isUsageEstimated,
   compacting,
   compaction,
   hasCompactionSummary,
@@ -398,6 +400,7 @@ export function ChatView({
             ) : (
               <TokenIndicator
                 usage={totalUsage}
+                isEstimated={isUsageEstimated}
                 contextWindow={contextWindow}
                 compacting={compacting}
                 compaction={compaction}

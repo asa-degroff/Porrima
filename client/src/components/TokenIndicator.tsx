@@ -9,6 +9,8 @@ interface CompactionInfo {
 
 interface Props {
   usage: MessageUsage;
+  /** True when `usage` is a post-compaction estimate rather than a real LLM-reported count. */
+  isEstimated?: boolean;
   contextWindow: number;
   compacting?: boolean;
   compaction?: CompactionInfo | null;
@@ -21,23 +23,24 @@ function formatNumber(n: number): string {
   return n.toString();
 }
 
-export function TokenIndicator({ 
-  usage, 
-  contextWindow, 
-  compacting, 
+export function TokenIndicator({
+  usage,
+  isEstimated,
+  contextWindow,
+  compacting,
   compaction,
   hasCompactionSummary,
   onClick
 }: Props) {
   const activityShape = useActivityShape();
-  // Determine if we have real usage data or are in a post-compaction state
-  // Real usage comes from Ollama's prompt_eval_count on assistant messages
-  const hasRealUsage = usage.totalTokens > 0;
-  const isPostCompaction = !hasRealUsage && hasCompactionSummary;
-  
-  // Calculate percentage for the progress bar
-  // In post-compaction state, show 0% since we're awaiting new data
-  const pct = hasRealUsage
+  // We have a usable count as long as totalTokens > 0 — whether it came from
+  // the LLM's real usage or the server's post-compaction estimate. The
+  // `isEstimated` flag just tells us to mark the number as provisional so the
+  // user knows a confirmed count will follow.
+  const hasUsageNumber = usage.totalTokens > 0;
+  const isPostCompactionUnknown = !hasUsageNumber && hasCompactionSummary;
+
+  const pct = hasUsageNumber
     ? Math.min((usage.totalTokens / contextWindow) * 100, 100)
     : 0;
 
@@ -49,19 +52,24 @@ export function TokenIndicator({
       title={onClick ? "Click to edit context window" : undefined}
     >
       <div className="flex items-center gap-1.5">
-        {hasRealUsage ? (
+        {hasUsageNumber ? (
           <>
-            <span title="Context tokens (input)">&#8593;{formatNumber(usage.input)}</span>
-            <span title="Generated tokens (output)">&#8595;{formatNumber(usage.output)}</span>
-            <span className="text-white/20">&middot;</span>
-            <span>{formatNumber(usage.totalTokens)} / {formatNumber(contextWindow)}</span>
+            {isEstimated ? (
+              <span
+                className="italic"
+                title="Estimated post-compaction context — will update after the next response"
+              >~{formatNumber(usage.totalTokens)} / {formatNumber(contextWindow)}</span>
+            ) : (
+              <>
+                <span title="Context tokens (input)">&#8593;{formatNumber(usage.input)}</span>
+                <span title="Generated tokens (output)">&#8595;{formatNumber(usage.output)}</span>
+                <span className="text-white/20">&middot;</span>
+                <span>{formatNumber(usage.totalTokens)} / {formatNumber(contextWindow)}</span>
+              </>
+            )}
           </>
-        ) : isPostCompaction ? (
-          <>
-            <span className="text-white/30 italic">context reset</span>
-            <span className="text-white/20">&middot;</span>
-            <span>{formatNumber(contextWindow)} max</span>
-          </>
+        ) : isPostCompactionUnknown ? (
+          <span>{formatNumber(contextWindow)} max</span>
         ) : (
           <span>{formatNumber(contextWindow)} max</span>
         )}
@@ -77,8 +85,8 @@ export function TokenIndicator({
                 : pct > 50
                   ? "rgb(251 191 36 / 0.5)"
                   : "rgb(96 165 250 / 0.4)",
-            // Fade the bar when we don't have real usage data
-            opacity: hasRealUsage ? 1 : 0.3,
+            // Fade the bar when we're showing a provisional or missing count.
+            opacity: hasUsageNumber ? (isEstimated ? 0.6 : 1) : 0.3,
           }}
         />
       </div>

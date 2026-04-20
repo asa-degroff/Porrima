@@ -336,6 +336,22 @@ function toolsForEstimate(
   return getAgentTools(chat.id, NOOP_TOOL_EFFECTS, contextWindow, projectPath, chat.type);
 }
 
+// Post-compaction context size estimate, used to populate the compaction SSE
+// event so the client can show a provisional token count instead of
+// "context reset" while waiting for the next assistant's real usage.
+async function estimatePostCompactionTokens(
+  chat: Chat,
+  systemPrompt: string,
+  tools: unknown,
+): Promise<number> {
+  try {
+    const { estimateContextTokens } = await import("../services/compaction.js");
+    return estimateContextTokens(chat.messages, systemPrompt, tools);
+  } catch {
+    return 0;
+  }
+}
+
 function createSafeStreamFn(chatOllamaOptions?: { keepAlive?: string | number; numGpu?: number; numPredict?: number }): StreamFn {
   return (model, ctx, options) => {
     if (options?.signal?.aborted) {
@@ -1283,14 +1299,6 @@ async function handleChatStream(
                 }
                 await saveChat(chat);
 
-                // Find the summary message that was inserted
-                const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
-                res.write(`event: compaction\ndata: ${JSON.stringify({
-                  removedCount: compaction.removedCount,
-                  remainingCount: chat.messages.filter(m => !m._outOfContext).length,
-                  summaryMessage: summaryMsg || null,
-                })}\n\n`);
-
                 // Full reset of memory context after compaction — rebuild with
                 // fresh retrieval, all memories frozen into the new system prompt.
                 if (chat.type === "agent" || chat.type === "bluesky") {
@@ -1301,6 +1309,18 @@ async function handleChatStream(
                   );
                   systemPrompt = split.systemPrompt;
                 }
+
+                // Find the summary message that was inserted. Emit AFTER the
+                // systemPrompt rebuild so the estimate reflects the prompt the
+                // next turn will actually use.
+                const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
+                const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
+                res.write(`event: compaction\ndata: ${JSON.stringify({
+                  removedCount: compaction.removedCount,
+                  remainingCount: chat.messages.filter(m => !m._outOfContext).length,
+                  summaryMessage: summaryMsg || null,
+                  estimatedTokens,
+                })}\n\n`);
 
                 // Clear usage so the token indicator reflects the compacted state
                 // rather than showing stale pre-compaction numbers
@@ -1455,12 +1475,14 @@ async function handleChatStream(
             // Emit compaction completion event AFTER all compaction work is done
             // (memory extraction, save) so the client can safely sync state.
             const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
+            const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
             res.write(`event: compaction\ndata: ${JSON.stringify({
               removedCount: compaction.removedCount,
               remainingCount: chat.messages.filter(m => !m._outOfContext).length,
               summaryMessage: summaryMsg || null,
               midTurn: true,
               cycle: compactionCycle,
+              estimatedTokens,
             })}\n\n`);
           }
         } catch (compErr) {
@@ -2008,10 +2030,16 @@ router.post("/", async (req, res) => {
       } else {
         console.log(`[chat] /compact complete: removed ${compaction.removedCount} messages`);
         const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
+        const estimatedTokens = await estimatePostCompactionTokens(
+          chat,
+          chat.systemPrompt || "",
+          toolsForEstimate(chat, contextWindow),
+        );
         res.write(`event: compaction\ndata: ${JSON.stringify({
           removedCount: compaction.removedCount,
           remainingCount: chat.messages.filter(m => !m._outOfContext).length,
           summaryMessage: summaryMsg || null,
+          estimatedTokens,
         })}\n\n`);
         res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: confirmText })}\n\n`);
         res.write(`event: done\ndata: ${JSON.stringify({ message: confirmMsg })}\n\n`);
@@ -2239,10 +2267,16 @@ router.post("/", async (req, res) => {
             // Find the summary message that was inserted
             const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
             // Emit compaction event for UI indicator
+            const estimatedTokens = await estimatePostCompactionTokens(
+              chat,
+              systemPrompt,
+              toolsForEstimate(chat, effectiveContextWindow),
+            );
             res.write(`event: compaction\ndata: ${JSON.stringify({
               removedCount: compaction.removedCount,
               remainingCount: chat.messages.filter(m => !m._outOfContext).length,
               summaryMessage: summaryMsg || null,
+              estimatedTokens,
             })}\n\n`);
           }
         } catch (err) {
@@ -2410,10 +2444,16 @@ router.post("/", async (req, res) => {
             // Find the summary message that was inserted
             const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
             // Emit compaction event for UI indicator
+            const estimatedTokens = await estimatePostCompactionTokens(
+              chat,
+              systemPrompt,
+              toolsForEstimate(chat, effectiveContextWindow),
+            );
             res.write(`event: compaction\ndata: ${JSON.stringify({
               removedCount: compaction.removedCount,
               remainingCount: chat.messages.filter(m => !m._outOfContext).length,
               summaryMessage: summaryMsg || null,
+              estimatedTokens,
             })}\n\n`);
           }
         } catch (err) {
@@ -2697,9 +2737,15 @@ router.post("/edit", async (req, res) => {
             editMemoriesDelta = split.memoriesMessage;
           }
           // Emit compaction event for UI indicator
+          const estimatedTokens = await estimatePostCompactionTokens(
+            chat,
+            systemPrompt,
+            toolsForEstimate(chat, effectiveContextWindow),
+          );
           res.write(`event: compaction\ndata: ${JSON.stringify({
             removedCount: compaction.removedCount,
             remainingCount: chat.messages.length,
+            estimatedTokens,
           })}\n\n`);
         }
       } catch (err) {
