@@ -441,10 +441,15 @@ async function buildMaintenancePhase2Trigger(chatId: string): Promise<string> {
   // 1. All non-system global blocks
   const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemBlock(b));
 
-  // 2. Active projects — agent chats modified since last synthesis
+  // 2. Active projects — agent chats modified since last synthesis.
+  // Floor the cutoff at 24h ago so a very-recent lastSynthesis (e.g. a
+  // back-to-back run) can't collapse the window to near-zero and hide
+  // projects with real recent activity.
   const db = getDb();
   const lastSynthesis = await getLastSynthesis();
-  const cutoff = lastSynthesis || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const floorMs = Date.now() - 24 * 60 * 60 * 1000;
+  const lastMs = lastSynthesis ? new Date(lastSynthesis).getTime() : floorMs;
+  const cutoff = new Date(Math.min(lastMs, floorMs)).toISOString();
 
   const activeProjects = db
     .prepare(
