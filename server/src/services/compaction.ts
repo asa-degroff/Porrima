@@ -20,14 +20,46 @@ function estimateTokens(text: string): number {
 }
 
 /**
+ * Per-in-context-message framing overhead. Covers role headers, chat-template
+ * separators, begin/end-of-turn markers, and other wire-format scaffolding
+ * that the char-based estimator would otherwise miss. Anthropic/OpenAI both
+ * document ~4 tokens/message; 8 is deliberately conservative because pi-ai
+ * splits tool results into their own messages and chat templates vary.
+ */
+const MESSAGE_FRAMING_TOKENS = 8;
+
+/**
+ * Estimate token cost of the serialized tool schema sent with every request.
+ * With ~30 tools each carrying a JSON schema, this can easily add 5–10K tokens
+ * that would otherwise go uncounted and let compaction skip past the
+ * threshold while the actual payload exceeds the model's window.
+ */
+function estimateToolSchemaTokens(tools: unknown): number {
+  if (!tools) return 0;
+  const arr = Array.isArray(tools) ? tools : [tools];
+  if (arr.length === 0) return 0;
+  try {
+    return estimateTokens(JSON.stringify(arr));
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Pure character-based estimate of all in-context messages + system prompt.
  * Does not rely on LLM-reported usage. Cheap, deterministic, and unaffected
  * by stale anchors when the system prompt or tool schemas change between turns.
  */
-function charEstimateContextSize(messages: Chat["messages"], systemPrompt: string): number {
+function charEstimateContextSize(
+  messages: Chat["messages"],
+  systemPrompt: string,
+  tools?: unknown,
+): number {
   let total = estimateTokens(systemPrompt);
+  total += estimateToolSchemaTokens(tools);
   for (const m of messages) {
     if (m._outOfContext) continue;
+    total += MESSAGE_FRAMING_TOKENS;
     if (m.role === "user") {
       total += estimateTokens(m.content);
       if (m.images?.length) total += m.images.length * 256;
@@ -36,7 +68,10 @@ function charEstimateContextSize(messages: Chat["messages"], systemPrompt: strin
       if (m.thinking) total += estimateTokens(m.thinking);
       if (m.toolCalls) total += m.toolCalls.length * 50;
       if (m.toolResults) {
-        for (const r of m.toolResults) total += estimateTokens(r.content) + 20;
+        // Each tool result is its own framed pi-ai message at send time.
+        for (const r of m.toolResults) {
+          total += estimateTokens(r.content) + 20 + MESSAGE_FRAMING_TOKENS;
+        }
       }
     }
   }
@@ -62,9 +97,13 @@ function charEstimateContextSize(messages: Chat["messages"], systemPrompt: strin
  * char estimation doesn't). When the prompt grows, Path B wins.
  */
 export { estimateContextSize as estimateContextTokens };
-function estimateContextSize(messages: Chat["messages"], systemPrompt: string): number {
+function estimateContextSize(
+  messages: Chat["messages"],
+  systemPrompt: string,
+  tools?: unknown,
+): number {
   // Path B: pure char-based estimate across the whole in-context set + prompt.
-  const pathBTokens = charEstimateContextSize(messages, systemPrompt);
+  const pathBTokens = charEstimateContextSize(messages, systemPrompt, tools);
 
   // Path A: anchor on the latest in-context assistant's reported usage.
   let lastKnownUsage = 0;
@@ -87,13 +126,16 @@ function estimateContextSize(messages: Chat["messages"], systemPrompt: string): 
   for (let i = lastUsageIndex + 1; i < messages.length; i++) {
     const m = messages[i];
     if (m._outOfContext) continue;
+    additionalTokens += MESSAGE_FRAMING_TOKENS;
     additionalTokens += estimateTokens(m.content);
     if (m.images?.length) additionalTokens += m.images.length * 256;
     if (m.role === "assistant") {
       if (m.thinking) additionalTokens += estimateTokens(m.thinking);
       if (m.toolCalls) additionalTokens += m.toolCalls.length * 50;
       if (m.toolResults) {
-        for (const r of m.toolResults) additionalTokens += estimateTokens(r.content) + 20;
+        for (const r of m.toolResults) {
+          additionalTokens += estimateTokens(r.content) + 20 + MESSAGE_FRAMING_TOKENS;
+        }
       }
     }
   }
@@ -117,14 +159,15 @@ export async function truncateBeforeSend(
   contextWindow: number,
   systemPrompt: string,
   onCompacting?: () => void,
-  onKeepalive?: () => void
+  onKeepalive?: () => void,
+  tools?: unknown,
 ): Promise<CompactionResult | null> {
   const noOp = null;
   const messages = chat.messages;
   if (messages.length <= 2) return noOp;
 
-  const estimatedTokens = estimateContextSize(messages, systemPrompt);
-  const charEstimate = charEstimateContextSize(messages, systemPrompt);
+  const estimatedTokens = estimateContextSize(messages, systemPrompt, tools);
+  const charEstimate = charEstimateContextSize(messages, systemPrompt, tools);
   const threshold = contextWindow * 0.80;
 
   // Fallthrough target: if the primary estimator says we're safe, we still
@@ -133,7 +176,7 @@ export async function truncateBeforeSend(
   // (e.g., the system prompt grew since the anchor was captured — common on
   // resume after contextState reset re-freezes memories into the prompt).
   if (estimatedTokens <= threshold) {
-    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive);
+    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools);
   }
 
   onCompacting?.();
@@ -169,7 +212,7 @@ export async function truncateBeforeSend(
     // Too few in-context messages to compact conventionally; still run the
     // hard-cap pass so the breach is logged (and, if forcible, aggressively
     // truncated via truncateChatHistory).
-    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive);
+    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools);
   }
 
   // Per-message token estimates for in-context messages
@@ -222,7 +265,7 @@ export async function truncateBeforeSend(
     // Budget planning says keep everything, but the estimator said we're over
     // the threshold. Run the hard-cap pass so it can force aggressive
     // compaction if the actual payload still exceeds the cap.
-    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive);
+    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools);
   }
 
   // Collect removed messages for archiving
@@ -352,8 +395,9 @@ async function hardCapSafetyPass(
   systemPrompt: string,
   onCompacting?: () => void,
   onKeepalive?: () => void,
+  tools?: unknown,
 ): Promise<CompactionResult | null> {
-  const charEstimate = charEstimateContextSize(chat.messages, systemPrompt);
+  const charEstimate = charEstimateContextSize(chat.messages, systemPrompt, tools);
   const hardCap = contextWindow * 0.90;
   if (charEstimate <= hardCap) return null;
 
@@ -386,7 +430,7 @@ async function hardCapSafetyPass(
     return null;
   }
 
-  const postCharEstimate = charEstimateContextSize(chat.messages, systemPrompt);
+  const postCharEstimate = charEstimateContextSize(chat.messages, systemPrompt, tools);
   console.log(
     `[compaction] Hard-cap safety pass complete: removed ${aggressive.removedCount} more messages, ` +
     `charEstimate ${charEstimate} → ${postCharEstimate} (${((postCharEstimate / contextWindow) * 100).toFixed(0)}% of ctx)`

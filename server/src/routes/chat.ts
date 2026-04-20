@@ -314,6 +314,28 @@ function isCloudModel(modelId: string): boolean {
   return modelId.includes(":cloud");
 }
 
+// Noop side effects just to satisfy getAgentTools' signature when we need
+// tool schemas for context-size estimation, not execution.
+const NOOP_TOOL_EFFECTS: ToolSideEffects = {
+  onArtifact: () => {},
+  onVisual: () => {},
+  onGeneratedImage: () => {},
+  onPendingReviewImage: () => {},
+  onAskUser: () => {},
+};
+
+// Build a tool schema list suitable for compaction size-estimation only.
+// The returned schemas are identical to what execution would use (same
+// chatType gating), so estimateToolSchemaTokens sees the real wire cost.
+function toolsForEstimate(
+  chat: Chat,
+  contextWindow: number,
+  projectPath?: string,
+): unknown {
+  if (chat.type === "quick") return undefined;
+  return getAgentTools(chat.id, NOOP_TOOL_EFFECTS, contextWindow, projectPath, chat.type);
+}
+
 function createSafeStreamFn(chatOllamaOptions?: { keepAlive?: string | number; numGpu?: number; numPredict?: number }): StreamFn {
   return (model, ctx, options) => {
     if (options?.signal?.aborted) {
@@ -1124,7 +1146,7 @@ async function handleChatStream(
             // Fallback to character estimation if usage not reported
             if (!currentTokens && chat.messages.length > 0) {
               const { estimateContextTokens } = await import("../services/compaction.js");
-              currentTokens = estimateContextTokens(chat.messages, systemPrompt);
+              currentTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
             }
             if (effectiveCW > 0 && currentTokens > 0) {
               const usageRatio = currentTokens / effectiveCW;
@@ -1238,7 +1260,7 @@ async function handleChatStream(
           // Fallback to character estimation if usage is missing
           if (!needsCompaction && lastUsage === 0 && chat.messages.length > 4) {
             const { estimateContextTokens } = await import("../services/compaction.js");
-            const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt);
+            const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
             const estimatedRatio = estimatedTokens / effectiveContextWindow;
             if (estimatedRatio > 0.80) {
               console.log(`[compaction] End-of-turn: usage missing but estimation shows ${estimatedTokens} tokens (${(estimatedRatio * 100).toFixed(0)}%) — forcing compaction`);
@@ -1589,7 +1611,7 @@ async function handleChatStream(
             let resumeTokens = state.finalUsage?.totalTokens ?? 0;
             if (!resumeTokens) {
               const { estimateContextTokens } = await import("../services/compaction.js");
-              resumeTokens = estimateContextTokens(chat.messages, systemPrompt);
+              resumeTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
             }
             if (resumeEffectiveCW > 0 && resumeTokens > 0 && resumeTokens / resumeEffectiveCW > 0.85) {
               console.warn(`[chat] Resume loop overflow (cycle ${compactionCycle}): ${resumeTokens}/${resumeEffectiveCW} (${((resumeTokens / resumeEffectiveCW) * 100).toFixed(0)}%) — triggering another compaction cycle`);
@@ -2175,7 +2197,14 @@ router.post("/", async (req, res) => {
         try {
           const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
           const emitKeepalive = () => res.write(`: keepalive\n\n`);
-          const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
+          const compaction = await truncateBeforeSend(
+            chat,
+            effectiveContextWindow,
+            systemPrompt,
+            () => res.write(`event: compacting\ndata: {}\n\n`),
+            emitKeepalive,
+            toolsForEstimate(chat, effectiveContextWindow),
+          );
           if (compaction && compaction.truncated) {
             // Extract memories from removed messages and await completion so they're
             // available for the system prompt rebuild below. Without awaiting, the
@@ -2334,7 +2363,14 @@ router.post("/", async (req, res) => {
         try {
           const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
           const emitKeepalive = () => res.write(`: keepalive\n\n`);
-          const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
+          const compaction = await truncateBeforeSend(
+            chat,
+            effectiveContextWindow,
+            systemPrompt,
+            () => res.write(`event: compacting\ndata: {}\n\n`),
+            emitKeepalive,
+            toolsForEstimate(chat, effectiveContextWindow),
+          );
           if (compaction && compaction.truncated) {
             // Extract memories from removed messages and await completion so they're
             // available for the system prompt rebuild below. Without awaiting, the

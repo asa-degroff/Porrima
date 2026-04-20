@@ -696,23 +696,10 @@ export async function runSystemSynthesis(options?: {
     );
     const synthesisPrompt = `${stablePrefix}\n\n${SYNTHESIS_INSTRUCTIONS}`;
 
-    // --- Pre-send compaction keeps history bounded ---
-    const compactionResult = await truncateBeforeSend(
-      chat,
-      contextWindow,
-      synthesisPrompt,
-    );
-    if (compactionResult?.truncated) {
-      console.log(
-        `[system-chat] Pre-compaction removed ${compactionResult.removedCount} messages`,
-      );
-      await saveChat(chat);
-    }
-
-    // --- Convert persistent history to pi-ai format ---
-    const piMessages = chatMessagesToPiMessages(chat.messages, modelId);
-
-    // --- Tool loop ---
+    // Build tools up front so the pre-send compaction estimator can account
+    // for tool-schema tokens — otherwise the schema (5–10K tokens for the
+    // full agent tool set) slips past the char-based threshold and leaves
+    // the model stuck prefilling a near-full context on reload.
     const artifacts: any[] = [];
     const visuals: any[] = [];
     const generatedImages: any[] = [];
@@ -727,6 +714,25 @@ export async function runSystemSynthesis(options?: {
     };
 
     const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system");
+
+    // --- Pre-send compaction keeps history bounded ---
+    const compactionResult = await truncateBeforeSend(
+      chat,
+      contextWindow,
+      synthesisPrompt,
+      undefined,
+      undefined,
+      tools,
+    );
+    if (compactionResult?.truncated) {
+      console.log(
+        `[system-chat] Pre-compaction removed ${compactionResult.removedCount} messages`,
+      );
+      await saveChat(chat);
+    }
+
+    // --- Convert persistent history to pi-ai format ---
+    const piMessages = chatMessagesToPiMessages(chat.messages, modelId);
 
     const MAX_ITERATIONS = 30;
     let iterations = 0;
