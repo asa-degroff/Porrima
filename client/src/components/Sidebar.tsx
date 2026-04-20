@@ -23,6 +23,7 @@ interface Props {
   onDeleteProject: (id: string) => void;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   onOpenSettings: () => void;
+  onOpenMemoryDebug?: () => void;
   onOpenImageSandbox: () => void;
   isOpen: boolean;
   onClose: () => void;
@@ -408,6 +409,7 @@ export function Sidebar({
   onDeleteProject,
   onSendToNotebook,
   onOpenSettings,
+  onOpenMemoryDebug,
   onOpenImageSandbox,
   isOpen,
   onClose,
@@ -707,6 +709,19 @@ export function Sidebar({
             </div>
             {/* Spacer */}
             <div className="flex-1" />
+            {/* Memory debug — opens extraction observability panel */}
+            {onOpenMemoryDebug && (
+              <button
+                onClick={onOpenMemoryDebug}
+                className="p-1.5 text-white/20 hover:text-white/50 hover:bg-white/5 rounded-lg transition-colors shrink-0"
+                title="Memory Extraction Debug"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2a4.5 4.5 0 0 0-4.5 4.5v1a4 4 0 0 0-2 7.4A4 4 0 0 0 8 22a4 4 0 0 0 4-4V6.5A4.5 4.5 0 0 0 12 2Z" />
+                  <path d="M12 2a4.5 4.5 0 0 1 4.5 4.5v1a4 4 0 0 1 2 7.4A4 4 0 0 1 16 22a4 4 0 0 1-4-4" />
+                </svg>
+              </button>
+            )}
             {/* Settings — far right */}
             <button
               onClick={() => onOpenSettings()}

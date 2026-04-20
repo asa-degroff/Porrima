@@ -18,6 +18,7 @@ import {
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
 import { invalidateMemoriesCache, invalidateStablePrefixCache } from "./memory-context.js";
+import { startExtractionRun } from "./memory-extraction-observability.js";
 import type { ChatMessage, Memory, MemoryCategory, Chat } from "../types.js";
 
 const LOG_DIR = join(homedir(), ".quje-agent", "logs");
@@ -347,6 +348,12 @@ const DEDUP_THRESHOLD = 0.85;
  * Dedup + save: for each fact, find the nearest existing memory via sqlite-vec.
  * If similarity > threshold, update in place; otherwise insert new.
  */
+export interface DedupAndSaveOutcome {
+  added: number;
+  superseded: number;
+  skippedDuplicates: number;
+}
+
 export async function dedupAndSave(
   facts: ExtractedFact[],
   embeddings: number[][],
@@ -354,7 +361,10 @@ export async function dedupAndSave(
   projectId?: string,
   sourceType: 'chat' | 'notebook' | 'explicit' = 'chat',
   sourceId?: string
-): Promise<void> {
+): Promise<DedupAndSaveOutcome> {
+  let added = 0;
+  let superseded = 0;
+  let skippedDuplicates = 0;
   for (let i = 0; i < facts.length; i++) {
     const fact = facts[i];
     const factEmbedding = embeddings[i];
@@ -372,6 +382,7 @@ export async function dedupAndSave(
           importance: Math.max(match.memory.importance, fact.importance),
           lastAccessed: new Date().toISOString(),
         });
+        skippedDuplicates++;
       } else {
         // Text has meaningfully changed — create a new memory that supersedes the old one
         console.log(
@@ -397,6 +408,7 @@ export async function dedupAndSave(
         if (!linked) {
           console.log(`[memory] Supersession link rejected (cycle detected): ${match.memory.id} ↛ ${newMemoryId}`);
         }
+        superseded++;
       }
     } else {
       console.log(`[memory] New memory: "${fact.text}"`);
@@ -419,8 +431,10 @@ export async function dedupAndSave(
       
       // Check for automatic supersession after saving new memory
       await checkSupersession(newMemoryId, fact.text, factEmbedding);
+      added++;
     }
   }
+  return { added, superseded, skippedDuplicates };
 }
 
 export async function extractMemories(
@@ -431,9 +445,23 @@ export async function extractMemories(
   projectId?: string
 ): Promise<void> {
   extractionMetrics.totalExtractions++;
-  try {
   const extractionPrompt = `User message: ${userMsg}\n\nAssistant response: ${assistantMsg}`;
   const systemPrompt = await buildExtractionSystemPrompt(projectId);
+  const chat = await getChat(chatId).catch(() => null);
+  const runHandle = startExtractionRun({
+    trigger: "immediate",
+    chatId,
+    chatTitle: chat?.title,
+    model: modelId,
+    priorMemoryCount: 0,
+    messages: [
+      { role: "user", content: userMsg },
+      { role: "assistant", content: assistantMsg },
+    ],
+    systemPrompt,
+    userPrompt: extractionPrompt,
+  });
+  try {
 
   // Call the LLM to extract facts (with retry)
   let responseText = "";
@@ -443,12 +471,14 @@ export async function extractMemories(
     },
     `extractMemories LLM call (chat ${chatId})`
   );
+  runHandle.attachOutput(responseText);
 
   const facts = parseExtractionResponse(responseText);
   if (facts.length === 0) {
     console.log("[memory] No facts extracted from exchange");
     extractionMetrics.successfulExtractions++;
     extractionMetrics.lastExtractionAt = new Date().toISOString();
+    runHandle.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0 });
     return;
   }
 
@@ -463,11 +493,12 @@ export async function extractMemories(
     );
   } catch (e) {
     console.error("[memory] Batch embedding failed:", e);
+    runHandle.fail(e);
     return;
   }
 
   // Dedup and save inside a single write lock to prevent concurrent overwrites
-  await dedupAndSave(facts, embeddings, chatId, projectId);
+  const outcome = await dedupAndSave(facts, embeddings, chatId, projectId);
 
   // Invalidate the memories cache for this chat so the next turn re-retrieves
   // with the newly extracted memories included. This keeps the system prompt
@@ -477,9 +508,17 @@ export async function extractMemories(
   extractionMetrics.successfulExtractions++;
   extractionMetrics.totalFactsExtracted += facts.length;
   extractionMetrics.lastExtractionAt = new Date().toISOString();
+  runHandle.complete({
+    facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
+    saved: outcome.added,
+    superseded: outcome.superseded,
+    skippedDuplicates: outcome.skippedDuplicates,
+    errors: 0,
+  });
   } catch (e) {
     extractionMetrics.failedExtractions++;
     extractionMetrics.lastFailureAt = new Date().toISOString();
+    runHandle.fail(e);
     throw e;
   }
 }
@@ -737,50 +776,76 @@ export async function preCompactionFlush(
     .join("\n\n");
 
   const systemPrompt = await buildPreCompactionSystemPrompt(projectId);
+  const chat = await getChat(chatId).catch(() => null);
+  const runHandle = startExtractionRun({
+    trigger: "pre-compaction",
+    chatId,
+    chatTitle: chat?.title,
+    model: modelId,
+    priorMemoryCount: 0,
+    messages: substantiveMessages.map((m) => ({ role: m.role, content: m.content })),
+    systemPrompt,
+    userPrompt: removedText,
+  });
 
-  let responseText = "";
-  await withRetry(
-    async () => {
-      responseText = await callExtractionLLM(modelId, removedText, systemPrompt);
-    },
-    `preCompactionFlush LLM call (chat ${chatId})`
-  );
-
-  const facts = parseExtractionResponse(responseText);
-  if (facts.length === 0) {
-    console.log("[memory] Pre-compaction flush: no facts extracted");
-    return;
-  }
-
-  console.log(`[memory] Pre-compaction flush: ${facts.length} facts extracted, embedding batch...`);
-
-  // Batch-embed all facts in a single API call
-  let embeddings: number[][];
   try {
-    embeddings = await withRetry(
-      () => embedBatch(facts.map((f) => f.text)),
-      `embedBatch for ${facts.length} pre-compaction facts (chat ${chatId})`
+    let responseText = "";
+    await withRetry(
+      async () => {
+        responseText = await callExtractionLLM(modelId, removedText, systemPrompt);
+      },
+      `preCompactionFlush LLM call (chat ${chatId})`
     );
+    runHandle.attachOutput(responseText);
+
+    const facts = parseExtractionResponse(responseText);
+    if (facts.length === 0) {
+      console.log("[memory] Pre-compaction flush: no facts extracted");
+      runHandle.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0 });
+      return;
+    }
+
+    console.log(`[memory] Pre-compaction flush: ${facts.length} facts extracted, embedding batch...`);
+
+    // Batch-embed all facts in a single API call
+    let embeddings: number[][];
+    try {
+      embeddings = await withRetry(
+        () => embedBatch(facts.map((f) => f.text)),
+        `embedBatch for ${facts.length} pre-compaction facts (chat ${chatId})`
+      );
+    } catch (e) {
+      console.error("[memory] Pre-compaction batch embedding failed:", e);
+      runHandle.fail(e);
+      return;
+    }
+
+    const outcome = await dedupAndSave(facts, embeddings, chatId, projectId);
+
+    // Process block updates (only high-importance facts with blockUpdate field)
+    // Use lower importance threshold (7) for pre-compaction flush since messages
+    // are about to be removed — moderate-importance architectural context that would
+    // normally stay in conversation needs more aggressive block preservation.
+    const blockUpdatesMade = await processBlockUpdates(facts, projectId, 7);
+    if (blockUpdatesMade) {
+      invalidateStablePrefixCache(chatId);  // Force reload of updated blocks
+    }
+
+    // Invalidate memories cache so next turn picks up new memories
+    invalidateMemoriesCache(chatId);
+
+    console.log("[memory] Pre-compaction flush complete");
+    runHandle.complete({
+      facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
+      saved: outcome.added,
+      superseded: outcome.superseded,
+      skippedDuplicates: outcome.skippedDuplicates,
+      errors: 0,
+    });
   } catch (e) {
-    console.error("[memory] Pre-compaction batch embedding failed:", e);
-    return;
+    runHandle.fail(e);
+    throw e;
   }
-
-  await dedupAndSave(facts, embeddings, chatId, projectId);
-
-  // Process block updates (only high-importance facts with blockUpdate field)
-  // Use lower importance threshold (7) for pre-compaction flush since messages
-  // are about to be removed — moderate-importance architectural context that would
-  // normally stay in conversation needs more aggressive block preservation.
-  const blockUpdatesMade = await processBlockUpdates(facts, projectId, 7);
-  if (blockUpdatesMade) {
-    invalidateStablePrefixCache(chatId);  // Force reload of updated blocks
-  }
-
-  // Invalidate memories cache so next turn picks up new memories
-  invalidateMemoriesCache(chatId);
-
-  console.log("[memory] Pre-compaction flush complete");
 }
 
 /**
@@ -1065,79 +1130,109 @@ export async function extractDelayedMemories(
   const extractionPrompt = `${prompt}\n\nCONVERSATION:\n${conversationText}`;
   const systemPrompt = await buildDelayedExtractionSystemPrompt();
 
-  // Call LLM to extract memories
-  let responseText = "";
-  try {
-    await withRetry(
-      async () => {
-        responseText = await callExtractionLLM(modelId, extractionPrompt, systemPrompt);
-      },
-      `extractDelayedMemories LLM call (chat ${chatId})`
-    );
-  } catch (e) {
-    console.error(`[memory-delayed] LLM extraction failed:`, e);
-    throw e;
-  }
-  
-  const facts = parseExtractionResponse(responseText);
-  if (facts.length === 0) {
-    console.log(`[memory-delayed] No new memories extracted from chat ${chatId}`);
-    // Still update tracking fields to mark extraction as run
-    await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
-    return;
-  }
-  
-  console.log(`[memory-delayed] Extracted ${facts.length} new memory(ies), embedding batch...`);
-  
-  // Batch-embed all facts
-  let embeddings: number[][];
-  try {
-    embeddings = await withRetry(
-      () => embedBatch(facts.map((f) => f.text)),
-      `embedBatch for ${facts.length} delayed memories (chat ${chatId})`
-    );
-  } catch (e) {
-    console.error("[memory-delayed] Batch embedding failed:", e);
-    throw e;
-  }
-  
-  // Save with sourceType = 'chat_delayed'
-  for (let i = 0; i < facts.length; i++) {
-    const fact = facts[i];
-    const factEmbedding = embeddings[i];
-    
-    // Check for duplicates against existing memories
-    const match = await findDuplicates(factEmbedding, DEDUP_THRESHOLD);
-    
-    if (match) {
-      console.log(
-        `[memory-delayed] Skipping duplicate (sim=${match.similarity.toFixed(3)}): "${fact.text}"`
-      );
-    } else {
-      const now = new Date().toISOString();
-      const newMemoryId = uuid();
-      await addMemory({
-        id: newMemoryId,
-        text: fact.text,
-        category: fact.category,
-        importance: Math.min(10, Math.max(1, fact.importance)),
-        embedding: factEmbedding,
-        createdAt: now,
-        lastAccessed: now,
-        accessCount: 0,
-        sourceChatId: chatId,
-        ...(chat.projectId ? { projectId: chat.projectId } : {}),
-        sourceType: 'chat_delayed',
-        sourceId: chatId,
-      });
-      
-      // Check for automatic supersession
-      await checkSupersession(newMemoryId, fact.text, factEmbedding);
-    }
-  }
-  
-  // Update chat tracking fields without touching lastModified
-  await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
+  const runHandle = startExtractionRun({
+    trigger: "delayed",
+    chatId,
+    chatTitle: chat.title,
+    model: modelId,
+    priorMemoryCount: context.previousMemories.length,
+    messages: context.messages.map((m) => ({ role: m.role, content: m.content })),
+    systemPrompt,
+    userPrompt: extractionPrompt,
+  });
 
-  console.log(`[memory-delayed] Extraction complete for chat ${chatId}`);
+  let runSaved = 0;
+  let runSkipped = 0;
+
+  try {
+    // Call LLM to extract memories
+    let responseText = "";
+    try {
+      await withRetry(
+        async () => {
+          responseText = await callExtractionLLM(modelId, extractionPrompt, systemPrompt);
+        },
+        `extractDelayedMemories LLM call (chat ${chatId})`
+      );
+    } catch (e) {
+      console.error(`[memory-delayed] LLM extraction failed:`, e);
+      throw e;
+    }
+    runHandle.attachOutput(responseText);
+
+    const facts = parseExtractionResponse(responseText);
+    if (facts.length === 0) {
+      console.log(`[memory-delayed] No new memories extracted from chat ${chatId}`);
+      // Still update tracking fields to mark extraction as run
+      await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
+      runHandle.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0 });
+      return;
+    }
+
+    console.log(`[memory-delayed] Extracted ${facts.length} new memory(ies), embedding batch...`);
+
+    // Batch-embed all facts
+    let embeddings: number[][];
+    try {
+      embeddings = await withRetry(
+        () => embedBatch(facts.map((f) => f.text)),
+        `embedBatch for ${facts.length} delayed memories (chat ${chatId})`
+      );
+    } catch (e) {
+      console.error("[memory-delayed] Batch embedding failed:", e);
+      throw e;
+    }
+
+    // Save with sourceType = 'chat_delayed'
+    for (let i = 0; i < facts.length; i++) {
+      const fact = facts[i];
+      const factEmbedding = embeddings[i];
+
+      // Check for duplicates against existing memories
+      const match = await findDuplicates(factEmbedding, DEDUP_THRESHOLD);
+
+      if (match) {
+        console.log(
+          `[memory-delayed] Skipping duplicate (sim=${match.similarity.toFixed(3)}): "${fact.text}"`
+        );
+        runSkipped++;
+      } else {
+        const now = new Date().toISOString();
+        const newMemoryId = uuid();
+        await addMemory({
+          id: newMemoryId,
+          text: fact.text,
+          category: fact.category,
+          importance: Math.min(10, Math.max(1, fact.importance)),
+          embedding: factEmbedding,
+          createdAt: now,
+          lastAccessed: now,
+          accessCount: 0,
+          sourceChatId: chatId,
+          ...(chat.projectId ? { projectId: chat.projectId } : {}),
+          sourceType: 'chat_delayed',
+          sourceId: chatId,
+        });
+
+        // Check for automatic supersession
+        await checkSupersession(newMemoryId, fact.text, factEmbedding);
+        runSaved++;
+      }
+    }
+
+    // Update chat tracking fields without touching lastModified
+    await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
+
+    console.log(`[memory-delayed] Extraction complete for chat ${chatId}`);
+    runHandle.complete({
+      facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
+      saved: runSaved,
+      superseded: 0,
+      skippedDuplicates: runSkipped,
+      errors: 0,
+    });
+  } catch (e) {
+    runHandle.fail(e);
+    throw e;
+  }
 }

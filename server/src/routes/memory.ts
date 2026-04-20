@@ -23,6 +23,7 @@ import {
 } from "../services/memory-storage.js";
 import { runSystemSynthesis } from "../services/system-chat.js";
 import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
+import { getRecentExtractionRuns, subscribeExtractionEvents } from "../services/memory-extraction-observability.js";
 import { invalidateAllMemoriesCaches, invalidateAllStablePrefixCaches } from "../services/memory-context.js";
 import type { Memory, MemorySummary } from "../types.js";
 
@@ -43,6 +44,46 @@ router.get("/status", async (_req, res) => {
     memoryCount,
     lastSynthesis,
     extraction: getExtractionMetrics(),
+  });
+});
+
+// Debug observability for the memory extraction agent. Ring buffer of the
+// most recent runs — each includes the model input (messages + prompt), raw
+// LLM output, and parsed results. In-memory only; survives the process but
+// not restarts. Routes are placed before /:id so "extraction" isn't matched
+// as a memory id.
+router.get("/extraction/recent", (_req, res) => {
+  res.json({ runs: getRecentExtractionRuns() });
+});
+
+// SSE stream of live extraction events. Emits `event: run` SSE frames whose
+// `data` is `{ type: "start" | "output" | "complete" | "error", run: ... }`.
+// The client unsubscribes by closing the connection.
+router.get("/extraction/stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+
+  // Prime the client with the current buffer so the panel can render
+  // immediately on connect without a separate /recent fetch.
+  res.write(`event: snapshot\ndata: ${JSON.stringify({ runs: getRecentExtractionRuns() })}\n\n`);
+
+  const unsubscribe = subscribeExtractionEvents((ev) => {
+    res.write(`event: run\ndata: ${JSON.stringify(ev)}\n\n`);
+  });
+
+  // Periodic heartbeat so intermediate proxies don't idle-kill the stream
+  // during quiet periods between extractions.
+  const heartbeat = setInterval(() => {
+    res.write(`: keepalive\n\n`);
+  }, 30_000);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    res.end();
   });
 });
 

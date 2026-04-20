@@ -3,6 +3,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { NotebookView } from "./components/NotebookView";
 import { SettingsModal } from "./components/SettingsModal";
+import { MemoryDebugPanel } from "./components/MemoryDebugPanel";
 import { CreateProjectModal } from "./components/CreateProjectModal";
 import { LoginPage } from "./components/LoginPage";
 
@@ -90,6 +91,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [lastActiveChatId, setLastActiveChatId] = useState<string | null>(settings.lastActiveChatId || null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [memoryDebugOpen, setMemoryDebugOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [imageSandboxOpen, setImageSandboxOpen] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -678,6 +680,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onDeleteProject={handleDeleteProject}
         onSendToNotebook={handleSendToNotebook}
         onOpenSettings={handleOpenSettings}
+        onOpenMemoryDebug={() => setMemoryDebugOpen(true)}
         onOpenImageSandbox={handleOpenImageSandbox}
         isOpen={sidebarOpen}
         onClose={handleCloseSidebar}
@@ -786,6 +789,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           onLogout={onLogout}
         />
       )}
+      <MemoryDebugPanel isOpen={memoryDebugOpen} onClose={() => setMemoryDebugOpen(false)} />
       {projectModalOpen && (
         <CreateProjectModal
           onClose={() => setProjectModalOpen(false)}
