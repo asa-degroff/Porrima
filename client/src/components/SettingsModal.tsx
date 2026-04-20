@@ -318,6 +318,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [embeddingModelDropdownOpen, setEmbeddingModelDropdownOpen] = useState(false);
   const [rerankerModelDropdownOpen, setRerankerModelDropdownOpen] = useState(false);
   const [favoritesDropdownOpen, setFavoritesDropdownOpen] = useState(false);
+  const [tocOpen, setTocOpen] = useState(false);
+  const tocRef = useRef<HTMLDivElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const visionModelDropdownRef = useRef<HTMLDivElement>(null);
   const voiceDropdownRef = useRef<HTMLDivElement>(null);
@@ -337,6 +339,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useClickOutside(extractionModelDropdownRef, () => setExtractionModelDropdownOpen(false), extractionModelDropdownOpen);
   useClickOutside(embeddingModelDropdownRef, () => setEmbeddingModelDropdownOpen(false), embeddingModelDropdownOpen);
   useClickOutside(rerankerModelDropdownRef, () => setRerankerModelDropdownOpen(false), rerankerModelDropdownOpen);
+  useClickOutside(tocRef, () => setTocOpen(false), tocOpen);
   useClickOutside(favoritesDropdownRef, () => setFavoritesDropdownOpen(false), favoritesDropdownOpen);
 
 
@@ -1047,31 +1050,70 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </button>
         </div>
 
-        {/* Body - Two column layout */}
-        <div className="flex flex-1 overflow-hidden">
-          {/* Left sidebar - Table of Contents */}
-          <div className="w-48 shrink-0 border-r border-white/10 overflow-y-auto py-4">
-            <nav className="px-3 space-y-1">
-              {SECTIONS.map((section) => (
-                <button
-                  key={section.id}
-                  onClick={() => scrollToSection(section.id)}
-                  className={`block w-full text-left px-3 py-2 text-xs rounded-lg transition-all ${
-                    activeSection === section.id
-                      ? 'bg-white/15 text-white font-medium'
-                      : 'text-white/50 hover:text-white/80 hover:bg-white/5'
-                  }`}
+        {/* Body - Single column with collapsible ToC */}
+        <div className="flex flex-1 overflow-hidden flex-col">
+          {/* Collapsible ToC bar */}
+          <div className="shrink-0 border-b border-white/10">
+            <div ref={tocRef} className="relative">
+              <button
+                onClick={() => setTocOpen((o) => !o)}
+                className="w-full flex items-center justify-between px-4 py-2 text-xs text-white/40 hover:text-white/60 hover:bg-white/[0.03] transition-colors cursor-pointer"
+              >
+                <span className="flex items-center gap-1.5">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="3" y1="6" x2="21" y2="6"/>
+                    <line x1="3" y1="12" x2="21" y2="12"/>
+                    <line x1="3" y1="18" x2="21" y2="18"/>
+                  </svg>
+                  Navigate to section
+                </span>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className={`shrink-0 transition-transform ${tocOpen ? "rotate-180" : ""}`}
                 >
-                  {section.label}
-                </button>
-              ))}
-            </nav>
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </button>
+              <div
+                className={`absolute z-40 left-0 right-0 top-full overflow-hidden transition-all ${
+                  tocOpen ? 'max-h-[60vh]' : 'max-h-0'
+                }`}
+                style={{
+                  backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
+                  borderColor: `rgba(var(--theme-primary-border))`,
+                }}
+              >
+                <nav className="max-h-[60vh] overflow-y-auto p-3 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1">
+                  {SECTIONS.map((section) => (
+                    <button
+                      key={section.id}
+                      onClick={() => { scrollToSection(section.id); setTocOpen(false); }}
+                      className={`block w-full text-left px-3 py-2 text-xs rounded-lg transition-all ${
+                        activeSection === section.id
+                          ? 'bg-white/15 text-white font-medium'
+                          : 'text-white/50 hover:text-white/80 hover:bg-white/5'
+                      }`}
+                    >
+                      {section.label}
+                    </button>
+                  ))}
+                </nav>
+              </div>
+            </div>
           </div>
 
-          {/* Right - Settings content */}
+          {/* Settings content */}
           <div
             ref={(el) => { scrollContainerRef.current = el; setScrollRoot(el); }}
-            className="flex-1 overflow-y-auto settings-content-scroll px-6 py-5 space-y-5"
+            className="flex-1 overflow-x-hidden overflow-y-auto settings-content-scroll px-6 py-5 space-y-5"
           >
           {/* Default Model */}
           <div id="models" className="space-y-2">
