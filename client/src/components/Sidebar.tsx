@@ -586,40 +586,53 @@ export function Sidebar({
       >
         {/* Header */}
       <div ref={headerRef} className="px-3 pt-3 pb-0 shrink-0">
-        {/* Search or Logo — mutually exclusive, same fixed height */}
-        {searchActive ? (
-          <div
-            className="rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)] h-[42px] flex items-center"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <SidebarSearch
-              isActive={searchActive}
-              query={searchQuery}
-              onQueryChange={setSearchQuery}
-              onClose={() => { setSearchActive(false); setSearchQuery(""); }}
-              onSelectResult={handleSelectResult}
-            />
-          </div>
-        ) : (
-          <div
-            className="flex items-center justify-start rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)] h-[42px] cursor-text"
-            onClick={handleActivateSearch}
-          >
-            <div className="relative flex items-center">
-              {/* Static logo + title — hidden during background activity */}
-              <div className={`flex items-center gap-2 transition-opacity duration-300 ${hasBackgroundActivity ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
-                <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
-                <h1 className="text-lg font-semibold text-white/90 tracking-tight">
-                  qu.je
-                </h1>
-              </div>
-              {/* Background activity indicator — octahedron for memory extraction, synthesis, creative directions */}
-              <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${hasBackgroundActivity ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-                <PolyhedronLogo isActive={true} shape={activityShape} />
+        {/* Search or Logo + Settings */}
+        <div className="flex items-center justify-between gap-2">
+          {searchActive ? (
+            <div
+              className="flex-1 min-w-0 rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)] h-[42px] flex items-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <SidebarSearch
+                isActive={searchActive}
+                query={searchQuery}
+                onQueryChange={setSearchQuery}
+                onClose={() => { setSearchActive(false); setSearchQuery(""); }}
+                onSelectResult={handleSelectResult}
+              />
+            </div>
+          ) : (
+            <div
+              className="flex-1 min-w-0 flex items-center justify-start rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)] h-[42px] cursor-text"
+              onClick={handleActivateSearch}
+            >
+              <div className="relative flex items-center">
+                {/* Static logo + title — hidden during background activity */}
+                <div className={`flex items-center gap-2 transition-opacity duration-300 ${hasBackgroundActivity ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+                  <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
+                  <h1 className="text-lg font-semibold text-white/90 tracking-tight">
+                    qu.je
+                  </h1>
+                </div>
+                {/* Background activity indicator — octahedron for memory extraction, synthesis, creative directions */}
+                <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${hasBackgroundActivity ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                  <PolyhedronLogo isActive={true} shape={activityShape} />
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+          {/* Settings — outside search pill */}
+          <button
+            onClick={() => onOpenSettings()}
+            className="p-1.5 text-white/20 hover:text-white/50 hover:bg-white/5 rounded-lg transition-colors shrink-0"
+            title="Settings"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </button>
+        </div>
 
         {/* View switcher — only show when search is not active */}
         {!searchActive && (
@@ -655,10 +668,10 @@ export function Sidebar({
 
       {/* Chat Sections — flex column, each section grows when expanded */}
       <div className="flex-1 flex flex-col min-h-0">
-        {/* Synthesis Section */}
+        {/* Synthesis & System Row */}
         <div className="px-3 pb-2 shrink-0">
           <div className="flex items-center gap-1.5">
-            {/* Status indicator — left */}
+            {/* Status indicator */}
             <div className="flex items-center gap-1.5 text-[10px] text-white/30">
               {isSynthesizing ? (
                 <>
@@ -677,7 +690,21 @@ export function Sidebar({
                 </>
               )}
             </div>
-            {/* Actions — next to status */}
+            {/* System label */}
+            <div className="flex items-center gap-1.5 px-1 group">
+              <span className="text-amber-400/30 group-hover:text-amber-300/50 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2a4 4 0 0 1 4 4c0 1.95-2 4-4 8-2-4-4-6.05-4-8a4 4 0 0 1 4-4Z"/>
+                  <path d="M10.5 11.5a2.5 2.5 0 0 0 3 0"/>
+                </svg>
+              </span>
+              <span className="text-[10px] font-semibold tracking-wider uppercase text-amber-300/40 group-hover:text-amber-300/60 transition-colors">
+                System
+              </span>
+            </div>
+            {/* Spacer */}
+            <div className="flex-1" />
+            {/* Action buttons */}
             <div className="flex items-center gap-1">
               {onSynthesisSleep && !isSynthesizing && (
                 <button
@@ -707,8 +734,6 @@ export function Sidebar({
                 </button>
               )}
             </div>
-            {/* Spacer */}
-            <div className="flex-1" />
             {/* Memory debug — opens extraction observability panel */}
             {onOpenMemoryDebug && (
               <button
@@ -722,33 +747,11 @@ export function Sidebar({
                 </svg>
               </button>
             )}
-            {/* Settings — far right */}
-            <button
-              onClick={() => onOpenSettings()}
-              className="p-1.5 text-white/20 hover:text-white/50 hover:bg-white/5 rounded-lg transition-colors shrink-0"
-              title="Settings"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
-            </button>
           </div>
         </div>
         {/* System Chat Section */}
         {systemChats.length > 0 && (
           <div className="px-3 pb-1 shrink-0 border-b border-white/5">
-            <div className="flex items-center gap-1.5 px-1 mb-1 group cursor-pointer">
-              <span className="text-amber-400/30 group-hover:text-amber-300/50 transition-colors">
-                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2a4 4 0 0 1 4 4c0 1.95-2 4-4 8-2-4-4-6.05-4-8a4 4 0 0 1 4-4Z"/>
-                  <path d="M10.5 11.5a2.5 2.5 0 0 0 3 0"/>
-                </svg>
-              </span>
-              <span className="text-[10px] font-semibold tracking-wider uppercase text-amber-300/40 group-hover:text-amber-300/60 transition-colors">
-                System
-              </span>
-            </div>
             <div className="px-1 pb-1">
               {systemChats.map((chat) => (
                 <button
