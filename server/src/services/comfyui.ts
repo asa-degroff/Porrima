@@ -2,21 +2,7 @@ import WebSocket from "ws";
 import { execFile } from "child_process";
 import { getSettings } from "./chat-storage.js";
 import type { ImageGenerationParams, ComfyUIStatus } from "../types.js";
-
-export const MODEL_PRESETS: Record<string, Partial<ImageGenerationParams>> = {
-  "z-image-base": {
-    steps: 30,
-    cfgScale: 4.0,
-    sampler: "euler",
-    scheduler: "normal",
-  },
-  "z-image-turbo": {
-    steps: 9,
-    cfgScale: 0.0,
-    sampler: "euler",
-    scheduler: "sgm_uniform",
-  },
-};
+import type { ImageBackend } from "./image-backend.js";
 
 async function getBaseUrl(): Promise<string> {
   const settings = await getSettings();
@@ -644,3 +630,10 @@ export async function generateImageWithState(
     });
   });
 }
+
+export const comfyuiBackend: ImageBackend = {
+  name: "comfyui",
+  getStatus: getComfyUIStatus,
+  getModels: getComfyUIModels,
+  generate: generateImageWithState,
+};

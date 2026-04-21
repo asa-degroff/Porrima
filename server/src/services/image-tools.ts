@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { Tool, ToolCall } from "@mariozechner/pi-ai";
-import { generateImageWithState, MODEL_PRESETS } from "./comfyui.js";
+import { getImageBackend } from "./image-backend.js";
+import { MODEL_PRESETS } from "./image-presets.js";
 import { saveGeneratedImage } from "./image-storage.js";
 import { createGeneration, linkComfyUIIds, updateProgress, completeGeneration } from "./image-generation.js";
 import { v4 as uuid } from "uuid";
@@ -88,11 +89,12 @@ export async function executeImageTool(
     // Create generation state for tracking
     const generation = createGeneration(params, chatId);
 
-    const result = await generateImageWithState(
+    const backend = await getImageBackend();
+    const result = await backend.generate(
       generation.id,
       generation.clientId,
       params,
-      (promptId) => linkComfyUIIds(generation.id, promptId),
+      (jobId) => linkComfyUIIds(generation.id, jobId),
       (progress) => updateProgress(generation.id, progress.step, progress.totalSteps)
     );
 

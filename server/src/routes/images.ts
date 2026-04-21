@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getComfyUIStatus, getComfyUIModels, generateImageWithState } from "../services/comfyui.js";
+import { getImageBackend } from "../services/image-backend.js";
 import { saveGeneratedImage, getImagePath, getImagePathPNG, getThumbPath, ensureThumbnail, getImageMetadata, listImages, deleteImage, toggleImageFavorite } from "../services/image-storage.js";
 import {
   loadGenerations,
@@ -27,7 +27,8 @@ loadGenerations().then(() => cleanupOldGenerations());
 
 router.get("/status", async (_req, res) => {
   try {
-    const status = await getComfyUIStatus();
+    const backend = await getImageBackend();
+    const status = await backend.getStatus();
     res.json(status);
   } catch (e: any) {
     res.json({ available: false, queueSize: 0, models: [] });
@@ -99,7 +100,8 @@ router.post("/search", async (req, res) => {
 
 router.get("/models", async (_req, res) => {
   try {
-    const models = await getComfyUIModels();
+    const backend = await getImageBackend();
+    const models = await backend.getModels();
     res.json(models);
   } catch {
     res.json([]);
@@ -177,12 +179,13 @@ router.post("/generate", async (req, res) => {
   }, 15_000);
 
   try {
-    const result = await generateImageWithState(
+    const backend = await getImageBackend();
+    const result = await backend.generate(
       generation.id,
       generation.clientId,
       params,
-      (promptId) => {
-        linkComfyUIIds(generation.id, promptId);
+      (jobId) => {
+        linkComfyUIIds(generation.id, jobId);
       },
       (progress) => {
         updateProgress(generation.id, progress.step, progress.totalSteps);

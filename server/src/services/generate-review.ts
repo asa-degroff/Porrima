@@ -3,7 +3,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import type { GeneratedImage } from "../types.js";
-import { generateImageWithState } from "./comfyui.js";
+import { getImageBackend } from "./image-backend.js";
 import { saveGeneratedImage } from "./image-storage.js";
 import { createGeneration, linkComfyUIIds, updateProgress, completeGeneration } from "./image-generation.js";
 
@@ -87,13 +87,14 @@ export async function generateForReview(
   const clientId = crypto.randomUUID();
 
   try {
-    const result = await generateImageWithState(
+    const backend = await getImageBackend();
+    const result = await backend.generate(
       generationId,
       clientId,
       generationParams,
-      (promptId) => {
-        linkComfyUIIds(generationId, promptId);
-        console.log(`[generate-review] Linked ComfyUI prompt ID: ${promptId}`);
+      (jobId) => {
+        linkComfyUIIds(generationId, jobId);
+        console.log(`[generate-review] Linked image backend job ID: ${jobId}`);
       },
       (progress) => {
         updateProgress(generationId, progress.step, progress.totalSteps);
