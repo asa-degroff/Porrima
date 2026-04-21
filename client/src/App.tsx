@@ -696,6 +696,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         sleepModeActive={sleepModeActive}
         onSynthesisSleep={handleSynthesisSleep}
         onSynthesisRun={handleSynthesisRun}
+        isImageSandboxOpen={imageSandboxOpen}
       />
       {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}
       {imageSandboxOpen ? (

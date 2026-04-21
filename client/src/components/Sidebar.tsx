@@ -39,6 +39,7 @@ interface Props {
   sleepModeActive?: boolean;
   onSynthesisSleep?: () => void;
   onSynthesisRun?: () => void;
+  isImageSandboxOpen?: boolean;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -425,6 +426,7 @@ export function Sidebar({
   sleepModeActive = false,
   onSynthesisSleep,
   onSynthesisRun,
+  isImageSandboxOpen = false,
 }: Props) {
   const {
     projectsExpanded,
@@ -586,8 +588,8 @@ export function Sidebar({
       >
         {/* Header */}
       <div ref={headerRef} className="px-3 pt-3 pb-0 shrink-0">
-        {/* Search or Logo + Settings */}
-        <div className="flex items-center justify-between gap-2">
+        {/* Search or Logo */}
+        <div className="flex items-center gap-2">
           {searchActive ? (
             <div
               className="flex-1 min-w-0 rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)] h-[42px] flex items-center"
@@ -621,39 +623,7 @@ export function Sidebar({
               </div>
             </div>
           )}
-          {/* Settings — outside search pill */}
-          <button
-            onClick={() => onOpenSettings()}
-            className="p-1.5 text-white/20 hover:text-white/50 hover:bg-white/5 rounded-lg transition-colors shrink-0"
-            title="Settings"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-          </button>
         </div>
-
-        {/* View switcher — only show when search is not active */}
-        {!searchActive && (
-          <div className="flex gap-1 mt-2">
-            <button
-              onClick={() => onSwitchView('chats')}
-              className={`flex-1 px-3 py-1.5 text-xs rounded-lg transition-colors ${activeView === 'chats' ? 'bg-white/10 text-white/80' : 'text-white/40 hover:text-white/60'}`}
-            >
-              Chats
-            </button>
-            <button
-              onClick={() => onSwitchView('notebooks')}
-              className={`flex-1 px-3 py-1.5 text-xs rounded-lg transition-colors relative ${activeView === 'notebooks' ? 'bg-white/10 text-white/80' : 'text-white/40 hover:text-white/60'}`}
-            >
-              Notebooks
-              {hasUnreadNotebooks && activeView !== 'notebooks' && (
-                <span className="absolute top-1 right-2 w-2 h-2 rounded-full bg-purple-400" />
-              )}
-            </button>
-          </div>
-        )}
 
         {/* Search results — separate from header, pushes content down */}
         {searchActive && (
@@ -668,8 +638,8 @@ export function Sidebar({
 
       {/* Chat Sections — flex column, each section grows when expanded */}
       <div className="flex-1 flex flex-col min-h-0">
-        {/* Synthesis & System Row */}
-        <div className="px-3 pb-2 shrink-0">
+        {/* Synthesis status & action buttons row */}
+        <div className="px-3 pt-2 pb-2 shrink-0">
           <div className="flex items-center gap-1.5">
             {/* Status indicator */}
             <div className="flex items-center gap-1.5 text-[10px] text-white/30">
@@ -690,18 +660,6 @@ export function Sidebar({
                 </>
               )}
             </div>
-            {/* System label */}
-            <div className="flex items-center gap-1.5 px-1 group">
-              <span className="text-amber-400/30 group-hover:text-amber-300/50 transition-colors">
-                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2a4 4 0 0 1 4 4c0 1.95-2 4-4 8-2-4-4-6.05-4-8a4 4 0 0 1 4-4Z"/>
-                  <path d="M10.5 11.5a2.5 2.5 0 0 0 3 0"/>
-                </svg>
-              </span>
-              <span className="text-[10px] font-semibold tracking-wider uppercase text-amber-300/40 group-hover:text-amber-300/60 transition-colors">
-                System
-              </span>
-            </div>
             {/* Spacer */}
             <div className="flex-1" />
             {/* Action buttons */}
@@ -710,14 +668,14 @@ export function Sidebar({
                 <button
                   onClick={onSynthesisSleep}
                   disabled={sleepModeActive}
-                  className={`p-1.5 rounded-md transition-all cursor-pointer ${
+                  className={`p-2 rounded-lg transition-all cursor-pointer ${
                     sleepModeActive
                       ? 'text-amber-400/80 bg-amber-500/15 animate-pulse'
                       : 'text-white/30 hover:text-white/60 hover:bg-white/5'
                   }`}
                   title="Sleep Mode — trigger synthesis and skip next periodic cycle"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
                   </svg>
                 </button>
@@ -725,28 +683,39 @@ export function Sidebar({
               {onSynthesisRun && !isSynthesizing && (
                 <button
                   onClick={onSynthesisRun}
-                  className={`p-1.5 rounded-md transition-all cursor-pointer text-white/30 hover:text-white/60 hover:bg-white/5`}
+                  className={`p-2 rounded-lg transition-all cursor-pointer text-white/30 hover:text-white/60 hover:bg-white/5`}
                   title="Run synthesis now"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
                   </svg>
                 </button>
               )}
-            </div>
-            {/* Memory debug — opens extraction observability panel */}
-            {onOpenMemoryDebug && (
+              {/* Memory debug — opens extraction observability panel */}
+              {onOpenMemoryDebug && (
+                <button
+                  onClick={onOpenMemoryDebug}
+                  className="p-2 text-white/30 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors shrink-0"
+                  title="Memory Extraction Debug"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2a4.5 4.5 0 0 0-4.5 4.5v1a4 4 0 0 0-2 7.4A4 4 0 0 0 8 22a4 4 0 0 0 4-4V6.5A4.5 4.5 0 0 0 12 2Z" />
+                    <path d="M12 2a4.5 4.5 0 0 1 4.5 4.5v1a4 4 0 0 1 2 7.4A4 4 0 0 1 16 22a4 4 0 0 1-4-4" />
+                  </svg>
+                </button>
+              )}
+              {/* Settings */}
               <button
-                onClick={onOpenMemoryDebug}
-                className="p-1.5 text-white/20 hover:text-white/50 hover:bg-white/5 rounded-lg transition-colors shrink-0"
-                title="Memory Extraction Debug"
+                onClick={() => onOpenSettings()}
+                className="p-2 text-white/30 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors shrink-0"
+                title="Settings"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2a4.5 4.5 0 0 0-4.5 4.5v1a4 4 0 0 0-2 7.4A4 4 0 0 0 8 22a4 4 0 0 0 4-4V6.5A4.5 4.5 0 0 0 12 2Z" />
-                  <path d="M12 2a4.5 4.5 0 0 1 4.5 4.5v1a4 4 0 0 1 2 7.4A4 4 0 0 1 16 22a4 4 0 0 1-4-4" />
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                  <circle cx="12" cy="12" r="3" />
                 </svg>
               </button>
-            )}
+            </div>
           </div>
         </div>
         {/* System Chat Section */}
@@ -1048,19 +1017,48 @@ export function Sidebar({
         <BlueskySection onOpenSettings={onOpenSettings} onSelectChat={(id) => { onSelectChat(id); onClose(); }} />
       </div>
 
-      {/* Image Sandbox */}
+      {/* Notebooks + Images — alternative views */}
       <div className="px-3 pb-3 shrink-0">
-        <button
-          onClick={() => { onOpenImageSandbox(); onClose(); }}
-          className="w-full px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-400/25 text-amber-300 text-sm font-medium hover:bg-amber-500/25 transition-all flex items-center justify-center gap-2"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-            <circle cx="9" cy="9" r="2" />
-            <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-          </svg>
-          Image Sandbox
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => { onSwitchView('notebooks'); onClose(); }}
+            className="relative flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2"
+            style={{
+              backgroundColor: `rgba(var(--theme-accent), ${activeView === 'notebooks' ? 0.15 : 0.05})`,
+              borderColor: `rgba(var(--theme-accent), ${activeView === 'notebooks' ? 0.4 : 0.25})`,
+              color: `rgba(var(--theme-accent-text))`,
+            }}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+            </svg>
+            Notebooks
+            {hasUnreadNotebooks && activeView !== 'notebooks' && (
+              <span
+                className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
+                style={{ backgroundColor: `rgba(var(--theme-accent), 0.05)` }}
+              />
+            )}
+          </button>
+          <button
+            onClick={() => { onOpenImageSandbox(); onClose(); }}
+            className={`flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2 ${
+              activeView === 'notebooks' ? 'opacity-50' : ''
+            }`}
+            style={{
+              backgroundColor: `rgba(var(--theme-accent), ${isImageSandboxOpen ? 0.15 : 0.05})`,
+              borderColor: `rgba(var(--theme-accent), ${isImageSandboxOpen ? 0.4 : 0.25})`,
+              color: `rgba(var(--theme-accent-text))`,
+            }}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+              <circle cx="9" cy="9" r="2" />
+              <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+            </svg>
+            Images
+          </button>
+        </div>
       </div>
       {/* Spacer for TTS bar */}
       {ttsBarVisible && <div className="h-[56px] shrink-0" />}
