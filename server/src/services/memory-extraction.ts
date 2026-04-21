@@ -83,6 +83,43 @@ export function hasActiveChats(): boolean {
 }
 
 /**
+ * Conservative char→token estimate (3 chars/token). Overestimates token count
+ * vs. the more common 4 chars/token, which is the safer direction when
+ * budgeting against a hard context limit: we'd rather truncate slightly more
+ * than blow the context window.
+ */
+function estimateTokensConservative(text: string): number {
+  return Math.ceil(text.length / 3);
+}
+
+/**
+ * Compute the char budget available for user content given a system prompt
+ * and the extraction server's configured context window. Reserves space for
+ * the max_tokens output, a safety margin, and any per-chunk overhead callers
+ * pass in (e.g. overlap prefix + prior-facts block when running chunked).
+ *
+ * Returns `maxInputChars` for the user content. May be very small if the
+ * system prompt is unusually large — callers should warn when that happens.
+ */
+export function computeExtractionInputBudget(
+  systemPrompt: string,
+  ctxSize: number,
+  opts?: { chunkOverheadChars?: number },
+): { maxInputChars: number; sysPromptTokens: number; inputBudgetTokens: number } {
+  const sysPromptTokens = estimateTokensConservative(systemPrompt);
+  const outputTokens = 2000;   // matches max_tokens in the request body
+  const safetyMargin = 512;    // absorbs small under-estimation
+  const overheadChars = opts?.chunkOverheadChars ?? 0;
+  const overheadTokens = Math.ceil(overheadChars / 3);
+  const inputBudgetTokens = Math.max(
+    0,
+    ctxSize - sysPromptTokens - outputTokens - safetyMargin - overheadTokens,
+  );
+  const maxInputChars = Math.max(1000, inputBudgetTokens * 3);
+  return { maxInputChars, sysPromptTokens, inputBudgetTokens };
+}
+
+/**
  * Call the extraction LLM — uses dedicated CPU extraction model if configured,
  * otherwise falls back to streamChat with the main model.
  * The dedicated model avoids GPU VRAM contention and KV cache invalidation.
@@ -100,14 +137,19 @@ async function callExtractionLLM(
     // Serialize through the mutex — the dedicated extraction server is
     // --parallel 1, so concurrent requests just pile up in Node.js memory.
     return withExtractionMutex(async () => {
-      // Truncate input to fit within the extraction model's context window.
-      // Reserve tokens for system prompt, max_tokens output (2000), and overhead.
-      // Use 3 chars/token (conservative — 4 underestimates for dense/code-heavy content).
       const ctxSize = settings.extractionCtxSize ?? 16384;
-      const reservedTokens = 4000;
-      const maxInputChars = Math.max(4000, (ctxSize - reservedTokens) * 3);
+      const { maxInputChars, sysPromptTokens, inputBudgetTokens } =
+        computeExtractionInputBudget(systemPrompt, ctxSize);
+
+      if (inputBudgetTokens < 1000) {
+        console.warn(
+          `[memory] Extraction input budget very small (${inputBudgetTokens} tok, sysPrompt=${sysPromptTokens} tok, ctx=${ctxSize}). ` +
+          `System prompt may be too large — consider trimming memory blocks.`,
+        );
+      }
+
       const truncatedContent = userContent.length > maxInputChars
-        ? userContent.slice(0, maxInputChars) + `\n[Truncated: ${(userContent.length / 1024).toFixed(0)}KB → ${(maxInputChars / 1024).toFixed(0)}KB to fit extraction context]`
+        ? userContent.slice(0, maxInputChars) + `\n[Truncated: ${(userContent.length / 1024).toFixed(0)}KB → ${(maxInputChars / 1024).toFixed(0)}KB to fit extraction context; sysPrompt=${sysPromptTokens} tok]`
         : userContent;
 
       // Direct call to dedicated extraction endpoint (CPU-only, no provider pipeline)
@@ -252,7 +294,38 @@ If nothing is genuinely novel or significant, output: []
 
 IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 
+/**
+ * Maximum share of the extraction context window that the system prompt
+ * (including block summaries) is allowed to consume. At 40% we leave the
+ * majority of the window for user content + output + safety margin.
+ */
+const SYS_PROMPT_CTX_RATIO = 0.40;
+
+/**
+ * Compute per-block char allotment that keeps the system prompt under
+ * SYS_PROMPT_CTX_RATIO of the extraction context window. Static prefix/
+ * instructions are fixed; blocks are the only variable part we can trim.
+ */
+function computeBlockCharBudget(
+  blockCount: number,
+  staticChars: number,
+  ctxSize: number,
+): number {
+  if (blockCount === 0) return 0;
+  // sysPrompt target tokens = ctxSize * ratio; × 3 chars/token (conservative).
+  const sysPromptCharBudget = Math.floor(ctxSize * SYS_PROMPT_CTX_RATIO * 3);
+  const remaining = Math.max(0, sysPromptCharBudget - staticChars);
+  const perBlock = Math.floor(remaining / blockCount);
+  // Never let per-block drop below a useful minimum, and never exceed the
+  // original 4000-char slice (so small ctx models get tighter budgets but
+  // large ctx models don't inflate block summaries beyond what callers expect).
+  return Math.max(300, Math.min(4000, perBlock));
+}
+
 async function buildExtractionSystemPrompt(projectId?: string): Promise<string> {
+  const settings = await getSettings();
+  const ctxSize = settings.extractionCtxSize ?? 16384;
+
   // Include loaded block summaries so extraction avoids redundant facts
   let blockContext = "";
   try {
@@ -261,7 +334,12 @@ async function buildExtractionSystemPrompt(projectId?: string): Promise<string> 
     const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId) : [];
     const allBlocks = [...globalBlocks, ...projectBlocks];
     if (allBlocks.length > 0) {
-      const summaries = allBlocks.map((b) => `- ${b.name}: ${b.content.slice(0, 4000)}`).join("\n");
+      const staticChars =
+        EXTRACTION_AGENT_PREFIX.length + EXTRACTION_INSTRUCTIONS.length + 400;
+      const perBlockChars = computeBlockCharBudget(allBlocks.length, staticChars, ctxSize);
+      const summaries = allBlocks
+        .map((b) => `- ${b.name}: ${b.content.slice(0, perBlockChars)}`)
+        .join("\n");
       blockContext = `\n\n## Existing Knowledge Blocks\nThe following memory blocks already contain relevant context — do NOT extract information that is already covered here:\n${summaries}\n`;
     }
   } catch { /* non-critical */ }
@@ -340,6 +418,289 @@ export function parseExtractionResponse(text: string): ExtractedFact[] {
   } catch {
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Chunked extraction primitive
+// ---------------------------------------------------------------------------
+// When the extraction server's context is smaller than the content we want
+// to analyze, we split the content into budget-sized chunks and make
+// sequential calls. Each subsequent chunk receives (a) a short char overlap
+// from the prior chunk for continuity and (b) the facts extracted from
+// earlier chunks so the LLM doesn't re-extract the same information.
+//
+// Chunking only runs when a dedicated extraction server is configured
+// (settings.extractionModelUrl). The main-model fallback path gets a single
+// call with the full content — that model's context is assumed to be large.
+// ---------------------------------------------------------------------------
+
+interface ExtractSegment {
+  /** Optional label prepended as "Label:\n" before the text. */
+  label?: string;
+  text: string;
+  /**
+   * If true and the rendered segment exceeds the chunk budget, split it on
+   * paragraph boundaries. Default true. Set false for atomic segments that
+   * must not be split mid-stream.
+   */
+  splittable?: boolean;
+}
+
+interface ExtractChunkedOptions {
+  modelId: string;
+  systemPrompt: string;
+  segments: ExtractSegment[];
+  /**
+   * Optional framing text prepended to every chunk (e.g. the "previously
+   * captured memories" preamble for delayed extraction). Kept identical
+   * across chunks so the LLM sees consistent framing.
+   */
+  userPromptHeader?: string;
+  signal?: AbortSignal;
+  /** Label used in chunk-boundary log lines. */
+  contextLabel?: string;
+}
+
+interface ExtractChunkedResult {
+  facts: ExtractedFact[];
+  /** Raw LLM output per chunk, concatenated with separators for observability. */
+  rawOutput: string;
+  chunkCount: number;
+}
+
+const OVERLAP_CHARS = 500;
+const MAX_PRIOR_FACTS_CHARS = 1500;
+/** Reserved per-chunk for overlap + priorFacts + markers. Subtracted from budget. */
+const CHUNK_OVERHEAD_CHARS = OVERLAP_CHARS + MAX_PRIOR_FACTS_CHARS + 200;
+
+function renderSegment(seg: ExtractSegment): string {
+  return seg.label ? `${seg.label}:\n${seg.text}` : seg.text;
+}
+
+function hardSplit(text: string, maxChars: number): string[] {
+  const pieces: string[] = [];
+  for (let i = 0; i < text.length; i += maxChars) {
+    pieces.push(text.slice(i, i + maxChars));
+  }
+  return pieces;
+}
+
+function splitByParagraph(text: string, maxChunkChars: number): string[] {
+  if (text.length <= maxChunkChars) return [text];
+  const paras = text.split(/\n\n+/);
+  const pieces: string[] = [];
+  let current = "";
+  for (const para of paras) {
+    if (!current) {
+      if (para.length <= maxChunkChars) {
+        current = para;
+      } else {
+        pieces.push(...hardSplit(para, maxChunkChars));
+      }
+      continue;
+    }
+    const candidate = current + "\n\n" + para;
+    if (candidate.length <= maxChunkChars) {
+      current = candidate;
+    } else {
+      pieces.push(current);
+      if (para.length <= maxChunkChars) {
+        current = para;
+      } else {
+        current = "";
+        pieces.push(...hardSplit(para, maxChunkChars));
+      }
+    }
+  }
+  if (current) pieces.push(current);
+  return pieces;
+}
+
+function packSegmentsIntoChunks(
+  segments: ExtractSegment[],
+  maxChunkChars: number,
+): string[] {
+  const chunks: string[] = [];
+  let current = "";
+  for (const seg of segments) {
+    const rendered = renderSegment(seg);
+
+    if (!current) {
+      if (rendered.length <= maxChunkChars) {
+        current = rendered;
+      } else {
+        const pieces = seg.splittable !== false
+          ? splitByParagraph(rendered, maxChunkChars)
+          : hardSplit(rendered, maxChunkChars);
+        for (let i = 0; i < pieces.length - 1; i++) chunks.push(pieces[i]);
+        current = pieces[pieces.length - 1] ?? "";
+      }
+      continue;
+    }
+
+    const candidate = current + "\n\n" + rendered;
+    if (candidate.length <= maxChunkChars) {
+      current = candidate;
+      continue;
+    }
+
+    // Doesn't fit into the current chunk — flush it and start fresh
+    chunks.push(current);
+    current = "";
+
+    if (rendered.length <= maxChunkChars) {
+      current = rendered;
+    } else {
+      const pieces = seg.splittable !== false
+        ? splitByParagraph(rendered, maxChunkChars)
+        : hardSplit(rendered, maxChunkChars);
+      for (let i = 0; i < pieces.length - 1; i++) chunks.push(pieces[i]);
+      current = pieces[pieces.length - 1] ?? "";
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function formatPriorFactsPreamble(facts: ExtractedFact[]): string {
+  if (facts.length === 0) return "";
+  // Keep the most recent facts (by position); temporally they line up with
+  // the immediately previous chunks, which are most likely to be continued
+  // in the current chunk.
+  const lines: string[] = [];
+  let budget = MAX_PRIOR_FACTS_CHARS;
+  let kept = 0;
+  for (let i = facts.length - 1; i >= 0; i--) {
+    const f = facts[i];
+    const line = `[${i + 1}] (${f.category}, imp:${f.importance}) ${f.text}`;
+    if (line.length + 1 > budget) break;
+    lines.unshift(line);
+    budget -= line.length + 1;
+    kept++;
+  }
+  const omitted = facts.length - kept;
+  return (omitted > 0 ? `[... ${omitted} earlier facts omitted]\n` : "") + lines.join("\n");
+}
+
+async function extractInChunks(
+  opts: ExtractChunkedOptions,
+): Promise<ExtractChunkedResult> {
+  const settings = await getSettings();
+  const extractionUrl = settings.extractionModelUrl;
+  const header = opts.userPromptHeader ? opts.userPromptHeader.trimEnd() : "";
+
+  // Fallback path: no dedicated extraction server — single call, let the main
+  // model handle the full content. Its context is assumed to be large.
+  if (!extractionUrl) {
+    const body = opts.segments.map(renderSegment).join("\n\n");
+    const combined = header ? `${header}\n\n${body}` : body;
+    const raw = await callExtractionLLM(
+      opts.modelId,
+      combined,
+      opts.systemPrompt,
+      opts.signal,
+    );
+    return {
+      facts: parseExtractionResponse(raw),
+      rawOutput: raw,
+      chunkCount: 1,
+    };
+  }
+
+  const ctxSize = settings.extractionCtxSize ?? 16384;
+  const { maxInputChars: baseBudget } = computeExtractionInputBudget(
+    opts.systemPrompt,
+    ctxSize,
+    { chunkOverheadChars: CHUNK_OVERHEAD_CHARS },
+  );
+  // Subtract header chars since the header is repeated in every chunk.
+  const maxChunkChars = Math.max(1000, baseBudget - header.length);
+
+  const chunks = packSegmentsIntoChunks(opts.segments, maxChunkChars);
+  if (chunks.length === 0) {
+    return { facts: [], rawOutput: "", chunkCount: 0 };
+  }
+
+  if (chunks.length > 1 && opts.contextLabel) {
+    console.log(
+      `[memory-chunk] ${opts.contextLabel}: splitting into ${chunks.length} chunks ` +
+      `(budget=${maxChunkChars} chars/chunk, ctx=${ctxSize}, sysPrompt=~${Math.ceil(opts.systemPrompt.length / 3)} tok)`,
+    );
+  }
+
+  const allFacts: ExtractedFact[] = [];
+  const rawOutputs: string[] = [];
+  let lastChunkContent = "";
+  let successCount = 0;
+  let lastError: unknown;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkContent = chunks[i];
+    const parts: string[] = [];
+    if (header) parts.push(header);
+
+    if (i > 0 && lastChunkContent) {
+      const overlap = lastChunkContent.slice(
+        Math.max(0, lastChunkContent.length - OVERLAP_CHARS),
+      );
+      parts.push(
+        `PRIOR CHUNK OVERLAP (for continuity; do not re-extract):\n...${overlap}\n---`,
+      );
+    }
+
+    if (i > 0 && allFacts.length > 0) {
+      parts.push(
+        `PREVIOUSLY EXTRACTED FROM EARLIER CHUNKS OF THIS CONTENT (do NOT duplicate):\n${formatPriorFactsPreamble(allFacts)}\n---`,
+      );
+    }
+
+    if (chunks.length > 1) {
+      parts.push(`CHUNK ${i + 1} OF ${chunks.length}:`);
+    }
+
+    parts.push(chunkContent);
+    const userContent = parts.join("\n\n");
+
+    let raw = "";
+    try {
+      raw = await callExtractionLLM(
+        opts.modelId,
+        userContent,
+        opts.systemPrompt,
+        opts.signal,
+      );
+      successCount++;
+    } catch (e) {
+      lastError = e;
+      console.error(
+        `[memory-chunk] ${opts.contextLabel ?? "extract"}: chunk ${i + 1}/${chunks.length} failed:`,
+        e,
+      );
+      rawOutputs.push(`[chunk ${i + 1} failed: ${e instanceof Error ? e.message : String(e)}]`);
+      lastChunkContent = chunkContent;
+      continue;
+    }
+
+    rawOutputs.push(raw);
+    const chunkFacts = parseExtractionResponse(raw);
+    if (chunkFacts.length > 0) allFacts.push(...chunkFacts);
+    lastChunkContent = chunkContent;
+  }
+
+  // If every chunk failed, surface the error so callers can retry/log.
+  // Partial success (at least one chunk succeeded) is acceptable — we return
+  // whatever facts we got.
+  if (successCount === 0 && chunks.length > 0) {
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`All ${chunks.length} extraction chunks failed`);
+  }
+
+  const rawOutput = chunks.length === 1
+    ? rawOutputs[0] ?? ""
+    : rawOutputs.map((r, i) => `=== chunk ${i + 1}/${chunks.length} ===\n${r}`).join("\n\n");
+
+  return { facts: allFacts, rawOutput, chunkCount: chunks.length };
 }
 
 const DEDUP_THRESHOLD = 0.85;
@@ -463,17 +824,25 @@ export async function extractMemories(
   });
   try {
 
-  // Call the LLM to extract facts (with retry)
-  let responseText = "";
+  // Call the LLM to extract facts (with retry, chunked if content exceeds budget)
+  let chunkResult: ExtractChunkedResult = { facts: [], rawOutput: "", chunkCount: 0 };
   await withRetry(
     async () => {
-      responseText = await callExtractionLLM(modelId, extractionPrompt, systemPrompt);
+      chunkResult = await extractInChunks({
+        modelId,
+        systemPrompt,
+        segments: [
+          { label: "User message", text: userMsg, splittable: true },
+          { label: "Assistant response", text: assistantMsg, splittable: true },
+        ],
+        contextLabel: `extractMemories chat=${chatId}`,
+      });
     },
     `extractMemories LLM call (chat ${chatId})`
   );
-  runHandle.attachOutput(responseText);
+  runHandle.attachOutput(chunkResult.rawOutput);
 
-  const facts = parseExtractionResponse(responseText);
+  const facts = chunkResult.facts;
   if (facts.length === 0) {
     console.log("[memory] No facts extracted from exchange");
     extractionMetrics.successfulExtractions++;
@@ -482,7 +851,7 @@ export async function extractMemories(
     return;
   }
 
-  console.log(`[memory] Extracted ${facts.length} fact(s), embedding batch...`);
+  console.log(`[memory] Extracted ${facts.length} fact(s) across ${chunkResult.chunkCount} chunk(s), embedding batch...`);
 
   // Batch-embed all facts in a single API call
   let embeddings: number[][];
@@ -576,6 +945,9 @@ Output a JSON array. Each item:
 Output ONLY the JSON array.`;
 
 async function buildPreCompactionSystemPrompt(projectId?: string): Promise<string> {
+  const settings = await getSettings();
+  const ctxSize = settings.extractionCtxSize ?? 16384;
+
   // Load existing blocks with space awareness
   let blockContext = "";
   try {
@@ -583,28 +955,39 @@ async function buildPreCompactionSystemPrompt(projectId?: string): Promise<strin
     const globalBlocks = getMemoryBlocksByScope("global");
     const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId) : [];
     const allBlocks = [...globalBlocks, ...projectBlocks];
-    
+
     if (allBlocks.length > 0) {
-      const MAX_BLOCK_CHARS = 4000;
+      const MAX_BLOCK_CHARS = 4000;  // block storage cap — unchanged, used for remaining-space math
+      const staticChars =
+        EXTRACTION_AGENT_PREFIX.length + PRE_COMPACTION_INSTRUCTIONS.length + 600;
+      const displayBudget = computeBlockCharBudget(allBlocks.length, staticChars, ctxSize);
+
       const blockSummaries = allBlocks.map((b) => {
+        // "Remaining space" reflects how much room is left in the stored block,
+        // not how much of it we're showing here. Keep the stored-cap math intact
+        // so the LLM makes correct append/replace decisions.
         const remainingSpace = MAX_BLOCK_CHARS - b.content.length;
-        const spaceStatus = remainingSpace > 500 
+        const spaceStatus = remainingSpace > 500
           ? `${remainingSpace.toLocaleString()} chars remaining (good for appends)`
           : remainingSpace > 100
           ? `${remainingSpace.toLocaleString()} chars remaining (consider targeted edits)`
           : `${remainingSpace.toLocaleString()} chars remaining (space constrained)`;
-        
+
+        const shownContent = b.content.length > displayBudget
+          ? b.content.slice(0, displayBudget) + `\n[...truncated for extraction context; full block is ${b.content.length} chars]`
+          : b.content;
+
         return `### ${b.name} [${b.id}]
 Scope: ${b.scope}
 ${spaceStatus}
 
-${b.content}`;
+${shownContent}`;
       }).join("\n\n");
-      
+
       blockContext = `\n\n## Existing Memory Blocks\nThe following memory blocks contain structured knowledge. Consider whether information from this conversation should update these blocks:\n\n${blockSummaries}\n`;
     }
   } catch { /* non-critical */ }
-  
+
   return `${EXTRACTION_AGENT_PREFIX}${blockContext}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
 }
 
@@ -789,23 +1172,35 @@ export async function preCompactionFlush(
   });
 
   try {
-    let responseText = "";
+    // Each removed message becomes one segment; messages that exceed the
+    // per-chunk budget (typically huge tool results) get paragraph-split.
+    const segments: ExtractSegment[] = substantiveMessages.map((m, i) => ({
+      text: `${m.role} (${i + 1}): ${m.content}`,
+      splittable: true,
+    }));
+
+    let chunkResult: ExtractChunkedResult = { facts: [], rawOutput: "", chunkCount: 0 };
     await withRetry(
       async () => {
-        responseText = await callExtractionLLM(modelId, removedText, systemPrompt);
+        chunkResult = await extractInChunks({
+          modelId,
+          systemPrompt,
+          segments,
+          contextLabel: `preCompactionFlush chat=${chatId}`,
+        });
       },
       `preCompactionFlush LLM call (chat ${chatId})`
     );
-    runHandle.attachOutput(responseText);
+    runHandle.attachOutput(chunkResult.rawOutput);
 
-    const facts = parseExtractionResponse(responseText);
+    const facts = chunkResult.facts;
     if (facts.length === 0) {
       console.log("[memory] Pre-compaction flush: no facts extracted");
       runHandle.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0 });
       return;
     }
 
-    console.log(`[memory] Pre-compaction flush: ${facts.length} facts extracted, embedding batch...`);
+    console.log(`[memory] Pre-compaction flush: ${facts.length} facts extracted across ${chunkResult.chunkCount} chunk(s), embedding batch...`);
 
     // Batch-embed all facts in a single API call
     let embeddings: number[][];
@@ -860,25 +1255,30 @@ export async function extractMemoriesFromText(
 ): Promise<void> {
   console.log(`[memory] Extracting from ${author} notebook entry ${entryId}`);
 
-  const extractionPrompt = `${author === 'user' ? 'User' : 'Agent'} notebook entry:\n${text}`;
   const systemPrompt = await buildExtractionSystemPrompt();
+  const authorLabel = author === 'user' ? 'User notebook entry' : 'Agent notebook entry';
 
-  let responseText = "";
+  let chunkResult: ExtractChunkedResult = { facts: [], rawOutput: "", chunkCount: 0 };
   try {
     await withRetry(
       async () => {
-        responseText = await callExtractionLLM(modelId, extractionPrompt, systemPrompt);
+        chunkResult = await extractInChunks({
+          modelId,
+          systemPrompt,
+          segments: [{ label: authorLabel, text, splittable: true }],
+          contextLabel: `extractMemoriesFromText entry=${entryId}`,
+        });
       },
       `extractMemoriesFromText LLM call (entry ${entryId})`
     );
 
-    const facts = parseExtractionResponse(responseText);
+    const facts = chunkResult.facts;
     if (facts.length === 0) {
       console.log("[memory] No facts extracted from notebook entry");
       return;
     }
 
-    console.log(`[memory] Extracted ${facts.length} fact(s) from notebook, embedding batch...`);
+    console.log(`[memory] Extracted ${facts.length} fact(s) from notebook across ${chunkResult.chunkCount} chunk(s), embedding batch...`);
 
     let embeddings: number[][];
     try {
@@ -1119,15 +1519,17 @@ export async function extractDelayedMemories(
     `[memory-delayed] Processing ${context.messages.length} messages (${startIndex}-${chat.messages.length}) with ${context.previousMemories.length} previous memories`
   );
   
-  // Build prompt with previous memories injected
-  const prompt = buildDelayedExtractionPrompt(context.previousMemories, context.messages.length, startIndex);
-  
-  // Serialize messages for LLM input
-  const conversationText = context.messages
-    .map((m, i) => `${m.role} (${startIndex + i + 1}): ${m.content}`)
-    .join("\n\n");
-  
-  const extractionPrompt = `${prompt}\n\nCONVERSATION:\n${conversationText}`;
+  // Build prompt with previous memories injected — used as the per-chunk header
+  const userPromptHeader = `${buildDelayedExtractionPrompt(context.previousMemories, context.messages.length, startIndex)}\n\nCONVERSATION:`;
+
+  // Each message is a segment; messages too large for the chunk budget get paragraph-split
+  const messageSegments: ExtractSegment[] = context.messages.map((m, i) => ({
+    text: `${m.role} (${startIndex + i + 1}): ${m.content}`,
+    splittable: true,
+  }));
+
+  // Serialize whole conversation for observability (what the debug panel will show)
+  const extractionPrompt = `${userPromptHeader}\n${messageSegments.map((s) => s.text).join("\n\n")}`;
   const systemPrompt = await buildDelayedExtractionSystemPrompt();
 
   const runHandle = startExtractionRun({
@@ -1145,12 +1547,18 @@ export async function extractDelayedMemories(
   let runSkipped = 0;
 
   try {
-    // Call LLM to extract memories
-    let responseText = "";
+    // Call LLM to extract memories (chunked if content exceeds extraction budget)
+    let chunkResult: ExtractChunkedResult = { facts: [], rawOutput: "", chunkCount: 0 };
     try {
       await withRetry(
         async () => {
-          responseText = await callExtractionLLM(modelId, extractionPrompt, systemPrompt);
+          chunkResult = await extractInChunks({
+            modelId,
+            systemPrompt,
+            segments: messageSegments,
+            userPromptHeader,
+            contextLabel: `extractDelayedMemories chat=${chatId}`,
+          });
         },
         `extractDelayedMemories LLM call (chat ${chatId})`
       );
@@ -1158,9 +1566,9 @@ export async function extractDelayedMemories(
       console.error(`[memory-delayed] LLM extraction failed:`, e);
       throw e;
     }
-    runHandle.attachOutput(responseText);
+    runHandle.attachOutput(chunkResult.rawOutput);
 
-    const facts = parseExtractionResponse(responseText);
+    const facts = chunkResult.facts;
     if (facts.length === 0) {
       console.log(`[memory-delayed] No new memories extracted from chat ${chatId}`);
       // Still update tracking fields to mark extraction as run
@@ -1169,7 +1577,7 @@ export async function extractDelayedMemories(
       return;
     }
 
-    console.log(`[memory-delayed] Extracted ${facts.length} new memory(ies), embedding batch...`);
+    console.log(`[memory-delayed] Extracted ${facts.length} new memory(ies) across ${chunkResult.chunkCount} chunk(s), embedding batch...`);
 
     // Batch-embed all facts
     let embeddings: number[][];
