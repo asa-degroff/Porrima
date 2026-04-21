@@ -335,6 +335,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [embeddingModelDropdownOpen, setEmbeddingModelDropdownOpen] = useState(false);
   const [rerankerModelDropdownOpen, setRerankerModelDropdownOpen] = useState(false);
   const [favoritesDropdownOpen, setFavoritesDropdownOpen] = useState(false);
+  const [imageBackendDropdownOpen, setImageBackendDropdownOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
   const tocRef = useRef<HTMLDivElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
@@ -346,6 +347,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const embeddingModelDropdownRef = useRef<HTMLDivElement>(null);
   const rerankerModelDropdownRef = useRef<HTMLDivElement>(null);
   const favoritesDropdownRef = useRef<HTMLDivElement>(null);
+  const imageBackendDropdownRef = useRef<HTMLDivElement>(null);
 
 
   useClickOutside(modelDropdownRef, () => setModelDropdownOpen(false), modelDropdownOpen);
@@ -356,6 +358,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useClickOutside(extractionModelDropdownRef, () => setExtractionModelDropdownOpen(false), extractionModelDropdownOpen);
   useClickOutside(embeddingModelDropdownRef, () => setEmbeddingModelDropdownOpen(false), embeddingModelDropdownOpen);
   useClickOutside(rerankerModelDropdownRef, () => setRerankerModelDropdownOpen(false), rerankerModelDropdownOpen);
+  useClickOutside(imageBackendDropdownRef, () => setImageBackendDropdownOpen(false), imageBackendDropdownOpen);
   useClickOutside(tocRef, () => setTocOpen(false), tocOpen);
   useClickOutside(favoritesDropdownRef, () => setFavoritesDropdownOpen(false), favoritesDropdownOpen);
 
@@ -2875,14 +2878,37 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             <h3 className="text-sm font-medium text-white/70">Image Generation</h3>
             <div className="space-y-2">
               <label className="block text-sm text-white/50">Backend</label>
-              <select
-                value={imageBackend}
-                onChange={(e) => setImageBackend(e.target.value as "comfyui" | "sdcpp")}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/30 transition-all"
-              >
-                <option value="comfyui">ComfyUI</option>
-                <option value="sdcpp">sd-server (stable-diffusion.cpp)</option>
-              </select>
+              <div className="relative" ref={imageBackendDropdownRef}>
+                <button
+                  onClick={() => setImageBackendDropdownOpen((o) => !o)}
+                  className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+                >
+                  <span className="truncate flex-1 text-left">
+                    {imageBackend === "sdcpp" ? "sd-server (stable-diffusion.cpp)" : "ComfyUI"}
+                  </span>
+                  {chevronSvg(imageBackendDropdownOpen)}
+                </button>
+                <DropdownPanel
+                  open={imageBackendDropdownOpen}
+                  className="left-0 right-0 top-full mt-1 overflow-hidden"
+                >
+                  {(["comfyui", "sdcpp"] as const).map((b) => (
+                    <button
+                      key={b}
+                      onClick={() => { setImageBackend(b); setImageBackendDropdownOpen(false); }}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                        imageBackend === b ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                      style={{
+                        backgroundColor: imageBackend === b ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: imageBackend === b ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
+                    >
+                      {b === "sdcpp" ? "sd-server (stable-diffusion.cpp)" : "ComfyUI"}
+                    </button>
+                  ))}
+                </DropdownPanel>
+              </div>
               <p className="text-white/30 text-xs">
                 Used by the Image Sandbox and the generate_image agent tool. sd-server loads one model at startup; configure via its launch command.
               </p>

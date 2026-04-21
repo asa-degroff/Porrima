@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useImageSandbox } from "../hooks/useImageSandbox";
 import { useVisionSandbox } from "../hooks/useVisionSandbox";
+import { useSettings } from "../hooks/useSettings";
 import { ImageControls } from "./ImageControls";
 import { ImageGallery } from "./ImageGallery";
 import { ImageDetails } from "./ImageDetails";
@@ -32,6 +33,9 @@ function isVisionCapable(family: string): boolean {
 
 export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisionModelId, onClose }: Props) {
   const activityShape = useActivityShape();
+  const { settings } = useSettings();
+  const backendLabel = settings.imageBackend === "sdcpp" ? "sd-server" : "ComfyUI";
+
   const {
     images,
     selectedImage,
@@ -328,8 +332,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   : activeGenerations.length > 0
                     ? `${activeGenerations.length} generating`
                     : isAvailable
-                      ? "ComfyUI Connected"
-                      : "ComfyUI Unavailable"
+                      ? `${backendLabel} Connected`
+                      : `${backendLabel} Unavailable`
                 : "Vision Ready"
               }
             </span>
