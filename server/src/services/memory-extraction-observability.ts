@@ -24,12 +24,20 @@ export interface ExtractionParsedFact {
   importance?: number;
 }
 
+export interface ExtractionChunkInfo {
+  count: number;
+  failures: number;
+  timingsMs: number[];
+}
+
 export interface ExtractionResults {
   facts: ExtractionParsedFact[];
   saved: number;
   superseded: number;
   skippedDuplicates: number;
   errors: number;
+  /** Chunking metadata — present only when chunkCount > 1. */
+  chunks?: ExtractionChunkInfo;
 }
 
 export interface ExtractionRun {

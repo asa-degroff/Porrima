@@ -17,12 +17,19 @@ interface ExtractionParsedFact {
   importance?: number;
 }
 
+interface ExtractionChunkInfo {
+  count: number;
+  failures: number;
+  timingsMs: number[];
+}
+
 interface ExtractionResults {
   facts: ExtractionParsedFact[];
   saved: number;
   superseded: number;
   skippedDuplicates: number;
   errors: number;
+  chunks?: ExtractionChunkInfo;
 }
 
 interface ExtractionRun {
@@ -189,7 +196,14 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
                       <span className="text-white/30 shrink-0">
                         {run.results ? `${run.results.facts.length} fact(s)` : "…"}
                       </span>
-                      <span className="text-white/30 w-12 text-right shrink-0">
+                      {run.results?.chunks && (
+                        <span className={`shrink-0 ${run.results.chunks.failures > 0 ? "text-amber-300/60" : "text-white/30"}`}>
+                          {run.results.chunks.count === 1
+                            ? "1 call"
+                            : `${run.results.chunks.count} calls${run.results.chunks.failures > 0 ? ` (${run.results.chunks.failures} fail)` : ""}`}
+                        </span>
+                      )}
+                      <span className="text-white/30 w-14 text-right shrink-0">
                         {formatDuration(run.durationMs)}
                       </span>
                       <span className="text-white/20 w-20 text-right shrink-0">
@@ -227,6 +241,9 @@ function RunDetail({ run }: { run: ExtractionRun }) {
           </>
         )}
       </div>
+      {run.results?.chunks && (
+        <ChunkBreakdown chunks={run.results.chunks} />
+      )}
       {run.results && run.results.facts.length > 0 && (
         <Section title={`Parsed Facts (${run.results.facts.length})`} defaultOpen>
           <ul className="space-y-1.5">
@@ -298,5 +315,35 @@ function Section({
       </button>
       {open && <div className="mt-2">{children}</div>}
     </div>
+  );
+}
+
+function ChunkBreakdown({ chunks }: { chunks: ExtractionChunkInfo }) {
+  const showDetails = chunks.count > 1;
+  if (!showDetails) return null;
+
+  return (
+    <Section title={`Chunks (${chunks.count} calls, ${chunks.failures} failed)`}>
+      <div className="space-y-1">
+        {chunks.timingsMs.map((ms, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <span className="text-white/40 shrink-0 w-16">
+              chunk {i + 1}:
+            </span>
+            <span className="text-white/80">
+              {formatDuration(ms)}
+            </span>
+          </div>
+        ))}
+        {chunks.timingsMs.length > 0 && (
+          <div className="flex items-center gap-2 pt-1 border-t border-white/10">
+            <span className="text-white/40 shrink-0 w-16">total:</span>
+            <span className="text-white/60">
+              {formatDuration(chunks.timingsMs.reduce((a, b) => a + b, 0))}
+            </span>
+          </div>
+        )}
+      </div>
+    </Section>
   );
 }

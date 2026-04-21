@@ -466,6 +466,9 @@ interface ExtractChunkedResult {
   /** Raw LLM output per chunk, concatenated with separators for observability. */
   rawOutput: string;
   chunkCount: number;
+  /** Per-chunk timing and failure count for debug observability. */
+  chunkTimingsMs: number[];
+  chunkFailures: number;
 }
 
 const OVERLAP_CHARS = 500;
@@ -620,6 +623,7 @@ async function extractInChunks(
   if (!extractionUrl) {
     const body = opts.segments.map(renderSegment).join("\n\n");
     const combined = header ? `${header}\n\n${body}` : body;
+    const t0 = Date.now();
     const raw = await callExtractionLLMWithRetry(
       opts.modelId,
       combined,
@@ -631,6 +635,8 @@ async function extractInChunks(
       facts: parseExtractionResponse(raw),
       rawOutput: raw,
       chunkCount: 1,
+      chunkTimingsMs: [Date.now() - t0],
+      chunkFailures: 0,
     };
   }
 
@@ -646,6 +652,7 @@ async function extractInChunks(
   const body = opts.segments.map(renderSegment).join("\n\n");
   const combined = header ? `${header}\n\n${body}` : body;
   if (combined.length <= singleBudget) {
+    const t0 = Date.now();
     const raw = await callExtractionLLMWithRetry(
       opts.modelId,
       combined,
@@ -657,6 +664,8 @@ async function extractInChunks(
       facts: parseExtractionResponse(raw),
       rawOutput: raw,
       chunkCount: 1,
+      chunkTimingsMs: [Date.now() - t0],
+      chunkFailures: 0,
     };
   }
 
@@ -671,7 +680,7 @@ async function extractInChunks(
 
   const chunks = packSegmentsIntoChunks(opts.segments, maxChunkChars);
   if (chunks.length === 0) {
-    return { facts: [], rawOutput: "", chunkCount: 0 };
+    return { facts: [], rawOutput: "", chunkCount: 0, chunkTimingsMs: [], chunkFailures: 0 };
   }
 
   if (chunks.length > 1 && opts.contextLabel) {
@@ -683,6 +692,7 @@ async function extractInChunks(
 
   const allFacts: ExtractedFact[] = [];
   const rawOutputs: string[] = [];
+  const chunkTimingsMs: number[] = [];
   let lastChunkContent = "";
   let successCount = 0;
   let lastError: unknown;
@@ -715,6 +725,7 @@ async function extractInChunks(
     const userContent = parts.join("\n\n");
 
     let raw = "";
+    const chunkT0 = Date.now();
     try {
       // Retry per-chunk so a transient failure in chunk N doesn't force us
       // to redo chunks 1..N-1 from scratch.
@@ -725,11 +736,14 @@ async function extractInChunks(
         `${retryContext} [chunk ${i + 1}/${chunks.length}]`,
         opts.signal,
       );
+      chunkTimingsMs.push(Date.now() - chunkT0);
       successCount++;
     } catch (e) {
+      const chunkDuration = Date.now() - chunkT0;
+      chunkTimingsMs.push(chunkDuration);
       lastError = e;
       console.error(
-        `[memory-chunk] ${retryContext}: chunk ${i + 1}/${chunks.length} failed after retries:`,
+        `[memory-chunk] ${retryContext}: chunk ${i + 1}/${chunks.length} failed after retries (${chunkDuration}ms):`,
         e,
       );
       rawOutputs.push(`[chunk ${i + 1} failed: ${e instanceof Error ? e.message : String(e)}]`);
@@ -756,7 +770,13 @@ async function extractInChunks(
     ? rawOutputs[0] ?? ""
     : rawOutputs.map((r, i) => `=== chunk ${i + 1}/${chunks.length} ===\n${r}`).join("\n\n");
 
-  return { facts: allFacts, rawOutput, chunkCount: chunks.length };
+  return {
+    facts: allFacts,
+    rawOutput,
+    chunkCount: chunks.length,
+    chunkTimingsMs,
+    chunkFailures: chunks.length - successCount,
+  };
 }
 
 const DEDUP_THRESHOLD = 0.85;
@@ -898,7 +918,14 @@ export async function extractMemories(
     console.log("[memory] No facts extracted from exchange");
     extractionMetrics.successfulExtractions++;
     extractionMetrics.lastExtractionAt = new Date().toISOString();
-    runHandle.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0 });
+    runHandle.complete({
+      facts: [],
+      saved: 0,
+      superseded: 0,
+      skippedDuplicates: 0,
+      errors: 0,
+      chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+    });
     return;
   }
 
@@ -934,6 +961,7 @@ export async function extractMemories(
     superseded: outcome.superseded,
     skippedDuplicates: outcome.skippedDuplicates,
     errors: 0,
+    chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
   });
   } catch (e) {
     extractionMetrics.failedExtractions++;
@@ -1242,7 +1270,14 @@ export async function preCompactionFlush(
     const facts = chunkResult.facts;
     if (facts.length === 0) {
       console.log("[memory] Pre-compaction flush: no facts extracted");
-      runHandle.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0 });
+      runHandle.complete({
+        facts: [],
+        saved: 0,
+        superseded: 0,
+        skippedDuplicates: 0,
+        errors: 0,
+        chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+      });
       return;
     }
 
@@ -1282,6 +1317,7 @@ export async function preCompactionFlush(
       superseded: outcome.superseded,
       skippedDuplicates: outcome.skippedDuplicates,
       errors: 0,
+      chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
     });
   } catch (e) {
     runHandle.fail(e);
@@ -1610,7 +1646,14 @@ export async function extractDelayedMemories(
       console.log(`[memory-delayed] No new memories extracted from chat ${chatId}`);
       // Still update tracking fields to mark extraction as run
       await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
-      runHandle.complete({ facts: [], saved: 0, superseded: 0, skippedDuplicates: 0, errors: 0 });
+      runHandle.complete({
+        facts: [],
+        saved: 0,
+        superseded: 0,
+        skippedDuplicates: 0,
+        errors: 0,
+        chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+      });
       return;
     }
 
@@ -1675,6 +1718,7 @@ export async function extractDelayedMemories(
       superseded: 0,
       skippedDuplicates: runSkipped,
       errors: 0,
+      chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
     });
   } catch (e) {
     runHandle.fail(e);
