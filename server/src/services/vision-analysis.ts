@@ -13,6 +13,7 @@ import {
 import { getOllamaUrl } from "./ollama-url.js";
 import { discoverAllModels } from "./models.js";
 import type { OllamaModel } from "../types.js";
+import { beginStream, endStream } from "./llm-activity.js";
 
 const VISION_DIR = join(process.env.HOME || process.env.USERPROFILE || ".", ".quje-agent", "vision");
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
@@ -312,61 +313,66 @@ export async function analyzeImage(
   presetKey: string,
   model?: string
 ): Promise<{ description: string; preset: string; model: string }> {
-  await ensureVisionDir();
+  beginStream();
+  try {
+    await ensureVisionDir();
 
-  const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
-  const modelName = model || getVLMModel();
-  const backend = await resolveVisionBackend(modelName);
+    const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
+    const modelName = model || getVLMModel();
+    const backend = await resolveVisionBackend(modelName);
 
-  if (backend.provider === "llamacpp") {
-    const description = await analyzeViaLlamaCpp(
-      imageData,
-      preset.prompt,
-      modelName,
-      backend.baseUrl,
-      backend.contextWindow
-    );
+    if (backend.provider === "llamacpp") {
+      const description = await analyzeViaLlamaCpp(
+        imageData,
+        preset.prompt,
+        modelName,
+        backend.baseUrl,
+        backend.contextWindow
+      );
+      return { description, preset: presetKey, model: modelName };
+    }
+
+    const ollamaReady = await waitForOllama();
+    if (!ollamaReady) {
+      throw new Error("Cannot reach Ollama. Is it running?");
+    }
+
+    const imageBuffer = base64ToBuffer(imageData).toString("base64");
+
+    const visionOptions: Record<string, any> = { temperature: 0.7 };
+    if (isLlamaCppModelLoaded()) visionOptions.num_gpu = 0;
+
+    const res = await fetch(`${backend.baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: modelName,
+        stream: false,
+        messages: [
+          { role: "system", content: preset.prompt },
+          {
+            role: "user",
+            content: "Describe this image.",
+            images: [imageBuffer],
+          },
+        ],
+        keep_alive: 0,
+        options: visionOptions,
+      }),
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text().catch(() => res.statusText);
+      throw new Error(`Vision analysis failed (${res.status}): ${errorText}`);
+    }
+
+    const response = await res.json();
+    const description = cleanOutput(response.message.content);
+
     return { description, preset: presetKey, model: modelName };
+  } finally {
+    endStream();
   }
-
-  const ollamaReady = await waitForOllama();
-  if (!ollamaReady) {
-    throw new Error("Cannot reach Ollama. Is it running?");
-  }
-
-  const imageBuffer = base64ToBuffer(imageData).toString("base64");
-
-  const visionOptions: Record<string, any> = { temperature: 0.7 };
-  if (isLlamaCppModelLoaded()) visionOptions.num_gpu = 0;
-
-  const res = await fetch(`${backend.baseUrl}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: modelName,
-      stream: false,
-      messages: [
-        { role: "system", content: preset.prompt },
-        {
-          role: "user",
-          content: "Describe this image.",
-          images: [imageBuffer],
-        },
-      ],
-      keep_alive: 0,
-      options: visionOptions,
-    }),
-  });
-
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => res.statusText);
-    throw new Error(`Vision analysis failed (${res.status}): ${errorText}`);
-  }
-
-  const response = await res.json();
-  const description = cleanOutput(response.message.content);
-
-  return { description, preset: presetKey, model: modelName };
 }
 
 export async function analyzeImageStream(
@@ -375,109 +381,114 @@ export async function analyzeImageStream(
   model: string | undefined,
   onEvent: (event: { event: string; data: unknown }) => void
 ): Promise<{ description: string; preset: string; model: string }> {
-  await ensureVisionDir();
+  beginStream();
+  try {
+    await ensureVisionDir();
 
-  const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
-  const modelName = model || getVLMModel();
-  const backend = await resolveVisionBackend(modelName);
+    const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
+    const modelName = model || getVLMModel();
+    const backend = await resolveVisionBackend(modelName);
 
-  // Send initial keepalive to show we're starting
-  onEvent({ event: "keepalive", data: { status: "starting", timestamp: Date.now() } });
+    // Send initial keepalive to show we're starting
+    onEvent({ event: "keepalive", data: { status: "starting", timestamp: Date.now() } });
 
-  if (backend.provider === "llamacpp") {
-    const description = await analyzeViaLlamaCpp(
-      imageData,
-      preset.prompt,
-      modelName,
-      backend.baseUrl,
-      backend.contextWindow,
-      (delta) => onEvent({ event: "text_delta", data: { delta } })
-    );
-    onEvent({ event: "description_complete", data: { description, preset: presetKey, model: modelName } });
-    return { description, preset: presetKey, model: modelName };
-  }
+    if (backend.provider === "llamacpp") {
+      const description = await analyzeViaLlamaCpp(
+        imageData,
+        preset.prompt,
+        modelName,
+        backend.baseUrl,
+        backend.contextWindow,
+        (delta) => onEvent({ event: "text_delta", data: { delta } })
+      );
+      onEvent({ event: "description_complete", data: { description, preset: presetKey, model: modelName } });
+      return { description, preset: presetKey, model: modelName };
+    }
 
-  const ollamaReady = await waitForOllama();
-  if (!ollamaReady) {
-    onEvent({ event: "error", data: { message: "Cannot reach Ollama. Is it running?" } });
-    throw new Error("Cannot reach Ollama. Is it running?");
-  }
+    const ollamaReady = await waitForOllama();
+    if (!ollamaReady) {
+      onEvent({ event: "error", data: { message: "Cannot reach Ollama. Is it running?" } });
+      throw new Error("Cannot reach Ollama. Is it running?");
+    }
 
-  const imageBuffer = base64ToBuffer(imageData).toString("base64");
-  const streamOptions: Record<string, any> = { temperature: 0.7 };
-  if (isLlamaCppModelLoaded()) streamOptions.num_gpu = 0;
+    const imageBuffer = base64ToBuffer(imageData).toString("base64");
+    const streamOptions: Record<string, any> = { temperature: 0.7 };
+    if (isLlamaCppModelLoaded()) streamOptions.num_gpu = 0;
 
-  const res = await fetch(`${backend.baseUrl}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: modelName,
-      stream: true,
-      messages: [
-        { role: "system", content: preset.prompt },
-        {
-          role: "user",
-          content: "Describe this image.",
-          images: [imageBuffer],
-        },
-      ],
-      keep_alive: 0,
-      options: streamOptions,
-    }),
-  });
+    const res = await fetch(`${backend.baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: modelName,
+        stream: true,
+        messages: [
+          { role: "system", content: preset.prompt },
+          {
+            role: "user",
+            content: "Describe this image.",
+            images: [imageBuffer],
+          },
+        ],
+        keep_alive: 0,
+        options: streamOptions,
+      }),
+    });
 
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => res.statusText);
-    onEvent({ event: "error", data: { message: `Vision analysis failed (${res.status}): ${errorText}` } });
-    throw new Error(`Vision analysis failed (${res.status}): ${errorText}`);
-  }
+    if (!res.ok) {
+      const errorText = await res.text().catch(() => res.statusText);
+      onEvent({ event: "error", data: { message: `Vision analysis failed (${res.status}): ${errorText}` } });
+      throw new Error(`Vision analysis failed (${res.status}): ${errorText}`);
+    }
 
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let fullContent = "";
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullContent = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
-    for (const line of lines) {
-      if (line.trim()) {
-        try {
-          const json = JSON.parse(line);
-          if (json.message?.content) {
-            const delta = json.message.content;
-            fullContent += delta;
-            onEvent({ event: "text_delta", data: { delta } });
+      for (const line of lines) {
+        if (line.trim()) {
+          try {
+            const json = JSON.parse(line);
+            if (json.message?.content) {
+              const delta = json.message.content;
+              fullContent += delta;
+              onEvent({ event: "text_delta", data: { delta } });
+            }
+          } catch {
+            // skip malformed
           }
-        } catch {
-          // skip malformed
         }
       }
     }
-  }
 
-  // Process remaining buffer
-  if (buffer.trim()) {
-    try {
-      const json = JSON.parse(buffer);
-      if (json.message?.content) {
-        fullContent += json.message.content;
-        onEvent({ event: "text_delta", data: { delta: json.message.content } });
+    // Process remaining buffer
+    if (buffer.trim()) {
+      try {
+        const json = JSON.parse(buffer);
+        if (json.message?.content) {
+          fullContent += json.message.content;
+          onEvent({ event: "text_delta", data: { delta: json.message.content } });
+        }
+      } catch {
+        // skip malformed
       }
-    } catch {
-      // skip malformed
     }
+
+    const description = cleanOutput(fullContent);
+    onEvent({ event: "description_complete", data: { description, preset: presetKey, model: modelName } });
+
+    return { description, preset: presetKey, model: modelName };
+  } finally {
+    endStream();
   }
-
-  const description = cleanOutput(fullContent);
-  onEvent({ event: "description_complete", data: { description, preset: presetKey, model: modelName } });
-
-  return { description, preset: presetKey, model: modelName };
 }
 
 export async function chatAboutImage(

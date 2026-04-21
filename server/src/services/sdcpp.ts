@@ -4,6 +4,7 @@ import { Agent } from "undici";
 import { getSettings } from "./chat-storage.js";
 import type { ImageGenerationParams } from "../types.js";
 import type { ImageBackend, GenerateProgress, ImageBackendStatus } from "./image-backend.js";
+import { acquireResources, type CoordinatorStatus } from "./resource-coordinator.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -39,9 +40,20 @@ async function probeReady(baseUrl: string): Promise<boolean> {
   }
 }
 
-async function ensureRunning(baseUrl: string): Promise<void> {
+async function ensureRunning(
+  baseUrl: string,
+  onStatus?: (status: CoordinatorStatus) => void,
+): Promise<void> {
   if (await probeReady(baseUrl)) return;
 
+  // Free up RAM before starting — sd-server pins ~13GB via --offload-to-cpu.
+  await acquireResources({
+    for: "sdcpp",
+    ram: {},
+    onStatus,
+  });
+
+  onStatus?.({ phase: "ready", message: `Starting ${SERVICE_NAME}...` });
   console.log(`[sdcpp] Starting ${SERVICE_NAME}...`);
   try {
     await execFileAsync("systemctl", ["--user", "start", SERVICE_NAME], {
@@ -148,6 +160,7 @@ async function generate(
   params: ImageGenerationParams,
   onLinkJob: (jobId: string) => void,
   onProgress?: (progress: GenerateProgress) => void,
+  onStatus?: (status: CoordinatorStatus) => void,
 ): Promise<{ imageData: Buffer; resolvedSeed: number }> {
   const baseUrl = await getBaseUrl();
 
@@ -157,7 +170,7 @@ async function generate(
     clearTimeout(idleStopTimer);
     idleStopTimer = null;
   }
-  await ensureRunning(baseUrl);
+  await ensureRunning(baseUrl, onStatus);
 
   // Resolve seed client-side — A1111 sync response doesn't reliably echo the
   // actual seed used when we pass -1, so decide it here and send it explicitly.

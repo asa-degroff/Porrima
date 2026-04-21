@@ -195,6 +195,11 @@ router.post("/generate", async (req, res) => {
         res.write(
           `event: progress\ndata: ${JSON.stringify({ step: progress.step, totalSteps: progress.totalSteps })}\n\n`
         );
+      },
+      (status) => {
+        res.write(
+          `event: status\ndata: ${JSON.stringify(status)}\n\n`
+        );
       }
     );
 

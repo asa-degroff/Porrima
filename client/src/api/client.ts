@@ -625,11 +625,25 @@ export function subscribeToGeneration(
   return controller;
 }
 
+export type CoordinatorPhase =
+  | "checking"
+  | "waiting-for-llm"
+  | "freeing-cache"
+  | "unloading"
+  | "restarting"
+  | "ready";
+
+export interface CoordinatorStatus {
+  phase: CoordinatorPhase;
+  message: string;
+}
+
 export interface ImageGenerateCallbacks {
   onStarted: (generationId: string) => void;
   onProgress: (step: number, totalSteps: number) => void;
   onDone: (image: GeneratedImage) => void;
   onError: (error: string) => void;
+  onStatus?: (status: CoordinatorStatus) => void;
 }
 
 export function generateImage(
@@ -680,6 +694,8 @@ export function generateImage(
                 callbacks.onStarted(data.id);
               } else if (currentEvent === "progress") {
                 callbacks.onProgress(data.step, data.totalSteps);
+              } else if (currentEvent === "status") {
+                callbacks.onStatus?.(data as CoordinatorStatus);
               } else if (currentEvent === "done") {
                 callbacks.onDone(data.image);
               } else if (currentEvent === "error") {

@@ -8,6 +8,7 @@ import {
   subscribeToGeneration,
   toggleImageFavorite as apiToggleImageFavorite,
 } from "../api/client";
+import type { CoordinatorStatus } from "../api/client";
 import type { ComfyUIStatus, GeneratedImage, ImageGenerationParams, GenerationState } from "../types";
 
 // Check if a generation is actively running
@@ -21,6 +22,7 @@ export function useImageSandbox() {
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState<{ step: number; total: number } | null>(null);
   const [comfyuiStatus, setComfyuiStatus] = useState<ComfyUIStatus | null>(null);
+  const [coordinatorStatus, setCoordinatorStatus] = useState<CoordinatorStatus | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [activeGenerations, setActiveGenerations] = useState<GenerationState[]>([]);
@@ -213,8 +215,16 @@ export function useImageSandbox() {
         },
         onProgress: (step, totalSteps) => {
           setProgress({ step, total: totalSteps });
+          // Clear coordinator status once real progress starts — coordination
+          // is done, the model is generating.
+          setCoordinatorStatus(null);
           // Clear error on progress - generation is actively running
           setError(null);
+        },
+        onStatus: (status) => {
+          // "ready" is the terminal coordinator phase; don't pin it visibly
+          // since the progress stream takes over immediately after.
+          setCoordinatorStatus(status.phase === "ready" ? null : status);
         },
         onDone: (image) => {
           // Refresh from server to ensure authoritative list
@@ -237,6 +247,7 @@ export function useImageSandbox() {
           });
           setGenerating(false);
           setProgress(null);
+          setCoordinatorStatus(null);
           setError(null); // Clear error on success
           scheduleErrorDismiss(); // Ensure error stays cleared
           if (currentGenerationId) {
@@ -247,6 +258,7 @@ export function useImageSandbox() {
           setError(err);
           setGenerating(false);
           setProgress(null);
+          setCoordinatorStatus(null);
           // Remove optimistic entry on error
           setActiveGenerations((prev) => prev.filter((g) => g.id !== optimisticId));
           if (currentGenerationId) {
@@ -322,6 +334,7 @@ export function useImageSandbox() {
     generating,
     progress,
     comfyuiStatus,
+    coordinatorStatus,
     models,
     error,
     enqueue,

@@ -23,6 +23,7 @@ import { saveUserImage } from "../services/user-image-storage.js";
 import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
 import { log } from "../services/logger.js";
+import { beginStream as beginLLMStream, endStream as endLLMStream } from "../services/llm-activity.js";
 
 // ---------------------------------------------------------------------------
 // Live stream registry — supports reconnect and grace-on-disconnect.
@@ -430,6 +431,7 @@ function createSafeStreamFn(chatOllamaOptions?: { keepAlive?: string | number; n
       };
 
       resetTimer();
+      beginLLMStream();
 
       try {
         for await (const event of rawStream) {
@@ -461,6 +463,7 @@ function createSafeStreamFn(chatOllamaOptions?: { keepAlive?: string | number; n
         } as any);
       } finally {
         if (timer) clearTimeout(timer);
+        endLLMStream();
         endStream();
       }
     })();

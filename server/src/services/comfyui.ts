@@ -2,7 +2,7 @@ import WebSocket from "ws";
 import { getSettings } from "./chat-storage.js";
 import type { ImageGenerationParams, ComfyUIStatus } from "../types.js";
 import type { ImageBackend } from "./image-backend.js";
-import { waitForFreeVRAM } from "./resource-coordinator.js";
+import { acquireResources, type CoordinatorStatus } from "./resource-coordinator.js";
 
 async function getBaseUrl(): Promise<string> {
   const settings = await getSettings();
@@ -186,15 +186,21 @@ export async function generateImageWithState(
   clientId: string,
   params: ImageGenerationParams,
   onLinkComfyUI: (promptId: string) => void,
-  onProgress?: (progress: GenerateProgress) => void
+  onProgress?: (progress: GenerateProgress) => void,
+  onStatus?: (status: CoordinatorStatus) => void,
 ): Promise<{ imageData: Buffer; resolvedSeed: number }> {
   const baseUrl = await getBaseUrl();
   // Ensure sufficient VRAM before starting — unloads LLM models if needed.
   // Abort if VRAM can't be freed — proceeding would cause ComfyUI to fall
   // back to CPU, consuming all system RAM and hanging indefinitely.
-  const vramReady = await waitForFreeVRAM(baseUrl);
-  if (!vramReady) {
-    throw new Error("Insufficient VRAM for image generation — could not free enough GPU memory");
+  try {
+    await acquireResources({
+      for: "comfyui",
+      vram: { baseUrl },
+      onStatus,
+    });
+  } catch (err: any) {
+    throw new Error(`Insufficient VRAM for image generation: ${err?.message ?? err}`);
   }
 
   const workflow = buildWorkflow(params, clientId);

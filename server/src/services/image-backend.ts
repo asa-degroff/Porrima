@@ -1,7 +1,9 @@
 import type { ImageGenerationParams, ComfyUIStatus } from "../types.js";
 import { getSettings } from "./chat-storage.js";
+import type { CoordinatorStatus } from "./resource-coordinator.js";
 
 export type ImageBackendStatus = ComfyUIStatus;
+export type { CoordinatorStatus } from "./resource-coordinator.js";
 
 export interface GenerateProgress {
   step: number;
@@ -18,6 +20,7 @@ export interface ImageBackend {
     params: ImageGenerationParams,
     onLinkJob: (jobId: string) => void,
     onProgress?: (progress: GenerateProgress) => void,
+    onStatus?: (status: CoordinatorStatus) => void,
   ): Promise<{ imageData: Buffer; resolvedSeed: number }>;
 }
 

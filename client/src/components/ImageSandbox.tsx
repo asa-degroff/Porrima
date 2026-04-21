@@ -43,6 +43,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     generating,
     progress,
     comfyuiStatus,
+    coordinatorStatus,
     models,
     error: imageError,
     enqueue,
@@ -327,13 +328,15 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             />
             <span className="text-xs text-white/40">
               {mode === "generate"
-                ? comfyuiStatus === null
-                  ? "Checking..."
-                  : activeGenerations.length > 0
-                    ? `${activeGenerations.length} generating`
-                    : isAvailable
-                      ? `${backendLabel} Connected`
-                      : `${backendLabel} Unavailable`
+                ? coordinatorStatus
+                  ? coordinatorStatus.message
+                  : comfyuiStatus === null
+                    ? "Checking..."
+                    : activeGenerations.length > 0
+                      ? `${activeGenerations.length} generating`
+                      : isAvailable
+                        ? `${backendLabel} Connected`
+                        : `${backendLabel} Unavailable`
                 : "Vision Ready"
               }
             </span>
