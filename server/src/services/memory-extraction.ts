@@ -469,8 +469,11 @@ interface ExtractChunkedResult {
 }
 
 const OVERLAP_CHARS = 500;
+/** Max number of prior facts carried into subsequent chunks' preamble. */
+const MAX_PRIOR_FACTS_COUNT = 8;
+/** Safety cap on the prior-facts preamble char length (catches unusually long facts). */
 const MAX_PRIOR_FACTS_CHARS = 1500;
-/** Reserved per-chunk for overlap + priorFacts + markers. Subtracted from budget. */
+/** Reserved per-chunk for overlap + priorFacts + markers. Subtracted from budget when chunking. */
 const CHUNK_OVERHEAD_CHARS = OVERLAP_CHARS + MAX_PRIOR_FACTS_CHARS + 200;
 
 function renderSegment(seg: ExtractSegment): string {
@@ -516,6 +519,24 @@ function splitByParagraph(text: string, maxChunkChars: number): string[] {
   return pieces;
 }
 
+/**
+ * Handle a segment that doesn't fit in the current chunk as-is: split it,
+ * push all but the last piece as complete chunks, and return the last piece
+ * as the seed for the next chunk being built.
+ */
+function splitOversizedSegment(
+  seg: ExtractSegment,
+  rendered: string,
+  maxChunkChars: number,
+  chunks: string[],
+): string {
+  const pieces = seg.splittable !== false
+    ? splitByParagraph(rendered, maxChunkChars)
+    : hardSplit(rendered, maxChunkChars);
+  for (let i = 0; i < pieces.length - 1; i++) chunks.push(pieces[i]);
+  return pieces[pieces.length - 1] ?? "";
+}
+
 function packSegmentsIntoChunks(
   segments: ExtractSegment[],
   maxChunkChars: number,
@@ -525,38 +546,22 @@ function packSegmentsIntoChunks(
   for (const seg of segments) {
     const rendered = renderSegment(seg);
 
-    if (!current) {
-      if (rendered.length <= maxChunkChars) {
-        current = rendered;
-      } else {
-        const pieces = seg.splittable !== false
-          ? splitByParagraph(rendered, maxChunkChars)
-          : hardSplit(rendered, maxChunkChars);
-        for (let i = 0; i < pieces.length - 1; i++) chunks.push(pieces[i]);
-        current = pieces[pieces.length - 1] ?? "";
-      }
-      continue;
-    }
-
-    const candidate = current + "\n\n" + rendered;
+    // Segment fits alongside (or is the seed of) the current chunk
+    const candidate = current ? current + "\n\n" + rendered : rendered;
     if (candidate.length <= maxChunkChars) {
       current = candidate;
       continue;
     }
 
-    // Doesn't fit into the current chunk — flush it and start fresh
-    chunks.push(current);
-    current = "";
-
-    if (rendered.length <= maxChunkChars) {
-      current = rendered;
-    } else {
-      const pieces = seg.splittable !== false
-        ? splitByParagraph(rendered, maxChunkChars)
-        : hardSplit(rendered, maxChunkChars);
-      for (let i = 0; i < pieces.length - 1; i++) chunks.push(pieces[i]);
-      current = pieces[pieces.length - 1] ?? "";
+    // Doesn't fit. Flush whatever we've got, then handle the segment fresh.
+    if (current) {
+      chunks.push(current);
+      current = "";
     }
+
+    current = rendered.length <= maxChunkChars
+      ? rendered
+      : splitOversizedSegment(seg, rendered, maxChunkChars, chunks);
   }
   if (current) chunks.push(current);
   return chunks;
@@ -564,22 +569,42 @@ function packSegmentsIntoChunks(
 
 function formatPriorFactsPreamble(facts: ExtractedFact[]): string {
   if (facts.length === 0) return "";
-  // Keep the most recent facts (by position); temporally they line up with
-  // the immediately previous chunks, which are most likely to be continued
-  // in the current chunk.
+  // Carry only the most recent few facts — the model is most likely to be
+  // about to re-extract things it just saw in the immediately preceding
+  // chunk. Earlier facts are covered by the downstream vector dedup.
+  const startIdx = Math.max(0, facts.length - MAX_PRIOR_FACTS_COUNT);
   const lines: string[] = [];
   let budget = MAX_PRIOR_FACTS_CHARS;
   let kept = 0;
-  for (let i = facts.length - 1; i >= 0; i--) {
+  for (let i = startIdx; i < facts.length; i++) {
     const f = facts[i];
     const line = `[${i + 1}] (${f.category}, imp:${f.importance}) ${f.text}`;
     if (line.length + 1 > budget) break;
-    lines.unshift(line);
+    lines.push(line);
     budget -= line.length + 1;
     kept++;
   }
   const omitted = facts.length - kept;
   return (omitted > 0 ? `[... ${omitted} earlier facts omitted]\n` : "") + lines.join("\n");
+}
+
+/**
+ * Send a single extraction call with per-call retry. Used by both the
+ * single-call path and the per-chunk loop so transient failures retry at
+ * the right granularity (one call, not the whole run).
+ */
+async function callExtractionLLMWithRetry(
+  modelId: string,
+  userContent: string,
+  systemPrompt: string,
+  retryContext: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  let result = "";
+  await withRetry(async () => {
+    result = await callExtractionLLM(modelId, userContent, systemPrompt, signal);
+  }, retryContext);
+  return result;
 }
 
 async function extractInChunks(
@@ -588,16 +613,18 @@ async function extractInChunks(
   const settings = await getSettings();
   const extractionUrl = settings.extractionModelUrl;
   const header = opts.userPromptHeader ? opts.userPromptHeader.trimEnd() : "";
+  const retryContext = opts.contextLabel ?? "extractInChunks";
 
   // Fallback path: no dedicated extraction server — single call, let the main
   // model handle the full content. Its context is assumed to be large.
   if (!extractionUrl) {
     const body = opts.segments.map(renderSegment).join("\n\n");
     const combined = header ? `${header}\n\n${body}` : body;
-    const raw = await callExtractionLLM(
+    const raw = await callExtractionLLMWithRetry(
       opts.modelId,
       combined,
       opts.systemPrompt,
+      retryContext,
       opts.signal,
     );
     return {
@@ -608,13 +635,39 @@ async function extractInChunks(
   }
 
   const ctxSize = settings.extractionCtxSize ?? 16384;
-  const { maxInputChars: baseBudget } = computeExtractionInputBudget(
+
+  // Up-front fit check against the *no-overhead* budget. When the content fits
+  // as a single call, skip chunking entirely — avoids splitting just because
+  // we pre-reserved overhead we'd never actually use.
+  const { maxInputChars: singleBudget } = computeExtractionInputBudget(
+    opts.systemPrompt,
+    ctxSize,
+  );
+  const body = opts.segments.map(renderSegment).join("\n\n");
+  const combined = header ? `${header}\n\n${body}` : body;
+  if (combined.length <= singleBudget) {
+    const raw = await callExtractionLLMWithRetry(
+      opts.modelId,
+      combined,
+      opts.systemPrompt,
+      retryContext,
+      opts.signal,
+    );
+    return {
+      facts: parseExtractionResponse(raw),
+      rawOutput: raw,
+      chunkCount: 1,
+    };
+  }
+
+  // Content exceeds single-call budget — chunk with overhead reservation.
+  const { maxInputChars: chunkedBudget } = computeExtractionInputBudget(
     opts.systemPrompt,
     ctxSize,
     { chunkOverheadChars: CHUNK_OVERHEAD_CHARS },
   );
   // Subtract header chars since the header is repeated in every chunk.
-  const maxChunkChars = Math.max(1000, baseBudget - header.length);
+  const maxChunkChars = Math.max(1000, chunkedBudget - header.length);
 
   const chunks = packSegmentsIntoChunks(opts.segments, maxChunkChars);
   if (chunks.length === 0) {
@@ -663,17 +716,20 @@ async function extractInChunks(
 
     let raw = "";
     try {
-      raw = await callExtractionLLM(
+      // Retry per-chunk so a transient failure in chunk N doesn't force us
+      // to redo chunks 1..N-1 from scratch.
+      raw = await callExtractionLLMWithRetry(
         opts.modelId,
         userContent,
         opts.systemPrompt,
+        `${retryContext} [chunk ${i + 1}/${chunks.length}]`,
         opts.signal,
       );
       successCount++;
     } catch (e) {
       lastError = e;
       console.error(
-        `[memory-chunk] ${opts.contextLabel ?? "extract"}: chunk ${i + 1}/${chunks.length} failed:`,
+        `[memory-chunk] ${retryContext}: chunk ${i + 1}/${chunks.length} failed after retries:`,
         e,
       );
       rawOutputs.push(`[chunk ${i + 1} failed: ${e instanceof Error ? e.message : String(e)}]`);
@@ -687,7 +743,7 @@ async function extractInChunks(
     lastChunkContent = chunkContent;
   }
 
-  // If every chunk failed, surface the error so callers can retry/log.
+  // If every chunk failed, surface the error so callers can log/fail the run.
   // Partial success (at least one chunk succeeded) is acceptable — we return
   // whatever facts we got.
   if (successCount === 0 && chunks.length > 0) {
@@ -824,22 +880,17 @@ export async function extractMemories(
   });
   try {
 
-  // Call the LLM to extract facts (with retry, chunked if content exceeds budget)
-  let chunkResult: ExtractChunkedResult = { facts: [], rawOutput: "", chunkCount: 0 };
-  await withRetry(
-    async () => {
-      chunkResult = await extractInChunks({
-        modelId,
-        systemPrompt,
-        segments: [
-          { label: "User message", text: userMsg, splittable: true },
-          { label: "Assistant response", text: assistantMsg, splittable: true },
-        ],
-        contextLabel: `extractMemories chat=${chatId}`,
-      });
-    },
-    `extractMemories LLM call (chat ${chatId})`
-  );
+  // Call the LLM to extract facts (chunked if content exceeds budget;
+  // retry happens per-chunk inside extractInChunks).
+  const chunkResult = await extractInChunks({
+    modelId,
+    systemPrompt,
+    segments: [
+      { label: "User message", text: userMsg, splittable: true },
+      { label: "Assistant response", text: assistantMsg, splittable: true },
+    ],
+    contextLabel: `extractMemories chat=${chatId}`,
+  });
   runHandle.attachOutput(chunkResult.rawOutput);
 
   const facts = chunkResult.facts;
@@ -1179,18 +1230,13 @@ export async function preCompactionFlush(
       splittable: true,
     }));
 
-    let chunkResult: ExtractChunkedResult = { facts: [], rawOutput: "", chunkCount: 0 };
-    await withRetry(
-      async () => {
-        chunkResult = await extractInChunks({
-          modelId,
-          systemPrompt,
-          segments,
-          contextLabel: `preCompactionFlush chat=${chatId}`,
-        });
-      },
-      `preCompactionFlush LLM call (chat ${chatId})`
-    );
+    // Retry happens per-chunk inside extractInChunks.
+    const chunkResult = await extractInChunks({
+      modelId,
+      systemPrompt,
+      segments,
+      contextLabel: `preCompactionFlush chat=${chatId}`,
+    });
     runHandle.attachOutput(chunkResult.rawOutput);
 
     const facts = chunkResult.facts;
@@ -1258,19 +1304,14 @@ export async function extractMemoriesFromText(
   const systemPrompt = await buildExtractionSystemPrompt();
   const authorLabel = author === 'user' ? 'User notebook entry' : 'Agent notebook entry';
 
-  let chunkResult: ExtractChunkedResult = { facts: [], rawOutput: "", chunkCount: 0 };
   try {
-    await withRetry(
-      async () => {
-        chunkResult = await extractInChunks({
-          modelId,
-          systemPrompt,
-          segments: [{ label: authorLabel, text, splittable: true }],
-          contextLabel: `extractMemoriesFromText entry=${entryId}`,
-        });
-      },
-      `extractMemoriesFromText LLM call (entry ${entryId})`
-    );
+    // Retry happens per-chunk inside extractInChunks.
+    const chunkResult = await extractInChunks({
+      modelId,
+      systemPrompt,
+      segments: [{ label: authorLabel, text, splittable: true }],
+      contextLabel: `extractMemoriesFromText entry=${entryId}`,
+    });
 
     const facts = chunkResult.facts;
     if (facts.length === 0) {
@@ -1547,21 +1588,17 @@ export async function extractDelayedMemories(
   let runSkipped = 0;
 
   try {
-    // Call LLM to extract memories (chunked if content exceeds extraction budget)
-    let chunkResult: ExtractChunkedResult = { facts: [], rawOutput: "", chunkCount: 0 };
+    // Call LLM to extract memories. Chunked if content exceeds extraction
+    // budget; retry happens per-chunk inside extractInChunks.
+    let chunkResult: ExtractChunkedResult;
     try {
-      await withRetry(
-        async () => {
-          chunkResult = await extractInChunks({
-            modelId,
-            systemPrompt,
-            segments: messageSegments,
-            userPromptHeader,
-            contextLabel: `extractDelayedMemories chat=${chatId}`,
-          });
-        },
-        `extractDelayedMemories LLM call (chat ${chatId})`
-      );
+      chunkResult = await extractInChunks({
+        modelId,
+        systemPrompt,
+        segments: messageSegments,
+        userPromptHeader,
+        contextLabel: `extractDelayedMemories chat=${chatId}`,
+      });
     } catch (e) {
       console.error(`[memory-delayed] LLM extraction failed:`, e);
       throw e;
