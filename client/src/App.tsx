@@ -562,6 +562,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleCloseSidebar = useCallback(() => setSidebarOpen(false), []);
   const handleOpenSidebar = useCallback(() => setSidebarOpen(true), []);
   const handleOpenImageSandbox = useCallback(() => {
+    setActiveView('chats');
     setImageSandboxOpen(true);
     saveUserUIState({ activeView: 'image-sandbox' }).catch((err) => {
       console.warn("Failed to save image sandbox state to server:", err);
