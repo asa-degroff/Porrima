@@ -14,7 +14,6 @@ export interface SynthesisResult {
   visuals: any[];
   generatedImages: any[];
   memoryUpdates: string[];
-  notebookEntryId?: string;
   blockId?: string;
   success: boolean;
   error?: string;
@@ -84,7 +83,7 @@ The context package below contains:
 
 ## What You Do
 
-Write a daily synthesis — a narrative summary in your own voice of shared work, patterns, and themes. Save it as a notebook entry.
+Write a daily synthesis — a narrative summary in your own voice of shared work, patterns, and themes. Save it by calling \`create_notebook_entry(content=<the full synthesis prose>)\`. Don't use \`save_memory\` for narrative prose — that tool is for atomic facts. Notebook entries are for prose.
 
 ## Output Requirements
 
@@ -99,7 +98,7 @@ Reference earlier entries in this chat as notes from a past self. Consider wheth
 
 ---
 
-Write your synthesis. This will be saved as a notebook entry.`;
+Write your synthesis and persist it with \`create_notebook_entry\`.`;
 
 const SYNTHESIS_PHASE2_INSTRUCTIONS = `## Phase 2: Memory Block Maintenance
 
@@ -623,7 +622,8 @@ export async function runSystemSynthesis(options?: {
 }): Promise<SynthesisResult> {
   const { preSynthesisArchive } = await import("./pre-synthesis-archive.js");
   const { getChat, saveChat } = await import("./chat-storage.js");
-  const { createNotebookEntry, updateNotebookEntry } = await import("./notebook-storage.js");
+  // Notebook persistence is now the agent's responsibility via
+  // create_notebook_entry; no server-side auto-save here.
   const { discoverAllModels } = await import("./models.js");
   const { streamChat, chatMessagesToPiMessages } = await import("./agent.js");
   const { getAgentTools } = await import("./agent-tools.js");
@@ -942,40 +942,20 @@ export async function runSystemSynthesis(options?: {
     chat.messages.push(assistantChatMsg);
     await saveChat(chat);
 
-    // --- Save synthesis as notebook entry for the UI ---
-    // Only save to notebook when we actually have synthesis text. A no-output
-    // run has nothing useful for the notebook; persisting the placeholder
-    // pollutes the agent's own notebook history with filler entries.
-    let notebookEntryId: string | undefined;
-    if (textLen === 0) {
-      console.log("[system-chat] Skipping notebook entry — no text content produced");
-    } else {
-      try {
-        const entry = await createNotebookEntry("agent", summary);
-        notebookEntryId = entry.id;
-        if (allToolCalls.length || artifacts.length || visuals.length || generatedImages.length) {
-          await updateNotebookEntry("agent", entry.id, {
-            // Map to ChatToolCall shape explicitly — the notebook storage
-            // expects `{ id, name, arguments }` and we were passing the raw
-            // pi-ai ToolCall through by accident. Same mapping used when
-            // writing the system chat's assistant message above.
-            toolCalls: allToolCalls.map((tc) => ({
-              id: tc.id,
-              name: tc.name,
-              arguments: tc.arguments as Record<string, any>,
-            })),
-            // Without the matched results, the notebook renderer keys each
-            // tool call's "in progress" state on the absence of a result with
-            // the same toolCallId — so every call was stuck pending forever.
-            toolResults: allToolResults,
-            artifacts,
-            visuals,
-          });
-        }
-        console.log(`[system-chat] Saved synthesis as notebook entry: ${entry.id}`);
-      } catch (e: any) {
-        console.error("[system-chat] Failed to save synthesis as notebook entry:", e.message);
-      }
+    // Notebook persistence is now the agent's responsibility via the
+    // `create_notebook_entry` tool. The old implicit auto-save of the
+    // assistant's narrative text hid wrong behavior — if the agent didn't
+    // produce prose (e.g., went straight to tool calls), we'd still write
+    // an empty/placeholder entry. Explicit tool use is the contract; the
+    // Phase 1 prompt tells the agent to call create_notebook_entry.
+    const notebookCalls = allToolCalls.filter((tc) => tc.name === "create_notebook_entry").length;
+    if (textLen > 0 && notebookCalls === 0) {
+      console.warn(
+        `[system-chat] Synthesis produced ${textLen}ch of text but agent did not call create_notebook_entry. ` +
+        `The text is preserved on the assistant message but was not persisted as a notebook entry.`,
+      );
+    } else if (notebookCalls > 0) {
+      console.log(`[system-chat] Agent persisted ${notebookCalls} notebook entry/entries via create_notebook_entry`);
     }
 
     // --- Invalidate stable prefix caches so next chats pick up block changes ---
@@ -1002,7 +982,6 @@ export async function runSystemSynthesis(options?: {
       visuals,
       generatedImages,
       memoryUpdates,
-      notebookEntryId,
       success: true,
     };
   } catch (e: any) {

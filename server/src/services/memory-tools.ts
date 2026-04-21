@@ -155,6 +155,22 @@ export const MEMORY_TOOLS: Tool[] = [
       block_id: Type.String({ description: "Block ID to get history for" }),
     }),
   },
+  {
+    name: "create_notebook_entry",
+    description:
+      "Write a notebook entry — a narrative reflection, daily synthesis, or longer-form note in your own voice. " +
+      "Notebook entries are preserved verbatim (no character cap), remain fully searchable via search_memory and " +
+      "list_memory_blocks, and are excluded from active context so they don't crowd the system prompt. " +
+      "Use this instead of save_memory when writing prose — save_memory is for atomic facts, notebook entries are for narrative.",
+    parameters: Type.Object({
+      content: Type.String({
+        description: "The full notebook entry content (markdown allowed, no length cap)",
+      }),
+      date: Type.Optional(Type.String({
+        description: "Optional YYYY-MM-DD date. Defaults to today. Used in the block id and name.",
+      })),
+    }),
+  },
 ];
 
 export interface ToolResult {
@@ -605,6 +621,20 @@ export async function executeMemoryTool(
       }
 
       return { content: lines.join("\n"), isError: false };
+    }
+
+    case "create_notebook_entry": {
+      const { content, date } = toolCall.arguments;
+      if (!content || typeof content !== "string" || content.trim().length === 0) {
+        return { content: "Missing or empty content", isError: true };
+      }
+      const { createNotebookEntry, extractBlockDescription } = await import("./notebook-storage.js");
+      const entry = await createNotebookEntry("agent", content, { type: "notebook", date });
+      const description = extractBlockDescription(content);
+      return {
+        content: `Created notebook entry [${entry.id}] "${description.slice(0, 60)}..." (${content.length} chars)`,
+        isError: false,
+      };
     }
 
     default:

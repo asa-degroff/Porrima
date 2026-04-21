@@ -31,6 +31,7 @@ import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
 import { initializePersona } from "./services/persona-store.js";
 import { createSystemChat } from "./services/system-chat.js";
+import { migrateAgentNotebookToBlocks } from "./services/notebook-storage.js";
 import { registerOllamaNativeProvider } from "./services/ollama-native-provider.js";
 import { registerOpenAICompatProvider } from "./services/openai-compat-provider.js";
 
@@ -54,6 +55,12 @@ await initializePersona();
 
 // Create system chat for synthesis/reflection
 await createSystemChat();
+
+// One-shot migration: move agent notebook JSON files into memory_blocks.
+// Idempotent — does nothing once the JSON files are in the .backup/ folder.
+await migrateAgentNotebookToBlocks().catch((err) => {
+  console.error("[notebook] Agent notebook migration failed:", err);
+});
 
 const app = express();
 

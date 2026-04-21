@@ -318,28 +318,20 @@ Current date: ${new Date().toLocaleDateString()}`;
     // Get final text response from last iteration
     const finalContent = lastResult?.content || "";
     
-    // Create agent entry with response
-    const agentEntry = await createNotebookEntry('agent', finalContent);
-    
-    // Attach tool calls, results, artifacts, and visuals
-    if (allToolCalls.length || allToolResults.length || allArtifacts.length || allVisuals.length) {
-      await updateNotebookEntry('agent', agentEntry.id, {
-        toolCalls: allToolCalls,
-        toolResults: allToolResults,
-        artifacts: allArtifacts,
-        visuals: allVisuals,
-      });
-    }
+    // Create agent entry — this now writes directly to memory_blocks as
+    // blockType='notebook', with attachments populated in one call. No
+    // separate createNotebookBlock is needed now that notebook entries ARE
+    // memory blocks.
+    const agentEntry = await createNotebookEntry('agent', finalContent, {
+      type: 'notebook',
+      attachments: {
+        toolCalls: allToolCalls.length ? allToolCalls : undefined,
+        toolResults: allToolResults.length ? allToolResults : undefined,
+        artifacts: allArtifacts.length ? allArtifacts : undefined,
+        visuals: allVisuals.length ? allVisuals : undefined,
+      },
+    });
 
-    // Create a memory block from the agent entry for searchability
-    try {
-      const { createNotebookBlock } = await import("../services/notebook-storage.js");
-      const blockId = createNotebookBlock(agentEntry.content, 'notebook');
-      console.log(`[notebook] Created memory block for agent entry: ${blockId}`);
-    } catch (e) {
-      console.error("[notebook] Failed to create memory block for agent entry:", e);
-    }
-    
     // Extract memories from agent entry
     await extractMemoriesFromText(modelId, agentEntry.content, 'agent', agentEntry.id);
     
