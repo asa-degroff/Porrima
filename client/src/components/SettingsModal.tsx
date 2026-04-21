@@ -195,6 +195,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [exaApiKey, setExaApiKey] = useState(settings.exaApiKey || "");
   const [comfyuiUrl, setComfyuiUrl] = useState(settings.comfyuiUrl || "http://127.0.0.1:8188");
   const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
+  const [imageBackend, setImageBackend] = useState<"comfyui" | "sdcpp">(settings.imageBackend ?? "comfyui");
+  const [sdcppUrl, setSdcppUrl] = useState(settings.sdcppUrl || "http://127.0.0.1:1234");
+  const [sdcppStatus, setSdcppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   // Ollama server settings
   const [ollamaUrl, setOllamaUrl] = useState(settings.ollamaUrl || "http://localhost:11434");
   // llama.cpp server settings
@@ -525,6 +528,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       braveApiKey: braveApiKey.trim(),
       exaApiKey: exaApiKey.trim(),
       comfyuiUrl: comfyuiUrl.trim() || undefined,
+      sdcppUrl: sdcppUrl.trim() || undefined,
+      imageBackend,
       ollamaUrl: ollamaUrl.trim() || undefined,
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
@@ -652,7 +657,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const handleTestComfyUI = useCallback(async () => {
     setComfyuiStatus("checking");
     try {
-      const res = await fetch("/api/images/status", { credentials: "include" });
+      const res = await fetch("/api/images/status?backend=comfyui", { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setComfyuiStatus(data.available ? "connected" : "unavailable");
@@ -661,6 +666,21 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       }
     } catch {
       setComfyuiStatus("unavailable");
+    }
+  }, []);
+
+  const handleTestSdcpp = useCallback(async () => {
+    setSdcppStatus("checking");
+    try {
+      const res = await fetch("/api/images/status?backend=sdcpp", { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setSdcppStatus(data.available ? "connected" : "unavailable");
+      } else {
+        setSdcppStatus("unavailable");
+      }
+    } catch {
+      setSdcppStatus("unavailable");
     }
   }, []);
 
@@ -2850,9 +2870,23 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             </div>
           </div>
 
-          {/* Image Generation (ComfyUI) */}
+          {/* Image Generation */}
           <div id="images" className="space-y-3 pt-2 border-t border-white/10">
-            <h3 className="text-sm font-medium text-white/70">Image Generation (ComfyUI)</h3>
+            <h3 className="text-sm font-medium text-white/70">Image Generation</h3>
+            <div className="space-y-2">
+              <label className="block text-sm text-white/50">Backend</label>
+              <select
+                value={imageBackend}
+                onChange={(e) => setImageBackend(e.target.value as "comfyui" | "sdcpp")}
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/30 transition-all"
+              >
+                <option value="comfyui">ComfyUI</option>
+                <option value="sdcpp">sd-server (stable-diffusion.cpp)</option>
+              </select>
+              <p className="text-white/30 text-xs">
+                Used by the Image Sandbox and the generate_image agent tool. sd-server loads one model at startup; configure via its launch command.
+              </p>
+            </div>
             <div className="space-y-2">
               <label className="block text-sm text-white/50">ComfyUI URL</label>
               <div className="flex gap-2">
@@ -2879,9 +2913,33 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   </span>
                 </div>
               )}
-              <p className="text-white/30 text-xs">
-                Local ComfyUI instance for image generation. Used by the Image Sandbox and the generate_image agent tool.
-              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm text-white/50">sd-server URL</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={sdcppUrl}
+                  onChange={(e) => setSdcppUrl(e.target.value)}
+                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-amber-400/30 focus:border-amber-400/30 transition-all"
+                  placeholder="http://127.0.0.1:1234"
+                />
+                <button
+                  onClick={handleTestSdcpp}
+                  disabled={sdcppStatus === "checking"}
+                  className="px-3 py-2 rounded-lg text-sm font-medium bg-amber-500/15 border border-amber-400/20 text-amber-300 hover:bg-amber-500/25 transition-all disabled:opacity-40 shrink-0"
+                >
+                  {sdcppStatus === "checking" ? "Testing..." : "Test"}
+                </button>
+              </div>
+              {sdcppStatus && sdcppStatus !== "checking" && (
+                <div className="flex items-center gap-1.5">
+                  <div className={`w-2 h-2 rounded-full ${sdcppStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
+                  <span className={`text-xs ${sdcppStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
+                    {sdcppStatus === "connected" ? "Connected" : "Not available"}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 

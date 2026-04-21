@@ -165,6 +165,8 @@ export interface Settings {
   braveApiKey: string;
   exaApiKey: string;
   comfyuiUrl?: string;
+  sdcppUrl?: string;            // default "http://127.0.0.1:1234" — stable-diffusion.cpp sd-server
+  imageBackend?: "comfyui" | "sdcpp";  // default "comfyui"
   modelContextWindows?: Record<string, number>;
   theme?: Theme;
   activityShape?: ActivityShape;

@@ -1,4 +1,5 @@
 import type { ImageGenerationParams, ComfyUIStatus } from "../types.js";
+import { getSettings } from "./chat-storage.js";
 
 export type ImageBackendStatus = ComfyUIStatus;
 
@@ -21,6 +22,17 @@ export interface ImageBackend {
 }
 
 export async function getImageBackend(): Promise<ImageBackend> {
+  const settings = await getSettings();
+  return getImageBackendByName(settings.imageBackend);
+}
+
+export async function getImageBackendByName(
+  name: string | undefined,
+): Promise<ImageBackend> {
+  if (name === "sdcpp") {
+    const { sdcppBackend } = await import("./sdcpp.js");
+    return sdcppBackend;
+  }
   const { comfyuiBackend } = await import("./comfyui.js");
   return comfyuiBackend;
 }

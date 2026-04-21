@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getImageBackend } from "../services/image-backend.js";
+import { getImageBackend, getImageBackendByName } from "../services/image-backend.js";
 import { saveGeneratedImage, getImagePath, getImagePathPNG, getThumbPath, ensureThumbnail, getImageMetadata, listImages, deleteImage, toggleImageFavorite } from "../services/image-storage.js";
 import {
   loadGenerations,
@@ -25,9 +25,12 @@ loadGenerations().then(() => cleanupOldGenerations());
 
 // Static paths BEFORE /:id param route
 
-router.get("/status", async (_req, res) => {
+router.get("/status", async (req, res) => {
   try {
-    const backend = await getImageBackend();
+    const backendParam = typeof req.query.backend === "string" ? req.query.backend : undefined;
+    const backend = backendParam
+      ? await getImageBackendByName(backendParam)
+      : await getImageBackend();
     const status = await backend.getStatus();
     res.json(status);
   } catch (e: any) {

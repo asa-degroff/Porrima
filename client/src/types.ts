@@ -166,6 +166,8 @@ export interface Settings {
   braveApiKey: string;
   exaApiKey: string;
   comfyuiUrl?: string;
+  sdcppUrl?: string;
+  imageBackend?: "comfyui" | "sdcpp";
   modelContextWindows?: Record<string, number>;
   theme?: Theme;
   backgroundEffect?: BackgroundEffect;
