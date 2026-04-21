@@ -23,17 +23,28 @@ export function getZeitgeistContent(): string | null {
 export function getZeitgeistArchiveInstruction(): string {
   const db = getMemoryDb();
 
-  // Check for any historical context blocks
+  // Check for any historical context blocks. Primary check is blockType
+  // (set on every row via the step-1 migration backfill); prefix/name
+  // fallback covers rows that pre-date the migration or were inserted
+  // outside the normal code path. Fallback goes in step 5.
   const hasArchives = db.prepare(
-    "SELECT 1 FROM memory_blocks WHERE name LIKE 'Zeitgeist Archive -%' LIMIT 1"
+    `SELECT 1 FROM memory_blocks
+     WHERE blockType = 'zeitgeist-archive'
+        OR id LIKE 'blk-archive-%'
+        OR name LIKE 'Zeitgeist Archive -%'
+     LIMIT 1`
   ).get() as any;
 
   const hasSynthesis = db.prepare(
-    "SELECT 1 FROM memory_blocks WHERE id LIKE 'blk-synth-%' LIMIT 1"
+    `SELECT 1 FROM memory_blocks
+     WHERE blockType = 'synthesis' OR id LIKE 'blk-synth-%'
+     LIMIT 1`
   ).get() as any;
 
   const hasNotebook = db.prepare(
-    "SELECT 1 FROM memory_blocks WHERE id LIKE 'blk-notebook-%' LIMIT 1"
+    `SELECT 1 FROM memory_blocks
+     WHERE blockType = 'notebook' OR id LIKE 'blk-notebook-%'
+     LIMIT 1`
   ).get() as any;
 
   if (!hasArchives && !hasSynthesis && !hasNotebook) return ""; // No historical blocks yet

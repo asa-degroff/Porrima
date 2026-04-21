@@ -164,6 +164,28 @@ export function getDb(): Database.Database {
     );
   `);
 
+  // Migration: add blockType + attachments columns. blockType distinguishes
+  // plain notes from notebook/synthesis/zeitgeist-archive entries (replaces
+  // the brittle `id.startsWith('blk-notebook-')` prefix matching scattered
+  // across memory-context.ts, zeitgeist.ts, memory-tools.ts). attachments is
+  // a JSON blob for images, toolCalls, toolResults, artifacts, visuals,
+  // links — references (ids/urls), not binary data.
+  const blockCols = db.prepare("PRAGMA table_info(memory_blocks)").all() as Array<{ name: string }>;
+  if (!blockCols.some((c) => c.name === "blockType")) {
+    db.exec(`ALTER TABLE memory_blocks ADD COLUMN blockType TEXT NOT NULL DEFAULT 'note'`);
+    // Backfill from id prefix so existing rows pick up the right type without
+    // a separate migration step. Rollout step 2 will flip runtime filters to
+    // read blockType; step 5 will remove the prefix fallback entirely.
+    db.exec(`UPDATE memory_blocks SET blockType = 'notebook' WHERE id LIKE 'blk-notebook-%'`);
+    db.exec(`UPDATE memory_blocks SET blockType = 'synthesis' WHERE id LIKE 'blk-synth-%'`);
+    db.exec(`UPDATE memory_blocks SET blockType = 'zeitgeist-archive' WHERE id LIKE 'blk-archive-%'`);
+    console.log("[memory] Added blockType column and backfilled from id prefixes");
+  }
+  if (!blockCols.some((c) => c.name === "attachments")) {
+    db.exec(`ALTER TABLE memory_blocks ADD COLUMN attachments TEXT`);
+    console.log("[memory] Added attachments column to memory_blocks");
+  }
+
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS memory_blocks_fts USING fts5(
       content,
@@ -1321,6 +1343,35 @@ export async function saveDailyLog(
 
 const MAX_BLOCK_CHARS = 4000;
 
+// blockType distinguishes the different kinds of entries that all live in the
+// memory_blocks table:
+//   - 'note': plain agent-managed knowledge block (the default). Subject to
+//     MAX_BLOCK_CHARS; eligible for auto-loading when active-scoped.
+//   - 'notebook': agent-authored narrative/reflection entry. Archived by
+//     default; exempt from the char cap.
+//   - 'synthesis': agent-authored daily synthesis output from runSystemSynthesis.
+//     Archived by default; exempt from the char cap.
+//   - 'zeitgeist-archive': snapshot of the zeitgeist continuity block at a
+//     point in time. Archived.
+export type BlockType = "note" | "notebook" | "synthesis" | "zeitgeist-archive";
+
+export function isArchivalBlockType(t: BlockType): boolean {
+  return t !== "note";
+}
+
+// Attachments live in a JSON column — references only (image ids, artifact
+// paths, tool-call metadata, chat links), never embedded binary data. The
+// referenced assets already live in their own stores (user-images/,
+// artifacts/, etc.) and are fetched on demand.
+export interface BlockAttachments {
+  images?: Array<{ id?: string; url?: string; thumbUrl?: string; mimeType?: string; name?: string }>;
+  toolCalls?: Array<{ id: string; name: string; arguments: Record<string, any> }>;
+  toolResults?: Array<{ toolCallId: string; toolName: string; content: string; isError: boolean }>;
+  artifacts?: Array<{ id: string; kind?: string; [k: string]: any }>;
+  visuals?: Array<{ id?: string; [k: string]: any }>;
+  links?: Array<{ type: string; id?: string; [k: string]: any }>;
+}
+
 export interface MemoryBlock {
   id: string;
   name: string;
@@ -1332,6 +1383,8 @@ export interface MemoryBlock {
   updatedAt: string;
   updatedBy: "agent" | "user";
   tokenEstimate: number;
+  blockType: BlockType;
+  attachments?: BlockAttachments;
   supersededBy?: string;
   supersedes?: string;
 }
@@ -1340,19 +1393,50 @@ function estimateBlockTokens(content: string): number {
   return Math.ceil(content.length / 4);
 }
 
-export function createMemoryBlock(block: Omit<MemoryBlock, "tokenEstimate">): MemoryBlock {
+// Shared row → MemoryBlock mapper. Handles blockType defaulting (for rows
+// written before the migration landed), attachments JSON parsing, and the
+// nullable column cleanups that every call site repeats.
+function mapBlockRow(row: any): MemoryBlock {
+  let attachments: BlockAttachments | undefined;
+  if (row.attachments) {
+    try {
+      attachments = JSON.parse(row.attachments);
+    } catch {
+      attachments = undefined;
+    }
+  }
+  return {
+    ...row,
+    projectId: row.projectId || undefined,
+    supersededBy: row.supersededBy || undefined,
+    supersedes: row.supersedes || undefined,
+    blockType: (row.blockType as BlockType) || "note",
+    attachments,
+  };
+}
+
+export function createMemoryBlock(
+  block: Omit<MemoryBlock, "tokenEstimate" | "blockType" | "attachments"> & {
+    blockType?: BlockType;
+    attachments?: BlockAttachments;
+  }
+): MemoryBlock {
   const db = getDb();
   const full: MemoryBlock = {
     ...block,
+    blockType: block.blockType ?? "note",
+    attachments: block.attachments,
     tokenEstimate: estimateBlockTokens(block.content),
   };
   db.prepare(`
-    INSERT INTO memory_blocks (id, name, description, content, scope, projectId, createdAt, updatedAt, updatedBy, tokenEstimate, supersededBy, supersedes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO memory_blocks (id, name, description, content, scope, projectId, createdAt, updatedAt, updatedBy, tokenEstimate, blockType, attachments, supersededBy, supersedes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     full.id, full.name, full.description, full.content, full.scope,
     full.projectId || "", full.createdAt, full.updatedAt, full.updatedBy,
-    full.tokenEstimate, full.supersededBy ?? null, full.supersedes ?? null
+    full.tokenEstimate, full.blockType,
+    full.attachments ? JSON.stringify(full.attachments) : null,
+    full.supersededBy ?? null, full.supersedes ?? null
   );
   return full;
 }
@@ -1362,6 +1446,8 @@ export function updateMemoryBlock(id: string, updates: {
   description?: string;
   name?: string;
   scope?: "global" | "project" | "archived";
+  blockType?: BlockType;
+  attachments?: BlockAttachments | null;
   updatedBy?: "agent" | "user";
 }): boolean {
   const db = getDb();
@@ -1372,11 +1458,21 @@ export function updateMemoryBlock(id: string, updates: {
   const tokenEstimate = estimateBlockTokens(content);
   const now = new Date().toISOString();
   const newScope = updates.scope ?? existing.scope;
+  const newType = updates.blockType ?? existing.blockType;
+  // `attachments: null` explicitly clears; `undefined` keeps the existing.
+  const attachmentsJson = updates.attachments === null
+    ? null
+    : updates.attachments !== undefined
+      ? JSON.stringify(updates.attachments)
+      : existing.attachments
+        ? JSON.stringify(existing.attachments)
+        : null;
 
   db.prepare(`
     UPDATE memory_blocks SET
       content = ?, description = ?, name = ?, scope = ?,
-      updatedAt = ?, updatedBy = ?, tokenEstimate = ?
+      updatedAt = ?, updatedBy = ?, tokenEstimate = ?,
+      blockType = ?, attachments = ?
     WHERE id = ?
   `).run(
     content,
@@ -1386,6 +1482,8 @@ export function updateMemoryBlock(id: string, updates: {
     now,
     updates.updatedBy ?? "agent",
     tokenEstimate,
+    newType,
+    attachmentsJson,
     id
   );
   return true;
@@ -1395,12 +1493,7 @@ export function getMemoryBlock(id: string): MemoryBlock | null {
   const db = getDb();
   const row = db.prepare("SELECT * FROM memory_blocks WHERE id = ?").get(id) as any;
   if (!row) return null;
-  return {
-    ...row,
-    projectId: row.projectId || undefined,
-    supersededBy: row.supersededBy || undefined,
-    supersedes: row.supersedes || undefined,
-  };
+  return mapBlockRow(row);
 }
 
 export function getMemoryBlocksByScope(scope: "global" | "project" | "archived", projectId?: string): MemoryBlock[] {
@@ -1419,12 +1512,7 @@ export function getMemoryBlocksByScope(scope: "global" | "project" | "archived",
       "SELECT * FROM memory_blocks WHERE scope = 'global' AND supersededBy IS NULL ORDER BY updatedAt DESC"
     ).all();
   }
-  return rows.map((r: any) => ({
-    ...r,
-    projectId: r.projectId || undefined,
-    supersededBy: r.supersededBy || undefined,
-    supersedes: r.supersedes || undefined,
-  }));
+  return rows.map(mapBlockRow);
 }
 
 export function getAllMemoryBlocks(): MemoryBlock[] {
@@ -1432,12 +1520,7 @@ export function getAllMemoryBlocks(): MemoryBlock[] {
   const rows = db.prepare(
     "SELECT * FROM memory_blocks WHERE supersededBy IS NULL ORDER BY updatedAt DESC"
   ).all() as any[];
-  return rows.map((r: any) => ({
-    ...r,
-    projectId: r.projectId || undefined,
-    supersededBy: r.supersededBy || undefined,
-    supersedes: r.supersedes || undefined,
-  }));
+  return rows.map(mapBlockRow);
 }
 
 export function deleteMemoryBlock(id: string): boolean {
@@ -1447,12 +1530,22 @@ export function deleteMemoryBlock(id: string): boolean {
 }
 
 /** Supersede a block with a new version. */
-export function supersedeBlock(oldBlockId: string, newBlock: Omit<MemoryBlock, "tokenEstimate">): MemoryBlock {
+export function supersedeBlock(
+  oldBlockId: string,
+  newBlock: Omit<MemoryBlock, "tokenEstimate" | "blockType" | "attachments"> & {
+    blockType?: BlockType;
+    attachments?: BlockAttachments;
+  }
+): MemoryBlock {
   const db = getDb();
+  // Carry forward the old block's type when the caller doesn't override it —
+  // supersession of a notebook entry should still be a notebook entry.
+  const old = getMemoryBlock(oldBlockId);
+  const inheritedType = newBlock.blockType ?? old?.blockType ?? "note";
   // Mark old block
   db.prepare("UPDATE memory_blocks SET supersededBy = ? WHERE id = ?").run(newBlock.id, oldBlockId);
   // Create new block with supersedes link
-  const full = createMemoryBlock({ ...newBlock, supersedes: oldBlockId });
+  const full = createMemoryBlock({ ...newBlock, blockType: inheritedType, supersedes: oldBlockId });
   return full;
 }
 
@@ -1481,12 +1574,7 @@ export function searchBlocks(
     return rows
       .filter((r) => !opts.projectId || r.scope === "global" || r.projectId === opts.projectId)
       .map((r) => ({
-        block: {
-          ...r,
-          projectId: r.projectId || undefined,
-          supersededBy: r.supersededBy || undefined,
-          supersedes: r.supersedes || undefined,
-        },
+        block: mapBlockRow(r),
         excerpt: extractExcerpt(r.content, query, 400),
         rank: r.rank,
       }));
@@ -1538,12 +1626,7 @@ export function listMemoryBlocks(opts: { scope?: "global" | "project" | "archive
   querySQL += " ORDER BY updatedAt DESC";
   
   const rows = db.prepare(querySQL).all(...params) as any[];
-  return rows.map((r: any) => ({
-    ...r,
-    projectId: r.projectId || undefined,
-    supersededBy: r.supersededBy || undefined,
-    supersedes: r.supersedes || undefined,
-  }));
+  return rows.map(mapBlockRow);
 }
 
 /** Get revision history by following supersedes/supersededBy chain. */
@@ -1551,19 +1634,13 @@ export function getBlockHistory(blockId: string): MemoryBlock[] {
   const db = getDb();
   const history: MemoryBlock[] = [];
   let currentId: string | null = blockId;
-  
+
   // Walk backwards through superseded versions
   while (currentId) {
     const row = db.prepare("SELECT * FROM memory_blocks WHERE id = ?").get(currentId) as any;
     if (!row) break;
-    
-    const block: MemoryBlock = {
-      ...row,
-      projectId: row.projectId || undefined,
-      supersededBy: row.supersededBy || undefined,
-      supersedes: row.supersedes || undefined,
-    };
-    history.push(block);
+
+    history.push(mapBlockRow(row));
     currentId = row.supersedes || null;
   }
   

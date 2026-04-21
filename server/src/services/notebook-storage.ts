@@ -2,7 +2,7 @@ import { readFile, writeFile, readdir, unlink, mkdir, access } from "fs/promises
 import { join } from "path";
 import { homedir } from "os";
 import type { NotebookEntry, NotebookIndex } from "../types.js";
-import { createMemoryBlock, MAX_BLOCK_CHARS } from "./memory-storage.js";
+import { createMemoryBlock } from "./memory-storage.js";
 
 const BASE_DIR = join(homedir(), ".quje-agent");
 const NOTEBOOKS_DIR = join(BASE_DIR, "notebooks");
@@ -203,20 +203,23 @@ export function createNotebookBlock(
 
   const prefix = type === 'synthesis' ? 'Synthesis' : 'Notebook';
   const description = extractBlockDescription(content);
-  const truncatedContent = content.length > MAX_BLOCK_CHARS
-    ? content.slice(0, MAX_BLOCK_CHARS)
-    : content;
 
   createMemoryBlock({
     id,
     name: `${prefix} - ${blockDate}: ${description.slice(0, 50)}`,
     description,
-    content: truncatedContent,
+    // MAX_BLOCK_CHARS doesn't apply here — notebook/synthesis blocks are
+    // excluded from auto-load by the blockType filter in memory-context.ts,
+    // so a multi-thousand-char daily synthesis is preserved verbatim.
+    content,
+    // Scope stays 'global' for backward compatibility with existing rows;
+    // blockType is what drives auto-load exclusion now.
     scope: 'global',
     projectId: '',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     updatedBy: 'agent',
+    blockType: type === 'synthesis' ? 'synthesis' : 'notebook',
   });
 
   return id;

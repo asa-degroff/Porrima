@@ -305,14 +305,18 @@ export async function buildStablePrefix(
     // "Available Memory Blocks" index — they have dedicated discovery paths
     // and would otherwise grow unboundedly and bloat every chat's context:
     // - Zeitgeist continuity block: loaded separately as "Continuity Context"
-    // - Zeitgeist archives: surfaced via getZeitgeistArchiveInstruction
-    // - Synthesis (blk-synth-*) and notebook (blk-notebook-*) blocks: still
+    // - notebook / synthesis / zeitgeist-archive blockTypes: still
     //   FTS-searchable via search_memory and discoverable via list_memory_blocks,
     //   but not pinned into the system prompt.
+    //
+    // Primary check is blockType (reliable, set on every row via the
+    // migration backfill). Prefix fallback kept until step 5 for any
+    // unmigrated / externally-inserted rows that lack blockType.
     const isSystemBlock = (b: MemoryBlock) =>
       b.id === "blk-zeitgeist-continuity" ||
-      b.id.startsWith("blk-archive-") ||
       b.scope === "archived" ||
+      (b.blockType !== undefined && b.blockType !== "note") ||
+      b.id.startsWith("blk-archive-") ||
       b.id.startsWith("blk-synth-") ||
       b.id.startsWith("blk-notebook-");
 
