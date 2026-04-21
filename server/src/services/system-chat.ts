@@ -767,7 +767,10 @@ export async function runSystemSynthesis(options?: {
             }
           },
           {
-            signal: AbortSignal.timeout(300_000),
+            // 30 min matches LOCAL_INACTIVITY_TIMEOUT_MS in the chat route.
+            // Cold model loads on large contexts can take 2+ min just to
+            // prefill; the previous 5 min bound aborted right in that window.
+            signal: AbortSignal.timeout(1_800_000),
             tools,
             keepAlive: "30m",
           },
