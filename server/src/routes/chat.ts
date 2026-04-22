@@ -10,7 +10,7 @@ import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow
 import type { OllamaModel } from "../types.js";
 import { extractMemories, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
 import { generateTitle } from "../services/title-generation.js";
-import { truncateChatHistory, truncateBeforeSend, triggerCompaction } from "../services/compaction.js";
+import { truncateChatHistory, truncateBeforeSend, triggerCompaction, hasStrandedToolCall } from "../services/compaction.js";
 import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
@@ -553,6 +553,9 @@ async function handleChatStream(
     finalUsage: undefined as ChatMessage["usage"],
     // Track if last turn ended with toolUse but no final text
     incompleteToolTurn: false,
+    // Track if stopReason was "stop" but thinking block had drafted tool-call syntax
+    // that never materialized as a structured call — needs continuation to recover.
+    strandedToolCall: false,
     // Track if thinking was promoted to content (not useful for previews)
     thinkingPromoted: false,
     // Track thinking duration
@@ -1082,9 +1085,24 @@ async function handleChatStream(
             state.incompleteToolTurn = false;
           }
           
-          // Handle thinking-only outputs: if turn ended with stop reason but only thinking was produced
-          // This happens when reasoning models output via thinking stream without text stream
-          if (stopReason === "stop" && !hasTextContent && state.thinkingText.trim().length > 0) {
+          // Detect stranded tool calls: stopReason is "stop" but thinking block contains
+          // tool-call-like syntax that never materialized as a structured call.
+          // This happens when the model drafts tool calls in its thinking stream (e.g.
+          // `<tool_call><function=read_file>...</function></tool_call>`) but stops before emitting the actual
+          // structured tool call. We need to continue the turn to let the model recover.
+          if (stopReason === "stop" && state.thinkingText.trim().length > 0 && hasStrandedToolCall(state.thinkingText)) {
+            state.strandedToolCall = true;
+            console.log(`[chat] STRANDED TOOL CALL DETECTED: stopReason="stop" but thinking contains <function=...> syntax (${state.thinkingText.length}ch thinking)`);
+            // Do NOT promote thinking to content — it's incomplete reasoning that led to
+            // a tool call. The continuation will let the model finish properly.
+            // If thinking was already promoted above (thinking-only path), undo it.
+            if (state.thinkingPromoted) {
+              state.thinkingText = state.fullText;
+              state.fullText = "";
+              state.thinkingPromoted = false;
+            }
+          } else if (stopReason === "stop" && !hasTextContent && state.thinkingText.trim().length > 0) {
+            // No stranded tool call — safe to promote thinking to content
             state.fullText = state.thinkingText;
             state.thinkingText = "";
             state.thinkingPromoted = true;
@@ -1094,7 +1112,7 @@ async function handleChatStream(
           console.log(
             `[chat] iter=${iterations} stop=${stopReason} tools=${event.toolResults?.length || 0}` +
             ` content=${state.fullText.length}ch thinking=${state.thinkingText.length}ch` +
-            ` tokens=${msg.usage?.totalTokens || "?"} incomplete=${state.incompleteToolTurn}`,
+            ` tokens=${msg.usage?.totalTokens || "?"} incomplete=${state.incompleteToolTurn} stranded=${state.strandedToolCall}`,
           );
           
           // Debug: log tool results if present
@@ -1257,7 +1275,7 @@ async function handleChatStream(
     // streaming indicator immediately rather than waiting for the `done` event
     // which only fires after compaction finishes.
     // Only emit when the agent is truly done — no pending continuation or mid-turn work.
-    if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && !state.incompleteToolTurn) {
+    if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && !state.incompleteToolTurn && !state.strandedToolCall) {
       res.write(`event: agent_output_complete\ndata: {}\n\n`);
     }
 
@@ -1265,7 +1283,9 @@ async function handleChatStream(
     // compact NOW before building the final message. This prevents the user from
     // waiting on compaction after their response appears complete.
     // Mid-turn compaction (90% during tool loops) is handled separately above.
-    if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput) {
+    // Skip if we have a stranded tool call — we need to continue the turn first,
+    // not compact away the context the model was working with.
+    if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && !state.strandedToolCall) {
       try {
         const model = allModels.find((m: OllamaModel) => m.id === chat.modelId);
         if (model) {
@@ -1315,7 +1335,12 @@ async function handleChatStream(
 
                 // Find the summary message that was inserted. Emit AFTER the
                 // systemPrompt rebuild so the estimate reflects the prompt the
-                // next turn will actually use.
+                // next turn will actually use. The client uses `estimatedTokens`
+                // to refresh the token indicator to the compacted state — we
+                // keep `state.finalUsage` intact so the final assistant message
+                // (saved below at buildCurrentAssistantMessage) retains its
+                // real pre-compaction usage value, which next turn's PathA uses
+                // as the anchor for estimateContextSize.
                 const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
                 const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
                 res.write(`event: compaction\ndata: ${JSON.stringify({
@@ -1324,10 +1349,6 @@ async function handleChatStream(
                   summaryMessage: summaryMsg || null,
                   estimatedTokens,
                 })}\n\n`);
-
-                // Clear usage so the token indicator reflects the compacted state
-                // rather than showing stale pre-compaction numbers
-                state.finalUsage = undefined;
               }
             });
           }
@@ -1408,6 +1429,118 @@ async function handleChatStream(
         // Don't continue to message persistence - we'll handle this below
         state.finalUsage = { input: 0, output: 0, totalTokens: 0 }; // Mark as failed
       }
+    }
+
+    // Stranded tool call recovery: if the model stopped with stopReason="stop" but
+    // its thinking block contained drafted tool-call syntax that never materialized
+    // as a structured call, continue the turn to let the model emit the real calls.
+    if (state.strandedToolCall && !askUserRef.current && iterations < MAX_ITERATIONS) {
+      console.log(`[chat] stranded tool call recovery: continuing turn to let model emit structured tool calls`);
+      console.log(`[chat] stranded thinking preview: ${state.thinkingText.slice(0, 200).replace(/\n/g, ' ')}...`);
+
+      const strandedAbortController = new AbortController();
+      let strandedProducedSomething = false;
+
+      try {
+        const strandedStream = agentLoopContinue(context, config, strandedAbortController.signal, safeStreamFn);
+
+        for await (const event of strandedStream) {
+          if (event.type === "message_update") {
+            const ame = event.assistantMessageEvent;
+            if (ame.type === "text_delta") {
+              strandedProducedSomething = true;
+              state.fullText += ame.delta;
+              state.pendingText += ame.delta;
+              res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+            } else if (ame.type === "thinking_delta") {
+              strandedProducedSomething = true;
+              state.thinkingText += ame.delta;
+              res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+            }
+          } else if (event.type === "tool_execution_start") {
+            strandedProducedSomething = true;
+            // Tool call was recovered — reset the flag and let the normal tool loop continue
+            state.strandedToolCall = false;
+            console.log(`[chat] stranded recovery SUCCESS: model emitted structured tool call: ${event.toolName}`);
+
+            const toolCall: ChatToolCall = {
+              id: event.toolCallId,
+              name: event.toolName,
+              arguments: event.args,
+            };
+            state.allToolCalls.push(toolCall);
+
+            if (event.toolName !== "ask_user") {
+              console.log(`[tool] Executing ${event.toolName}:`, event.args);
+              const segment: OutputSegment = { seq: ++state.seqCounter, type: "tool_call", toolCall };
+              state.segments.push(segment);
+              res.write(`event: segment\ndata: ${JSON.stringify(segment)}\n\n`);
+              res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
+            }
+          } else if (event.type === "tool_execution_end") {
+            if (event.toolName !== "ask_user") {
+              const resultText = event.result?.content?.[0]?.text || "";
+              const toolResult: ChatToolResult = {
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                content: resultText,
+                isError: event.isError,
+              };
+              state.allToolResults.push(toolResult);
+
+              const callIdx = state.segments.findIndex(
+                s => s.type === "tool_call" && s.toolCall?.id === event.toolCallId
+              );
+              const resultSegment: OutputSegment = { seq: ++state.seqCounter, type: "tool_result", toolResult };
+              if (callIdx >= 0) {
+                state.segments.splice(callIdx + 1, 0, resultSegment);
+              } else {
+                state.segments.push(resultSegment);
+              }
+              res.write(`event: segment\ndata: ${JSON.stringify(resultSegment)}\n\n`);
+              res.write(`event: tool_status\ndata: ${JSON.stringify({
+                name: event.toolName,
+                status: event.isError ? "error" : "done",
+                result: resultText,
+              })}\n\n`);
+            }
+          } else if (event.type === "turn_end") {
+            const msg = event.message as AssistantMessage;
+            const stopReason = msg.stopReason || "stop";
+            console.log(`[chat] stranded recovery turn_end: stop=${stopReason} text=${state.fullText.length}ch tools=${event.toolResults?.length || 0}`);
+
+            // If the model stopped again without producing anything useful, bail
+            if (!strandedProducedSomething && !state.fullText.trim() && state.thinkingText.trim().length === 0) {
+              console.error(`[chat] stranded recovery produced NOTHING — giving up`);
+              break;
+            }
+
+            // If model is now on a proper tool loop, let the main for-await pick it up
+            if (stopReason === "toolUse") {
+              console.log(`[chat] stranded recovery: model entered tool loop — continuing main iteration`);
+              // Don't break — let the main event loop continue processing
+            } else {
+              break;
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error(`[chat] stranded recovery loop crashed: ${err.message}`);
+      }
+
+      strandedAbortController.abort();
+
+      if (state.strandedToolCall && !strandedProducedSomething) {
+        // Recovery failed — model didn't produce structured calls. Fall back to treating
+        // the thinking content as the final response.
+        console.warn(`[chat] stranded recovery failed to produce structured calls — promoting thinking to content as fallback`);
+        if (state.thinkingText.trim().length > 0) {
+          state.fullText = state.thinkingText;
+          state.thinkingText = "";
+          state.thinkingPromoted = true;
+        }
+      }
+      state.strandedToolCall = false;
     }
 
     // Mid-turn compaction loop: compact and resume as many times as needed.

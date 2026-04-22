@@ -12,6 +12,27 @@ export interface CompactionResult {
 }
 
 /**
+ * Detect tool-call-like syntax in thinking text.
+ *
+ * Models like Qwen 3.5/3.6 via llama.cpp sometimes draft tool calls in their
+ * thinking stream (e.g. `<function=read_file>...</function>`) as part of
+ * internal reasoning, but then stop with stopReason="stop" instead of emitting
+ * the actual structured tool call. This leaves the tool call stranded as text.
+ *
+ * Returns true if the thinking text contains what looks like a drafted tool call
+ * that was never materialized into a structured call.
+ */
+export function hasStrandedToolCall(thinkingText: string): boolean {
+  if (!thinkingText || thinkingText.length < 20) return false;
+  // Match the pi-ai tool call XML-like syntax in thinking text.
+  // The model drafts tool calls as: <function=name> or <function/name>
+  // (sometimes with / instead of =, depending on model version/prompting).
+  // We match either form to be robust.
+  const toolCallPattern = /<function[=\/][a-zA-Z_][a-zA-Z0-9_]*>/;
+  return toolCallPattern.test(thinkingText);
+}
+
+/**
  * Estimate token count from character count.
  * English text averages ~4 chars/token. This is a rough proxy but fast.
  */
@@ -248,27 +269,27 @@ export async function truncateBeforeSend(
   // Iterate backwards over in-context messages to find budget boundary.
   // Fills up to the 50% target, not the 80% trigger, so the post-compaction
   // payload has room to grow before the next trigger fires.
-  let runningTotal = overheadTokens + scaledEstimates[0]; // always keep first
-  let keepFromIC = 1;
-  const recentICIndices: number[] = [];
-  for (let ic = icIndices.length - 1; ic >= 1; ic--) {
+  // The first in-context message is no longer pinned: anchoring the original
+  // user prompt across compaction cycles derails conversations whose topic has
+  // drifted, since the agent sees the opener spliced against unrelated recent
+  // context. The inserted compaction summary already captures earlier work.
+  let runningTotal = overheadTokens;
+  let keepFromIC = icIndices.length; // sentinel: nothing fit yet
+  for (let ic = icIndices.length - 1; ic >= 0; ic--) {
     if (runningTotal + scaledEstimates[ic] <= target) {
       runningTotal += scaledEstimates[ic];
-      recentICIndices.push(ic);
+      keepFromIC = ic;
     } else {
       break;
     }
   }
 
-  if (recentICIndices.length === 0) {
-    console.warn(`[compaction] No recent messages fit within target (${runningTotal} > ${target}), keeping last 2 in-context`);
-    keepFromIC = Math.max(1, icIndices.length - 2);
-  } else {
-    recentICIndices.sort((a, b) => a - b);
-    keepFromIC = recentICIndices[0];
+  if (keepFromIC === icIndices.length) {
+    console.warn(`[compaction] No recent messages fit within target (overhead ${overheadTokens} alone > ${target}), keeping last 2 in-context`);
+    keepFromIC = Math.max(0, icIndices.length - 2);
   }
 
-  const messagesToMarkCount = keepFromIC - 1;
+  const messagesToMarkCount = keepFromIC;
   console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFromIC=${keepFromIC} marking=${messagesToMarkCount}/${icIndices.length} in-context`);
 
   if (messagesToMarkCount <= 0) {
@@ -281,7 +302,7 @@ export async function truncateBeforeSend(
   // Collect removed messages for archiving
   const removedMessages: ChatMessage[] = [];
   const markedIndices: number[] = [];
-  for (let ic = 1; ic < keepFromIC; ic++) {
+  for (let ic = 0; ic < keepFromIC; ic++) {
     const origIdx = icIndices[ic];
     removedMessages.push(messages[origIdx]);
     markedIndices.push(origIdx);
@@ -984,20 +1005,30 @@ export async function truncateChatHistory(
   // thousands of tokens (persona + user doc + memory blocks + zeitgeist).
   let overheadTokens = 0;
   let effectiveEstimates = inContextEstimates;
+  let scaleFactor = 1;
   if (systemPrompt) {
     const charEstimate = charEstimateContextSize(messages, systemPrompt, tools);
     const messageContentTokens = inContextEstimates.reduce((s, t) => s + t, 0);
     const charEstimateTotal = estimateTokens(systemPrompt) + messageContentTokens;
-    const scaleFactor = charEstimateTotal > 0 ? charEstimate / charEstimateTotal : 1;
+    // Use max of char-estimate and LLM-reported usage as the numerator: when the
+    // tokenizer inflates the payload beyond what char estimation predicts (tool
+    // schemas, framing, non-ASCII content), char-only scaling under-counts and
+    // the budget keeps too many messages — leaving context hot enough to
+    // immediately re-trigger pre-send compaction on the next turn.
+    const usageForScale = knownUsage && knownUsage > charEstimate ? knownUsage : charEstimate;
+    scaleFactor = charEstimateTotal > 0 ? usageForScale / charEstimateTotal : 1;
     overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
     effectiveEstimates = inContextEstimates.map((t) => Math.ceil(t * scaleFactor));
   }
 
-  // Iterate backwards over in-context messages to find the keep boundary
-  let runningTotal = overheadTokens + effectiveEstimates[0]; // always keep first in-context message
-  let keepFromICIdx = inContextIndices.length; // index into inContextIndices
+  // Iterate backwards over in-context messages to find the keep boundary.
+  // The first in-context message is no longer pinned: anchoring the original
+  // user prompt across compaction cycles derails conversations whose topic has
+  // drifted. The inserted compaction summary already captures earlier work.
+  let runningTotal = overheadTokens;
+  let keepFromICIdx = inContextIndices.length; // sentinel: nothing fit yet
 
-  for (let ic = inContextIndices.length - 1; ic >= 1; ic--) {
+  for (let ic = inContextIndices.length - 1; ic >= 0; ic--) {
     if (runningTotal + effectiveEstimates[ic] <= targetTokens) {
       runningTotal += effectiveEstimates[ic];
       keepFromICIdx = ic;
@@ -1006,17 +1037,23 @@ export async function truncateChatHistory(
     }
   }
 
-  keepFromICIdx = Math.min(keepFromICIdx, inContextIndices.length - 1);
+  // If nothing fit at all (overhead alone > target), keep at least the most
+  // recent message so the agent has something to respond to.
+  if (keepFromICIdx === inContextIndices.length) {
+    keepFromICIdx = Math.max(0, inContextIndices.length - 1);
+  }
 
   // For forced compaction (manual /compact), if the budget calculation would keep
   // everything, still compact at least half the in-context messages. The user
   // explicitly asked to compact — don't skip just because it all fits.
-  if (forceCompact && keepFromICIdx <= 1 && inContextIndices.length > 3) {
+  if (forceCompact && keepFromICIdx === 0 && inContextIndices.length > 3) {
     keepFromICIdx = Math.ceil(inContextIndices.length / 2);
-    console.log(`[compaction] Force compact: budget keeps all, compacting first half (${keepFromICIdx - 1} of ${inContextIndices.length} in-context messages)`);
+    console.log(`[compaction] Force compact: budget keeps all, compacting first half (${keepFromICIdx} of ${inContextIndices.length} in-context messages)`);
   }
 
-  const messagesToMarkCount = keepFromICIdx - 1; // exclude the first in-context message
+  const messagesToMarkCount = keepFromICIdx;
+
+  console.log(`[compaction] Post-response budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} target=${targetTokens} keepFromIC=${keepFromICIdx} marking=${messagesToMarkCount}/${inContextIndices.length} in-context`);
 
   if (messagesToMarkCount <= 0) return noOp;
 
@@ -1025,7 +1062,7 @@ export async function truncateChatHistory(
   // Collect the messages being marked out (for archiving and estimation)
   const removedMessages: ChatMessage[] = [];
   const markedOriginalIndices: number[] = [];
-  for (let ic = 1; ic < keepFromICIdx; ic++) {
+  for (let ic = 0; ic < keepFromICIdx; ic++) {
     const origIdx = inContextIndices[ic];
     removedMessages.push(messages[origIdx]);
     markedOriginalIndices.push(origIdx);
