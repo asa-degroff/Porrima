@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 interface Props {
   thinking: string;
@@ -27,8 +27,11 @@ export function ThinkingBlock({
   const [userToggled, setUserToggled] = useState(false);
   const [userExpanded, setUserExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const manualScrollOverrideRef = useRef(false);
   const prevStreamingRef = useRef(isStreaming);
   const [, setTick] = useState(0);
+  const [scrollPaused, setScrollPaused] = useState(false);
 
   // Reset user override when streaming state transitions
   if (prevStreamingRef.current !== isStreaming) {
@@ -50,9 +53,50 @@ export function ThinkingBlock({
     return () => clearInterval(interval);
   }, [isStreaming, thinkingActive]);
 
+  // Reset scroll pause when streaming stops
+  useEffect(() => {
+    if (!isStreaming && scrollPaused) {
+      setScrollPaused(false);
+      manualScrollOverrideRef.current = false;
+    }
+  }, [isStreaming, scrollPaused]);
+
+  // Track whether user is scrolled near the bottom of the thinking block
+  const handleScroll = useCallback(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const threshold = 40;
+    const wasNearBottom = isNearBottomRef.current;
+    isNearBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+
+    // If streaming and user scrolls away from bottom, enable manual override
+    if (isStreaming && wasNearBottom && !isNearBottomRef.current) {
+      manualScrollOverrideRef.current = true;
+      setScrollPaused(true);
+    }
+
+    // If user scrolls back to bottom, disable override
+    if (isNearBottomRef.current && manualScrollOverrideRef.current) {
+      manualScrollOverrideRef.current = false;
+      setScrollPaused(false);
+    }
+  }, [isStreaming]);
+
+  // Scroll to bottom handler
+  const scrollToBottom = useCallback(() => {
+    const el = contentRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      manualScrollOverrideRef.current = false;
+      isNearBottomRef.current = true;
+      setScrollPaused(false);
+    }
+  }, []);
+
   // Auto-scroll thinking content during streaming
   useEffect(() => {
-    if (isStreaming && expanded && contentRef.current) {
+    if (isStreaming && expanded && contentRef.current && !manualScrollOverrideRef.current) {
       contentRef.current.scrollTop = contentRef.current.scrollHeight;
     }
   }, [thinking, isStreaming, expanded]);
@@ -111,13 +155,30 @@ export function ThinkingBlock({
         )}
       </button>
       {expanded && (
-        <div
-          ref={contentRef}
-          className="px-3 pb-3 max-h-64 overflow-y-auto"
-        >
-          <pre className="text-xs text-white/50 whitespace-pre-wrap font-[inherit] leading-relaxed">
-            {thinking}
-          </pre>
+        <div className="relative">
+          <div
+            ref={contentRef}
+            onScroll={handleScroll}
+            className="px-3 pb-3 max-h-64 overflow-y-auto"
+          >
+            <pre className="text-xs text-white/50 whitespace-pre-wrap font-[inherit] leading-relaxed">
+              {thinking}
+            </pre>
+          </div>
+          {/* Scroll to bottom button - appears when user scrolls away during streaming */}
+          {scrollPaused && (
+            <button
+              onClick={scrollToBottom}
+              className="absolute bottom-2 right-2 z-10 flex items-center gap-1 px-2 py-1 rounded-full bg-black/40 border border-white/15 text-white/60 hover:text-white hover:bg-black/60 hover:border-white/25 transition-all shadow-lg backdrop-blur-sm text-[10px]"
+              title="Scroll to bottom"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14" />
+                <path d="m19 12-7 7-7-7" />
+              </svg>
+              <span className="font-medium">Bottom</span>
+            </button>
+          )}
         </div>
       )}
     </div>
