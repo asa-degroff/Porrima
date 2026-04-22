@@ -40,6 +40,53 @@ async function probeReady(baseUrl: string): Promise<boolean> {
   }
 }
 
+/**
+ * Poll /sdapi/v1/options until sd-server responds (or timeout). Used after
+ * systemctl start/restart — the service reports "active" before the Vulkan
+ * backend and model loading finish, so we need to probe HTTP readiness.
+ */
+async function waitReady(baseUrl: string, context: string): Promise<void> {
+  const deadline = Date.now() + READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (await probeReady(baseUrl)) {
+      console.log(`[sdcpp] ${SERVICE_NAME} is ready (${context})`);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, READY_POLL_INTERVAL_MS));
+  }
+  throw new Error(
+    `${SERVICE_NAME} failed to become ready (${context}) within ${READY_TIMEOUT_MS / 1000}s`,
+  );
+}
+
+/**
+ * Restart sd-server to recover from a zombie state. After a GPU context loss
+ * (e.g. "radv/amdgpu: The CS has been cancelled because the context is lost"),
+ * the process stays alive and /sdapi/v1/options still responds, but any
+ * generation request returns HTTP 500 because the Vulkan backend is dead.
+ * systemctl restart gives us a fresh process with a working backend.
+ */
+async function restartService(
+  baseUrl: string,
+  onStatus?: (status: CoordinatorStatus) => void,
+): Promise<void> {
+  onStatus?.({
+    phase: "restarting",
+    message: "sd-server returned 500 — restarting to recover...",
+  });
+  console.warn(`[sdcpp] Restarting ${SERVICE_NAME} to recover from zombie state`);
+  try {
+    await execFileAsync("systemctl", ["--user", "restart", SERVICE_NAME], {
+      timeout: 30_000,
+    });
+  } catch (err: any) {
+    throw new Error(
+      `Failed to restart ${SERVICE_NAME}: ${err?.stderr || err?.message || err}`,
+    );
+  }
+  await waitReady(baseUrl, "restart");
+}
+
 async function ensureRunning(
   baseUrl: string,
   onStatus?: (status: CoordinatorStatus) => void,
@@ -74,18 +121,7 @@ async function ensureRunning(
       `Failed to start ${SERVICE_NAME}: ${err?.stderr || err?.message || err}`,
     );
   }
-
-  const deadline = Date.now() + READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (await probeReady(baseUrl)) {
-      console.log(`[sdcpp] ${SERVICE_NAME} is ready`);
-      return;
-    }
-    await new Promise((r) => setTimeout(r, READY_POLL_INTERVAL_MS));
-  }
-  throw new Error(
-    `${SERVICE_NAME} failed to become ready within ${READY_TIMEOUT_MS / 1000}s`,
-  );
+  await waitReady(baseUrl, "start");
 }
 
 function scheduleIdleStop(): void {
@@ -217,7 +253,10 @@ async function generate(
     onProgress?.({ step: estimated, totalSteps: params.steps });
   }, HEARTBEAT_STEP_MS);
 
-  try {
+  // Call sd-server's txt2img and parse the response. Throws a tagged error
+  // with .status when the HTTP response is non-ok so the caller can branch
+  // on retryable-vs-terminal failures.
+  const attemptRequest = async (): Promise<Buffer> => {
     const res = await fetch(`${baseUrl}/sdapi/v1/txt2img`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -230,25 +269,43 @@ async function generate(
     if (!res.ok) {
       let detail = res.statusText;
       try {
-        const err = (await res.json()) as { error?: string; detail?: string };
-        if (err.error || err.detail) detail = err.error || err.detail || detail;
+        const parsed = (await res.json()) as { error?: string; detail?: string };
+        if (parsed.error || parsed.detail) detail = parsed.error || parsed.detail || detail;
       } catch {
         // body wasn't JSON — keep statusText
       }
-      const msg = `sd-server txt2img error (${res.status}): ${detail}`;
-      console.error(`[sdcpp] ${msg}`);
-      throw new Error(msg);
+      const err: Error & { status?: number } = new Error(
+        `sd-server txt2img error (${res.status}): ${detail}`,
+      );
+      err.status = res.status;
+      throw err;
     }
 
     const data = (await res.json()) as { images?: string[]; info?: string };
     if (!data.images || data.images.length === 0) {
-      console.error("[sdcpp] sd-server returned no images");
       throw new Error("sd-server returned no images");
     }
+    return Buffer.from(data.images[0], "base64");
+  };
 
-    const imageData = Buffer.from(data.images[0], "base64");
+  try {
+    let imageData: Buffer;
+    try {
+      imageData = await attemptRequest();
+    } catch (err: any) {
+      // HTTP 500 is the canonical symptom of a lost Vulkan context after a
+      // GPU reset — the process stays alive but inference is permanently
+      // broken. Restart once and retry. Other errors bubble up unchanged.
+      if (err?.status === 500) {
+        console.warn(`[sdcpp] ${err.message} — restarting service and retrying once`);
+        await restartService(baseUrl, onStatus);
+        imageData = await attemptRequest();
+      } else {
+        throw err;
+      }
+    }
+
     onProgress?.({ step: params.steps, totalSteps: params.steps });
-
     return { imageData, resolvedSeed };
   } catch (err: any) {
     console.error(`[sdcpp] generate failed: ${err?.message || err}`);
