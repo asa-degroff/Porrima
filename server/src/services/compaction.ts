@@ -149,8 +149,10 @@ function estimateContextSize(
  * would exceed the safe threshold (~80% of context window).
  *
  * This prevents broken responses from hitting the context limit mid-generation.
- * Unlike post-response compaction (which targets 50%), pre-send truncation
- * targets 75% to leave room for the new exchange.
+ * Trigger is at 80%, but the budget target is 50% — matching post-response
+ * compaction. Targeting the same level the next turn would compact to anyway
+ * avoids a second cache-invalidating compaction later in the turn, and gives
+ * subsequent turns headroom before the next trigger.
  *
  * Returns CompactionResult if truncation occurred, null if context is already safe.
  */
@@ -168,14 +170,20 @@ export async function truncateBeforeSend(
 
   const estimatedTokens = estimateContextSize(messages, systemPrompt, tools);
   const charEstimate = charEstimateContextSize(messages, systemPrompt, tools);
-  const threshold = contextWindow * 0.80;
+  // Trigger and target are decoupled: we only compact when well into the
+  // danger zone (80%), but when we do, we compact down to 50% — the same
+  // level post-response targets. Compacting to 80% would leave us one turn
+  // away from re-triggering and would also guarantee a second compaction
+  // from the post-response path in the same turn.
+  const trigger = contextWindow * 0.80;
+  const target = contextWindow * 0.50;
 
-  // Fallthrough target: if the primary estimator says we're safe, we still
-  // enforce a hard-cap check at the bottom (see "Hard-cap safety pass"). This
-  // catches cases where the usage-anchor path understates the real payload
-  // (e.g., the system prompt grew since the anchor was captured — common on
-  // resume after contextState reset re-freezes memories into the prompt).
-  if (estimatedTokens <= threshold) {
+  // Fallthrough: if the primary estimator says we're safe, we still enforce
+  // a hard-cap check at the bottom (see "Hard-cap safety pass"). This catches
+  // cases where the usage-anchor path understates the real payload (e.g., the
+  // system prompt grew since the anchor was captured — common on resume after
+  // contextState reset re-freezes memories into the prompt).
+  if (estimatedTokens <= trigger) {
     return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools);
   }
 
@@ -200,7 +208,7 @@ export async function truncateBeforeSend(
     ? `usage=${lastUsage}`
     : `charEst`;
   console.log(
-    `[compaction] Pre-send truncation triggered: ${estimatedTokens} tokens > ${threshold} threshold (drivingPath=${drivingPath}, charEst=${charEstimate}, ctx=${contextWindow})`
+    `[compaction] Pre-send truncation triggered: ${estimatedTokens} tokens > ${trigger} trigger, target=${target} (drivingPath=${drivingPath}, charEst=${charEstimate}, ctx=${contextWindow})`
   );
 
   // Build index of in-context messages for budget calculation
@@ -237,12 +245,14 @@ export async function truncateBeforeSend(
   const scaledEstimates = icEstimates.map((t) => Math.ceil(t * scaleFactor));
   const overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
 
-  // Iterate backwards over in-context messages to find budget boundary
+  // Iterate backwards over in-context messages to find budget boundary.
+  // Fills up to the 50% target, not the 80% trigger, so the post-compaction
+  // payload has room to grow before the next trigger fires.
   let runningTotal = overheadTokens + scaledEstimates[0]; // always keep first
   let keepFromIC = 1;
   const recentICIndices: number[] = [];
   for (let ic = icIndices.length - 1; ic >= 1; ic--) {
-    if (runningTotal + scaledEstimates[ic] <= threshold) {
+    if (runningTotal + scaledEstimates[ic] <= target) {
       runningTotal += scaledEstimates[ic];
       recentICIndices.push(ic);
     } else {
@@ -251,7 +261,7 @@ export async function truncateBeforeSend(
   }
 
   if (recentICIndices.length === 0) {
-    console.warn(`[compaction] No recent messages fit within threshold (${runningTotal} > ${threshold}), keeping last 2 in-context`);
+    console.warn(`[compaction] No recent messages fit within target (${runningTotal} > ${target}), keeping last 2 in-context`);
     keepFromIC = Math.max(1, icIndices.length - 2);
   } else {
     recentICIndices.sort((a, b) => a - b);
