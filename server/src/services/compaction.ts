@@ -431,7 +431,7 @@ async function hardCapSafetyPass(
   // archives properly and generates index summaries.
   // truncateChatHistory fires onCompacting internally when it starts marking
   // messages, so don't double-fire from here.
-  const aggressive = await truncateChatHistory(chat, contextWindow, true, onCompacting, onKeepalive);
+  const aggressive = await truncateChatHistory(chat, contextWindow, true, onCompacting, onKeepalive, undefined, systemPrompt, tools);
   if (!aggressive.truncated) {
     console.error(
       `[compaction] Aggressive compaction failed to reduce context further. ` +
@@ -633,7 +633,7 @@ Descriptions should capture the SIGNIFICANCE of each block — what was learned,
 Good descriptions:
 - archive:abc:001 — Identified P0 bug in memory reset during compaction; /compact path skipped resetMemoryContext
 - archive:abc:002 — Reviewed indexed summary architecture; concluded lossless archival beats narrative summarization
-- archive:abc:003 — Read compaction.ts to understand truncation thresholds (75% pre-send, 50% post-response, 85% mid-turn)
+- archive:abc:003 — Read compaction.ts to understand truncation thresholds (80% trigger, 50% target for both pre-send and post-response)
 - archive:abc:004 — User prefers systems that preserve full-fidelity message storage with indexed access rather than lossy summarization
 
 Bad descriptions (too vague or action-focused):
@@ -902,7 +902,11 @@ export async function truncateChatHistory(
   onCompacting?: () => void,
   onKeepalive?: () => void,
   /** Known token usage from the current turn (the message may not be in chat.messages yet). */
-  knownUsage?: number
+  knownUsage?: number,
+  /** System prompt for accurate overhead budgeting. */
+  systemPrompt?: string,
+  /** Tool schemas for accurate overhead budgeting. */
+  tools?: unknown,
 ): Promise<CompactionResult> {
   const noOp: CompactionResult = { truncated: false, removedCount: 0 };
   const messages = chat.messages;
@@ -972,13 +976,30 @@ export async function truncateChatHistory(
     return tokens;
   });
 
+  // Account for system prompt + tool schema overhead in the budget.
+  // When systemPrompt is provided, use the same scale factor approach as
+  // truncateBeforeSend so the per-message estimates match the actual payload.
+  // Without this, the greedy backfill can keep messages that push the real
+  // payload well past the target, since the system prompt alone can be
+  // thousands of tokens (persona + user doc + memory blocks + zeitgeist).
+  let overheadTokens = 0;
+  let effectiveEstimates = inContextEstimates;
+  if (systemPrompt) {
+    const charEstimate = charEstimateContextSize(messages, systemPrompt, tools);
+    const messageContentTokens = inContextEstimates.reduce((s, t) => s + t, 0);
+    const charEstimateTotal = estimateTokens(systemPrompt) + messageContentTokens;
+    const scaleFactor = charEstimateTotal > 0 ? charEstimate / charEstimateTotal : 1;
+    overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
+    effectiveEstimates = inContextEstimates.map((t) => Math.ceil(t * scaleFactor));
+  }
+
   // Iterate backwards over in-context messages to find the keep boundary
-  let runningTotal = inContextEstimates[0]; // always keep first in-context message
+  let runningTotal = overheadTokens + effectiveEstimates[0]; // always keep first in-context message
   let keepFromICIdx = inContextIndices.length; // index into inContextIndices
 
   for (let ic = inContextIndices.length - 1; ic >= 1; ic--) {
-    if (runningTotal + inContextEstimates[ic] <= targetTokens) {
-      runningTotal += inContextEstimates[ic];
+    if (runningTotal + effectiveEstimates[ic] <= targetTokens) {
+      runningTotal += effectiveEstimates[ic];
       keepFromICIdx = ic;
     } else {
       break;
@@ -1099,12 +1120,14 @@ export async function truncateChatHistory(
  */
 export async function triggerCompaction(
   chat: Chat,
-  contextWindow: number
+  contextWindow: number,
+  systemPrompt?: string,
+  tools?: unknown,
 ): Promise<CompactionResult | null> {
   console.log(`[compaction] Manual compaction triggered for chat ${chat.id}`);
-  
+
   // Use truncateChatHistory with forceCompact=true
-  const result = await truncateChatHistory(chat, contextWindow, true);
+  const result = await truncateChatHistory(chat, contextWindow, true, undefined, undefined, undefined, systemPrompt, tools);
   
   if (result.truncated) {
     console.log(`[compaction] Manual compaction complete: removed ${result.removedCount} messages (~${result.estimatedTokenCount} est. tokens)`);

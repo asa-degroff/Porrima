@@ -1294,7 +1294,7 @@ async function handleChatStream(
             // Wrap in keepalive loop so the client's 95s inactivity timeout
             // doesn't fire during slow extraction/embed/rerank steps.
             await withSSEKeepalive(res, async () => {
-              const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive, lastUsage);
+              const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive, lastUsage, systemPrompt, agentTools);
               if (compaction.truncated) {
                 // Extract memories from removed messages (agent chats only)
                 if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
@@ -1459,7 +1459,7 @@ async function handleChatStream(
       let compactionAborted = false;
       await withSSEKeepalive(res, async () => {
         try {
-          const compaction = await truncateChatHistory(chat, effectiveCW, true, emitCompacting, emitKeepalive);
+          const compaction = await truncateChatHistory(chat, effectiveCW, true, emitCompacting, emitKeepalive, undefined, systemPrompt, agentTools);
           if (compaction?.truncated) {
             await saveChat(chat);
             console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: removed ${compaction.removedCount} messages, estimated ${compaction.estimatedTokenCount} tokens remaining`);
