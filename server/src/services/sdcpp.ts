@@ -46,10 +46,20 @@ async function ensureRunning(
 ): Promise<void> {
   if (await probeReady(baseUrl)) return;
 
-  // Free up RAM before starting — sd-server pins ~13GB via --offload-to-cpu.
+  // Free up resources before starting. sd-server pins ~13GB of weights in RAM
+  // via --offload-to-cpu, then streams them to GPU during inference — so we
+  // need *both* a RAM reserve AND some free VRAM on the shared GPU. We probe
+  // VRAM through ComfyUI's /system_stats endpoint since ComfyUI is pinned to
+  // the same GPU and its probe works regardless of which backend is active.
+  const settings = await getSettings();
+  const comfyuiUrl = settings.comfyuiUrl || "http://127.0.0.1:8188";
   await acquireResources({
     for: "sdcpp",
     ram: {},
+    // 5GB covers z_image streaming (4.4GB) + VAE tiling compute buffers +
+    // Vulkan overhead. Lower than ComfyUI's 6GB default because
+    // --offload-to-cpu means weights don't stay resident in VRAM.
+    vram: { baseUrl: comfyuiUrl, minFreeBytes: 5 * 1024 * 1024 * 1024 },
     onStatus,
   });
 
