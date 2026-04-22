@@ -904,6 +904,19 @@ async function handleChatStream(
     // Process LLM events → SSE (main loop)
     for await (const event of eventStream) {
       switch (event.type) {
+        case "message_start": {
+          // Mirror the message into our outer context. pi-agent-core's agentLoop
+          // spreads context.messages into its internal currentContext and never
+          // mutates our outer copy, so recovery paths that later call
+          // agentLoopContinue(context,...) would otherwise see an empty or
+          // stale history. message_start fires for user prompts, steering
+          // messages, and follow-ups — exactly what the running context needs.
+          if (event.message) {
+            context.messages.push(event.message);
+          }
+          break;
+        }
+
         case "message_update": {
           const ame = event.assistantMessageEvent;
           if (ame.type === "text_delta") {
@@ -1033,6 +1046,18 @@ async function handleChatStream(
         case "turn_end": {
           const msg = event.message as AssistantMessage;
           const stopReason = msg.stopReason || "stop";
+
+          // Mirror the completed turn into outer context.messages so recovery
+          // paths (stranded recovery, incomplete-tool-turn continuation) have a
+          // live history to pass back into agentLoopContinue. Order matches
+          // pi-agent-core's internal runLoop: assistant message, then each
+          // tool result message.
+          context.messages.push(msg);
+          if (event.toolResults?.length) {
+            for (const tr of event.toolResults) {
+              context.messages.push(tr);
+            }
+          }
 
           console.log(`[chat] turn_end: stopReason=${stopReason}, toolResults=${event.toolResults?.length || 0}, content=${state.fullText.length}ch`);
           if (stopReason === "error") {
@@ -1440,6 +1465,15 @@ async function handleChatStream(
 
       const strandedAbortController = new AbortController();
       let strandedProducedSomething = false;
+
+      // agentLoopContinue rejects contexts ending with an assistant message.
+      // The stranded assistant (stopReason=stop with no structured call) is
+      // exactly what we want to drop — continuation should pick up from the
+      // last user or toolResult so the model gets another shot at emitting
+      // the real tool call.
+      while (context.messages.length > 0 && context.messages[context.messages.length - 1].role === "assistant") {
+        context.messages.pop();
+      }
 
       try {
         const strandedStream = agentLoopContinue(context, config, strandedAbortController.signal, safeStreamFn);
