@@ -166,6 +166,112 @@ function estimateContextSize(
 }
 
 /**
+ * Attempt to shrink a single oversized assistant message by archiving a prefix
+ * of its `(toolCall, toolResult)` pairs. The caller passes `budgetTokens` — the
+ * maximum tokens the shrunk message should fit within — and the helper greedily
+ * keeps tail pairs (most recent first) until adding another pair would breach.
+ *
+ * The synthesized head (archived portion) carries the original thinking and the
+ * peeled pairs. The caller is responsible for feeding it through `archiveAndIndex`
+ * alongside any other removed messages, so all archive IDs appear in one summary.
+ *
+ * Mutates `msg` in place: `toolCalls` and `toolResults` lose the peeled pairs;
+ * `thinking` is cleared (it travels with the head).
+ *
+ * Returns null when splitting is ineligible:
+ *   - role ≠ assistant
+ *   - fewer than 2 tool calls (nothing to split at a pair boundary)
+ *   - even the last single pair + content exceeds the budget (split won't help)
+ *   - every pair would be kept (no archiving would happen)
+ */
+function trySplitAssistantMessage(
+  msg: ChatMessage,
+  budgetTokens: number,
+  scaleFactor: number,
+): {
+  head: ChatMessage;
+  originalPairs: number;
+  archivedPairs: number;
+  keptPairs: number;
+  archivedTokens: number;
+} | null {
+  if (msg.role !== "assistant") return null;
+  const toolCalls = msg.toolCalls;
+  const toolResults = msg.toolResults ?? [];
+  if (!toolCalls || toolCalls.length < 2) return null;
+
+  // Per-pair token estimates aligned with charEstimateContextSize: 50 per call
+  // for framing (it ignores argument bytes, but arguments can be large for
+  // tools like create_artifact/edit_file, so we include them here — keeps the
+  // split conservative when tool args dominate).
+  const pairEstimates = toolCalls.map((tc) => {
+    const tr = toolResults.find((r) => r.toolCallId === tc.id);
+    let tokens = 50;
+    try {
+      tokens += estimateTokens(JSON.stringify(tc.arguments ?? {}));
+    } catch { /* non-serializable args: skip */ }
+    if (tr) tokens += estimateTokens(tr.content) + 20 + MESSAGE_FRAMING_TOKENS;
+    return Math.ceil(tokens * scaleFactor);
+  });
+
+  // Fixed tail cost after split: the final text content + one MESSAGE_FRAMING.
+  // Thinking goes with the head and is no longer part of the kept message.
+  const contentTokens = Math.ceil(estimateTokens(msg.content) * scaleFactor);
+  const framing = Math.ceil(MESSAGE_FRAMING_TOKENS * scaleFactor);
+
+  let runningTotal = contentTokens + framing;
+  let firstKeptIdx = toolCalls.length; // sentinel: nothing fit
+  for (let i = toolCalls.length - 1; i >= 0; i--) {
+    if (runningTotal + pairEstimates[i] <= budgetTokens) {
+      runningTotal += pairEstimates[i];
+      firstKeptIdx = i;
+    } else {
+      break;
+    }
+  }
+
+  // Can't fit even the final pair + content within budget — split is futile.
+  if (firstKeptIdx === toolCalls.length) return null;
+  // Everything fits; no split needed.
+  if (firstKeptIdx === 0) return null;
+
+  const archivedIds = new Set(toolCalls.slice(0, firstKeptIdx).map((tc) => tc.id));
+  const archivedCalls = toolCalls.slice(0, firstKeptIdx);
+  const archivedResults = toolResults.filter((tr) => archivedIds.has(tr.toolCallId));
+
+  const head: ChatMessage = {
+    role: "assistant",
+    content: "",                 // final text stays on the kept tail
+    thinking: msg.thinking,
+    toolCalls: archivedCalls,
+    toolResults: archivedResults,
+    timestamp: msg.timestamp,
+    _outOfContext: true,
+  };
+
+  // Mutate in place.
+  msg.toolCalls = toolCalls.slice(firstKeptIdx);
+  msg.toolResults = toolResults.filter((tr) => !archivedIds.has(tr.toolCallId));
+  msg.thinking = undefined;
+
+  const archivedTokens = archivedCalls.reduce((sum, tc) => {
+    const tr = archivedResults.find((r) => r.toolCallId === tc.id);
+    let t = 50;
+    try { t += estimateTokens(JSON.stringify(tc.arguments ?? {})); } catch { /* ignore */ }
+    if (tr) t += estimateTokens(tr.content) + 20;
+    return sum + t;
+  }, 0) + (head.thinking ? estimateTokens(head.thinking) : 0);
+
+  return {
+    head,
+    originalPairs: toolCalls.length,
+    archivedPairs: archivedCalls.length,
+    keptPairs: msg.toolCalls.length,
+    archivedTokens,
+  };
+}
+
+/**
  * Proactively truncate chat history BEFORE sending to the LLM if context
  * would exceed the safe threshold (~80% of context window).
  *
@@ -284,22 +390,44 @@ export async function truncateBeforeSend(
     }
   }
 
+  // Split fallback: when backward-fill can't fit even the last message, try
+  // peeling a prefix of that message's tool-call pairs into its own archive
+  // block. Common for long coding tasks where a single turn produced many
+  // file reads/greps that, taken together, exceed the budget on their own.
+  let splitInfo: ReturnType<typeof trySplitAssistantMessage> | null = null;
   if (keepFromIC === icIndices.length) {
-    console.warn(`[compaction] No recent messages fit within target (overhead ${overheadTokens} alone > ${target}), keeping last 2 in-context`);
-    keepFromIC = Math.max(0, icIndices.length - 2);
+    const lastOrigIdx = icIndices[icIndices.length - 1];
+    splitInfo = trySplitAssistantMessage(
+      messages[lastOrigIdx],
+      Math.max(0, target - overheadTokens),
+      scaleFactor,
+    );
+    if (splitInfo) {
+      // Archive the split head alongside everything older than the last message.
+      keepFromIC = icIndices.length - 1;
+      console.log(
+        `[compaction] Mid-message split: chat=${chat.id} msgIdx=${lastOrigIdx} ` +
+        `originalPairs=${splitInfo.originalPairs} archivedPairs=${splitInfo.archivedPairs} ` +
+        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens}`,
+      );
+    } else {
+      console.warn(`[compaction] No recent messages fit within target (overhead ${overheadTokens} alone > ${target}), keeping last 2 in-context`);
+      keepFromIC = Math.max(0, icIndices.length - 2);
+    }
   }
 
   const messagesToMarkCount = keepFromIC;
-  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFromIC=${keepFromIC} marking=${messagesToMarkCount}/${icIndices.length} in-context`);
+  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFromIC=${keepFromIC} marking=${messagesToMarkCount}/${icIndices.length} in-context${splitInfo ? ` + split head (${splitInfo.archivedPairs} pairs)` : ""}`);
 
-  if (messagesToMarkCount <= 0) {
-    // Budget planning says keep everything, but the estimator said we're over
-    // the threshold. Run the hard-cap pass so it can force aggressive
+  if (messagesToMarkCount <= 0 && !splitInfo) {
+    // Budget planning says keep everything AND no split occurred — nothing to
+    // archive on this pass. Run the hard-cap pass so it can force aggressive
     // compaction if the actual payload still exceeds the cap.
     return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools);
   }
 
-  // Collect removed messages for archiving
+  // Collect removed messages for archiving. The split head (if any) joins this
+  // batch so all archive IDs end up referenced in a single summary.
   const removedMessages: ChatMessage[] = [];
   const markedIndices: number[] = [];
   for (let ic = 0; ic < keepFromIC; ic++) {
@@ -307,6 +435,7 @@ export async function truncateBeforeSend(
     removedMessages.push(messages[origIdx]);
     markedIndices.push(origIdx);
   }
+  if (splitInfo) removedMessages.push(splitInfo.head);
 
   // Archive in deferred mode — mechanical descriptions now, LLM enrichment
   // runs in the background so the user turn isn't blocked on a CPU model call.
@@ -335,7 +464,9 @@ export async function truncateBeforeSend(
     }
   }
 
-  // Insert summary before the first kept in-context message
+  // Insert summary before the first kept in-context message. When a split
+  // happened without full-message removal, treat the split as 1 compacted
+  // unit so the UI still shows a compaction indicator (it checks truthiness).
   const insertionIdx = icIndices[keepFromIC];
   const summaryMessage: ChatMessage = {
     role: "assistant",
@@ -343,7 +474,7 @@ export async function truncateBeforeSend(
     thinking: undefined,
     timestamp: Date.now(),
     _isCompactionSummary: true,
-    _compactedMessageCount: messagesToMarkCount,
+    _compactedMessageCount: messagesToMarkCount + (splitInfo ? 1 : 0),
     _archiveIds: archiveIds,
   };
   messages.splice(insertionIdx, 0, summaryMessage);
@@ -381,9 +512,11 @@ export async function truncateBeforeSend(
     console.warn("[compaction] Title regeneration failed:", err);
   }
 
+  // Count the split (if any) as 1 compacted unit so user-facing messaging
+  // ("Removed N messages") doesn't report 0 when a partial compaction happened.
   const primaryResult: CompactionResult = {
     truncated: true,
-    removedCount: messagesToMarkCount,
+    removedCount: messagesToMarkCount + (splitInfo ? 1 : 0),
     removedMessages,
     estimatedTokenCount: estimatedRemovedTokens,
   };
@@ -1037,10 +1170,28 @@ export async function truncateChatHistory(
     }
   }
 
-  // If nothing fit at all (overhead alone > target), keep at least the most
-  // recent message so the agent has something to respond to.
+  // Split fallback: when backward-fill can't fit even the last message, try
+  // peeling a prefix of that message's tool-call pairs into its own archive
+  // block. Targets the long-coding-task case where a single assistant turn
+  // accumulated many tool iterations and dominates the budget on its own.
+  let splitInfo: ReturnType<typeof trySplitAssistantMessage> | null = null;
   if (keepFromICIdx === inContextIndices.length) {
-    keepFromICIdx = Math.max(0, inContextIndices.length - 1);
+    const lastOrigIdx = inContextIndices[inContextIndices.length - 1];
+    splitInfo = trySplitAssistantMessage(
+      messages[lastOrigIdx],
+      Math.max(0, targetTokens - overheadTokens),
+      scaleFactor,
+    );
+    if (splitInfo) {
+      keepFromICIdx = inContextIndices.length - 1;
+      console.log(
+        `[compaction] Mid-message split: chat=${chat.id} msgIdx=${lastOrigIdx} ` +
+        `originalPairs=${splitInfo.originalPairs} archivedPairs=${splitInfo.archivedPairs} ` +
+        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens}`,
+      );
+    } else {
+      keepFromICIdx = Math.max(0, inContextIndices.length - 1);
+    }
   }
 
   // For forced compaction (manual /compact), if the budget calculation would keep
@@ -1053,13 +1204,15 @@ export async function truncateChatHistory(
 
   const messagesToMarkCount = keepFromICIdx;
 
-  console.log(`[compaction] Post-response budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} target=${targetTokens} keepFromIC=${keepFromICIdx} marking=${messagesToMarkCount}/${inContextIndices.length} in-context`);
+  console.log(`[compaction] Post-response budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} target=${targetTokens} keepFromIC=${keepFromICIdx} marking=${messagesToMarkCount}/${inContextIndices.length} in-context${splitInfo ? ` + split head (${splitInfo.archivedPairs} pairs)` : ""}`);
 
-  if (messagesToMarkCount <= 0) return noOp;
+  if (messagesToMarkCount <= 0 && !splitInfo) return noOp;
 
   onCompacting?.();
 
-  // Collect the messages being marked out (for archiving and estimation)
+  // Collect the messages being marked out (for archiving and estimation).
+  // The split head (if any) joins this batch so all archive IDs end up
+  // referenced in a single summary marker.
   const removedMessages: ChatMessage[] = [];
   const markedOriginalIndices: number[] = [];
   for (let ic = 0; ic < keepFromICIdx; ic++) {
@@ -1067,6 +1220,7 @@ export async function truncateChatHistory(
     removedMessages.push(messages[origIdx]);
     markedOriginalIndices.push(origIdx);
   }
+  if (splitInfo) removedMessages.push(splitInfo.head);
 
   // Archive removed messages and generate indexed summary (post-response
   // path uses sync mode — the agent loop may consume the summary immediately).
@@ -1101,14 +1255,17 @@ export async function truncateChatHistory(
     }
   }
 
-  // Insert the compaction summary right before the first kept in-context message
+  // Insert the compaction summary right before the first kept in-context
+  // message. When a split happened without full-message removal, treat the
+  // split as 1 compacted unit so the UI still renders a compaction indicator
+  // (it checks truthiness of _compactedMessageCount).
   const insertionIndex = inContextIndices[keepFromICIdx];
   const summaryMessage: ChatMessage = {
     role: "assistant",
     content: indexedSummary,
     timestamp: Date.now(),
     _isCompactionSummary: true,
-    _compactedMessageCount: messagesToMarkCount,
+    _compactedMessageCount: messagesToMarkCount + (splitInfo ? 1 : 0),
     _archiveIds: archiveIds,
   };
   messages.splice(insertionIndex, 0, summaryMessage);
@@ -1147,7 +1304,14 @@ export async function truncateChatHistory(
     console.warn("[compaction] Title regeneration failed:", err);
   }
 
-  return { truncated: true, removedCount: messagesToMarkCount, removedMessages, estimatedTokenCount: estimatedRemovedTokens };
+  return {
+    truncated: true,
+    // Count the split (if any) as 1 compacted unit so user-facing messaging
+    // ("Removed N messages") doesn't report 0 when a partial compaction happened.
+    removedCount: messagesToMarkCount + (splitInfo ? 1 : 0),
+    removedMessages,
+    estimatedTokenCount: estimatedRemovedTokens,
+  };
 }
 
 /**
