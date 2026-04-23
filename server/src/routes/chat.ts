@@ -1363,6 +1363,16 @@ async function handleChatStream(
                     chat.messages, chat.id, chat.projectId, chat.type, projectPath
                   );
                   systemPrompt = split.systemPrompt;
+
+                  // Reinjected skills after compaction — they were lost when
+                  // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+                  if (chat.activeSkills?.length) {
+                    const skillsCache = new Map<string, Skill>();
+                    const allSkills = await discoverSkills(chat.projectId);
+                    for (const s of allSkills) skillsCache.set(s.name, s);
+                    systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+                    console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after end-of-turn compaction`);
+                  }
                 }
 
                 // Find the summary message that was inserted. Emit AFTER the
@@ -2632,6 +2642,16 @@ router.post("/", async (req, res) => {
               );
               systemPrompt = split.systemPrompt;
               // split.memoriesMessage is always empty after reset (case 1: full retrieval)
+
+              // Reinject skills after compaction — they were lost when
+              // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+              if (chat.activeSkills?.length) {
+                const skillsCache = new Map<string, Skill>();
+                const allSkills = await discoverSkills(chat.projectId);
+                for (const s of allSkills) skillsCache.set(s.name, s);
+                systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+                console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after pre-send compaction`);
+              }
             }
             // Find the summary message that was inserted
             const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
@@ -2927,6 +2947,16 @@ router.post("/edit", async (req, res) => {
             );
             systemPrompt = split.systemPrompt;
             editMemoriesDelta = split.memoriesMessage;
+
+            // Reinject skills after compaction — they were lost when
+            // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+            if (chat.activeSkills?.length) {
+              const skillsCache = new Map<string, Skill>();
+              const allSkills = await discoverSkills(chat.projectId);
+              for (const s of allSkills) skillsCache.set(s.name, s);
+              systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+              console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after edit pre-send compaction`);
+            }
           }
           // Emit compaction event for UI indicator
           const estimatedTokens = await estimatePostCompactionTokens(
