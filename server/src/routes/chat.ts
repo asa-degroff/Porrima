@@ -1208,7 +1208,7 @@ async function handleChatStream(
             }
           }
 
-          // Mid-turn context protection: if usage > 90% during tool loop, break for compaction
+          // Mid-turn context protection: if usage > 95% during tool loop, break for compaction
           if (stopReason === "toolUse" && !hitContextLimit) {
             const effectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
             let currentTokens = state.finalUsage?.totalTokens ?? 0;
@@ -1219,7 +1219,7 @@ async function handleChatStream(
             }
             if (effectiveCW > 0 && currentTokens > 0) {
               const usageRatio = currentTokens / effectiveCW;
-              if (usageRatio > 0.90) {
+              if (usageRatio > 0.95) {
                 console.warn(`[chat] Mid-turn context overflow: ${currentTokens}/${effectiveCW} (${(usageRatio * 100).toFixed(0)}%) at iteration ${iterations} — breaking for compaction`);
                 turnAbortController.abort();
                 state.needsMidTurnCompaction = true;
@@ -1314,7 +1314,7 @@ async function handleChatStream(
     // End-of-turn compaction: if we crossed the 80% threshold during this turn,
     // compact NOW before building the final message. This prevents the user from
     // waiting on compaction after their response appears complete.
-    // Mid-turn compaction (90% during tool loops) is handled separately above.
+    // Mid-turn compaction (95% during tool loops) is handled separately above.
     // Skip if we have a stranded tool call — we need to continue the turn first,
     // not compact away the context the model was working with.
     if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && !state.strandedToolCall) {

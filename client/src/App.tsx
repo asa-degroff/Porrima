@@ -101,6 +101,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [synthesisComplete, setSynthesisComplete] = useState(false);
   const [sleepModeActive, setSleepModeActive] = useState(false);
+  const [isExtractionRunning, setIsExtractionRunning] = useState(false);
 
   // Load UI state from server on mount
   useEffect(() => {
@@ -134,6 +135,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         const prev = wasSynthesizingRef.current;
         wasSynthesizingRef.current = status.isSynthesizing;
         setIsSynthesizing(status.isSynthesizing);
+        setIsExtractionRunning(status.isExtractionRunning);
         if (status.isSynthesizing) {
           setSynthesisComplete(false);
         } else if (prev) {
@@ -698,6 +700,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         isSynthesizing={isSynthesizing}
         synthesisComplete={synthesisComplete}
         sleepModeActive={sleepModeActive}
+        isExtractionRunning={isExtractionRunning}
         onSynthesisSleep={handleSynthesisSleep}
         onSynthesisRun={handleSynthesisRun}
         isImageSandboxOpen={imageSandboxOpen}

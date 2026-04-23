@@ -983,6 +983,7 @@ export interface SynthesisStatus {
   lastSynthesis: string | null;
   memoryCount: number;
   isSynthesizing: boolean;
+  isExtractionRunning: boolean;
 }
 
 // Response from POST /synthesis/run and /synthesis/sleep. Synthesis is

@@ -92,10 +92,14 @@ router.get("/synthesis/status", async (_req, res) => {
   const memoryCount = await getMemoryCount();
   const lastSynthesis = await getLastSynthesis();
   const { isSynthesisActive } = await import("../services/system-chat.js");
+  // Check if any extraction run is currently in progress
+  const recentRuns = getRecentExtractionRuns();
+  const isExtractionRunning = recentRuns.some((r) => r.status === "running");
   res.json({
     lastSynthesis,
     memoryCount,
     isSynthesizing: isSynthesisActive(),
+    isExtractionRunning,
   });
 });
 

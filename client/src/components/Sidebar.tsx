@@ -38,6 +38,7 @@ interface Props {
   isSynthesizing?: boolean;
   synthesisComplete?: boolean;
   sleepModeActive?: boolean;
+  isExtractionRunning?: boolean;
   onSynthesisSleep?: () => void;
   onSynthesisRun?: () => void;
   isImageSandboxOpen?: boolean;
@@ -426,6 +427,7 @@ export function Sidebar({
   isSynthesizing = false,
   synthesisComplete = false,
   sleepModeActive = false,
+  isExtractionRunning = false,
   onSynthesisSleep,
   onSynthesisRun,
   isImageSandboxOpen = false,
@@ -612,14 +614,14 @@ export function Sidebar({
             >
               <div className="relative flex items-center">
                 {/* Static logo + title — hidden during background activity */}
-                <div className={`flex items-center gap-2 transition-opacity duration-300 ${hasBackgroundActivity ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+                <div className={`flex items-center gap-2 transition-opacity duration-300 ${(hasBackgroundActivity || isExtractionRunning) ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
                   <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
                   <h1 className="text-lg font-semibold text-white/90 tracking-tight">
                     qu.je
                   </h1>
                 </div>
                 {/* Background activity indicator — octahedron for memory extraction, synthesis, creative directions */}
-                <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${hasBackgroundActivity ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${(hasBackgroundActivity || isExtractionRunning) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
                   <PolyhedronLogo isActive={true} shape={activityShape} />
                 </div>
               </div>
@@ -886,7 +888,7 @@ export function Sidebar({
                 <ChevronIcon expanded={agentExpanded} />
               </span>
               <span className="text-[10px] font-semibold tracking-wider uppercase text-white/30 group-hover:text-white/50 transition-colors">
-                Agent Chats
+                Global Chats
               </span>
               {!agentExpanded && agentChats.length > 0 && (
                 <span className="text-[10px] text-white/20 ml-auto">{agentChats.length}</span>
