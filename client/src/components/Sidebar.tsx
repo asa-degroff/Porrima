@@ -24,6 +24,7 @@ interface Props {
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   onOpenSettings: () => void;
   onOpenMemoryDebug?: () => void;
+  onOpenModelStats?: () => void;
   onOpenImageSandbox: () => void;
   isOpen: boolean;
   onClose: () => void;
@@ -411,6 +412,7 @@ export function Sidebar({
   onSendToNotebook,
   onOpenSettings,
   onOpenMemoryDebug,
+  onOpenModelStats,
   onOpenImageSandbox,
   isOpen,
   onClose,
@@ -702,6 +704,20 @@ export function Sidebar({
                     <ellipse cx="12" cy="5" rx="9" ry="3"/>
                     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
                     <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                  </svg>
+                </button>
+              )}
+              {/* Model stats — llama.cpp performance metrics */}
+              {onOpenModelStats && (
+                <button
+                  onClick={onOpenModelStats}
+                  className="p-2 text-white/30 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors shrink-0"
+                  title="Model Stats"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 20V10"/>
+                    <path d="M12 20V4"/>
+                    <path d="M6 20v-6"/>
                   </svg>
                 </button>
               )}

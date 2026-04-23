@@ -563,6 +563,8 @@ async function handleChatStream(
     thinkingDurationMs: 0,
     // Mid-turn compaction: set when usage > 85% during tool loop
     needsMidTurnCompaction: false,
+    // Track last llama.cpp timings for model-stats recording (per-message)
+    lastLlamaTimings: null as any,
   };
 
   function resetAccumulators() {
@@ -582,6 +584,7 @@ async function handleChatStream(
     state.thinkingStartTime = null;
     state.thinkingDurationMs = 0;
     state.needsMidTurnCompaction = false;
+    state.lastLlamaTimings = null;
   }
 
   function buildCurrentAssistantMessage(): ChatMessage {
@@ -1165,6 +1168,10 @@ async function handleChatStream(
               output: msg.usage.output,
               totalTokens: msg.usage.totalTokens,
             };
+          }
+          // Capture llama.cpp timings for model-stats recording
+          if ((msg as any).llamaTimings) {
+            state.lastLlamaTimings = (msg as any).llamaTimings;
           }
 
           // Send iteration event with usage data so client can update token indicators mid-loop
@@ -1785,6 +1792,10 @@ async function handleChatStream(
             if (msg.usage) {
               state.finalUsage = { input: msg.usage.input, output: msg.usage.output, totalTokens: msg.usage.totalTokens };
             }
+            // Capture llama.cpp timings from resume loop too
+            if ((msg as any).llamaTimings) {
+              state.lastLlamaTimings = (msg as any).llamaTimings;
+            }
             iterations++;
             console.log(`[chat] resume turn_end (cycle ${compactionCycle}): stop=${sr} content=${state.fullText.length}ch tokens=${msg.usage?.totalTokens || "?"}`);
 
@@ -1992,6 +2003,17 @@ async function handleChatStream(
           }
         } catch (err) {
           console.warn("[title] post-stream generation failed:", err);
+        }
+      }
+
+      // Record model performance stats for llama.cpp models (per-message, not per-turn)
+      if (ollamaModel?.provider === "llamacpp" && state.lastLlamaTimings) {
+        try {
+          const { recordModelStats } = await import("../services/model-stats.js");
+          recordModelStats(ollamaModel.id, "llamacpp", state.lastLlamaTimings);
+          console.log(`[model-stats] recorded: ${ollamaModel.id} decode=${state.lastLlamaTimings.predicted_per_second.toFixed(1)} tok/s`);
+        } catch (err) {
+          console.warn("[model-stats] recording failed:", err);
         }
       }
 

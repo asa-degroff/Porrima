@@ -94,6 +94,18 @@ interface OpenAIChatChunk {
     completion_tokens: number;
     total_tokens: number;
   };
+  timings?: {
+    prompt_n: number;
+    prompt_ms: number;
+    prompt_per_token_ms: number;
+    prompt_per_second: number;
+    predicted_n: number;
+    predicted_ms: number;
+    predicted_per_token_ms: number;
+    predicted_per_second: number;
+    load_ms?: number;
+    sample_ms?: number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -843,6 +855,9 @@ export const streamOpenAICompat = (
 
       let stopReason: StopReason = "stop";
 
+      // Track llama.cpp timings from the final SSE chunk.
+      let llamaTimings: OpenAIChatChunk["timings"] | undefined;
+
       for await (const chunk of parseSSE(response.body, options?.signal)) {
         // Extract usage from final chunk
         if (chunk.usage) {
@@ -854,6 +869,10 @@ export const streamOpenAICompat = (
             totalTokens: chunk.usage.total_tokens || 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           };
+        }
+        // Capture llama.cpp timings from final chunk
+        if (chunk.timings) {
+          llamaTimings = chunk.timings;
         }
 
         const choice = chunk.choices?.[0];
@@ -1004,6 +1023,10 @@ export const streamOpenAICompat = (
       }
 
       output.stopReason = stopReason;
+      // Attach llama.cpp timings so downstream consumers (model-stats, etc.) can record them.
+      if (llamaTimings) {
+        (output as any).llamaTimings = llamaTimings;
+      }
 
       if (options?.signal?.aborted) {
         throw new Error("Request was aborted");

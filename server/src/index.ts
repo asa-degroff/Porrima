@@ -26,6 +26,7 @@ import notebooksRouter from "./routes/notebooks.js";
 import blueskyRouter from "./routes/bluesky.js";
 import uiStateRouter from "./routes/ui-state.js";
 import embeddingMigrationRouter from "./routes/embedding-migration.js";
+import modelStatsRouter from "./routes/model-stats.js";
 import { requireAuth } from "./middleware/auth.js";
 import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
@@ -124,6 +125,7 @@ app.use("/api/notebooks", notebooksRouter);
 app.use("/api/bluesky", blueskyRouter);
 app.use("/api/ui-state", uiStateRouter);
 app.use("/api/embedding", embeddingMigrationRouter);
+app.use("/api/model-stats", modelStatsRouter);
 
 // Optional: Run corpus cleanup on startup to fix orphans from before the deletion fix
 // Set CORPUS_CLEANUP=true to enable
