@@ -253,6 +253,56 @@
   --theme-glow: rgba(45, 170, 160, 0.15);
 }
 
+[data-theme="iron"] {
+  /* Mid-gray — lighter than asphalt, with rust-orange accents */
+  --theme-primary: 160, 165, 175;       /* mid warm gray */
+  --theme-primary-muted: 160, 165, 175, 0.2;
+  --theme-primary-border: 160, 165, 175, 0.3;
+  --theme-primary-text: 185, 190, 200;  /* light gray */
+  
+  --theme-accent: 205, 133, 63;         /* rust orange-brown */
+  --theme-accent-muted: 205, 133, 63, 0.15;
+  --theme-accent-border: 205, 133, 63, 0.25;
+  --theme-accent-text: 230, 165, 100;   /* warm rust glow */
+  
+  --theme-secondary: 180, 140, 110;     /* dusty tan */
+  --theme-secondary-muted: 180, 140, 110, 0.2;
+  --theme-secondary-border: 180, 140, 110, 0.25;
+  --theme-secondary-text: 200, 170, 145; /* light dusty tan */
+  
+  --theme-grid: 160, 165, 175;          /* mid gray for grid lines */
+  --theme-grid-opacity: 0.1;
+  
+  --theme-bg-gradient: linear-gradient(135deg, #121214 0%, #1c1c20 25%, #202024 38%, #232328 50%, #202024 62%, #1c1c20 75%, #121214 100%);
+  --theme-bg-flat: #232328;
+  --theme-glow: rgba(160, 165, 175, 0.12);
+}
+
+[data-theme="rust"] {
+  /* Burnt orange/rust background with silvery light gray accents */
+  --theme-primary: 210, 130, 50;        /* burnt rust orange */
+  --theme-primary-muted: 210, 130, 50, 0.2;
+  --theme-primary-border: 210, 130, 50, 0.3;
+  --theme-primary-text: 240, 175, 110;  /* light rust amber */
+  
+  --theme-accent: 210, 215, 225;        /* silvery light gray */
+  --theme-accent-muted: 210, 215, 225, 0.15;
+  --theme-accent-border: 210, 215, 225, 0.25;
+  --theme-accent-text: 210, 215, 225, 0.85;
+  
+  --theme-secondary: 180, 190, 200;     /* cool steel gray */
+  --theme-secondary-muted: 180, 190, 200, 0.2;
+  --theme-secondary-border: 180, 190, 200, 0.25;
+  --theme-secondary-text: 200, 210, 220; /* light steel */
+  
+  --theme-grid: 210, 130, 50;           /* rust for grid lines */
+  --theme-grid-opacity: 0.1;
+  
+  --theme-bg-gradient: linear-gradient(135deg, #1a0e06 0%, #2c1a0e 25%, #332012 38%, #382414 50%, #332012 62%, #2c1a0e 75%, #1a0e06 100%);
+  --theme-bg-flat: #382414;
+  --theme-glow: rgba(210, 130, 50, 0.15);
+}
+
 /* Disable chromatic aberration globally when user toggles it off */
 [data-chromatic-aberration="off"] {
   --theme-aberration-strength: 0;

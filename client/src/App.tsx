@@ -212,6 +212,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         emerald: '#041a10',
         copper: '#140a07',
         'oxidized-copper': '#051210',
+        iron: '#121214',
+        rust: '#1a0e06',
       };
       themeColorMeta.setAttribute('content', themeColors[theme] || '#0f172a');
     }

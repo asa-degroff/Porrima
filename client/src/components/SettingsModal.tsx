@@ -2283,6 +2283,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 { value: "emerald" as Theme, label: "Emerald", preview: "from-emerald-900" },
                 { value: "copper" as Theme, label: "Copper", preview: "from-orange-900" },
                 { value: "oxidized-copper" as Theme, label: "Verdigris", preview: "from-teal-900" },
+                { value: "iron" as Theme, label: "Iron", preview: "from-gray-800" },
+                { value: "rust" as Theme, label: "Rust", preview: "from-orange-950" },
               ].map((opt) => (
                 <button
                   key={opt.value}

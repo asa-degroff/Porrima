@@ -146,7 +146,7 @@ export interface ConversationSearchResult {
   rank: number;
 }
 
-export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper";
+export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper" | "iron" | "rust";
 export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots";
 export type CornerShape = "round" | "squircle";
 export type CornerRadius = "compact" | "default" | "generous";
