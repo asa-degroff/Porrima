@@ -326,12 +326,22 @@ async function buildExtractionSystemPrompt(projectId?: string): Promise<string> 
   const settings = await getSettings();
   const ctxSize = settings.extractionCtxSize ?? 16384;
 
-  // Include loaded block summaries so extraction avoids redundant facts
+  // Include loaded block summaries so extraction avoids redundant facts.
+  // Filter out system-managed blocks (synthesis, notebook, zeitgeist archives) —
+  // they are off-topic for the extraction task and bloat the context window.
   let blockContext = "";
   try {
     const { getMemoryBlocksByScope } = await import("./memory-storage.js");
-    const globalBlocks = getMemoryBlocksByScope("global");
-    const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId) : [];
+    const isSystemBlock = (b: { id: string; scope: string; blockType?: string }) =>
+      b.id === "blk-zeitgeist-continuity" ||
+      b.scope === "archived" ||
+      (b.blockType !== undefined && b.blockType !== "note") ||
+      b.id.startsWith("blk-archive-") ||
+      b.id.startsWith("blk-synth-") ||
+      b.id.startsWith("blk-notebook-");
+
+    const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemBlock(b));
+    const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemBlock(b)) : [];
     const allBlocks = [...globalBlocks, ...projectBlocks];
     if (allBlocks.length > 0) {
       const staticChars =
@@ -1027,12 +1037,22 @@ async function buildPreCompactionSystemPrompt(projectId?: string): Promise<strin
   const settings = await getSettings();
   const ctxSize = settings.extractionCtxSize ?? 16384;
 
-  // Load existing blocks with space awareness
+  // Load existing blocks with space awareness.
+  // Filter out system-managed blocks (synthesis, notebook, zeitgeist archives) —
+  // they are off-topic for the extraction task and bloat the context window.
   let blockContext = "";
   try {
     const { getMemoryBlocksByScope } = await import("./memory-storage.js");
-    const globalBlocks = getMemoryBlocksByScope("global");
-    const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId) : [];
+    const isSystemBlock = (b: { id: string; scope: string; blockType?: string }) =>
+      b.id === "blk-zeitgeist-continuity" ||
+      b.scope === "archived" ||
+      (b.blockType !== undefined && b.blockType !== "note") ||
+      b.id.startsWith("blk-archive-") ||
+      b.id.startsWith("blk-synth-") ||
+      b.id.startsWith("blk-notebook-");
+
+    const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemBlock(b));
+    const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemBlock(b)) : [];
     const allBlocks = [...globalBlocks, ...projectBlocks];
 
     if (allBlocks.length > 0) {
