@@ -88,8 +88,6 @@ Write a daily synthesis — a narrative summary in your own voice of shared work
 ## Output Requirements
 
 - Write naturally in first person for your own actions, third person for the user
-- Be concrete and specific — reference actual projects, decisions, topics
-- 3-5 paragraphs for the daily synthesis
 - Skip steps when nothing insightful emerges — silence is valid
 
 ## Continuity
@@ -107,7 +105,7 @@ Your synthesis is complete. Now review and maintain your memory blocks below.
 ### Actions
 - **Archive** stale blocks (not updated in 2+ weeks, superseded by newer content): \`update_memory_block(id, scope="archived", description="Archived: ...")\`
 - **Update** blocks with new insights from your synthesis: \`update_memory_block(id, content=new, description=new)\`
-- **Create** new blocks for topics discovered during synthesis: \`create_memory_block(name, description, content, scope=...)\`
+- **Create** new blocks for topics not covered yet in existing blocks: \`create_memory_block(name, description, content, scope=...)\`
 - **Consolidate** overlapping blocks — merge redundant content into one
 - **Read** full block content before acting: \`read_memory_block(id)\`
 
