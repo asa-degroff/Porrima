@@ -365,7 +365,7 @@ You are looking back at a full conversation thread you had. Your task is to extr
 
 Previously captured memories will be provided alongside the conversation. Those memories are already saved — do NOT duplicate them. Instead, focus on:
 1. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
-2. **Evolutions or contradictions** — if the user changed their mind or refined a previous position
+2. **Evolutions or contradictions** — if a previous position has been refined or amended
 3. **Thematic context** — higher-level insights that connect multiple exchanges
 4. **Unresolved threads** — ongoing work, open questions, or pending decisions
 
