@@ -178,6 +178,81 @@
   --theme-glow: rgba(180, 120, 80, 0.15);
 }
 
+[data-theme="emerald"] {
+  /* Vivid emerald green — brighter and more alive than forest */
+  --theme-primary: 16, 185, 129;       /* emerald-500 */
+  --theme-primary-muted: 16, 185, 129, 0.2;
+  --theme-primary-border: 16, 185, 129, 0.3;
+  --theme-primary-text: 52, 211, 153;  /* emerald-400 */
+  
+  --theme-accent: 251, 146, 60;        /* orange-400 — warm peach/coral */
+  --theme-accent-muted: 251, 146, 60, 0.15;
+  --theme-accent-border: 251, 146, 60, 0.2;
+  --theme-accent-text: 251, 146, 60, 0.85;
+  
+  --theme-secondary: 244, 114, 182;    /* pink-400 — soft contrast */
+  --theme-secondary-muted: 244, 114, 182, 0.2;
+  --theme-secondary-border: 244, 114, 182, 0.25;
+  --theme-secondary-text: 249, 168, 212; /* pink-300 */
+  
+  --theme-grid: 16, 185, 129;          /* emerald-500 for grid lines */
+  --theme-grid-opacity: 0.12;
+  
+  --theme-bg-gradient: linear-gradient(135deg, #041a10 0%, #0a2e1d 25%, #0b3320 38%, #0d3824 50%, #0b3320 62%, #0a2e1d 75%, #041a10 100%);
+  --theme-bg-flat: #0d3824;
+  --theme-glow: rgba(16, 185, 129, 0.15);
+}
+
+[data-theme="copper"] {
+  /* Warm copper red-brown with blue-green accents */
+  --theme-primary: 200, 100, 60;       /* warm copper red-brown */
+  --theme-primary-muted: 200, 100, 60, 0.2;
+  --theme-primary-border: 200, 100, 60, 0.3;
+  --theme-primary-text: 225, 145, 100; /* light copper */
+  
+  --theme-accent: 45, 180, 170;        /* teal blue-green */
+  --theme-accent-muted: 45, 180, 170, 0.15;
+  --theme-accent-border: 45, 180, 170, 0.2;
+  --theme-accent-text: 96, 205, 190;   /* light teal */
+  
+  --theme-secondary: 70, 160, 175;     /* steel blue-green */
+  --theme-secondary-muted: 70, 160, 175, 0.2;
+  --theme-secondary-border: 70, 160, 175, 0.25;
+  --theme-secondary-text: 110, 195, 205; /* light steel teal */
+  
+  --theme-grid: 200, 100, 60;          /* copper for grid lines */
+  --theme-grid-opacity: 0.12;
+  
+  --theme-bg-gradient: linear-gradient(135deg, #140a07 0%, #231410 25%, #291913 38%, #2e1c15 50%, #291913 62%, #231410 75%, #140a07 100%);
+  --theme-bg-flat: #2e1c15;
+  --theme-glow: rgba(200, 100, 60, 0.15);
+}
+
+[data-theme="oxidized-copper"] {
+  /* Patina blue-green with copper-red-orange accents */
+  --theme-primary: 45, 170, 160;       /* patina blue-green */
+  --theme-primary-muted: 45, 170, 160, 0.2;
+  --theme-primary-border: 45, 170, 160, 0.3;
+  --theme-primary-text: 96, 200, 190;  /* light patina */
+  
+  --theme-accent: 220, 110, 45;        /* copper-red-orange */
+  --theme-accent-muted: 220, 110, 45, 0.15;
+  --theme-accent-border: 220, 110, 45, 0.2;
+  --theme-accent-text: 235, 145, 80;   /* warm copper glow */
+  
+  --theme-secondary: 70, 140, 165;     /* deep teal */
+  --theme-secondary-muted: 70, 140, 165, 0.2;
+  --theme-secondary-border: 70, 140, 165, 0.25;
+  --theme-secondary-text: 100, 180, 200; /* light deep teal */
+  
+  --theme-grid: 45, 170, 160;          /* patina for grid lines */
+  --theme-grid-opacity: 0.12;
+  
+  --theme-bg-gradient: linear-gradient(135deg, #051210 0%, #0c2220 25%, #0f2825 38%, #112c29 50%, #0f2825 62%, #0c2220 75%, #051210 100%);
+  --theme-bg-flat: #112c29;
+  --theme-glow: rgba(45, 170, 160, 0.15);
+}
+
 /* Disable chromatic aberration globally when user toggles it off */
 [data-chromatic-aberration="off"] {
   --theme-aberration-strength: 0;

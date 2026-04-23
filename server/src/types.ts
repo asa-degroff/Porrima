@@ -147,7 +147,7 @@ export interface OllamaModel {
   provider?: InferenceProvider;  // Default: "ollama" for backward compat
 }
 
-export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono";
+export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper";
 export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots";
 export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
 

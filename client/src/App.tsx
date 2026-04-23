@@ -207,6 +207,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         forest: '#0a1a0f',
         crimson: '#1a0a0f',
         mono: '#0a0a0a',
+        strawberry: '#1a010b',
+        coffee: '#0f0a07',
+        emerald: '#041a10',
+        copper: '#140a07',
+        'oxidized-copper': '#051210',
       };
       themeColorMeta.setAttribute('content', themeColors[theme] || '#0f172a');
     }
