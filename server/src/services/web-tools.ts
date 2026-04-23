@@ -14,9 +14,51 @@ type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
 const TAVILY_SEARCH_DEPTHS = ["basic", "advanced", "fast", "ultra-fast"] as const;
 const TAVILY_TOPICS = ["general", "news", "finance"] as const;
 const TAVILY_TIME_RANGES = ["day", "week", "month", "year", "d", "w", "m", "y"] as const;
+const TAVILY_ANSWER_MODES = ["basic", "advanced"] as const;
+const TAVILY_RAW_CONTENT_MODES = ["markdown", "text"] as const;
 
 function isWebSearchProvider(value: unknown): value is WebSearchProvider {
   return typeof value === "string" && WEB_SEARCH_PROVIDERS.includes(value as WebSearchProvider);
+}
+
+function normalizeString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+
+  let normalized = value.trim();
+  for (let i = 0; i < 2; i++) {
+    const startsAndEndsWithQuotes =
+      (normalized.startsWith("\"") && normalized.endsWith("\"")) ||
+      (normalized.startsWith("'") && normalized.endsWith("'"));
+
+    if (!startsAndEndsWithQuotes || normalized.length < 2) break;
+
+    try {
+      const parsed = JSON.parse(normalized);
+      if (typeof parsed !== "string") break;
+      normalized = parsed.trim();
+    } catch {
+      normalized = normalized.slice(1, -1).trim();
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const normalized = value
+    .map(normalizeString)
+    .filter((item): item is string => !!item);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeBooleanOrString(value: unknown): boolean | string | undefined {
+  if (typeof value === "boolean") return value;
+  const normalized = normalizeString(value);
+  if (normalized === undefined) return undefined;
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  return normalized;
 }
 
 function pickAllowedString<T extends string>(
@@ -24,8 +66,19 @@ function pickAllowedString<T extends string>(
   allowed: readonly T[],
   fallback?: T
 ): T | undefined {
-  if (typeof value === "string" && (allowed as readonly string[]).includes(value)) return value as T;
+  const normalized = normalizeString(value);
+  if (normalized && (allowed as readonly string[]).includes(normalized)) return normalized as T;
   return fallback;
+}
+
+function pickAllowedBooleanOrString<T extends string>(
+  value: unknown,
+  allowed: readonly T[]
+): boolean | T | undefined {
+  const normalized = normalizeBooleanOrString(value);
+  if (typeof normalized === "boolean") return normalized;
+  if (normalized && (allowed as readonly string[]).includes(normalized)) return normalized as T;
+  return undefined;
 }
 
 // --- Chrome path discovery ---
@@ -60,12 +113,7 @@ const WEB_SEARCH_TOOL: Tool = {
         maximum: 20,
       })
     ),
-    provider: Type.Optional(
-      Type.Union(
-        [Type.Literal("brave"), Type.Literal("exa"), Type.Literal("tavily")],
-        { description: "Optional provider override: brave, exa, or tavily. Omit to use the configured default." }
-      )
-    ),
+    provider: Type.Optional(Type.String({ description: "Optional provider override: brave, exa, or tavily. Omit to use the configured default. Use the bare value, not a quoted string." })),
     // Exa-specific parameters (only effective when provider is "exa")
     searchType: Type.Optional(Type.String({ description: "Exa search type: auto, neural, keyword, hybrid, fast, deep, deep-lite, deep-reasoning, magic, instant (default: auto)" })),
     contents: Type.Optional(
@@ -89,43 +137,19 @@ const WEB_SEARCH_TOOL: Tool = {
     ),
     // Tavily-specific parameters (only effective when provider is "tavily")
     searchDepth: Type.Optional(
-      Type.Union(
-        [Type.Literal("basic"), Type.Literal("advanced"), Type.Literal("fast"), Type.Literal("ultra-fast")],
-        { description: "Tavily search depth: basic, advanced, fast, ultra-fast (default: basic)" }
-      )
+      Type.String({ description: "Tavily search depth: basic, advanced, fast, ultra-fast (default: basic). Use the bare value, not a quoted string." })
     ),
     topic: Type.Optional(
-      Type.Union(
-        [Type.Literal("general"), Type.Literal("news"), Type.Literal("finance")],
-        { description: "Tavily topic: general, news, or finance (default: general)" }
-      )
+      Type.String({ description: "Tavily topic: general, news, or finance (default: general). Use the bare value, not a quoted string." })
     ),
     timeRange: Type.Optional(
-      Type.Union(
-        [
-          Type.Literal("day"),
-          Type.Literal("week"),
-          Type.Literal("month"),
-          Type.Literal("year"),
-          Type.Literal("d"),
-          Type.Literal("w"),
-          Type.Literal("m"),
-          Type.Literal("y"),
-        ],
-        { description: "Tavily time range filter: day/week/month/year or d/w/m/y" }
-      )
+      Type.String({ description: "Tavily time range filter: day/week/month/year or d/w/m/y. Use the bare value, not a quoted string." })
     ),
     includeAnswer: Type.Optional(
-      Type.Union(
-        [Type.Boolean(), Type.Literal("basic"), Type.Literal("advanced")],
-        { description: "Tavily only: include an LLM-generated answer (false by default)" }
-      )
+      Type.Any({ description: "Tavily only: include an LLM-generated answer. Boolean, basic, or advanced. False by default." })
     ),
     includeRawContent: Type.Optional(
-      Type.Union(
-        [Type.Boolean(), Type.Literal("markdown"), Type.Literal("text")],
-        { description: "Tavily only: include cleaned page content. Can increase latency and result size." }
-      )
+      Type.Any({ description: "Tavily only: include cleaned page content. Boolean, markdown, or text. Can increase latency and result size." })
     ),
   }),
 };
@@ -191,22 +215,24 @@ async function getTavilyApiKey(): Promise<string> {
 
 async function getDefaultWebSearchProvider(): Promise<WebSearchProvider> {
   const settings = await getSettings();
-  return isWebSearchProvider(settings.defaultWebSearchProvider)
-    ? settings.defaultWebSearchProvider
+  const provider = normalizeString(settings.defaultWebSearchProvider);
+  return isWebSearchProvider(provider)
+    ? provider
     : "brave";
 }
 
 async function executeWebSearch(
   args: Record<string, any>
 ): Promise<{ content: string; isError: boolean }> {
-  if (args.provider !== undefined && !isWebSearchProvider(args.provider)) {
+  const requestedProvider = normalizeString(args.provider);
+  if (requestedProvider !== undefined && !isWebSearchProvider(requestedProvider)) {
     return {
-      content: `Unsupported web search provider: ${String(args.provider)}. Use one of: ${WEB_SEARCH_PROVIDERS.join(", ")}.`,
+      content: `Unsupported web search provider: ${requestedProvider}. Use one of: ${WEB_SEARCH_PROVIDERS.join(", ")}.`,
       isError: true,
     };
   }
 
-  const provider = args.provider || await getDefaultWebSearchProvider();
+  const provider = requestedProvider || await getDefaultWebSearchProvider();
 
   if (provider === "exa") {
     return executeExaSearch(args);
@@ -300,13 +326,16 @@ async function executeExaSearch(
     const body: Record<string, any> = {
       query,
       numResults,
-      type: args.searchType || "auto",
+      type: normalizeString(args.searchType) || "auto",
     };
 
     // Exa-specific filters
-    if (args.startPublishedDate) body.startPublishedDate = args.startPublishedDate;
-    if (args.endPublishedDate) body.endPublishedDate = args.endPublishedDate;
-    if (args.includeDomains && args.includeDomains.length > 0) body.includeDomains = args.includeDomains;
+    const startPublishedDate = normalizeString(args.startPublishedDate);
+    const endPublishedDate = normalizeString(args.endPublishedDate);
+    const includeDomains = normalizeStringArray(args.includeDomains);
+    if (startPublishedDate) body.startPublishedDate = startPublishedDate;
+    if (endPublishedDate) body.endPublishedDate = endPublishedDate;
+    if (includeDomains) body.includeDomains = includeDomains;
 
     // Exa content options — don't enable by default to avoid token bloat
     // Only include if explicitly set
@@ -410,12 +439,18 @@ async function executeTavilySearch(
     const timeRange = pickAllowedString(args.timeRange, TAVILY_TIME_RANGES);
     if (timeRange) body.time_range = timeRange;
 
-    if (args.startDate || args.startPublishedDate) body.start_date = args.startDate || args.startPublishedDate;
-    if (args.endDate || args.endPublishedDate) body.end_date = args.endDate || args.endPublishedDate;
-    if (args.includeDomains && args.includeDomains.length > 0) body.include_domains = args.includeDomains;
-    if (args.excludeDomains && args.excludeDomains.length > 0) body.exclude_domains = args.excludeDomains;
-    if (args.includeAnswer !== undefined) body.include_answer = args.includeAnswer;
-    if (args.includeRawContent !== undefined) body.include_raw_content = args.includeRawContent;
+    const startDate = normalizeString(args.startDate) || normalizeString(args.startPublishedDate);
+    const endDate = normalizeString(args.endDate) || normalizeString(args.endPublishedDate);
+    const includeDomains = normalizeStringArray(args.includeDomains);
+    const excludeDomains = normalizeStringArray(args.excludeDomains);
+    const includeAnswer = pickAllowedBooleanOrString(args.includeAnswer, TAVILY_ANSWER_MODES);
+    const includeRawContent = pickAllowedBooleanOrString(args.includeRawContent, TAVILY_RAW_CONTENT_MODES);
+    if (startDate) body.start_date = startDate;
+    if (endDate) body.end_date = endDate;
+    if (includeDomains) body.include_domains = includeDomains;
+    if (excludeDomains) body.exclude_domains = excludeDomains;
+    if (includeAnswer !== undefined) body.include_answer = includeAnswer;
+    if (includeRawContent !== undefined) body.include_raw_content = includeRawContent;
 
     const response = await fetch("https://api.tavily.com/search", {
       method: "POST",
