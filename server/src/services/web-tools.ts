@@ -8,6 +8,25 @@ import { existsSync } from "fs";
 import { getSettings } from "./chat-storage.js";
 
 const MAX_CONTENT_LENGTH = 50_000;
+const WEB_SEARCH_PROVIDERS = ["brave", "exa", "tavily"] as const;
+type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
+
+const TAVILY_SEARCH_DEPTHS = ["basic", "advanced", "fast", "ultra-fast"] as const;
+const TAVILY_TOPICS = ["general", "news", "finance"] as const;
+const TAVILY_TIME_RANGES = ["day", "week", "month", "year", "d", "w", "m", "y"] as const;
+
+function isWebSearchProvider(value: unknown): value is WebSearchProvider {
+  return typeof value === "string" && WEB_SEARCH_PROVIDERS.includes(value as WebSearchProvider);
+}
+
+function pickAllowedString<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fallback?: T
+): T | undefined {
+  if (typeof value === "string" && (allowed as readonly string[]).includes(value)) return value as T;
+  return fallback;
+}
 
 // --- Chrome path discovery ---
 
@@ -31,7 +50,7 @@ function findChromePath(): string | null {
 const WEB_SEARCH_TOOL: Tool = {
   name: "web_search",
   description:
-    "Search the web. Supports Brave Search and Exa as providers. Brave returns simple snippets; Exa supports rich content extraction (highlights, summaries), date/domain filters, and deep reasoning search.",
+    "Search the web. Uses the configured default provider unless provider is supplied as an override. Supports Brave Search, Exa, and Tavily. Brave returns simple snippets; Exa supports rich content extraction and deep reasoning search; Tavily supports concise ranked web results, optional generated answers, and date/domain filters.",
   parameters: Type.Object({
     query: Type.String({ description: "Search query" }),
     count: Type.Optional(
@@ -41,7 +60,12 @@ const WEB_SEARCH_TOOL: Tool = {
         maximum: 20,
       })
     ),
-    provider: Type.Optional(Type.String({ description: "Search provider: 'brave' or 'exa' (default: brave)" })),
+    provider: Type.Optional(
+      Type.Union(
+        [Type.Literal("brave"), Type.Literal("exa"), Type.Literal("tavily")],
+        { description: "Optional provider override: brave, exa, or tavily. Omit to use the configured default." }
+      )
+    ),
     // Exa-specific parameters (only effective when provider is "exa")
     searchType: Type.Optional(Type.String({ description: "Exa search type: auto, neural, keyword, hybrid, fast, deep, deep-lite, deep-reasoning, magic, instant (default: auto)" })),
     contents: Type.Optional(
@@ -52,13 +76,56 @@ const WEB_SEARCH_TOOL: Tool = {
       })
     ),
     startPublishedDate: Type.Optional(
-      Type.String({ description: "Exa only: earliest publication date (YYYY-MM-DD)" })
+      Type.String({ description: "Exa/Tavily: earliest publication or update date (YYYY-MM-DD)" })
     ),
     endPublishedDate: Type.Optional(
-      Type.String({ description: "Exa only: latest publication date (YYYY-MM-DD)" })
+      Type.String({ description: "Exa/Tavily: latest publication or update date (YYYY-MM-DD)" })
     ),
     includeDomains: Type.Optional(
-      Type.Array(Type.String(), { description: "Exa only: domains to include in results" })
+      Type.Array(Type.String(), { description: "Exa/Tavily: domains to include in results" })
+    ),
+    excludeDomains: Type.Optional(
+      Type.Array(Type.String(), { description: "Tavily only: domains to exclude from results" })
+    ),
+    // Tavily-specific parameters (only effective when provider is "tavily")
+    searchDepth: Type.Optional(
+      Type.Union(
+        [Type.Literal("basic"), Type.Literal("advanced"), Type.Literal("fast"), Type.Literal("ultra-fast")],
+        { description: "Tavily search depth: basic, advanced, fast, ultra-fast (default: basic)" }
+      )
+    ),
+    topic: Type.Optional(
+      Type.Union(
+        [Type.Literal("general"), Type.Literal("news"), Type.Literal("finance")],
+        { description: "Tavily topic: general, news, or finance (default: general)" }
+      )
+    ),
+    timeRange: Type.Optional(
+      Type.Union(
+        [
+          Type.Literal("day"),
+          Type.Literal("week"),
+          Type.Literal("month"),
+          Type.Literal("year"),
+          Type.Literal("d"),
+          Type.Literal("w"),
+          Type.Literal("m"),
+          Type.Literal("y"),
+        ],
+        { description: "Tavily time range filter: day/week/month/year or d/w/m/y" }
+      )
+    ),
+    includeAnswer: Type.Optional(
+      Type.Union(
+        [Type.Boolean(), Type.Literal("basic"), Type.Literal("advanced")],
+        { description: "Tavily only: include an LLM-generated answer (false by default)" }
+      )
+    ),
+    includeRawContent: Type.Optional(
+      Type.Union(
+        [Type.Boolean(), Type.Literal("markdown"), Type.Literal("text")],
+        { description: "Tavily only: include cleaned page content. Can increase latency and result size." }
+      )
     ),
   }),
 };
@@ -116,13 +183,36 @@ async function getExaApiKey(): Promise<string> {
   return settings.exaApiKey || "";
 }
 
+async function getTavilyApiKey(): Promise<string> {
+  if (process.env.TAVILY_API_KEY) return process.env.TAVILY_API_KEY;
+  const settings = await getSettings();
+  return settings.tavilyApiKey || "";
+}
+
+async function getDefaultWebSearchProvider(): Promise<WebSearchProvider> {
+  const settings = await getSettings();
+  return isWebSearchProvider(settings.defaultWebSearchProvider)
+    ? settings.defaultWebSearchProvider
+    : "brave";
+}
+
 async function executeWebSearch(
   args: Record<string, any>
 ): Promise<{ content: string; isError: boolean }> {
-  const provider = args.provider || "brave";
+  if (args.provider !== undefined && !isWebSearchProvider(args.provider)) {
+    return {
+      content: `Unsupported web search provider: ${String(args.provider)}. Use one of: ${WEB_SEARCH_PROVIDERS.join(", ")}.`,
+      isError: true,
+    };
+  }
+
+  const provider = args.provider || await getDefaultWebSearchProvider();
 
   if (provider === "exa") {
     return executeExaSearch(args);
+  }
+  if (provider === "tavily") {
+    return executeTavilySearch(args);
   }
 
   return executeBraveSearch(args);
@@ -285,6 +375,102 @@ async function executeExaSearch(
     return { content: formatted, isError: false };
   } catch (e: any) {
     return { content: `Exa Search failed: ${e.message}`, isError: true };
+  }
+}
+
+async function executeTavilySearch(
+  args: Record<string, any>
+): Promise<{ content: string; isError: boolean }> {
+  const apiKey = await getTavilyApiKey();
+  if (!apiKey) {
+    return {
+      content:
+        "Tavily Search is unavailable: no API key configured. Add one in Settings or set the TAVILY_API_KEY environment variable.",
+      isError: true,
+    };
+  }
+
+  const query = args.query;
+  if (!query) {
+    return { content: "Missing required parameter: query", isError: true };
+  }
+
+  const maxResults = Math.min(20, Math.max(1, args.count || 5));
+
+  try {
+    const body: Record<string, any> = {
+      query,
+      max_results: maxResults,
+      search_depth: pickAllowedString(args.searchDepth, TAVILY_SEARCH_DEPTHS, "basic"),
+    };
+
+    const topic = pickAllowedString(args.topic, TAVILY_TOPICS);
+    if (topic) body.topic = topic;
+
+    const timeRange = pickAllowedString(args.timeRange, TAVILY_TIME_RANGES);
+    if (timeRange) body.time_range = timeRange;
+
+    if (args.startDate || args.startPublishedDate) body.start_date = args.startDate || args.startPublishedDate;
+    if (args.endDate || args.endPublishedDate) body.end_date = args.endDate || args.endPublishedDate;
+    if (args.includeDomains && args.includeDomains.length > 0) body.include_domains = args.includeDomains;
+    if (args.excludeDomains && args.excludeDomains.length > 0) body.exclude_domains = args.excludeDomains;
+    if (args.includeAnswer !== undefined) body.include_answer = args.includeAnswer;
+    if (args.includeRawContent !== undefined) body.include_raw_content = args.includeRawContent;
+
+    const response = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        content: `Tavily Search API error: ${response.status} ${response.statusText} — ${errorText.slice(0, 500)}`,
+        isError: true,
+      };
+    }
+
+    const data = await response.json();
+    const results = data.results || [];
+    const sections: string[] = [];
+
+    if (data.answer) {
+      sections.push(`Answer: ${data.answer}`);
+    }
+
+    if (results.length > 0) {
+      sections.push(results
+        .map((r: any, i: number) => {
+          const parts: string[] = [];
+          parts.push(`${i + 1}. **${r.title || "(no title)"}**`);
+          parts.push(`   ${r.url}`);
+
+          const content = r.content || r.raw_content;
+          if (content) {
+            parts.push(`   ${String(content).slice(0, 1000)}`);
+          }
+
+          const meta: string[] = [];
+          if (typeof r.score === "number") meta.push(`score ${r.score.toFixed(3)}`);
+          if (r.published_date) meta.push(String(r.published_date).slice(0, 10));
+          if (meta.length > 0) parts.push(`   — ${meta.join(", ")}`);
+
+          return parts.join("\n");
+        })
+        .join("\n\n"));
+    }
+
+    if (sections.length === 0) {
+      return { content: "No search results found.", isError: false };
+    }
+
+    return { content: sections.join("\n\n"), isError: false };
+  } catch (e: any) {
+    return { content: `Tavily Search failed: ${e.message}`, isError: true };
   }
 }
 

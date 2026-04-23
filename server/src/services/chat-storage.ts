@@ -630,6 +630,8 @@ const DEFAULT_SETTINGS: Settings = {
   defaultSystemPrompt: "You are a helpful assistant.",
   braveApiKey: "",
   exaApiKey: "",
+  tavilyApiKey: "",
+  defaultWebSearchProvider: "brave",
 };
 
 export async function getSettings(): Promise<Settings> {

@@ -159,12 +159,16 @@ export interface SystemPromptPreset {
   isDefault: boolean;
 }
 
+export type WebSearchProvider = "brave" | "exa" | "tavily";
+
 export interface Settings {
   defaultModelId: string;
   defaultVisionModelId?: string;
   defaultSystemPrompt: string;
   braveApiKey: string;
   exaApiKey: string;
+  tavilyApiKey: string;
+  defaultWebSearchProvider?: WebSearchProvider;
   comfyuiUrl?: string;
   sdcppUrl?: string;
   imageBackend?: "comfyui" | "sdcpp";

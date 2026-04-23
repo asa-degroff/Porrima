@@ -162,6 +162,18 @@ const chevronSvg = (open: boolean) => (
   </svg>
 );
 
+type WebSearchProvider = NonNullable<Settings["defaultWebSearchProvider"]>;
+
+const WEB_SEARCH_PROVIDER_OPTIONS: Array<{ id: WebSearchProvider; label: string; description: string }> = [
+  { id: "brave", label: "Brave Search", description: "Fast snippets from Brave Search API." },
+  { id: "exa", label: "Exa", description: "Richer search with highlights, summaries, and deep modes." },
+  { id: "tavily", label: "Tavily", description: "Ranked web results with optional answers and date filters." },
+];
+
+function coerceWebSearchProvider(provider: Settings["defaultWebSearchProvider"]): WebSearchProvider {
+  return WEB_SEARCH_PROVIDER_OPTIONS.some((option) => option.id === provider) ? provider! : "brave";
+}
+
 interface MemoryStatus {
   memoryCount: number;
   lastSynthesis: string | null;
@@ -193,6 +205,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [userDocMessage, setUserDocMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [exaApiKey, setExaApiKey] = useState(settings.exaApiKey || "");
+  const [tavilyApiKey, setTavilyApiKey] = useState(settings.tavilyApiKey || "");
+  const [defaultWebSearchProvider, setDefaultWebSearchProvider] = useState<WebSearchProvider>(coerceWebSearchProvider(settings.defaultWebSearchProvider));
   const [comfyuiUrl, setComfyuiUrl] = useState(settings.comfyuiUrl || "http://127.0.0.1:8188");
   const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [imageBackend, setImageBackend] = useState<"comfyui" | "sdcpp">(settings.imageBackend ?? "comfyui");
@@ -336,6 +350,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [rerankerModelDropdownOpen, setRerankerModelDropdownOpen] = useState(false);
   const [favoritesDropdownOpen, setFavoritesDropdownOpen] = useState(false);
   const [imageBackendDropdownOpen, setImageBackendDropdownOpen] = useState(false);
+  const [webSearchProviderDropdownOpen, setWebSearchProviderDropdownOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
   const tocRef = useRef<HTMLDivElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
@@ -348,6 +363,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const rerankerModelDropdownRef = useRef<HTMLDivElement>(null);
   const favoritesDropdownRef = useRef<HTMLDivElement>(null);
   const imageBackendDropdownRef = useRef<HTMLDivElement>(null);
+  const webSearchProviderDropdownRef = useRef<HTMLDivElement>(null);
 
 
   useClickOutside(modelDropdownRef, () => setModelDropdownOpen(false), modelDropdownOpen);
@@ -359,6 +375,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useClickOutside(embeddingModelDropdownRef, () => setEmbeddingModelDropdownOpen(false), embeddingModelDropdownOpen);
   useClickOutside(rerankerModelDropdownRef, () => setRerankerModelDropdownOpen(false), rerankerModelDropdownOpen);
   useClickOutside(imageBackendDropdownRef, () => setImageBackendDropdownOpen(false), imageBackendDropdownOpen);
+  useClickOutside(webSearchProviderDropdownRef, () => setWebSearchProviderDropdownOpen(false), webSearchProviderDropdownOpen);
   useClickOutside(tocRef, () => setTocOpen(false), tocOpen);
   useClickOutside(favoritesDropdownRef, () => setFavoritesDropdownOpen(false), favoritesDropdownOpen);
 
@@ -530,6 +547,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       defaultSystemPrompt: effectivePrompt,
       braveApiKey: braveApiKey.trim(),
       exaApiKey: exaApiKey.trim(),
+      tavilyApiKey: tavilyApiKey.trim(),
+      defaultWebSearchProvider,
       comfyuiUrl: comfyuiUrl.trim() || undefined,
       sdcppUrl: sdcppUrl.trim() || undefined,
       imageBackend,
@@ -2843,6 +2862,44 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           <div id="api-keys" className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">API Keys</h3>
             <div className="space-y-2">
+              <label className="block text-sm text-white/50">Default Web Search Provider</label>
+              <div className="relative" ref={webSearchProviderDropdownRef}>
+                <button
+                  onClick={() => setWebSearchProviderDropdownOpen((o) => !o)}
+                  className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+                >
+                  <span className="truncate flex-1 text-left">
+                    {WEB_SEARCH_PROVIDER_OPTIONS.find((p) => p.id === defaultWebSearchProvider)?.label || "Brave Search"}
+                  </span>
+                  {chevronSvg(webSearchProviderDropdownOpen)}
+                </button>
+                <DropdownPanel
+                  open={webSearchProviderDropdownOpen}
+                  className="left-0 right-0 top-full mt-1 overflow-hidden"
+                >
+                  {WEB_SEARCH_PROVIDER_OPTIONS.map((provider) => (
+                    <button
+                      key={provider.id}
+                      onClick={() => { setDefaultWebSearchProvider(provider.id); setWebSearchProviderDropdownOpen(false); }}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                        defaultWebSearchProvider === provider.id ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                      style={{
+                        backgroundColor: defaultWebSearchProvider === provider.id ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: defaultWebSearchProvider === provider.id ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
+                    >
+                      <span className="block">{provider.label}</span>
+                      <span className="block text-[11px] text-white/35 mt-0.5">{provider.description}</span>
+                    </button>
+                  ))}
+                </DropdownPanel>
+              </div>
+              <p className="text-white/30 text-xs">
+                Used when the web_search agent tool does not specify a provider. Agents can still override it for a specific search.
+              </p>
+            </div>
+            <div className="space-y-2">
               <label className="block text-sm text-white/50">Brave Search API Key</label>
               <input
                 type="password"
@@ -2873,6 +2930,23 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 Required for Exa-powered web search. Provides richer results with highlights, summaries, and deep reasoning. Get a key at{" "}
                 <a href="https://exa.ai" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
                   exa.ai
+                </a>
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm text-white/50">Tavily Search API Key</label>
+              <input
+                type="password"
+                value={tavilyApiKey}
+                onChange={(e) => setTavilyApiKey(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
+                placeholder="tvly-..."
+                autoComplete="off"
+              />
+              <p className="text-white/30 text-xs">
+                Required for Tavily-powered web search. Supports ranked results, optional generated answers, and date/domain filters. Get a key at{" "}
+                <a href="https://app.tavily.com" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
+                  app.tavily.com
                 </a>
               </p>
             </div>
