@@ -348,7 +348,7 @@ export function ChatView({
           {activeSkills?.length ? (
             <div className="hidden md:flex items-center gap-1">
               {activeSkills.map(skill => (
-                <span key={skill} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 border border-blue-400/30 text-blue-300">
+                <span key={skill} className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(var(--theme-accent-muted))', border: '1px solid rgba(var(--theme-accent-border))', color: 'rgba(var(--theme-accent-text))' }}>
                   {skill}
                 </span>
               ))}

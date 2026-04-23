@@ -277,3 +277,32 @@
 .theme-secondary-text { color: rgba(var(--theme-secondary-text)); }
 
 .theme-glow { box-shadow: 0 0 20px var(--theme-glow); }
+
+/* Accent focus ring utility — ring-2 with accent color on focus-within */
+.theme-accent-focus:focus-within {
+  outline: none;
+  border-color: rgba(var(--theme-accent), 0.3) !important;
+  box-shadow: 0 0 0 2px rgba(var(--theme-accent), 0.25);
+}
+
+/* Accent send button */
+.theme-accent-btn {
+  background-color: rgba(var(--theme-accent-muted));
+  border: 1px solid rgba(var(--theme-accent-border));
+  color: rgba(var(--theme-accent-text));
+  transition: background-color 150ms ease;
+}
+.theme-accent-btn:hover {
+  background-color: rgba(var(--theme-accent), 0.3);
+}
+.theme-accent-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Accent drag state */
+.theme-accent-drag {
+  border-color: rgba(var(--theme-accent), 0.5) !important;
+  box-shadow: 0 0 0 2px rgba(var(--theme-accent), 0.3);
+  background-color: rgba(var(--theme-accent), 0.1) !important;
+}

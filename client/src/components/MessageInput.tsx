@@ -92,7 +92,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
       
       const chip = document.createElement('span');
       chip.className = 'skill-chip';
-      chip.style.cssText = 'display:inline-block;padding:2px 8px;margin:0 4px;background:rgba(59,130,246,0.25);border:1px solid rgba(59,130,246,0.4);border-radius:12px;font-size:12px;color:rgb(147,197,253);font-weight:500;vertical-align:middle;';
+      chip.style.cssText = 'display:inline-block;padding:2px 8px;margin:0 4px;background:rgba(var(--theme-accent-muted));border:1px solid rgba(var(--theme-accent-border));border-radius:12px;font-size:12px;color:rgba(var(--theme-accent-text));font-weight:500;vertical-align:middle;';
       chip.textContent = `/${skillName}`;
       chip.setAttribute('data-skill', skillName);
       chip.setAttribute('contenteditable', 'false');
@@ -417,9 +417,9 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className={`backdrop-blur-xs bg-white/5 border rounded-2xl p-2 md:p-2.5 focus-within:ring-2 focus-within:ring-blue-400/30 focus-within:border-blue-400/30 transition-colors ${
+        className={`backdrop-blur-xs bg-white/5 border rounded-2xl p-2 md:p-2.5 theme-accent-focus transition-colors ${
           dragging
-            ? "border-blue-400/50 ring-2 ring-blue-400/30 bg-blue-500/10"
+            ? "theme-accent-drag ring-0"
             : waitingForInput
               ? "border-amber-400/40 ring-1 ring-amber-400/20"
               : "border-white/15"
@@ -431,7 +431,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
               <div key={i} className="relative group/thumb">
                 {processingImages.has(i) ? (
                   <div className="h-16 w-16 rounded-lg border border-white/15 bg-white/5 flex items-center justify-center">
-                    <div className="w-5 h-5 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
+                    <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: 'rgba(var(--theme-accent-border))', borderTopColor: 'rgba(var(--theme-accent-text))' }} />
                   </div>
                 ) : (
                   <img
@@ -504,7 +504,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
             {streaming && canSend ? (
               <button
                 onClick={handleSubmit}
-                className="px-4 py-1.5 rounded-lg bg-blue-500/20 border border-blue-400/30 text-blue-300 text-sm hover:bg-blue-500/30 transition-colors"
+                className="px-4 py-1.5 rounded-lg text-sm theme-accent-btn"
               >
                 Send
               </button>
@@ -535,7 +535,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
               <button
                 onClick={handleSubmit}
                 disabled={!canSend}
-                className="px-4 py-1.5 rounded-lg bg-blue-500/20 border border-blue-400/30 text-blue-300 text-sm hover:bg-blue-500/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                className="px-4 py-1.5 rounded-lg text-sm theme-accent-btn"
               >
                 Send
               </button>
