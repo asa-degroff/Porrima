@@ -53,20 +53,9 @@ export const MEMORY_TOOLS: Tool[] = [
     }),
   },
   {
-    name: "forget_memory",
-    description:
-      "Delete a memory. Use when the user asks you to forget something. Search first to find the memory ID.",
-    parameters: Type.Object({
-      id: Type.Optional(Type.String({ description: "Memory ID to delete" })),
-      query: Type.Optional(
-        Type.String({ description: "Search query to find memory to delete" })
-      ),
-    }),
-  },
-  {
     name: "update_persona",
     description:
-      "Update the agent's persona document. Use sparingly—only for significant, recurring patterns that should become part of your core identity. Called automatically during synthesis when patterns emerge.",
+      "Update your persona document. Use for significant, recurring patterns or ideas that should become part of your core identity.",
     parameters: Type.Object({
       section: Type.String({
         description:
@@ -77,7 +66,7 @@ export const MEMORY_TOOLS: Tool[] = [
       }),
       reason: Type.String({
         description:
-          "Why this change is being made (e.g., 'User has repeatedly emphasized X across multiple sessions')",
+          "Why this change is being made",
       }),
     }),
   },
@@ -255,40 +244,6 @@ export async function executeMemoryTool(
       }
 
       return { content: `Found memories:\n${formatted}${blockSection}`, isError: false };
-    }
-
-    case "forget_memory": {
-      const { id, query } = toolCall.arguments;
-      if (!id) {
-        if (query) {
-          let queryEmbedding: number[];
-          try {
-            queryEmbedding = await embed(query);
-          } catch (e: any) {
-            return { content: `Embedding failed: ${e.message}`, isError: true };
-          }
-          const results = await searchMemories(queryEmbedding, 1, new Date(), query);
-          // RRF scores are small — ~0.005 indicates a strong match in at least one ranking
-          if (results.length > 0 && results[0].score > 0.005) {
-            const deleted = await deleteMemory(results[0].memory.id);
-            if (deleted) {
-              return {
-                content: `Deleted memory: "${results[0].memory.text}"`,
-                isError: false,
-              };
-            }
-          }
-          return {
-            content: "No matching memory found to delete.",
-            isError: true,
-          };
-        }
-        return { content: "Missing id or query", isError: true };
-      }
-
-      const deleted = await deleteMemory(id);
-      if (!deleted) return { content: "Memory not found", isError: true };
-      return { content: "Memory deleted.", isError: false };
     }
 
     case "update_persona": {
