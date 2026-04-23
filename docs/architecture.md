@@ -72,9 +72,10 @@ Chat storage uses SQLite (`server/src/services/chat-storage.ts`). The `app.db` d
 
 Compaction replaces narrative LLM summaries with **indexed archives** (inspired by Memex and Letta):
 
-1. **Pre-send compaction** (75% threshold): Proactively truncates before LLM call
+1. **Pre-send compaction** (80% trigger → 50% target): Proactively truncates before LLM call. Decoupling the trigger from the target prevents a second compaction from firing immediately at end-of-turn in the same exchange.
 2. **Post-response compaction** (50% target): Triggered after response if usage is high
 3. **Mid-turn compaction** (85% threshold): Detects overflow during tool loops, breaks the agent loop, compacts, and resumes with a handoff message. Multi-cycle (up to 5 cycles) for very long tasks.
+4. **Hard-cap safety pass** (95% char-estimate): Defensive net that runs after the pre-send path. If the pure char-based estimate alone exceeds 95% of the window (e.g., the usage anchor went stale because the system prompt grew), forces aggressive compaction via `truncateChatHistory(forceCompact=true)` targeting 50%.
 
 When compaction runs, it follows a strict sequence: **archive** → **flush** → **reset** → **rebuild**:
 
@@ -85,7 +86,7 @@ When compaction runs, it follows a strict sequence: **archive** → **flush** �
 
 See [docs/compaction.md](compaction.md) for full details.
 
-**Context estimation** uses LLM-reported token usage as a baseline (from the last assistant message's `usage.totalTokens`), with character-based estimation as fallback. This is much more accurate than pure character estimation, which misses tool definitions, system prompt overhead, and message framing.
+**Context estimation** returns the max of two paths: **Path A** anchors on the last in-context assistant's reported `usage.totalTokens` and adds char-estimates for anything added since; **Path B** is a pure char-based estimate of the full system prompt + in-context messages + tool schemas. Path A wins in steady state (it captures framing/tokenizer overhead char estimation misses). Path B wins when the anchor has gone stale — system prompt grew after a `resetMemoryContext` re-froze memories, AGENTS.md / persona / memory blocks expanded, or tool schemas changed. The hard-cap safety pass uses Path B alone, so a blown anchor can't mask an oversized real payload.
 
 ## GPU Coordination
 

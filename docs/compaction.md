@@ -12,8 +12,8 @@ There are five compaction paths, each with different timing and constraints:
 |------|---------|-----------|----------|
 | **End-of-turn** | After agent response completes | >50% context or `stopReason=length` | Yes — awaits flush |
 | **Mid-turn** | During tool loop (>85% context) | >85% context | Yes — awaits flush |
-| **Pre-send (normal)** | Before sending to LLM | >75% context | Yes — awaits flush |
-| **Pre-send (resume)** | Before resuming after crash/ask_user | >75% context | Yes — awaits flush |
+| **Pre-send (normal)** | Before sending to LLM | >80% trigger → 50% target | Yes — awaits flush |
+| **Pre-send (resume)** | Before resuming after crash/ask_user | >80% trigger → 50% target | Yes — awaits flush |
 | **`/compact` command** | User-triggered | Forced | Yes — awaits flush |
 
 All paths now **await** `preCompactionFlush` before rebuilding the system prompt, ensuring extracted memories are available for retrieval.
