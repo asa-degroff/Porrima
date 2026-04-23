@@ -146,7 +146,7 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
       onClick={onClose}
     >
       <div
-        className="bg-zinc-900/95 border border-white/10 rounded-xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl"
+        className="bg-zinc-900/95 border border-white/10 rounded-xl w-full max-w-4xl min-h-[400px] max-h-[85vh] flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
