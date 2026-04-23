@@ -28,6 +28,13 @@ async function checkAndRunSynthesis() {
       console.log("[scheduler] Skipping synthesis check — system synthesis already active");
       return;
     }
+    // Skip if any chat is actively streaming — synthesis uses the main model
+    // and will contend with the user's live chat for the single GPU slot,
+    // causing the synthesis call to fail with stopReason=error.
+    if (hasActiveChats()) {
+      console.log("[scheduler] Skipping synthesis check — active chat(s) in progress");
+      return;
+    }
     // Respect sleep mode cooldown — the /sleep endpoint triggers synthesis
     // manually and stamps a timestamp; we skip periodic runs for 2 hours
     // after that so we don't immediately re-synthesize.
