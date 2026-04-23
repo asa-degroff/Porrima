@@ -406,7 +406,7 @@ export async function truncateBeforeSend(
 
 /**
  * Hard-cap safety pass. Runs a pure char-based estimate of the current
- * in-context payload and, if it exceeds 90% of the context window, forces
+ * in-context payload and, if it exceeds 95% of the context window, forces
  * aggressive compaction via `truncateChatHistory(forceCompact=true)` which
  * targets 50% of the window.
  *
@@ -429,7 +429,7 @@ async function hardCapSafetyPass(
   tools?: unknown,
 ): Promise<CompactionResult | null> {
   const charEstimate = charEstimateContextSize(chat.messages, systemPrompt, tools);
-  const hardCap = contextWindow * 0.90;
+  const hardCap = contextWindow * 0.95;
   if (charEstimate <= hardCap) return null;
 
   const icCount = chat.messages.filter((m) => !m._outOfContext).length;
@@ -444,7 +444,7 @@ async function hardCapSafetyPass(
 
   console.warn(
     `[compaction] Hard-cap safety triggered: charEstimate=${charEstimate} > ${hardCap.toFixed(0)} ` +
-    `(90% of ctx=${contextWindow}) — running aggressive compaction (target 50%)`
+    `(95% of ctx=${contextWindow}) — running aggressive compaction (target 50%)`
   );
 
   // Force compaction targeting 50% of the context window. This is the same
