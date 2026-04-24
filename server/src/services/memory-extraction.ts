@@ -476,6 +476,39 @@ function extractionRoleLabel(role: ChatMessage["role"]): string {
   return role === "user" ? "USER (human)" : "ASSISTANT (agent/me)";
 }
 
+/**
+ * Max characters for a single tool result in extraction context.
+ * Full webpage content (50KB from web_fetch) is useless for memory extraction
+ * and would consume the entire context budget of the extraction model. A short
+ * preview is enough for the extraction agent to understand what was fetched.
+ */
+const EXTRACT_TOOL_RESULT_MAX = 4_000;
+
+/**
+ * Tool names whose results are typically large and contain mostly non-extractable
+ * content (full webpages, file dumps, raw HTML). These get aggressive truncation.
+ */
+const BULK_TOOL_NAMES = new Set([
+  "web_fetch",
+  "read_file",
+  "read_pdf",
+  "bash",
+  "run_python",
+  "list_files",
+]);
+
+function formatToolResultForExtraction(tr: { toolName: string; content: string; isError: boolean }): string {
+  let content = tr.content;
+
+  if (BULK_TOOL_NAMES.has(tr.toolName) && content.length > EXTRACT_TOOL_RESULT_MAX) {
+    const kept = content.slice(0, EXTRACT_TOOL_RESULT_MAX);
+    const omitted = content.length - EXTRACT_TOOL_RESULT_MAX;
+    content = kept + `\n[...truncated for extraction: ${omitted.toLocaleString()} chars omitted]`;
+  }
+
+  return `- ${tr.toolName}${tr.isError ? " (error)" : ""}: ${content}`;
+}
+
 function formatMessageContentForExtraction(message: ChatMessage): string {
   const parts: string[] = [];
   if (message.content?.trim()) parts.push(message.content.trim());
@@ -489,7 +522,7 @@ function formatMessageContentForExtraction(message: ChatMessage): string {
 
   if (message.toolResults?.length) {
     const results = message.toolResults
-      .map((tr) => `- ${tr.toolName}${tr.isError ? " (error)" : ""}: ${tr.content}`)
+      .map(formatToolResultForExtraction)
       .join("\n");
     parts.push(`Tool results observed by ASSISTANT:\n${results}`);
   }
