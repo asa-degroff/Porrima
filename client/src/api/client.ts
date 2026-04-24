@@ -1,4 +1,4 @@
-import type { Artifact, Chat, ChatListItem, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
+import type { Artifact, Chat, ChatListItem, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings, VllmModelProfile } from "../types";
 
 const BASE = "/api";
 
@@ -1258,6 +1258,67 @@ export async function getAllServerHealth(): Promise<ServerHealthMap> {
   const res = await apiFetch(`${BASE}/models/health-all`);
   if (!res.ok) throw new Error("Failed to fetch server health");
   return res.json();
+}
+
+// --- vLLM Supervisor ---
+
+export type VllmSupervisorState = "idle" | "starting" | "ready" | "stopping" | "failed";
+
+export interface VllmSupervisorLog {
+  timestamp: number;
+  stream: "stdout" | "stderr" | "system";
+  line: string;
+}
+
+export interface VllmSupervisorStatus {
+  status: VllmSupervisorState;
+  managedEnabled: boolean;
+  currentProfileId?: string;
+  activeProfileId?: string;
+  pid?: number;
+  url?: string;
+  profile?: VllmModelProfile;
+  profiles: VllmModelProfile[];
+  command?: string[];
+  vllmBin: string;
+  vllmBinExists: boolean;
+  startedAt?: string;
+  readyAt?: string;
+  lastError?: string;
+  activeStreams: number;
+  logs: VllmSupervisorLog[];
+}
+
+export async function getVllmStatus(): Promise<VllmSupervisorStatus> {
+  const res = await apiFetch(`${BASE}/vllm/status`);
+  if (!res.ok) throw new Error("Failed to fetch vLLM status");
+  return res.json();
+}
+
+async function postVllmAction(path: string, profileId?: string, profile?: VllmModelProfile): Promise<VllmSupervisorStatus> {
+  const res = await apiFetch(`${BASE}/vllm/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(profile ? { profile } : profileId ? { profileId } : {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Failed to ${path} vLLM`);
+  return data;
+}
+
+export function startVllmProfile(profileId?: string, profile?: VllmModelProfile): Promise<VllmSupervisorStatus> {
+  return postVllmAction("start", profileId, profile);
+}
+
+export async function stopVllmProfile(): Promise<VllmSupervisorStatus> {
+  const res = await apiFetch(`${BASE}/vllm/stop`, { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Failed to stop vLLM");
+  return data;
+}
+
+export function restartVllmProfile(profileId?: string, profile?: VllmModelProfile): Promise<VllmSupervisorStatus> {
+  return postVllmAction("restart", profileId, profile);
 }
 
 // --- Llama.cpp Path Management ---

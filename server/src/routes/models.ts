@@ -2,6 +2,7 @@ import { Router } from "express";
 import { discoverAllModels } from "../services/models.js";
 import { getSettings } from "../services/chat-storage.js";
 import { getOllamaUrl } from "../services/ollama-url.js";
+import { getVllmProfiles, getVllmSupervisorStatus } from "../services/vllm-supervisor.js";
 
 const router = Router();
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
@@ -48,6 +49,18 @@ router.get("/health/:modelId", async (req, res) => {
   if (provider === "vllm") {
     try {
       const settings = await getSettings();
+      if (settings.vllmManagedEnabled) {
+        const status = await getVllmSupervisorStatus(settings);
+        const found = status.profiles.some((profile) => profile.servedModelName === modelId || profile.id === modelId);
+        if (!found) {
+          return res.status(404).json({ model: modelId, status: "unavailable", error: "Model is not configured as a managed vLLM profile" });
+        }
+        if (status.status === "ready" && (status.profile?.servedModelName === modelId || status.profile?.id === modelId)) {
+          return res.json({ model: modelId, status: "ok" });
+        }
+        return res.status(503).json({ model: modelId, status: "unavailable", error: `Managed vLLM is ${status.status}` });
+      }
+
       const baseUrl = settings.vllmUrl || VLLM_DEFAULT_URL;
       const response = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(5000) });
       if (!response.ok) {
@@ -132,6 +145,17 @@ router.get("/discover", async (req, res) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
+    if (provider === "vllm" && !urlOverride) {
+      const settings = await getSettings();
+      if (settings.vllmManagedEnabled) {
+        clearTimeout(timeoutId);
+        const models = getVllmProfiles(settings)
+          .map((profile) => ({ id: profile.servedModelName, name: profile.name }))
+          .filter((m) => matchesKind(m.id, kind));
+        return res.json({ models });
+      }
+    }
+
     if (provider === "ollama") {
       const settings = await getSettings();
       const baseUrl = urlOverride || getOllamaUrl(settings);
@@ -204,7 +228,9 @@ router.get("/health-all", async (_req, res) => {
   ]);
 
   const vllm = settings.vllmEnabled
-    ? await pingLlamaCpp(vllmUrl)
+    ? settings.vllmManagedEnabled
+      ? ((await getVllmSupervisorStatus(settings)).status === "ready" ? "ok" : "unavailable")
+      : await pingLlamaCpp(vllmUrl)
     : "unavailable";
 
   res.json({ inference, vllm, extraction, reranker, embedding, ollama });
@@ -236,6 +262,13 @@ router.get("/vllm/health", async (req, res) => {
   try {
     const urlOverride = req.query.url as string | undefined;
     const settings = await getSettings();
+    if (settings.vllmManagedEnabled && !urlOverride) {
+      const status = await getVllmSupervisorStatus(settings);
+      if (status.status === "ready") {
+        return res.json({ status: "ok", supervisor: status.status });
+      }
+      return res.status(503).json({ status: "unavailable", supervisor: status.status, error: status.lastError });
+    }
     const baseUrl = urlOverride || settings.vllmUrl || VLLM_DEFAULT_URL;
     const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(5000) });
     if (response.ok) {

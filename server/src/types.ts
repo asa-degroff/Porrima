@@ -158,6 +158,30 @@ export interface SystemPromptPreset {
   isDefault: boolean;
 }
 
+export interface VllmModelProfile {
+  id: string;
+  name: string;
+  model: string;
+  servedModelName: string;
+  tokenizer?: string;
+  hfConfigPath?: string;
+  host?: string;
+  port: number;
+  rocrVisibleDevices?: string;
+  tensorParallelSize?: number;
+  maxModelLen: number;
+  maxNumSeqs?: number;
+  gpuMemoryUtilization?: number;
+  dtype?: "auto" | "float16" | "bfloat16";
+  reasoningParser?: string;
+  toolCallParser?: string;
+  enableAutoToolChoice?: boolean;
+  enforceEager?: boolean;
+  languageModelOnly?: boolean;
+  kvCacheMetrics?: boolean;
+  extraArgs?: string[];
+}
+
 export type WebSearchProvider = "brave" | "exa" | "tavily";
 
 export interface Settings {
@@ -201,6 +225,9 @@ export interface Settings {
   // vLLM server settings
   vllmEnabled?: boolean;
   vllmUrl?: string;             // default "http://localhost:8095"
+  vllmManagedEnabled?: boolean; // launch/switch vLLM profiles from this server
+  vllmActiveProfileId?: string;
+  vllmProfiles?: VllmModelProfile[];
   // Extraction server (CPU-only llama.cpp instance)
   extractionCtxSize?: number;   // default 16384 — context window for extraction server
   // Reranker server (CPU-only llama.cpp instance)

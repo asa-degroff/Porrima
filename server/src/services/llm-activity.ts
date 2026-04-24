@@ -8,7 +8,17 @@
 // on CPU — safe to ignore.
 
 let activeStreams = 0;
-const idleListeners: Array<() => void> = [];
+const idleListeners: Array<{ maxActive: number; fn: () => void }> = [];
+
+function notifyIdleListeners(): void {
+  for (let i = idleListeners.length - 1; i >= 0; i--) {
+    const listener = idleListeners[i];
+    if (activeStreams <= listener.maxActive) {
+      idleListeners.splice(i, 1);
+      listener.fn();
+    }
+  }
+}
 
 export function beginStream(): void {
   activeStreams++;
@@ -20,10 +30,7 @@ export function endStream(): void {
     return;
   }
   activeStreams--;
-  if (activeStreams === 0) {
-    const snapshot = idleListeners.splice(0);
-    for (const fn of snapshot) fn();
-  }
+  notifyIdleListeners();
 }
 
 export function isActive(): boolean {
@@ -40,7 +47,16 @@ export function activeStreamCount(): number {
  * the listener. No hard timeout — callers control it via their signal.
  */
 export function waitForIdle(signal?: AbortSignal): Promise<void> {
-  if (activeStreams === 0) return Promise.resolve();
+  return waitForActiveCountAtMost(0, signal);
+}
+
+/**
+ * Resolve as soon as the number of active user-visible LLM streams is at most
+ * `maxActive`. This lets a request that is already counted as active wait for
+ * other streams without waiting for itself.
+ */
+export function waitForActiveCountAtMost(maxActive: number, signal?: AbortSignal): Promise<void> {
+  if (activeStreams <= maxActive) return Promise.resolve();
 
   return new Promise((resolve, reject) => {
     const onIdle = () => {
@@ -48,12 +64,12 @@ export function waitForIdle(signal?: AbortSignal): Promise<void> {
       resolve();
     };
     const onAbort = () => {
-      const i = idleListeners.indexOf(onIdle);
+      const i = idleListeners.findIndex((listener) => listener.fn === onIdle);
       if (i >= 0) idleListeners.splice(i, 1);
       reject(signal?.reason ?? new Error("Aborted while waiting for LLM to finish"));
     };
 
-    idleListeners.push(onIdle);
+    idleListeners.push({ maxActive, fn: onIdle });
     if (signal) {
       if (signal.aborted) {
         onAbort();

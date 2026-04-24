@@ -76,6 +76,7 @@ interface OpenAIChatChunk {
     delta: {
       role?: string;
       content?: string | null;
+      reasoning?: string | null;
       reasoning_content?: string | null;
       tool_calls?: Array<{
         index: number;
@@ -679,12 +680,18 @@ export const streamOpenAICompat = (
 
     try {
       const providerName = model.provider === "vllm" ? "vLLM" : "llama.cpp";
+      let requestBaseUrl = model.baseUrl;
+
+      if (model.provider === "vllm") {
+        const { ensureVllmProfile } = await import("./vllm-supervisor.js");
+        requestBaseUrl = await ensureVllmProfile(model.id, options?.signal);
+      }
 
       // Pre-load llama.cpp router models before sending the chat request. vLLM
       // is launched as a model-specific server, so /models/load is not part of
       // its OpenAI-compatible surface.
       if (model.provider === "llamacpp") {
-        await ensureModelLoaded(model.baseUrl, model.id, model.contextWindow);
+        await ensureModelLoaded(requestBaseUrl, model.id, model.contextWindow);
       }
 
       const messages = await convertMessages(model, context);
@@ -734,7 +741,7 @@ export const streamOpenAICompat = (
         }
       } catch { /* non-critical */ }
 
-      const url = `${model.baseUrl}/v1/chat/completions`;
+      const url = `${requestBaseUrl}/v1/chat/completions`;
       const cacheMetadata = buildCacheMetadata(
         cachePrompt,
         messages,
@@ -946,7 +953,8 @@ export const streamOpenAICompat = (
         if (!delta) continue;
 
         // Handle reasoning/thinking tokens
-        if (delta.reasoning_content) {
+        const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
+        if (reasoningDelta) {
           if (!currentBlock || currentBlock.type !== "thinking") {
             finishCurrentBlock(currentBlock);
             currentBlock = { type: "thinking", thinking: "" };
@@ -957,11 +965,11 @@ export const streamOpenAICompat = (
               partial: output,
             } as AssistantMessageEvent);
           }
-          currentBlock.thinking += delta.reasoning_content;
+          currentBlock.thinking += reasoningDelta;
           stream.push({
             type: "thinking_delta",
             contentIndex: blockIndex(),
-            delta: delta.reasoning_content,
+            delta: reasoningDelta,
             partial: output,
           } as AssistantMessageEvent);
         }

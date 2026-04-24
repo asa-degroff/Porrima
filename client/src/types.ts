@@ -137,6 +137,30 @@ export interface OllamaModel {
   provider?: InferenceProvider;  // Default: "ollama" for backward compat
 }
 
+export interface VllmModelProfile {
+  id: string;
+  name: string;
+  model: string;
+  servedModelName: string;
+  tokenizer?: string;
+  hfConfigPath?: string;
+  host?: string;
+  port: number;
+  rocrVisibleDevices?: string;
+  tensorParallelSize?: number;
+  maxModelLen: number;
+  maxNumSeqs?: number;
+  gpuMemoryUtilization?: number;
+  dtype?: "auto" | "float16" | "bfloat16";
+  reasoningParser?: string;
+  toolCallParser?: string;
+  enableAutoToolChoice?: boolean;
+  enforceEager?: boolean;
+  languageModelOnly?: boolean;
+  kvCacheMetrics?: boolean;
+  extraArgs?: string[];
+}
+
 export interface ConversationSearchResult {
   chatId: string;
   chatTitle: string | null;
@@ -206,6 +230,9 @@ export interface Settings {
   // vLLM server settings
   vllmEnabled?: boolean;
   vllmUrl?: string;             // default "http://localhost:8095"
+  vllmManagedEnabled?: boolean;
+  vllmActiveProfileId?: string;
+  vllmProfiles?: VllmModelProfile[];
   // Extraction server (CPU-only llama.cpp instance)
   extractionCtxSize?: number;   // default 16384 — context window for extraction server
   // Reranker server (CPU-only llama.cpp instance)

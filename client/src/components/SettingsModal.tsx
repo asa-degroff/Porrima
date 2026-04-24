@@ -14,11 +14,11 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth } from "../api/client";
-import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap } from "../api/client";
+import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getVllmStatus, startVllmProfile, stopVllmProfile, restartVllmProfile } from "../api/client";
+import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, VllmSupervisorStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
+import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult, VllmModelProfile } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
@@ -170,6 +170,29 @@ const WEB_SEARCH_PROVIDER_OPTIONS: Array<{ id: WebSearchProvider; label: string;
   { id: "tavily", label: "Tavily", description: "Ranked web results with optional answers and date filters." },
 ];
 
+const DEFAULT_VLLM_PROFILE: VllmModelProfile = {
+  id: "qwen3.6-27b-ud-q4_k_xl",
+  name: "Qwen3.6 27B UD Q4_K_XL",
+  model: "unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL",
+  servedModelName: "qwen3.6-27b-ud-q4_k_xl",
+  tokenizer: "Qwen/Qwen3.6-27B",
+  hfConfigPath: "Qwen/Qwen3.6-27B",
+  host: "127.0.0.1",
+  port: 8095,
+  rocrVisibleDevices: "0,1",
+  tensorParallelSize: 2,
+  maxModelLen: 16384,
+  maxNumSeqs: 96,
+  gpuMemoryUtilization: 0.82,
+  dtype: "float16",
+  reasoningParser: "qwen3",
+  toolCallParser: "qwen3_coder",
+  enableAutoToolChoice: true,
+  languageModelOnly: true,
+  kvCacheMetrics: true,
+  extraArgs: [],
+};
+
 function coerceWebSearchProvider(provider: Settings["defaultWebSearchProvider"]): WebSearchProvider {
   return WEB_SEARCH_PROVIDER_OPTIONS.some((option) => option.id === provider) ? provider! : "brave";
 }
@@ -223,6 +246,21 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [vllmEnabled, setVllmEnabled] = useState(settings.vllmEnabled ?? false);
   const [vllmUrl, setVllmUrl] = useState(settings.vllmUrl || "http://localhost:8095");
   const [vllmStatus, setVllmStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
+  const initialVllmProfiles = settings.vllmProfiles?.length ? settings.vllmProfiles : [DEFAULT_VLLM_PROFILE];
+  const [vllmManagedEnabled, setVllmManagedEnabled] = useState(settings.vllmManagedEnabled ?? false);
+  const [vllmProfiles, setVllmProfiles] = useState<VllmModelProfile[]>(initialVllmProfiles);
+  const [vllmActiveProfileId, setVllmActiveProfileId] = useState(settings.vllmActiveProfileId || initialVllmProfiles[0]?.id || "");
+  const [vllmSupervisorStatus, setVllmSupervisorStatus] = useState<VllmSupervisorStatus | null>(null);
+  const [vllmActionLoading, setVllmActionLoading] = useState<"start" | "stop" | "restart" | null>(null);
+  const [vllmSupervisorMessage, setVllmSupervisorMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const activeVllmProfile = vllmProfiles.find((profile) => profile.id === vllmActiveProfileId) || vllmProfiles[0] || DEFAULT_VLLM_PROFILE;
+  const updateActiveVllmProfile = (updates: Partial<VllmModelProfile>) => {
+    setVllmProfiles((prev) => {
+      const currentId = activeVllmProfile.id;
+      const next = prev.length ? prev : [DEFAULT_VLLM_PROFILE];
+      return next.map((profile) => profile.id === currentId ? { ...profile, ...updates } : profile);
+    });
+  };
   // Extraction server settings
   const [extractionCtxSize, setExtractionCtxSize] = useState(settings.extractionCtxSize ?? 16384);
   // Reranker server settings
@@ -472,7 +510,35 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       .then((h) => { if (!cancelled) setServerHealth(h); })
       .catch(() => { if (!cancelled) setServerHealth(null); });
     return () => { cancelled = true; };
-  }, [ollamaUrl, llamacppUrl, vllmUrl, vllmEnabled, rerankerUrl, embeddingUrl, embeddingProvider, extractionModelUrl]);
+  }, [ollamaUrl, llamacppUrl, vllmUrl, vllmEnabled, vllmManagedEnabled, rerankerUrl, embeddingUrl, embeddingProvider, extractionModelUrl]);
+
+  const refreshVllmSupervisor = useCallback(async () => {
+    try {
+      const status = await getVllmStatus();
+      setVllmSupervisorStatus(status);
+    } catch {
+      setVllmSupervisorStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!vllmEnabled || !vllmManagedEnabled) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const status = await getVllmStatus();
+        if (!cancelled) setVllmSupervisorStatus(status);
+      } catch {
+        if (!cancelled) setVllmSupervisorStatus(null);
+      }
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [vllmEnabled, vllmManagedEnabled]);
 
   // Discover embedding models for the dropdown. Re-runs when provider/url change.
   useEffect(() => {
@@ -562,6 +628,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       llamacppSharesGpu,
       vllmEnabled,
       vllmUrl: vllmUrl.trim() || undefined,
+      vllmManagedEnabled,
+      vllmActiveProfileId: vllmActiveProfileId || activeVllmProfile.id,
+      vllmProfiles: vllmProfiles.length > 0 ? vllmProfiles : [DEFAULT_VLLM_PROFILE],
       extractionCtxSize,
       rerankerEnabled,
       rerankerUrl: rerankerUrl.trim() || undefined,
@@ -729,7 +798,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const handleTestVllm = useCallback(async () => {
     setVllmStatus("checking");
     try {
-      const res = await fetch(`/api/models/vllm/health?url=${encodeURIComponent(vllmUrl)}`, { credentials: "include" });
+      const query = vllmManagedEnabled ? "" : `?url=${encodeURIComponent(vllmUrl)}`;
+      const res = await fetch(`/api/models/vllm/health${query}`, { credentials: "include" });
       if (res.ok) {
         setVllmStatus("connected");
       } else {
@@ -738,7 +808,57 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     } catch {
       setVllmStatus("unavailable");
     }
-  }, [vllmUrl]);
+  }, [vllmUrl, vllmManagedEnabled]);
+
+  const handleStartVllmSupervisor = useCallback(async () => {
+    setVllmActionLoading("start");
+    setVllmSupervisorMessage(null);
+    try {
+      const status = await startVllmProfile(activeVllmProfile.id, activeVllmProfile);
+      setVllmSupervisorStatus(status);
+      setVllmProfiles(status.profiles);
+      setVllmActiveProfileId(status.activeProfileId || activeVllmProfile.id);
+      setVllmSupervisorMessage({ type: "ok", text: "vLLM started" });
+    } catch (err: any) {
+      setVllmSupervisorMessage({ type: "err", text: err.message || "Failed to start vLLM" });
+      await refreshVllmSupervisor();
+    } finally {
+      setVllmActionLoading(null);
+    }
+  }, [activeVllmProfile, refreshVllmSupervisor]);
+
+  const handleStopVllmSupervisor = useCallback(async () => {
+    setVllmActionLoading("stop");
+    setVllmSupervisorMessage(null);
+    try {
+      const status = await stopVllmProfile();
+      setVllmSupervisorStatus(status);
+      setVllmProfiles(status.profiles);
+      setVllmSupervisorMessage({ type: "ok", text: "vLLM stopped" });
+    } catch (err: any) {
+      setVllmSupervisorMessage({ type: "err", text: err.message || "Failed to stop vLLM" });
+      await refreshVllmSupervisor();
+    } finally {
+      setVllmActionLoading(null);
+    }
+  }, [refreshVllmSupervisor]);
+
+  const handleRestartVllmSupervisor = useCallback(async () => {
+    setVllmActionLoading("restart");
+    setVllmSupervisorMessage(null);
+    try {
+      const status = await restartVllmProfile(activeVllmProfile.id, activeVllmProfile);
+      setVllmSupervisorStatus(status);
+      setVllmProfiles(status.profiles);
+      setVllmActiveProfileId(status.activeProfileId || activeVllmProfile.id);
+      setVllmSupervisorMessage({ type: "ok", text: "vLLM restarted" });
+    } catch (err: any) {
+      setVllmSupervisorMessage({ type: "err", text: err.message || "Failed to restart vLLM" });
+      await refreshVllmSupervisor();
+    } finally {
+      setVllmActionLoading(null);
+    }
+  }, [activeVllmProfile, refreshVllmSupervisor]);
 
   const handleTestExtractionModel = useCallback(async () => {
     if (!extractionModelUrl) return;
@@ -1481,6 +1601,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       onChange={(e) => setVllmUrl(e.target.value)}
                       className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
                       placeholder="http://localhost:8095"
+                      disabled={vllmManagedEnabled}
                     />
                     <button
                       onClick={handleTestVllm}
@@ -1496,6 +1617,265 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       <span className={`text-xs ${vllmStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
                         {vllmStatus === "connected" ? "Connected" : "Not available"}
                       </span>
+                    </div>
+                  )}
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={vllmManagedEnabled}
+                      onChange={(e) => setVllmManagedEnabled(e.target.checked)}
+                      className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+                    />
+                    <span className="text-xs text-white/70">Managed local vLLM process</span>
+                  </label>
+
+                  {vllmManagedEnabled && (
+                    <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex items-center gap-1.5 mr-auto">
+                          <div className={`w-2 h-2 rounded-full ${
+                            vllmSupervisorStatus?.status === "ready" ? "bg-green-400" :
+                            vllmSupervisorStatus?.status === "starting" || vllmSupervisorStatus?.status === "stopping" ? "bg-amber-400" :
+                            vllmSupervisorStatus?.status === "failed" ? "bg-red-400" :
+                            "bg-white/20"
+                          }`} />
+                          <span className="text-xs text-white/60">
+                            {vllmSupervisorStatus?.status || "idle"}
+                            {vllmSupervisorStatus?.pid ? ` - pid ${vllmSupervisorStatus.pid}` : ""}
+                          </span>
+                        </div>
+                        <button
+                          onClick={handleStartVllmSupervisor}
+                          disabled={vllmActionLoading !== null}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-green-500/15 border border-green-400/20 text-green-300 hover:bg-green-500/25 transition-all disabled:opacity-40"
+                        >
+                          {vllmActionLoading === "start" ? "Starting..." : "Start"}
+                        </button>
+                        <button
+                          onClick={handleRestartVllmSupervisor}
+                          disabled={vllmActionLoading !== null}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40"
+                        >
+                          {vllmActionLoading === "restart" ? "Restarting..." : "Restart"}
+                        </button>
+                        <button
+                          onClick={handleStopVllmSupervisor}
+                          disabled={vllmActionLoading !== null}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40"
+                        >
+                          {vllmActionLoading === "stop" ? "Stopping..." : "Stop"}
+                        </button>
+                      </div>
+
+                      {vllmSupervisorMessage && (
+                        <div className={`p-2 rounded-lg text-xs ${vllmSupervisorMessage.type === "ok" ? "bg-green-500/10 border border-green-400/15 text-green-400/80" : "bg-red-500/10 border border-red-400/15 text-red-400/80"}`}>
+                          {vllmSupervisorMessage.text}
+                        </div>
+                      )}
+                      {vllmSupervisorStatus?.lastError && (
+                        <div className="p-2 rounded-lg text-xs bg-red-500/10 border border-red-400/15 text-red-400/80">
+                          {vllmSupervisorStatus.lastError}
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">Profile</span>
+                          <select
+                            value={activeVllmProfile.id}
+                            onChange={(e) => setVllmActiveProfileId(e.target.value)}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                          >
+                            {vllmProfiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>{profile.name}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">Display name</span>
+                          <input
+                            type="text"
+                            value={activeVllmProfile.name}
+                            onChange={(e) => updateActiveVllmProfile({ name: e.target.value })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                          />
+                        </label>
+                        <label className="space-y-1 sm:col-span-2">
+                          <span className="text-[10px] uppercase text-white/35">HF model / GGUF selector</span>
+                          <input
+                            type="text"
+                            value={activeVllmProfile.model}
+                            onChange={(e) => updateActiveVllmProfile({ model: e.target.value })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">Served model</span>
+                          <input
+                            type="text"
+                            value={activeVllmProfile.servedModelName}
+                            onChange={(e) => updateActiveVllmProfile({ servedModelName: e.target.value })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">ROCR devices</span>
+                          <input
+                            type="text"
+                            value={activeVllmProfile.rocrVisibleDevices || ""}
+                            onChange={(e) => updateActiveVllmProfile({ rocrVisibleDevices: e.target.value })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">Tokenizer</span>
+                          <input
+                            type="text"
+                            value={activeVllmProfile.tokenizer || ""}
+                            onChange={(e) => updateActiveVllmProfile({ tokenizer: e.target.value })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">HF config</span>
+                          <input
+                            type="text"
+                            value={activeVllmProfile.hfConfigPath || ""}
+                            onChange={(e) => updateActiveVllmProfile({ hfConfigPath: e.target.value })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">Port</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={activeVllmProfile.port}
+                            onChange={(e) => updateActiveVllmProfile({ port: parseInt(e.target.value, 10) || 8095 })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">Max context</span>
+                          <input
+                            type="number"
+                            min={1024}
+                            step={1024}
+                            value={activeVllmProfile.maxModelLen}
+                            onChange={(e) => updateActiveVllmProfile({ maxModelLen: parseInt(e.target.value, 10) || 16384 })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">Tensor parallel</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={activeVllmProfile.tensorParallelSize || 1}
+                            onChange={(e) => updateActiveVllmProfile({ tensorParallelSize: parseInt(e.target.value, 10) || 1 })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">Max sequences</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={activeVllmProfile.maxNumSeqs ?? 96}
+                            onChange={(e) => updateActiveVllmProfile({ maxNumSeqs: parseInt(e.target.value, 10) || 96 })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">GPU utilization</span>
+                          <input
+                            type="number"
+                            min={0.1}
+                            max={0.99}
+                            step={0.01}
+                            value={activeVllmProfile.gpuMemoryUtilization ?? 0.82}
+                            onChange={(e) => updateActiveVllmProfile({ gpuMemoryUtilization: parseFloat(e.target.value) || 0.82 })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">Dtype</span>
+                          <select
+                            value={activeVllmProfile.dtype || "auto"}
+                            onChange={(e) => updateActiveVllmProfile({ dtype: e.target.value as VllmModelProfile["dtype"] })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                          >
+                            <option value="auto">auto</option>
+                            <option value="float16">float16</option>
+                            <option value="bfloat16">bfloat16</option>
+                          </select>
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">Reasoning parser</span>
+                          <input
+                            type="text"
+                            value={activeVllmProfile.reasoningParser || ""}
+                            onChange={(e) => updateActiveVllmProfile({ reasoningParser: e.target.value })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase text-white/35">Tool parser</span>
+                          <input
+                            type="text"
+                            value={activeVllmProfile.toolCallParser || ""}
+                            onChange={(e) => updateActiveVllmProfile({ toolCallParser: e.target.value })}
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="flex flex-wrap gap-4">
+                        {([
+                          ["enableAutoToolChoice", "Auto tools"],
+                          ["languageModelOnly", "Text only"],
+                          ["enforceEager", "Eager mode"],
+                          ["kvCacheMetrics", "KV metrics"],
+                        ] as const).map(([key, label]) => (
+                          <label key={key} className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={!!activeVllmProfile[key]}
+                              onChange={(e) => updateActiveVllmProfile({ [key]: e.target.checked } as Partial<VllmModelProfile>)}
+                              className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+                            />
+                            <span className="text-xs text-white/60">{label}</span>
+                          </label>
+                        ))}
+                      </div>
+
+                      <label className="space-y-1 block">
+                        <span className="text-[10px] uppercase text-white/35">Extra vLLM args</span>
+                        <textarea
+                          value={(activeVllmProfile.extraArgs || []).join("\n")}
+                          onChange={(e) => updateActiveVllmProfile({ extraArgs: e.target.value.split("\n").map((line) => line.trim()).filter(Boolean) })}
+                          rows={3}
+                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono resize-none"
+                        />
+                      </label>
+
+                      {vllmSupervisorStatus?.url && (
+                        <div className="text-xs text-white/40 font-mono break-all">{vllmSupervisorStatus.url}</div>
+                      )}
+                      {vllmSupervisorStatus?.command && (
+                        <div className="text-[10px] text-white/30 font-mono break-all">
+                          {vllmSupervisorStatus.command.join(" ")}
+                        </div>
+                      )}
+                      {vllmSupervisorStatus?.logs && vllmSupervisorStatus.logs.length > 0 && (
+                        <div className="max-h-36 overflow-y-auto rounded-lg bg-black/20 border border-white/10 p-2 font-mono text-[10px] text-white/45 space-y-1">
+                          {vllmSupervisorStatus.logs.slice(-12).map((log, idx) => (
+                            <div key={`${log.timestamp}-${idx}`} className={log.stream === "stderr" ? "text-amber-300/60 break-all" : "break-all"}>
+                              <span className="text-white/25">{log.stream}</span> {log.line}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                   <p className="text-xs text-white/30">

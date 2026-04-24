@@ -383,7 +383,14 @@ function createSafeStreamFn(chatOllamaOptions?: { keepAlive?: string | number; n
     // Wrap the raw stream with an inactivity timeout.
     // If Ollama is stuck loading a model, the stream hangs indefinitely —
     // this detects that and aborts with a clear error.
-    const rawStream = streamSimple(model, ctx, mergedOptions);
+    beginLLMStream();
+    let rawStream: ReturnType<typeof streamSimple>;
+    try {
+      rawStream = streamSimple(model, ctx, mergedOptions);
+    } catch (err) {
+      endLLMStream();
+      throw err;
+    }
     const wrappedStream = createAssistantMessageEventStream();
 
     const cloud = isCloudModel(model.id);
@@ -431,7 +438,6 @@ function createSafeStreamFn(chatOllamaOptions?: { keepAlive?: string | number; n
       };
 
       resetTimer();
-      beginLLMStream();
 
       try {
         for await (const event of rawStream) {

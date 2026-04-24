@@ -2,9 +2,15 @@ import type { Model } from "@mariozechner/pi-ai";
 import type { OllamaModel, Settings } from "../types.js";
 import { getSettings } from "./chat-storage.js";
 import { getOllamaUrl } from "./ollama-url.js";
+import {
+  findVllmProfile,
+  getVllmProfileUrl,
+  getVllmProfiles,
+  profileToModel,
+  VLLM_DEFAULT_URL,
+} from "./vllm-supervisor.js";
 
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
-const VLLM_DEFAULT_URL = "http://localhost:8095";
 
 interface OllamaTagResponse {
   models: Array<{
@@ -337,12 +343,19 @@ interface VllmModelsResponse {
 let vllmCache: { models: OllamaModel[]; timestamp: number } | null = null;
 
 export async function discoverVllmModels(settings?: Settings): Promise<OllamaModel[]> {
+  const s = settings ?? await getSettings();
+  if (!s.vllmEnabled) return [];
+
   if (vllmCache && Date.now() - vllmCache.timestamp < MODEL_CACHE_TTL_MS) {
     return vllmCache.models;
   }
 
-  const s = settings ?? await getSettings();
-  if (!s.vllmEnabled) return [];
+  if (s.vllmManagedEnabled) {
+    const models = getVllmProfiles(s).map(profileToModel);
+    vllmCache = { models, timestamp: Date.now() };
+    return models;
+  }
+
   const baseUrl = s.vllmUrl || VLLM_DEFAULT_URL;
 
   try {
@@ -437,7 +450,12 @@ export async function getExtractionRoute(): Promise<ExtractionRoute | null> {
 }
 
 function supportsReasoning(family: string): boolean {
-  return family.startsWith("qwen3") || family.startsWith("gemma4");
+  const lower = family.toLowerCase();
+  return lower.startsWith("qwen3") ||
+    lower.includes("/qwen3") ||
+    lower.includes("qwen3.") ||
+    lower.startsWith("gemma4") ||
+    lower.includes("/gemma-4");
 }
 
 /**
@@ -514,7 +532,8 @@ export async function createPiModelFromProvider(
   }
   if (model.provider === "vllm") {
     const settings = await getSettings();
-    const baseUrl = settings.vllmUrl || VLLM_DEFAULT_URL;
+    const profile = settings.vllmManagedEnabled ? findVllmProfile(model.id, settings) : undefined;
+    const baseUrl = profile ? getVllmProfileUrl(profile) : (settings.vllmUrl || VLLM_DEFAULT_URL);
     const input: ("text" | "image")[] = model.supportsImages ? ["text", "image"] : ["text"];
     return {
       id: model.id,
@@ -522,10 +541,10 @@ export async function createPiModelFromProvider(
       api: "openai-compat",
       provider: "vllm",
       baseUrl,
-      reasoning: false,
+      reasoning: !!profile?.reasoningParser || supportsReasoning(model.family),
       input,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: model.contextWindow,
+      contextWindow: profile?.maxModelLen ?? model.contextWindow,
       maxTokens: 32768,
     };
   }

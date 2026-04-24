@@ -3,9 +3,9 @@ import type { Request, Response } from "express";
 import { getAllModelSummaries, getModelRuns, clearModelStats } from "../services/model-stats.js";
 import { getSettings } from "../services/chat-storage.js";
 import { fetchVllmCacheMetrics } from "../services/vllm-metrics.js";
+import { getVllmMetricsBaseUrl } from "../services/vllm-supervisor.js";
 
 const router = Router();
-const VLLM_DEFAULT_URL = "http://localhost:8095";
 
 /**
  * GET /api/model-stats
@@ -28,7 +28,7 @@ router.get("/", async (_req: Request, res: Response) => {
 router.get("/vllm-cache", async (_req: Request, res: Response) => {
   try {
     const settings = await getSettings();
-    const baseUrl = settings.vllmUrl?.trim() || VLLM_DEFAULT_URL;
+    const baseUrl = await getVllmMetricsBaseUrl(settings);
     if (!settings.vllmEnabled) {
       return res.json({
         status: "unavailable",
