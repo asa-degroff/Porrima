@@ -1,6 +1,6 @@
 import { execFile } from "child_process";
-import { writeFile, mkdir, unlink, access, rm as rmDir, stat, readFile } from "fs/promises";
-import { join, relative } from "path";
+import { writeFile, mkdir, unlink, rm as rmDir, readFile } from "fs/promises";
+import { join } from "path";
 import { tmpdir, homedir } from "os";
 import { v4 as uuid } from "uuid";
 
@@ -8,7 +8,7 @@ const ARTIFACTS_DIR = join(homedir(), ".quje-agent", "artifacts");
 const VISUALS_DIR = join(homedir(), ".quje-agent", "visuals");
 const WORKSPACE_DIR = join(homedir(), ".quje-agent", "workspace");
 
-// Persistent sandbox sessions: sessionId -> { dir, createdAt, lastUsed }
+// Persistent workspace sessions: sessionId -> { dir, createdAt, lastUsed }
 const persistentSessions = new Map<string, { dir: string; createdAt: number; lastUsed: number }>();
 
 // Session cleanup: remove sessions older than 24 hours
@@ -18,35 +18,35 @@ const MAX_SESSIONS = 10;
 async function cleanupOldSessions() {
   const now = Date.now();
   const toRemove: string[] = [];
-  
+
   for (const [sessionId, session] of persistentSessions) {
     if (now - session.lastUsed > SESSION_TTL_MS) {
       toRemove.push(sessionId);
     }
   }
-  
-  // Also enforce max sessions by removing oldest
+
+  // Enforce max sessions by removing oldest
   if (persistentSessions.size - toRemove.length >= MAX_SESSIONS) {
     const sorted = Array.from(persistentSessions.entries())
       .filter(([id]) => !toRemove.includes(id))
       .sort((a, b) => a[1].lastUsed - b[1].lastUsed);
-    
+
     const excessCount = sorted.length - MAX_SESSIONS + 1;
     for (let i = 0; i < excessCount; i++) {
       toRemove.push(sorted[i][0]);
     }
   }
-  
+
   for (const sessionId of toRemove) {
     const session = persistentSessions.get(sessionId);
     if (session) {
       try {
         await rmDir(session.dir, { recursive: true, force: true });
       } catch (e) {
-        console.error(`[sandbox] Failed to cleanup session ${sessionId}:`, e);
+        console.error(`[python] Failed to cleanup session ${sessionId}:`, e);
       }
       persistentSessions.delete(sessionId);
-      console.log(`[sandbox] Cleaned up stale session: ${sessionId}`);
+      console.log(`[python] Cleaned up stale session: ${sessionId}`);
     }
   }
 }
@@ -61,154 +61,67 @@ export interface ExecutionResult {
   exitCode: number;
 }
 
-// Sensitive env var patterns to strip from sandbox environment
-const SENSITIVE_ENV_PATTERNS = [
-  /^SSH_/,
-  /^AWS_/,
-  /^GOOGLE_/,
-  /^AZURE_/,
-  /^GH_TOKEN$/,
-  /^GITHUB_TOKEN$/,
-  /^GITLAB_/,
-  /^NPM_TOKEN$/,
-  /^NODE_AUTH_TOKEN$/,
-  /^DOCKER_/,
-  /^KUBECONFIG$/,
-  /^OPENAI_/,
-  /^ANTHROPIC_/,
-  /^API_KEY$/,
-  /^SECRET/,
-  /TOKEN$/,
-  /^CREDENTIAL/,
-  /PASSWORD/,
-];
-
-function makeSafeEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value === undefined) continue;
-    if (SENSITIVE_ENV_PATTERNS.some((p) => p.test(key))) continue;
-    env[key] = value;
-  }
-  // Override HOME to sandbox dir so scripts can't access ~/.ssh etc.
-  env.HOME = tmpdir();
-  env.PYTHONDONTWRITEBYTECODE = "1";
-  return env;
-}
-
-let bwrapAvailable: boolean | null = null;
-
-async function checkBwrap(): Promise<boolean> {
-  if (bwrapAvailable !== null) return bwrapAvailable;
-  try {
-    await access("/usr/bin/bwrap");
-    bwrapAvailable = true;
-  } catch {
-    bwrapAvailable = false;
-  }
-  return bwrapAvailable;
-}
-
-function buildBwrapArgs(scriptPath: string, sandboxDir: string): string[] {
-  return [
-    // New PID and network namespace (disables network access)
-    "--unshare-net",
-    "--unshare-pid",
-    // Mount /usr read-only (contains all binaries/libraries)
-    "--ro-bind", "/usr", "/usr",
-    // Recreate standard symlinks (lib, lib64, bin, sbin -> /usr/*)
-    "--symlink", "usr/lib", "/lib",
-    "--symlink", "usr/lib64", "/lib64",
-    "--symlink", "usr/bin", "/bin",
-    "--symlink", "usr/sbin", "/sbin",
-    // Minimal /etc for Python
-    "--ro-bind", "/etc/alternatives", "/etc/alternatives",
-    // Python needs /proc
-    "--proc", "/proc",
-    // Writable sandbox directory
-    "--bind", sandboxDir, sandboxDir,
-    // Writable /tmp inside sandbox
-    "--tmpfs", "/tmp",
-    // Mount the script read-only
-    "--ro-bind", scriptPath, scriptPath,
-    // Set HOME to sandbox
-    "--setenv", "HOME", sandboxDir,
-    "--setenv", "PYTHONDONTWRITEBYTECODE", "1",
-    // Drop to sandbox dir
-    "--chdir", sandboxDir,
-    // Run python
-    "python3", scriptPath,
-  ];
-}
-
 /**
- * Execute Python code with optional persistent session.
- * 
+ * Execute Python code in a clean workspace directory.
+ *
+ * No longer sandboxed — runs with full system access, matching the agent's
+ * bash tool. The workspace directory provides clean isolation from the project
+ * tree and auto-cleanup, not a security boundary.
+ *
  * @param code - Python code to execute
  * @param timeout - Timeout in seconds (default 30)
- * @param sessionId - Optional session ID for persistent workspace. If provided,
- *   the sandbox directory persists between calls, allowing file I/O across executions.
- *   If not provided, a temporary sandbox is created and destroyed.
+ * @param sessionId - Optional session ID for a persistent workspace. If provided,
+ *   the directory persists between calls, allowing file I/O across executions.
+ *   If not provided, a temporary workspace is created and destroyed after execution.
  */
 export async function executePython(
   code: string,
   timeout: number = 30,
   sessionId?: string
 ): Promise<ExecutionResult> {
-  let sandboxDir: string;
+  let workspaceDir: string;
   let isPersistent = false;
 
   if (sessionId) {
-    // Use persistent session
     const existing = persistentSessions.get(sessionId);
     if (existing) {
-      sandboxDir = existing.dir;
+      workspaceDir = existing.dir;
       existing.lastUsed = Date.now();
       isPersistent = true;
-      console.log(`[sandbox] Reusing persistent session: ${sessionId}`);
+      console.log(`[python] Reusing session: ${sessionId}`);
     } else {
-      // Create new persistent session
-      sandboxDir = join(WORKSPACE_DIR, `session-${sessionId}`);
-      await mkdir(sandboxDir, { recursive: true });
+      workspaceDir = join(WORKSPACE_DIR, `session-${sessionId}`);
+      await mkdir(workspaceDir, { recursive: true });
       persistentSessions.set(sessionId, {
-        dir: sandboxDir,
+        dir: workspaceDir,
         createdAt: Date.now(),
         lastUsed: Date.now(),
       });
       isPersistent = true;
-      console.log(`[sandbox] Created persistent session: ${sessionId} at ${sandboxDir}`);
+      console.log(`[python] Created session: ${sessionId} at ${workspaceDir}`);
     }
   } else {
-    // Ephemeral session (original behavior)
     const sandboxId = uuid();
-    sandboxDir = join(tmpdir(), `quje-sandbox-${sandboxId}`);
-    await mkdir(sandboxDir, { recursive: true });
+    workspaceDir = join(tmpdir(), `quje-python-${sandboxId}`);
+    await mkdir(workspaceDir, { recursive: true });
   }
 
-  const tempFile = join(sandboxDir, "script.py");
+  const scriptPath = join(workspaceDir, "script.py");
 
   try {
-    await writeFile(tempFile, code, "utf-8");
+    await writeFile(scriptPath, code, "utf-8");
 
-    const useBwrap = await checkBwrap();
-
-    const cmd = useBwrap ? "/usr/bin/bwrap" : "python3";
-    const args = useBwrap
-      ? buildBwrapArgs(tempFile, sandboxDir)
-      : [tempFile];
-    const env = useBwrap ? process.env as Record<string, string> : makeSafeEnv();
-
-    console.log(`[sandbox] Executing Python (${useBwrap ? "bwrap" : "restricted"})${isPersistent ? ` [session: ${sessionId}]` : ""}`);
+    console.log(`[python] Executing${isPersistent ? ` [session: ${sessionId}]` : " [ephemeral]"}`);
 
     return await new Promise<ExecutionResult>((resolve) => {
       execFile(
-        cmd,
-        args,
+        "python3",
+        [scriptPath],
         {
           timeout: timeout * 1000,
           maxBuffer: 1024 * 1024,
-          cwd: useBwrap ? undefined : sandboxDir,
-          env,
+          cwd: workspaceDir,
+          env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
         },
         (error, stdout, stderr) => {
           if (error) {
@@ -236,13 +149,10 @@ export async function executePython(
       );
     });
   } finally {
-    // Only clean up ephemeral sessions
     if (!isPersistent) {
-      const { rm } = await import("fs/promises");
-      rm(sandboxDir, { recursive: true, force: true }).catch(() => {});
+      rmDir(workspaceDir, { recursive: true, force: true }).catch(() => {});
     } else {
-      // Clean up just the script file in persistent sessions
-      unlink(tempFile).catch(() => {});
+      unlink(scriptPath).catch(() => {});
     }
   }
 }

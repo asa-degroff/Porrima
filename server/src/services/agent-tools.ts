@@ -68,7 +68,7 @@ const BASH_TOOL: Tool = {
 
 const RUN_PYTHON_TOOL: Tool = {
   name: "run_python",
-  description: "Execute Python code and return the output. Runs in a temporary directory with a 30s timeout.",
+  description: "Execute Python code and return the output. Runs in a clean workspace directory with full system access (filesystem, network, environment) and a 30s timeout. Use for data processing, computation, and any Python task — no restrictions.",
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute" }),
   }),
@@ -954,8 +954,8 @@ print(json.dumps(result))
     await writeFile(scriptPath, pythonCode, "utf-8");
     
     return new Promise((resolve) => {
-      // Ensure user's local Python packages are in path (for --break-system-packages installs)
-      const env: Record<string, string> = { ...process.env as Record<string, string>, HOME: sandboxDir };
+      // Ensure user's local Python packages are in path
+      const env: Record<string, string> = { ...process.env as Record<string, string> };
       const homeDir = homedir();
       const userSitePackages = join(homeDir, ".local", "lib", "python3.13", "site-packages");
       env.PYTHONPATH = userSitePackages + (process.env.PYTHONPATH ? ":" + process.env.PYTHONPATH : "");
