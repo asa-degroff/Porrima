@@ -4,8 +4,6 @@ import { getSettings } from "../services/chat-storage.js";
 import { getOllamaUrl } from "../services/ollama-url.js";
 
 const router = Router();
-const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
-const VLLM_DEFAULT_URL = "http://localhost:8095";
 
 router.get("/", async (req, res) => {
   try {
@@ -27,36 +25,14 @@ router.get("/health/:modelId", async (req, res) => {
   // Determine which provider to check
   if (provider === "llamacpp") {
     try {
-      const settings = await getSettings();
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
-      const baseUrl = settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
-      const response = await fetch(`${baseUrl}/health`, {
+      const response = await fetch(`http://localhost:8080/health`, {
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
       if (!response.ok) {
         return res.status(503).json({ model: modelId, status: "unavailable", error: `llama.cpp returned ${response.status}` });
-      }
-      res.json({ model: modelId, status: "ok" });
-    } catch (e: any) {
-      res.status(503).json({ model: modelId, status: "unavailable", error: e.message });
-    }
-    return;
-  }
-
-  if (provider === "vllm") {
-    try {
-      const settings = await getSettings();
-      const baseUrl = settings.vllmUrl || VLLM_DEFAULT_URL;
-      const response = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(5000) });
-      if (!response.ok) {
-        return res.status(503).json({ model: modelId, status: "unavailable", error: `vLLM returned ${response.status}` });
-      }
-      const data = (await response.json()) as { data?: Array<{ id: string }> };
-      const found = data.data?.some((m) => m.id === modelId);
-      if (!found) {
-        return res.status(404).json({ model: modelId, status: "unavailable", error: "Model not listed by vLLM" });
       }
       res.json({ model: modelId, status: "ok" });
     } catch (e: any) {
@@ -100,7 +76,7 @@ router.get("/health/:modelId", async (req, res) => {
 // Discover models on a specific upstream server, filtered by kind.
 // Used by the settings UI to populate embedding/reranker model dropdowns.
 // Query params:
-//   - provider: "ollama" | "llamacpp" | "vllm" (required)
+//   - provider: "ollama" | "llamacpp" (required)
 //   - url: override the server URL (optional; defaults to provider's standard URL)
 //   - kind: "embedding" | "rerank" | "chat" (required)
 // Returns { models: Array<{ id: string; name: string }> }. On upstream failure
@@ -111,8 +87,8 @@ router.get("/discover", async (req, res) => {
   const kind = req.query.kind as string | undefined;
   const urlOverride = req.query.url as string | undefined;
 
-  if (provider !== "ollama" && provider !== "llamacpp" && provider !== "vllm") {
-    return res.status(400).json({ models: [], error: "provider must be 'ollama', 'llamacpp', or 'vllm'" });
+  if (provider !== "ollama" && provider !== "llamacpp") {
+    return res.status(400).json({ models: [], error: "provider must be 'ollama' or 'llamacpp'" });
   }
   if (kind !== "embedding" && kind !== "rerank" && kind !== "chat") {
     return res.status(400).json({ models: [], error: "kind must be 'embedding', 'rerank', or 'chat'" });
@@ -147,16 +123,16 @@ router.get("/discover", async (req, res) => {
       return res.json({ models });
     }
 
-    // OpenAI-compatible providers: llama.cpp and vLLM
-    const baseUrl = urlOverride || (provider === "vllm" ? VLLM_DEFAULT_URL : LLAMACPP_DEFAULT_URL);
+    // llama.cpp
+    const baseUrl = urlOverride || "http://localhost:8080";
     const response = await fetch(`${baseUrl}/v1/models`, { signal: controller.signal });
     clearTimeout(timeoutId);
     if (!response.ok) {
-      return res.json({ models: [], error: `${provider} returned ${response.status}` });
+      return res.json({ models: [], error: `llama.cpp returned ${response.status}` });
     }
     const data = (await response.json()) as { data: Array<{ id: string }> };
     const models = data.data
-      .filter((m) => m.id && (provider === "vllm" || !m.id.includes("/")))
+      .filter((m) => m.id && !m.id.includes("/"))
       .filter((m) => matchesKind(m.id, kind))
       .map((m) => ({ id: m.id, name: m.id }));
     return res.json({ models });
@@ -170,8 +146,7 @@ router.get("/discover", async (req, res) => {
 router.get("/health-all", async (_req, res) => {
   const settings = await getSettings();
   const ollamaUrl = getOllamaUrl(settings);
-  const inferenceUrl = settings.llamacppUrl?.trim() || LLAMACPP_DEFAULT_URL;
-  const vllmUrl = settings.vllmUrl?.trim() || VLLM_DEFAULT_URL;
+  const inferenceUrl = settings.llamacppUrl?.trim() || "http://localhost:8080";
   const extractionUrl = settings.extractionModelUrl?.trim() || "http://localhost:8083";
   const rerankerUrl = settings.rerankerUrl?.trim() || "http://localhost:8082";
   const embeddingProvider = settings.embeddingProvider ?? "ollama";
@@ -203,11 +178,7 @@ router.get("/health-all", async (_req, res) => {
     pingOllama(ollamaUrl),
   ]);
 
-  const vllm = settings.vllmEnabled
-    ? await pingLlamaCpp(vllmUrl)
-    : "unavailable";
-
-  res.json({ inference, vllm, extraction, reranker, embedding, ollama });
+  res.json({ inference, extraction, reranker, embedding, ollama });
 });
 
 // llama.cpp server health check (proxied to avoid CORS issues)
@@ -225,23 +196,6 @@ router.get("/llamacpp/health", async (req, res) => {
       res.json({ status: "ok" });
     } else {
       res.status(503).json({ status: "unavailable", error: `llama.cpp returned ${response.status}` });
-    }
-  } catch (e: any) {
-    res.status(503).json({ status: "unavailable", error: e.message });
-  }
-});
-
-// vLLM server health check (proxied to avoid CORS issues)
-router.get("/vllm/health", async (req, res) => {
-  try {
-    const urlOverride = req.query.url as string | undefined;
-    const settings = await getSettings();
-    const baseUrl = urlOverride || settings.vllmUrl || VLLM_DEFAULT_URL;
-    const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(5000) });
-    if (response.ok) {
-      res.json({ status: "ok" });
-    } else {
-      res.status(503).json({ status: "unavailable", error: `vLLM returned ${response.status}` });
     }
   } catch (e: any) {
     res.status(503).json({ status: "unavailable", error: e.message });

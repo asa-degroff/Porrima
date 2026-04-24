@@ -4,7 +4,6 @@ import { getSettings } from "./chat-storage.js";
 import { getOllamaUrl } from "./ollama-url.js";
 
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
-const VLLM_DEFAULT_URL = "http://localhost:8095";
 const TITLE_MODEL = "qwen3.5:0.8b";
 
 /**
@@ -26,20 +25,18 @@ export async function generateTitle(
     const userContent = `User: ${truncatedUser}\n\nAssistant: ${truncatedResponse}`;
 
     // Check which provider has the title model
-    let provider: "ollama" | "llamacpp" | "vllm" = "ollama";
+    let provider: "ollama" | "llamacpp" = "ollama";
     try {
       const models = await discoverAllModels();
       const found = models.find((m) => m.id === TITLE_MODEL);
-      if (found?.provider === "llamacpp" || found?.provider === "vllm") provider = found.provider;
+      if (found?.provider) provider = found.provider;
     } catch { /* fall through to default provider */ }
 
     let title: string | null = null;
 
-    if (provider === "llamacpp" || provider === "vllm") {
+    if (provider === "llamacpp") {
       const settings = await getSettings();
-      const baseUrl = provider === "vllm"
-        ? settings.vllmUrl || VLLM_DEFAULT_URL
-        : settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
+      const baseUrl = settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
       const res = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -56,7 +53,7 @@ export async function generateTitle(
         signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) {
-        console.warn(`[title] ${provider} generation failed: HTTP ${res.status}`);
+        console.warn(`[title] llama.cpp generation failed: HTTP ${res.status}`);
         return null;
       }
       const data = await res.json();
@@ -139,20 +136,18 @@ export async function regenerateTitle(
       "Focus on the current topic being discussed.";
 
     // Check which provider has the title model
-    let provider: "ollama" | "llamacpp" | "vllm" = "ollama";
+    let provider: "ollama" | "llamacpp" = "ollama";
     try {
       const models = await discoverAllModels();
       const found = models.find((m) => m.id === TITLE_MODEL);
-      if (found?.provider === "llamacpp" || found?.provider === "vllm") provider = found.provider;
+      if (found?.provider) provider = found.provider;
     } catch { /* fall through to default provider */ }
 
     let title: string | null = null;
 
-    if (provider === "llamacpp" || provider === "vllm") {
+    if (provider === "llamacpp") {
       const settings = await getSettings();
-      const baseUrl = provider === "vllm"
-        ? settings.vllmUrl || VLLM_DEFAULT_URL
-        : settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
+      const baseUrl = settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
       const res = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -169,7 +164,7 @@ export async function regenerateTitle(
         signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) {
-        console.warn(`[title] ${provider} regeneration failed: HTTP ${res.status}`);
+        console.warn(`[title] llama.cpp regeneration failed: HTTP ${res.status}`);
         return null;
       }
       const data = await res.json();

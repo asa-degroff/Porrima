@@ -1,11 +1,8 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { getAllModelSummaries, getModelRuns, clearModelStats } from "../services/model-stats.js";
-import { getSettings } from "../services/chat-storage.js";
-import { fetchVllmCacheMetrics } from "../services/vllm-metrics.js";
 
 const router = Router();
-const VLLM_DEFAULT_URL = "http://localhost:8095";
 
 /**
  * GET /api/model-stats
@@ -18,30 +15,6 @@ router.get("/", async (_req: Request, res: Response) => {
   } catch (err) {
     console.error("[model-stats] GET / failed:", err);
     res.status(500).json({ error: "Failed to get model stats" });
-  }
-});
-
-/**
- * GET /api/model-stats/vllm-cache
- * Live vLLM prefix/KV cache metrics from the configured vLLM server.
- */
-router.get("/vllm-cache", async (_req: Request, res: Response) => {
-  try {
-    const settings = await getSettings();
-    const baseUrl = settings.vllmUrl?.trim() || VLLM_DEFAULT_URL;
-    if (!settings.vllmEnabled) {
-      return res.json({
-        status: "unavailable",
-        url: baseUrl,
-        timestamp: Date.now(),
-        models: [],
-        error: "vLLM provider is disabled",
-      });
-    }
-    res.json(await fetchVllmCacheMetrics(baseUrl));
-  } catch (err) {
-    console.error("[model-stats] GET /vllm-cache failed:", err);
-    res.status(500).json({ error: "Failed to get vLLM cache metrics" });
   }
 });
 

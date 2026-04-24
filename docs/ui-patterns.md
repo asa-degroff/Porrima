@@ -32,7 +32,7 @@
 
 ## Other
 
-- Per-chat model selector with provider grouping (Ollama / llama.cpp / vLLM headers and provider icons)
+- Per-chat model selector with provider grouping (Ollama / llama.cpp headers, "LC" badge)
 - Model favorites: star toggle in settings, "Show only favorites in chat" mode
 - System prompt presets with "None (persona only)" option for agent chats, "Add preset" label when none selected
 - Markdown rendering with GFM support

@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { VisionPreset, AnalyzedImage } from "../api/client";
 import type { OllamaModel } from "../types";
-import { ProviderIcon, providerIconClass } from "./ProviderIcon";
+import { ProviderIcon } from "./ProviderIcon";
 import { DropdownPanel } from "./SettingsModal";
 
 const MAX_DIMENSION = 2048;
@@ -173,7 +173,7 @@ export function VisionControls({
             >
               {models.map((m) => (
                 <button
-                  key={`${m.provider || "ollama"}-${m.id}`}
+                  key={m.id}
                   onClick={() => { onModelChange(m.id); setModelOpen(false); }}
                   className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
                     m.id === selectedModel
@@ -189,7 +189,7 @@ export function VisionControls({
                   <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
                   <ProviderIcon
                     provider={m.provider}
-                    className={providerIconClass(m.provider)}
+                    className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
                   />
                 </button>
               ))}

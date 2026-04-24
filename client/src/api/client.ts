@@ -42,7 +42,7 @@ export interface DiscoveredModel {
 }
 
 export async function discoverModels(params: {
-  provider: "ollama" | "llamacpp" | "vllm";
+  provider: "ollama" | "llamacpp";
   kind: "embedding" | "rerank" | "chat";
   url?: string;
 }): Promise<{ models: DiscoveredModel[]; error?: string }> {
@@ -1247,7 +1247,6 @@ export async function fetchChat(id: string): Promise<Chat> {
 export type ServerHealth = "ok" | "unavailable";
 export interface ServerHealthMap {
   inference: ServerHealth;
-  vllm: ServerHealth;
   extraction: ServerHealth;
   reranker: ServerHealth;
   embedding: ServerHealth;

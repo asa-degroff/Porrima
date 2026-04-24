@@ -66,7 +66,7 @@ if (typeof document !== "undefined") {
 }
 
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
-  const { models, refresh: refreshModels } = useModels();
+  const { models } = useModels();
   const { chats, createChat, removeChat, refresh, refreshImmediate } = useChats();
   const { projects, createProject, removeProject } = useProjects();
   const { settings, updateSettings } = useSettings();
@@ -590,10 +590,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleSaveSettings = useCallback(
     async (s: import("./types").Settings) => {
       await updateSettings(s);
-      await refreshModels();
       setSettingsOpen(false);
     },
-    [updateSettings, refreshModels]
+    [updateSettings]
   );
   const handleSwitchView = useCallback((view: 'chats' | 'notebooks') => {
     setActiveView(view);

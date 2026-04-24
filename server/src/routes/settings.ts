@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { getSettings, saveSettings } from "../services/chat-storage.js";
 import { getLlamaPathInfo, updateLlamaPath, validateLlamaPath, getLlamaServicesStatus } from "../services/llama-path.js";
-import { invalidateModelCache } from "../services/models.js";
 
 const router = Router();
 
@@ -12,7 +11,6 @@ router.get("/", async (_req, res) => {
 
 router.put("/", async (req, res) => {
   const settings = await saveSettings(req.body);
-  invalidateModelCache();
   res.json(settings);
 });
 

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import type { OllamaModel } from "../types";
-import { ProviderIcon, providerIconClass } from "./ProviderIcon";
+import { ProviderIcon } from "./ProviderIcon";
 import { DropdownPanel } from "./SettingsModal";
 
 interface Props {
@@ -31,13 +31,11 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
   const { groups, hasMultipleProviders } = useMemo(() => {
     const ollamaModels = models.filter((m) => !m.provider || m.provider === "ollama");
     const llamacppModels = models.filter((m) => m.provider === "llamacpp");
-    const vllmModels = models.filter((m) => m.provider === "vllm");
-    const providerCount = [ollamaModels, llamacppModels, vllmModels].filter((group) => group.length > 0).length;
+    const multi = ollamaModels.length > 0 && llamacppModels.length > 0;
     const g: Array<{ label: string; provider: string; models: OllamaModel[] }> = [];
     if (ollamaModels.length > 0) g.push({ label: "Ollama", provider: "ollama", models: ollamaModels });
     if (llamacppModels.length > 0) g.push({ label: "llama.cpp", provider: "llamacpp", models: llamacppModels });
-    if (vllmModels.length > 0) g.push({ label: "vLLM", provider: "vllm", models: vllmModels });
-    return { groups: g, hasMultipleProviders: providerCount > 1 };
+    return { groups: g, hasMultipleProviders: multi };
   }, [models]);
 
   return (
@@ -51,7 +49,7 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
         {selected && (
           <ProviderIcon
             provider={selected.provider}
-            className={providerIconClass(selected.provider, false)}
+            className={selected.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/60 shrink-0"}
           />
         )}
         <svg
@@ -101,7 +99,7 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
                 {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
                 <ProviderIcon
                   provider={m.provider}
-                  className={providerIconClass(m.provider)}
+                  className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
                 />
               </button>
             ))}

@@ -4,7 +4,6 @@ import { getSettings } from "./chat-storage.js";
 import { getOllamaUrl } from "./ollama-url.js";
 
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
-const VLLM_DEFAULT_URL = "http://localhost:8095";
 
 interface OllamaTagResponse {
   models: Array<{
@@ -318,98 +317,29 @@ function formatLlamaCppModelName(id: string): string {
     .join(" ");
 }
 
-// ---------------------------------------------------------------------------
-// vLLM model discovery
-// ---------------------------------------------------------------------------
-
-interface VllmModelEntry {
-  id: string;
-  object?: string;
-  owned_by?: string;
-  root?: string;
-  max_model_len?: number;
-}
-
-interface VllmModelsResponse {
-  data: VllmModelEntry[];
-}
-
-let vllmCache: { models: OllamaModel[]; timestamp: number } | null = null;
-
-export async function discoverVllmModels(settings?: Settings): Promise<OllamaModel[]> {
-  if (vllmCache && Date.now() - vllmCache.timestamp < MODEL_CACHE_TTL_MS) {
-    return vllmCache.models;
-  }
-
-  const s = settings ?? await getSettings();
-  if (!s.vllmEnabled) return [];
-  const baseUrl = s.vllmUrl || VLLM_DEFAULT_URL;
-
-  try {
-    const response = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`vLLM not reachable: ${response.status}`);
-    const data = (await response.json()) as VllmModelsResponse;
-    const DEFAULT_CONTEXT_WINDOW = 32768;
-
-    const models: OllamaModel[] = data.data
-      .filter((m) => !!m.id)
-      .map((m) => {
-        const familySource = (m.root || m.id).toLowerCase();
-        const supportsImages = /vision|-vl|llava|pixtral|qwen.*vl|gemma.*it.*mm/.test(familySource);
-        return {
-          id: m.id,
-          name: formatVllmModelName(m.id, m.root),
-          parameterSize: "",
-          family: familySource,
-          contextWindow: m.max_model_len ?? DEFAULT_CONTEXT_WINDOW,
-          supportsImages,
-          provider: "vllm" as const,
-        };
-      });
-
-    vllmCache = { models, timestamp: Date.now() };
-    return models;
-  } catch (error) {
-    console.error("[models] discoverVllmModels failed:", error);
-    if (vllmCache) {
-      console.warn("[models] returning stale vLLM cache");
-      return vllmCache.models;
-    }
-    return [];
-  }
-}
-
-function formatVllmModelName(id: string, root?: string): string {
-  const display = id || root || "vLLM model";
-  if (root && root !== id) return `${display} (${root.split("/").pop() || root})`;
-  return display.split("/").pop() || display;
-}
-
 /**
  * Discover models from all enabled providers.
  * Returns a unified list tagged with their provider.
  */
 export async function discoverAllModels(): Promise<OllamaModel[]> {
   const settings = await getSettings();
-  const [ollamaModels, llamacppModels, vllmModels] = await Promise.all([
+  const [ollamaModels, llamacppModels] = await Promise.all([
     discoverOllamaModels().catch((err) => {
       console.error("[models] Ollama discovery failed:", err);
       return [] as OllamaModel[];
     }),
     discoverLlamaCppModels(settings),
-    discoverVllmModels(settings),
   ]);
 
   // Tag Ollama models that don't have a provider field yet
   const tagged = ollamaModels.map((m) => ({ ...m, provider: m.provider ?? ("ollama" as const) }));
-  return [...tagged, ...llamacppModels, ...vllmModels];
+  return [...tagged, ...llamacppModels];
 }
 
 /** Invalidate model caches (e.g., after settings change). */
 export function invalidateModelCache() {
   modelCache = null;
   llamacppCache = null;
-  vllmCache = null;
 }
 
 export interface ExtractionRoute {
@@ -506,23 +436,6 @@ export async function createPiModelFromProvider(
       provider: "llamacpp",
       baseUrl,
       reasoning: true, // llama.cpp serves reasoning models; thinking via delta.reasoning_content
-      input,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: model.contextWindow,
-      maxTokens: 32768,
-    };
-  }
-  if (model.provider === "vllm") {
-    const settings = await getSettings();
-    const baseUrl = settings.vllmUrl || VLLM_DEFAULT_URL;
-    const input: ("text" | "image")[] = model.supportsImages ? ["text", "image"] : ["text"];
-    return {
-      id: model.id,
-      name: model.name,
-      api: "openai-compat",
-      provider: "vllm",
-      baseUrl,
-      reasoning: false,
       input,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: model.contextWindow,
