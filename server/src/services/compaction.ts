@@ -390,12 +390,14 @@ export async function truncateBeforeSend(
     }
   }
 
-  // Split fallback: when backward-fill can't fit even the last message, try
-  // peeling a prefix of that message's tool-call pairs into its own archive
-  // block. Common for long coding tasks where a single turn produced many
-  // file reads/greps that, taken together, exceed the budget on their own.
+  // Split optimization: backward-fill stops either because everything fit
+  // (keepFromIC === 0) or because a message was too big. In the latter case,
+  // the boundary message at icIndices[keepFromIC - 1] would be archived whole.
+  // If it's an assistant turn with ≥2 tool-call pairs, peel its head off so
+  // its tail (last N pairs + final content) stays in context.
   let splitInfo: ReturnType<typeof trySplitAssistantMessage> | null = null;
   if (keepFromIC === icIndices.length) {
+    // Last-resort: not even the last message fit. Split it.
     const lastOrigIdx = icIndices[icIndices.length - 1];
     splitInfo = trySplitAssistantMessage(
       messages[lastOrigIdx],
@@ -406,13 +408,34 @@ export async function truncateBeforeSend(
       // Archive the split head alongside everything older than the last message.
       keepFromIC = icIndices.length - 1;
       console.log(
-        `[compaction] Mid-message split: chat=${chat.id} msgIdx=${lastOrigIdx} ` +
+        `[compaction] Mid-message split (tail): chat=${chat.id} msgIdx=${lastOrigIdx} ` +
         `originalPairs=${splitInfo.originalPairs} archivedPairs=${splitInfo.archivedPairs} ` +
         `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens}`,
       );
     } else {
       console.warn(`[compaction] No recent messages fit within target (overhead ${overheadTokens} alone > ${target}), keeping last 2 in-context`);
       keepFromIC = Math.max(0, icIndices.length - 2);
+    }
+  } else if (keepFromIC > 0) {
+    // Boundary split: backward-fill stopped because the next-older message
+    // didn't fit. If that boundary is a tool-call-heavy assistant turn, peel
+    // off its head so its tail rides along with the kept window instead of
+    // being archived whole.
+    const boundaryICIdx = keepFromIC - 1;
+    const boundaryOrigIdx = icIndices[boundaryICIdx];
+    const remainingBudget = Math.max(0, target - runningTotal);
+    splitInfo = trySplitAssistantMessage(
+      messages[boundaryOrigIdx],
+      remainingBudget,
+      scaleFactor,
+    );
+    if (splitInfo) {
+      keepFromIC = boundaryICIdx;
+      console.log(
+        `[compaction] Mid-message split (boundary): chat=${chat.id} msgIdx=${boundaryOrigIdx} ` +
+        `originalPairs=${splitInfo.originalPairs} archivedPairs=${splitInfo.archivedPairs} ` +
+        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens}`,
+      );
     }
   }
 
@@ -1170,12 +1193,14 @@ export async function truncateChatHistory(
     }
   }
 
-  // Split fallback: when backward-fill can't fit even the last message, try
-  // peeling a prefix of that message's tool-call pairs into its own archive
-  // block. Targets the long-coding-task case where a single assistant turn
-  // accumulated many tool iterations and dominates the budget on its own.
+  // Split optimization: backward-fill stops either because everything fit
+  // or because a message was too big. In the latter case, the boundary
+  // message at inContextIndices[keepFromICIdx - 1] would be archived whole.
+  // If it's an assistant turn with ≥2 tool-call pairs, peel its head off so
+  // its tail stays in context.
   let splitInfo: ReturnType<typeof trySplitAssistantMessage> | null = null;
   if (keepFromICIdx === inContextIndices.length) {
+    // Last-resort: not even the last message fit. Split it.
     const lastOrigIdx = inContextIndices[inContextIndices.length - 1];
     splitInfo = trySplitAssistantMessage(
       messages[lastOrigIdx],
@@ -1185,12 +1210,32 @@ export async function truncateChatHistory(
     if (splitInfo) {
       keepFromICIdx = inContextIndices.length - 1;
       console.log(
-        `[compaction] Mid-message split: chat=${chat.id} msgIdx=${lastOrigIdx} ` +
+        `[compaction] Mid-message split (tail): chat=${chat.id} msgIdx=${lastOrigIdx} ` +
         `originalPairs=${splitInfo.originalPairs} archivedPairs=${splitInfo.archivedPairs} ` +
         `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens}`,
       );
     } else {
       keepFromICIdx = Math.max(0, inContextIndices.length - 1);
+    }
+  } else if (keepFromICIdx > 0) {
+    // Boundary split: backward-fill stopped because the next-older message
+    // didn't fit. If that boundary is a tool-call-heavy assistant turn, peel
+    // off its head so its tail rides along with the kept window.
+    const boundaryICIdx = keepFromICIdx - 1;
+    const boundaryOrigIdx = inContextIndices[boundaryICIdx];
+    const remainingBudget = Math.max(0, targetTokens - runningTotal);
+    splitInfo = trySplitAssistantMessage(
+      messages[boundaryOrigIdx],
+      remainingBudget,
+      scaleFactor,
+    );
+    if (splitInfo) {
+      keepFromICIdx = boundaryICIdx;
+      console.log(
+        `[compaction] Mid-message split (boundary): chat=${chat.id} msgIdx=${boundaryOrigIdx} ` +
+        `originalPairs=${splitInfo.originalPairs} archivedPairs=${splitInfo.archivedPairs} ` +
+        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens}`,
+      );
     }
   }
 
