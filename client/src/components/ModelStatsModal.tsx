@@ -15,6 +15,13 @@ interface LlamaTimingsEntry {
   promptTokensPerSec: number;
   predictedTokensPerSec: number;
   totalMs: number;
+  cachePrompt: boolean;
+  cacheMode?: string;
+  reportedPromptTokens?: number;
+  inferredCachedTokens?: number;
+  inferredCacheHitRatio?: number;
+  requestMessageCount?: number;
+  requestCharCount?: number;
 }
 
 interface ModelSummary {
@@ -23,6 +30,8 @@ interface ModelSummary {
   avgPredictedTokensPerSec: number | null;
   avgPromptMs: number | null;
   avgPredictedMs: number | null;
+  avgInferredCacheHitRatio: number | null;
+  avgInferredCachedTokens: number | null;
   runCount: number;
 }
 
@@ -57,6 +66,22 @@ function formatTimeAgo(ts: number): string {
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function formatNumber(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "—";
+  return new Intl.NumberFormat().format(Math.round(n));
+}
+
+function formatPercent(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "—";
+  return `${Math.round(n * 100)}%`;
+}
+
+function formatChars(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "—";
+  if (n < 1000) return `${n} chars`;
+  return `${(n / 1000).toFixed(1)}k chars`;
 }
 
 function truncateModelId(id: string): string {
@@ -129,6 +154,24 @@ function SpeedBar({ value, maxRef, isDecode, label }: { value: number | null; ma
   );
 }
 
+function CacheBar({ ratio, label }: { ratio: number | null | undefined; label: string }) {
+  const pct = ratio != null ? Math.min(Math.max(ratio * 100, 0), 100) : 0;
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] text-white/40 w-12 shrink-0">{label}</span>
+      <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
+        <div
+          className="h-full rounded-full bg-cyan-300/70 transition-all duration-300"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="text-[10px] w-16 text-right shrink-0 text-cyan-200/80">
+        {formatPercent(ratio)}
+      </span>
+    </div>
+  );
+}
+
 function ModelCard({
   record,
   onLoadDetail,
@@ -172,6 +215,16 @@ function ModelCard({
         </div>
       </div>
 
+      <div className="space-y-1.5 pt-1 border-t border-white/5">
+        <div className="flex items-center justify-between text-[10px]">
+          <span className="text-white/40">cache prompt</span>
+          <span className={last?.cachePrompt ? "text-cyan-200/80" : "text-white/30"}>
+            {last?.cachePrompt ? "enabled" : "not recorded"}
+          </span>
+        </div>
+        <CacheBar ratio={summary.avgInferredCacheHitRatio} label="avg hit" />
+      </div>
+
       {last && (
         <div className="flex gap-4 text-[10px] text-white/30 pt-1 border-t border-white/5">
           <span>last: {formatTimeAgo(last.timestamp)}</span>
@@ -179,6 +232,9 @@ function ModelCard({
           <span>decode: {formatDuration(last.predictedMs)}</span>
           <span>
             {last.promptTokens}p / {last.predictedTokens}d tokens
+          </span>
+          <span>
+            cache: {formatNumber(last.inferredCachedTokens)}
           </span>
         </div>
       )}
@@ -220,6 +276,30 @@ function ModelDetail({
         </div>
       </Section>
 
+      <Section title="Cache" defaultOpen>
+        <div className="space-y-2">
+          <CacheBar ratio={summary.avgInferredCacheHitRatio} label="hit EMA" />
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+            <div className="flex justify-between gap-2">
+              <span className="text-white/40">Avg cached</span>
+              <span className="text-white/70 font-mono">{formatNumber(summary.avgInferredCachedTokens)}</span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span className="text-white/40">Last cached</span>
+              <span className="text-white/70 font-mono">{formatNumber(summary.lastRun?.inferredCachedTokens)}</span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span className="text-white/40">Last hit</span>
+              <span className="text-white/70 font-mono">{formatPercent(summary.lastRun?.inferredCacheHitRatio)}</span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span className="text-white/40">Mode</span>
+              <span className="text-white/70 font-mono">{summary.lastRun?.cacheMode ?? "—"}</span>
+            </div>
+          </div>
+        </div>
+      </Section>
+
       <Section title="Last Run" defaultOpen>
         {summary.lastRun ? (
           <div className="space-y-1.5 text-[11px]">
@@ -229,7 +309,13 @@ function ModelDetail({
               "Decode time": formatDuration(summary.lastRun.predictedMs),
               "Prefill time": formatDuration(summary.lastRun.promptMs),
               "Total time": formatDuration(summary.lastRun.totalMs),
-              "Prompt tokens": summary.lastRun.promptTokens,
+              "Prompt eval tokens": summary.lastRun.promptTokens,
+              "Reported prompt tokens": formatNumber(summary.lastRun.reportedPromptTokens),
+              "Inferred cached tokens": formatNumber(summary.lastRun.inferredCachedTokens),
+              "Inferred cache hit": formatPercent(summary.lastRun.inferredCacheHitRatio),
+              "Cache prompt": summary.lastRun.cachePrompt ? "enabled" : "disabled/not recorded",
+              "Request messages": formatNumber(summary.lastRun.requestMessageCount),
+              "Request size": formatChars(summary.lastRun.requestCharCount),
               "Predicted tokens": summary.lastRun.predictedTokens,
             }) as [string, string][]).map(([k, v]) => (
               <div key={k} className="flex justify-between">
@@ -265,6 +351,9 @@ function ModelDetail({
                 <span className="text-white/30 w-14 shrink-0">{formatDuration(run.promptMs)}</span>
                 <span className="text-white/30 shrink-0">
                   {run.promptTokens}p / {run.predictedTokens}d
+                </span>
+                <span className="text-cyan-200/60 shrink-0">
+                  {formatNumber(run.inferredCachedTokens)} cached
                 </span>
               </div>
             ))}
@@ -335,7 +424,7 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
       >
         <header className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
           <div className="flex items-center gap-3">
-            <h2 className="text-sm font-medium text-white/90">Model Stats</h2>
+            <h2 className="text-sm font-medium text-white/90">Model Stats & Cache</h2>
             <span className="text-[10px] text-white/30">{records.length} model{records.length !== 1 ? "s" : ""}</span>
           </div>
           <div className="flex items-center gap-2">

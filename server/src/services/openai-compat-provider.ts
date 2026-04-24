@@ -108,6 +108,38 @@ interface OpenAIChatChunk {
   };
 }
 
+export interface LlamaCacheMetadata {
+  cachePrompt: boolean;
+  cacheMode: "cache_prompt" | "disabled";
+  requestMessageCount: number;
+  requestCharCount: number;
+  reportedPromptTokens?: number;
+  promptEvalTokens?: number;
+  inferredCachedTokens?: number;
+  inferredCacheHitRatio?: number;
+}
+
+function estimateRequestChars(messages: any[], tools: any[] | undefined): number {
+  try {
+    return JSON.stringify({ messages, tools: tools ?? [] }).length;
+  } catch {
+    return 0;
+  }
+}
+
+function buildCacheMetadata(
+  cachePrompt: boolean,
+  messages: any[],
+  tools: any[] | undefined,
+): LlamaCacheMetadata {
+  return {
+    cachePrompt,
+    cacheMode: cachePrompt ? "cache_prompt" : "disabled",
+    requestMessageCount: messages.length,
+    requestCharCount: estimateRequestChars(messages, tools),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Message conversion (OpenAI format)
 // ---------------------------------------------------------------------------
@@ -670,6 +702,15 @@ export const streamOpenAICompat = (
         body.tools = convertTools(context.tools);
       }
 
+      // llama.cpp exposes prompt KV reuse through its `cache_prompt` request
+      // parameter. The OpenAI-compatible endpoint accepts server-specific
+      // generation parameters, so set it explicitly instead of relying on
+      // defaults that vary across llama.cpp builds.
+      const cachePrompt = process.env.LLAMACPP_CACHE_PROMPT !== "0";
+      if (cachePrompt) {
+        body.cache_prompt = true;
+      }
+
       if (model.reasoning) {
         body.chat_template_kwargs = { enable_thinking: true };
       }
@@ -690,6 +731,7 @@ export const streamOpenAICompat = (
       } catch { /* non-critical */ }
 
       const url = `${model.baseUrl}/v1/chat/completions`;
+      const cacheMetadata = buildCacheMetadata(cachePrompt, messages, body.tools);
 
       // Retry on transient connection failures (fetch failed / ECONNRESET).
       // llama.cpp's router can briefly refuse connections between rapid iterations.
@@ -861,6 +903,7 @@ export const streamOpenAICompat = (
       for await (const chunk of parseSSE(response.body, options?.signal)) {
         // Extract usage from final chunk
         if (chunk.usage) {
+          cacheMetadata.reportedPromptTokens = chunk.usage.prompt_tokens || 0;
           output.usage = {
             input: chunk.usage.prompt_tokens || 0,
             output: chunk.usage.completion_tokens || 0,
@@ -873,6 +916,14 @@ export const streamOpenAICompat = (
         // Capture llama.cpp timings from final chunk
         if (chunk.timings) {
           llamaTimings = chunk.timings;
+          cacheMetadata.promptEvalTokens = chunk.timings.prompt_n;
+          if (cacheMetadata.reportedPromptTokens !== undefined) {
+            const inferredCached = Math.max(0, cacheMetadata.reportedPromptTokens - chunk.timings.prompt_n);
+            cacheMetadata.inferredCachedTokens = inferredCached;
+            cacheMetadata.inferredCacheHitRatio = cacheMetadata.reportedPromptTokens > 0
+              ? inferredCached / cacheMetadata.reportedPromptTokens
+              : 0;
+          }
         }
 
         const choice = chunk.choices?.[0];
@@ -1027,6 +1078,7 @@ export const streamOpenAICompat = (
       if (llamaTimings) {
         (output as any).llamaTimings = llamaTimings;
       }
+      (output as any).llamaCache = cacheMetadata;
 
       if (options?.signal?.aborted) {
         throw new Error("Request was aborted");

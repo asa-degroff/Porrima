@@ -709,12 +709,12 @@ export function Sidebar({
                   </svg>
                 </button>
               )}
-              {/* Model stats — llama.cpp performance metrics */}
+              {/* Model stats — llama.cpp performance and cache metrics */}
               {onOpenModelStats && (
                 <button
                   onClick={onOpenModelStats}
                   className="p-2 text-white/30 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors shrink-0"
-                  title="Model Stats"
+                  title="Model Stats & Cache"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M18 20V10"/>

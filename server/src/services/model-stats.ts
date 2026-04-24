@@ -34,6 +34,13 @@ export interface ModelStatsEntry {
   promptTokensPerSec: number;
   predictedTokensPerSec: number;
   totalMs: number;
+  cachePrompt: boolean;
+  cacheMode?: string;
+  reportedPromptTokens?: number;
+  inferredCachedTokens?: number;
+  inferredCacheHitRatio?: number;
+  requestMessageCount?: number;
+  requestCharCount?: number;
 }
 
 export interface ModelStatsSummary {
@@ -42,7 +49,20 @@ export interface ModelStatsSummary {
   avgPredictedTokensPerSec: number | null;
   avgPromptMs: number | null;
   avgPredictedMs: number | null;
+  avgInferredCacheHitRatio: number | null;
+  avgInferredCachedTokens: number | null;
   runCount: number;
+}
+
+export interface CacheMetrics {
+  cachePrompt?: boolean;
+  cacheMode?: string;
+  requestMessageCount?: number;
+  requestCharCount?: number;
+  reportedPromptTokens?: number;
+  promptEvalTokens?: number;
+  inferredCachedTokens?: number;
+  inferredCacheHitRatio?: number;
 }
 
 type Row = Record<string, unknown>;
@@ -77,6 +97,25 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_model_stats_modelId ON model_stats(modelId, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_model_stats_timestamp ON model_stats(timestamp DESC);
   `);
+
+  const existingColumns = new Set(
+    (database.prepare("PRAGMA table_info(model_stats)").all() as Array<{ name: string }>)
+      .map((col) => col.name)
+  );
+  const addColumn = (name: string, ddl: string) => {
+    if (!existingColumns.has(name)) {
+      database.exec(`ALTER TABLE model_stats ADD COLUMN ${ddl}`);
+      existingColumns.add(name);
+    }
+  };
+
+  addColumn("cachePrompt", "cachePrompt INTEGER NOT NULL DEFAULT 0");
+  addColumn("cacheMode", "cacheMode TEXT");
+  addColumn("reportedPromptTokens", "reportedPromptTokens INTEGER");
+  addColumn("inferredCachedTokens", "inferredCachedTokens INTEGER");
+  addColumn("inferredCacheHitRatio", "inferredCacheHitRatio REAL");
+  addColumn("requestMessageCount", "requestMessageCount INTEGER");
+  addColumn("requestCharCount", "requestCharCount INTEGER");
 }
 
 /**
@@ -87,6 +126,7 @@ export function recordModelStats(
   modelId: string,
   provider: string,
   timings: LlamaTimings,
+  cacheMetrics?: CacheMetrics,
   timestamp?: number
 ): ModelStatsEntry {
   const database = getDb();
@@ -98,12 +138,25 @@ export function recordModelStats(
       id, modelId, provider, timestamp,
       promptTokens, predictedTokens,
       promptMs, predictedMs, sampleMs,
-      promptTokensPerSec, predictedTokensPerSec
+      promptTokensPerSec, predictedTokensPerSec,
+      cachePrompt, cacheMode, reportedPromptTokens, inferredCachedTokens,
+      inferredCacheHitRatio, requestMessageCount, requestCharCount
     ) VALUES (@id, @modelId, @provider, @timestamp,
       @promptTokens, @predictedTokens,
       @promptMs, @predictedMs, @sampleMs,
-      @promptTokensPerSec, @predictedTokensPerSec)
+      @promptTokensPerSec, @predictedTokensPerSec,
+      @cachePrompt, @cacheMode, @reportedPromptTokens, @inferredCachedTokens,
+      @inferredCacheHitRatio, @requestMessageCount, @requestCharCount)
   `);
+
+  const reportedPromptTokens = cacheMetrics?.reportedPromptTokens;
+  const promptEvalTokens = cacheMetrics?.promptEvalTokens ?? timings.prompt_n;
+  const inferredCachedTokens = cacheMetrics?.inferredCachedTokens ??
+    (typeof reportedPromptTokens === "number" ? Math.max(0, reportedPromptTokens - promptEvalTokens) : undefined);
+  const inferredCacheHitRatio = cacheMetrics?.inferredCacheHitRatio ??
+    (typeof reportedPromptTokens === "number" && reportedPromptTokens > 0 && typeof inferredCachedTokens === "number"
+      ? inferredCachedTokens / reportedPromptTokens
+      : undefined);
 
   const entry: ModelStatsEntry = {
     id,
@@ -118,6 +171,13 @@ export function recordModelStats(
     promptTokensPerSec: timings.prompt_per_second,
     predictedTokensPerSec: timings.predicted_per_second,
     totalMs: timings.prompt_ms + timings.predicted_ms,
+    cachePrompt: !!cacheMetrics?.cachePrompt,
+    cacheMode: cacheMetrics?.cacheMode,
+    reportedPromptTokens,
+    inferredCachedTokens,
+    inferredCacheHitRatio,
+    requestMessageCount: cacheMetrics?.requestMessageCount,
+    requestCharCount: cacheMetrics?.requestCharCount,
   };
 
   stmt.run({
@@ -132,6 +192,13 @@ export function recordModelStats(
     sampleMs: timings.sample_ms ?? null,
     promptTokensPerSec: timings.prompt_per_second,
     predictedTokensPerSec: timings.predicted_per_second,
+    cachePrompt: cacheMetrics?.cachePrompt ? 1 : 0,
+    cacheMode: cacheMetrics?.cacheMode ?? null,
+    reportedPromptTokens: reportedPromptTokens ?? null,
+    inferredCachedTokens: inferredCachedTokens ?? null,
+    inferredCacheHitRatio: inferredCacheHitRatio ?? null,
+    requestMessageCount: cacheMetrics?.requestMessageCount ?? null,
+    requestCharCount: cacheMetrics?.requestCharCount ?? null,
   });
 
   pruneOldRuns(modelId);
@@ -161,7 +228,9 @@ export function getModelRuns(modelId: string, limit = 20): ModelStatsEntry[] {
     SELECT id, modelId, provider, timestamp,
       promptTokens, predictedTokens,
       promptMs, predictedMs, sampleMs,
-      promptTokensPerSec, predictedTokensPerSec
+      promptTokensPerSec, predictedTokensPerSec,
+      cachePrompt, cacheMode, reportedPromptTokens, inferredCachedTokens,
+      inferredCacheHitRatio, requestMessageCount, requestCharCount
     FROM model_stats
     WHERE modelId = ?
     ORDER BY timestamp DESC
@@ -181,6 +250,13 @@ export function getModelRuns(modelId: string, limit = 20): ModelStatsEntry[] {
     promptTokensPerSec: r.promptTokensPerSec as number,
     predictedTokensPerSec: r.predictedTokensPerSec as number,
     totalMs: (r.promptMs as number) + (r.predictedMs as number),
+    cachePrompt: !!r.cachePrompt,
+    cacheMode: r.cacheMode != null ? r.cacheMode as string : undefined,
+    reportedPromptTokens: r.reportedPromptTokens != null ? r.reportedPromptTokens as number : undefined,
+    inferredCachedTokens: r.inferredCachedTokens != null ? r.inferredCachedTokens as number : undefined,
+    inferredCacheHitRatio: r.inferredCacheHitRatio != null ? r.inferredCacheHitRatio as number : undefined,
+    requestMessageCount: r.requestMessageCount != null ? r.requestMessageCount as number : undefined,
+    requestCharCount: r.requestCharCount != null ? r.requestCharCount as number : undefined,
   }));
 }
 
@@ -194,7 +270,9 @@ export function getModelStatsSummary(modelId: string): ModelStatsSummary {
     SELECT id, modelId, provider, timestamp,
       promptTokens, predictedTokens,
       promptMs, predictedMs, sampleMs,
-      promptTokensPerSec, predictedTokensPerSec
+      promptTokensPerSec, predictedTokensPerSec,
+      cachePrompt, cacheMode, reportedPromptTokens, inferredCachedTokens,
+      inferredCacheHitRatio, requestMessageCount, requestCharCount
     FROM model_stats
     WHERE modelId = ?
     ORDER BY timestamp DESC
@@ -214,11 +292,19 @@ export function getModelStatsSummary(modelId: string): ModelStatsSummary {
     promptTokensPerSec: lastRow.promptTokensPerSec as number,
     predictedTokensPerSec: lastRow.predictedTokensPerSec as number,
     totalMs: (lastRow.promptMs as number) + (lastRow.predictedMs as number),
+    cachePrompt: !!lastRow.cachePrompt,
+    cacheMode: lastRow.cacheMode != null ? lastRow.cacheMode as string : undefined,
+    reportedPromptTokens: lastRow.reportedPromptTokens != null ? lastRow.reportedPromptTokens as number : undefined,
+    inferredCachedTokens: lastRow.inferredCachedTokens != null ? lastRow.inferredCachedTokens as number : undefined,
+    inferredCacheHitRatio: lastRow.inferredCacheHitRatio != null ? lastRow.inferredCacheHitRatio as number : undefined,
+    requestMessageCount: lastRow.requestMessageCount != null ? lastRow.requestMessageCount as number : undefined,
+    requestCharCount: lastRow.requestCharCount != null ? lastRow.requestCharCount as number : undefined,
   } as ModelStatsEntry) : null;
 
   // Compute EMA from all runs (chronological order for proper EMA)
   const allRows = database.prepare(`
-    SELECT promptTokensPerSec, predictedTokensPerSec, promptMs, predictedMs
+    SELECT promptTokensPerSec, predictedTokensPerSec, promptMs, predictedMs,
+      inferredCacheHitRatio, inferredCachedTokens
     FROM model_stats
     WHERE modelId = ?
     ORDER BY timestamp ASC
@@ -228,12 +314,16 @@ export function getModelStatsSummary(modelId: string): ModelStatsSummary {
   let avgPredictedTokensPerSec: number | null = null;
   let avgPromptMs: number | null = null;
   let avgPredictedMs: number | null = null;
+  let avgInferredCacheHitRatio: number | null = null;
+  let avgInferredCachedTokens: number | null = null;
 
   for (const row of allRows) {
     const ptps = row.promptTokensPerSec as number;
     const dtps = row.predictedTokensPerSec as number;
     const pMs = row.promptMs as number;
     const dMs = row.predictedMs as number;
+    const cacheHitRatio = row.inferredCacheHitRatio as number | null;
+    const cachedTokens = row.inferredCachedTokens as number | null;
     if (avgPromptTokensPerSec === null) {
       avgPromptTokensPerSec = ptps;
       avgPredictedTokensPerSec = dtps;
@@ -245,6 +335,16 @@ export function getModelStatsSummary(modelId: string): ModelStatsSummary {
       avgPromptMs = EMA_ALPHA * pMs + (1 - EMA_ALPHA) * avgPromptMs!;
       avgPredictedMs = EMA_ALPHA * dMs + (1 - EMA_ALPHA) * avgPredictedMs!;
     }
+    if (typeof cacheHitRatio === "number") {
+      avgInferredCacheHitRatio = avgInferredCacheHitRatio === null
+        ? cacheHitRatio
+        : EMA_ALPHA * cacheHitRatio + (1 - EMA_ALPHA) * avgInferredCacheHitRatio;
+    }
+    if (typeof cachedTokens === "number") {
+      avgInferredCachedTokens = avgInferredCachedTokens === null
+        ? cachedTokens
+        : EMA_ALPHA * cachedTokens + (1 - EMA_ALPHA) * avgInferredCachedTokens;
+    }
   }
 
   return {
@@ -253,6 +353,8 @@ export function getModelStatsSummary(modelId: string): ModelStatsSummary {
     avgPredictedTokensPerSec,
     avgPromptMs,
     avgPredictedMs,
+    avgInferredCacheHitRatio,
+    avgInferredCachedTokens,
     runCount: allRows.length,
   };
 }
