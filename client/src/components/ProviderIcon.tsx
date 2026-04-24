@@ -1,4 +1,4 @@
-// Brand icons for inference providers. Both use `currentColor` so callers
+// Brand icons for inference providers. All use `currentColor` so callers
 // control tint via Tailwind text-* classes.
 //
 // - Ollama: CC0 vectorization from Simple Icons (simpleicons.org/ollama).
@@ -20,7 +20,16 @@ export function ProviderIcon({ provider, className = "", size = 14, title }: Pro
   if (provider === "llamacpp") {
     return <LlamaCppIcon className={className} size={size} title={title ?? "llama.cpp"} />;
   }
+  if (provider === "vllm") {
+    return <VllmIcon className={className} size={size} title={title ?? "vLLM"} />;
+  }
   return null;
+}
+
+export function providerIconClass(provider: string | undefined | null, muted = true): string {
+  if (provider === "llamacpp") return "text-[#ff8236] shrink-0";
+  if (provider === "vllm") return "text-cyan-300/80 shrink-0";
+  return muted ? "text-white/40 shrink-0" : "text-white/60 shrink-0";
 }
 
 function OllamaIcon({ className, size, title }: { className: string; size: number; title: string }) {
@@ -61,6 +70,30 @@ function LlamaCppIcon({ className, size, title }: { className: string; size: num
         <polygon points="1186.4,290.8 1186.4,307.8 1171.4,307.8 1171.4,290.8 1155.4,290.8 1155.4,276.8 1171.4,276.8 1171.4,258.8 1186.4,258.8 1186.4,275.3 1187.9,276.8 1203.4,276.8 1203.4,290.8" />
         <path d="m 1142.3,156.9 c 2,3 -9.3,15.9 -11.1,19.2 -5.2,9.8 -1.7,15.4 2.2,24.7 -11.3,-1.7 -21.8,-0.3 -33,1 2.5,-21.5 14.6,-52.8 41.9,-44.9 z" />
       </g>
+    </svg>
+  );
+}
+
+function VllmIcon({ className, size, title }: { className: string; size: number; title: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      role="img"
+      aria-label={title}
+      className={className}
+    >
+      <title>{title}</title>
+      <path
+        d="M4.5 5.5l5.1 13h4.8l5.1-13M8.4 5.5l3.6 9.4 3.6-9.4"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

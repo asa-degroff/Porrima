@@ -5,3 +5,4 @@ dist
 .env
 /server/.env
 .codex
+.cache/

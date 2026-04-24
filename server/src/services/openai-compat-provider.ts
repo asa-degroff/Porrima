@@ -110,7 +110,7 @@ interface OpenAIChatChunk {
 
 export interface LlamaCacheMetadata {
   cachePrompt: boolean;
-  cacheMode: "cache_prompt" | "disabled";
+  cacheMode: "cache_prompt" | "vllm_prefix_caching" | "disabled";
   requestMessageCount: number;
   requestCharCount: number;
   reportedPromptTokens?: number;
@@ -131,10 +131,11 @@ function buildCacheMetadata(
   cachePrompt: boolean,
   messages: any[],
   tools: any[] | undefined,
+  cacheMode: LlamaCacheMetadata["cacheMode"] = cachePrompt ? "cache_prompt" : "disabled",
 ): LlamaCacheMetadata {
   return {
     cachePrompt,
-    cacheMode: cachePrompt ? "cache_prompt" : "disabled",
+    cacheMode,
     requestMessageCount: messages.length,
     requestCharCount: estimateRequestChars(messages, tools),
   };
@@ -677,10 +678,14 @@ export const streamOpenAICompat = (
     };
 
     try {
-      // Pre-load the model in router mode. This ensures the target model is
-      // loaded and ready before we send the chat request. In single-model mode
-      // this endpoint doesn't exist, so we catch and ignore errors.
-      await ensureModelLoaded(model.baseUrl, model.id, model.contextWindow);
+      const providerName = model.provider === "vllm" ? "vLLM" : "llama.cpp";
+
+      // Pre-load llama.cpp router models before sending the chat request. vLLM
+      // is launched as a model-specific server, so /models/load is not part of
+      // its OpenAI-compatible surface.
+      if (model.provider === "llamacpp") {
+        await ensureModelLoaded(model.baseUrl, model.id, model.contextWindow);
+      }
 
       const messages = await convertMessages(model, context);
       const body: any = {
@@ -703,10 +708,9 @@ export const streamOpenAICompat = (
       }
 
       // llama.cpp exposes prompt KV reuse through its `cache_prompt` request
-      // parameter. The OpenAI-compatible endpoint accepts server-specific
-      // generation parameters, so set it explicitly instead of relying on
-      // defaults that vary across llama.cpp builds.
-      const cachePrompt = process.env.LLAMACPP_CACHE_PROMPT !== "0";
+      // parameter. vLLM handles prefix caching at the server/engine level, with
+      // observability available through /metrics instead of a per-request flag.
+      const cachePrompt = model.provider === "llamacpp" && process.env.LLAMACPP_CACHE_PROMPT !== "0";
       if (cachePrompt) {
         body.cache_prompt = true;
       }
@@ -731,7 +735,12 @@ export const streamOpenAICompat = (
       } catch { /* non-critical */ }
 
       const url = `${model.baseUrl}/v1/chat/completions`;
-      const cacheMetadata = buildCacheMetadata(cachePrompt, messages, body.tools);
+      const cacheMetadata = buildCacheMetadata(
+        cachePrompt,
+        messages,
+        body.tools,
+        model.provider === "vllm" ? "vllm_prefix_caching" : undefined
+      );
 
       // Retry on transient connection failures (fetch failed / ECONNRESET).
       // llama.cpp's router can briefly refuse connections between rapid iterations.
@@ -760,7 +769,7 @@ export const streamOpenAICompat = (
       if (lastFetchError) {
         // Invalidate loaded model cache — connection failure likely means the child
         // process crashed and the router can't proxy to it.
-        invalidateLoadedModel();
+        if (model.provider === "llamacpp") invalidateLoadedModel();
         throw lastFetchError;
       }
 
@@ -768,15 +777,15 @@ export const streamOpenAICompat = (
         const errorText = response ? await response.text().catch(() => "Unknown error") : "No response";
         // Invalidate loaded model cache on server errors — the child process may have
         // crashed (common with vision models on ROCm) and needs to be reloaded.
-        if (response && (response.status === 500 || response.status === 502 || response.status === 503)) {
+        if (model.provider === "llamacpp" && response && (response.status === 500 || response.status === 502 || response.status === 503)) {
           console.warn(`[openai-compat] Server error ${response.status}, invalidating model cache`);
           invalidateLoadedModel();
         }
-        throw new Error(`llama.cpp API error ${response?.status ?? "?"}: ${errorText}`);
+        throw new Error(`${providerName} API error ${response?.status ?? "?"}: ${errorText}`);
       }
 
       if (!response.body) {
-        throw new Error("No response body from llama.cpp");
+        throw new Error(`No response body from ${providerName}`);
       }
 
       stream.push({ type: "start", partial: output } as AssistantMessageEvent);

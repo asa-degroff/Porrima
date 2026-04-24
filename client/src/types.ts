@@ -125,7 +125,7 @@ export interface UserDocument {
   path?: string;
 }
 
-export type InferenceProvider = "ollama" | "llamacpp";
+export type InferenceProvider = "ollama" | "llamacpp" | "vllm";
 
 export interface OllamaModel {
   id: string;
@@ -203,6 +203,9 @@ export interface Settings {
   llamacppEnabled?: boolean;
   llamacppUrl?: string;         // default "http://localhost:8080"
   llamacppSharesGpu?: boolean;  // default true
+  // vLLM server settings
+  vllmEnabled?: boolean;
+  vllmUrl?: string;             // default "http://localhost:8095"
   // Extraction server (CPU-only llama.cpp instance)
   extractionCtxSize?: number;   // default 16384 — context window for extraction server
   // Reranker server (CPU-only llama.cpp instance)

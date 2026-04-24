@@ -29,7 +29,7 @@ Projects provide persistent context for agent chats through AGENTS.md files:
 Multi-provider system supporting multiple inference backends through pi-ai's provider abstraction:
 
 - **Ollama Native** (`ollama-native-provider.ts`): Registers with pi-ai for Ollama's native `/api/chat` format
-- **OpenAI-Compatible** (`openai-compat-provider.ts`): Registers with pi-ai for OpenAI-format APIs (llama.cpp)
+- **OpenAI-Compatible** (`openai-compat-provider.ts`): Registers with pi-ai for OpenAI-format APIs (llama.cpp and vLLM)
   - SSE parser for OpenAI streaming format
   - Incremental tool call handling with argument accumulation
   - Support for `reasoning_content` field (thinking blocks via `--reasoning-format deepseek`)
@@ -38,9 +38,9 @@ Multi-provider system supporting multiple inference backends through pi-ai's pro
   - Router mode model management: `ensureModelLoaded()` handles load/unload/reload; `waitForModelReady()` polls `/v1/models` status; `waitForModelUnloaded()` ensures clean transitions
   - Retry on transient fetch failures (3 attempts, 1s delay) for TCP connection hiccups between rapid tool iterations
   - Ollama VRAM cleanup before model loads — unloads Ollama models via `/api/ps` to prevent GPU memory contention
-- **Model Discovery** (`models.ts`): `discoverAllModels()` queries both Ollama and llama.cpp servers, tags each model with `provider: "ollama"` or `provider: "llamacpp"`. HF-cached models (IDs with `/`) are filtered out. `createPiModelFromProvider()` routes to the correct pi-ai API provider. Vision detection uses `/props` modalities for loaded models, name heuristics for unloaded.
+- **Model Discovery** (`models.ts`): `discoverAllModels()` queries enabled Ollama, llama.cpp, and vLLM servers, tags each model with `provider: "ollama"`, `provider: "llamacpp"`, or `provider: "vllm"`. HF-cached llama.cpp models (IDs with `/`) are filtered out. `createPiModelFromProvider()` routes to the correct pi-ai API provider. Vision detection uses `/props` modalities for loaded llama.cpp models and name heuristics for unloaded/OpenAI-compatible models.
 - **Reasoning Detection**: `supportsReasoning()` checks model family (`qwen3*`, `gemma4*`) — enables `think: true` for Ollama, `chat_template_kwargs` for llama.cpp
-- **Settings**: `llamacppEnabled`, `llamacppUrl`, `llamacppSharesGpu` control llama.cpp integration. `favoriteModels`, `showOnlyFavorites` for model selector filtering.
+- **Settings**: `llamacppEnabled`, `llamacppUrl`, `llamacppSharesGpu` control llama.cpp integration; `vllmEnabled`, `vllmUrl` control vLLM integration. `favoriteModels`, `showOnlyFavorites` filter model selectors.
 
 ## llama.cpp Infrastructure
 

@@ -709,7 +709,7 @@ export function Sidebar({
                   </svg>
                 </button>
               )}
-              {/* Model stats — llama.cpp performance and cache metrics */}
+              {/* Model stats — local provider performance and cache metrics */}
               {onOpenModelStats && (
                 <button
                   onClick={onOpenModelStats}

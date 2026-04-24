@@ -17,6 +17,7 @@ import { beginStream, endStream } from "./llm-activity.js";
 
 const VISION_DIR = join(process.env.HOME || process.env.USERPROFILE || ".", ".quje-agent", "vision");
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
+const VLLM_DEFAULT_URL = "http://localhost:8095";
 
 async function resolveOllamaBase(): Promise<string> {
   return getOllamaUrl(await getSettings());
@@ -24,7 +25,8 @@ async function resolveOllamaBase(): Promise<string> {
 
 type VisionBackend =
   | { provider: "ollama"; baseUrl: string }
-  | { provider: "llamacpp"; baseUrl: string; contextWindow?: number };
+  | { provider: "llamacpp"; baseUrl: string; contextWindow?: number }
+  | { provider: "vllm"; baseUrl: string; contextWindow?: number };
 
 async function resolveVisionBackend(modelId: string): Promise<VisionBackend> {
   const settings = await getSettings();
@@ -39,6 +41,13 @@ async function resolveVisionBackend(modelId: string): Promise<VisionBackend> {
     return {
       provider: "llamacpp",
       baseUrl: settings.llamacppUrl?.trim() || LLAMACPP_DEFAULT_URL,
+      contextWindow: match.contextWindow,
+    };
+  }
+  if (match?.provider === "vllm") {
+    return {
+      provider: "vllm",
+      baseUrl: settings.vllmUrl?.trim() || VLLM_DEFAULT_URL,
       contextWindow: match.contextWindow,
     };
   }
@@ -321,13 +330,15 @@ export async function analyzeImage(
     const modelName = model || getVLMModel();
     const backend = await resolveVisionBackend(modelName);
 
-    if (backend.provider === "llamacpp") {
+    if (backend.provider === "llamacpp" || backend.provider === "vllm") {
       const description = await analyzeViaLlamaCpp(
         imageData,
         preset.prompt,
         modelName,
         backend.baseUrl,
-        backend.contextWindow
+        backend.contextWindow,
+        undefined,
+        backend.provider === "llamacpp"
       );
       return { description, preset: presetKey, model: modelName };
     }
@@ -392,14 +403,15 @@ export async function analyzeImageStream(
     // Send initial keepalive to show we're starting
     onEvent({ event: "keepalive", data: { status: "starting", timestamp: Date.now() } });
 
-    if (backend.provider === "llamacpp") {
+    if (backend.provider === "llamacpp" || backend.provider === "vllm") {
       const description = await analyzeViaLlamaCpp(
         imageData,
         preset.prompt,
         modelName,
         backend.baseUrl,
         backend.contextWindow,
-        (delta) => onEvent({ event: "text_delta", data: { delta } })
+        (delta) => onEvent({ event: "text_delta", data: { delta } }),
+        backend.provider === "llamacpp"
       );
       onEvent({ event: "description_complete", data: { description, preset: presetKey, model: modelName } });
       return { description, preset: presetKey, model: modelName };
@@ -504,7 +516,7 @@ export async function chatAboutImage(
   const backend = await resolveVisionBackend(modelName);
   const systemPrompt = buildChatSystemPrompt(presetKey, currentDescription);
 
-  if (backend.provider === "llamacpp") {
+  if (backend.provider === "llamacpp" || backend.provider === "vllm") {
     return chatAboutImageViaLlamaCpp(
       imageData,
       conversation.slice(-maxHistoryTurns),
@@ -512,7 +524,8 @@ export async function chatAboutImage(
       systemPrompt,
       modelName,
       backend.baseUrl,
-      backend.contextWindow
+      backend.contextWindow,
+      backend.provider === "llamacpp"
     );
   }
 
@@ -572,9 +585,10 @@ async function analyzeViaLlamaCpp(
   modelId: string,
   baseUrl: string,
   contextWindow: number | undefined,
-  onDelta?: (delta: string) => void
+  onDelta?: (delta: string) => void,
+  loadModel = true
 ): Promise<string> {
-  await ensureModelLoaded(baseUrl, modelId, contextWindow);
+  if (loadModel) await ensureModelLoaded(baseUrl, modelId, contextWindow);
   const dataUrl = await buildImageDataUrl(imageData);
 
   const body = {
@@ -619,9 +633,10 @@ async function chatAboutImageViaLlamaCpp(
   systemPrompt: string,
   modelId: string,
   baseUrl: string,
-  contextWindow: number | undefined
+  contextWindow: number | undefined,
+  loadModel = true
 ): Promise<string> {
-  await ensureModelLoaded(baseUrl, modelId, contextWindow);
+  if (loadModel) await ensureModelLoaded(baseUrl, modelId, contextWindow);
   const dataUrl = await buildImageDataUrl(imageData);
 
   const messages: any[] = [

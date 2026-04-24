@@ -22,7 +22,7 @@ import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, Bac
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
-import { ProviderIcon } from "./ProviderIcon";
+import { ProviderIcon, providerIconClass } from "./ProviderIcon";
 
 // Reusable toggle switch with spring animation
 const ACCENT_COLORS: Record<string, { on: string; off: string }> = {
@@ -219,6 +219,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || "http://localhost:8080");
   const [llamacppSharesGpu, setLlamacppSharesGpu] = useState(settings.llamacppSharesGpu ?? true);
   const [llamacppStatus, setLlamacppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
+  // vLLM server settings
+  const [vllmEnabled, setVllmEnabled] = useState(settings.vllmEnabled ?? false);
+  const [vllmUrl, setVllmUrl] = useState(settings.vllmUrl || "http://localhost:8095");
+  const [vllmStatus, setVllmStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   // Extraction server settings
   const [extractionCtxSize, setExtractionCtxSize] = useState(settings.extractionCtxSize ?? 16384);
   // Reranker server settings
@@ -460,7 +464,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       .catch(() => {});
   }, []);
 
-  // Aggregate health pings for all five configured servers. Re-runs when URL
+  // Aggregate health pings for configured servers. Re-runs when URL
   // fields change so the dots update as the user edits settings.
   useEffect(() => {
     let cancelled = false;
@@ -468,7 +472,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       .then((h) => { if (!cancelled) setServerHealth(h); })
       .catch(() => { if (!cancelled) setServerHealth(null); });
     return () => { cancelled = true; };
-  }, [ollamaUrl, llamacppUrl, rerankerUrl, embeddingUrl, embeddingProvider, extractionModelUrl]);
+  }, [ollamaUrl, llamacppUrl, vllmUrl, vllmEnabled, rerankerUrl, embeddingUrl, embeddingProvider, extractionModelUrl]);
 
   // Discover embedding models for the dropdown. Re-runs when provider/url change.
   useEffect(() => {
@@ -556,6 +560,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
       llamacppSharesGpu,
+      vllmEnabled,
+      vllmUrl: vllmUrl.trim() || undefined,
       extractionCtxSize,
       rerankerEnabled,
       rerankerUrl: rerankerUrl.trim() || undefined,
@@ -719,6 +725,20 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setLlamacppStatus("unavailable");
     }
   }, []);
+
+  const handleTestVllm = useCallback(async () => {
+    setVllmStatus("checking");
+    try {
+      const res = await fetch(`/api/models/vllm/health?url=${encodeURIComponent(vllmUrl)}`, { credentials: "include" });
+      if (res.ok) {
+        setVllmStatus("connected");
+      } else {
+        setVllmStatus("unavailable");
+      }
+    } catch {
+      setVllmStatus("unavailable");
+    }
+  }, [vllmUrl]);
 
   const handleTestExtractionModel = useCallback(async () => {
     if (!extractionModelUrl) return;
@@ -1231,7 +1251,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </button>
                 {models.map((m) => (
                   <button
-                    key={m.id}
+                    key={`${m.provider || "ollama"}-${m.id}`}
                     onClick={() => { setDefaultModelId(m.id); setModelDropdownOpen(false); }}
                     className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
                       m.id === defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
@@ -1245,7 +1265,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
                     <ProviderIcon
                       provider={m.provider}
-                      className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                      className={providerIconClass(m.provider)}
                     />
                   </button>
                 ))}
@@ -1257,7 +1277,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           <div id="inference" className="space-y-4">
             <h3 className="text-sm font-semibold text-white/80">Inference Servers</h3>
             <p className="text-xs text-white/40 -mt-2">
-              Four llama.cpp model roles (main chat inference, memory extraction, cross-encoder reranker, embedding) plus the Ollama server (model discovery, title generation, vision). Each URL can point at a separate instance.
+              Configure Ollama, llama.cpp, and vLLM chat providers plus dedicated memory extraction, reranking, and embedding servers. Each URL can point at a separate instance.
             </p>
 
             {/* Server health (HTTP pings against each configured URL) */}
@@ -1265,7 +1285,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               <h4 className="text-sm text-white/80">Server health</h4>
               <div className="ml-2 flex items-center gap-3 text-xs">
                 {([
-                  ["inference", "Inference"],
+                  ["inference", "llama.cpp"],
+                  ["vllm", "vLLM"],
                   ["extraction", "Extraction"],
                   ["reranker", "Reranker"],
                   ["embedding", "Embedding"],
@@ -1399,7 +1420,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   onChange={(e) => setLlamacppEnabled(e.target.checked)}
                   className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
                 />
-                <span className="text-sm text-white/80">Inference server</span>
+                <span className="text-sm text-white/80">llama.cpp inference server</span>
               </label>
               {llamacppEnabled && (
                 <div className="space-y-2 ml-6">
@@ -1436,6 +1457,50 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     />
                   </label>
                   <p className="text-xs text-white/30">Main GPU inference server (router mode). Models are loaded on demand.</p>
+                </div>
+              )}
+            </div>
+
+            {/* vLLM Server */}
+            <div className="space-y-2 border-t border-white/5 pt-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={vllmEnabled}
+                  onChange={(e) => setVllmEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+                />
+                <span className="text-sm text-white/80">vLLM server</span>
+              </label>
+              {vllmEnabled && (
+                <div className="space-y-2 ml-6">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={vllmUrl}
+                      onChange={(e) => setVllmUrl(e.target.value)}
+                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+                      placeholder="http://localhost:8095"
+                    />
+                    <button
+                      onClick={handleTestVllm}
+                      disabled={vllmStatus === "checking"}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
+                    >
+                      {vllmStatus === "checking" ? "Testing..." : "Test"}
+                    </button>
+                  </div>
+                  {vllmStatus && vllmStatus !== "checking" && (
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-2 h-2 rounded-full ${vllmStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
+                      <span className={`text-xs ${vllmStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
+                        {vllmStatus === "connected" ? "Connected" : "Not available"}
+                      </span>
+                    </div>
+                  )}
+                  <p className="text-xs text-white/30">
+                    OpenAI-compatible vLLM endpoint for GPU chat inference. Prefix and KV cache metrics are read from <code className="text-white/50">/metrics</code>.
+                  </p>
                 </div>
               )}
             </div>
@@ -2107,7 +2172,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
                       <ProviderIcon
                         provider={m.provider}
-                        className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                        className={providerIconClass(m.provider)}
                       />
                     </button>
                   );
@@ -2147,7 +2212,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </button>
                 {models.map((m) => (
                   <button
-                    key={m.id}
+                    key={`${m.provider || "ollama"}-${m.id}`}
                     onClick={() => { setDefaultVisionModelId(m.id); setVisionModelDropdownOpen(false); }}
                     className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
                       m.id === defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
@@ -2161,7 +2226,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
                     <ProviderIcon
                       provider={m.provider}
-                      className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                      className={providerIconClass(m.provider)}
                     />
                   </button>
                 ))}
@@ -2215,7 +2280,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       const isLlamacpp = m.provider === "llamacpp";
                       const preserveThinking = modelPreserveThinking[m.id] === true;
                       return (
-                        <div key={m.id} className="flex items-center gap-2">
+                        <div key={`${m.provider || "ollama"}-${m.id}`} className="flex items-center gap-2">
                           <span className="text-xs text-white/50 truncate flex-1 min-w-0" title={m.id}>{m.name}</span>
                           {isLlamacpp && (
                             <button

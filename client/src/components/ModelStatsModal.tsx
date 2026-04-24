@@ -48,6 +48,34 @@ interface ModelStatsDetail {
   runs: LlamaTimingsEntry[];
 }
 
+interface VllmCacheMetric {
+  modelName: string;
+  engine?: string;
+  kvCacheUsagePct?: number;
+  prefixCacheQueriesTotal?: number;
+  prefixCacheHitsTotal?: number;
+  prefixCacheHitRatio?: number;
+  externalPrefixCacheQueriesTotal?: number;
+  externalPrefixCacheHitsTotal?: number;
+  promptTokensCachedTotal?: number;
+  localCacheHitTokens?: number;
+  externalKvTransferTokens?: number;
+  enablePrefixCaching?: boolean;
+  gpuMemoryUtilization?: number;
+  blockSize?: number;
+  numGpuBlocks?: number;
+  cacheDtype?: string;
+  prefixCachingHashAlgo?: string;
+}
+
+interface VllmCacheSnapshot {
+  status: "ok" | "unavailable";
+  url: string;
+  timestamp: number;
+  models: VllmCacheMetric[];
+  error?: string;
+}
+
 interface Props {
   isOpen: boolean;
   onClose: () => void;
@@ -364,10 +392,75 @@ function ModelDetail({
   );
 }
 
+function VllmCachePanel({ snapshot }: { snapshot: VllmCacheSnapshot | null }) {
+  if (!snapshot) return null;
+  const unavailable = snapshot.status !== "ok";
+
+  return (
+    <div className="bg-white/5 rounded-lg p-3 space-y-2 border border-white/5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-white/80">vLLM Live Cache</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded ${unavailable ? "text-white/35 bg-white/5" : "text-cyan-200/80 bg-cyan-400/10"}`}>
+            {unavailable ? "unavailable" : "live"}
+          </span>
+        </div>
+        <span className="text-[10px] text-white/30 font-mono truncate">{snapshot.url}</span>
+      </div>
+
+      {unavailable ? (
+        <div className="text-[11px] text-white/35">{snapshot.error || "No vLLM metrics available"}</div>
+      ) : snapshot.models.length === 0 ? (
+        <div className="text-[11px] text-white/35">Metrics endpoint is reachable, but no vLLM cache series were present.</div>
+      ) : (
+        <div className="space-y-2">
+          {snapshot.models.map((model) => (
+            <div key={`${model.engine || "0"}-${model.modelName}`} className="space-y-1.5 rounded-md bg-black/10 border border-white/5 p-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-mono text-white/75 truncate">{truncateModelId(model.modelName)}</span>
+                <span className="text-[10px] text-white/30">engine {model.engine ?? "0"}</span>
+              </div>
+              <CacheBar ratio={model.prefixCacheHitRatio} label="hit rate" />
+              <CacheBar ratio={model.kvCacheUsagePct} label="kv use" />
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+                <div className="flex justify-between gap-2">
+                  <span className="text-white/40">Cached tokens</span>
+                  <span className="text-white/70 font-mono">{formatNumber(model.promptTokensCachedTotal)}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-white/40">Prefix hits</span>
+                  <span className="text-white/70 font-mono">{formatNumber(model.prefixCacheHitsTotal)}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-white/40">Prefix queries</span>
+                  <span className="text-white/70 font-mono">{formatNumber(model.prefixCacheQueriesTotal)}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-white/40">Prefix cache</span>
+                  <span className="text-white/70 font-mono">{model.enablePrefixCaching === undefined ? "—" : model.enablePrefixCaching ? "on" : "off"}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-white/40">GPU util cap</span>
+                  <span className="text-white/70 font-mono">{formatPercent(model.gpuMemoryUtilization)}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-white/40">Blocks</span>
+                  <span className="text-white/70 font-mono">{formatNumber(model.numGpuBlocks)}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- Main Modal ---
 
 export function ModelStatsModal({ isOpen, onClose }: Props) {
   const [records, setRecords] = useState<ModelStatsRecord[]>([]);
+  const [vllmCache, setVllmCache] = useState<VllmCacheSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailModelId, setDetailModelId] = useState<string | null>(null);
   const [detailData, setDetailData] = useState<ModelStatsDetail | null>(null);
@@ -376,11 +469,12 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/model-stats", { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        setRecords(data);
-      }
+      const [statsRes, vllmRes] = await Promise.all([
+        fetch("/api/model-stats", { credentials: "include" }),
+        fetch("/api/model-stats/vllm-cache", { credentials: "include" }),
+      ]);
+      if (statsRes.ok) setRecords(await statsRes.json());
+      if (vllmRes.ok) setVllmCache(await vllmRes.json());
     } catch (err) {
       console.error("[model-stats] fetch failed:", err);
     } finally {
@@ -447,11 +541,15 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
           ) : detailLoading ? (
             <div className="text-white/30 text-sm text-center py-8">Loading…</div>
           ) : records.length === 0 && !loading ? (
-            <div className="p-8 text-center text-white/30 text-sm">
-              No model stats recorded yet. Run at least one message through a llama.cpp model.
+            <div className="space-y-3">
+              <VllmCachePanel snapshot={vllmCache} />
+              <div className="p-8 text-center text-white/30 text-sm">
+                No historical model stats recorded yet. Run at least one message through a local OpenAI-compatible model.
+              </div>
             </div>
           ) : (
             <div className="space-y-3">
+              <VllmCachePanel snapshot={vllmCache} />
               {records.map((record) => (
                 <ModelCard
                   key={record.modelId}
