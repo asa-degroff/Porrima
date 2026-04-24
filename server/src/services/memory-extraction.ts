@@ -19,6 +19,8 @@ import {
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
 import { invalidateMemoriesCache, invalidateStablePrefixCache } from "./memory-context.js";
 import { startExtractionRun } from "./memory-extraction-observability.js";
+import { recordModelStats } from "./model-stats.js";
+import type { LlamaTimings } from "./model-stats.js";
 import type { ChatMessage, Memory, MemoryCategory, Chat } from "../types.js";
 
 const LOG_DIR = join(homedir(), ".quje-agent", "logs");
@@ -173,6 +175,21 @@ async function callExtractionLLM(
         throw new Error(`Extraction model error ${res.status}: ${err}`);
       }
       const data = await res.json();
+
+      // Record model stats from extraction timings (same structure as chat model)
+      const timings = data.timings as LlamaTimings | undefined;
+      if (timings) {
+        try {
+          recordModelStats(
+            settings.extractionModelId || "extraction",
+            "llamacpp-extraction",
+            timings
+          );
+        } catch (e) {
+          console.warn("[memory] Failed to record extraction model stats:", e);
+        }
+      }
+
       return data.choices?.[0]?.message?.content?.trim() || "";
     });
   }

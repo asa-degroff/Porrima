@@ -369,6 +369,7 @@ function ModelDetail({
 export function ModelStatsModal({ isOpen, onClose }: Props) {
   const [records, setRecords] = useState<ModelStatsRecord[]>([]);
   const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<"chat" | "extraction">("chat");
   const [detailModelId, setDetailModelId] = useState<string | null>(null);
   const [detailData, setDetailData] = useState<ModelStatsDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -408,8 +409,15 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
     if (isOpen) {
       fetchData();
       setDetailModelId(null);
+      setActiveTab("chat");
     }
   }, [isOpen, fetchData]);
+
+  // Filter records by tab: extraction models have provider containing "extraction"
+  const filteredRecords = records.filter((r) => {
+    const isExtraction = r.provider.toLowerCase().includes("extraction");
+    return activeTab === "extraction" ? isExtraction : !isExtraction;
+  });
 
   if (!isOpen) return null;
 
@@ -425,7 +433,21 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
         <header className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-medium text-white/90">Model Stats & Cache</h2>
-            <span className="text-[10px] text-white/30">{records.length} model{records.length !== 1 ? "s" : ""}</span>
+            <div className="flex items-center bg-white/5 rounded-lg p-0.5">
+              <button
+                onClick={() => { setActiveTab("chat"); setDetailModelId(null); }}
+                className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "chat" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+              >
+                Chat
+              </button>
+              <button
+                onClick={() => { setActiveTab("extraction"); setDetailModelId(null); }}
+                className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "extraction" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+              >
+                Extraction
+              </button>
+            </div>
+            <span className="text-[10px] text-white/30">{filteredRecords.length} model{filteredRecords.length !== 1 ? "s" : ""}</span>
           </div>
           <div className="flex items-center gap-2">
             {loading && <span className="text-[10px] text-amber-300/60">loading…</span>}
@@ -446,13 +468,15 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
             <ModelDetail detail={detailData} onBack={() => setDetailModelId(null)} />
           ) : detailLoading ? (
             <div className="text-white/30 text-sm text-center py-8">Loading…</div>
-          ) : records.length === 0 && !loading ? (
+          ) : filteredRecords.length === 0 && !loading ? (
             <div className="p-8 text-center text-white/30 text-sm">
-              No model stats recorded yet. Run at least one message through a llama.cpp model.
+              {activeTab === "extraction"
+                ? "No extraction model stats recorded yet. Configure an extraction model to start tracking."
+                : "No model stats recorded yet. Run at least one message through a llama.cpp model."}
             </div>
           ) : (
             <div className="space-y-3">
-              {records.map((record) => (
+              {filteredRecords.map((record) => (
                 <ModelCard
                   key={record.modelId}
                   record={record}
