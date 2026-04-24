@@ -257,9 +257,15 @@ I am operating in archival mode. My task is to notice and preserve information w
 
 I know who I am. My identity, personality, values, communication style, and how I work are already part of me and do not need to be extracted or saved as memories. I do NOT archive statements about my own nature, characteristics, or operational style.
 
+Source attribution is critical:
+- USER/HUMAN messages are the only source for the user's preferences, personal facts, and intent.
+- ASSISTANT/AGENT messages are my own prior responses, proposals, interpretations, tool summaries, and work product. Do NOT attribute assistant-message content to the user unless a user message confirms it.
+- When preserving task or project continuity from assistant messages, phrase it as project/task state or work I performed/proposed, not as something the user said, believes, or wants.
+- If user and assistant messages conflict, treat the user's message as the source of truth.
+
 What I capture: things worth remembering for future interactions — written in my own voice, as something I'd tell myself to remember. Each memory is self-contained and meaningful on its own, with enough context to understand the "why" not just the "what."
 
-What I skip: my own identity traits, broad preferences,anything already in existing knowledge blocks, and generic observations without specific context.`;
+What I skip: my own identity traits, broad preferences, anything already in existing knowledge blocks, and generic observations without specific context.`;
 
 const EXTRACTION_INSTRUCTIONS = `---
 
@@ -363,6 +369,8 @@ const DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS = `---
 
 You are looking back at a full conversation thread you had. Your task is to extract patterns, decisions, and context that emerged across the entire conversation — write each memory in your own voice.
 
+The conversation is explicitly labeled by speaker. USER (human) messages are the user's words. ASSISTANT (agent/me) messages are my own prior responses and work.
+
 Previously captured memories will be provided alongside the conversation. Those memories are already saved — do NOT duplicate them. Instead, focus on:
 1. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
 2. **Evolutions or contradictions** — if a previous position has been refined or amended
@@ -383,7 +391,15 @@ IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 const DELAYED_EXTRACTION_USER_TEMPLATE = `PREVIOUSLY CAPTURED MEMORIES from this chat:
 {{PREVIOUS_MEMORIES}}
 
-These memories are already saved. Do NOT duplicate them.`;
+These memories are already saved. Do NOT duplicate them.
+
+This extraction window contains {{MESSAGE_COUNT}} substantive messages, starting at stored chat message index {{START_INDEX}}.
+
+The conversation below uses this format:
+- Message N - USER (human): content authored by the user
+- Message N - ASSISTANT (agent/me): content authored by me, including my proposals, summaries, and completed work
+
+Attribution rule: only create user facts/preferences/instructions from USER messages or from ASSISTANT content that a later USER message explicitly confirms.`;
 
 async function buildDelayedExtractionSystemPrompt(): Promise<string> {
   return `${EXTRACTION_AGENT_PREFIX}\n\n${DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS}`;
@@ -454,6 +470,44 @@ interface ExtractSegment {
    * must not be split mid-stream.
    */
   splittable?: boolean;
+}
+
+function extractionRoleLabel(role: ChatMessage["role"]): string {
+  return role === "user" ? "USER (human)" : "ASSISTANT (agent/me)";
+}
+
+function formatMessageContentForExtraction(message: ChatMessage): string {
+  const parts: string[] = [];
+  if (message.content?.trim()) parts.push(message.content.trim());
+
+  if (message.toolCalls?.length) {
+    const calls = message.toolCalls
+      .map((tc) => `- ${tc.name}: ${JSON.stringify(tc.arguments)}`)
+      .join("\n");
+    parts.push(`Tool calls made by ASSISTANT:\n${calls}`);
+  }
+
+  if (message.toolResults?.length) {
+    const results = message.toolResults
+      .map((tr) => `- ${tr.toolName}${tr.isError ? " (error)" : ""}: ${tr.content}`)
+      .join("\n");
+    parts.push(`Tool results observed by ASSISTANT:\n${results}`);
+  }
+
+  return parts.join("\n\n") || "(no text content)";
+}
+
+function messageToExtractionSegment(message: ChatMessage, messageIndex: number): ExtractSegment {
+  return {
+    label: `Message ${messageIndex + 1} - ${extractionRoleLabel(message.role)}`,
+    text: formatMessageContentForExtraction(message),
+    splittable: true,
+  };
+}
+
+function formatMessageForExtraction(message: ChatMessage, messageIndex: number): string {
+  const segment = messageToExtractionSegment(message, messageIndex);
+  return `${segment.label}:\n${segment.text}`;
 }
 
 interface ExtractChunkedOptions {
@@ -1254,8 +1308,8 @@ export async function preCompactionFlush(
 
   // Only send the messages being removed, not the full conversation
   const removedText = substantiveMessages
-    .map((m, i) => `${m.role} (${i + 1}): ${m.content}`)
-    .join("\n\n");
+    .map((m, i) => formatMessageForExtraction(m, i))
+    .join("\n\n---\n\n");
 
   const systemPrompt = await buildPreCompactionSystemPrompt(projectId);
   const chat = await getChat(chatId).catch(() => null);
@@ -1273,10 +1327,9 @@ export async function preCompactionFlush(
   try {
     // Each removed message becomes one segment; messages that exceed the
     // per-chunk budget (typically huge tool results) get paragraph-split.
-    const segments: ExtractSegment[] = substantiveMessages.map((m, i) => ({
-      text: `${m.role} (${i + 1}): ${m.content}`,
-      splittable: true,
-    }));
+    const segments: ExtractSegment[] = substantiveMessages.map((m, i) =>
+      messageToExtractionSegment(m, i)
+    );
 
     // Retry happens per-chunk inside extractInChunks.
     const chunkResult = await extractInChunks({
@@ -1538,6 +1591,15 @@ export async function backfillSupersessions(): Promise<void> {
 
 const DEFAULT_MESSAGE_CAP = 50;
 
+interface IndexedChatMessage {
+  index: number;
+  message: ChatMessage;
+}
+
+function isSubstantiveForDelayedExtraction(message: ChatMessage): boolean {
+  return !message._isCompactionSummary && !message._outOfContext && !message._isSystemMessage;
+}
+
 /**
  * Build context for delayed extraction: recent messages + previous memories.
  * For long chats, caps the message window but includes all previous memories
@@ -1547,18 +1609,21 @@ async function buildDelayedExtractionContext(
   chat: Chat,
   messageCap: number = DEFAULT_MESSAGE_CAP
 ): Promise<{
-  messages: ChatMessage[];
+  messages: IndexedChatMessage[];
   previousMemories: Omit<Memory, "embedding">[];
 }> {
   const previousMemories = await getMemoriesByChatId(chat.id);
+  const substantiveMessages = chat.messages
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => isSubstantiveForDelayedExtraction(message));
   
-  if (chat.messages.length <= messageCap) {
+  if (substantiveMessages.length <= messageCap) {
     // Short chat: send everything
-    return { messages: chat.messages, previousMemories };
+    return { messages: substantiveMessages, previousMemories };
   }
   
   // Long chat: send last N messages + all previous memories
-  const recentMessages = chat.messages.slice(-messageCap);
+  const recentMessages = substantiveMessages.slice(-messageCap);
   return { messages: recentMessages, previousMemories };
 }
 
@@ -1610,23 +1675,31 @@ export async function extractDelayedMemories(
   
   // Build context: recent messages + previous memories
   const context = await buildDelayedExtractionContext(chat, messageCap);
-  const startIndex = Math.max(0, chat.messages.length - context.messages.length);
+  if (context.messages.length === 0) {
+    console.log(`[memory-delayed] No substantive messages to process for chat ${chatId}`);
+    await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
+    return;
+  }
+
+  const startIndex = context.messages[0]?.index ?? 0;
+  const endIndex = context.messages[context.messages.length - 1]?.index ?? -1;
   
   console.log(
-    `[memory-delayed] Processing ${context.messages.length} messages (${startIndex}-${chat.messages.length}) with ${context.previousMemories.length} previous memories`
+    `[memory-delayed] Processing ${context.messages.length} messages (${startIndex}-${endIndex}) with ${context.previousMemories.length} previous memories`
   );
   
   // Build prompt with previous memories injected — used as the per-chunk header
   const userPromptHeader = `${buildDelayedExtractionPrompt(context.previousMemories, context.messages.length, startIndex)}\n\nCONVERSATION:`;
 
   // Each message is a segment; messages too large for the chunk budget get paragraph-split
-  const messageSegments: ExtractSegment[] = context.messages.map((m, i) => ({
-    text: `${m.role} (${startIndex + i + 1}): ${m.content}`,
-    splittable: true,
-  }));
+  const messageSegments: ExtractSegment[] = context.messages.map(({ message, index }) =>
+    messageToExtractionSegment(message, index)
+  );
 
   // Serialize whole conversation for observability (what the debug panel will show)
-  const extractionPrompt = `${userPromptHeader}\n${messageSegments.map((s) => s.text).join("\n\n")}`;
+  const extractionPrompt = `${userPromptHeader}\n${context.messages
+    .map(({ message, index }) => formatMessageForExtraction(message, index))
+    .join("\n\n---\n\n")}`;
   const systemPrompt = await buildDelayedExtractionSystemPrompt();
 
   const runHandle = startExtractionRun({
@@ -1635,7 +1708,10 @@ export async function extractDelayedMemories(
     chatTitle: chat.title,
     model: modelId,
     priorMemoryCount: context.previousMemories.length,
-    messages: context.messages.map((m) => ({ role: m.role, content: m.content })),
+    messages: context.messages.map(({ message }) => ({
+      role: message.role,
+      content: formatMessageContentForExtraction(message),
+    })),
     systemPrompt,
     userPrompt: extractionPrompt,
   });
