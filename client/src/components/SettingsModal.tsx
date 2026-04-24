@@ -14,8 +14,8 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth } from "../api/client";
-import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap } from "../api/client";
+import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs } from "../api/client";
+import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
 import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, MemorySummary, MemoryLineage, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
@@ -174,6 +174,24 @@ function coerceWebSearchProvider(provider: Settings["defaultWebSearchProvider"])
   return WEB_SEARCH_PROVIDER_OPTIONS.some((option) => option.id === provider) ? provider! : "brave";
 }
 
+function llamaSystemdTone(status: LlamaServerStatus["systemd"]["activeState"]): string {
+  if (status === "active") return "bg-green-500/15 text-green-300 border-green-400/25";
+  if (status === "activating" || status === "deactivating") return "bg-amber-500/15 text-amber-300 border-amber-400/25";
+  if (status === "failed") return "bg-red-500/15 text-red-300 border-red-400/25";
+  return "bg-white/5 text-white/45 border-white/10";
+}
+
+function llamaHealthTone(status: LlamaServerStatus["http"]["status"]): string {
+  if (status === "ok") return "bg-green-500/15 text-green-300 border-green-400/25";
+  if (status === "unavailable") return "bg-red-500/15 text-red-300 border-red-400/25";
+  return "bg-white/5 text-white/45 border-white/10";
+}
+
+function formatSystemdTimestamp(value: string): string {
+  if (!value || value === "n/a") return "n/a";
+  return value.replace(/\s+UTC$/, "");
+}
+
 interface MemoryStatus {
   memoryCount: number;
   lastSynthesis: string | null;
@@ -268,6 +286,18 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [llamaPathUpdating, setLlamaPathUpdating] = useState(false);
   const [llamaPathMessage, setLlamaPathMessage] = useState<{ type: "ok" | "err" | "warn"; text: string } | null>(null);
   const [llamaPathUpdateResult, setLlamaPathUpdateResult] = useState<LlamaPathUpdateResult | null>(null);
+  const [llamaServers, setLlamaServers] = useState<LlamaServerStatus[]>([]);
+  const [llamaServersLoading, setLlamaServersLoading] = useState(false);
+  const [llamaServerActionInFlight, setLlamaServerActionInFlight] = useState<string | null>(null);
+  const [llamaServerMessage, setLlamaServerMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [expandedLlamaServerId, setExpandedLlamaServerId] = useState<LlamaServerId | null>(null);
+  const [llamaServerLogs, setLlamaServerLogs] = useState<{
+    id: LlamaServerId;
+    unitName: string;
+    logs: string;
+    loading: boolean;
+    error?: string;
+  } | null>(null);
   const [favoriteModels, setFavoriteModels] = useState<Set<string>>(new Set(settings.favoriteModels || []));
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(settings.showOnlyFavorites ?? false);
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
@@ -379,6 +409,44 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useClickOutside(tocRef, () => setTocOpen(false), tocOpen);
   useClickOutside(favoritesDropdownRef, () => setFavoritesDropdownOpen(false), favoritesDropdownOpen);
 
+  const refreshLlamaServers = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setLlamaServersLoading(true);
+    try {
+      const data = await getLlamaServers();
+      setLlamaServers(data.servers);
+    } catch (e: any) {
+      setLlamaServerMessage({ type: "err", text: e?.message || "Failed to load llama.cpp server status" });
+    } finally {
+      if (showSpinner) setLlamaServersLoading(false);
+    }
+  }, []);
+
+  const handleLlamaServerAction = useCallback(async (id: LlamaServerId, action: LlamaServerAction) => {
+    setLlamaServerActionInFlight(`${id}:${action}`);
+    setLlamaServerMessage(null);
+    try {
+      const result = await controlLlamaServer(id, action);
+      setLlamaServers((prev) => prev.map((server) => server.id === id ? result.server : server));
+      setLlamaServerMessage({ type: "ok", text: `${result.server.label} ${action === "restart" ? "restarted" : action === "start" ? "started" : "stopped"}.` });
+      await refreshLlamaServers();
+    } catch (e: any) {
+      setLlamaServerMessage({ type: "err", text: e?.message || `Failed to ${action} server` });
+    } finally {
+      setLlamaServerActionInFlight(null);
+    }
+  }, [refreshLlamaServers]);
+
+  const handleLlamaServerLogs = useCallback(async (id: LlamaServerId) => {
+    const server = llamaServers.find((item) => item.id === id);
+    setLlamaServerLogs({ id, unitName: server?.unitName || "", logs: "", loading: true });
+    try {
+      const result = await getLlamaServerLogs(id, 200);
+      setLlamaServerLogs({ id, unitName: result.unitName, logs: result.logs || "(no recent log output)", loading: false });
+    } catch (e: any) {
+      setLlamaServerLogs({ id, unitName: server?.unitName || "", logs: "", loading: false, error: e?.message || "Failed to load logs" });
+    }
+  }, [llamaServers]);
+
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -459,6 +527,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       .then((data) => setLlamaPathInfo(data))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    refreshLlamaServers(true);
+    const interval = window.setInterval(() => refreshLlamaServers(), 5000);
+    return () => window.clearInterval(interval);
+  }, [refreshLlamaServers]);
 
   // Aggregate health pings for all five configured servers. Re-runs when URL
   // fields change so the dots update as the user edits settings.
@@ -1384,14 +1458,199 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   </div>
                 )}
 
-                <p className="text-xs text-white/30">
-                  Path to the llama.cpp build directory. All llama.cpp services share this binary via the <code className="text-white/50">~/bin/llama-current</code> symlink.
-                </p>
-              </div>
-            </div>
+	                <p className="text-xs text-white/30">
+	                  Path to the llama.cpp build directory. All llama.cpp services share this binary via the <code className="text-white/50">~/bin/llama-current</code> symlink.
+	                </p>
+	              </div>
+	            </div>
 
-            {/* Inference Server */}
-            <div className="space-y-2">
+	            {/* Managed llama.cpp instances */}
+	            <div className="space-y-2 border-t border-white/5 pt-3">
+	              <div className="flex items-center justify-between gap-3">
+	                <div>
+	                  <h4 className="text-sm text-white/80">Managed llama.cpp instances</h4>
+	                  <p className="text-xs text-white/30 mt-0.5">
+	                    Allowlisted systemd units with process state, HTTP health, launch command, and recent logs.
+	                  </p>
+	                </div>
+	                <button
+	                  type="button"
+	                  onClick={() => refreshLlamaServers(true)}
+	                  disabled={llamaServersLoading}
+	                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0"
+	                >
+	                  {llamaServersLoading ? "Refreshing..." : "Refresh"}
+	                </button>
+	              </div>
+
+	              {llamaServerMessage && (
+	                <div className={`p-2 rounded-lg text-xs ${llamaServerMessage.type === "ok" ? "bg-green-500/10 border border-green-400/15 text-green-400/80" : "bg-red-500/10 border border-red-400/15 text-red-400/80"}`}>
+	                  {llamaServerMessage.text}
+	                </div>
+	              )}
+
+	              <div className="space-y-2">
+	                {llamaServers.length === 0 && (
+	                  <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 text-xs text-white/35">
+	                    {llamaServersLoading ? "Loading llama.cpp server status..." : "No llama.cpp server status available."}
+	                  </div>
+	                )}
+	                {llamaServers.map((server) => {
+	                  const busy = Boolean(llamaServerActionInFlight?.startsWith(`${server.id}:`));
+	                  const missingUnit = server.systemd.loadState === "not-found";
+	                  const expanded = expandedLlamaServerId === server.id;
+	                  const modelsPreview = server.http.modelIds.length > 0
+	                    ? server.http.modelIds.slice(0, 3).join(", ") + (server.http.modelIds.length > 3 ? ` +${server.http.modelIds.length - 3}` : "")
+	                    : "none reported";
+	                  return (
+	                    <div key={server.id} className="rounded-lg border border-white/10 bg-white/[0.025] overflow-hidden">
+	                      <div className="p-3 space-y-3">
+	                        <div className="flex items-start justify-between gap-3">
+	                          <div className="min-w-0">
+	                            <div className="flex items-center gap-2 flex-wrap">
+	                              <span className="text-sm text-white/80 font-medium">{server.label}</span>
+	                              <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/45 font-mono">
+	                                {server.unitName}
+	                              </span>
+	                              {!server.appEnabled && (
+	                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/35">
+	                                  not selected by app
+	                                </span>
+	                              )}
+	                            </div>
+	                            <p className="text-xs text-white/35 mt-1">{server.description}</p>
+	                            <div className="flex items-center gap-2 mt-2 text-[11px] text-white/45 min-w-0">
+	                              <span className="font-mono truncate">{server.url}</span>
+	                              {server.expectedModel && (
+	                                <>
+	                                  <span className="text-white/20">/</span>
+	                                  <span className="font-mono truncate">{server.expectedModel}</span>
+	                                </>
+	                              )}
+	                            </div>
+	                          </div>
+	                          <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+	                            <span className={`px-2 py-1 rounded-full border text-[10px] font-medium ${llamaSystemdTone(server.systemd.activeState)}`}>
+	                              {missingUnit ? "missing unit" : server.systemd.activeState}
+	                            </span>
+	                            <span className={`px-2 py-1 rounded-full border text-[10px] font-medium ${llamaHealthTone(server.http.status)}`} title={server.http.error}>
+	                              HTTP {server.http.status}
+	                            </span>
+	                          </div>
+	                        </div>
+
+	                        <div className="flex items-center gap-2 flex-wrap">
+	                          <button
+	                            type="button"
+	                            onClick={() => handleLlamaServerAction(server.id, "start")}
+	                            disabled={busy || missingUnit || server.systemd.activeState === "active"}
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-green-500/10 border border-green-400/20 text-green-300/80 hover:bg-green-500/20 transition-all disabled:opacity-40"
+	                          >
+	                            Start
+	                          </button>
+	                          <button
+	                            type="button"
+	                            onClick={() => handleLlamaServerAction(server.id, "stop")}
+	                            disabled={busy || missingUnit || server.systemd.activeState === "inactive" || server.systemd.activeState === "unknown"}
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40"
+	                          >
+	                            Stop
+	                          </button>
+	                          <button
+	                            type="button"
+	                            onClick={() => handleLlamaServerAction(server.id, "restart")}
+	                            disabled={busy || missingUnit}
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40"
+	                          >
+	                            {busy ? "Working..." : "Restart"}
+	                          </button>
+	                          <button
+	                            type="button"
+	                            onClick={() => setExpandedLlamaServerId(expanded ? null : server.id)}
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all"
+	                          >
+	                            {expanded ? "Hide details" : "Details"}
+	                          </button>
+	                          <button
+	                            type="button"
+	                            onClick={() => handleLlamaServerLogs(server.id)}
+	                            disabled={missingUnit}
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40"
+	                          >
+	                            Logs
+	                          </button>
+	                        </div>
+	                      </div>
+
+	                      {expanded && (
+	                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3">
+	                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+	                            <div>
+	                              <span className="text-white/30">Role</span>
+	                              <p className="text-white/60">{server.role}</p>
+	                            </div>
+	                            <div>
+	                              <span className="text-white/30">PID</span>
+	                              <p className="text-white/60 font-mono">{server.systemd.mainPid ?? "n/a"}</p>
+	                            </div>
+	                            <div>
+	                              <span className="text-white/30">Unit file</span>
+	                              <p className="text-white/60 font-mono truncate" title={server.systemd.fragmentPath}>{server.systemd.fragmentPath || "n/a"}</p>
+	                            </div>
+	                            <div>
+	                              <span className="text-white/30">Working directory</span>
+	                              <p className="text-white/60 font-mono truncate" title={server.systemd.workingDirectory}>{server.systemd.workingDirectory || "n/a"}</p>
+	                            </div>
+	                            <div>
+	                              <span className="text-white/30">Substate</span>
+	                              <p className="text-white/60 font-mono">{server.systemd.subState || "n/a"}</p>
+	                            </div>
+	                            <div>
+	                              <span className="text-white/30">Active since</span>
+	                              <p className="text-white/60 font-mono">{formatSystemdTimestamp(server.systemd.activeEnterTimestamp)}</p>
+	                            </div>
+	                          </div>
+	                          <div>
+	                            <span className="text-xs text-white/30">Models from /v1/models</span>
+	                            <p className="text-xs text-white/60 font-mono truncate" title={server.http.modelIds.join(", ")}>{modelsPreview}</p>
+	                          </div>
+	                          <div>
+	                            <span className="text-xs text-white/30">ExecStart</span>
+	                            <pre className="mt-1 max-h-28 overflow-auto rounded-md border border-white/10 bg-black/20 p-2 text-[10px] text-white/55 whitespace-pre-wrap break-words">
+	                              {server.systemd.execStart || server.systemd.error || "No launch command reported by systemd."}
+	                            </pre>
+	                          </div>
+	                        </div>
+	                      )}
+	                    </div>
+	                  );
+	                })}
+	              </div>
+
+	              {llamaServerLogs && (
+	                <div className="rounded-lg border border-white/10 bg-black/20 overflow-hidden">
+	                  <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/5">
+	                    <div className="min-w-0">
+	                      <p className="text-xs text-white/70">Recent logs</p>
+	                      <p className="text-[11px] text-white/35 font-mono truncate">{llamaServerLogs.unitName || llamaServerLogs.id}</p>
+	                    </div>
+	                    <button
+	                      type="button"
+	                      onClick={() => setLlamaServerLogs(null)}
+	                      className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 hover:bg-white/10 transition-all"
+	                    >
+	                      Close
+	                    </button>
+	                  </div>
+	                  <pre className="max-h-64 overflow-auto p-3 text-[10px] leading-relaxed text-white/55 whitespace-pre-wrap break-words">
+	                    {llamaServerLogs.loading ? "Loading logs..." : llamaServerLogs.error || llamaServerLogs.logs}
+	                  </pre>
+	                </div>
+	              )}
+	            </div>
+
+	            {/* Inference Server */}
+	            <div className="space-y-2">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"

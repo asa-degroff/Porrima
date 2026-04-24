@@ -1290,6 +1290,64 @@ export async function validateLlamaPathApi(candidatePath: string): Promise<{ val
   return res.json();
 }
 
+// --- Llama.cpp Server Supervisor ---
+
+export type LlamaServerId = "inference" | "extraction" | "reranker" | "embedding";
+export type LlamaServerAction = "start" | "stop" | "restart";
+
+export interface LlamaServerStatus {
+  id: LlamaServerId;
+  label: string;
+  role: string;
+  description: string;
+  url: string;
+  unitName: string;
+  appEnabled: boolean;
+  expectedModel?: string;
+  systemd: {
+    loadState: "loaded" | "not-found" | "error" | "unknown";
+    activeState: "active" | "activating" | "deactivating" | "inactive" | "failed" | "unknown";
+    subState: string;
+    mainPid: number | null;
+    execMainStatus: number | null;
+    fragmentPath: string;
+    workingDirectory: string;
+    execStart: string;
+    activeEnterTimestamp: string;
+    stateChangeTimestamp: string;
+    error?: string;
+  };
+  http: {
+    status: "ok" | "unavailable" | "unknown";
+    modelIds: string[];
+    error?: string;
+  };
+}
+
+export async function getLlamaServers(): Promise<{ servers: LlamaServerStatus[] }> {
+  const res = await apiFetch(`${BASE}/llama-servers`);
+  if (!res.ok) throw new Error("Failed to fetch llama.cpp server status");
+  return res.json();
+}
+
+export async function controlLlamaServer(id: LlamaServerId, action: LlamaServerAction): Promise<{ server: LlamaServerStatus }> {
+  const res = await apiFetch(`${BASE}/llama-servers/${id}/${action}`, { method: "POST" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to ${action} llama.cpp server`);
+  }
+  return res.json();
+}
+
+export async function getLlamaServerLogs(id: LlamaServerId, lines = 200): Promise<{ unitName: string; logs: string }> {
+  const res = await apiFetch(`${BASE}/llama-servers/${id}/logs?lines=${encodeURIComponent(String(lines))}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to fetch llama.cpp server logs");
+  }
+  return res.json();
+}
+
 // --- Embedding Migration ---
 
 export interface EmbeddingBackup {

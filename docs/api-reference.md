@@ -3,6 +3,10 @@
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/models` | List available Ollama models |
+| GET | `/api/llama-servers` | List managed llama.cpp systemd units with process state, HTTP health, and launch metadata |
+| GET | `/api/llama-servers/:id` | Get one managed llama.cpp server status (`inference`, `extraction`, `reranker`, `embedding`) |
+| POST | `/api/llama-servers/:id/:action` | Start, stop, or restart an allowlisted llama.cpp systemd unit |
+| GET | `/api/llama-servers/:id/logs` | Recent journal logs for an allowlisted llama.cpp systemd unit |
 | GET | `/api/chats` | List all chats |
 | POST | `/api/chats` | Create chat (`{ modelId, type: "agent"\|"quick", projectId? }`). The `system` chat is created automatically on server startup — clients don't POST it. |
 | PATCH | `/api/chats/:id` | Update chat metadata |
