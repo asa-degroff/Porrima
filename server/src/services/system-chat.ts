@@ -790,8 +790,11 @@ export async function runSystemSynthesis(options?: {
       const hasOutput = (streamResult?.content?.length ?? 0) > 0;
       const hasToolCalls = iterationToolCalls.length > 0;
 
-      // Phase 1 no-text = complete failure, nothing to transition from
-      if (phaseIndex === 0 && !hasOutput && !hasToolCalls) {
+      // Phase 1 no-text on the very first iteration = complete failure, nothing
+      // to transition from. On later iterations, an idle turn in Phase 1 means
+      // the agent finished its synthesis work and should fall through to the
+      // phase-transition logic below so Phase 2+ can run.
+      if (iterations === 0 && phaseIndex === 0 && !hasOutput && !hasToolCalls) {
         console.log("[system-chat] Phase 1 produced no output, ending synthesis");
         break;
       }
