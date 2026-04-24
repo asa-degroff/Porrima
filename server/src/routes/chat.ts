@@ -1180,12 +1180,39 @@ async function handleChatStream(
             state.lastLlamaCache = (msg as any).llamaCache;
           }
 
-          // Send iteration event with usage data so client can update token indicators mid-loop
+          // Stage the in-progress assistant message into chat.messages BEFORE
+          // the mid-turn context check so the estimator sees freshly-accumulated
+          // tool calls/results. Without this, the estimator's last message is
+          // the previous iteration's state and misses the tool result that's
+          // about to become input for the next iteration.
+          const partialMsg = buildCurrentAssistantMessage();
+          {
+            const lastMsg = chat.messages[chat.messages.length - 1];
+            if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
+              chat.messages[chat.messages.length - 1] = { ...partialMsg, _inProgress: true };
+            } else {
+              chat.messages.push({ ...partialMsg, _inProgress: true });
+            }
+          }
+
+          // Compute a current-context estimate that accounts for accumulated
+          // tool results. Raw usage.totalTokens reflects iter=N's (input+output)
+          // and does NOT include the tool result generated between iter=N and
+          // iter=N+1 — that tool result is part of iter=N+1's input, and a
+          // single large one (e.g. read_file on a 50 KB source file) can push
+          // past the hard context cap before the next iteration even starts.
+          const { estimateContextTokens } = await import("../services/compaction.js");
+          const effectiveCWForCheck = getEffectiveContextWindow(chat, ollamaModel, settings);
+          const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
+
+          // Send iteration event with usage AND estimate so client can update
+          // token indicators mid-loop with a number that reflects next-call size.
           res.write(`event: iteration\ndata: ${JSON.stringify({
             iteration: iterations,
             stopReason,
             toolCount: event.toolResults?.length || 0,
             usage: state.finalUsage || undefined,
+            estimatedTokens,
           })}\n\n`);
 
           if (stopReason === "length") {
@@ -1203,10 +1230,9 @@ async function handleChatStream(
           if (!hitContextLimit && !msg.usage && (stopReason as string) !== "stop" && (stopReason as string) !== "toolUse" && (stopReason as string) !== "length") {
             // Check if the last known usage was already high
             const lastKnown = state.finalUsage?.totalTokens ?? 0;
-            const effectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
-            if (effectiveCW > 0 && (lastKnown / effectiveCW > 0.8 || iterations > 3)) {
+            if (effectiveCWForCheck > 0 && (lastKnown / effectiveCWForCheck > 0.8 || iterations > 3)) {
               hitContextLimit = true;
-              console.warn(`[chat] model error with no usage data at iteration ${iterations} (last known: ${lastKnown}/${effectiveCW}) — treating as context overflow`);
+              console.warn(`[chat] model error with no usage data at iteration ${iterations} (last known: ${lastKnown}/${effectiveCWForCheck}) — treating as context overflow`);
               res.write(`event: warning\ndata: ${JSON.stringify({
                 type: "context_length",
                 message: "Response may have been cut short — context window likely full",
@@ -1214,19 +1240,16 @@ async function handleChatStream(
             }
           }
 
-          // Mid-turn context protection: if usage > 95% during tool loop, break for compaction
+          // Mid-turn context protection. Uses the estimator (not raw usage) so
+          // tool results added since the last usage anchor are counted. Trigger
+          // at 80% to match truncateBeforeSend and leave room for compaction
+          // instead of tipping over the hard cap on the next iteration.
           if (stopReason === "toolUse" && !hitContextLimit) {
-            const effectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
-            let currentTokens = state.finalUsage?.totalTokens ?? 0;
-            // Fallback to character estimation if usage not reported
-            if (!currentTokens && chat.messages.length > 0) {
-              const { estimateContextTokens } = await import("../services/compaction.js");
-              currentTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
-            }
-            if (effectiveCW > 0 && currentTokens > 0) {
-              const usageRatio = currentTokens / effectiveCW;
-              if (usageRatio > 0.95) {
-                console.warn(`[chat] Mid-turn context overflow: ${currentTokens}/${effectiveCW} (${(usageRatio * 100).toFixed(0)}%) at iteration ${iterations} — breaking for compaction`);
+            if (effectiveCWForCheck > 0 && estimatedTokens > 0) {
+              const usageRatio = estimatedTokens / effectiveCWForCheck;
+              if (usageRatio > 0.80) {
+                const rawUsage = state.finalUsage?.totalTokens ?? 0;
+                console.warn(`[chat] Mid-turn context overflow: est ${estimatedTokens}/${effectiveCWForCheck} (${(usageRatio * 100).toFixed(0)}%) at iteration ${iterations} [rawUsage=${rawUsage}] — breaking for compaction`);
                 turnAbortController.abort();
                 state.needsMidTurnCompaction = true;
               }
@@ -1243,22 +1266,12 @@ async function handleChatStream(
             turnAbortController.abort();
           }
 
-          // Incremental persistence: save progress after each iteration
-          // This ensures tool calls and partial responses survive server restarts
-          // and are visible in the UI after a page refresh during a long tool loop.
+          // Incremental persistence: save progress after each iteration.
+          // The chat.messages mutation already happened above; here we just
+          // persist to disk and record pending state for crash recovery.
           try {
-            const partialMsg = buildCurrentAssistantMessage();
-            // Update chat.messages with the in-progress assistant message so it
-            // survives crashes and is visible on page refresh. We push on first
-            // iteration, then replace in subsequent iterations.
-            const lastMsg = chat.messages[chat.messages.length - 1];
-            if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
-              chat.messages[chat.messages.length - 1] = { ...partialMsg, _inProgress: true };
-            } else {
-              chat.messages.push({ ...partialMsg, _inProgress: true });
-            }
             await saveChat(chat);
-            
+
             // ALSO save in-flight accumulators to pending_states for crash recovery
             // This allows resume from mid-turn, not just ask_user
             await savePendingState(chat.id, {
@@ -1272,8 +1285,8 @@ async function handleChatStream(
               iterations,
               lastUserMessage,
             });
-            
-            console.log(`[chat] iteration ${iterations}: saved progress (${partialMsg.toolCalls?.length || 0} tools, ${partialMsg.content.length}ch)`);
+
+            console.log(`[chat] iteration ${iterations}: saved progress (${partialMsg.toolCalls?.length || 0} tools, ${partialMsg.content.length}ch, est ${estimatedTokens} tokens)`);
           } catch (saveErr) {
             console.error(`[chat] failed to save iteration ${iterations}:`, saveErr);
           }

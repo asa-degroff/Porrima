@@ -110,6 +110,11 @@ export interface IterationInfo {
   stopReason: string;
   toolCount: number;
   usage?: { input: number; output: number; totalTokens: number };
+  /** Server-side estimate of what the NEXT LLM call's input will tokenize to.
+   *  Includes accumulated tool results that aren't reflected in `usage`
+   *  (which only covers the previous iteration's input+output). Prefer this
+   *  over `usage.totalTokens` for the token indicator during tool loops. */
+  estimatedTokens?: number;
 }
 
 export interface StreamWarning {

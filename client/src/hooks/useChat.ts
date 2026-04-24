@@ -126,6 +126,12 @@ export function useChat(chatId: string | null) {
   const [titleUpdate, setTitleUpdate] = useState<{ chatId: string; title: string } | null>(null);
   const [streamingSegmentIndex, setStreamingSegmentIndex] = useState<number | null>(null);
   const [streamingUsage, setStreamingUsage] = useState<MessageUsage | null>(null);
+  // Separate from streamingUsage because the server-side estimate reflects the
+  // NEXT call's input (includes accumulated tool results), not the last call's
+  // reported usage. When the estimate exceeds reported usage, we show it as a
+  // provisional ~N / max in the indicator so the user sees the payload the
+  // next iteration will actually send.
+  const [streamingEstimate, setStreamingEstimate] = useState<number | null>(null);
   const [hasBackgroundActivity, setHasBackgroundActivity] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const doneCalledRef = useRef(false);
@@ -201,6 +207,7 @@ export function useChat(chatId: string | null) {
       setPostCompactionEstimate(null);
       setStreamingSegmentIndex(null);
       setStreamingUsage(null);
+      setStreamingEstimate(null);
     }
   }, [chatId]);
 
@@ -430,6 +437,7 @@ export function useChat(chatId: string | null) {
           setStreaming(false);
           setStreamingSegmentIndex(null);
           setStreamingUsage(null);
+          setStreamingEstimate(null);
           if (wfi) setWaitingForInput(true);
           bgStreams.delete(streamChatId);
         }
@@ -539,10 +547,11 @@ export function useChat(chatId: string | null) {
         }
       },
       onIteration: (info) => {
-        console.log(`[chat] iteration ${info.iteration}: stopReason=${info.stopReason} tools=${info.toolCount}`);
+        console.log(`[chat] iteration ${info.iteration}: stopReason=${info.stopReason} tools=${info.toolCount} est=${info.estimatedTokens ?? "?"}`);
         // Update live usage from iteration events so token indicator stays current during tool loops
-        if (info.usage && activeChatIdRef.current === streamChatId) {
-          setStreamingUsage(info.usage);
+        if (activeChatIdRef.current === streamChatId) {
+          if (info.usage) setStreamingUsage(info.usage);
+          if (typeof info.estimatedTokens === "number") setStreamingEstimate(info.estimatedTokens);
         }
       },
       onWarning: (w) => {
@@ -1028,7 +1037,24 @@ export function useChat(chatId: string | null) {
   // mark the number as provisional instead of rendering it identically to a
   // confirmed count.
   const { totalUsage, isUsageEstimated }: { totalUsage: MessageUsage; isUsageEstimated: boolean } = useMemo(() => {
-    if (streamingUsage) return { totalUsage: streamingUsage, isUsageEstimated: false };
+    if (streamingUsage) {
+      // During tool loops, the server sends a per-iteration `estimatedTokens`
+      // that reflects the next call's input (includes accumulated tool
+      // results). Reported usage covers only the previous iteration's
+      // input+output, so when a big tool result landed between iterations the
+      // estimate is meaningfully larger and is the truthful number to show.
+      if (streamingEstimate && streamingEstimate > streamingUsage.totalTokens) {
+        return {
+          totalUsage: {
+            input: streamingUsage.input,
+            output: streamingUsage.output,
+            totalTokens: streamingEstimate,
+          },
+          isUsageEstimated: true,
+        };
+      }
+      return { totalUsage: streamingUsage, isUsageEstimated: false };
+    }
     // Find the index of the last compaction summary — any usage data before it
     // is stale (reflects pre-compaction context size).
     let lastCompactionIdx = -1;
@@ -1057,7 +1083,7 @@ export function useChat(chatId: string | null) {
       };
     }
     return { totalUsage: { input: 0, output: 0, totalTokens: 0 }, isUsageEstimated: false };
-  }, [messages, streamingUsage, postCompactionEstimate]);
+  }, [messages, streamingUsage, streamingEstimate, postCompactionEstimate]);
 
   // Check if the chat has a compaction summary (for UI state)
   const hasCompactionSummary = useMemo(() => {
