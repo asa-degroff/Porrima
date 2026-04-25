@@ -176,7 +176,7 @@ export function ThinkingBlock({
                 <path d="M12 5v14" />
                 <path d="m19 12-7 7-7-7" />
               </svg>
-              <span className="font-medium">Bottom</span>
+              <span className="font-medium">New</span>
             </button>
           )}
         </div>

@@ -561,7 +561,7 @@ export function ChatView({
               <path d="M12 5v14" />
               <path d="m19 12-7 7-7-7" />
             </svg>
-            <span className="text-xs font-medium">New output</span>
+            <span className="text-xs font-medium">New</span>
           </button>
         )}
       </div>
