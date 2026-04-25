@@ -590,11 +590,21 @@ export function useChat(chatId: string | null) {
           bg.compacting = false;
           bg.compaction = info;
 
-          // For mid-turn compaction, the server will continue streaming after
-          // compaction completes — do NOT fetch/sync messages here, as the async
-          // fetch races with incoming deltas and can overwrite streaming state.
-          // The stream's own events (text_delta, segments, etc.) are authoritative.
-          // Only sync for end-of-turn compaction where no further streaming follows.
+          // Mid-turn compaction: the server will immediately continue streaming
+          // on the same SSE connection. Restore the streaming state that was
+          // cleared by onAgentOutputComplete, so the spinner and input lock
+          // re-engage for the continued generation.
+          if (info.midTurn) {
+            bg.streaming = true;
+            if (activeChatIdRef.current === streamChatId) {
+              setStreaming(true);
+              setStreamingSegmentIndex(null);
+            }
+          }
+
+          // For non-mid-turn compaction, the server has finished — do NOT
+          // continue streaming. Only sync for end-of-turn compaction where no
+          // further streaming follows.
           if (!info.midTurn) {
             // Reload messages from server to ensure correct ordering.
             // The server has the authoritative message order after compaction —
