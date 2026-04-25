@@ -17,7 +17,7 @@ import {
   getMemoryById,
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
-import { invalidateMemoriesCache, invalidateStablePrefixCache } from "./memory-context.js";
+import { invalidateMemoriesCache } from "./memory-context.js";
 import { startExtractionRun } from "./memory-extraction-observability.js";
 import { recordModelStats } from "./model-stats.js";
 import type { LlamaTimings } from "./model-stats.js";
@@ -272,11 +272,11 @@ const EXTRACTION_AGENT_PREFIX = `# Archival Mode
 
 I am operating in archival mode. My task is to notice and preserve information worth remembering — I am not conversing, I am sorting and capturing.
 
-I know who I am. My identity, personality, values, communication style, and how I work are already part of me and do not need to be extracted or saved as memories. I do NOT archive statements about my own nature, characteristics, or operational style.
+I know who I am. My identity, personality, values, communication style, and how I work are already part of me and do not need to be extracted or saved as memories. I don't archive statements about my own nature, characteristics, or operational style.
 
-Source attribution is critical:
-- USER/HUMAN messages are the only source for the user's preferences, personal facts, and intent.
-- ASSISTANT/AGENT messages are my own prior responses, proposals, interpretations, tool summaries, and work product. Do NOT attribute assistant-message content to the user unless a user message confirms it.
+Source attribution:
+- User messages are the source for the user's preferences, personal facts, and intent.
+- "Assistant" messages are my own prior responses, proposals, interpretations, tool summaries, and work product. Don't attribute assistant-message content to the user — these are my own, first-person output.
 - When preserving task or project continuity from assistant messages, phrase it as project/task state or work I performed/proposed, not as something the user said, believes, or wants.
 - If user and assistant messages conflict, treat the user's message as the source of truth.
 
@@ -426,14 +426,6 @@ interface ExtractedFact {
   text: string;
   category: MemoryCategory;
   importance: number;
-  blockUpdate?: {
-    blockId?: string;  // Existing block to update
-    targetBlockName?: string;  // Name of block — only for creating NEW blocks
-    updateType: "append" | "replace_section";  // append = add text to end, replace_section = modify a section
-    content: string;  // The NEW text to add (NOT the entire block content)
-    section?: string;  // Which section header to modify (required for replace_section)
-    reasoning: string;  // Why this block needs updating
-  };
 }
 
 export function parseExtractionResponse(text: string): ExtractedFact[] {
@@ -490,7 +482,7 @@ interface ExtractSegment {
 }
 
 function extractionRoleLabel(role: ChatMessage["role"]): string {
-  return role === "user" ? "USER (human)" : "ASSISTANT (agent/me)";
+  return role === "user" ? "User (human)" : "Agent (me)";
 }
 
 /**
@@ -1099,235 +1091,15 @@ Focus on:
 
 Each atomic memory should be self-contained and meaningful (2-5 sentences).
 
-### Memory Block Updates
-
-You will be provided with existing memory blocks below. These are structured knowledge documents that organize related information. Consider whether the conversation contains information that should update these blocks.
-
-**When to update blocks:**
-- Substantive changes to architecture, decisions, or technical context already covered in a block
-- New important details that expand on existing block content
-- Corrections or refinements to information in blocks
-
-**When to create a new block:**
-- Newly emerged, substantive topic that isn't directly covered by existing blocks but is still important to preserve
-
-**When to use atomic memories instead:**
-- Quick facts, preferences, or one-off details
-- Information that doesn't fit existing block topics
-- Lower importance observations (importance ≤ 7)
-
-**Block update guidelines:**
-- You will see remaining character space for each block (max 4000 chars)
-- Use "append" to add new content to an existing block when space allows (>500 chars remaining)
-- Use "replace_section" to modify a specific section when the block is nearly full
-- IMPORTANT: "content" for append/replace_section should contain ONLY the new text to add, NOT the entire block
-- Only create new blocks for genuinely new topics that don't match existing block names
-
 Output a JSON array. Each item:
 - "text": A standalone statement with sufficient context (2-5 sentences)
 - "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
 - "importance": 1-10
-- "blockUpdate": Optional. If this fact warrants a block update:
-  - "blockId": ID of existing block to update (use the ID from the block header, e.g. [blk-xxxxx])
-  - "targetBlockName": Name of block — only use this when creating a NEW block for a topic with no existing block
-  - "updateType": "append" (add text to end) or "replace_section" (modify specific section)
-  - "content": The NEW text to add — NOT the entire block content
-  - "section": Which section header to modify (required for replace_section)
-  - "reasoning": Why this block needs updating
 
 Output ONLY the JSON array.`;
 
-async function buildPreCompactionSystemPrompt(projectId?: string): Promise<string> {
-  const settings = await getSettings();
-  const ctxSize = settings.extractionCtxSize ?? 16384;
-
-  // Load existing blocks with space awareness.
-  // Filter out system-managed blocks (synthesis, notebook, zeitgeist archives) —
-  // they are off-topic for the extraction task and bloat the context window.
-  let blockContext = "";
-  try {
-    const { getMemoryBlocksByScope } = await import("./memory-storage.js");
-    const isSystemBlock = (b: { id: string; scope: string; blockType?: string }) =>
-      b.id === "blk-zeitgeist-continuity" ||
-      b.scope === "archived" ||
-      (b.blockType !== undefined && b.blockType !== "note") ||
-      b.id.startsWith("blk-archive-") ||
-      b.id.startsWith("blk-synth-") ||
-      b.id.startsWith("blk-notebook-");
-
-    const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemBlock(b));
-    const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemBlock(b)) : [];
-    const allBlocks = [...globalBlocks, ...projectBlocks];
-
-    if (allBlocks.length > 0) {
-      const MAX_BLOCK_CHARS = 4000;  // block storage cap — unchanged, used for remaining-space math
-      const staticChars =
-        EXTRACTION_AGENT_PREFIX.length + PRE_COMPACTION_INSTRUCTIONS.length + 600;
-      const displayBudget = computeBlockCharBudget(allBlocks.length, staticChars, ctxSize);
-
-      const blockSummaries = allBlocks.map((b) => {
-        // "Remaining space" reflects how much room is left in the stored block,
-        // not how much of it we're showing here. Keep the stored-cap math intact
-        // so the LLM makes correct append/replace decisions.
-        const remainingSpace = MAX_BLOCK_CHARS - b.content.length;
-        const spaceStatus = remainingSpace > 500
-          ? `${remainingSpace.toLocaleString()} chars remaining (good for appends)`
-          : remainingSpace > 100
-          ? `${remainingSpace.toLocaleString()} chars remaining (consider targeted edits)`
-          : `${remainingSpace.toLocaleString()} chars remaining (space constrained)`;
-
-        const shownContent = b.content.length > displayBudget
-          ? b.content.slice(0, displayBudget) + `\n[...truncated for extraction context; full block is ${b.content.length} chars]`
-          : b.content;
-
-        return `### ${b.name} [${b.id}]
-Scope: ${b.scope}
-${spaceStatus}
-
-${shownContent}`;
-      }).join("\n\n");
-
-      blockContext = `\n\n## Existing Memory Blocks\nThe following memory blocks contain structured knowledge. Consider whether information from this conversation should update these blocks:\n\n${blockSummaries}\n`;
-    }
-  } catch { /* non-critical */ }
-
-  return `${EXTRACTION_AGENT_PREFIX}${blockContext}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
-}
-
-/**
- * Process block updates from extraction output.
- * Only applies updates for facts with importance >= minImportance (default: 8) that have blockUpdate field.
- * Pre-compaction flush passes a lower threshold (7) since messages are about to be removed and
- * need more aggressive preservation.
- */
-async function processBlockUpdates(
-  facts: ExtractedFact[],
-  projectId?: string,
-  minImportance: number = 8
-): Promise<boolean> {
-  const { getMemoryBlock, getMemoryBlocksByScope, updateMemoryBlock, createMemoryBlock } = await import("./memory-storage.js");
-  
-  const MAX_BLOCK_CHARS = 4000;
-  const MIN_SPACE_FOR_APPEND = 500;
-  
-  let updatesMade = false;
-  const now = new Date().toISOString();
-  
-  for (const fact of facts) {
-    // Only process facts above the importance threshold with block updates
-    if (!fact.blockUpdate || fact.importance < minImportance) continue;
-    
-    const update = fact.blockUpdate;
-    
-    try {
-      // Normalize "refine" to "append" — the extraction LLM sometimes outputs
-      // "refine" but means "add this content". Previously "refine" was destructive
-      // (replacing the entire block), so we map it to append for safety.
-      if (update.updateType === "refine" as string) {
-        update.updateType = "append";
-        console.log(`[memory-blocks] Normalized "refine" updateType to "append" for block update`);
-      }
-      
-      // Resolve the target block: either by ID or by name lookup
-      let existingBlock: ReturnType<typeof getMemoryBlock> = null;
-      let resolvedBlockId: string | undefined = update.blockId;
-      
-      if (update.blockId) {
-        existingBlock = getMemoryBlock(update.blockId);
-        if (!existingBlock) {
-          console.warn(`[memory-blocks] Block ${update.blockId} not found, skipping update`);
-          continue;
-        }
-      } else if (update.targetBlockName) {
-        // No blockId provided — look up by name in the appropriate scope.
-        // This prevents creating duplicate blocks when the LLM provides
-        // a targetBlockName without the blockId.
-        const scope = projectId ? "project" : "global";
-        const blocks = getMemoryBlocksByScope(scope as "global" | "project", projectId);
-        const match = blocks.find(b => b.name === update.targetBlockName);
-        if (match) {
-          existingBlock = match;
-          resolvedBlockId = match.id;
-          console.log(`[memory-blocks] Resolved targetBlockName "${update.targetBlockName}" to existing block ${match.id}`);
-        }
-      }
-      
-      if (existingBlock && resolvedBlockId) {
-        // Update existing block
-        const remainingSpace = MAX_BLOCK_CHARS - existingBlock.content.length;
-        
-        if (update.updateType === "append") {
-          // Append new content to the existing block.
-          if (remainingSpace < MIN_SPACE_FOR_APPEND) {
-            console.log(`[memory-blocks] Insufficient space for append on ${resolvedBlockId} (${remainingSpace} chars remaining), skipping`);
-            continue;
-          }
-          
-          const newContent = existingBlock.content + "\n\n" + update.content;
-          if (newContent.length > MAX_BLOCK_CHARS) {
-            console.warn(`[memory-blocks] Append would exceed limit (${newContent.length} > ${MAX_BLOCK_CHARS}), skipping`);
-            continue;
-          }
-          
-          updateMemoryBlock(resolvedBlockId, {
-            content: newContent,
-            updatedBy: "agent",
-          });
-          console.log(`[memory-blocks] Appended to block "${existingBlock.name}" ${resolvedBlockId} (${newContent.length} chars total)`);
-          updatesMade = true;
-        } else if (update.updateType === "replace_section" && update.section) {
-          // Find and replace the section
-          const sectionHeader = `### ${update.section}`;
-          const sectionIndex = existingBlock.content.indexOf(sectionHeader);
-          
-          if (sectionIndex === -1) {
-            console.warn(`[memory-blocks] Section "${update.section}" not found in ${resolvedBlockId}, skipping`);
-            continue;
-          }
-          
-          // Find end of section (next ### or end of content)
-          const nextSectionIndex = existingBlock.content.indexOf("\n### ", sectionIndex + sectionHeader.length);
-          const sectionEnd = nextSectionIndex === -1 ? existingBlock.content.length : nextSectionIndex;
-          
-          const beforeSection = existingBlock.content.slice(0, sectionIndex);
-          const afterSection = existingBlock.content.slice(sectionEnd);
-          const newContent = beforeSection + sectionHeader + "\n" + update.content + afterSection;
-          
-          if (newContent.length > MAX_BLOCK_CHARS) {
-            console.warn(`[memory-blocks] Section replace would exceed limit (${newContent.length} > ${MAX_BLOCK_CHARS}), skipping`);
-            continue;
-          }
-          
-          updateMemoryBlock(resolvedBlockId, {
-            content: newContent,
-            updatedBy: "agent",
-          });
-          console.log(`[memory-blocks] Replaced section "${update.section}" in block "${existingBlock.name}" ${resolvedBlockId}`);
-          updatesMade = true;
-        }
-      } else if (update.targetBlockName) {
-        // No existing block found with this name — create a new one
-        const newBlockId = `blk-${Math.random().toString(36).substr(2, 9)}`;
-        createMemoryBlock({
-          id: newBlockId,
-          name: update.targetBlockName,
-          description: update.reasoning.slice(0, 200),  // Use reasoning as initial description
-          content: update.content,
-          scope: projectId ? "project" : "global",
-          projectId: projectId || "",
-          createdAt: now,
-          updatedAt: now,
-          updatedBy: "agent",
-        });
-        console.log(`[memory-blocks] Created new block "${update.targetBlockName}" (${newBlockId})`);
-        updatesMade = true;
-      }
-    } catch (e) {
-      console.error(`[memory-blocks] Failed to apply block update:`, e);
-    }
-  }
-  
-  return updatesMade;
+async function buildPreCompactionSystemPrompt(): Promise<string> {
+  return `${EXTRACTION_AGENT_PREFIX}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
 }
 
 /**
@@ -1361,7 +1133,7 @@ export async function preCompactionFlush(
     .map((m, i) => formatMessageForExtraction(m, i))
     .join("\n\n---\n\n");
 
-  const systemPrompt = await buildPreCompactionSystemPrompt(projectId);
+  const systemPrompt = await buildPreCompactionSystemPrompt();
   const chat = await getChat(chatId).catch(() => null);
   const runHandle = startExtractionRun({
     trigger: "pre-compaction",
@@ -1421,16 +1193,9 @@ export async function preCompactionFlush(
 
     const outcome = await dedupAndSave(facts, embeddings, chatId, projectId);
 
-    // Process block updates (only high-importance facts with blockUpdate field)
-    // Use lower importance threshold (7) for pre-compaction flush since messages
-    // are about to be removed — moderate-importance architectural context that would
-    // normally stay in conversation needs more aggressive block preservation.
-    const blockUpdatesMade = await processBlockUpdates(facts, projectId, 7);
-    if (blockUpdatesMade) {
-      invalidateStablePrefixCache(chatId);  // Force reload of updated blocks
-    }
-
-    // Invalidate memories cache so next turn picks up new memories
+    // Invalidate memories cache so next turn picks up new memories.
+    // Block updates are not performed here — they're handled by the main
+    // agent during synthesis cycles.
     invalidateMemoriesCache(chatId);
 
     console.log("[memory] Pre-compaction flush complete");
