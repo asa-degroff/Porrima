@@ -14,7 +14,7 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs } from "../api/client";
+import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi, getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings } from "../api/client";
 import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
@@ -446,6 +446,39 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setLlamaServerLogs({ id, unitName: server?.unitName || "", logs: "", loading: false, error: e?.message || "Failed to load logs" });
     }
   }, [llamaServers]);
+
+  // Track which server card has its config section expanded
+  const [llamaConfigExpanded, setLlamaConfigExpanded] = useState<LlamaServerId | null>(null);
+
+  // Inline setting update for a specific server — saves immediately via PATCH
+  const handleLlamaServerSettings = useCallback(async (id: LlamaServerId, updates: Record<string, unknown>) => {
+    setLlamaServerMessage(null);
+    try {
+      const result = await updateLlamaServerSettings(id, updates as import("../api/client").LlamaServerUpdate);
+      // Sync local state from the updated server status
+      const s = result.server;
+      if (s.id === "inference") {
+        setLlamacppUrl(s.url);
+        if (s.expectedModel) setDefaultModelId(s.expectedModel);
+      }
+      if (s.id === "extraction") {
+        setExtractionModelUrl(s.url);
+        if (s.expectedModel) setExtractionModelId(s.expectedModel);
+      }
+      if (s.id === "reranker") {
+        setRerankerUrl(s.url);
+        if (s.expectedModel) setRerankerModelId(s.expectedModel);
+      }
+      if (s.id === "embedding") {
+        setEmbeddingUrl(s.url);
+        if (s.expectedModel) setEmbeddingModel(s.expectedModel);
+      }
+      // Refresh the server statuses to pick up new health
+      await refreshLlamaServers();
+    } catch (e: any) {
+      setLlamaServerMessage({ type: "err", text: e?.message || "Failed to update settings" });
+    }
+  }, [refreshLlamaServers]);
 
 
   useEffect(() => {
@@ -1464,13 +1497,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	              </div>
 	            </div>
 
-	            {/* Managed llama.cpp instances */}
+	            {/* Managed llama.cpp instances — unified status + config */}
 	            <div className="space-y-2 border-t border-white/5 pt-3">
 	              <div className="flex items-center justify-between gap-3">
 	                <div>
 	                  <h4 className="text-sm text-white/80">Managed llama.cpp instances</h4>
 	                  <p className="text-xs text-white/30 mt-0.5">
-	                    Allowlisted systemd units with process state, HTTP health, launch command, and recent logs.
+	                    Systemd status, HTTP health, configuration, and logs for each server role.
 	                  </p>
 	                </div>
 	                <button
@@ -1498,12 +1531,14 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                {llamaServers.map((server) => {
 	                  const busy = Boolean(llamaServerActionInFlight?.startsWith(`${server.id}:`));
 	                  const missingUnit = server.systemd.loadState === "not-found";
-	                  const expanded = expandedLlamaServerId === server.id;
+	                  const detailsExpanded = expandedLlamaServerId === server.id;
+	                  const configExpanded = llamaConfigExpanded === server.id;
 	                  const modelsPreview = server.http.modelIds.length > 0
 	                    ? server.http.modelIds.slice(0, 3).join(", ") + (server.http.modelIds.length > 3 ? ` +${server.http.modelIds.length - 3}` : "")
 	                    : "none reported";
 	                  return (
 	                    <div key={server.id} className="rounded-lg border border-white/10 bg-white/[0.025] overflow-hidden">
+	                      {/* Card header */}
 	                      <div className="p-3 space-y-3">
 	                        <div className="flex items-start justify-between gap-3">
 	                          <div className="min-w-0">
@@ -1519,17 +1554,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                              )}
 	                            </div>
 	                            <p className="text-xs text-white/35 mt-1">{server.description}</p>
-	                            <div className="flex items-center gap-2 mt-2 text-[11px] text-white/45 min-w-0">
-	                              <span className="font-mono truncate">{server.url}</span>
-	                              {server.expectedModel && (
-	                                <>
-	                                  <span className="text-white/20">/</span>
-	                                  <span className="font-mono truncate">{server.expectedModel}</span>
-	                                </>
-	                              )}
-	                            </div>
 	                          </div>
-	                          <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+	                          <div className="flex items-center gap-1.5 shrink-0">
 	                            <span className={`px-2 py-1 rounded-full border text-[10px] font-medium ${llamaSystemdTone(server.systemd.activeState)}`}>
 	                              {missingUnit ? "missing unit" : server.systemd.activeState}
 	                            </span>
@@ -1539,6 +1565,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                          </div>
 	                        </div>
 
+	                        {/* Action buttons */}
 	                        <div className="flex items-center gap-2 flex-wrap">
 	                          <button
 	                            type="button"
@@ -1566,10 +1593,17 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                          </button>
 	                          <button
 	                            type="button"
-	                            onClick={() => setExpandedLlamaServerId(expanded ? null : server.id)}
+	                            onClick={() => setLlamaConfigExpanded(configExpanded ? null : server.id)}
 	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all"
 	                          >
-	                            {expanded ? "Hide details" : "Details"}
+	                            {configExpanded ? "Hide config" : "Config"}
+	                          </button>
+	                          <button
+	                            type="button"
+	                            onClick={() => setExpandedLlamaServerId(detailsExpanded ? null : server.id)}
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all"
+	                          >
+	                            {detailsExpanded ? "Hide details" : "Details"}
 	                          </button>
 	                          <button
 	                            type="button"
@@ -1582,33 +1616,250 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                        </div>
 	                      </div>
 
-	                      {expanded && (
+	                      {/* Inline config section */}
+	                      {configExpanded && (
+	                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3">
+	                          {server.id === "inference" && (
+	                            <div className="space-y-2">
+	                              <div className="flex items-center gap-2">
+	                                <label className="flex items-center gap-2 cursor-pointer">
+	                                  <input
+	                                    type="checkbox"
+	                                    checked={llamacppEnabled}
+	                                    onChange={(e) => {
+	                                      setLlamacppEnabled(e.target.checked);
+	                                      handleLlamaServerSettings("inference", { enabled: e.target.checked });
+	                                    }}
+	                                    className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+	                                  />
+	                                  <span className="text-xs text-white/70">Enabled</span>
+	                                </label>
+	                              </div>
+	                              {llamacppEnabled && (
+	                                <div className="space-y-2">
+	                                  <div className="flex gap-2">
+	                                    <label className="block text-xs text-white/50 w-12">URL</label>
+	                                    <input
+	                                      type="text"
+	                                      value={llamacppUrl}
+	                                      onChange={(e) => setLlamacppUrl(e.target.value)}
+	                                      onBlur={() => handleLlamaServerSettings("inference", { url: llamacppUrl })}
+	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                                      placeholder="http://localhost:8080"
+	                                    />
+	                                  </div>
+	                                  <div className="flex items-center gap-2">
+	                                    <label className="flex items-center gap-2 cursor-pointer">
+	                                      <input
+	                                        type="checkbox"
+	                                        checked={llamacppSharesGpu}
+	                                        onChange={(e) => {
+	                                          setLlamacppSharesGpu(e.target.checked);
+	                                          handleLlamaServerSettings("inference", { sharesGpu: e.target.checked });
+	                                        }}
+	                                        className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+	                                      />
+	                                      <span className="text-xs text-white/70">Shares GPU</span>
+	                                    </label>
+	                                    <span className="text-xs text-white/30">Coordinate VRAM with image generation</span>
+	                                  </div>
+	                                </div>
+	                              )}
+	                              <p className="text-xs text-white/30">Main GPU inference server (router mode).</p>
+	                            </div>
+	                          )}
+	                          {server.id === "extraction" && (
+	                            <div className="space-y-2">
+	                              <div className="flex gap-2">
+	                                <label className="block text-xs text-white/50 w-12">URL</label>
+	                                <input
+	                                  type="text"
+	                                  value={extractionModelUrl}
+	                                  onChange={(e) => setExtractionModelUrl(e.target.value)}
+	                                  onBlur={() => handleLlamaServerSettings("extraction", { url: extractionModelUrl })}
+	                                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                                  placeholder="http://localhost:8083"
+	                                />
+	                              </div>
+	                              <div className="flex gap-2 items-end">
+	                                <div>
+	                                  <label className="block text-xs text-white/50 mb-1">Ctx size</label>
+	                                  <input
+	                                    type="number"
+	                                    value={extractionCtxSize}
+	                                    onChange={(e) => setExtractionCtxSize(Math.max(2048, parseInt(e.target.value) || 16384))}
+	                                    onBlur={() => handleLlamaServerSettings("extraction", { ctxSize: extractionCtxSize })}
+	                                    min={2048} max={131072} step={1024}
+	                                    className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                  />
+	                                  <span className="text-xs text-white/30 ml-2">tokens</span>
+	                                </div>
+	                                <div className="flex-1">
+	                                  <label className="block text-xs text-white/50 mb-1">Model</label>
+	                                  {extractionServerModels.length > 0 && !extractionUseCustom ? (
+	                                    <div className="relative" ref={extractionModelDropdownRef}>
+	                                      <button onClick={() => setExtractionModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
+	                                        <span className="truncate flex-1 text-left">{extractionModelId || "Select…"}</span>
+	                                        {chevronSvg(extractionModelDropdownOpen)}
+	                                      </button>
+	                                      <DropdownPanel open={extractionModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
+	                                        {extractionServerModels.map((m) => (
+	                                          <button key={m.id} onClick={() => {
+	                                            setExtractionModelId(m.id); setExtractionModelDropdownOpen(false);
+	                                            handleLlamaServerSettings("extraction", { modelId: m.id });
+	                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === extractionModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                            {m.name}
+	                                          </button>
+	                                        ))}
+	                                        <button onClick={() => setExtractionUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                      </DropdownPanel>
+	                                    </div>
+	                                  ) : (
+	                                    <input type="text" value={extractionModelId} onChange={(e) => setExtractionModelId(e.target.value)}
+	                                      onBlur={() => handleLlamaServerSettings("extraction", { modelId: extractionModelId })}
+	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" placeholder="model-name" />
+	                                  )}
+	                                </div>
+	                              </div>
+	                              <div className="flex items-center justify-between">
+	                                <div>
+	                                  <label className="block text-xs text-white/70">Fallback to available model</label>
+	                                  <p className="text-xs text-white/30 mt-0.5">Use first available model if selected is not loaded</p>
+	                                </div>
+	                                <ToggleSwitch checked={extractionFallbackEnabled} onChange={() => {
+	                                  const v = !extractionFallbackEnabled;
+	                                  setExtractionFallbackEnabled(v);
+	                                  handleLlamaServerSettings("extraction", { fallbackEnabled: v });
+	                                }} accentColor="purple" />
+	                              </div>
+	                              <p className="text-xs text-white/30">Dedicated instance for memory extraction tasks.</p>
+	                            </div>
+	                          )}
+	                          {server.id === "reranker" && (
+	                            <div className="space-y-2">
+	                              <div className="flex items-center gap-2">
+	                                <label className="flex items-center gap-2 cursor-pointer">
+	                                  <input type="checkbox" checked={rerankerEnabled} onChange={(e) => {
+	                                    setRerankerEnabled(e.target.checked);
+	                                    handleLlamaServerSettings("reranker", { enabled: e.target.checked });
+	                                  }} className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30" />
+	                                  <span className="text-xs text-white/70">Enabled</span>
+	                                </label>
+	                              </div>
+	                              {rerankerEnabled && (
+	                                <div className="space-y-2">
+	                                  <div className="flex gap-2">
+	                                    <label className="block text-xs text-white/50 w-12">URL</label>
+	                                    <input type="text" value={rerankerUrl} onChange={(e) => setRerankerUrl(e.target.value)}
+	                                      onBlur={() => handleLlamaServerSettings("reranker", { url: rerankerUrl })}
+	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                                      placeholder="http://localhost:8082" />
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Model</label>
+	                                    {rerankerModels.length > 0 && !rerankerUseCustom ? (
+	                                      <div className="relative" ref={rerankerModelDropdownRef}>
+	                                        <button onClick={() => setRerankerModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
+	                                          <span className="truncate flex-1 text-left">{rerankerModelId || "Select…"}</span>
+	                                          {chevronSvg(rerankerModelDropdownOpen)}
+	                                        </button>
+	                                        <DropdownPanel open={rerankerModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
+	                                          {rerankerModels.map((m) => (
+	                                            <button key={m.id} onClick={() => {
+	                                              setRerankerModelId(m.id); setRerankerModelDropdownOpen(false);
+	                                              handleLlamaServerSettings("reranker", { modelId: m.id });
+	                                            }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === rerankerModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                              {m.name}
+	                                            </button>
+	                                          ))}
+	                                          <button onClick={() => setRerankerUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                        </DropdownPanel>
+	                                      </div>
+	                                    ) : (
+	                                      <input type="text" value={rerankerModelId} onChange={(e) => setRerankerModelId(e.target.value)}
+	                                        onBlur={() => handleLlamaServerSettings("reranker", { modelId: rerankerModelId })}
+	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                        placeholder="qwen3-reranker" />
+	                                    )}
+	                                  </div>
+	                                </div>
+	                              )}
+	                              <p className="text-xs text-white/30">Cross-encoder reranker for memory retrieval.</p>
+	                            </div>
+	                          )}
+	                          {server.id === "embedding" && (
+	                            <div className="space-y-2">
+	                              <div className="flex gap-2">
+	                                {(["ollama", "llamacpp"] as const).map((p) => (
+	                                  <button key={p} onClick={() => {
+	                                    setEmbeddingProvider(p);
+	                                    const url = p === "llamacpp" ? "http://localhost:8084" : "http://localhost:11434";
+	                                    setEmbeddingUrl(url);
+	                                    setEmbeddingModels([]); setEmbeddingUseCustom(false);
+	                                    handleLlamaServerSettings("embedding", { provider: p, url });
+	                                  }} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+	                                    embeddingProvider === p ? "bg-purple-500/20 border-purple-400/30 text-purple-200" : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
+	                                  }`}>{p === "ollama" ? "Ollama" : "llama.cpp"}</button>
+	                                ))}
+	                              </div>
+	                              <div className="flex gap-2">
+	                                <label className="block text-xs text-white/50 w-12">URL</label>
+	                                <input type="text" value={embeddingUrl} onChange={(e) => setEmbeddingUrl(e.target.value)}
+	                                  onBlur={() => handleLlamaServerSettings("embedding", { url: embeddingUrl })}
+	                                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                                  placeholder={embeddingProvider === "llamacpp" ? "http://localhost:8084" : "http://localhost:11434"} />
+	                              </div>
+	                              <div>
+	                                <label className="block text-xs text-white/50 mb-1">Model</label>
+	                                {embeddingModels.length > 0 && !embeddingUseCustom ? (
+	                                  <div className="relative" ref={embeddingModelDropdownRef}>
+	                                    <button onClick={() => setEmbeddingModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
+	                                      <span className="truncate flex-1 text-left">{embeddingModel || "Select…"}</span>
+	                                      {chevronSvg(embeddingModelDropdownOpen)}
+	                                    </button>
+	                                    <DropdownPanel open={embeddingModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
+	                                      {embeddingModels.map((m) => (
+	                                        <button key={m.id} onClick={() => {
+	                                          setEmbeddingModel(m.id); setEmbeddingModelDropdownOpen(false);
+	                                          handleLlamaServerSettings("embedding", { modelId: m.id });
+	                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === embeddingModel ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                          {m.name}
+	                                        </button>
+	                                      ))}
+	                                      <button onClick={() => setEmbeddingUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                    </DropdownPanel>
+	                                  </div>
+	                                ) : (
+	                                  <input type="text" value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)}
+	                                    onBlur={() => handleLlamaServerSettings("embedding", { modelId: embeddingModel })}
+	                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                    placeholder="qwen3-embedding:0.6b" />
+	                                )}
+	                                {storedEmbeddingDimension && (
+	                                  <p className="text-xs text-white/30 mt-1">Stored dimension: <span className="text-white/50">{storedEmbeddingDimension}</span></p>
+	                                )}
+	                              </div>
+	                              {embeddingConfigChanged && (
+	                                <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-2 text-xs text-amber-200/90">
+	                                  <p className="font-medium">Embedding config changed.</p>
+	                                  <p className="text-amber-100/70">Save settings, then re-embed existing memories and corpus with the new model.</p>
+	                                </div>
+	                              )}
+	                            </div>
+	                          )}
+	                        </div>
+	                      )}
+
+	                      {/* Details section */}
+	                      {detailsExpanded && (
 	                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3">
 	                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-	                            <div>
-	                              <span className="text-white/30">Role</span>
-	                              <p className="text-white/60">{server.role}</p>
-	                            </div>
-	                            <div>
-	                              <span className="text-white/30">PID</span>
-	                              <p className="text-white/60 font-mono">{server.systemd.mainPid ?? "n/a"}</p>
-	                            </div>
-	                            <div>
-	                              <span className="text-white/30">Unit file</span>
-	                              <p className="text-white/60 font-mono truncate" title={server.systemd.fragmentPath}>{server.systemd.fragmentPath || "n/a"}</p>
-	                            </div>
-	                            <div>
-	                              <span className="text-white/30">Working directory</span>
-	                              <p className="text-white/60 font-mono truncate" title={server.systemd.workingDirectory}>{server.systemd.workingDirectory || "n/a"}</p>
-	                            </div>
-	                            <div>
-	                              <span className="text-white/30">Substate</span>
-	                              <p className="text-white/60 font-mono">{server.systemd.subState || "n/a"}</p>
-	                            </div>
-	                            <div>
-	                              <span className="text-white/30">Active since</span>
-	                              <p className="text-white/60 font-mono">{formatSystemdTimestamp(server.systemd.activeEnterTimestamp)}</p>
-	                            </div>
+	                            <div><span className="text-white/30">Role</span><p className="text-white/60">{server.role}</p></div>
+	                            <div><span className="text-white/30">PID</span><p className="text-white/60 font-mono">{server.systemd.mainPid ?? "n/a"}</p></div>
+	                            <div><span className="text-white/30">Unit file</span><p className="text-white/60 font-mono truncate" title={server.systemd.fragmentPath}>{server.systemd.fragmentPath || "n/a"}</p></div>
+	                            <div><span className="text-white/30">Working directory</span><p className="text-white/60 font-mono truncate" title={server.systemd.workingDirectory}>{server.systemd.workingDirectory || "n/a"}</p></div>
+	                            <div><span className="text-white/30">Substate</span><p className="text-white/60 font-mono">{server.systemd.subState || "n/a"}</p></div>
+	                            <div><span className="text-white/30">Active since</span><p className="text-white/60 font-mono">{formatSystemdTimestamp(server.systemd.activeEnterTimestamp)}</p></div>
 	                          </div>
 	                          <div>
 	                            <span className="text-xs text-white/30">Models from /v1/models</span>
@@ -1634,11 +1885,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                      <p className="text-xs text-white/70">Recent logs</p>
 	                      <p className="text-[11px] text-white/35 font-mono truncate">{llamaServerLogs.unitName || llamaServerLogs.id}</p>
 	                    </div>
-	                    <button
-	                      type="button"
-	                      onClick={() => setLlamaServerLogs(null)}
-	                      className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 hover:bg-white/10 transition-all"
-	                    >
+	                    <button type="button" onClick={() => setLlamaServerLogs(null)}
+	                      className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 hover:bg-white/10 transition-all">
 	                      Close
 	                    </button>
 	                  </div>
@@ -1648,659 +1896,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                </div>
 	              )}
 	            </div>
-
-	            {/* Inference Server */}
-	            <div className="space-y-2">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={llamacppEnabled}
-                  onChange={(e) => setLlamacppEnabled(e.target.checked)}
-                  className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
-                />
-                <span className="text-sm text-white/80">Inference server</span>
-              </label>
-              {llamacppEnabled && (
-                <div className="space-y-2 ml-6">
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={llamacppUrl}
-                      onChange={(e) => setLlamacppUrl(e.target.value)}
-                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
-                      placeholder="http://localhost:8080"
-                    />
-                    <button
-                      onClick={handleTestLlamaCpp}
-                      disabled={llamacppStatus === "checking"}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
-                    >
-                      {llamacppStatus === "checking" ? "Testing..." : "Test"}
-                    </button>
-                  </div>
-                  {llamacppStatus && llamacppStatus !== "checking" && (
-                    <div className="flex items-center gap-1.5">
-                      <div className={`w-2 h-2 rounded-full ${llamacppStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
-                      <span className={`text-xs ${llamacppStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
-                        {llamacppStatus === "connected" ? "Connected" : "Not available"}
-                      </span>
-                    </div>
-                  )}
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={llamacppSharesGpu}
-                      onChange={(e) => setLlamacppSharesGpu(e.target.checked)}
-                      className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
-                    />
-                  </label>
-                  <p className="text-xs text-white/30">Main GPU inference server (router mode). Models are loaded on demand.</p>
-                </div>
-              )}
-            </div>
-
-            {/* Extraction Server */}
-            <div className="space-y-2 border-t border-white/5 pt-3">
-              <h4 className="text-sm text-white/80">Extraction server</h4>
-              <div className="space-y-2 ml-2">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={extractionModelUrl}
-                    onChange={(e) => setExtractionModelUrl(e.target.value)}
-                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
-                    placeholder="http://localhost:8083"
-                  />
-                  {extractionModelUrl && (
-                    <button
-                      onClick={handleTestExtractionModel}
-                      disabled={extractionModelStatus === "checking"}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
-                    >
-                      {extractionModelStatus === "checking" ? "Testing..." : "Test"}
-                    </button>
-                  )}
-                </div>
-                {extractionModelUrl && extractionModelStatus && extractionModelStatus !== "checking" && (
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-2 h-2 rounded-full ${extractionModelStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
-                    <span className={`text-xs ${extractionModelStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
-                      {extractionModelStatus === "connected" ? "Connected" : "Not available"}
-                    </span>
-                  </div>
-                )}
-                <p className="text-xs text-white/30">
-                  Dedicated instance for memory extraction.
-                </p>
-                <div>
-                  <label className="block text-xs text-white/70 mb-1">Context window</label>
-                  <input
-                    type="number"
-                    value={extractionCtxSize}
-                    onChange={(e) => setExtractionCtxSize(Math.max(2048, parseInt(e.target.value) || 16384))}
-                    min={2048}
-                    max={131072}
-                    step={1024}
-                    className="w-32 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
-                  />
-                  <span className="text-xs text-white/30 ml-2">tokens</span>
-                  <p className="text-xs text-white/30 mt-1">
-                    Used client-side to truncate input before sending. Set this to match the server's <code className="text-white/50">--ctx-size</code> to avoid overflow. Changing it here does not reconfigure the server.
-                  </p>
-                </div>
-
-                <div className="pt-3 border-t border-white/5 space-y-3">
-                  <h5 className="text-xs font-medium text-white/60 uppercase tracking-wider">Extraction Model</h5>
-                  <p className="text-xs text-white/30">
-                    Used for background extraction tasks.
-                  </p>
-                  <div>
-                    <label className="block text-xs text-white/70 mb-1.5">Model</label>
-                    {(() => {
-                      const useServerList = extractionModelUrl.trim().length > 0;
-                      const sourceList: DiscoveredModel[] = useServerList
-                        ? extractionServerModels
-                        : models.map((m) => ({ id: m.id, name: m.parameterSize ? `${m.name} (${m.parameterSize})` : m.name }));
-                      const showSelect = !extractionUseCustom && sourceList.length > 0;
-                      const currentInList = sourceList.some((m) => m.id === extractionModelId);
-                      return showSelect ? (
-                        <div className="relative" ref={extractionModelDropdownRef}>
-                          <button
-                            onClick={() => setExtractionModelDropdownOpen((o) => !o)}
-                            className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-                          >
-                            <span className="truncate flex-1 text-left">
-                              {currentInList
-                                ? (sourceList.find((m) => m.id === extractionModelId)?.name ?? extractionModelId)
-                                : (extractionModelId
-                                    ? `${extractionModelId}${useServerList ? " (not on extraction server)" : ""}`
-                                    : "Select a model…")}
-                            </span>
-                            {chevronSvg(extractionModelDropdownOpen)}
-                          </button>
-                          <DropdownPanel
-                            open={extractionModelDropdownOpen}
-                            className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
-                          >
-                            {sourceList.map((m) => (
-                              <button
-                                key={m.id}
-                                onClick={() => {
-                                  setExtractionModelId(m.id);
-                                  setExtractionModelDropdownOpen(false);
-                                }}
-                                className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                                  m.id === extractionModelId
-                                    ? "text-white"
-                                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                                }`}
-                                style={{
-                                  backgroundColor: m.id === extractionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                  color: m.id === extractionModelId ? `rgba(var(--theme-secondary-text))` : '',
-                                }}
-                              >
-                                {m.name}
-                              </button>
-                            ))}
-                            <button
-                              onClick={() => {
-                                setExtractionUseCustom(true);
-                                setExtractionModelDropdownOpen(false);
-                              }}
-                              className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
-                            >
-                              Custom…
-                            </button>
-                          </DropdownPanel>
-                        </div>
-                      ) : (
-                        <div className="space-y-1">
-                          <input
-                            type="text"
-                            value={extractionModelId}
-                            onChange={(e) => setExtractionModelId(e.target.value)}
-                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
-                            placeholder="model-name"
-                          />
-                          {sourceList.length > 0 && extractionUseCustom && (
-                            <button
-                              type="button"
-                              onClick={() => setExtractionUseCustom(false)}
-                              className="text-[11px] text-purple-300/70 hover:text-purple-200 transition-colors"
-                            >
-                              ← Choose from {sourceList.length} discovered model{sourceList.length === 1 ? "" : "s"}
-                            </button>
-                          )}
-                          {useServerList && extractionServerModelsLoading && extractionServerModels.length === 0 && (
-                            <p className="text-[11px] text-white/30">Looking for models on extraction server…</p>
-                          )}
-                          {useServerList && !extractionServerModelsLoading && extractionServerModels.length === 0 && (
-                            <p className="text-[11px] text-white/30">No models discovered on extraction server — enter the model name manually.</p>
-                          )}
-                        </div>
-                      );
-                    })()}
-                    <p className="text-xs text-white/40 mt-1.5">
-                      {extractionModelUrl.trim()
-                        ? "Loaded model on the extraction server above. Background tasks (notebooks, corpus enrichment, scheduled extraction) route here automatically."
-                        : "Defaults to the chat model if not set. Configure the extraction server URL above to route background tasks to a CPU-only instance."}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <label className="block text-sm font-medium text-white/60">Fallback to available model</label>
-                      <p className="text-xs text-white/30 mt-0.5">Use first available model if selected model is not loaded</p>
-                    </div>
-                    <ToggleSwitch
-                      checked={extractionFallbackEnabled}
-                      onChange={() => setExtractionFallbackEnabled(!extractionFallbackEnabled)}
-                      accentColor="purple"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Reranker Server */}
-            <div className="space-y-2 border-t border-white/5 pt-3">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={rerankerEnabled}
-                  onChange={(e) => setRerankerEnabled(e.target.checked)}
-                  className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
-                />
-                <span className="text-sm text-white/80">Reranker server</span>
-              </label>
-              {rerankerEnabled && (
-                <div className="space-y-2 ml-2">
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={rerankerUrl}
-                      onChange={(e) => setRerankerUrl(e.target.value)}
-                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
-                      placeholder="http://localhost:8082"
-                    />
-                    <button
-                      onClick={handleTestReranker}
-                      disabled={rerankerStatus === "checking"}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
-                    >
-                      {rerankerStatus === "checking" ? "Testing..." : "Test"}
-                    </button>
-                  </div>
-                  {rerankerStatus && rerankerStatus !== "checking" && (
-                    <div className="flex items-center gap-1.5">
-                      <div className={`w-2 h-2 rounded-full ${rerankerStatus === "connected" ? "bg-green-400" : "bg-red-400"}`} />
-                      <span className={`text-xs ${rerankerStatus === "connected" ? "text-green-400/80" : "text-red-400/80"}`}>
-                        {rerankerStatus === "connected" ? "Connected" : "Not available"}
-                      </span>
-                    </div>
-                  )}
-                  <div>
-                    <label className="block text-xs text-white/70 mb-1">Model name</label>
-                    {(() => {
-                      const showSelect = !rerankerUseCustom && rerankerModels.length > 0;
-                      const currentInList = rerankerModels.some((m) => m.id === rerankerModelId);
-                      return showSelect ? (
-                        <div className="relative" ref={rerankerModelDropdownRef}>
-                          <button
-                            onClick={() => setRerankerModelDropdownOpen((o) => !o)}
-                            className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
-                          >
-                            <span className="truncate flex-1 text-left">
-                              {currentInList ? rerankerModelId : (rerankerModelId ? `${rerankerModelId} (not on server)` : "Select a model…")}
-                            </span>
-                            {chevronSvg(rerankerModelDropdownOpen)}
-                          </button>
-                          <DropdownPanel
-                            open={rerankerModelDropdownOpen}
-                            className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
-                          >
-                            {rerankerModels.map((m) => (
-                              <button
-                                key={m.id}
-                                onClick={() => {
-                                  setRerankerModelId(m.id);
-                                  setRerankerModelDropdownOpen(false);
-                                }}
-                                className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${
-                                  m.id === rerankerModelId
-                                    ? "text-white"
-                                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                                }`}
-                                style={{
-                                  backgroundColor: m.id === rerankerModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                  color: m.id === rerankerModelId ? `rgba(var(--theme-secondary-text))` : '',
-                                }}
-                              >
-                                {m.name}
-                              </button>
-                            ))}
-                            <button
-                              onClick={() => {
-                                setRerankerUseCustom(true);
-                                setRerankerModelDropdownOpen(false);
-                              }}
-                              className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
-                            >
-                              Custom…
-                            </button>
-                          </DropdownPanel>
-                        </div>
-                      ) : (
-                        <div className="space-y-1">
-                          <input
-                            type="text"
-                            value={rerankerModelId}
-                            onChange={(e) => setRerankerModelId(e.target.value)}
-                            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
-                            placeholder="qwen3-reranker"
-                          />
-                          {rerankerModels.length > 0 && rerankerUseCustom && (
-                            <button
-                              type="button"
-                              onClick={() => setRerankerUseCustom(false)}
-                              className="text-[11px] text-purple-300/70 hover:text-purple-200 transition-colors"
-                            >
-                              ← Choose from {rerankerModels.length} discovered model{rerankerModels.length === 1 ? "" : "s"}
-                            </button>
-                          )}
-                          {rerankerModelsLoading && rerankerModels.length === 0 && (
-                            <p className="text-[11px] text-white/30">Looking for models on server…</p>
-                          )}
-                          {!rerankerModelsLoading && rerankerModels.length === 0 && rerankerUrl.trim() && (
-                            <p className="text-[11px] text-white/30">No reranker models discovered — enter the model name manually.</p>
-                          )}
-                        </div>
-                      );
-                    })()}
-                    <p className="text-xs text-white/30 mt-1">Model identifier sent in the <code className="text-white/50">/v1/rerank</code> request.</p>
-                  </div>
-                  <p className="text-xs text-white/30">
-                    Cross-encoder reranker for memory retrieval quality.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Embedding Server */}
-            <div className="space-y-2 border-t border-white/5 pt-3">
-              <h4 className="text-sm text-white/80">Embedding server</h4>
-              <div className="space-y-3 ml-2">
-                <div className="flex gap-2">
-                  {(["ollama", "llamacpp"] as const).map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => {
-                        if (embeddingProvider === p) return;
-                        setEmbeddingProvider(p);
-                        // Always reset to the matching default URL on provider switch —
-                        // the same URL serving Ollama also responds to llama.cpp's
-                        // /v1/models endpoint (Ollama is OpenAI-compatible), which would
-                        // otherwise conflate the two and show Ollama models in the
-                        // llama.cpp dropdown. Users with custom URLs can re-enter them.
-                        setEmbeddingUrl(p === "llamacpp" ? "http://localhost:8084" : "http://localhost:11434");
-                        setEmbeddingModels([]);
-                        setEmbeddingUseCustom(false);
-                      }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                        embeddingProvider === p
-                          ? "bg-purple-500/20 border-purple-400/30 text-purple-200"
-                          : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
-                      }`}
-                    >
-                      {p === "ollama" ? "Ollama" : "llama.cpp"}
-                    </button>
-                  ))}
-                </div>
-                <div>
-                  <label className="block text-xs text-white/70 mb-1">URL</label>
-                  <input
-                    type="text"
-                    value={embeddingUrl}
-                    onChange={(e) => setEmbeddingUrl(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
-                    placeholder={embeddingProvider === "llamacpp" ? "http://localhost:8084" : "http://localhost:11434"}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-white/70 mb-1">Model</label>
-                  {(() => {
-                    const showSelect = !embeddingUseCustom && embeddingModels.length > 0;
-                    const currentInList = embeddingModels.some((m) => m.id === embeddingModel);
-                    return showSelect ? (
-                      <div className="relative" ref={embeddingModelDropdownRef}>
-                        <button
-                          onClick={() => setEmbeddingModelDropdownOpen((o) => !o)}
-                          className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
-                        >
-                          <span className="truncate flex-1 text-left">
-                            {currentInList ? embeddingModel : (embeddingModel ? `${embeddingModel} (not on server)` : "Select a model…")}
-                          </span>
-                          {chevronSvg(embeddingModelDropdownOpen)}
-                        </button>
-                        <DropdownPanel
-                          open={embeddingModelDropdownOpen}
-                          className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
-                        >
-                          {embeddingModels.map((m) => (
-                            <button
-                              key={m.id}
-                              onClick={() => {
-                                setEmbeddingModel(m.id);
-                                setEmbeddingModelDropdownOpen(false);
-                              }}
-                              className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${
-                                m.id === embeddingModel
-                                  ? "text-white"
-                                  : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                              }`}
-                              style={{
-                                backgroundColor: m.id === embeddingModel ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                color: m.id === embeddingModel ? `rgba(var(--theme-secondary-text))` : '',
-                              }}
-                            >
-                              {m.name}
-                            </button>
-                          ))}
-                          <button
-                            onClick={() => {
-                              setEmbeddingUseCustom(true);
-                              setEmbeddingModelDropdownOpen(false);
-                            }}
-                            className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 hover:text-white/80 transition-all border-t border-white/5 mt-1"
-                          >
-                            Custom…
-                          </button>
-                        </DropdownPanel>
-                      </div>
-                    ) : (
-                      <div className="space-y-1">
-                        <input
-                          type="text"
-                          value={embeddingModel}
-                          onChange={(e) => setEmbeddingModel(e.target.value)}
-                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
-                          placeholder="qwen3-embedding:0.6b"
-                        />
-                        {embeddingModels.length > 0 && embeddingUseCustom && (
-                          <button
-                            type="button"
-                            onClick={() => setEmbeddingUseCustom(false)}
-                            className="text-[11px] text-purple-300/70 hover:text-purple-200 transition-colors"
-                          >
-                            ← Choose from {embeddingModels.length} discovered model{embeddingModels.length === 1 ? "" : "s"}
-                          </button>
-                        )}
-                        {embeddingModelsLoading && embeddingModels.length === 0 && (
-                          <p className="text-[11px] text-white/30">Looking for models on server…</p>
-                        )}
-                        {!embeddingModelsLoading && embeddingModels.length === 0 && embeddingUrl.trim() && (
-                          <p className="text-[11px] text-white/30">No embedding models discovered — enter the model name manually.</p>
-                        )}
-                      </div>
-                    );
-                  })()}
-                  {storedEmbeddingDimension && (
-                    <p className="text-xs text-white/30 mt-1">
-                      Stored vector dimension: <span className="text-white/50">{storedEmbeddingDimension}</span>
-                    </p>
-                  )}
-                </div>
-
-                {embeddingConfigChanged && (
-                  <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-200/90 space-y-1">
-                    <p className="font-medium">Embedding config changed.</p>
-                    <p className="text-amber-100/70">
-                      Save settings, then re-embed existing memories and corpus with the new model. Different models produce incompatible vectors; searches will be inaccurate until migration completes.
-                    </p>
-                  </div>
-                )}
-
-                {/* Migration + Backups */}
-                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h5 className="text-xs font-medium text-white/70 uppercase tracking-wider">Migration &amp; Backups</h5>
-                    <button
-                      onClick={refreshBackups}
-                      disabled={backupsLoading}
-                      className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
-                    >
-                      {backupsLoading ? "Loading…" : "Refresh"}
-                    </button>
-                  </div>
-
-                  <p className="text-xs text-white/40">
-                    Re-embedding rebuilds vector tables for every memory and corpus entry. This can take several minutes on large stores and the chat is unavailable while vectors are being rewritten. A backup is strongly recommended.
-                  </p>
-
-                  {backupMessage && (
-                    <div className={`text-xs p-2 rounded ${backupMessage.type === "ok" ? "bg-green-500/10 text-green-300/80" : "bg-red-500/10 text-red-300/80"}`}>
-                      {backupMessage.text}
-                    </div>
-                  )}
-
-                  {/* Backup controls */}
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={backupLabel}
-                      onChange={(e) => setBackupLabel(e.target.value)}
-                      placeholder="Optional label (e.g., 'before qwen3 switch')"
-                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
-                    />
-                    <button
-                      onClick={handleCreateBackup}
-                      className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0"
-                    >
-                      Back up now
-                    </button>
-                  </div>
-
-                  {/* Backups list */}
-                  {backups.length > 0 && (
-                    <div className="space-y-1 max-h-48 overflow-y-auto">
-                      {backups.map((b) => {
-                        const isConfirming = confirmRestoreId === b.id;
-                        const sizeMb = (b.sourceSizes.memoriesBytes + b.sourceSizes.corpusBytes) / (1024 * 1024);
-                        return (
-                          <div key={b.id} className="p-2 rounded-lg bg-white/[0.03] border border-white/5 text-xs">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-mono text-white/70">{b.id}</span>
-                                  {b.label && <span className="text-white/50 truncate">— {b.label}</span>}
-                                </div>
-                                <div className="text-[11px] text-white/40 mt-0.5">
-                                  {b.counts.memories} memories · {b.counts.corpus} corpus · {sizeMb.toFixed(1)} MB · {b.embedding.model}
-                                  {b.embedding.dimension ? ` (dim ${b.embedding.dimension})` : ""}
-                                </div>
-                              </div>
-                              <div className="flex gap-1 shrink-0">
-                                {isConfirming ? (
-                                  <>
-                                    <button
-                                      onClick={() => handleRestoreBackup(b.id)}
-                                      className="px-2 py-0.5 rounded text-[11px] bg-red-500/20 border border-red-400/30 text-red-200 hover:bg-red-500/30 transition-all"
-                                    >
-                                      Confirm restore
-                                    </button>
-                                    <button
-                                      onClick={() => setConfirmRestoreId(null)}
-                                      className="px-2 py-0.5 rounded text-[11px] text-white/50 hover:text-white/80"
-                                    >
-                                      Cancel
-                                    </button>
-                                  </>
-                                ) : (
-                                  <>
-                                    <button
-                                      onClick={() => setConfirmRestoreId(b.id)}
-                                      className="px-2 py-0.5 rounded text-[11px] bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
-                                    >
-                                      Restore
-                                    </button>
-                                    <button
-                                      onClick={() => handleDeleteBackup(b.id)}
-                                      className="px-2 py-0.5 rounded text-[11px] text-white/30 hover:text-red-400/80 transition-all"
-                                    >
-                                      Delete
-                                    </button>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Migrate controls */}
-                  <div className="pt-2 border-t border-white/5 space-y-2">
-                    {!migrationRunning && !confirmMigrate && (
-                      <button
-                        onClick={() => setConfirmMigrate(true)}
-                        className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/25 text-purple-200 hover:bg-purple-500/25 transition-all"
-                      >
-                        Re-embed all memories &amp; corpus
-                      </button>
-                    )}
-
-                    {!migrationRunning && confirmMigrate && (
-                      <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-2.5 text-xs space-y-2">
-                        <p className="text-amber-200/90 font-medium">Re-embed with <code className="font-mono text-amber-100">{embeddingModel}</code>?</p>
-                        <p className="text-amber-100/70">
-                          This rewrites every vector. It may take minutes, and the chat is unavailable while it runs. Create a backup first if you haven't.
-                        </p>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={handleRunMigration}
-                            className="px-3 py-1 rounded text-[11px] font-medium bg-amber-500/25 border border-amber-400/40 text-amber-100 hover:bg-amber-500/40 transition-all"
-                          >
-                            Start migration
-                          </button>
-                          <button
-                            onClick={() => setConfirmMigrate(false)}
-                            className="px-3 py-1 rounded text-[11px] text-white/50 hover:text-white/80 transition-all"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {migrationRunning && migrationProgress && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-white/60 capitalize">{migrationProgress.phase}</span>
-                          {migrationProgress.total != null && (
-                            <span className="text-white/40">
-                              {migrationProgress.processed ?? 0} / {migrationProgress.total}
-                            </span>
-                          )}
-                        </div>
-                        {migrationProgress.total != null && migrationProgress.total > 0 && (
-                          <div className="h-1.5 bg-white/5 rounded overflow-hidden">
-                            <div
-                              className="h-full bg-purple-400/60 transition-all"
-                              style={{
-                                width: `${Math.min(100, ((migrationProgress.processed ?? 0) / migrationProgress.total) * 100)}%`,
-                              }}
-                            />
-                          </div>
-                        )}
-                        {migrationProgress.message && (
-                          <p className="text-[11px] text-white/40">{migrationProgress.message}</p>
-                        )}
-                        <button
-                          onClick={handleCancelMigration}
-                          className="text-[11px] text-red-400/70 hover:text-red-400"
-                        >
-                          Cancel migration
-                        </button>
-                      </div>
-                    )}
-
-                    {migrationError && (
-                      <div className="text-xs p-2 rounded bg-red-500/10 border border-red-400/20 text-red-300/90">
-                        {migrationError}
-                      </div>
-                    )}
-
-                    {migrationResult && !migrationRunning && (
-                      <div className="text-xs p-2 rounded bg-green-500/10 border border-green-400/20 text-green-300/90">
-                        Migrated {migrationResult.memories} memories and {migrationResult.corpus} corpus entries at dimension {migrationResult.dimension}.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+	          </div>
 
           {/* Model Favorites */}
           <div id="favorites" className="space-y-2 pt-2 border-t border-white/10">
@@ -2372,6 +1968,187 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   );
                 })}
               </DropdownPanel>
+            </div>
+          </div>
+
+
+
+          {/* Migration + Backups */}
+          <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <h5 className="text-xs font-medium text-white/70 uppercase tracking-wider">Migration &amp; Backups</h5>
+              <button
+                onClick={refreshBackups}
+                disabled={backupsLoading}
+                className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
+              >
+                {backupsLoading ? "Loading…" : "Refresh"}
+              </button>
+            </div>
+
+            <p className="text-xs text-white/40">
+              Re-embedding rebuilds vector tables for every memory and corpus entry. This can take several minutes on large stores and the chat is unavailable while vectors are being rewritten. A backup is strongly recommended.
+            </p>
+
+            {backupMessage && (
+              <div className={`text-xs p-2 rounded ${backupMessage.type === "ok" ? "bg-green-500/10 text-green-300/80" : "bg-red-500/10 text-red-300/80"}`}>
+                {backupMessage.text}
+              </div>
+            )}
+
+            {/* Backup controls */}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={backupLabel}
+                onChange={(e) => setBackupLabel(e.target.value)}
+                placeholder="Optional label (e.g., 'before qwen3 switch')"
+                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+              />
+              <button
+                onClick={handleCreateBackup}
+                className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0"
+              >
+                Back up now
+              </button>
+            </div>
+
+            {/* Backups list */}
+            {backups.length > 0 && (
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {backups.map((b) => {
+                  const isConfirming = confirmRestoreId === b.id;
+                  const sizeMb = (b.sourceSizes.memoriesBytes + b.sourceSizes.corpusBytes) / (1024 * 1024);
+                  return (
+                    <div key={b.id} className="p-2 rounded-lg bg-white/[0.03] border border-white/5 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-white/70">{b.id}</span>
+                            {b.label && <span className="text-white/50 truncate">— {b.label}</span>}
+                          </div>
+                          <div className="text-[11px] text-white/40 mt-0.5">
+                            {b.counts.memories} memories · {b.counts.corpus} corpus · {sizeMb.toFixed(1)} MB · {b.embedding.model}
+                            {b.embedding.dimension ? ` (dim ${b.embedding.dimension})` : ""}
+                          </div>
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          {isConfirming ? (
+                            <>
+                              <button
+                                onClick={() => handleRestoreBackup(b.id)}
+                                className="px-2 py-0.5 rounded text-[11px] bg-red-500/20 border border-red-400/30 text-red-200 hover:bg-red-500/30 transition-all"
+                              >
+                                Confirm restore
+                              </button>
+                              <button
+                                onClick={() => setConfirmRestoreId(null)}
+                                className="px-2 py-0.5 rounded text-[11px] text-white/50 hover:text-white/80"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => setConfirmRestoreId(b.id)}
+                                className="px-2 py-0.5 rounded text-[11px] bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
+                              >
+                                Restore
+                              </button>
+                              <button
+                                onClick={() => handleDeleteBackup(b.id)}
+                                className="px-2 py-0.5 rounded text-[11px] text-white/30 hover:text-red-400/80 transition-all"
+                              >
+                                Delete
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Migrate controls */}
+            <div className="pt-2 border-t border-white/5 space-y-2">
+              {!migrationRunning && !confirmMigrate && (
+                <button
+                  onClick={() => setConfirmMigrate(true)}
+                  className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/25 text-purple-200 hover:bg-purple-500/25 transition-all"
+                >
+                  Re-embed all memories &amp; corpus
+                </button>
+              )}
+
+              {!migrationRunning && confirmMigrate && (
+                <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-2.5 text-xs space-y-2">
+                  <p className="text-amber-200/90 font-medium">Re-embed with <code className="font-mono text-amber-100">{embeddingModel}</code>?</p>
+                  <p className="text-amber-100/70">
+                    This rewrites every vector. It may take minutes, and the chat is unavailable while it runs. Create a backup first if you haven't.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleRunMigration}
+                      className="px-3 py-1 rounded text-[11px] font-medium bg-amber-500/25 border border-amber-400/40 text-amber-100 hover:bg-amber-500/40 transition-all"
+                    >
+                      Start migration
+                    </button>
+                    <button
+                      onClick={() => setConfirmMigrate(false)}
+                      className="px-3 py-1 rounded text-[11px] text-white/50 hover:text-white/80 transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {migrationRunning && migrationProgress && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-white/60 capitalize">{migrationProgress.phase}</span>
+                    {migrationProgress.total != null && (
+                      <span className="text-white/40">
+                        {migrationProgress.processed ?? 0} / {migrationProgress.total}
+                      </span>
+                    )}
+                  </div>
+                  {migrationProgress.total != null && migrationProgress.total > 0 && (
+                    <div className="h-1.5 bg-white/5 rounded overflow-hidden">
+                      <div
+                        className="h-full bg-purple-400/60 transition-all"
+                        style={{
+                          width: `${Math.min(100, ((migrationProgress.processed ?? 0) / migrationProgress.total) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  )}
+                  {migrationProgress.message && (
+                    <p className="text-[11px] text-white/40">{migrationProgress.message}</p>
+                  )}
+                  <button
+                    onClick={handleCancelMigration}
+                    className="text-[11px] text-red-400/70 hover:text-red-400"
+                  >
+                    Cancel migration
+                  </button>
+                </div>
+              )}
+
+              {migrationError && (
+                <div className="text-xs p-2 rounded bg-red-500/10 border border-red-400/20 text-red-300/90">
+                  {migrationError}
+                </div>
+              )}
+
+              {migrationResult && !migrationRunning && (
+                <div className="text-xs p-2 rounded bg-green-500/10 border border-green-400/20 text-green-300/90">
+                  Migrated {migrationResult.memories} memories and {migrationResult.corpus} corpus entries at dimension {migrationResult.dimension}.
+                </div>
+              )}
             </div>
           </div>
 
