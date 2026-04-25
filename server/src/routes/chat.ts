@@ -121,13 +121,20 @@ function endLiveStream(chatId: string): void {
   }, LIVE_END_RETENTION_MS);
 }
 
+function closeLiveSSE(chatId: string, res: Response): void {
+  endLiveStream(chatId);
+  if (!res.writableEnded) {
+    try { res.end(); } catch {}
+  }
+}
+
 /**
  * Install the live-stream plumbing on a response. Patches res.write to route
  * through emitToStream (buffer + fan-out), registers a primary subscriber,
  * and sets up grace-on-disconnect. Replaces any existing live stream for this
  * chat (fresh turn = new stream). Idempotent per response object.
  */
-function installLiveStream(res: Response, req: Request, chatId: string): LiveStream {
+function installLiveStream(res: Response, _req: Request, chatId: string): LiveStream {
   if ((res as any)._liveStreamInstalled) {
     return liveStreams.get(chatId)!;
   }
@@ -169,7 +176,7 @@ function installLiveStream(res: Response, req: Request, chatId: string): LiveStr
     return true;
   }) as any;
 
-  req.on("close", () => {
+  res.on("close", () => {
     detachSubscriber(stream, primarySub);
   });
 
@@ -590,17 +597,35 @@ async function handleChatStream(
     state.lastLlamaCache = null;
   }
 
+  function isPlaceholderEllipsis(text: string | undefined): boolean {
+    if (!text) return false;
+    const normalized = text.replace(/\s/g, "").replace(/…/g, "...");
+    return normalized.length > 0 && /^(\.{3})+$/.test(normalized);
+  }
+
+  function stripPlaceholderEllipsisBlocks(text: string): string {
+    return text
+      .split(/\n{2,}/)
+      .filter((block) => !isPlaceholderEllipsis(block))
+      .join("\n\n");
+  }
+
   function buildCurrentAssistantMessage(): ChatMessage {
     // Flush any remaining text
-    if (state.pendingText.trim()) {
+    if (state.pendingText.trim() && !isPlaceholderEllipsis(state.pendingText)) {
       state.segments.push({ seq: ++state.seqCounter, type: "text", content: state.pendingText });
     }
     state.pendingText = "";
+    const cleanSegments = state.segments.filter((segment) =>
+      segment.type !== "text" || !isPlaceholderEllipsis(segment.content)
+    );
+    const cleanContent = stripPlaceholderEllipsisBlocks(state.fullText);
+    const cleanThinking = isPlaceholderEllipsis(state.thinkingText) ? "" : state.thinkingText;
 
     return {
       role: "assistant",
-      content: state.fullText,
-      thinking: state.thinkingText || undefined,
+      content: cleanContent,
+      thinking: cleanThinking || undefined,
       thinkingDurationMs: state.thinkingDurationMs > 0 ? state.thinkingDurationMs : undefined,
       usage: state.finalUsage,
       toolCalls: state.allToolCalls.length > 0 ? state.allToolCalls : undefined,
@@ -608,7 +633,7 @@ async function handleChatStream(
       artifacts: state.allArtifacts.length > 0 ? state.allArtifacts : undefined,
       visuals: state.allVisuals.length > 0 ? state.allVisuals : undefined,
       generatedImages: state.allGeneratedImages.length > 0 ? state.allGeneratedImages : undefined,
-      segments: state.segments.length > 0 ? state.segments : undefined,
+      segments: cleanSegments.length > 0 ? cleanSegments : undefined,
       timestamp: Date.now(),
       _thinkingPromoted: state.thinkingPromoted || undefined,
     };
@@ -624,10 +649,29 @@ async function handleChatStream(
 
   /** Flush any accumulated text into a text segment */
   function flushTextSegment() {
-    if (state.pendingText.trim()) {
+    if (state.pendingText.trim() && !isPlaceholderEllipsis(state.pendingText)) {
       state.segments.push({ seq: ++state.seqCounter, type: "text", content: state.pendingText });
     }
     state.pendingText = "";
+  }
+
+  function appendTextDelta(delta: string): boolean {
+    if (isPlaceholderEllipsis(delta)) return false;
+    flushThinkingTimer();
+    state.fullText += delta;
+    state.pendingText += delta;
+    res.write(`event: text_delta\ndata: ${JSON.stringify({ delta })}\n\n`);
+    return true;
+  }
+
+  function appendThinkingDelta(delta: string): boolean {
+    if (isPlaceholderEllipsis(delta)) return false;
+    if (state.thinkingStartTime === null) {
+      state.thinkingStartTime = Date.now();
+    }
+    state.thinkingText += delta;
+    res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta })}\n\n`);
+    return true;
   }
 
   // Create a turn-level abort controller to prevent signal bleeding across iterations
@@ -926,16 +970,9 @@ async function handleChatStream(
         case "message_update": {
           const ame = event.assistantMessageEvent;
           if (ame.type === "text_delta") {
-            flushThinkingTimer();
-            state.fullText += ame.delta;
-            state.pendingText += ame.delta;
-            res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+            appendTextDelta(ame.delta);
           } else if (ame.type === "thinking_delta") {
-            if (state.thinkingStartTime === null) {
-              state.thinkingStartTime = Date.now();
-            }
-            state.thinkingText += ame.delta;
-            res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+            appendThinkingDelta(ame.delta);
           }
           break;
         }
@@ -1408,6 +1445,8 @@ async function handleChatStream(
                   removedCount: compaction.removedCount,
                   remainingCount: chat.messages.filter(m => !m._outOfContext).length,
                   summaryMessage: summaryMsg || null,
+                  phase: "end_turn",
+                  continues: false,
                   estimatedTokens,
                 })}\n\n`);
               }
@@ -1438,14 +1477,9 @@ async function handleChatStream(
           if (event.type === "message_update") {
             const ame = event.assistantMessageEvent;
             if (ame.type === "text_delta") {
-              continuationProducedContent = true;
-              state.fullText += ame.delta;
-              state.pendingText += ame.delta;
-              res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+              continuationProducedContent = appendTextDelta(ame.delta) || continuationProducedContent;
             } else if (ame.type === "thinking_delta") {
-              continuationProducedContent = true;
-              state.thinkingText += ame.delta;
-              res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+              continuationProducedContent = appendThinkingDelta(ame.delta) || continuationProducedContent;
             }
           } else if (event.type === "turn_end") {
             const msg = event.message as AssistantMessage;
@@ -1518,14 +1552,9 @@ async function handleChatStream(
           if (event.type === "message_update") {
             const ame = event.assistantMessageEvent;
             if (ame.type === "text_delta") {
-              strandedProducedSomething = true;
-              state.fullText += ame.delta;
-              state.pendingText += ame.delta;
-              res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+              strandedProducedSomething = appendTextDelta(ame.delta) || strandedProducedSomething;
             } else if (ame.type === "thinking_delta") {
-              strandedProducedSomething = true;
-              state.thinkingText += ame.delta;
-              res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+              strandedProducedSomething = appendThinkingDelta(ame.delta) || strandedProducedSomething;
             }
           } else if (event.type === "tool_execution_start") {
             strandedProducedSomething = true;
@@ -1686,6 +1715,8 @@ async function handleChatStream(
               removedCount: compaction.removedCount,
               remainingCount: chat.messages.filter(m => !m._outOfContext).length,
               summaryMessage: summaryMsg || null,
+              phase: "mid_turn",
+              continues: true,
               midTurn: true,
               cycle: compactionCycle,
               estimatedTokens,
@@ -1774,16 +1805,9 @@ async function handleChatStream(
           if (event.type === "message_update") {
             const ame = event.assistantMessageEvent;
             if (ame.type === "text_delta") {
-              flushThinkingTimer();
-              state.fullText += ame.delta;
-              state.pendingText += ame.delta;
-              res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+              appendTextDelta(ame.delta);
             } else if (ame.type === "thinking_delta") {
-              if (state.thinkingStartTime === null) {
-                state.thinkingStartTime = Date.now();
-              }
-              state.thinkingText += ame.delta;
-              res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta: ame.delta })}\n\n`);
+              appendThinkingDelta(ame.delta);
             }
           } else if (event.type === "tool_execution_start") {
             flushThinkingTimer();
@@ -2252,6 +2276,20 @@ router.post("/", async (req, res) => {
       // If there's a follow-up message, process it; otherwise send confirmation
       if (compactResult.followUpMessage) {
         console.log(`[chat] /compact with follow-up: "${compactResult.followUpMessage.slice(0, 50)}..."`);
+        const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
+        const estimatedTokens = await estimatePostCompactionTokens(
+          chat,
+          chat.systemPrompt || "",
+          toolsForEstimate(chat, contextWindow),
+        );
+        res.write(`event: compaction\ndata: ${JSON.stringify({
+          removedCount: compaction.removedCount,
+          remainingCount: chat.messages.filter(m => !m._outOfContext).length,
+          summaryMessage: summaryMsg || null,
+          phase: "manual",
+          continues: true,
+          estimatedTokens,
+        })}\n\n`);
         message = compactResult.followUpMessage;
         // Continue with normal message processing below
       } else {
@@ -2266,11 +2304,13 @@ router.post("/", async (req, res) => {
           removedCount: compaction.removedCount,
           remainingCount: chat.messages.filter(m => !m._outOfContext).length,
           summaryMessage: summaryMsg || null,
+          phase: "manual",
+          continues: false,
           estimatedTokens,
         })}\n\n`);
         res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: confirmText })}\n\n`);
         res.write(`event: done\ndata: ${JSON.stringify({ message: confirmMsg })}\n\n`);
-        res.end();
+        closeLiveSSE(chat.id, res);
         return;
       }
     } else {
@@ -2285,7 +2325,7 @@ router.post("/", async (req, res) => {
       await saveChat(chat);
       res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: skipMsg.content })}\n\n`);
       res.write(`event: done\ndata: ${JSON.stringify({ message: skipMsg })}\n\n`);
-      res.end();
+      closeLiveSSE(chat.id, res);
       return;
     }
   }
@@ -2503,6 +2543,8 @@ router.post("/", async (req, res) => {
               removedCount: compaction.removedCount,
               remainingCount: chat.messages.filter(m => !m._outOfContext).length,
               summaryMessage: summaryMsg || null,
+              phase: "pre_send",
+              continues: true,
               estimatedTokens,
             })}\n\n`);
           }
@@ -2690,6 +2732,8 @@ router.post("/", async (req, res) => {
               removedCount: compaction.removedCount,
               remainingCount: chat.messages.filter(m => !m._outOfContext).length,
               summaryMessage: summaryMsg || null,
+              phase: "pre_send",
+              continues: true,
               estimatedTokens,
             })}\n\n`);
           }
@@ -2836,7 +2880,7 @@ router.get("/reconnect/:chatId", async (req, res) => {
     stream.graceTimer = null;
   }
 
-  req.on("close", () => {
+  res.on("close", () => {
     detachSubscriber(stream, sub);
   });
 
@@ -2992,6 +3036,8 @@ router.post("/edit", async (req, res) => {
           res.write(`event: compaction\ndata: ${JSON.stringify({
             removedCount: compaction.removedCount,
             remainingCount: chat.messages.length,
+            phase: "pre_send",
+            continues: true,
             estimatedTokens,
           })}\n\n`);
         }

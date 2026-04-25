@@ -38,6 +38,12 @@ const skillChipStyle: React.CSSProperties = {
 // Stable empty array for availableSkills default prop
 const emptySkillsList: string[] = [];
 
+function isPlaceholderEllipsis(text: string | undefined): boolean {
+  if (!text) return false;
+  const normalized = text.replace(/\s/g, "").replace(/…/g, "...");
+  return normalized.length > 0 && /^(\.{3})+$/.test(normalized);
+}
+
 interface Props {
   message: ChatMessage;
   isStreaming: boolean;
@@ -211,6 +217,7 @@ export const MessageBubble = memo(function MessageBubble({
 
   // During streaming, use live thinking; after done, use saved thinking
   const thinkingText = showStreaming ? streamingThinking : message.thinking;
+  const visibleThinkingText = isPlaceholderEllipsis(thinkingText) ? undefined : thinkingText;
   const isThinkingStreaming = showStreaming && !message.content;
 
   // Build output segments - use ordered segments if available, otherwise separate arrays
@@ -350,9 +357,9 @@ export const MessageBubble = memo(function MessageBubble({
               </div>
             ) : (
               <>
-                {thinkingText && (
+                {visibleThinkingText && (
                   <ThinkingBlock
-                    thinking={thinkingText}
+                    thinking={visibleThinkingText}
                     isStreaming={showStreaming}
                     thinkingDurationMs={message.thinkingDurationMs}
                     thinkingActive={showStreaming ? streamingThinkingActive : false}
@@ -362,9 +369,9 @@ export const MessageBubble = memo(function MessageBubble({
                 )}
 
                 {/* Fallback: if message has thinking but no content/segments, show thinking as visible text (backward compat for pre-fix messages) */}
-                {!renderSegments && !message.content && thinkingText && !showStreaming && (
+                {!renderSegments && !message.content && visibleThinkingText && !showStreaming && (
                   <div className="text-sm leading-relaxed mt-2 text-white/70">
-                    {thinkingText}
+                    {visibleThinkingText}
                   </div>
                 )}
 
@@ -847,6 +854,7 @@ function SegmentRenderer({
   const isDesktop = useIsDesktop();
   switch (segment.type) {
     case "text": {
+      if (isPlaceholderEllipsis(segment.content)) return null;
       // Only show cursor on the actively streaming text segment
       const isActivelyStreaming = showStreaming && streamingSegmentIndex === index && segment.type === "text";
       return segment.content ? (

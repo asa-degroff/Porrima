@@ -390,8 +390,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       // If this chat has a background stream (active or recently completed),
       // the useChat effect will restore its state — skip loadMessages to avoid
       // overwriting with stale data from cache/server.
-      const hasBg = hasBackgroundStream(id);
-
       // Show cached data immediately for instant feel.
       // Chromium can throw UnknownError ("Failed to read large IndexedDB value")
       // on oversized entries — treat any failure as a cache miss and self-heal.
@@ -404,7 +402,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       if (cached) {
         setActiveChat(cached);
         setActiveChatData(cached);
-        if (!hasBg) loadMessages(cached.messages);
+        if (!hasBackgroundStream(id)) loadMessages(cached.messages);
 
         // Background refresh: update cache from server without blocking the UI
         fetch(`/api/chats/${id}`, { credentials: "include" })
@@ -417,7 +415,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
                 if (currentId === id) {
                   setActiveChat(chat);
                   setActiveChatData(chat);
-                  if (!hasBg) loadMessages(chat.messages);
+                  if (!hasBackgroundStream(id)) loadMessages(chat.messages);
                 }
                 return currentId;
               });
@@ -434,7 +432,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           const chat: Chat = await res.json();
           setActiveChat(chat);
           setActiveChatData(chat);
-          if (!hasBg) loadMessages(chat.messages);
+          if (!hasBackgroundStream(id)) loadMessages(chat.messages);
           setCachedChat(chat).catch(() => {});
         } else {
           setActiveChatId(null);

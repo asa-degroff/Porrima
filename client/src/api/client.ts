@@ -136,7 +136,16 @@ export interface StreamCallbacks {
   onIteration?: (info: IterationInfo) => void;
   onWarning?: (warning: StreamWarning) => void;
   onCompacting?: () => void;
-  onCompaction?: (info: { removedCount: number; remainingCount: number; summaryMessage?: import("../types").ChatMessage | null; midTurn?: boolean; cycle?: number; estimatedTokens?: number }) => void;
+  onCompaction?: (info: {
+    removedCount: number;
+    remainingCount: number;
+    summaryMessage?: import("../types").ChatMessage | null;
+    phase?: "pre_send" | "mid_turn" | "end_turn" | "manual";
+    continues?: boolean;
+    midTurn?: boolean;
+    cycle?: number;
+    estimatedTokens?: number;
+  }) => void;
   onAgentOutputComplete?: () => void;
   onTitleUpdate?: (chatId: string, title: string) => void;
   onMessageComplete?: (message: any) => void;
@@ -169,6 +178,7 @@ async function readSSEBody(
 
   let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
   const resetInactivityTimer = () => {
+    if (receivedDoneOrError) return;
     if (inactivityTimer) clearTimeout(inactivityTimer);
     inactivityTimer = setTimeout(() => {
       console.warn("[SSE] inactivity timeout — aborting stream");
@@ -188,9 +198,17 @@ async function readSSEBody(
         const data = JSON.parse(line.slice(6));
         if (currentEvent === "done" || currentEvent === "error") {
           receivedDoneOrError = true;
+          if (inactivityTimer) {
+            clearTimeout(inactivityTimer);
+            inactivityTimer = null;
+          }
         }
         if (currentEvent === "description_complete" || currentEvent === "reanalyze_complete") {
           receivedDoneOrError = true;
+          if (inactivityTimer) {
+            clearTimeout(inactivityTimer);
+            inactivityTimer = null;
+          }
           console.log("[SSE] Vision completion event received:", currentEvent);
         }
         processSSEEvent(currentEvent, data, callbacks);
@@ -1349,6 +1367,29 @@ export async function getLlamaServerLogs(id: LlamaServerId, lines = 200): Promis
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || "Failed to fetch llama.cpp server logs");
+  }
+  return res.json();
+}
+
+export interface LlamaServerUpdate {
+  url?: string;
+  modelId?: string;
+  enabled?: boolean;
+  sharesGpu?: boolean;
+  ctxSize?: number;
+  fallbackEnabled?: boolean;
+  provider?: "ollama" | "llamacpp";
+}
+
+export async function updateLlamaServerSettings(id: LlamaServerId, updates: LlamaServerUpdate): Promise<{ server: LlamaServerStatus }> {
+  const res = await apiFetch(`${BASE}/llama-servers/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to update server settings");
   }
   return res.json();
 }

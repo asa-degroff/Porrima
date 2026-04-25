@@ -31,6 +31,12 @@ const LLAMACPP_SUPPORTED_IMAGE_MIME = new Set([
   "image/bmp",
 ]);
 
+function isPlaceholderEllipsis(text: string | undefined): boolean {
+  if (!text) return false;
+  const normalized = text.replace(/\s/g, "").replace(/…/g, "...");
+  return normalized.length > 0 && /^(\.{3})+$/.test(normalized);
+}
+
 export async function normalizeImageForLlamaCpp(
   data: string,
   mimeType: string
@@ -196,14 +202,14 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
       const thinkingBlocks = assistantMsg.content.filter((b: any) => b.type === "thinking");
 
       const nonEmptyText = textBlocks
-        .filter((b: any) => b.type === "text" && b.text && b.text.trim().length > 0)
+        .filter((b: any) => b.type === "text" && b.text && b.text.trim().length > 0 && !isPlaceholderEllipsis(b.text))
         .map((b: any) => b.text)
         .join("");
       const content = nonEmptyText ? sanitizeSurrogates(nonEmptyText) : null;
 
       // Include reasoning_content for proper context replay (DeepSeek API convention)
       const thinkingText = thinkingBlocks
-        .filter((b: any) => b.type === "thinking" && (b as any).thinking?.trim())
+        .filter((b: any) => b.type === "thinking" && (b as any).thinking?.trim() && !isPlaceholderEllipsis((b as any).thinking))
         .map((b: any) => (b as any).thinking)
         .join("\n");
 
@@ -937,7 +943,7 @@ export const streamOpenAICompat = (
         if (!delta) continue;
 
         // Handle reasoning/thinking tokens
-        if (delta.reasoning_content) {
+        if (delta.reasoning_content && !isPlaceholderEllipsis(delta.reasoning_content)) {
           if (!currentBlock || currentBlock.type !== "thinking") {
             finishCurrentBlock(currentBlock);
             currentBlock = { type: "thinking", thinking: "" };
@@ -958,7 +964,7 @@ export const streamOpenAICompat = (
         }
 
         // Handle content tokens
-        if (delta.content) {
+        if (delta.content && !isPlaceholderEllipsis(delta.content)) {
           // Filter Gemma 4 channel tokens that leak into content
           const filteredContent = filterGemmaChannelTokens(delta.content);
           if (filteredContent) {

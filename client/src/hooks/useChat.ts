@@ -25,7 +25,7 @@ interface BackgroundStream {
   error: string | null;
   warning: StreamWarning | null;
   compacting: boolean;
-  compaction: { removedCount: number; remainingCount: number } | null;
+  compaction: CompactionInfo | null;
   doneCalled: boolean;
   abortController: AbortController | null;
   chatRef: Chat | null;
@@ -45,6 +45,19 @@ const bgStreams = new Map<string, BackgroundStream>();
 interface Draft {
   text: string;
   images: ImageAttachment[];
+}
+
+type CompactionPhase = "pre_send" | "mid_turn" | "end_turn" | "manual";
+
+interface CompactionInfo {
+  removedCount: number;
+  remainingCount: number;
+  summaryMessage?: ChatMessage | null;
+  phase?: CompactionPhase;
+  continues?: boolean;
+  midTurn?: boolean;
+  cycle?: number;
+  estimatedTokens?: number;
 }
 
 const drafts = new Map<string, Draft>();
@@ -102,6 +115,50 @@ function createBgStream(chatRef: Chat | null): BackgroundStream {
   };
 }
 
+function cloneMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) => ({
+    ...m,
+    images: m.images ? m.images.map((img) => ({ ...img })) : undefined,
+    toolCalls: m.toolCalls ? m.toolCalls.map((tc) => ({ ...tc, arguments: { ...(tc.arguments ?? {}) } })) : undefined,
+    toolResults: m.toolResults ? m.toolResults.map((tr) => ({ ...tr })) : undefined,
+    artifacts: m.artifacts ? m.artifacts.map((artifact) => ({ ...artifact })) : undefined,
+    generatedImages: m.generatedImages ? m.generatedImages.map((image) => ({ ...image })) : undefined,
+    visuals: m.visuals ? m.visuals.map((visual) => ({ ...visual })) : undefined,
+    segments: m.segments ? m.segments.map((segment) => ({ ...segment })) : undefined,
+  }));
+}
+
+function makeAssistantPlaceholder(bg: BackgroundStream): ChatMessage {
+  return {
+    role: "assistant",
+    content: bg.content,
+    thinking: bg.thinking || undefined,
+    thinkingDurationMs: bg.thinkingAccumulatedMs || undefined,
+    timestamp: Date.now(),
+    segments: bg.segments.length ? bg.segments.map((s) => ({ ...s })) : undefined,
+  };
+}
+
+function withLiveAssistant(messages: ChatMessage[], bg: BackgroundStream): ChatMessage[] {
+  const next = cloneMessages(messages);
+  const last = next[next.length - 1];
+  const liveAssistant = makeAssistantPlaceholder(bg);
+
+  if (last?.role === "assistant" && !last._isCompactionSummary) {
+    next[next.length - 1] = {
+      ...last,
+      ...liveAssistant,
+      timestamp: last.timestamp || liveAssistant.timestamp,
+      _inProgress: last._inProgress,
+      _isSystemMessage: last._isSystemMessage,
+    };
+  } else {
+    next.push(liveAssistant);
+  }
+
+  return next;
+}
+
 export function useChat(chatId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
@@ -116,7 +173,7 @@ export function useChat(chatId: string | null) {
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<StreamWarning | null>(null);
   const [compacting, setCompacting] = useState(false);
-  const [compaction, setCompaction] = useState<{ removedCount: number; remainingCount: number } | null>(null);
+  const [compaction, setCompaction] = useState<CompactionInfo | null>(null);
   // Provisional token count from the most recent compaction event — used to
   // show an accurate (if approximate) context size between compaction and the
   // next assistant's real usage, so the indicator never reverts to
@@ -229,10 +286,23 @@ export function useChat(chatId: string | null) {
       if (bgStreams.has(chatId)) return;
 
       console.log(`[chat] reconnecting to in-flight stream for ${chatId} (${status.bufferedChunks} buffered chunks)`);
-      const bg = createBgStream(activeChatRef.current);
+      let serverChat: Chat | null = null;
+      try {
+        serverChat = await apiFetchChat(chatId);
+      } catch {
+        serverChat = activeChatRef.current?.id === chatId ? activeChatRef.current : null;
+      }
+      if (cancelled) return;
+      if (chatId !== activeChatIdRef.current) return;
+      if (bgStreams.has(chatId)) return;
+
+      const bg = createBgStream(serverChat ?? activeChatRef.current);
+      bg.messages = withLiveAssistant(serverChat?.messages ?? activeChatRef.current?.messages ?? [], bg);
       bgStreams.set(chatId, bg);
       prepareStream();
+      setMessages([...bg.messages]);
       setStreaming(true);
+      if (serverChat) setActiveChatData(serverChat);
 
       const callbacks = makeStreamCallbacks(chatId);
       const controller = reconnectChat(chatId, callbacks);
@@ -286,6 +356,10 @@ export function useChat(chatId: string | null) {
       onDelta: (delta) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        if (bg.compacting) {
+          bg.compacting = false;
+          if (activeChatIdRef.current === streamChatId) setCompacting(false);
+        }
 
         // Pause thinking timer on text output
         if (bg.thinkingActive) {
@@ -326,6 +400,10 @@ export function useChat(chatId: string | null) {
       onThinkingDelta: (delta) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        if (bg.compacting) {
+          bg.compacting = false;
+          if (activeChatIdRef.current === streamChatId) setCompacting(false);
+        }
         bg.thinking += delta;
 
         // Start thinking timer if not already active
@@ -573,12 +651,11 @@ export function useChat(chatId: string | null) {
         }
       },
       onAgentOutputComplete: () => {
-        // The agent finished generating — stop the streaming indicator so it
-        // doesn't overlap with the compaction progress indicator.
-        const bg = bgStreams.get(streamChatId);
-        if (bg) bg.streaming = false;
+        // The model finished emitting visible output, but the SSE turn may
+        // still be compacting, saving, or generating metadata. Keep the stream
+        // active until `done` so reconnect, input locking, and background state
+        // reflect the server-side lifecycle.
         if (activeChatIdRef.current === streamChatId) {
-          setStreaming(false);
           setStreamingThinkingActive(false);
           setStreamingSegmentIndex(null);
         }
@@ -586,15 +663,13 @@ export function useChat(chatId: string | null) {
       onCompaction: (info) => {
         console.log(`[chat] compaction: removed ${info.removedCount} messages, ${info.remainingCount} remaining`);
         const bg = bgStreams.get(streamChatId);
+        const phase: CompactionPhase = info.phase ?? (info.midTurn ? "mid_turn" : "end_turn");
+        const streamContinues = info.continues ?? (phase === "pre_send" || phase === "mid_turn");
         if (bg) {
           bg.compacting = false;
           bg.compaction = info;
 
-          // Mid-turn compaction: the server will immediately continue streaming
-          // on the same SSE connection. Restore the streaming state that was
-          // cleared by onAgentOutputComplete, so the spinner and input lock
-          // re-engage for the continued generation.
-          if (info.midTurn) {
+          if (streamContinues) {
             bg.streaming = true;
             if (activeChatIdRef.current === streamChatId) {
               setStreaming(true);
@@ -602,31 +677,38 @@ export function useChat(chatId: string | null) {
             }
           }
 
-          // For non-mid-turn compaction, the server has finished — do NOT
-          // continue streaming. Only sync for end-of-turn compaction where no
-          // further streaming follows.
-          if (!info.midTurn) {
+          if (phase === "pre_send" || phase === "end_turn") {
             // Reload messages from server to ensure correct ordering.
             // The server has the authoritative message order after compaction —
-            // manual index splicing is fragile and causes ordering bugs.
+            // manual index splicing is fragile and causes ordering bugs. For
+            // pre-send compaction, preserve the live assistant placeholder
+            // because normal generation is about to resume on this SSE stream.
             apiFetchChat(streamChatId)
               .then((chat) => {
                 if (chat) {
-                  // Only sync messages if the bg stream hasn't accumulated new content
-                  // since the compaction event (avoids wiping streaming content from
-                  // a concurrent agent loop that started after compaction).
-                  const hasNewContent = bg.content && !chat.messages.some(
-                    (m) => m.role === "assistant" && m.content === bg.content
-                  );
-                  if (!hasNewContent) {
-                    bg.messages = chat.messages;
+                  if (bgStreams.get(streamChatId) !== bg || bg.doneCalled) return;
+                  setActiveChatData(chat);
 
-                    const lastMsg = chat.messages[chat.messages.length - 1];
-                    bg.content = lastMsg?.content || "";
-                    bg.segments = lastMsg?.segments ? lastMsg.segments.map(s => ({ ...s })) : [];
-                    bg.seqCounter = bg.segments.length;
+                  if (streamContinues) {
+                    bg.messages = withLiveAssistant(chat.messages, bg);
+                    if (activeChatIdRef.current === streamChatId) {
+                      setMessages([...bg.messages]);
+                    }
+                  } else {
+                    bg.messages = cloneMessages(chat.messages);
+
+                    const lastAssistant = [...chat.messages].reverse().find(
+                      (m) => m.role === "assistant" && !m._isCompactionSummary
+                    );
+                    if (lastAssistant) {
+                      if (!bg.content || lastAssistant.content.length >= bg.content.length) {
+                        bg.content = lastAssistant.content;
+                      }
+                      bg.segments = lastAssistant.segments ? lastAssistant.segments.map(s => ({ ...s })) : bg.segments;
+                      bg.seqCounter = Math.max(bg.seqCounter, bg.segments.length);
+                      bg.thinking = lastAssistant.thinking || bg.thinking;
+                    }
                     bg.tools = [];
-                    bg.thinking = lastMsg?.thinking || "";
                     bg.thinkingActive = false;
                     bg.thinkingAccumulatedMs = 0;
                     bg.thinkingLastStart = 0;
@@ -638,10 +720,8 @@ export function useChat(chatId: string | null) {
                       setStreamingThinkingAccumulatedMs(0);
                       streamingThinkingLastStartRef.current = 0;
                       setActiveTools([]);
-                      setMessages(chat.messages);
+                      setMessages([...bg.messages]);
                     }
-                  } else {
-                    console.log("[chat] Skipping compaction message sync — streaming has new content");
                   }
                 }
               })
@@ -810,7 +890,7 @@ export function useChat(chatId: string | null) {
         }
       },
     }),
-    [flushStreamingContent]
+    [flushStreamingContent, setActiveChatData]
   );
 
   // Shared pre-stream state reset

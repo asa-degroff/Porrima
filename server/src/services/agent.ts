@@ -25,6 +25,29 @@ export interface StreamChatResult {
   assistantMessage: AssistantMessage;
 }
 
+function isPlaceholderEllipsis(text: string | undefined): boolean {
+  if (!text) return false;
+  const normalized = text.replace(/\s/g, "").replace(/…/g, "...");
+  return normalized.length > 0 && /^(\.{3})+$/.test(normalized);
+}
+
+function stripPlaceholderEllipsisBlocks(text: string): string {
+  return text
+    .split(/\n{2,}/)
+    .filter((block) => !isPlaceholderEllipsis(block))
+    .join("\n\n");
+}
+
+function visibleAssistantContent(message: ChatMessage): string {
+  const textSegments = message.segments?.filter((segment) =>
+    segment.type === "text" && segment.content && !isPlaceholderEllipsis(segment.content)
+  );
+  if (textSegments?.length) {
+    return textSegments.map((segment) => segment.content).join("");
+  }
+  return stripPlaceholderEllipsisBlocks(message.content || "");
+}
+
 /** Convert our ChatMessage[] to pi-ai Message[] for the initial context */
 export function chatMessagesToPiMessages(
   messages: ChatMessage[],
@@ -46,11 +69,14 @@ export function chatMessagesToPiMessages(
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       };
 
+      const visibleContent = visibleAssistantContent(m);
+      const visibleThinking = isPlaceholderEllipsis(m.thinking) ? "" : (m.thinking || "");
+
       if (m.toolCalls?.length) {
         // Reconstruct tool-calling turn: assistant with tool calls only
         const toolContent: any[] = [];
-        if (m.thinking) {
-          toolContent.push({ type: "thinking", thinking: m.thinking });
+        if (visibleThinking) {
+          toolContent.push({ type: "thinking", thinking: visibleThinking });
         }
         for (const tc of m.toolCalls) {
           toolContent.push({
@@ -105,10 +131,10 @@ export function chatMessagesToPiMessages(
         }
 
         // Then the final text response as a separate assistant message
-        if (m.content) {
+        if (visibleContent) {
           result.push({
             role: "assistant" as const,
-            content: [{ type: "text", text: m.content }],
+            content: [{ type: "text", text: visibleContent }],
             api: "ollama-native" as const,
             provider: "ollama",
             model: modelId,
@@ -120,11 +146,11 @@ export function chatMessagesToPiMessages(
       } else {
         // No tool calls — simple text response
         const content: any[] = [];
-        if (m.thinking) {
-          content.push({ type: "thinking", thinking: m.thinking });
+        if (visibleThinking) {
+          content.push({ type: "thinking", thinking: visibleThinking });
         }
-        if (m.content) {
-          content.push({ type: "text", text: m.content });
+        if (visibleContent) {
+          content.push({ type: "text", text: visibleContent });
         }
         result.push({
           role: "assistant" as const,
