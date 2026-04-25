@@ -66,6 +66,16 @@ function estimateToolSchemaTokens(tools: unknown): number {
   }
 }
 
+function estimateToolCallTokens(toolCall: NonNullable<ChatMessage["toolCalls"]>[number]): number {
+  let tokens = 50;
+  try {
+    tokens += estimateTokens(JSON.stringify(toolCall.arguments ?? {}));
+  } catch {
+    // Keep the fixed call overhead if arguments are not serializable.
+  }
+  return tokens;
+}
+
 /**
  * Pure character-based estimate of all in-context messages + system prompt.
  * Does not rely on LLM-reported usage. Cheap, deterministic, and unaffected
@@ -87,7 +97,9 @@ function charEstimateContextSize(
     } else if (m.role === "assistant") {
       total += estimateTokens(m.content);
       if (m.thinking) total += estimateTokens(m.thinking);
-      if (m.toolCalls) total += m.toolCalls.length * 50;
+      if (m.toolCalls) {
+        for (const tc of m.toolCalls) total += estimateToolCallTokens(tc);
+      }
       if (m.toolResults) {
         // Each tool result is its own framed pi-ai message at send time.
         for (const r of m.toolResults) {
@@ -152,7 +164,9 @@ function estimateContextSize(
     if (m.images?.length) additionalTokens += m.images.length * 256;
     if (m.role === "assistant") {
       if (m.thinking) additionalTokens += estimateTokens(m.thinking);
-      if (m.toolCalls) additionalTokens += m.toolCalls.length * 50;
+      if (m.toolCalls) {
+        for (const tc of m.toolCalls) additionalTokens += estimateToolCallTokens(tc);
+      }
       if (m.toolResults) {
         for (const r of m.toolResults) {
           additionalTokens += estimateTokens(r.content) + 20 + MESSAGE_FRAMING_TOKENS;
@@ -200,16 +214,12 @@ function trySplitAssistantMessage(
   const toolResults = msg.toolResults ?? [];
   if (!toolCalls || toolCalls.length < 2) return null;
 
-  // Per-pair token estimates aligned with charEstimateContextSize: 50 per call
-  // for framing (it ignores argument bytes, but arguments can be large for
-  // tools like create_artifact/edit_file, so we include them here — keeps the
-  // split conservative when tool args dominate).
+  // Per-pair token estimates aligned with charEstimateContextSize. Tool
+  // arguments can be large for tools like create_artifact/edit_file, so they
+  // must be counted or compaction will underestimate the real wire payload.
   const pairEstimates = toolCalls.map((tc) => {
     const tr = toolResults.find((r) => r.toolCallId === tc.id);
-    let tokens = 50;
-    try {
-      tokens += estimateTokens(JSON.stringify(tc.arguments ?? {}));
-    } catch { /* non-serializable args: skip */ }
+    let tokens = estimateToolCallTokens(tc);
     if (tr) tokens += estimateTokens(tr.content) + 20 + MESSAGE_FRAMING_TOKENS;
     return Math.ceil(tokens * scaleFactor);
   });
@@ -256,8 +266,7 @@ function trySplitAssistantMessage(
 
   const archivedTokens = archivedCalls.reduce((sum, tc) => {
     const tr = archivedResults.find((r) => r.toolCallId === tc.id);
-    let t = 50;
-    try { t += estimateTokens(JSON.stringify(tc.arguments ?? {})); } catch { /* ignore */ }
+    let t = estimateToolCallTokens(tc);
     if (tr) t += estimateTokens(tr.content) + 20;
     return sum + t;
   }, 0) + (head.thinking ? estimateTokens(head.thinking) : 0);
@@ -357,7 +366,9 @@ export async function truncateBeforeSend(
     if (m.role === "user" && m.images?.length) tokens += m.images.length * 256;
     if (m.role === "assistant") {
       if (m.thinking) tokens += estimateTokens(m.thinking);
-      if (m.toolCalls) tokens += m.toolCalls.length * 50;
+      if (m.toolCalls) {
+        for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
+      }
       if (m.toolResults) {
         for (const r of m.toolResults) tokens += estimateTokens(r.content) + 20;
       }
@@ -508,7 +519,9 @@ export async function truncateBeforeSend(
     if (m.role === "user" && m.images?.length) tokens += m.images.length * 256;
     if (m.role === "assistant") {
       if (m.thinking) tokens += estimateTokens(m.thinking);
-      if (m.toolCalls) tokens += m.toolCalls.length * 50;
+      if (m.toolCalls) {
+        for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
+      }
       if (m.toolResults) {
         for (const r of m.toolResults) tokens += estimateTokens(r.content) + 20;
       }
@@ -1143,7 +1156,9 @@ export async function truncateChatHistory(
     }
     if (m.role === "assistant") {
       if (m.thinking) tokens += estimateTokens(m.thinking);
-      if (m.toolCalls) tokens += m.toolCalls.length * 50;
+      if (m.toolCalls) {
+        for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
+      }
       if (m.toolResults) {
         for (const r of m.toolResults) {
           tokens += estimateTokens(r.content) + 20;
@@ -1322,7 +1337,9 @@ export async function truncateChatHistory(
     if (m.role === "user" && m.images?.length) tokens += m.images.length * 256;
     if (m.role === "assistant") {
       if (m.thinking) tokens += estimateTokens(m.thinking);
-      if (m.toolCalls) tokens += m.toolCalls.length * 50;
+      if (m.toolCalls) {
+        for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
+      }
       if (m.toolResults) {
         for (const r of m.toolResults) tokens += estimateTokens(r.content) + 20;
       }
