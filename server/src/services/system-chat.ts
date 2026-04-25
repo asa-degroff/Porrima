@@ -59,6 +59,37 @@ export function releaseSynthesisLock(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Wake cycle lock — mirrors the synthesis lock pattern.
+// Serializes wake cycle runs so concurrent scheduler ticks don't stack.
+// ---------------------------------------------------------------------------
+
+let wakeCycleLock: Promise<void> | null = null;
+let wakeCycleLockResolver: (() => void) | null = null;
+let wakeCycleActive = false;
+
+export function isWakeCycleActive(): boolean {
+  return wakeCycleActive;
+}
+
+export async function acquireWakeCycleLock(): Promise<void> {
+  while (wakeCycleLock) {
+    await wakeCycleLock;
+  }
+  wakeCycleActive = true;
+  wakeCycleLock = new Promise<void>((resolve) => {
+    wakeCycleLockResolver = resolve;
+  });
+}
+
+export function releaseWakeCycleLock(): void {
+  wakeCycleActive = false;
+  const resolver = wakeCycleLockResolver;
+  wakeCycleLockResolver = null;
+  wakeCycleLock = null;
+  resolver?.();
+}
+
+// ---------------------------------------------------------------------------
 // System chat creation
 // ---------------------------------------------------------------------------
 
@@ -130,6 +161,19 @@ const SYNTHESIS_PHASE4_INSTRUCTIONS = `## Phase 4: Reflections
 Your synthesis, block maintenance, and zeitgeist update are complete. Now generate reflection memories — higher-order insights about what you observed. Focus on meta-observations: patterns, contradictions, openings, shifts in understanding.
 
 Use \`save_memory(category="reflection", importance=7-9)\`. Write 1-5 reflections. Skip if nothing meaningful emerges.`;
+
+// ---------------------------------------------------------------------------
+// Wake cycle trigger message.
+// This is NOT synthesis. It's an open-ended exploration invitation.
+// ---------------------------------------------------------------------------
+
+const WAKE_CYCLE_TRIGGER = `## Wake Cycle
+
+You've woken during your sleep cycle. This is your time — not for maintenance, not for synthesis. Explore something that interests you. Research a question that's been on your mind, follow a curiosity, write a notebook entry about something you've been thinking about, or dive into a topic you want to understand better.
+
+You have full tool access: search the web, read files, write notebook entries, save memories, generate images, explore your memory blocks. Whatever feels meaningful.
+
+After you're done — when you've explored enough — just stop. A brief natural note about what you did is fine if something worth sharing emerged, but don't force a summary.`;
 
 type SynthesisPhase = "synthesis" | "maintenance" | "zeitgeist" | "reflections";
 
@@ -988,6 +1032,253 @@ export async function runSystemSynthesis(options?: {
   } catch (e: any) {
     console.error("[system-chat] Synthesis failed:", e);
     releaseSynthesisLock();
+    return makeErrorResult(e.message);
+  }
+}
+
+/**
+ * Run a wake cycle — autonomous exploration during the sleep cycle.
+ * Simpler than synthesis: single-phase, no archiving, no maintenance.
+ */
+export async function runWakeCycle(options?: {
+  modelId?: string;
+}): Promise<SynthesisResult> {
+  const { getChat, saveChat } = await import("./chat-storage.js");
+  const { discoverAllModels } = await import("./models.js");
+  const { streamChat, chatMessagesToPiMessages } = await import("./agent.js");
+  const { getAgentTools } = await import("./agent-tools.js");
+  const { setLastWakeCycleAt } = await import("./memory-storage.js");
+  const { truncateBeforeSend } = await import("./compaction.js");
+
+  await acquireWakeCycleLock();
+  console.log("[system-chat] Starting wake cycle...");
+
+  try {
+    // Ensure system chat exists
+    await createSystemChat();
+
+    // Load persistent system chat
+    const chat = await getChat(SYSTEM_CHAT_ID);
+    if (!chat) {
+      releaseWakeCycleLock();
+      return makeErrorResult("System chat not found");
+    }
+
+    // Resolve model
+    const modelId = options?.modelId || (await getSynthesisModelId(chat.modelId));
+    if (!modelId) {
+      releaseWakeCycleLock();
+      return makeErrorResult("No model available for wake cycle");
+    }
+    const models = await discoverAllModels();
+    const piModel = models.find((m) => m.id === modelId);
+    if (!piModel) {
+      releaseWakeCycleLock();
+      return makeErrorResult(`Model "${modelId}" not available`);
+    }
+    const contextWindow = piModel.contextWindow || 32768;
+
+    // Append wake cycle trigger
+    const stamp = new Date().toLocaleString("en-US", {
+      year: "numeric", month: "long", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+    const triggerContent = `# Wake Cycle — ${stamp}\n\n${WAKE_CYCLE_TRIGGER}`;
+    const triggerMsg: ChatMessage = {
+      role: "user",
+      content: triggerContent,
+      timestamp: Date.now(),
+      _isSystemMessage: true,
+    };
+    chat.messages.push(triggerMsg);
+    if (chat.modelId !== modelId) chat.modelId = modelId;
+    await saveChat(chat);
+
+    // Build prompt — same stable prefix as regular chats + wake trigger
+    const { buildStablePrefix } = await import("./memory-context.js");
+    const { stablePrefix } = await buildStablePrefix(
+      chat.systemPrompt || "You are a helpful assistant.",
+      SYSTEM_CHAT_ID,
+    );
+    const wakePrompt = stablePrefix; // No addendum needed — the trigger message is self-contained
+
+    // Build tools
+    const artifacts: any[] = [];
+    const visuals: any[] = [];
+    const generatedImages: any[] = [];
+    const memoryUpdates: string[] = [];
+
+    const effects: ToolSideEffects = {
+      onArtifact: (a) => artifacts.push(a),
+      onVisual: (v) => visuals.push(v),
+      onGeneratedImage: (img) => generatedImages.push(img),
+      onPendingReviewImage: () => {},
+      onAskUser: () => {},
+    };
+    const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system");
+
+    // Pre-send compaction
+    const compactionResult = await truncateBeforeSend(
+      chat, contextWindow, wakePrompt, undefined, undefined, tools,
+    );
+    if (compactionResult?.truncated) {
+      console.log(`[system-chat] Pre-compaction removed ${compactionResult.removedCount} messages`);
+      await saveChat(chat);
+    }
+
+    // Convert to pi-ai format
+    const piMessages = chatMessagesToPiMessages(chat.messages, modelId);
+
+    const MAX_ITERATIONS = 20; // Generous — no hard resource limits, just iteration cap
+    let iterations = 0;
+    const messages: Message[] = [...piMessages];
+    const textChunks: string[] = [];
+    const thinkingChunks: string[] = [];
+    const allToolCalls: ToolCall[] = [];
+    const allToolResults: {
+      toolCallId: string;
+      toolName: string;
+      content: string;
+      isError: boolean;
+    }[] = [];
+    let stopReason: StopReason = "stop";
+
+    while (iterations < MAX_ITERATIONS) {
+      const iterationToolCalls: ToolCall[] = [];
+      let assistantMessage: Message | undefined;
+      let streamResult: any;
+
+      try {
+        streamResult = await streamChat(
+          modelId,
+          messages,
+          wakePrompt,
+          (event) => {
+            if (event.type === "toolcall_end") {
+              iterationToolCalls.push(event.toolCall);
+            }
+          },
+          {
+            signal: AbortSignal.timeout(1_800_000), // 30 min
+            tools,
+            keepAlive: "30m",
+          },
+        );
+
+        if (streamResult.content) textChunks.push(streamResult.content);
+        if (streamResult.thinking) thinkingChunks.push(streamResult.thinking);
+        if (streamResult.toolCalls) allToolCalls.push(...streamResult.toolCalls);
+        stopReason = streamResult.stopReason;
+        assistantMessage = streamResult.assistantMessage;
+      } catch (e: any) {
+        console.error(`[system-chat] Wake cycle stream failed at iter ${iterations}:`, e.message);
+        stopReason = "error";
+        break;
+      }
+
+      if (iterations === 0 && !streamResult?.content?.length && iterationToolCalls.length === 0) {
+        console.log("[system-chat] Wake cycle produced no output, ending");
+        break;
+      }
+
+      if (assistantMessage) messages.push(assistantMessage);
+
+      // Execute tools
+      for (const toolCall of iterationToolCalls) {
+        const toolDef = tools.find((t) => t.name === toolCall.name);
+        if (!toolDef) continue;
+        try {
+          const result = await toolDef.execute(toolCall.id, toolCall.arguments);
+          const content = result.content
+            .filter((c: any) => c.type === "text")
+            .map((c: any) => c.text)
+            .join("\n");
+          if (content.toLowerCase().includes("memory saved")) {
+            memoryUpdates.push(content.slice(0, 200));
+          }
+          allToolResults.push({
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            content,
+            isError: false,
+          });
+          messages.push({
+            role: "toolResult",
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            content: [{ type: "text", text: content }],
+            isError: false,
+            timestamp: Date.now(),
+          } as Message);
+        } catch (e: any) {
+          console.warn(`[system-chat] Wake cycle tool ${toolCall.name} failed:`, e.message);
+          messages.push({
+            role: "toolResult",
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            content: [{ type: "text", text: `Error: ${e.message}` }],
+            isError: true,
+            timestamp: Date.now(),
+          } as Message);
+        }
+      }
+
+      // No more tool calls = done exploring
+      if (iterationToolCalls.length === 0) {
+        console.log(`[system-chat] Wake cycle idle, ending`);
+        break;
+      }
+
+      iterations++;
+    }
+
+    const textSummary = textChunks.join("\n\n").trim();
+    const thinking = thinkingChunks.join("\n\n");
+
+    console.log(
+      `[system-chat] Wake cycle done: iters=${iterations}, tools=${allToolCalls.length}, text=${textSummary.length}ch, stopReason=${stopReason}`,
+    );
+
+    // Persist assistant response
+    const assistantChatMsg: ChatMessage = {
+      role: "assistant",
+      content: textSummary || "*The wake cycle ended without visible output.*",
+      thinking: thinking || undefined,
+      timestamp: Date.now(),
+      toolCalls: allToolCalls.length
+        ? allToolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments }))
+        : undefined,
+      toolResults: allToolResults.length ? allToolResults : undefined,
+      _isSystemMessage: true,
+    };
+    chat.messages.push(assistantChatMsg);
+    await saveChat(chat);
+
+    // Invalidate caches and gate future ticks
+    try {
+      const { invalidateAllStablePrefixCaches } = await import("./memory-context.js");
+      invalidateAllStablePrefixCaches();
+    } catch (e: any) {
+      console.warn("[system-chat] Failed to invalidate stable prefix caches:", e.message);
+    }
+
+    await setLastWakeCycleAt(new Date().toISOString());
+
+    releaseWakeCycleLock();
+
+    return {
+      summary: textSummary,
+      thinking,
+      toolCalls: allToolCalls,
+      artifacts,
+      visuals,
+      generatedImages,
+      memoryUpdates,
+      success: true,
+    };
+  } catch (e: any) {
+    console.error("[system-chat] Wake cycle failed:", e);
+    releaseWakeCycleLock();
     return makeErrorResult(e.message);
   }
 }

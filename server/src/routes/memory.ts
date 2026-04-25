@@ -91,15 +91,38 @@ router.get("/extraction/stream", (req, res) => {
 router.get("/synthesis/status", async (_req, res) => {
   const memoryCount = await getMemoryCount();
   const lastSynthesis = await getLastSynthesis();
-  const { isSynthesisActive } = await import("../services/system-chat.js");
+  const { isSynthesisActive, isWakeCycleActive } = await import("../services/system-chat.js");
+  const { getLastWakeCycleAt } = await import("../services/memory-storage.js");
+  const { getSettings } = await import("../services/chat-storage.js");
   // Check if any extraction run is currently in progress
   const recentRuns = getRecentExtractionRuns();
   const isExtractionRunning = recentRuns.some((r) => r.status === "running");
+  
+  // Compute sleep cycle state
+  const settings = await getSettings();
+  const sleepCycleThresholdMinutes = settings.sleepCycleThresholdMinutes ?? 60;
+  let sleepCycleActive = false;
+  if (settings.lastUserActivityAt) {
+    const lastActivity = new Date(settings.lastUserActivityAt).getTime();
+    const elapsedMinutes = (Date.now() - lastActivity) / (1000 * 60);
+    sleepCycleActive = elapsedMinutes >= sleepCycleThresholdMinutes;
+  }
+  
+  const lastWakeCycleAt = await getLastWakeCycleAt();
+  
   res.json({
     lastSynthesis,
     memoryCount,
     isSynthesizing: isSynthesisActive(),
     isExtractionRunning,
+    // Sleep cycle
+    sleepCycleActive,
+    sleepCycleThresholdMinutes,
+    lastUserActivityAt: settings.lastUserActivityAt ?? null,
+    // Wake cycle
+    isWakeCycleRunning: isWakeCycleActive(),
+    lastWakeCycleAt,
+    wakeCycleEnabled: settings.wakeCycleEnabled ?? false,
   });
 });
 
@@ -159,6 +182,31 @@ router.post("/synthesis/sleep", async (_req, res) => {
 
     dispatchSynthesis("sleep");
     res.status(202).json({ started: true, sleepModeTriggeredAt: settings.sleepModeTriggeredAt });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Manually trigger a wake cycle. Returns 202 Accepted immediately.
+router.post("/wake/run", async (_req, res) => {
+  try {
+    const { isWakeCycleActive } = await import("../services/system-chat.js");
+    if (isWakeCycleActive()) {
+      return res.status(409).json({ error: "Wake cycle already in progress" });
+    }
+    const { runWakeCycle } = await import("../services/system-chat.js");
+    runWakeCycle()
+      .then((result) => {
+        if (!result.success) {
+          console.error(`[wake/manual] failed:`, result.error);
+        } else {
+          console.log(`[wake/manual] complete: ${result.summary.length}ch, ${result.toolCalls.length} tools`);
+        }
+      })
+      .catch((e: any) => {
+        console.error(`[wake/manual] threw:`, e?.message || e);
+      });
+    res.status(202).json({ started: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

@@ -1007,6 +1007,14 @@ export interface SynthesisStatus {
   memoryCount: number;
   isSynthesizing: boolean;
   isExtractionRunning: boolean;
+  // Sleep cycle
+  sleepCycleActive: boolean;
+  sleepCycleThresholdMinutes: number;
+  lastUserActivityAt: string | null;
+  // Wake cycle
+  isWakeCycleRunning: boolean;
+  lastWakeCycleAt: string | null;
+  wakeCycleEnabled: boolean;
 }
 
 // Response from POST /synthesis/run and /synthesis/sleep. Synthesis is
@@ -1041,6 +1049,17 @@ export async function triggerSleepMode(): Promise<SynthesisDispatchResult> {
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || "Failed to trigger sleep mode");
+  }
+  return res.json();
+}
+
+export async function triggerWakeCycle(): Promise<SynthesisDispatchResult> {
+  const res = await apiFetch(`${BASE}/memory/wake/run`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to trigger wake cycle");
   }
   return res.json();
 }

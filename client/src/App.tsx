@@ -34,7 +34,7 @@ import { ActivityStyleProvider } from "./hooks/useActivityStyle";
 import { useTTS } from "./hooks/useTTS";
 import { TTSControlBar } from "./components/TTSControlBar";
 import { useNotebooks } from "./hooks/useNotebooks";
-import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis } from "./api/client";
+import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis, triggerWakeCycle } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
 import type { Chat, ChatType, CornerShape, CornerRadius } from "./types";
 
@@ -102,6 +102,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [synthesisComplete, setSynthesisComplete] = useState(false);
   const [sleepModeActive, setSleepModeActive] = useState(false);
   const [isExtractionRunning, setIsExtractionRunning] = useState(false);
+  const [sleepCycleActive, setSleepCycleActive] = useState(false);
+  const [isWakeCycleRunning, setIsWakeCycleRunning] = useState(false);
 
   // Load UI state from server on mount
   useEffect(() => {
@@ -136,6 +138,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         wasSynthesizingRef.current = status.isSynthesizing;
         setIsSynthesizing(status.isSynthesizing);
         setIsExtractionRunning(status.isExtractionRunning);
+        setSleepCycleActive(status.sleepCycleActive);
+        setIsWakeCycleRunning(status.isWakeCycleRunning);
         if (status.isSynthesizing) {
           setSynthesisComplete(false);
         } else if (prev) {
@@ -629,6 +633,16 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, [isSynthesizing]);
 
+  const handleWakeRun = useCallback(async () => {
+    if (isWakeCycleRunning) return;
+    try {
+      await triggerWakeCycle();
+      setIsWakeCycleRunning(true);
+    } catch (e: any) {
+      console.error("Wake cycle failed:", e.message);
+    }
+  }, [isWakeCycleRunning]);
+
   // Close image sandbox when switching to notebooks
   useEffect(() => {
     if (activeView === 'notebooks' && imageSandboxOpen) {
@@ -705,9 +719,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         isSynthesizing={isSynthesizing}
         synthesisComplete={synthesisComplete}
         sleepModeActive={sleepModeActive}
+        sleepCycleActive={sleepCycleActive}
         isExtractionRunning={isExtractionRunning}
+        isWakeCycleRunning={isWakeCycleRunning}
         onSynthesisSleep={handleSynthesisSleep}
         onSynthesisRun={handleSynthesisRun}
+        onWakeRun={handleWakeRun}
         isImageSandboxOpen={imageSandboxOpen}
       />
       {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}

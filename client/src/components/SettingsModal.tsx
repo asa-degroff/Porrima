@@ -29,12 +29,13 @@ const ACCENT_COLORS: Record<string, { on: string; off: string }> = {
   purple:  { on: "bg-purple-500/30", off: "bg-white/10" },
   blue:    { on: "bg-blue-500/30",   off: "bg-white/10" },
   emerald: { on: "bg-emerald-500/30", off: "bg-white/10" },
+  violet:  { on: "bg-violet-500/30", off: "bg-white/10" },
 };
 
 interface ToggleSwitchProps {
   checked: boolean;
   onChange: () => void;
-  accentColor: "purple" | "blue" | "emerald";
+  accentColor: "purple" | "blue" | "emerald" | "violet";
   disabled?: boolean;
 }
 
@@ -335,6 +336,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [delayedExtractionThreshold, setDelayedExtractionThreshold] = useState(settings.delayedExtractionThresholdMinutes ?? 30);
   const [delayedExtractionCap, setDelayedExtractionCap] = useState(settings.delayedExtractionMessageCap ?? 50);
   const [enrichmentBatchSize, setEnrichmentBatchSize] = useState(settings.enrichmentBatchSize ?? 5);
+  // Sleep cycle & wake cycle settings
+  const [sleepCycleThreshold, setSleepCycleThreshold] = useState(settings.sleepCycleThresholdMinutes ?? 60);
+  const [wakeCycleEnabled, setWakeCycleEnabled] = useState(settings.wakeCycleEnabled ?? false);
+  const [wakeCycleInterval, setWakeCycleInterval] = useState(settings.wakeCycleIntervalHours ?? 6);
   const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
   const [extractionModelUrl, setExtractionModelUrl] = useState(settings.extractionModelUrl || "");
   const [extractionModelStatus, setExtractionModelStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
@@ -689,6 +694,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       delayedExtractionThresholdMinutes: delayedExtractionThreshold,
       delayedExtractionMessageCap: delayedExtractionCap,
       enrichmentBatchSize,
+      sleepCycleThresholdMinutes: sleepCycleThreshold,
+      wakeCycleEnabled,
+      wakeCycleIntervalHours: wakeCycleInterval,
       extractionModelId,
       extractionModelUrl: extractionModelUrl.trim() || undefined,
       extractionFallbackEnabled,
@@ -3598,6 +3606,56 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <p className="text-xs text-white/30">How many unenriched images to process every 10 minutes</p>
               </div>
 
+              {/* Sleep Cycle & Wake Cycle */}
+              <div className="pt-4 border-t border-white/10 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-white/60">Sleep cycle threshold</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={15}
+                      max={240}
+                      step={15}
+                      value={sleepCycleThreshold}
+                      onChange={(e) => setSleepCycleThreshold(Number(e.target.value))}
+                      className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-indigo-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                    />
+                    <span className="text-xs text-white/40 w-16 text-right">{sleepCycleThreshold} min</span>
+                  </div>
+                  <p className="text-xs text-white/30">After this period of inactivity, the sleep cycle begins and autonomous modes activate</p>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-sm font-medium text-white/60">Wake cycle</label>
+                    <p className="text-xs text-white/30">Periodic autonomous exploration during sleep — web research, notebook writing, curiosity</p>
+                  </div>
+                  <ToggleSwitch
+                    checked={wakeCycleEnabled}
+                    onChange={() => setWakeCycleEnabled(!wakeCycleEnabled)}
+                    accentColor="violet"
+                  />
+                </div>
+
+                {wakeCycleEnabled && (
+                  <div>
+                    <label className="block text-sm font-medium text-white/60">Wake interval</label>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="range"
+                        min={1}
+                        max={24}
+                        step={1}
+                        value={wakeCycleInterval}
+                        onChange={(e) => setWakeCycleInterval(Number(e.target.value))}
+                        className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-violet-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                      />
+                      <span className="text-xs text-white/40 w-16 text-right">{wakeCycleInterval}h</span>
+                    </div>
+                    <p className="text-xs text-white/30">How often to wake during the sleep cycle</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

@@ -220,6 +220,15 @@ export interface Settings {
   bluesky?: BlueskySettings;
   // Sleep mode — tracks when the user manually triggered synthesis, skips next periodic
   sleepModeTriggeredAt?: string;
+  // User activity tracking — stamped on every user-initiated message send.
+  // Used by the scheduler to determine sleep cycle state.
+  lastUserActivityAt?: string;
+  // Sleep cycle — when user is idle for this many minutes, the sleep cycle begins.
+  // During sleep, synthesis and wake cycles run autonomously.
+  sleepCycleThresholdMinutes?: number;
+  // Wake cycle — periodic autonomous exploration during sleep cycle.
+  wakeCycleEnabled?: boolean;
+  wakeCycleIntervalHours?: number;
 }
 
 export interface BlueskySettings {

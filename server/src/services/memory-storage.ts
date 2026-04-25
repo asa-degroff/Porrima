@@ -854,6 +854,25 @@ export async function setLastSynthesis(value: string | null): Promise<void> {
   }
 }
 
+export async function getLastWakeCycleAt(): Promise<string | null> {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT value FROM metadata WHERE key = 'lastWakeCycleAt'")
+    .get() as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export async function setLastWakeCycleAt(value: string | null): Promise<void> {
+  const db = getDb();
+  if (value) {
+    db.prepare(
+      "INSERT OR REPLACE INTO metadata (key, value) VALUES ('lastWakeCycleAt', ?)"
+    ).run(value);
+  } else {
+    db.prepare("DELETE FROM metadata WHERE key = 'lastWakeCycleAt'").run();
+  }
+}
+
 export type MemorySortBy = "created_at_desc" | "created_at_asc" | "last_accessed_desc" | "importance_desc";
 
 const SORT_CLAUSES: Record<MemorySortBy, string> = {

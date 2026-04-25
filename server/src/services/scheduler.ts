@@ -3,8 +3,11 @@ import {
   shouldRunSystemSynthesis,
   runSystemSynthesis,
   isSynthesisActive,
+  runWakeCycle,
+  isWakeCycleActive,
 } from "./system-chat.js";
 import { getDb, getSettings, saveSettings, createChat, findBlueskyChatId } from "./chat-storage.js";
+import { getLastWakeCycleAt } from "./memory-storage.js";
 import { v4 as uuidv4 } from "uuid";
 import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
 import { getBlueskyPoller } from "./bluesky-poller.js";
@@ -14,7 +17,13 @@ import { enrichCorpusBatch } from "./image-corpus.js";
 const SYNTHESIS_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const ENRICHMENT_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const WAKE_CYCLE_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes (same as synthesis)
 const DEFAULT_ENRICHMENT_BATCH_SIZE = 5;
+const DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES = 60; // 1 hour of inactivity → sleep cycle
+const DEFAULT_WAKE_CYCLE_INTERVAL_HOURS = 6; // wake every 6 hours during sleep
+
+let delayedExtractionCheckRunning = false;
+const delayedExtractionsInProgress = new Set<string>();
 
 
 // ---------------------------------------------------------------------------
@@ -129,12 +138,105 @@ async function findChatsNeedingDelayedExtraction(thresholdMs: number): Promise<s
   return rows.map(r => r.id);
 }
 
+// ---------------------------------------------------------------------------
+// Sleep Cycle & Wake Cycle
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if the sleep cycle is currently active.
+ * Sleep cycle is active when:
+ * 1. No active chats are streaming
+ * 2. User has been inactive for longer than the configured threshold
+ */
+function isSleepCycleActive(settings: any): boolean {
+  if (hasActiveChats()) return false;
+  
+  if (!settings.lastUserActivityAt) {
+    // No activity recorded — treat as active (user just started)
+    return false;
+  }
+  
+  const thresholdMinutes = settings.sleepCycleThresholdMinutes ?? DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES;
+  const lastActivity = new Date(settings.lastUserActivityAt).getTime();
+  const elapsed = (Date.now() - lastActivity) / (1000 * 60); // minutes
+  
+  return elapsed >= thresholdMinutes;
+}
+
+/**
+ * Check and run a wake cycle during the sleep cycle.
+ * Gated by:
+ * - Sleep cycle must be active (user inactive)
+ * - Wake cycles must be enabled in settings
+ * - No synthesis currently running (don't overlap)
+ * - No wake cycle currently running (don't overlap with self)
+ * - Interval must have elapsed since last wake cycle
+ */
+async function checkAndRunWakeCycle() {
+  try {
+    const settings = await getSettings();
+    
+    // Must be enabled
+    if (!settings.wakeCycleEnabled) return;
+    
+    // Must be in sleep cycle
+    if (!isSleepCycleActive(settings)) {
+      console.log("[scheduler] Skipping wake cycle — not in sleep cycle");
+      return;
+    }
+    
+    // Don't overlap with synthesis
+    if (isSynthesisActive()) {
+      console.log("[scheduler] Skipping wake cycle — synthesis active");
+      return;
+    }
+    
+    // Don't overlap with a running wake cycle
+    if (isWakeCycleActive()) {
+      console.log("[scheduler] Skipping wake cycle — wake cycle already running");
+      return;
+    }
+    
+    // Check interval
+    const intervalHours = settings.wakeCycleIntervalHours ?? DEFAULT_WAKE_CYCLE_INTERVAL_HOURS;
+    const lastWake = await getLastWakeCycleAt();
+    if (lastWake) {
+      const elapsed = (Date.now() - new Date(lastWake).getTime()) / (1000 * 60 * 60); // hours
+      if (elapsed < intervalHours) {
+        return; // Not yet due
+      }
+    }
+    
+    // Fire the wake cycle
+    console.log("[scheduler] Wake cycle due, starting...");
+    const result = await runWakeCycle({ modelId: settings.defaultModelId });
+    
+    if (result.success) {
+      console.log(`[scheduler] Wake cycle complete: ${result.summary.length} chars, ${result.toolCalls.length} tool calls`);
+    } else {
+      console.error(`[scheduler] Wake cycle failed: ${result.error}`);
+    }
+  } catch (e) {
+    console.error("[scheduler] Wake cycle check failed:", e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Delayed Extraction Check
+// ---------------------------------------------------------------------------
+
 /**
  * Check and run delayed extractions for inactive chats.
  * Called every 5 minutes to catch chats that cross the inactivity threshold.
  * Processes chats in batches to avoid overwhelming the LLM API.
  */
 async function checkAndRunDelayedExtractions() {
+  if (delayedExtractionCheckRunning) {
+    console.log("[scheduler] Skipping delayed extraction check — previous check still running");
+    return;
+  }
+
+  delayedExtractionCheckRunning = true;
   try {
     const settings = await getSettings();
     const enabled = settings.delayedExtractionEnabled ?? true;
@@ -202,23 +304,32 @@ async function checkAndRunDelayedExtractions() {
     // avoids holding multiple request bodies simultaneously.
     for (let i = 0; i < chatIds.length; i++) {
       const chatId = chatIds[i];
+      if (delayedExtractionsInProgress.has(chatId)) {
+        console.log(`[scheduler] Skipping chat ${chatId} — delayed extraction already in progress`);
+        continue;
+      }
       // Re-check: a chat may have become active since we started
       if (isChatActive(chatId)) {
         console.log(`[scheduler] Skipping chat ${chatId} — now active`);
         continue;
       }
+      delayedExtractionsInProgress.add(chatId);
       try {
         console.log(`[scheduler] Running delayed extraction for chat ${chatId} (${i + 1}/${chatIds.length}) with model ${extractionModelId}...`);
         await extractDelayedMemories(chatId, extractionModelId);
         console.log(`[scheduler] Delayed extraction complete for chat ${chatId}`);
       } catch (e) {
         console.error(`[scheduler] Delayed extraction failed for chat ${chatId}:`, e);
+      } finally {
+        delayedExtractionsInProgress.delete(chatId);
       }
     }
 
     console.log(`[scheduler] Delayed extraction backlog complete (${chatIds.length} chats processed)`);
   } catch (e) {
     console.error("[scheduler] Delayed extraction check failed:", e);
+  } finally {
+    delayedExtractionCheckRunning = false;
   }
 }
 
@@ -252,7 +363,10 @@ export function startScheduler(): void {
   // Check every 30 minutes for corpus enrichment
   setInterval(checkAndRunEnrichment, ENRICHMENT_CHECK_INTERVAL_MS);
   
-  console.log("[scheduler] Started (synthesis every 15min, delayed extraction every 5min, enrichment every 30min)");
+  // Check every 15 minutes for wake cycles
+  setInterval(checkAndRunWakeCycle, WAKE_CYCLE_CHECK_INTERVAL_MS);
+  
+  console.log("[scheduler] Started (synthesis every 15min, delayed extraction every 5min, enrichment every 30min, wake cycle every 15min)");
 
   // Start Bluesky poller if enabled
   startBlueskyPoller();

@@ -4,7 +4,7 @@ import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } fr
 import { streamSimple, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
 import type { AgentContext, AgentLoopConfig, StreamFn } from "@mariozechner/pi-agent-core";
-import { getChat, saveChat, getSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
+import { getChat, saveChat, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
 import { chatMessagesToPiMessages } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { OllamaModel } from "../types.js";
@@ -2206,6 +2206,18 @@ router.post("/", async (req, res) => {
 
   const chat = await getChat(chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
+
+  // Stamp user activity — used by the scheduler to determine sleep cycle state.
+  // Only stamp for user-facing chats (not system chat).
+  if (chat.type !== "system") {
+    try {
+      const settings = await getSettings();
+      settings.lastUserActivityAt = new Date().toISOString();
+      await saveSettings(settings);
+    } catch (e) {
+      console.warn("[chat] Failed to stamp user activity:", e);
+    }
+  }
 
   // Restore any queued messages from a previous SSE drop
   await messageQueue.loadFromDisk(chatId);

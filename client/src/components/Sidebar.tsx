@@ -38,9 +38,12 @@ interface Props {
   isSynthesizing?: boolean;
   synthesisComplete?: boolean;
   sleepModeActive?: boolean;
+  sleepCycleActive?: boolean;
   isExtractionRunning?: boolean;
+  isWakeCycleRunning?: boolean;
   onSynthesisSleep?: () => void;
   onSynthesisRun?: () => void;
+  onWakeRun?: () => void;
   isImageSandboxOpen?: boolean;
 }
 
@@ -427,9 +430,12 @@ export function Sidebar({
   isSynthesizing = false,
   synthesisComplete = false,
   sleepModeActive = false,
+  sleepCycleActive = false,
   isExtractionRunning = false,
+  isWakeCycleRunning = false,
   onSynthesisSleep,
   onSynthesisRun,
+  onWakeRun,
   isImageSandboxOpen = false,
 }: Props) {
   const {
@@ -652,10 +658,20 @@ export function Sidebar({
                   <span className="text-amber-400/60">●</span>
                   <span className="text-amber-300/60">Synthesizing</span>
                 </>
+              ) : isWakeCycleRunning ? (
+                <>
+                  <span className="text-violet-400/60">●</span>
+                  <span className="text-violet-300/60">Waking</span>
+                </>
               ) : synthesisComplete ? (
                 <>
                   <span className="text-emerald-400/60">●</span>
                   <span className="text-emerald-300/60">Complete</span>
+                </>
+              ) : sleepCycleActive ? (
+                <>
+                  <span className="text-indigo-400/60">●</span>
+                  <span className="text-indigo-300/60">Sleeping</span>
                 </>
               ) : (
                 <>
@@ -668,19 +684,36 @@ export function Sidebar({
             <div className="flex-1" />
             {/* Action buttons */}
             <div className="flex items-center gap-1">
-              {onSynthesisSleep && !isSynthesizing && (
+              {onSynthesisSleep && !isSynthesizing && !isWakeCycleRunning && (
                 <button
                   onClick={onSynthesisSleep}
-                  disabled={sleepModeActive}
+                  disabled={sleepModeActive || sleepCycleActive}
                   className={`p-2 rounded-lg transition-all cursor-pointer ${
-                    sleepModeActive
-                      ? 'text-amber-400/80 bg-amber-500/15 animate-pulse'
-                      : 'text-white/30 hover:text-white/60 hover:bg-white/5'
+                    sleepCycleActive
+                      ? 'text-indigo-400/80 bg-indigo-500/15 animate-pulse'
+                      : sleepModeActive
+                        ? 'text-amber-400/80 bg-amber-500/15 animate-pulse'
+                        : 'text-white/30 hover:text-white/60 hover:bg-white/5'
                   }`}
-                  title="Sleep Mode — trigger synthesis and skip next periodic cycle"
+                  title={sleepCycleActive
+                    ? "Sleep cycle active — autonomous mode running"
+                    : "Sleep Mode — trigger synthesis and skip next periodic cycle"}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+                  </svg>
+                </button>
+              )}
+              {/* Wake cycle — manual trigger during sleep cycle */}
+              {onWakeRun && sleepCycleActive && !isSynthesizing && !isWakeCycleRunning && (
+                <button
+                  onClick={onWakeRun}
+                  className="p-2 rounded-lg transition-all cursor-pointer text-violet-400/60 hover:text-violet-300/80 hover:bg-violet-500/10"
+                  title="Wake cycle — trigger autonomous exploration now"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="4"/>
+                    <path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>
                   </svg>
                 </button>
               )}

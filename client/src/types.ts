@@ -226,6 +226,13 @@ export interface Settings {
   lastActiveChatId?: string;
   // Sleep mode — tracks when the user manually triggered synthesis
   sleepModeTriggeredAt?: string;
+  // User activity tracking — stamped on every user-initiated message send
+  lastUserActivityAt?: string;
+  // Sleep cycle — when user is idle for this many minutes, the sleep cycle begins
+  sleepCycleThresholdMinutes?: number;
+  // Wake cycle — periodic autonomous exploration during sleep cycle
+  wakeCycleEnabled?: boolean;
+  wakeCycleIntervalHours?: number;
 }
 
 export interface BlueskySettings {
