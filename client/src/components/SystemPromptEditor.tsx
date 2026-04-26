@@ -8,9 +8,11 @@ interface Props {
   disabled?: boolean;
   presets?: SystemPromptPreset[];
   isAgent?: boolean;
+  hidden?: boolean;
 }
 
-export function SystemPromptEditor({ value, onChange, disabled, presets, isAgent }: Props) {
+export function SystemPromptEditor({ value, onChange, disabled, presets, isAgent, hidden }: Props) {
+  if (hidden) return null;
   const [expanded, setExpanded] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [localValue, setLocalValue] = useState(value);

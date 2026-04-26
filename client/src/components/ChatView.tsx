@@ -455,13 +455,14 @@ export function ChatView({
         </div>
       </div>
 
-      {/* System Prompt */}
+      {/* System Prompt — hidden after first message (preset changes would invalidate the entire KV cache) */}
       <SystemPromptEditor
         value={systemPrompt}
         onChange={onSystemPromptChange}
         disabled={streaming}
         presets={systemPromptPresets}
         isAgent={chatType === "agent" || chatType === "bluesky"}
+        hidden={messages.length > 0}
       />
 
       <div className="flex-1 flex flex-row min-h-0 min-w-0 relative">
