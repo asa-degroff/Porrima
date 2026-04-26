@@ -177,7 +177,7 @@ function notebookEntryAttachments(entry: Partial<NotebookEntry>): BlockAttachmen
 function listAgentNotebookEntries(): NotebookIndex {
   // notebook + synthesis blocks, newest first. listMemoryBlocks already orders
   // by updatedAt DESC and excludes superseded rows.
-  const blocks = listMemoryBlocks().filter(
+  const blocks = listMemoryBlocks({ includeInternal: true }).filter(
     (b) => b.blockType === "notebook" || b.blockType === "synthesis"
   );
   const entries = blocks.map((b) => ({

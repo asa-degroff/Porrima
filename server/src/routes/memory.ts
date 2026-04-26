@@ -273,12 +273,13 @@ router.post("/", async (req, res) => {
 // Memory Blocks API
 // ---------------------------------------------------------------------------
 
-// List blocks (optional filters: scope, projectId)
+// List blocks (optional filters: scope, projectId, includeInternal)
 router.get("/blocks", async (_req, res) => {
-  const { scope, projectId } = _req.query as { scope?: string; projectId?: string };
+  const { scope, projectId, includeInternal } = _req.query as { scope?: string; projectId?: string; includeInternal?: string };
   const blocks = listMemoryBlocks({
     scope: scope as "global" | "project" | undefined,
     projectId,
+    includeInternal: includeInternal === "true",
   });
   res.json(blocks);
 });

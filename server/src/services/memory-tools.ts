@@ -537,7 +537,7 @@ export async function executeMemoryTool(
 
     case "list_memory_blocks": {
       const { scope, project_id, query } = toolCall.arguments;
-      const blocks = listMemoryBlocks({ scope, projectId: project_id, query });
+      const blocks = listMemoryBlocks({ scope, projectId: project_id, query, includeInternal: true });
       
       if (blocks.length === 0) {
         return { content: "No memory blocks found matching criteria.", isError: false };

@@ -17,7 +17,27 @@ function isUserBlock(b: MemoryBlock): boolean {
   return true;
 }
 
+// Module-level cache keyed by projectId. Persists across component mounts/unmounts
+// so the count badge and dropdown data survive chat switches without re-fetching.
+const blocksCache = new Map<string, { blocks: MemoryBlock[]; timestamp: number }>();
+const CACHE_TTL_MS = 30_000; // 30s — stale-while-revalidate
+
+function getCacheKey(projectId?: string): string {
+  return projectId ?? "__global__";
+}
+
+async function fetchBlocks(projectId?: string): Promise<MemoryBlock[]> {
+  const [global, project] = await Promise.all([
+    fetchMemoryBlocks("global"),
+    projectId ? fetchMemoryBlocks("project", projectId) : Promise.resolve<MemoryBlock[]>([]),
+  ]);
+  // Backend already filters internal blocks by blockType, but keep client-side
+  // filter as a safety net for any edge cases.
+  return [...global, ...project].filter(isUserBlock);
+}
+
 export function BlockIndicator({ projectId }: Props) {
+  const cacheKey = getCacheKey(projectId);
   const [open, setOpen] = useState(false);
   const [blocks, setBlocks] = useState<MemoryBlock[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,30 +63,48 @@ export function BlockIndicator({ projectId }: Props) {
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  // Reset cached blocks when projectId changes (different chat/project)
-  const lastProjectIdRef = useRef(projectId);
-  if (lastProjectIdRef.current !== projectId) {
-    lastProjectIdRef.current = projectId;
-    setBlocks(null);
-    setOpen(false);
-    setExpandedBlockId(null);
-    setHistory(null);
-  }
+  // Eager-fetch blocks on mount and cacheKey change. Uses stale-while-revalidate:
+  // if there's a cached hit within TTL, show it immediately then refresh in background.
+  // This ensures the count badge is always visible and the dropdown has data ready.
+  useEffect(() => {
+    let cancelled = false;
+    const cached = blocksCache.get(cacheKey);
+
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      // Stale cache hit — show immediately, revalidate in background
+      setBlocks(cached.blocks);
+      setLoading(false);
+    } else {
+      // Cache miss or expired — fetch fresh
+      setLoading(true);
+    }
+
+    fetchBlocks(projectId)
+      .then((result) => {
+        if (!cancelled) {
+          blocksCache.set(cacheKey, { blocks: result, timestamp: Date.now() });
+          setBlocks(result);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          // Fall back to stale cache if fetch fails
+          if (cached) {
+            setBlocks(cached.blocks);
+          } else {
+            setBlocks([]);
+          }
+          setLoading(false);
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [cacheKey, projectId]);
 
   const handleClick = useCallback(() => {
-    const opening = !open;
-    setOpen(opening);
-    if (opening && !blocks) {
-      setLoading(true);
-      Promise.all([
-        fetchMemoryBlocks("global"),
-        projectId ? fetchMemoryBlocks("project", projectId) : Promise.resolve([]),
-      ])
-        .then(([global, project]) => setBlocks([...global, ...project].filter(isUserBlock)))
-        .catch(() => setBlocks([]))
-        .finally(() => setLoading(false));
-    }
-  }, [open, blocks, projectId]);
+    setOpen((prev) => !prev);
+  }, []);
 
   const handleBlockClick = useCallback((blockId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -124,12 +162,14 @@ export function BlockIndicator({ projectId }: Props) {
       setBlocks((prev) =>
         prev ? prev.map((b) => (b.id === blockId ? updated : b)) : []
       );
+      // Invalidate cache so next interaction triggers a fresh fetch
+      blocksCache.delete(cacheKey);
       setEditingBlockId(null);
       setEditBlockContent("");
     } catch {
       // Silent fail
     }
-  }, [editBlockContent]);
+  }, [editBlockContent, cacheKey]);
 
   const handleCancelEdit = useCallback(() => {
     setEditingBlockId(null);

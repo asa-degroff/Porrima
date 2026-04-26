@@ -1621,29 +1621,36 @@ function extractExcerpt(text: string, query: string, radius = 400): string {
 }
 
 /** List blocks with optional filtering. */
-export function listMemoryBlocks(opts: { scope?: "global" | "project" | "archived"; projectId?: string; query?: string } = {}): MemoryBlock[] {
+export function listMemoryBlocks(opts: { scope?: "global" | "project" | "archived"; projectId?: string; query?: string; includeInternal?: boolean } = {}): MemoryBlock[] {
   const db = getDb();
   let querySQL = "SELECT * FROM memory_blocks WHERE supersededBy IS NULL";
   const params: any[] = [];
-  
+
   if (opts.scope) {
     querySQL += " AND scope = ?";
     params.push(opts.scope);
   }
-  
+
   if (opts.projectId) {
     querySQL += " AND projectId = ?";
     params.push(opts.projectId);
   }
-  
+
   if (opts.query) {
     querySQL += " AND (name LIKE ? OR description LIKE ?)";
     const searchPattern = `%${opts.query}%`;
     params.push(searchPattern, searchPattern);
   }
-  
+
+  // Exclude internal block types (synthesis, zeitgeist-archive, notebook) unless
+  // explicitly requested. These are managed by the agent and shouldn't appear in
+  // the user-facing block indicator or dropdown.
+  if (!opts.includeInternal) {
+    querySQL += " AND blockType NOT IN ('synthesis', 'zeitgeist-archive', 'notebook')";
+  }
+
   querySQL += " ORDER BY updatedAt DESC";
-  
+
   const rows = db.prepare(querySQL).all(...params) as any[];
   return rows.map(mapBlockRow);
 }
