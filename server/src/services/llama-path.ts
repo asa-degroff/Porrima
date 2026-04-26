@@ -8,7 +8,7 @@ const execFileAsync = promisify(execFile);
 
 const LLAMA_CURRENT_LINK = join(process.env.HOME || "/home/asa", "bin", "llama-current");
 const SYSTEMCTL = "systemctl";
-const SERVICE_NAMES = ["llama-server.service", "reranker.service", "extraction-model.service"];
+const SERVICE_NAMES = ["llama-server.service", "reranker.service", "extraction-model.service", "title-generation.service"];
 
 // How long to wait for each service to come up after restart
 const HEALTH_CHECK_TIMEOUT_MS = 8000;

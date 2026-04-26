@@ -92,6 +92,11 @@ router.patch("/:id", async (req, res) => {
       if (body.url !== undefined) settings.embeddingUrl = (body.url as string).trim() || undefined;
       if (body.modelId !== undefined) settings.embeddingModel = (body.modelId as string).trim() || undefined;
     }
+    if (def.id === "title-generation") {
+      if (body.enabled !== undefined) settings.titleGenerationEnabled = Boolean(body.enabled);
+      if (body.url !== undefined) settings.titleGenerationUrl = (body.url as string).trim() || undefined;
+      if (body.modelId !== undefined) settings.titleGenerationModelId = (body.modelId as string).trim() || undefined;
+    }
 
     await saveSettings(settings);
 
@@ -106,7 +111,13 @@ router.patch("/:id", async (req, res) => {
 export default router;
 
 function getDefinition(id: string): { id: string } | null {
-  if (id === "inference" || id === "extraction" || id === "reranker" || id === "embedding") {
+  if (
+    id === "inference" ||
+    id === "extraction" ||
+    id === "reranker" ||
+    id === "embedding" ||
+    id === "title-generation"
+  ) {
     return { id };
   }
   return null;

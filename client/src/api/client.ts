@@ -1293,6 +1293,7 @@ export interface ServerHealthMap {
   inference: ServerHealth;
   extraction: ServerHealth;
   reranker: ServerHealth;
+  titleGeneration: ServerHealth;
   embedding: ServerHealth;
   ollama: ServerHealth;
 }
@@ -1336,7 +1337,7 @@ export async function validateLlamaPathApi(candidatePath: string): Promise<{ val
 
 // --- Llama.cpp Server Supervisor ---
 
-export type LlamaServerId = "inference" | "extraction" | "reranker" | "embedding";
+export type LlamaServerId = "inference" | "extraction" | "reranker" | "embedding" | "title-generation";
 export type LlamaServerAction = "start" | "stop" | "restart";
 
 export interface LlamaServerStatus {

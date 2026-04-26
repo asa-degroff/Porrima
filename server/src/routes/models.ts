@@ -149,6 +149,7 @@ router.get("/health-all", async (_req, res) => {
   const inferenceUrl = settings.llamacppUrl?.trim() || "http://localhost:8080";
   const extractionUrl = settings.extractionModelUrl?.trim() || "http://localhost:8083";
   const rerankerUrl = settings.rerankerUrl?.trim() || "http://localhost:8082";
+  const titleGenerationUrl = settings.titleGenerationUrl?.trim() || "http://localhost:8085";
   const embeddingProvider = settings.embeddingProvider ?? "ollama";
   const embeddingUrl = settings.embeddingUrl?.trim()
     || (embeddingProvider === "llamacpp" ? "http://localhost:8084" : ollamaUrl);
@@ -170,15 +171,16 @@ router.get("/health-all", async (_req, res) => {
     }
   };
 
-  const [inference, extraction, reranker, embedding, ollama] = await Promise.all([
+  const [inference, extraction, reranker, titleGeneration, embedding, ollama] = await Promise.all([
     pingLlamaCpp(inferenceUrl),
     pingLlamaCpp(extractionUrl),
     pingLlamaCpp(rerankerUrl),
+    pingLlamaCpp(titleGenerationUrl),
     embeddingProvider === "llamacpp" ? pingLlamaCpp(embeddingUrl) : pingOllama(embeddingUrl),
     pingOllama(ollamaUrl),
   ]);
 
-  res.json({ inference, extraction, reranker, embedding, ollama });
+  res.json({ inference, extraction, reranker, titleGeneration, embedding, ollama });
 });
 
 // llama.cpp server health check (proxied to avoid CORS issues)

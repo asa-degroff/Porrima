@@ -6,7 +6,7 @@ const execFileAsync = promisify(execFile);
 const SYSTEMCTL = "systemctl";
 const JOURNALCTL = "journalctl";
 
-export type LlamaServerId = "inference" | "extraction" | "reranker" | "embedding";
+export type LlamaServerId = "inference" | "extraction" | "reranker" | "embedding" | "title-generation";
 export type LlamaServerAction = "start" | "stop" | "restart";
 
 type SystemdActiveState = "active" | "activating" | "deactivating" | "inactive" | "failed" | "unknown";
@@ -92,10 +92,25 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     description: "Optional llama.cpp embedding server for memories and image corpus vectors.",
     settingsModelKey: "embeddingModel",
   },
+  "title-generation": {
+    id: "title-generation",
+    label: "Title generation",
+    role: "Chat titles",
+    unitName: "title-generation.service",
+    defaultUrl: "http://localhost:8085",
+    description: "Tiny CPU-only llama.cpp instance for generating short chat titles.",
+    settingsModelKey: "titleGenerationModelId",
+  },
 };
 
 function getDefinition(id: string): LlamaServerDefinition | null {
-  if (id === "inference" || id === "extraction" || id === "reranker" || id === "embedding") {
+  if (
+    id === "inference" ||
+    id === "extraction" ||
+    id === "reranker" ||
+    id === "embedding" ||
+    id === "title-generation"
+  ) {
     return DEFINITIONS[id];
   }
   return null;
@@ -110,6 +125,7 @@ function getConfiguredUrl(def: LlamaServerDefinition, settings: Settings): strin
       ? settings.embeddingUrl?.trim() || def.defaultUrl
       : def.defaultUrl;
   }
+  if (def.id === "title-generation") return settings.titleGenerationUrl?.trim() || def.defaultUrl;
   return def.defaultUrl;
 }
 
@@ -118,6 +134,7 @@ function getAppEnabled(def: LlamaServerDefinition, settings: Settings): boolean 
   if (def.id === "extraction") return Boolean(settings.extractionModelUrl?.trim());
   if (def.id === "reranker") return settings.rerankerEnabled !== false;
   if (def.id === "embedding") return settings.embeddingProvider === "llamacpp";
+  if (def.id === "title-generation") return settings.titleGenerationEnabled !== false;
   return false;
 }
 

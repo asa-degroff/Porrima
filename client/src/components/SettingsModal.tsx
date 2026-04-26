@@ -248,6 +248,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [rerankerModels, setRerankerModels] = useState<DiscoveredModel[]>([]);
   const [rerankerModelsLoading, setRerankerModelsLoading] = useState(false);
   const [rerankerUseCustom, setRerankerUseCustom] = useState(false);
+  // Title generation server settings
+  const [titleGenerationEnabled, setTitleGenerationEnabled] = useState(settings.titleGenerationEnabled !== false);
+  const [titleGenerationUrl, setTitleGenerationUrl] = useState(settings.titleGenerationUrl || "http://localhost:8085");
+  const [titleGenerationModelId, setTitleGenerationModelId] = useState(settings.titleGenerationModelId || "qwen3.5-0.8b");
+  const [titleGenerationModels, setTitleGenerationModels] = useState<DiscoveredModel[]>([]);
+  const [titleGenerationModelsLoading, setTitleGenerationModelsLoading] = useState(false);
+  const [titleGenerationUseCustom, setTitleGenerationUseCustom] = useState(false);
   // Embedding server settings
   const savedEmbeddingProvider: "ollama" | "llamacpp" = settings.embeddingProvider ?? "ollama";
   const savedEmbeddingUrl =
@@ -383,6 +390,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [extractionModelDropdownOpen, setExtractionModelDropdownOpen] = useState(false);
   const [embeddingModelDropdownOpen, setEmbeddingModelDropdownOpen] = useState(false);
   const [rerankerModelDropdownOpen, setRerankerModelDropdownOpen] = useState(false);
+  const [titleGenerationModelDropdownOpen, setTitleGenerationModelDropdownOpen] = useState(false);
   const [favoritesDropdownOpen, setFavoritesDropdownOpen] = useState(false);
   const [imageBackendDropdownOpen, setImageBackendDropdownOpen] = useState(false);
   const [webSearchProviderDropdownOpen, setWebSearchProviderDropdownOpen] = useState(false);
@@ -396,6 +404,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const extractionModelDropdownRef = useRef<HTMLDivElement>(null);
   const embeddingModelDropdownRef = useRef<HTMLDivElement>(null);
   const rerankerModelDropdownRef = useRef<HTMLDivElement>(null);
+  const titleGenerationModelDropdownRef = useRef<HTMLDivElement>(null);
   const favoritesDropdownRef = useRef<HTMLDivElement>(null);
   const imageBackendDropdownRef = useRef<HTMLDivElement>(null);
   const webSearchProviderDropdownRef = useRef<HTMLDivElement>(null);
@@ -409,6 +418,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useClickOutside(extractionModelDropdownRef, () => setExtractionModelDropdownOpen(false), extractionModelDropdownOpen);
   useClickOutside(embeddingModelDropdownRef, () => setEmbeddingModelDropdownOpen(false), embeddingModelDropdownOpen);
   useClickOutside(rerankerModelDropdownRef, () => setRerankerModelDropdownOpen(false), rerankerModelDropdownOpen);
+  useClickOutside(titleGenerationModelDropdownRef, () => setTitleGenerationModelDropdownOpen(false), titleGenerationModelDropdownOpen);
   useClickOutside(imageBackendDropdownRef, () => setImageBackendDropdownOpen(false), imageBackendDropdownOpen);
   useClickOutside(webSearchProviderDropdownRef, () => setWebSearchProviderDropdownOpen(false), webSearchProviderDropdownOpen);
   useClickOutside(tocRef, () => setTocOpen(false), tocOpen);
@@ -477,6 +487,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       if (s.id === "embedding") {
         setEmbeddingUrl(s.url);
         if (s.expectedModel) setEmbeddingModel(s.expectedModel);
+      }
+      if (s.id === "title-generation") {
+        setTitleGenerationUrl(s.url);
+        if (s.expectedModel) setTitleGenerationModelId(s.expectedModel);
       }
       // Refresh the server statuses to pick up new health
       await refreshLlamaServers();
@@ -580,7 +594,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       .then((h) => { if (!cancelled) setServerHealth(h); })
       .catch(() => { if (!cancelled) setServerHealth(null); });
     return () => { cancelled = true; };
-  }, [ollamaUrl, llamacppUrl, rerankerUrl, embeddingUrl, embeddingProvider, extractionModelUrl]);
+  }, [ollamaUrl, llamacppUrl, rerankerUrl, embeddingUrl, embeddingProvider, extractionModelUrl, titleGenerationUrl]);
 
   // Discover embedding models for the dropdown. Re-runs when provider/url change.
   useEffect(() => {
@@ -638,6 +652,25 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     return () => { cancelled = true; clearTimeout(handle); };
   }, [rerankerEnabled, rerankerUrl]);
 
+  // Discover title-generation models for the dropdown. Re-runs when URL changes.
+  useEffect(() => {
+    if (!titleGenerationEnabled) return;
+    let cancelled = false;
+    const url = titleGenerationUrl.trim();
+    if (!url) {
+      setTitleGenerationModels([]);
+      return;
+    }
+    setTitleGenerationModelsLoading(true);
+    const handle = setTimeout(() => {
+      discoverModels({ provider: "llamacpp", kind: "chat", url })
+        .then((r) => { if (!cancelled) setTitleGenerationModels(r.models); })
+        .catch(() => { if (!cancelled) setTitleGenerationModels([]); })
+        .finally(() => { if (!cancelled) setTitleGenerationModelsLoading(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [titleGenerationEnabled, titleGenerationUrl]);
+
   // Fetch Bluesky status
   useEffect(() => {
     fetch("/api/bluesky/status", { credentials: "include" })
@@ -672,6 +705,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       rerankerEnabled,
       rerankerUrl: rerankerUrl.trim() || undefined,
       rerankerModelId: rerankerModelId.trim() || undefined,
+      titleGenerationEnabled,
+      titleGenerationUrl: titleGenerationUrl.trim() || undefined,
+      titleGenerationModelId: titleGenerationModelId.trim() || undefined,
       embeddingProvider,
       embeddingUrl: embeddingUrl.trim() || undefined,
       embeddingModel: embeddingModel.trim() || undefined,
@@ -1372,7 +1408,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           <div id="inference" className="space-y-4">
             <h3 className="text-sm font-semibold text-white/80">Inference Servers</h3>
             <p className="text-xs text-white/40 -mt-2">
-              Four llama.cpp model roles (main chat inference, memory extraction, cross-encoder reranker, embedding) plus the Ollama server (model discovery, title generation, vision). Each URL can point at a separate instance.
+              Five llama.cpp model roles (main chat inference, memory extraction, cross-encoder reranker, embedding, title generation) plus the Ollama server (model discovery, vision). Each URL can point at a separate instance.
             </p>
 
             {/* Server health (HTTP pings against each configured URL) */}
@@ -1384,6 +1420,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   ["extraction", "Extraction"],
                   ["reranker", "Reranker"],
                   ["embedding", "Embedding"],
+                  ["titleGeneration", "Titles"],
                   ["ollama", "Ollama"],
                 ] as const).map(([key, label]) => {
                   const status = serverHealth?.[key];
@@ -1545,7 +1582,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                    ? server.http.modelIds.slice(0, 3).join(", ") + (server.http.modelIds.length > 3 ? ` +${server.http.modelIds.length - 3}` : "")
 	                    : "none reported";
 	                  return (
-	                    <div key={server.id} className="rounded-lg border border-white/10 bg-white/[0.025] overflow-hidden">
+	                    <div key={server.id} className="rounded-lg border border-white/10 bg-white/[0.025]">
 	                      {/* Card header */}
 	                      <div className="p-3 space-y-3">
 	                        <div className="flex items-start justify-between gap-3">
@@ -1626,7 +1663,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 
 	                      {/* Inline config section */}
 	                      {configExpanded && (
-	                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3">
+	                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3 last:rounded-b-[7px]">
 	                          {server.id === "inference" && (
 	                            <div className="space-y-2">
 	                              <div className="flex items-center gap-2">
@@ -1855,12 +1892,64 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                              )}
 	                            </div>
 	                          )}
+	                          {server.id === "title-generation" && (
+	                            <div className="space-y-2">
+	                              <div className="flex items-center gap-2">
+	                                <label className="flex items-center gap-2 cursor-pointer">
+	                                  <input type="checkbox" checked={titleGenerationEnabled} onChange={(e) => {
+	                                    setTitleGenerationEnabled(e.target.checked);
+	                                    handleLlamaServerSettings("title-generation", { enabled: e.target.checked });
+	                                  }} className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30" />
+	                                  <span className="text-xs text-white/70">Enabled</span>
+	                                </label>
+	                              </div>
+	                              {titleGenerationEnabled && (
+	                                <div className="space-y-2">
+	                                  <div className="flex gap-2">
+	                                    <label className="block text-xs text-white/50 w-12">URL</label>
+	                                    <input type="text" value={titleGenerationUrl} onChange={(e) => setTitleGenerationUrl(e.target.value)}
+	                                      onBlur={() => handleLlamaServerSettings("title-generation", { url: titleGenerationUrl })}
+	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                                      placeholder="http://localhost:8085" />
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Model</label>
+	                                    {titleGenerationModels.length > 0 && !titleGenerationUseCustom ? (
+	                                      <div className="relative" ref={titleGenerationModelDropdownRef}>
+	                                        <button onClick={() => setTitleGenerationModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
+	                                          <span className="truncate flex-1 text-left">{titleGenerationModelId || "Select…"}</span>
+	                                          {chevronSvg(titleGenerationModelDropdownOpen)}
+	                                        </button>
+	                                        <DropdownPanel open={titleGenerationModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
+	                                          {titleGenerationModels.map((m) => (
+	                                            <button key={m.id} onClick={() => {
+	                                              setTitleGenerationModelId(m.id); setTitleGenerationModelDropdownOpen(false);
+	                                              handleLlamaServerSettings("title-generation", { modelId: m.id });
+	                                            }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === titleGenerationModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                              {m.name}
+	                                            </button>
+	                                          ))}
+	                                          <button onClick={() => setTitleGenerationUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                        </DropdownPanel>
+	                                      </div>
+	                                    ) : (
+	                                      <input type="text" value={titleGenerationModelId} onChange={(e) => setTitleGenerationModelId(e.target.value)}
+	                                        onBlur={() => handleLlamaServerSettings("title-generation", { modelId: titleGenerationModelId })}
+	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                        placeholder="qwen3.5-0.8b" />
+	                                    )}
+	                                  </div>
+	                                </div>
+	                              )}
+	                              <p className="text-xs text-white/30">Tiny CPU-only instance for generating short chat titles.</p>
+	                            </div>
+	                          )}
 	                        </div>
 	                      )}
 
 	                      {/* Details section */}
 	                      {detailsExpanded && (
-	                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3">
+	                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3 last:rounded-b-[7px]">
 	                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
 	                            <div><span className="text-white/30">Role</span><p className="text-white/60">{server.role}</p></div>
 	                            <div><span className="text-white/30">PID</span><p className="text-white/60 font-mono">{server.systemd.mainPid ?? "n/a"}</p></div>

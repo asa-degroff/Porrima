@@ -204,6 +204,10 @@ export interface Settings {
   rerankerEnabled?: boolean;    // default true
   rerankerUrl?: string;         // default "http://localhost:8082"
   rerankerModelId?: string;     // default "qwen3-reranker" — model name sent to the reranker server
+  // Title generation server (CPU-only llama.cpp instance, tiny model)
+  titleGenerationEnabled?: boolean;  // default true
+  titleGenerationUrl?: string;       // default "http://localhost:8085"
+  titleGenerationModelId?: string;   // default "qwen3.5-0.8b" — model name sent to the title-generation server
   // Embedding server (Ollama or llama.cpp)
   embeddingProvider?: "ollama" | "llamacpp";  // default "ollama"
   embeddingUrl?: string;        // default "http://localhost:11434" (ollama) or "http://localhost:8084" (llamacpp)
