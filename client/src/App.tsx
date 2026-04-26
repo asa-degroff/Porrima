@@ -69,7 +69,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { models } = useModels();
   const { chats, createChat, removeChat, refresh, refreshImmediate } = useChats();
   const { projects, createProject, removeProject } = useProjects();
-  const { settings, updateSettings } = useSettings();
+  const { settings, updateSettings, loading: settingsLoading } = useSettings();
   const { isOnline } = useOnlineStatus();
   const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
@@ -808,7 +808,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         streamingSegmentIndex={streamingSegmentIndex}
       />
       )}
-      {settingsOpen && (
+      {settingsOpen && !settingsLoading && (
         <SettingsModal
           settings={settings}
           models={models}

@@ -649,7 +649,37 @@ export async function getSettings(): Promise<Settings> {
 
 export async function saveSettings(settings: Settings): Promise<Settings> {
   const db = getDb();
-  const merged = { ...DEFAULT_SETTINGS, ...settings };
+
+  // Merge against the currently-stored settings, not just DEFAULT_SETTINGS.
+  // The previous behavior — `{ ...DEFAULT_SETTINGS, ...settings }` — replaced
+  // the whole row from the incoming object, which made the server vulnerable
+  // to clients that send a stale/partial Settings object (e.g., a UI modal
+  // that mounts before its async settings fetch completes and then submits
+  // empty defaults). With a true merge against existing, fields the client
+  // didn't include are preserved, and a defensive guard below also refuses
+  // to clobber non-empty stored strings with empty-string overwrites.
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'settings'").get() as
+    | { value: string }
+    | undefined;
+  const existing: Settings = row
+    ? { ...DEFAULT_SETTINGS, ...JSON.parse(row.value) }
+    : { ...DEFAULT_SETTINGS };
+
+  const safeIncoming: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(settings)) {
+    // Drop empty-string overwrites of non-empty stored string values. The
+    // SettingsModal-mounts-before-load race is the canonical case: it would
+    // submit `extractionModelId = ""` when the user really has it set. To
+    // explicitly clear a string field, send `null` (treated as an explicit
+    // clear and passed through) rather than `""`.
+    const existingVal = (existing as unknown as Record<string, unknown>)[key];
+    if (val === "" && typeof existingVal === "string" && existingVal.length > 0) {
+      continue;
+    }
+    safeIncoming[key] = val;
+  }
+
+  const merged = { ...DEFAULT_SETTINGS, ...existing, ...safeIncoming } as Settings;
 
   db.prepare(`
     INSERT OR REPLACE INTO settings (key, value)
