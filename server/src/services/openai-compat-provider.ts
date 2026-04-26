@@ -499,10 +499,22 @@ export async function ensureModelLoaded(baseUrl: string, modelId: string, contex
   }
 
   try {
-    // Unload the previous model first to free VRAM
-    const previousModelId = lastLoadedModel?.modelId;
-    const needsUnload = lastLoadedModel?.baseUrl === baseUrl && previousModelId !== modelId;
-    const needsReload = lastLoadedModel?.baseUrl === baseUrl && previousModelId === modelId;
+    // Unload the previous model first to free VRAM. After a Node restart the
+    // in-memory `lastLoadedModel` cache is empty even when the router has a
+    // different model loaded — without recovering that live state we'd skip
+    // the unload, send /models/load for the new model on top, and OOM the GPU.
+    // Recover the actual loaded model name from /v1/models when our cache is
+    // empty so the unload path triggers correctly.
+    let previousModelId = lastLoadedModel?.modelId;
+    if (!previousModelId) {
+      const actual = await getActualLoadedModel(baseUrl);
+      if (actual && actual.id !== modelId) {
+        previousModelId = actual.id;
+        console.log(`[openai-compat] Recovered live loaded model=${actual.id} for ${baseUrl} (in-memory cache was empty)`);
+      }
+    }
+    const needsUnload = previousModelId !== undefined && previousModelId !== modelId;
+    const needsReload = lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel?.modelId === modelId;
 
     // Invalidate cache before any model change so failures don't leave stale state
     if (needsUnload) {

@@ -1003,6 +1003,22 @@ export async function runSystemSynthesis(options?: {
       console.log(`[system-chat] Agent persisted ${notebookCalls} notebook entry/entries via create_notebook_entry`);
     }
 
+    // --- Detect "ran but produced nothing" failure (e.g., upstream LLM error) ---
+    // If the stream errored AND we have no text, no tool calls, no thinking,
+    // there's nothing to gate on. Returning success: true here would burn the
+    // 24h synthesis slot on a transient failure (model load race, brief 500),
+    // and the next periodic check would skip until tomorrow. Bail out without
+    // calling setLastSynthesis so the next scheduler tick re-runs the cycle.
+    const producedNothing =
+      stopReason === "error" && textLen === 0 && thinkLen === 0 && allToolCalls.length === 0;
+    if (producedNothing) {
+      console.warn(
+        `[system-chat] Synthesis failed at iter ${iterations} (stopReason=error, no output) — NOT updating lastSynthesis so the next scheduler tick can retry.`,
+      );
+      releaseSynthesisLock();
+      return makeErrorResult("Synthesis failed: model returned error before producing any output");
+    }
+
     // --- Invalidate stable prefix caches so next chats pick up block changes ---
     try {
       invalidateAllStablePrefixCaches();
