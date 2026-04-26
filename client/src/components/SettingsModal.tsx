@@ -3713,7 +3713,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       step={15}
                       value={sleepCycleThreshold}
                       onChange={(e) => setSleepCycleThreshold(Number(e.target.value))}
-                      className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-indigo-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                      className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                     />
                     <span className="text-xs text-white/40 w-16 text-right">{sleepCycleThreshold} min</span>
                   </div>
@@ -3728,7 +3728,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <ToggleSwitch
                     checked={wakeCycleEnabled}
                     onChange={() => setWakeCycleEnabled(!wakeCycleEnabled)}
-                    accentColor="violet"
+                    accentColor="purple"
                   />
                 </div>
 
@@ -3743,7 +3743,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         step={1}
                         value={wakeCycleInterval}
                         onChange={(e) => setWakeCycleInterval(Number(e.target.value))}
-                        className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-violet-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                        className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                       />
                       <span className="text-xs text-white/40 w-16 text-right">{wakeCycleInterval}h</span>
                     </div>
