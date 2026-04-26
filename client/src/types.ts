@@ -228,6 +228,8 @@ export interface Settings {
   sleepModeTriggeredAt?: string;
   // User activity tracking — stamped on every user-initiated message send
   lastUserActivityAt?: string;
+  // Agent completion tracking — stamped when the agent's last response completed
+  lastAgentCompletedAt?: string;
   // Sleep cycle — when user is idle for this many minutes, the sleep cycle begins
   sleepCycleThresholdMinutes?: number;
   // Wake cycle — periodic autonomous exploration during sleep cycle

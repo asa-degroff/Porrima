@@ -218,11 +218,17 @@ export interface Settings {
   modelPreserveThinking?: Record<string, boolean>;
   // Bluesky integration settings
   bluesky?: BlueskySettings;
-  // Sleep mode — tracks when the user manually triggered synthesis, skips next periodic
+  // Sleep mode — when the user clicked the sleep button to release the system
+  // to autonomous mode. Acts as both: (a) immediate activation of the sleep cycle,
+  // and (b) 2h synthesis cooldown (scheduler skips periodic runs while < 2h elapsed).
   sleepModeTriggeredAt?: string;
   // User activity tracking — stamped on every user-initiated message send.
-  // Used by the scheduler to determine sleep cycle state.
   lastUserActivityAt?: string;
+  // Agent completion tracking — stamped when the agent's last response fully completed
+  // (after tool loop, compaction, etc.). The sleep cycle's inactivity timer measures
+  // from this timestamp rather than lastUserActivityAt, preventing premature sleep
+  // activation while the agent is still producing output.
+  lastAgentCompletedAt?: string;
   // Sleep cycle — when user is idle for this many minutes, the sleep cycle begins.
   // During sleep, synthesis and wake cycles run autonomously.
   sleepCycleThresholdMinutes?: number;

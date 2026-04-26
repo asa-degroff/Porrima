@@ -602,18 +602,16 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   }, []);
 
   // Synthesis handlers. Trigger dispatches the run server-side (202 Accepted)
-  // and returns immediately. The polling effect watches isSynthesizing to
-  // reflect progress and to flash "Complete" on finish.
+  // Release the system to autonomous mode. Stamps sleepModeTriggeredAt which
+  // immediately activates the sleep cycle. No longer dispatches synthesis —
+  // the scheduler runs synthesis/wake on their normal schedule.
   const handleSynthesisSleep = useCallback(async () => {
     if (isSynthesizing) return;
     setSleepModeActive(true);
-    setSynthesisComplete(false);
     try {
       await triggerSleepMode();
-      // Optimistically reflect that a run is starting so the button updates
-      // before the next poll tick; the poll will confirm within ~10s.
-      setIsSynthesizing(true);
-      wasSynthesizingRef.current = true;
+      // Sleep cycle will activate immediately on next poll tick.
+      // No synthesis dispatch — the scheduler handles scheduling.
     } catch (e: any) {
       console.error("Sleep mode failed:", e.message);
     } finally {

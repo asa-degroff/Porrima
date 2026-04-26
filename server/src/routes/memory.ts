@@ -94,22 +94,32 @@ router.get("/synthesis/status", async (_req, res) => {
   const { isSynthesisActive, isWakeCycleActive } = await import("../services/system-chat.js");
   const { getLastWakeCycleAt } = await import("../services/memory-storage.js");
   const { getSettings } = await import("../services/chat-storage.js");
+  const { hasActiveChats } = await import("../services/memory-extraction.js");
   // Check if any extraction run is currently in progress
   const recentRuns = getRecentExtractionRuns();
   const isExtractionRunning = recentRuns.some((r) => r.status === "running");
-  
+
   // Compute sleep cycle state
   const settings = await getSettings();
   const sleepCycleThresholdMinutes = settings.sleepCycleThresholdMinutes ?? 60;
   let sleepCycleActive = false;
-  if (settings.lastUserActivityAt) {
-    const lastActivity = new Date(settings.lastUserActivityAt).getTime();
-    const elapsedMinutes = (Date.now() - lastActivity) / (1000 * 60);
-    sleepCycleActive = elapsedMinutes >= sleepCycleThresholdMinutes;
+
+  if (!hasActiveChats()) {
+    // Immediate activation: user clicked the release button
+    if (settings.sleepModeTriggeredAt) {
+      sleepCycleActive = true;
+    } else {
+      // Inactivity-based: measure from agent completion, fall back to user activity
+      const lastCompletion = settings.lastAgentCompletedAt ?? settings.lastUserActivityAt;
+      if (lastCompletion) {
+        const elapsedMinutes = (Date.now() - new Date(lastCompletion).getTime()) / (1000 * 60);
+        sleepCycleActive = elapsedMinutes >= sleepCycleThresholdMinutes;
+      }
+    }
   }
-  
+
   const lastWakeCycleAt = await getLastWakeCycleAt();
-  
+
   res.json({
     lastSynthesis,
     memoryCount,
@@ -119,6 +129,8 @@ router.get("/synthesis/status", async (_req, res) => {
     sleepCycleActive,
     sleepCycleThresholdMinutes,
     lastUserActivityAt: settings.lastUserActivityAt ?? null,
+    lastAgentCompletedAt: settings.lastAgentCompletedAt ?? null,
+    sleepModeTriggeredAt: settings.sleepModeTriggeredAt ?? null,
     // Wake cycle
     isWakeCycleRunning: isWakeCycleActive(),
     lastWakeCycleAt,
@@ -162,25 +174,21 @@ router.post("/synthesis/run", async (_req, res) => {
   }
 });
 
-// Sleep mode — trigger synthesis and suppress periodic cycles for 2 hours.
-// The flag is a timestamp, not a latch: the scheduler skips while
-// Date.now() - sleepModeTriggeredAt < 2h, so the cooldown self-expires
-// without the endpoint needing to clear it.
+// Release the system to autonomous mode. Stamps sleepModeTriggeredAt which:
+// (a) immediately activates the sleep cycle (bypassing the inactivity threshold)
+// (b) suppresses periodic synthesis for 2h (the scheduler handles scheduling)
+// Unlike the previous design, this no longer dispatches synthesis immediately —
+// the scheduler runs synthesis and wake cycles on their normal schedule.
+// The 2h cooldown prevents the periodic synthesis from double-firing right after release.
 //
-// Like /run, returns 202 immediately to survive proxy idle timeouts; the
-// /status poll surfaces completion.
+// Returns 202 immediately to survive proxy idle timeouts.
 router.post("/synthesis/sleep", async (_req, res) => {
   try {
-    const { isSynthesisActive } = await import("../services/system-chat.js");
-    if (isSynthesisActive()) {
-      return res.status(409).json({ error: "Synthesis already in progress" });
-    }
     const { getSettings, saveSettings } = await import("../services/chat-storage.js");
     const settings = await getSettings();
     settings.sleepModeTriggeredAt = new Date().toISOString();
     await saveSettings(settings);
 
-    dispatchSynthesis("sleep");
     res.status(202).json({ started: true, sleepModeTriggeredAt: settings.sleepModeTriggeredAt });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

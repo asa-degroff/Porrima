@@ -2035,6 +2035,19 @@ async function handleChatStream(
       await clearPendingState(chat.id);
     }
 
+    // Stamp agent completion — used by the sleep cycle to measure inactivity
+    // from when the agent finished (not from when the user sent).
+    // Only stamp for user-facing chats, not system (synthesis/wake) or quick.
+    if (chat.type === "agent" || chat.type === "bluesky") {
+      try {
+        const settings = await getSettings();
+        settings.lastAgentCompletedAt = new Date().toISOString();
+        await saveSettings(settings);
+      } catch (e) {
+        console.warn("[chat] Failed to stamp agent completion:", e);
+      }
+    }
+
     if (waitingForInput) {
       res.write(
         `event: done\ndata: ${JSON.stringify({ message: assistantMsg, waitingForInput: true, iterations })}\n\n`
