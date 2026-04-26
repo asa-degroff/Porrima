@@ -13,6 +13,7 @@ import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-e
 import { getBlueskyPoller } from "./bluesky-poller.js";
 import { BLUESKY_SYSTEM_PROMPT } from "../routes/bluesky.js";
 import { enrichCorpusBatch } from "./image-corpus.js";
+import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js";
 
 const SYNTHESIS_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -147,28 +148,14 @@ async function findChatsNeedingDelayedExtraction(thresholdMs: number): Promise<s
  * Sleep cycle activates when EITHER:
  * 1. sleepModeTriggeredAt is set (user clicked the release button) — immediate activation
  * 2. Agent has been idle longer than the configured threshold (measured from lastAgentCompletedAt)
+ * A newer user message suppresses sleep until the next assistant completion stamps lastAgentCompletedAt.
  * In both cases, no active chats must be streaming.
  */
 function isSleepCycleActive(settings: any): boolean {
-  if (hasActiveChats()) return false;
-
-  // Immediate activation: user clicked the release button
-  if (settings.sleepModeTriggeredAt) {
-    return true;
-  }
-
-  // Inactivity-based activation: measure from when the agent finished its last response.
-  // Falls back to lastUserActivityAt if no agent completion recorded yet.
-  const lastCompletion = settings.lastAgentCompletedAt ?? settings.lastUserActivityAt;
-  if (!lastCompletion) {
-    return false;
-  }
-
-  const thresholdMinutes = settings.sleepCycleThresholdMinutes ?? DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES;
-  const lastActivity = new Date(lastCompletion).getTime();
-  const elapsed = (Date.now() - lastActivity) / (1000 * 60); // minutes
-
-  return elapsed >= thresholdMinutes;
+  return computeSleepCycleActive(settings, {
+    hasActiveChats: hasActiveChats(),
+    defaultThresholdMinutes: DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES,
+  });
 }
 
 /**

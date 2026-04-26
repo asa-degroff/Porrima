@@ -25,6 +25,7 @@ import { runSystemSynthesis } from "../services/system-chat.js";
 import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
 import { getRecentExtractionRuns, subscribeExtractionEvents } from "../services/memory-extraction-observability.js";
 import { invalidateAllMemoriesCaches, invalidateAllStablePrefixCaches } from "../services/memory-context.js";
+import { isSleepCycleActive as computeSleepCycleActive } from "../services/sleep-cycle.js";
 import type { Memory, MemorySummary } from "../types.js";
 
 const router = Router();
@@ -102,21 +103,10 @@ router.get("/synthesis/status", async (_req, res) => {
   // Compute sleep cycle state
   const settings = await getSettings();
   const sleepCycleThresholdMinutes = settings.sleepCycleThresholdMinutes ?? 60;
-  let sleepCycleActive = false;
-
-  if (!hasActiveChats()) {
-    // Immediate activation: user clicked the release button
-    if (settings.sleepModeTriggeredAt) {
-      sleepCycleActive = true;
-    } else {
-      // Inactivity-based: measure from agent completion, fall back to user activity
-      const lastCompletion = settings.lastAgentCompletedAt ?? settings.lastUserActivityAt;
-      if (lastCompletion) {
-        const elapsedMinutes = (Date.now() - new Date(lastCompletion).getTime()) / (1000 * 60);
-        sleepCycleActive = elapsedMinutes >= sleepCycleThresholdMinutes;
-      }
-    }
-  }
+  const sleepCycleActive = computeSleepCycleActive(settings, {
+    hasActiveChats: hasActiveChats(),
+    defaultThresholdMinutes: 60,
+  });
 
   const lastWakeCycleAt = await getLastWakeCycleAt();
 

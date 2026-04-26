@@ -449,6 +449,7 @@ export function Sidebar({
     setProjectExpanded,
   } = useSidebarState();
   const activityShape = useActivityShape();
+  const effectiveSleepCycleActive = sleepCycleActive && !isStreaming;
 
   const [projectsEditMode, setProjectsEditMode] = useState(false);
   const [previousExpandedStates, setPreviousExpandedStates] = useState<Record<string, boolean>>({});
@@ -668,7 +669,12 @@ export function Sidebar({
                   <span className="text-emerald-400/60">●</span>
                   <span className="text-emerald-300/60">Complete</span>
                 </>
-              ) : sleepCycleActive ? (
+              ) : isStreaming ? (
+                <>
+                  <span className="text-sky-400/60">●</span>
+                  <span className="text-sky-300/60">Active</span>
+                </>
+              ) : effectiveSleepCycleActive ? (
                 <>
                   <span className="text-indigo-400/60">●</span>
                   <span className="text-indigo-300/60">Sleeping</span>
@@ -687,15 +693,17 @@ export function Sidebar({
               {onSynthesisSleep && !isSynthesizing && !isWakeCycleRunning && (
                 <button
                   onClick={onSynthesisSleep}
-                  disabled={sleepModeActive || sleepCycleActive}
+                  disabled={sleepModeActive || effectiveSleepCycleActive || isStreaming}
                   className={`p-2 rounded-lg transition-all cursor-pointer ${
-                    sleepCycleActive
+                    effectiveSleepCycleActive
                       ? 'text-indigo-400/80 bg-indigo-500/15 animate-pulse'
                       : sleepModeActive
                         ? 'text-amber-400/80 bg-amber-500/15 animate-pulse'
                         : 'text-white/30 hover:text-white/60 hover:bg-white/5'
                   }`}
-                  title={sleepCycleActive
+                  title={isStreaming
+                    ? "Chat active — release is available after the response completes"
+                    : effectiveSleepCycleActive
                     ? "Sleep cycle active — autonomous mode running"
                     : "Release — let the system take over with autonomous synthesis and wake cycles"}
                 >

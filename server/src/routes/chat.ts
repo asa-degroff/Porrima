@@ -484,6 +484,31 @@ function createSafeStreamFn(chatOllamaOptions?: { keepAlive?: string | number; n
 
 const router = Router();
 
+async function stampUserActivity(chat: Chat): Promise<void> {
+  if (chat.type === "system") return;
+
+  try {
+    const settings = await getSettings();
+    settings.lastUserActivityAt = new Date().toISOString();
+    delete settings.sleepModeTriggeredAt;
+    await saveSettings(settings);
+  } catch (e) {
+    console.warn("[chat] Failed to stamp user activity:", e);
+  }
+}
+
+async function stampAssistantCompletion(chat: Chat): Promise<void> {
+  if (chat.type === "system") return;
+
+  try {
+    const settings = await getSettings();
+    settings.lastAgentCompletedAt = new Date().toISOString();
+    await saveSettings(settings);
+  } catch (e) {
+    console.warn("[chat] Failed to stamp assistant completion:", e);
+  }
+}
+
 /**
  * Shared SSE streaming handler using pi-agent-core's agentLoop.
  * Both POST / (send) and POST /edit call this after their own setup.
@@ -2038,18 +2063,10 @@ async function handleChatStream(
       await clearPendingState(chat.id);
     }
 
-    // Stamp agent completion — used by the sleep cycle to measure inactivity
-    // from when the agent finished (not from when the user sent).
-    // Only stamp for user-facing chats, not system (synthesis/wake) or quick.
-    if (chat.type === "agent" || chat.type === "bluesky") {
-      try {
-        const settings = await getSettings();
-        settings.lastAgentCompletedAt = new Date().toISOString();
-        await saveSettings(settings);
-      } catch (e) {
-        console.warn("[chat] Failed to stamp agent completion:", e);
-      }
-    }
+    // Used by the sleep cycle to measure inactivity from when the assistant
+    // finished, not from when the user sent. System chats are autonomous and
+    // should not reset the user-idle window.
+    await stampAssistantCompletion(chat);
 
     if (waitingForInput) {
       res.write(
@@ -2209,6 +2226,13 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: "chatId and message (or images) are required" });
   }
 
+  const chat = await getChat(chatId);
+  if (!chat) return res.status(404).json({ error: "Chat not found" });
+
+  // Stamp user activity before waiting on synthesis so sleep mode clears as
+  // soon as the user starts a turn, even if processing is temporarily queued.
+  await stampUserActivity(chat);
+
   // Wait for any running system synthesis to complete before processing user messages.
   // This prevents race conditions where synthesis modifies memories/context while a
   // user message is being processed with stale context.
@@ -2218,24 +2242,6 @@ router.post("/", async (req, res) => {
       `[chat] Waiting for system synthesis to complete before processing message for chat ${chatId}`,
     );
     await pendingSynthesis;
-  }
-
-  const chat = await getChat(chatId);
-  if (!chat) return res.status(404).json({ error: "Chat not found" });
-
-  // Stamp user activity and clear sleep release flag.
-  // Only stamp for user-facing chats (not system chat).
-  // Clearing sleepModeTriggeredAt ensures the sleep indicator disappears
-  // when the user returns to activity.
-  if (chat.type !== "system") {
-    try {
-      const settings = await getSettings();
-      settings.lastUserActivityAt = new Date().toISOString();
-      delete settings.sleepModeTriggeredAt;
-      await saveSettings(settings);
-    } catch (e) {
-      console.warn("[chat] Failed to stamp user activity:", e);
-    }
   }
 
   // Restore any queued messages from a previous SSE drop
@@ -2340,6 +2346,7 @@ router.post("/", async (req, res) => {
           estimatedTokens,
         })}\n\n`);
         res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: confirmText })}\n\n`);
+        await stampAssistantCompletion(chat);
         res.write(`event: done\ndata: ${JSON.stringify({ message: confirmMsg })}\n\n`);
         closeLiveSSE(chat.id, res);
         return;
@@ -2355,6 +2362,7 @@ router.post("/", async (req, res) => {
       chat.messages.push(skipMsg);
       await saveChat(chat);
       res.write(`event: text_delta\ndata: ${JSON.stringify({ delta: skipMsg.content })}\n\n`);
+      await stampAssistantCompletion(chat);
       res.write(`event: done\ndata: ${JSON.stringify({ message: skipMsg })}\n\n`);
       closeLiveSSE(chat.id, res);
       return;
@@ -2824,6 +2832,8 @@ router.post("/enqueue", async (req, res) => {
   const chat = await getChat(chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
+  await stampUserActivity(chat);
+
   // Persist images to disk
   const persistedImages = images?.length ? await persistImages(images) : undefined;
 
@@ -2941,6 +2951,8 @@ router.post("/edit", async (req, res) => {
   if (chat.messages[messageIndex].role !== "user") {
     return res.status(400).json({ error: "messageIndex must point to a user message" });
   }
+
+  await stampUserActivity(chat);
 
   // Get the original message to preserve images BEFORE truncating
   const originalMessage = chat.messages[messageIndex];
