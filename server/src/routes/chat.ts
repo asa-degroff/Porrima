@@ -65,7 +65,10 @@ const activeStreams = (globalThis as any)._activeChatStreams || new Map<string, 
 (globalThis as any)._activeChatStreams = activeStreams;
 
 const LIVE_BUFFER_MAX_BYTES = 10 * 1024 * 1024; // 10MB cap per chat
-const LIVE_GRACE_MS = 30_000;
+// Generous grace period so brief client disconnects (tab backgrounded, network
+// hop, page refresh) don't abort an in-flight model call mid-prefill. The
+// /reconnect/:chatId endpoint replays the buffered events on reattach.
+const LIVE_GRACE_MS = 5 * 60_000;
 const LIVE_END_RETENTION_MS = 60_000;
 
 function emitToStream(stream: LiveStream, chunk: string): void {
