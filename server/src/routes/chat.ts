@@ -2220,12 +2220,15 @@ router.post("/", async (req, res) => {
   const chat = await getChat(chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
-  // Stamp user activity — used by the scheduler to determine sleep cycle state.
+  // Stamp user activity and clear sleep release flag.
   // Only stamp for user-facing chats (not system chat).
+  // Clearing sleepModeTriggeredAt ensures the sleep indicator disappears
+  // when the user returns to activity.
   if (chat.type !== "system") {
     try {
       const settings = await getSettings();
       settings.lastUserActivityAt = new Date().toISOString();
+      delete settings.sleepModeTriggeredAt;
       await saveSettings(settings);
     } catch (e) {
       console.warn("[chat] Failed to stamp user activity:", e);
