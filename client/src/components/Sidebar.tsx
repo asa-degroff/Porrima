@@ -1082,8 +1082,8 @@ export function Sidebar({
             Notebooks
             {hasUnreadNotebooks && activeView !== 'notebooks' && (
               <span
-                className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
-                style={{ backgroundColor: `rgba(var(--theme-accent), 0.05)` }}
+                className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full animate-pulse"
+                style={{ backgroundColor: `rgba(var(--theme-accent), 0.85)` }}
               />
             )}
           </button>
