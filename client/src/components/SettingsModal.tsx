@@ -103,6 +103,7 @@ const SECTIONS = [
   { id: 'memory', label: 'Memory' },
   { id: 'skills', label: 'Skills' },
   { id: 'extraction', label: 'Extraction' },
+  { id: 'tools', label: 'Tool Options' },
   { id: 'bluesky', label: 'Bluesky' },
   { id: 'tts', label: 'TTS' },
   { id: 'passkeys', label: 'Security' },
@@ -354,6 +355,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [extractionServerModelsLoading, setExtractionServerModelsLoading] = useState(false);
   const [extractionUseCustom, setExtractionUseCustom] = useState(false);
   const [extractionFallbackEnabled, setExtractionFallbackEnabled] = useState(settings.extractionFallbackEnabled ?? true);
+  // Tool options — read_file truncation
+  const [readFileDefaultLines, setReadFileDefaultLines] = useState(settings.readFileDefaultLines ?? 1000);
+  const [readFileMaxBytes, setReadFileMaxBytes] = useState(settings.readFileMaxBytes ?? 256 * 1024);
   const [memorySearchQuery, setMemorySearchQuery] = useState("");
   const [memoryResults, setMemoryResults] = useState<(MemorySummary & { score?: number })[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
@@ -736,6 +740,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       extractionModelId,
       extractionModelUrl: extractionModelUrl.trim() || undefined,
       extractionFallbackEnabled,
+      readFileDefaultLines,
+      readFileMaxBytes,
       bluesky: {
         ...settings.bluesky,
         enabled: blueskyEnabled,
@@ -3744,6 +3750,54 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <p className="text-xs text-white/30">How often to wake during the sleep cycle</p>
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+
+          {/* Tool Options Section */}
+          <div id="tools" className="border-t border-white/10 pt-6">
+            <h3 className="text-sm font-semibold text-white/80 mb-4">Tool Options</h3>
+
+            <div className="space-y-4">
+              <p className="text-xs text-white/40 -mt-2">
+                Controls how filesystem tools shape their results. Tighter limits keep tool output from bloating the
+                conversation context and slowing prompt prefill on subsequent turns.
+              </p>
+
+              {/* read_file default line limit */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-white/60">read_file default line limit</label>
+                  <span className="text-xs text-white/40">{readFileDefaultLines} lines</span>
+                </div>
+                <input
+                  type="range"
+                  min={100}
+                  max={5000}
+                  step={100}
+                  value={readFileDefaultLines}
+                  onChange={(e) => setReadFileDefaultLines(Number(e.target.value))}
+                  className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                />
+                <p className="text-xs text-white/30">When the agent calls read_file without a limit, return up to this many lines and append a truncation marker so it can paginate with offset.</p>
+              </div>
+
+              {/* read_file byte cap */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-white/60">read_file byte cap</label>
+                  <span className="text-xs text-white/40">{Math.round(readFileMaxBytes / 1024)} KB</span>
+                </div>
+                <input
+                  type="range"
+                  min={32 * 1024}
+                  max={2 * 1024 * 1024}
+                  step={32 * 1024}
+                  value={readFileMaxBytes}
+                  onChange={(e) => setReadFileMaxBytes(Number(e.target.value))}
+                  className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                />
+                <p className="text-xs text-white/30">Hard cap on returned bytes (after line slicing) — safety net for files with pathological line lengths like minified bundles or base64 blobs.</p>
               </div>
             </div>
           </div>

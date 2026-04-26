@@ -239,6 +239,12 @@ export interface Settings {
   // Wake cycle — periodic autonomous exploration during sleep cycle.
   wakeCycleEnabled?: boolean;
   wakeCycleIntervalHours?: number;
+  // Tool options
+  // read_file default line limit when no `limit` arg is provided (default 1000).
+  readFileDefaultLines?: number;
+  // read_file hard byte cap on returned content, applied after line slicing
+  // as a safety net for pathological lines / minified bundles (default 262144).
+  readFileMaxBytes?: number;
 }
 
 export interface BlueskySettings {

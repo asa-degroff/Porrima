@@ -632,6 +632,8 @@ const DEFAULT_SETTINGS: Settings = {
   exaApiKey: "",
   tavilyApiKey: "",
   defaultWebSearchProvider: "brave",
+  readFileDefaultLines: 1000,
+  readFileMaxBytes: 256 * 1024,
 };
 
 export async function getSettings(): Promise<Settings> {

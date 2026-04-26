@@ -10,6 +10,8 @@ const DEFAULT_SETTINGS: Settings = {
   tavilyApiKey: "",
   defaultWebSearchProvider: "brave",
   hapticsEnabled: true,
+  readFileDefaultLines: 1000,
+  readFileMaxBytes: 256 * 1024,
 };
 
 export function useSettings() {

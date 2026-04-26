@@ -11,6 +11,7 @@ import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
 import { IMAGE_TOOLS, executeImageTool } from "./image-tools.js";
 import { BLUESKY_TOOLS, executeBlueskyTool } from "./bluesky-tools.js";
 import { executePython, createArtifact, createVisual, updateArtifact, updateVisual } from "./sandbox.js";
+import { getSettings } from "./chat-storage.js";
 import { v4 as uuid } from "uuid";
 import type { Artifact, GeneratedImage, InlineVisual } from "../types.js";
 
@@ -21,11 +22,11 @@ const VISUALS_DIR = join(homedir(), ".quje-agent", "visuals");
 
 const READ_FILE_TOOL: Tool = {
   name: "read_file",
-  description: "Read the contents of a file. Returns content with line numbers.",
+  description: "Read the contents of a file. Returns content with line numbers. When `limit` is omitted, returns up to a configurable default number of lines (1000 by default) and appends a truncation marker indicating how to read the rest with `offset`. For large files, paginate with `offset`/`limit` instead of issuing repeated full reads.",
   parameters: Type.Object({
     path: Type.String({ description: "File path (relative to working directory or absolute)" }),
     offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-based)" })),
-    limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+    limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read. Defaults to the configured tool option (1000)." })),
   }),
 };
 
@@ -260,7 +261,13 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
   tools.push({
     ...READ_FILE_TOOL,
     label: "read_file",
-    execute: async (_id, params) => wrapResult(await executeReadFile(params as Record<string, any>, baseDir)),
+    execute: async (_id, params) => {
+      const settings = await getSettings().catch(() => undefined);
+      return wrapResult(await executeReadFile(params as Record<string, any>, baseDir, {
+        defaultLines: settings?.readFileDefaultLines,
+        maxBytes: settings?.readFileMaxBytes,
+      }));
+    },
   });
 
   tools.push({
@@ -655,19 +662,52 @@ function resolvePath(inputPath: string, baseDir: string = HOME): string {
   return resolve(baseDir, inputPath);
 }
 
-async function executeReadFile(args: Record<string, any>, baseDir: string = HOME): Promise<{ content: string; isError: boolean }> {
+interface ReadFileOpts {
+  defaultLines?: number;
+  maxBytes?: number;
+}
+
+async function executeReadFile(args: Record<string, any>, baseDir: string = HOME, opts: ReadFileOpts = {}): Promise<{ content: string; isError: boolean }> {
   try {
     const filePath = resolvePath(args.path, baseDir);
     const content = await readFile(filePath, "utf-8");
     const lines = content.split("\n");
+    const totalLines = lines.length;
+
+    const defaultLines = opts.defaultLines ?? 1000;
+    const maxBytes = opts.maxBytes ?? 256 * 1024;
 
     const offset = Math.max(1, args.offset || 1);
-    const limit = args.limit || lines.length;
-    const selected = lines.slice(offset - 1, offset - 1 + limit);
+    const limitProvided = typeof args.limit === "number" && args.limit > 0;
+    const requestedLimit = limitProvided ? args.limit : defaultLines;
+    const sliceEnd = offset - 1 + requestedLimit;
+    const selected = lines.slice(offset - 1, sliceEnd);
 
-    const numbered = selected
+    let numbered = selected
       .map((line, i) => `${String(offset + i).padStart(6)} | ${line}`)
       .join("\n");
+
+    // Byte-cap safety net for pathological files (minified bundles, base64 blobs).
+    // Trim at a line boundary so the line-number prefix isn't broken mid-line.
+    let byteTruncated = false;
+    if (Buffer.byteLength(numbered, "utf-8") > maxBytes) {
+      const trimmed = numbered.slice(0, maxBytes);
+      const lastNewline = trimmed.lastIndexOf("\n");
+      numbered = lastNewline > 0 ? trimmed.slice(0, lastNewline) : trimmed;
+      byteTruncated = true;
+    }
+
+    const linesShown = numbered ? numbered.split("\n").length : 0;
+    const lastShown = offset - 1 + linesShown;
+    const hasMore = lastShown < totalLines;
+
+    if (hasMore || byteTruncated) {
+      const reason = byteTruncated
+        ? `output exceeded the ${(maxBytes / 1024).toFixed(0)}KB byte cap`
+        : `default line limit of ${defaultLines} reached`;
+      const nextOffset = lastShown + 1;
+      numbered += `\n\n[Truncated: ${reason}. File has ${totalLines} total lines; showing ${offset}-${lastShown}. To read more, call read_file again with offset=${nextOffset}.]`;
+    }
 
     return { content: numbered, isError: false };
   } catch (e: any) {
