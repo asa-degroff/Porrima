@@ -445,16 +445,37 @@ async function waitForModelUnloaded(baseUrl: string, modelId: string, maxWaitMs 
 }
 
 /**
- * Query llama.cpp to find which model is actually loaded right now.
- * Returns the model ID if exactly one model is in "loaded" state, or null.
+ * Parse `--ctx-size N` from a llama-server argv array. Returns undefined if
+ * the flag is absent or unparseable. Used to recover the actual context window
+ * of an already-loaded model after a Node restart wipes our in-memory cache.
  */
-async function getActualLoadedModel(baseUrl: string): Promise<string | null> {
+function parseCtxSizeFromArgs(args: unknown): number | undefined {
+  if (!Array.isArray(args)) return undefined;
+  const i = args.indexOf("--ctx-size");
+  if (i < 0 || i + 1 >= args.length) return undefined;
+  const n = Number(args[i + 1]);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * Query llama.cpp to find which model is actually loaded right now.
+ * Returns { id, contextWindow } if exactly one model is in "loaded" state.
+ * `contextWindow` is parsed from the model's argv (`--ctx-size`) and may be
+ * undefined if the flag was omitted (in which case llama-server's default
+ * applies — caller should treat undefined as "unknown but likely matches").
+ */
+async function getActualLoadedModel(baseUrl: string): Promise<{ id: string; contextWindow?: number } | null> {
   try {
     const res = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return null;
     const data = await res.json();
     const loaded = data.data?.filter((m: any) => m.status?.value === "loaded");
-    if (loaded?.length === 1) return loaded[0].id;
+    if (loaded?.length === 1) {
+      return {
+        id: loaded[0].id,
+        contextWindow: parseCtxSizeFromArgs(loaded[0].status?.args),
+      };
+    }
     return null;
   } catch {
     return null;
@@ -559,18 +580,18 @@ export async function ensureModelLoaded(baseUrl: string, modelId: string, contex
       const text = await res.text().catch(() => "");
       if (text.includes("already running")) {
         // Verify which model is actually loaded on llama.cpp
-        const actualModel = await getActualLoadedModel(baseUrl);
-        if (actualModel && actualModel !== modelId) {
+        const actualLoaded = await getActualLoadedModel(baseUrl);
+        if (actualLoaded && actualLoaded.id !== modelId) {
           // A different model is running — unload it and retry
-          console.log(`[openai-compat] Expected ${modelId} but ${actualModel} is running, forcing switch`);
+          console.log(`[openai-compat] Expected ${modelId} but ${actualLoaded.id} is running, forcing switch`);
           try {
             await fetch(`${baseUrl}/models/unload`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ model: actualModel }),
+              body: JSON.stringify({ model: actualLoaded.id }),
               signal: AbortSignal.timeout(30_000),
             });
-            await waitForModelUnloaded(baseUrl, actualModel);
+            await waitForModelUnloaded(baseUrl, actualLoaded.id);
             const retryRes = await fetch(`${baseUrl}/models/load`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -592,8 +613,16 @@ export async function ensureModelLoaded(baseUrl: string, modelId: string, contex
           return;
         }
 
-        // The requested model IS what's running — handle context window mismatch
-        const knownCtx = lastLoadedModel?.contextWindow;
+        // The requested model IS what's running — handle context window mismatch.
+        // After a Node restart the in-memory `lastLoadedModel` cache is empty even
+        // when llama-server has the model loaded with the right ctx. Recover the
+        // actual ctx from /v1/models (status.args) instead of pessimistically
+        // reloading, which would nuke the KV cache and force a full cold prefill.
+        const liveCtx = actualLoaded?.contextWindow;
+        const knownCtx = lastLoadedModel?.contextWindow ?? liveCtx;
+        if (lastLoadedModel?.contextWindow === undefined && liveCtx !== undefined) {
+          console.log(`[openai-compat] Recovered live ctx=${liveCtx} for ${modelId} from /v1/models (in-memory cache was empty)`);
+        }
         if (contextWindow && (!knownCtx || knownCtx < contextWindow)) {
           console.log(`[openai-compat] Model already running (ctx=${knownCtx ?? "unknown"}) but need ctx=${contextWindow}, reloading`);
           try {
@@ -630,6 +659,8 @@ export async function ensureModelLoaded(baseUrl: string, modelId: string, contex
           // Reload failed — wait for whatever state the model is in before proceeding
           await waitForModelReady(baseUrl, modelId).catch(() => {});
         }
+        // No reload needed — populate the cache with the live ctx (if recovered)
+        // or the requested ctx (which the running instance already satisfies).
         lastLoadedModel = { baseUrl, modelId, contextWindow: knownCtx ?? contextWindow };
       } else {
         // Non-"already running" 400 error — don't cache

@@ -45,9 +45,9 @@ function ToggleSwitch({ checked, onChange, accentColor, disabled }: ToggleSwitch
     <button
       onClick={onChange}
       disabled={disabled}
-      className={`group relative w-12 h-6 rounded-full 
+      className={`group relative shrink-0 w-12 h-6 rounded-full
         transition-[background-color] ease-[cubic-bezier(0.4,0,0.2,1)] duration-200
-        ${checked ? colors.on : colors.off} 
+        ${checked ? colors.on : colors.off}
         ${disabled ? "opacity-40 cursor-not-allowed pointer-events-none" : "cursor-pointer"}`}
       role="switch"
       aria-checked={checked}
