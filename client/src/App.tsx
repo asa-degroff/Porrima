@@ -20,7 +20,7 @@ const RippleDotsBackground = lazy(() =>
   import("./components/RippleDotsBackground").then((m) => ({ default: m.RippleDotsBackground }))
 );
 import { useChats } from "./hooks/useChats";
-import { useChat, hasBackgroundStream } from "./hooks/useChat";
+import { useChat, hasBackgroundStream, getStreamingChatIds } from "./hooks/useChat";
 import { useProjects } from "./hooks/useProjects";
 import { useModels } from "./hooks/useModels";
 import { useSettings } from "./hooks/useSettings";
@@ -196,6 +196,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     titleUpdate,
     hasCompactionSummary,
   } = useChat(activeChatId);
+
+  // Any chat streaming — includes background chats so the sidebar indicator stays correct when viewing a different chat
+  const anyStreaming = streaming || getStreamingChatIds().length > 0;
 
   // Apply theme to document
   useEffect(() => {
@@ -708,7 +711,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         isOpen={sidebarOpen}
         onClose={handleCloseSidebar}
         onOpen={handleOpenSidebar}
-        isStreaming={streaming}
+        isStreaming={anyStreaming}
         hasUnreadNotebooks={hasUnreadAgentEntries()}
         ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}
         blueskyChatId={settings.bluesky?.blueskyChatId}

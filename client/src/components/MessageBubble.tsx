@@ -44,6 +44,14 @@ function isPlaceholderEllipsis(text: string | undefined): boolean {
   return normalized.length > 0 && /^(\.{3})+$/.test(normalized);
 }
 
+/** Format a Unix-ms timestamp into a compact human-readable string */
+function formatTimestamp(ts: number): string {
+  const d = new Date(ts);
+  const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${date} · ${time}`;
+}
+
 interface Props {
   message: ChatMessage;
   isStreaming: boolean;
@@ -227,16 +235,40 @@ export const MessageBubble = memo(function MessageBubble({
     <div className={`group ${isUser ? "flex justify-end" : "flex justify-start"} mb-4`}>
       <div className={`flex flex-row items-start max-w-[95%] md:max-w-[80%] min-w-0`}>
         {isUser && editable && !editing && (
-          <button
-            onClick={handleStartEdit}
-            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-white/10 mt-2.5 mr-1.5 shrink-0"
-            title="Edit message"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
-              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-              <path d="m15 5 4 4" />
-            </svg>
-          </button>
+          <div className="flex flex-col gap-1 mr-1.5 shrink-0">
+            <button
+              onClick={handleStartEdit}
+              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-white/10 mt-2.5"
+              title="Edit message"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
+                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                <path d="m15 5 4 4" />
+              </svg>
+            </button>
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity relative group/info">
+              <button
+                className="p-1 rounded-md hover:bg-white/10"
+                title={formatTimestamp(message.timestamp)}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="16" x2="12" y2="12" />
+                  <line x1="12" y1="8" x2="12.01" y2="8" />
+                </svg>
+              </button>
+              <div className="invisible group-hover/info:visible absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded-md text-[11px] whitespace-nowrap pointer-events-none z-50"
+                style={{
+                  backgroundColor: 'rgba(30, 30, 40, 0.95)',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  color: 'rgba(255, 255, 255, 0.8)',
+                  backdropFilter: 'blur(8px)',
+                }}
+              >
+                {formatTimestamp(message.timestamp)}
+              </div>
+            </div>
+          </div>
         )}
         <div className={`flex flex-col ${isUser ? "items-end" : "items-start"} min-w-0`}>
           <div
