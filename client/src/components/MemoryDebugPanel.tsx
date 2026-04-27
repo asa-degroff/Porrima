@@ -128,7 +128,7 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [editBlockContent, setEditBlockContent] = useState("");
   const [confirmingBlockDelete, setConfirmingBlockDelete] = useState<string | null>(null);
-  const [blockScopeFilter, setBlockScopeFilter] = useState<"all" | "global" | "project">("all");
+  const [blockScopeFilter, setBlockScopeFilter] = useState<"all" | "global" | "project" | "archived">("all");
 
   // ── Extraction SSE ────────────────────────────────────────────────────
   useEffect(() => {
@@ -864,9 +864,9 @@ function BlocksTab({
   editingBlockId: string | null;
   editBlockContent: string;
   confirmingBlockDelete: string | null;
-  scopeFilter: "all" | "global" | "project";
+  scopeFilter: "all" | "global" | "project" | "archived";
   onContentChange: (content: string) => void;
-  onScopeFilterChange: (scope: "all" | "global" | "project") => void;
+  onScopeFilterChange: (scope: "all" | "global" | "project" | "archived") => void;
   onStartEdit: (id: string, content: string) => void;
   onCancelEdit: () => void;
   onSaveBlock: (id: string, content: string) => void;
@@ -881,7 +881,7 @@ function BlocksTab({
 
       {/* Scope filter */}
       <div className="flex gap-1">
-        {(["all", "global", "project"] as const).map((scope) => (
+        {(["all", "global", "project", "archived"] as const).map((scope) => (
           <button
             key={scope}
             onClick={() => onScopeFilterChange(scope)}
@@ -892,7 +892,7 @@ function BlocksTab({
               backgroundColor: scopeFilter === scope ? `rgba(var(--theme-secondary, 100 100 200), 0.15)` : "transparent",
             }}
           >
-            {scope === "all" ? "All" : scope === "global" ? "Global" : "Project"}
+            {scope === "all" ? "All" : scope === "global" ? "Global" : scope === "project" ? "Project" : "Archived"}
           </button>
         ))}
       </div>
@@ -919,7 +919,9 @@ function BlocksTab({
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-white/80">{block.name}</span>
                       <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                        block.scope === "global" ? "bg-blue-500/15 text-blue-300" : "bg-emerald-500/15 text-emerald-300"
+                        block.scope === "global" ? "bg-blue-500/15 text-blue-300" :
+                        block.scope === "project" ? "bg-emerald-500/15 text-emerald-300" :
+                        "bg-amber-500/15 text-amber-300"
                       }`}>
                         {block.scope}
                       </span>
