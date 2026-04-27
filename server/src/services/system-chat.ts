@@ -223,12 +223,14 @@ export async function createSystemChat(): Promise<void> {
         dirty = true;
       }
 
-      // One-shot migration: retroactively flag synthesis trigger messages.
+      // One-shot migration: retroactively flag synthesis messages (triggers + responses).
       // Synthesis user-messages carry content starting with "# Synthesis Cycle"
       // or "## Phase N:" — any such message without _isSynthesisMessage already
-      // set needs to be flagged so delayed extraction can skip them.
+      // set needs to be flagged. The assistant response immediately following a
+      // flagged trigger is also part of the synthesis exchange and gets flagged.
       let synthesisFlagged = 0;
-      for (const msg of loaded.messages) {
+      for (let i = 0; i < loaded.messages.length; i++) {
+        const msg = loaded.messages[i];
         if (msg._isSynthesisMessage) continue; // already flagged
         if (msg.role !== "user") continue;
         const content = msg.content || "";
@@ -239,6 +241,12 @@ export async function createSystemChat(): Promise<void> {
         ) {
           msg._isSynthesisMessage = true;
           synthesisFlagged++;
+          // Flag the assistant response immediately following this trigger
+          const nextMsg = loaded.messages[i + 1];
+          if (nextMsg && nextMsg.role === "assistant" && !nextMsg._isSynthesisMessage) {
+            nextMsg._isSynthesisMessage = true;
+            synthesisFlagged++;
+          }
         }
       }
       if (synthesisFlagged > 0) {
@@ -1075,6 +1083,7 @@ export async function runSystemSynthesis(options?: {
     const assistantChatMsg: ChatMessage = {
       ...emitter.buildAssistantMessage(thinking, summary),
       timestamp: Date.now(),
+      _isSynthesisMessage: true,
     };
     chat.messages.push(assistantChatMsg);
     await saveChat(chat);
