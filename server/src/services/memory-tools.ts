@@ -28,7 +28,7 @@ export const MEMORY_TOOLS: Tool[] = [
     parameters: Type.Object({
       text: Type.String({ description: "The fact to remember" }),
       category: StringEnum(
-        ["preference", "fact", "behavior", "instruction", "context", "decision", "note"] as const,
+        ["preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"] as const,
         { description: "Category of the memory" }
       ),
       importance: Type.Number({

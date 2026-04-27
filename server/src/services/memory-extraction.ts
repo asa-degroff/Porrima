@@ -301,7 +301,7 @@ Each extracted memory should be a self-contained statement that would be meaning
 
 Output a JSON array. Each item:
 - "text": A standalone statement with sufficient context (1-3 sentences)
-- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
+- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
 - "importance": 1-10 (10 = critical, 1 = trivial)
 
 Categories:
@@ -312,6 +312,7 @@ Categories:
 - "context" — project-level information: architecture, tech choices, ongoing work, constraints, relationships between systems
 - "decision" — a choice that was made and why, tradeoffs considered
 - "note" — general observations, curiosities, personal details, or anything worth remembering that doesn't fit the above categories
+- "reflection" — higher-order insights, meta-observations, patterns, contradictions, openings, shifts in understanding
 
 If nothing is genuinely novel or significant, output: []
 
@@ -398,7 +399,7 @@ Each extracted memory should be self-contained and meaningful without the origin
 
 Output a JSON array. Each item:
 - "text": A standalone statement with sufficient context (2-5 sentences)
-- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
+- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
 - "importance": 1-10 (10 = critical, 1 = trivial)
 
 If nothing is genuinely novel or significant, output: []
@@ -1093,7 +1094,7 @@ Each atomic memory should be self-contained and meaningful (2-5 sentences).
 
 Output a JSON array. Each item:
 - "text": A standalone statement with sufficient context (2-5 sentences)
-- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note"
+- "category": One of "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"
 - "importance": 1-10
 
 Output ONLY the JSON array.`;
