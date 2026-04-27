@@ -116,3 +116,33 @@ export async function regenerateTitle(
   if (title) console.log(`[title] regenerated: "${title}"`);
   return title;
 }
+
+/**
+ * Generate a sidebar title for the system chat after a synthesis or wake cycle.
+ * Unlike normal chat title generation, this focuses on the assistant's latest
+ * cycle output rather than the synthetic trigger message, which can be a large
+ * context package with generic headings.
+ */
+export async function generateSystemCycleTitle(
+  cycleKind: "synthesis" | "wake",
+  assistantResponse: string
+): Promise<string | null> {
+  const config = await getServerConfig();
+  if (!config) return null;
+
+  const cycleLabel = cycleKind === "wake" ? "wake cycle" : "system synthesis";
+  const truncatedResponse = assistantResponse.slice(0, 1200);
+
+  const systemContent =
+    `Generate a short sidebar title (3-8 words) for the latest ${cycleLabel}. ` +
+    "Focus on the concrete topic, outcome, or theme. " +
+    "Avoid generic titles like 'Daily Synthesis' or 'Wake Cycle' unless there is no better subject. " +
+    "Reply with ONLY the title text. No quotes, no trailing punctuation, no explanation.";
+  const userContent = `Latest ${cycleLabel} output:\n\n${truncatedResponse}`;
+
+  const title = postProcess(
+    await callServer(config, systemContent, userContent, `system ${cycleKind} title generation`)
+  );
+  if (title) console.log(`[title] system ${cycleKind}: "${title}"`);
+  return title;
+}

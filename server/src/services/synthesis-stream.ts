@@ -213,6 +213,10 @@ export class SynthesisEmitter {
     this.writeEvent("iteration", info);
   }
 
+  emitTitleUpdate(title: string): void {
+    this.writeEvent("title_update", { chatId: this.stream.chatId, title });
+  }
+
   /**
    * After all phases complete and the assistant message has been persisted,
    * emit `done` so reconnected clients close their stream cleanly. Matches

@@ -1,6 +1,6 @@
 import type { ToolSideEffects } from "./agent-tools.js";
 import type { Message, StopReason, ToolCall } from "@mariozechner/pi-ai";
-import type { ChatMessage } from "../types.js";
+import type { Chat, ChatMessage } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -658,6 +658,28 @@ function makeErrorResult(message: string): SynthesisResult {
   };
 }
 
+async function refreshSystemChatTitle(
+  chat: Chat,
+  cycleKind: "synthesis" | "wake",
+  assistantContent: string,
+  saveChat: (chat: Chat) => Promise<void>,
+  emitTitleUpdate: (title: string) => void,
+): Promise<void> {
+  if (!assistantContent.trim()) return;
+
+  try {
+    const { generateSystemCycleTitle } = await import("./title-generation.js");
+    const title = await generateSystemCycleTitle(cycleKind, assistantContent);
+    if (!title || title === chat.title) return;
+
+    chat.title = title;
+    await saveChat(chat);
+    emitTitleUpdate(title);
+  } catch (e: any) {
+    console.warn(`[title] system ${cycleKind} title update failed:`, e?.message || e);
+  }
+}
+
 export async function runSystemSynthesis(options?: {
   modelId?: string;
   skipArchive?: boolean;
@@ -1037,6 +1059,14 @@ export async function runSystemSynthesis(options?: {
     // (and the SSE inactivity timer does not spuriously fire).
     emitter.emitDone(assistantChatMsg, iterations);
 
+    await refreshSystemChatTitle(
+      chat,
+      "synthesis",
+      assistantChatMsg.content,
+      saveChat,
+      (title) => emitter.emitTitleUpdate(title),
+    );
+
     // Notebook persistence is now the agent's responsibility via the
     // `create_notebook_entry` tool. The old implicit auto-save of the
     // assistant's narrative text hid wrong behavior — if the agent didn't
@@ -1368,6 +1398,14 @@ export async function runWakeCycle(options?: {
     await saveChat(chat);
 
     emitter.emitDone(assistantChatMsg, iterations);
+
+    await refreshSystemChatTitle(
+      chat,
+      "wake",
+      assistantChatMsg.content,
+      saveChat,
+      (title) => emitter.emitTitleUpdate(title),
+    );
 
     // Invalidate caches and gate future ticks
     try {
