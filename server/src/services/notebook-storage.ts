@@ -199,12 +199,39 @@ function getAgentNotebookEntry(id: string): NotebookEntry | null {
   return blockToNotebookEntry(block);
 }
 
+function normalizeNotebookContent(content: string): string {
+  return content.replace(/\r\n/g, "\n").trim();
+}
+
+export function findDuplicateAgentNotebookEntry(content: string, opts?: {
+  type?: 'synthesis' | 'notebook';
+  date?: string;
+}): NotebookEntry | null {
+  const type = opts?.type ?? 'notebook';
+  const blockDate = (opts?.date || new Date().toISOString().split('T')[0]).replace(/-/g, "");
+  const prefix = type === 'synthesis' ? 'blk-synth' : 'blk-notebook';
+  const idPrefix = `${prefix}-${blockDate}-`;
+  const normalized = normalizeNotebookContent(content);
+
+  const duplicate = listMemoryBlocks({ includeInternal: true }).find(
+    (b) =>
+      b.blockType === type &&
+      b.id.startsWith(idPrefix) &&
+      normalizeNotebookContent(b.content) === normalized,
+  );
+
+  return duplicate ? blockToNotebookEntry(duplicate) : null;
+}
+
 function createAgentNotebookEntry(content: string, opts?: {
   type?: 'synthesis' | 'notebook';
   date?: string;
   attachments?: BlockAttachments;
 }): NotebookEntry {
   const type = opts?.type ?? 'notebook';
+  const existing = findDuplicateAgentNotebookEntry(content, { type, date: opts?.date });
+  if (existing) return existing;
+
   const blockDate = opts?.date || new Date().toISOString().split('T')[0];
   const id = generateNotebookBlockId(type, blockDate);
   const description = extractBlockDescription(content);

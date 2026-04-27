@@ -583,7 +583,15 @@ export async function executeMemoryTool(
       if (!content || typeof content !== "string" || content.trim().length === 0) {
         return { content: "Missing or empty content", isError: true };
       }
-      const { createNotebookEntry, extractBlockDescription } = await import("./notebook-storage.js");
+      const { createNotebookEntry, extractBlockDescription, findDuplicateAgentNotebookEntry } = await import("./notebook-storage.js");
+      const existing = findDuplicateAgentNotebookEntry(content, { type: "notebook", date });
+      if (existing) {
+        const description = extractBlockDescription(content);
+        return {
+          content: `Notebook entry already exists [${existing.id}] "${description.slice(0, 60)}..." (${content.length} chars). Skipped duplicate.`,
+          isError: false,
+        };
+      }
       const entry = await createNotebookEntry("agent", content, { type: "notebook", date });
       const description = extractBlockDescription(content);
       return {
