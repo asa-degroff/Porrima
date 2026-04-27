@@ -70,6 +70,7 @@ export interface ChatMessage {
   _thinkingPromoted?: boolean;
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
+  _isSynthesisMessage?: boolean;
 }
 
 export type ChatType = "agent" | "quick" | "bluesky" | "system";

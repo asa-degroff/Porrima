@@ -69,6 +69,8 @@ export interface ChatMessage {
   _inProgress?: boolean;
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
+  /** Marks this message as a synthesis trigger — excluded from delayed extraction */
+  _isSynthesisMessage?: boolean;
   /** Empty assistant placeholder inserted when the user sends a steering message.
    *  While set, streaming deltas from the pre-steering generation are not applied here
    *  (they land on the previous assistant msg via message_complete). Cleared by follow_up_start. */

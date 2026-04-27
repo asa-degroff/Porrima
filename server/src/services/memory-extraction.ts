@@ -1412,7 +1412,7 @@ interface IndexedChatMessage {
 }
 
 function isSubstantiveForDelayedExtraction(message: ChatMessage): boolean {
-  return !message._isCompactionSummary && !message._outOfContext && !message._isSystemMessage;
+  return !message._isCompactionSummary && !message._outOfContext && !message._isSynthesisMessage;
 }
 
 /**
@@ -1483,8 +1483,8 @@ export async function extractDelayedMemories(
     return;
   }
   
-  if (chat.type !== "agent") {
-    console.log(`[memory-delayed] Skipping quick chat ${chatId}`);
+  if (!["agent", "system"].includes(chat.type)) {
+    console.log(`[memory-delayed] Skipping ${chat.type} chat ${chatId}`);
     return;
   }
   

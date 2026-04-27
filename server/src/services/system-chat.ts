@@ -223,6 +223,29 @@ export async function createSystemChat(): Promise<void> {
         dirty = true;
       }
 
+      // One-shot migration: retroactively flag synthesis trigger messages.
+      // Synthesis user-messages carry content starting with "# Synthesis Cycle"
+      // or "## Phase N:" — any such message without _isSynthesisMessage already
+      // set needs to be flagged so delayed extraction can skip them.
+      let synthesisFlagged = 0;
+      for (const msg of loaded.messages) {
+        if (msg._isSynthesisMessage) continue; // already flagged
+        if (msg.role !== "user") continue;
+        const content = msg.content || "";
+        if (
+          content.startsWith("# Synthesis Cycle") ||
+          content.startsWith("## Phase ") ||
+          content.startsWith("# Daily Synthesis")
+        ) {
+          msg._isSynthesisMessage = true;
+          synthesisFlagged++;
+        }
+      }
+      if (synthesisFlagged > 0) {
+        dirty = true;
+        console.log(`[system-chat] Flagged ${synthesisFlagged} existing synthesis messages`);
+      }
+
       // Keep the system chat's modelId in sync with the user's current default.
       // Regular chats stamp modelId at creation and the UI forbids changing it
       // afterward, but the system chat is meant to ride whatever model is the
@@ -756,6 +779,7 @@ export async function runSystemSynthesis(options?: {
       content: phase1Content,
       timestamp: Date.now(),
       _isSystemMessage: true,
+      _isSynthesisMessage: true,
     };
     chat.messages.push(phase1Msg);
     // Keep modelId in sync so user-initiated messages also hit this model.
@@ -985,6 +1009,7 @@ export async function runSystemSynthesis(options?: {
             content: nextTrigger,
             timestamp: Date.now(),
             _isSystemMessage: true,
+            _isSynthesisMessage: true,
           };
           chat.messages.push(phaseTriggerMsg);
           messages.push({
