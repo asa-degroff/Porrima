@@ -653,7 +653,7 @@ export function Sidebar({
         <div className="px-3 pt-2 pb-2 shrink-0">
           <div className="flex items-center gap-1.5">
             {/* Status indicator */}
-            <div className="flex items-center gap-1.5 text-[10px] text-white/30">
+            <div className="flex items-center gap-1.5 text-[10px] text-white/30 pl-1">
               {isSynthesizing ? (
                 <>
                   <span className="text-amber-400/60">●</span>
