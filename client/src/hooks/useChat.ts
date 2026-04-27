@@ -478,6 +478,8 @@ export function useChat(chatId: string | null) {
           }
         }
 
+        const finalSegments = segments || (bg.segments.length > 0 ? bg.segments.map((s) => ({ ...s })) : undefined);
+
         // Finalize last message with full metadata
         const last = bg.messages[bg.messages.length - 1];
         if (last?.role === "assistant") {
@@ -492,7 +494,7 @@ export function useChat(chatId: string | null) {
             visuals: doneVisuals || undefined,
             toolCalls: toolCalls || undefined,
             toolResults: toolResults || undefined,
-            segments: segments || undefined,
+            segments: finalSegments,
           };
         }
 
