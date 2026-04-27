@@ -670,10 +670,16 @@ export async function runSystemSynthesis(options?: {
   const { streamChat, chatMessagesToPiMessages } = await import("./agent.js");
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastSynthesis } = await import("./memory-storage.js");
-  const { truncateBeforeSend } = await import("./compaction.js");
+  const { truncateBeforeSend, estimateContextTokens } = await import("./compaction.js");
+  const { SynthesisEmitter } = await import("./synthesis-stream.js");
 
   await acquireSynthesisLock();
   console.log("[system-chat] Starting synthesis...");
+
+  // Headless SSE stream for the system chat — clients that open the system
+  // chat reconnect via /api/chat/reconnect/:chatId and watch synthesis stream
+  // in real time. Created up-front so any error path can still call .end().
+  const emitter = new SynthesisEmitter(SYSTEM_CHAT_ID);
 
   try {
     // Ensure system chat row exists (first-run safety)
@@ -694,6 +700,7 @@ export async function runSystemSynthesis(options?: {
     // --- Load persistent system chat ---
     const chat = await getChat(SYSTEM_CHAT_ID);
     if (!chat) {
+      emitter.end();
       releaseSynthesisLock();
       return makeErrorResult("System chat not found after creation");
     }
@@ -701,12 +708,14 @@ export async function runSystemSynthesis(options?: {
     // --- Resolve model ---
     const modelId = options?.modelId || (await getSynthesisModelId(chat.modelId));
     if (!modelId) {
+      emitter.end();
       releaseSynthesisLock();
       return makeErrorResult("No model available for synthesis");
     }
     const models = await discoverAllModels();
     const piModel = models.find((m) => m.id === modelId);
     if (!piModel) {
+      emitter.end();
       releaseSynthesisLock();
       return makeErrorResult(`Model "${modelId}" not available`);
     }
@@ -750,9 +759,18 @@ export async function runSystemSynthesis(options?: {
     const memoryUpdates: string[] = [];
 
     const effects: ToolSideEffects = {
-      onArtifact: (a) => artifacts.push(a),
-      onVisual: (v) => visuals.push(v),
-      onGeneratedImage: (img) => generatedImages.push(img),
+      onArtifact: (a) => {
+        artifacts.push(a);
+        emitter.emitArtifact(a);
+      },
+      onVisual: (v) => {
+        visuals.push(v);
+        emitter.emitVisual(v);
+      },
+      onGeneratedImage: (img) => {
+        generatedImages.push(img);
+        emitter.emitGeneratedImage(img);
+      },
       onPendingReviewImage: () => {},
       onAskUser: () => {},
     };
@@ -806,8 +824,21 @@ export async function runSystemSynthesis(options?: {
           messages,
           synthesisPrompt,
           (event) => {
-            if (event.type === "toolcall_end") {
+            // Forward streamSimple events to the SSE emitter so reconnected
+            // clients see deltas in real time. toolcall_end also drives
+            // segment emission so the UI shows a "running" tool card before
+            // execution finishes (matching how regular chats render).
+            if (event.type === "text_delta") {
+              emitter.emitTextDelta(event.delta);
+            } else if (event.type === "thinking_delta") {
+              emitter.emitThinkingDelta(event.delta);
+            } else if (event.type === "toolcall_end") {
               iterationToolCalls.push(event.toolCall);
+              emitter.emitToolCall({
+                id: event.toolCall.id,
+                name: event.toolCall.name,
+                arguments: event.toolCall.arguments,
+              });
             }
           },
           {
@@ -825,6 +856,9 @@ export async function runSystemSynthesis(options?: {
         if (streamResult.toolCalls) allToolCalls.push(...streamResult.toolCalls);
         stopReason = streamResult.stopReason;
         assistantMessage = streamResult.assistantMessage;
+        // Update token indicator after each iteration — usage from this turn
+        // is the most recent ground truth for the running context size.
+        emitter.setUsage(streamResult.usage);
       } catch (e: any) {
         console.error(`[system-chat] Stream failed at iter ${iterations}:`, e.message);
         stopReason = "error";
@@ -863,12 +897,14 @@ export async function runSystemSynthesis(options?: {
           if (content.toLowerCase().includes("memory saved")) {
             memoryUpdates.push(content.slice(0, 200));
           }
-          allToolResults.push({
+          const toolResult = {
             toolCallId: toolCall.id,
             toolName: toolCall.name,
             content,
             isError: false,
-          });
+          };
+          allToolResults.push(toolResult);
+          emitter.emitToolResult(toolResult);
           messages.push({
             role: "toolResult",
             toolCallId: toolCall.id,
@@ -879,12 +915,14 @@ export async function runSystemSynthesis(options?: {
           } as Message);
         } catch (e: any) {
           console.warn(`[system-chat] Tool execution failed for ${toolCall.name}:`, e.message);
-          allToolResults.push({
+          const toolResult = {
             toolCallId: toolCall.id,
             toolName: toolCall.name,
             content: `Error: ${e.message}`,
             isError: true,
-          });
+          };
+          allToolResults.push(toolResult);
+          emitter.emitToolResult(toolResult);
           messages.push({
             role: "toolResult",
             toolCallId: toolCall.id,
@@ -895,6 +933,19 @@ export async function runSystemSynthesis(options?: {
           } as Message);
         }
       }
+
+      // Per-iteration update: matches the regular chat's `iteration` event so
+      // the TokenIndicator reflects current context size mid-loop. The
+      // estimate accounts for accumulated tool results that aren't yet part
+      // of usage.totalTokens (those are next-call input).
+      const estimatedTokens = estimateContextTokens(chat.messages, synthesisPrompt, tools);
+      emitter.emitIteration({
+        iteration: iterations + 1,
+        stopReason,
+        toolCount: iterationToolCalls.length,
+        usage: emitter.state.finalUsage,
+        estimatedTokens,
+      });
 
       // Phase transition: agent produced output this turn + no tool calls = idle.
       // One idle turn is sufficient — the agent would naturally keep working if
@@ -970,22 +1021,19 @@ export async function runSystemSynthesis(options?: {
       `# Daily Synthesis\n\n*The model produced no visible output this cycle (stopReason=${stopReason}, thinking=${thinkLen}ch, tools=${allToolCalls.length}). The thinking trace is preserved on the system chat's last assistant message.*`;
 
     // --- Persist the assistant response to the system chat ---
+    // The emitter built up segments + usage during streaming; reuse them so
+    // the persisted message matches what the user just watched scroll by.
     const assistantChatMsg: ChatMessage = {
-      role: "assistant",
-      content: summary,
-      thinking: thinking || undefined,
+      ...emitter.buildAssistantMessage(thinking, summary),
       timestamp: Date.now(),
-      toolCalls: allToolCalls.length
-        ? allToolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments }))
-        : undefined,
-      toolResults: allToolResults.length ? allToolResults : undefined,
-      artifacts: artifacts.length ? artifacts : undefined,
-      visuals: visuals.length ? visuals : undefined,
-      generatedImages: generatedImages.length ? generatedImages : undefined,
-      _isSystemMessage: true,
     };
     chat.messages.push(assistantChatMsg);
     await saveChat(chat);
+
+    // Tell connected clients the stream is done. Mirrors the regular chat
+    // route's terminal `done` event so reconnected clients close cleanly
+    // (and the SSE inactivity timer does not spuriously fire).
+    emitter.emitDone(assistantChatMsg, iterations);
 
     // Notebook persistence is now the agent's responsibility via the
     // `create_notebook_entry` tool. The old implicit auto-save of the
@@ -1015,6 +1063,7 @@ export async function runSystemSynthesis(options?: {
       console.warn(
         `[system-chat] Synthesis failed at iter ${iterations} (stopReason=error, no output) — NOT updating lastSynthesis so the next scheduler tick can retry.`,
       );
+      emitter.end();
       releaseSynthesisLock();
       return makeErrorResult("Synthesis failed: model returned error before producing any output");
     }
@@ -1033,6 +1082,7 @@ export async function runSystemSynthesis(options?: {
       `[system-chat] Synthesis complete: ${iterations} iterations, ${allToolCalls.length} tool calls, final phase=${PHASE_ORDER[phaseIndex]}, stopReason=${stopReason}`,
     );
 
+    emitter.end();
     releaseSynthesisLock();
 
     return {
@@ -1047,6 +1097,7 @@ export async function runSystemSynthesis(options?: {
     };
   } catch (e: any) {
     console.error("[system-chat] Synthesis failed:", e);
+    emitter.end();
     releaseSynthesisLock();
     return makeErrorResult(e.message);
   }
@@ -1064,10 +1115,15 @@ export async function runWakeCycle(options?: {
   const { streamChat, chatMessagesToPiMessages } = await import("./agent.js");
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastWakeCycleAt } = await import("./memory-storage.js");
-  const { truncateBeforeSend } = await import("./compaction.js");
+  const { truncateBeforeSend, estimateContextTokens } = await import("./compaction.js");
+  const { SynthesisEmitter } = await import("./synthesis-stream.js");
 
   await acquireWakeCycleLock();
   console.log("[system-chat] Starting wake cycle...");
+
+  // Headless SSE stream so the system chat UI sees wake cycle output stream
+  // in real time (same plumbing as runSystemSynthesis).
+  const emitter = new SynthesisEmitter(SYSTEM_CHAT_ID);
 
   try {
     // Ensure system chat exists
@@ -1076,6 +1132,7 @@ export async function runWakeCycle(options?: {
     // Load persistent system chat
     const chat = await getChat(SYSTEM_CHAT_ID);
     if (!chat) {
+      emitter.end();
       releaseWakeCycleLock();
       return makeErrorResult("System chat not found");
     }
@@ -1083,12 +1140,14 @@ export async function runWakeCycle(options?: {
     // Resolve model
     const modelId = options?.modelId || (await getSynthesisModelId(chat.modelId));
     if (!modelId) {
+      emitter.end();
       releaseWakeCycleLock();
       return makeErrorResult("No model available for wake cycle");
     }
     const models = await discoverAllModels();
     const piModel = models.find((m) => m.id === modelId);
     if (!piModel) {
+      emitter.end();
       releaseWakeCycleLock();
       return makeErrorResult(`Model "${modelId}" not available`);
     }
@@ -1125,9 +1184,18 @@ export async function runWakeCycle(options?: {
     const memoryUpdates: string[] = [];
 
     const effects: ToolSideEffects = {
-      onArtifact: (a) => artifacts.push(a),
-      onVisual: (v) => visuals.push(v),
-      onGeneratedImage: (img) => generatedImages.push(img),
+      onArtifact: (a) => {
+        artifacts.push(a);
+        emitter.emitArtifact(a);
+      },
+      onVisual: (v) => {
+        visuals.push(v);
+        emitter.emitVisual(v);
+      },
+      onGeneratedImage: (img) => {
+        generatedImages.push(img);
+        emitter.emitGeneratedImage(img);
+      },
       onPendingReviewImage: () => {},
       onAskUser: () => {},
     };
@@ -1170,8 +1238,17 @@ export async function runWakeCycle(options?: {
           messages,
           wakePrompt,
           (event) => {
-            if (event.type === "toolcall_end") {
+            if (event.type === "text_delta") {
+              emitter.emitTextDelta(event.delta);
+            } else if (event.type === "thinking_delta") {
+              emitter.emitThinkingDelta(event.delta);
+            } else if (event.type === "toolcall_end") {
               iterationToolCalls.push(event.toolCall);
+              emitter.emitToolCall({
+                id: event.toolCall.id,
+                name: event.toolCall.name,
+                arguments: event.toolCall.arguments,
+              });
             }
           },
           {
@@ -1186,6 +1263,7 @@ export async function runWakeCycle(options?: {
         if (streamResult.toolCalls) allToolCalls.push(...streamResult.toolCalls);
         stopReason = streamResult.stopReason;
         assistantMessage = streamResult.assistantMessage;
+        emitter.setUsage(streamResult.usage);
       } catch (e: any) {
         console.error(`[system-chat] Wake cycle stream failed at iter ${iterations}:`, e.message);
         stopReason = "error";
@@ -1212,12 +1290,14 @@ export async function runWakeCycle(options?: {
           if (content.toLowerCase().includes("memory saved")) {
             memoryUpdates.push(content.slice(0, 200));
           }
-          allToolResults.push({
+          const toolResult = {
             toolCallId: toolCall.id,
             toolName: toolCall.name,
             content,
             isError: false,
-          });
+          };
+          allToolResults.push(toolResult);
+          emitter.emitToolResult(toolResult);
           messages.push({
             role: "toolResult",
             toolCallId: toolCall.id,
@@ -1228,6 +1308,14 @@ export async function runWakeCycle(options?: {
           } as Message);
         } catch (e: any) {
           console.warn(`[system-chat] Wake cycle tool ${toolCall.name} failed:`, e.message);
+          const toolResult = {
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            content: `Error: ${e.message}`,
+            isError: true,
+          };
+          allToolResults.push(toolResult);
+          emitter.emitToolResult(toolResult);
           messages.push({
             role: "toolResult",
             toolCallId: toolCall.id,
@@ -1238,6 +1326,16 @@ export async function runWakeCycle(options?: {
           } as Message);
         }
       }
+
+      // Per-iteration update for the TokenIndicator.
+      const estimatedTokens = estimateContextTokens(chat.messages, wakePrompt, tools);
+      emitter.emitIteration({
+        iteration: iterations + 1,
+        stopReason,
+        toolCount: iterationToolCalls.length,
+        usage: emitter.state.finalUsage,
+        estimatedTokens,
+      });
 
       // No more tool calls = done exploring
       if (iterationToolCalls.length === 0) {
@@ -1255,20 +1353,16 @@ export async function runWakeCycle(options?: {
       `[system-chat] Wake cycle done: iters=${iterations}, tools=${allToolCalls.length}, text=${textSummary.length}ch, stopReason=${stopReason}`,
     );
 
-    // Persist assistant response
+    // Persist assistant response — emitter.buildAssistantMessage carries
+    // segments + usage so persisted shape matches the streamed view.
     const assistantChatMsg: ChatMessage = {
-      role: "assistant",
-      content: textSummary || "*The wake cycle ended without visible output.*",
-      thinking: thinking || undefined,
+      ...emitter.buildAssistantMessage(thinking, textSummary || "*The wake cycle ended without visible output.*"),
       timestamp: Date.now(),
-      toolCalls: allToolCalls.length
-        ? allToolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments }))
-        : undefined,
-      toolResults: allToolResults.length ? allToolResults : undefined,
-      _isSystemMessage: true,
     };
     chat.messages.push(assistantChatMsg);
     await saveChat(chat);
+
+    emitter.emitDone(assistantChatMsg, iterations);
 
     // Invalidate caches and gate future ticks
     try {
@@ -1280,6 +1374,7 @@ export async function runWakeCycle(options?: {
 
     await setLastWakeCycleAt(new Date().toISOString());
 
+    emitter.end();
     releaseWakeCycleLock();
 
     return {
@@ -1294,6 +1389,7 @@ export async function runWakeCycle(options?: {
     };
   } catch (e: any) {
     console.error("[system-chat] Wake cycle failed:", e);
+    emitter.end();
     releaseWakeCycleLock();
     return makeErrorResult(e.message);
   }
