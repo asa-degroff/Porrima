@@ -223,16 +223,15 @@ export class SynthesisEmitter {
     this.writeEvent("done", { message, iterations });
   }
 
-  /** Per-phase reset: clear segments + accumulators between synthesis phases. */
-  resetForNewPhase(): void {
-    this.flushPendingText();
-    this.state.fullText = "";
-    this.state.thinkingText = "";
-    this.state.pendingText = "";
-    // Note: segments / toolCalls / toolResults / artifacts persist across phases
-    // because the persisted assistant message includes everything the agent did
-    // during the synthesis run (matching how the agent's notebook entry view
-    // shows the full sequence).
+  /**
+   * Emit an error event before closing. Without this, an early-exit `end()`
+   * looks to the client like an abrupt disconnect — its inactivity check
+   * surfaces "Connection lost — no response received from model" which
+   * misattributes failures like "no model available" or "system chat not
+   * found". Mirrors the regular chat route's `event: error` shape.
+   */
+  emitError(message: string): void {
+    this.writeEvent("error", { error: message });
   }
 
   /**
@@ -258,7 +257,15 @@ export class SynthesisEmitter {
     };
   }
 
-  /** Update the most-recent usage. Called once per streamChat iteration. */
+  /**
+   * Update the most-recent usage. Called once per streamChat iteration.
+   *
+   * The zero-totalTokens guard is intentional: some providers (and some
+   * thinking-only outputs that bail before producing tokens) report a usage
+   * object full of zeros. Overwriting a real prior count with zeros would
+   * blank the TokenIndicator mid-loop. Better to keep the last known good
+   * count until a real usage report lands.
+   */
   setUsage(usage: MessageUsage | undefined): void {
     if (!usage) return;
     if (usage.totalTokens > 0) {
@@ -278,4 +285,49 @@ export class SynthesisEmitter {
     }
     endLiveStream(this.stream.chatId);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Side-effects factory
+//
+// Both runSystemSynthesis and runWakeCycle wire the same ToolSideEffects
+// pattern: each artifact / visual / generated image needs to be pushed into a
+// local accumulator (so the SynthesisResult return value carries it) AND
+// emitted to the live stream (so reconnected clients see segments in real
+// time). This helper centralizes the dual-write so a third caller can adopt
+// the same pattern without copy-paste drift.
+// ---------------------------------------------------------------------------
+
+export interface EffectBuckets {
+  artifacts: Artifact[];
+  visuals: InlineVisual[];
+  generatedImages: GeneratedImage[];
+}
+
+export function createEmitterSideEffects(
+  emitter: SynthesisEmitter,
+  buckets: EffectBuckets,
+): {
+  onArtifact: (a: Artifact) => void;
+  onVisual: (v: InlineVisual) => void;
+  onGeneratedImage: (img: GeneratedImage) => void;
+  onPendingReviewImage: () => void;
+  onAskUser: () => void;
+} {
+  return {
+    onArtifact: (a) => {
+      buckets.artifacts.push(a);
+      emitter.emitArtifact(a);
+    },
+    onVisual: (v) => {
+      buckets.visuals.push(v);
+      emitter.emitVisual(v);
+    },
+    onGeneratedImage: (img) => {
+      buckets.generatedImages.push(img);
+      emitter.emitGeneratedImage(img);
+    },
+    onPendingReviewImage: () => {},
+    onAskUser: () => {},
+  };
 }

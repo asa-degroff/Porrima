@@ -671,7 +671,7 @@ export async function runSystemSynthesis(options?: {
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastSynthesis } = await import("./memory-storage.js");
   const { truncateBeforeSend, estimateContextTokens } = await import("./compaction.js");
-  const { SynthesisEmitter } = await import("./synthesis-stream.js");
+  const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
   await acquireSynthesisLock();
   console.log("[system-chat] Starting synthesis...");
@@ -700,6 +700,7 @@ export async function runSystemSynthesis(options?: {
     // --- Load persistent system chat ---
     const chat = await getChat(SYSTEM_CHAT_ID);
     if (!chat) {
+      emitter.emitError("System chat not found after creation");
       emitter.end();
       releaseSynthesisLock();
       return makeErrorResult("System chat not found after creation");
@@ -708,6 +709,7 @@ export async function runSystemSynthesis(options?: {
     // --- Resolve model ---
     const modelId = options?.modelId || (await getSynthesisModelId(chat.modelId));
     if (!modelId) {
+      emitter.emitError("No model available for synthesis");
       emitter.end();
       releaseSynthesisLock();
       return makeErrorResult("No model available for synthesis");
@@ -715,6 +717,7 @@ export async function runSystemSynthesis(options?: {
     const models = await discoverAllModels();
     const piModel = models.find((m) => m.id === modelId);
     if (!piModel) {
+      emitter.emitError(`Model "${modelId}" not available`);
       emitter.end();
       releaseSynthesisLock();
       return makeErrorResult(`Model "${modelId}" not available`);
@@ -758,22 +761,11 @@ export async function runSystemSynthesis(options?: {
     const generatedImages: any[] = [];
     const memoryUpdates: string[] = [];
 
-    const effects: ToolSideEffects = {
-      onArtifact: (a) => {
-        artifacts.push(a);
-        emitter.emitArtifact(a);
-      },
-      onVisual: (v) => {
-        visuals.push(v);
-        emitter.emitVisual(v);
-      },
-      onGeneratedImage: (img) => {
-        generatedImages.push(img);
-        emitter.emitGeneratedImage(img);
-      },
-      onPendingReviewImage: () => {},
-      onAskUser: () => {},
-    };
+    const effects: ToolSideEffects = createEmitterSideEffects(emitter, {
+      artifacts,
+      visuals,
+      generatedImages,
+    });
 
     const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system");
 
@@ -934,6 +926,16 @@ export async function runSystemSynthesis(options?: {
         }
       }
 
+      // The persisted summary joins per-iteration content with `\n\n` (see
+      // textChunks.join below). Emit a matching separator into the stream so
+      // a watching client sees the same paragraph breaks the persisted
+      // message will have. A trailing separator after the last iteration is
+      // harmless: the final summary is `.trim()`ed and the client overwrites
+      // its accumulated content with the persisted message on `done`.
+      if (hasOutput) {
+        emitter.emitTextDelta("\n\n");
+      }
+
       // Per-iteration update: matches the regular chat's `iteration` event so
       // the TokenIndicator reflects current context size mid-loop. The
       // estimate accounts for accumulated tool results that aren't yet part
@@ -1063,6 +1065,7 @@ export async function runSystemSynthesis(options?: {
       console.warn(
         `[system-chat] Synthesis failed at iter ${iterations} (stopReason=error, no output) — NOT updating lastSynthesis so the next scheduler tick can retry.`,
       );
+      emitter.emitError("Synthesis failed: model returned error before producing any output");
       emitter.end();
       releaseSynthesisLock();
       return makeErrorResult("Synthesis failed: model returned error before producing any output");
@@ -1097,6 +1100,7 @@ export async function runSystemSynthesis(options?: {
     };
   } catch (e: any) {
     console.error("[system-chat] Synthesis failed:", e);
+    emitter.emitError(e.message || "Synthesis failed");
     emitter.end();
     releaseSynthesisLock();
     return makeErrorResult(e.message);
@@ -1116,7 +1120,7 @@ export async function runWakeCycle(options?: {
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastWakeCycleAt } = await import("./memory-storage.js");
   const { truncateBeforeSend, estimateContextTokens } = await import("./compaction.js");
-  const { SynthesisEmitter } = await import("./synthesis-stream.js");
+  const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
   await acquireWakeCycleLock();
   console.log("[system-chat] Starting wake cycle...");
@@ -1132,6 +1136,7 @@ export async function runWakeCycle(options?: {
     // Load persistent system chat
     const chat = await getChat(SYSTEM_CHAT_ID);
     if (!chat) {
+      emitter.emitError("System chat not found");
       emitter.end();
       releaseWakeCycleLock();
       return makeErrorResult("System chat not found");
@@ -1140,6 +1145,7 @@ export async function runWakeCycle(options?: {
     // Resolve model
     const modelId = options?.modelId || (await getSynthesisModelId(chat.modelId));
     if (!modelId) {
+      emitter.emitError("No model available for wake cycle");
       emitter.end();
       releaseWakeCycleLock();
       return makeErrorResult("No model available for wake cycle");
@@ -1147,6 +1153,7 @@ export async function runWakeCycle(options?: {
     const models = await discoverAllModels();
     const piModel = models.find((m) => m.id === modelId);
     if (!piModel) {
+      emitter.emitError(`Model "${modelId}" not available`);
       emitter.end();
       releaseWakeCycleLock();
       return makeErrorResult(`Model "${modelId}" not available`);
@@ -1183,22 +1190,11 @@ export async function runWakeCycle(options?: {
     const generatedImages: any[] = [];
     const memoryUpdates: string[] = [];
 
-    const effects: ToolSideEffects = {
-      onArtifact: (a) => {
-        artifacts.push(a);
-        emitter.emitArtifact(a);
-      },
-      onVisual: (v) => {
-        visuals.push(v);
-        emitter.emitVisual(v);
-      },
-      onGeneratedImage: (img) => {
-        generatedImages.push(img);
-        emitter.emitGeneratedImage(img);
-      },
-      onPendingReviewImage: () => {},
-      onAskUser: () => {},
-    };
+    const effects: ToolSideEffects = createEmitterSideEffects(emitter, {
+      artifacts,
+      visuals,
+      generatedImages,
+    });
     const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system");
 
     // Pre-send compaction
@@ -1327,6 +1323,15 @@ export async function runWakeCycle(options?: {
         }
       }
 
+      // Match the persisted summary's `\n\n` between iterations (see
+      // textChunks.join below) so the streamed view doesn't drift from the
+      // final message. Trailing separators are stripped by the summary's
+      // `.trim()` and the client overwrites on `done`.
+      const wakeHasOutput = (streamResult?.content?.length ?? 0) > 0;
+      if (wakeHasOutput) {
+        emitter.emitTextDelta("\n\n");
+      }
+
       // Per-iteration update for the TokenIndicator.
       const estimatedTokens = estimateContextTokens(chat.messages, wakePrompt, tools);
       emitter.emitIteration({
@@ -1389,6 +1394,7 @@ export async function runWakeCycle(options?: {
     };
   } catch (e: any) {
     console.error("[system-chat] Wake cycle failed:", e);
+    emitter.emitError(e.message || "Wake cycle failed");
     emitter.end();
     releaseWakeCycleLock();
     return makeErrorResult(e.message);

@@ -56,10 +56,14 @@ const LIVE_END_RETENTION_MS = 60_000;
 
 export function emitToStream(stream: LiveStream, chunk: string): void {
   if (stream.ended) return;
+  // Use UTF-8 byte length, not chunk.length (UTF-16 code units): tool results
+  // and segment payloads can carry multi-byte content (CJK, emoji, escaped
+  // unicode), and the cap is denominated in bytes.
+  const byteLen = Buffer.byteLength(chunk);
   stream.buffer.push(chunk);
-  stream.bufferBytes += chunk.length;
+  stream.bufferBytes += byteLen;
   while (stream.bufferBytes > LIVE_BUFFER_MAX_BYTES && stream.buffer.length > 1) {
-    stream.bufferBytes -= stream.buffer.shift()!.length;
+    stream.bufferBytes -= Buffer.byteLength(stream.buffer.shift()!);
   }
   for (const sub of stream.subscribers) {
     if (sub.res.writableEnded || sub.res.destroyed) {
