@@ -38,7 +38,9 @@ import {
   endLiveStream,
   closeLiveSSE,
   installLiveStream,
+  stampStreamPresence,
 } from "../services/live-streams.js";
+import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 
 /**
  * Initialize an SSE response: write headers, disable Nagle, install the live
@@ -1246,6 +1248,29 @@ async function handleChatStream(
     // Only emit when the agent is truly done — no pending continuation or mid-turn work.
     if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && !state.incompleteToolTurn && !state.strandedToolCall) {
       res.write(`event: agent_output_complete\ndata: {}\n\n`);
+
+      // Fire-and-forget push notification to the user's other devices. The
+      // device that initiated this turn (if any deviceId was supplied) is
+      // suppressed; presence-tracked devices are also skipped server-side.
+      // System chats (synthesis, wake) are never user-facing — skip them.
+      if (chat.id !== "system" && state.fullText.trim()) {
+        const initiatingDeviceId = (req.body as any)?.deviceId;
+        const previewBody = truncateForBody(state.fullText);
+        sendPush(
+          "owner",
+          {
+            type: "message_complete",
+            title: chat.title || "qu.je",
+            body: previewBody || "Reply ready.",
+            url: `/?chat=${chat.id}`,
+            chatId: chat.id,
+            tag: `chat:${chat.id}`,
+          },
+          {
+            suppressDeviceIds: typeof initiatingDeviceId === "string" ? [initiatingDeviceId] : [],
+          }
+        ).catch((err) => console.warn("[push] message_complete dispatch failed:", err));
+      }
     }
 
     // End-of-turn compaction: if we crossed the 80% threshold during this turn,
@@ -2754,6 +2779,10 @@ router.get("/reconnect/:chatId", async (req, res) => {
   });
   res.socket?.setNoDelay(true);
   res.write(`: reconnected\n\n`);
+
+  // Stamp push-presence so a device that just reconnected to a live turn
+  // doesn't also get a push when that turn completes.
+  stampStreamPresence(req);
 
   // Replay the buffered events so the client catches up on what it missed.
   for (const chunk of stream.buffer) {

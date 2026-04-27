@@ -23,6 +23,8 @@ import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { ProviderIcon } from "./ProviderIcon";
+import { usePushNotifications } from "../hooks/usePushNotifications";
+import { sendPushTest } from "../api/push";
 
 // Reusable toggle switch with spring animation
 const ACCENT_COLORS: Record<string, { on: string; off: string }> = {
@@ -95,6 +97,7 @@ const SECTIONS = [
   { id: 'theme', label: 'Appearance' },
   { id: 'background', label: 'Background' },
   { id: 'haptics', label: 'Haptics' },
+  { id: 'notifications', label: 'Notifications' },
   { id: 'persona', label: 'Persona' },
   { id: 'user-doc', label: 'About You' },
   { id: 'presets', label: 'Presets' },
@@ -317,6 +320,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [presetSaving, setPresetSaving] = useState(false);
   const [presetMessage, setPresetMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [hapticsEnabled, setHapticsEnabled] = useState(settings.hapticsEnabled ?? true);
+  const push = usePushNotifications();
+  const [pushTestState, setPushTestState] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [modelContextWindows, setModelContextWindows] = useState<Record<string, number>>(settings.modelContextWindows || {});
   const [modelPreserveThinking, setModelPreserveThinking] = useState<Record<string, boolean>>(settings.modelPreserveThinking || {});
   const [ctxWindowsExpanded, setCtxWindowsExpanded] = useState(false);
@@ -2565,6 +2570,104 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 accentColor="blue"
               />
             </div>
+          </div>
+
+          {/* Push Notifications */}
+          <div id="notifications" className="space-y-3 pt-2 border-t border-white/10">
+            <div className="flex items-center justify-between">
+              <div className="min-w-0 pr-3">
+                <label className="block text-sm font-medium text-white/60">Push notifications</label>
+                <p className="text-xs text-white/30 mt-0.5">
+                  Notify this device when an agent reply is ready and you're not already viewing the app.
+                </p>
+              </div>
+              <ToggleSwitch
+                checked={push.status === "subscribed"}
+                onChange={() => {
+                  setPushTestState(null);
+                  if (push.status === "subscribed") {
+                    void push.disable();
+                  } else {
+                    void push.enable();
+                  }
+                }}
+                disabled={push.support !== "supported" || push.status === "loading"}
+                accentColor="blue"
+              />
+            </div>
+
+            {push.support === "needs-install" && (
+              <p className="text-xs text-amber-300/80">
+                Add qu.je to your Home Screen first — iOS only delivers push notifications to installed PWAs.
+              </p>
+            )}
+            {push.support === "unsupported" && (
+              <p className="text-xs text-white/40">
+                This browser doesn't support Web Push notifications.
+              </p>
+            )}
+            {push.permission === "denied" && (
+              <p className="text-xs text-red-300/80">
+                Browser notifications are blocked. Enable them in your browser/system settings, then try again.
+              </p>
+            )}
+            {push.error && (
+              <p className="text-xs text-red-300/80 break-words">{push.error}</p>
+            )}
+
+            {push.status === "subscribed" && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const result = await sendPushTest();
+                        setPushTestState({
+                          tone: "ok",
+                          text: `Sent — delivered ${result.delivered}, expired ${result.expired}, failed ${result.failed}`,
+                        });
+                      } catch (err: any) {
+                        setPushTestState({ tone: "err", text: err?.message || "Failed to send test" });
+                      }
+                    }}
+                    className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
+                  >
+                    Send test notification
+                  </button>
+                  {pushTestState && (
+                    <span className={`text-xs ${pushTestState.tone === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
+                      {pushTestState.text}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {push.devices.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <p className="text-xs text-white/40">Registered devices</p>
+                <ul className="space-y-1">
+                  {push.devices.map((d) => {
+                    const ua = d.userAgent || "Unknown device";
+                    const trimmed = ua.length > 80 ? ua.slice(0, 80) + "…" : ua;
+                    return (
+                      <li
+                        key={d.deviceId}
+                        className="flex items-center justify-between gap-2 text-xs text-white/50 bg-white/[0.03] border border-white/5 rounded-md px-2 py-1.5"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate font-mono text-[10px] text-white/40">{d.deviceId.slice(0, 8)}</p>
+                          <p className="truncate text-white/55">{trimmed}</p>
+                        </div>
+                        <span className="text-[10px] text-white/30 shrink-0">
+                          {new Date(d.lastSeenAt).toLocaleDateString()}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
           </div>
 
           {/* Agent Persona */}

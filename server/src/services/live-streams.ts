@@ -1,4 +1,21 @@
 import type { Request, Response } from "express";
+import { markPresence } from "./push-storage.js";
+
+/**
+ * Pull a deviceId from a request — checks query string first, then request
+ * body. The client stamps both: SSE GETs go on the URL, POSTs are also in JSON.
+ * Returns null if absent.
+ */
+function readDeviceId(req: Request | undefined): string | null {
+  if (!req) return null;
+  const fromQuery = (req.query?.deviceId as string | undefined) ?? null;
+  if (fromQuery && typeof fromQuery === "string") return fromQuery;
+  const body = (req as any).body;
+  if (body && typeof body === "object" && typeof body.deviceId === "string") {
+    return body.deviceId;
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Live stream registry — supports reconnect and runs to completion regardless
@@ -114,6 +131,10 @@ export function closeLiveSSE(chatId: string, res: Response): void {
  */
 export function installLiveStream(res: Response, _req: Request, chatId: string): LiveStream {
   if ((res as any)._liveStreamInstalled) {
+    // Even on the idempotent path, refresh presence — the caller may have
+    // arrived after a reconnect or a second installLiveStream invocation.
+    const dev = readDeviceId(_req);
+    if (dev) markPresence(dev, "sse");
     return liveStreams.get(chatId)!;
   }
 
@@ -160,7 +181,23 @@ export function installLiveStream(res: Response, _req: Request, chatId: string):
   });
 
   (res as any)._liveStreamInstalled = true;
+
+  // Stamp push-presence so message-complete dispatch knows this device is
+  // currently watching the stream and should be suppressed.
+  const dev = readDeviceId(_req);
+  if (dev) markPresence(dev, "sse");
+
   return stream;
+}
+
+/**
+ * Stamp push-presence for a request that's attaching to an existing live
+ * stream (e.g. /reconnect). Safe to call on any request — no-op if no
+ * deviceId is present.
+ */
+export function stampStreamPresence(req: Request): void {
+  const dev = readDeviceId(req);
+  if (dev) markPresence(dev, "sse");
 }
 
 /**

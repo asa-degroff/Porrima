@@ -1,6 +1,18 @@
 import type { Artifact, Chat, ChatListItem, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
+import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
+
+function appendDeviceIdQuery(url: string): string {
+  const id = readDeviceId();
+  if (!id) return url;
+  return url + (url.includes("?") ? "&" : "?") + `deviceId=${encodeURIComponent(id)}`;
+}
+
+function withDeviceId<T extends Record<string, unknown>>(body: T): T & { deviceId?: string } {
+  const id = readDeviceId();
+  return id ? { ...body, deviceId: id } : body;
+}
 
 export class OfflineError extends Error {
   constructor(message = "Network unavailable") {
@@ -298,7 +310,11 @@ export function sendMessage(
   callbacks: StreamCallbacks,
   images?: ImageAttachment[]
 ): AbortController {
-  return streamSSE(`${BASE}/chat`, { chatId, message, images: images?.length ? images : undefined }, callbacks);
+  return streamSSE(
+    `${BASE}/chat`,
+    withDeviceId({ chatId, message, images: images?.length ? images : undefined }),
+    callbacks
+  );
 }
 
 /**
@@ -328,7 +344,7 @@ export async function getChatStatus(
 export function reconnectChat(chatId: string, callbacks: StreamCallbacks): AbortController {
   const controller = new AbortController();
 
-  fetch(`${BASE}/chat/reconnect/${encodeURIComponent(chatId)}`, {
+  fetch(appendDeviceIdQuery(`${BASE}/chat/reconnect/${encodeURIComponent(chatId)}`), {
     method: "GET",
     signal: controller.signal,
     credentials: "include",
@@ -383,7 +399,11 @@ export function editMessage(
   callbacks: StreamCallbacks,
   images?: ImageAttachment[]
 ): AbortController {
-  return streamSSE(`${BASE}/chat/edit`, { chatId, messageIndex, message, images: images?.length ? images : undefined }, callbacks);
+  return streamSSE(
+    `${BASE}/chat/edit`,
+    withDeviceId({ chatId, messageIndex, message, images: images?.length ? images : undefined }),
+    callbacks
+  );
 }
 
 export async function stopChat(chatId: string): Promise<{ stopped: boolean; reason?: string }> {
