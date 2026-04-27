@@ -1,9 +1,9 @@
+import { apiFetch } from "./client";
+
 const BASE = "/api/push";
 
-interface FetchOpts extends RequestInit {}
-
-async function pushFetch(path: string, init?: FetchOpts): Promise<Response> {
-  return fetch(`${BASE}${path}`, { ...init, credentials: "include" });
+function pushFetch(path: string, init?: RequestInit): Promise<Response> {
+  return apiFetch(`${BASE}${path}`, init);
 }
 
 export async function fetchPushPublicKey(): Promise<string> {
@@ -45,13 +45,17 @@ export async function unsubscribePush(deviceId: string): Promise<void> {
 }
 
 export async function postPushPresence(deviceId: string, visible: boolean): Promise<void> {
-  // Presence is best-effort; never surface errors to the UI.
+  // Presence is best-effort; never surface errors to the UI. Use raw fetch
+  // here (not apiFetch) so a 401 on a stale tab doesn't trigger the global
+  // unauthorized handler — if the user's session expired, the next real call
+  // will surface that.
   try {
-    await pushFetch("/presence", {
+    await fetch(`${BASE}/presence`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ deviceId, visible }),
       keepalive: true,
+      credentials: "include",
     });
   } catch {
     // ignore

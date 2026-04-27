@@ -111,8 +111,15 @@ export async function sendPush(
           return;
         }
         result.failed++;
+        // Surface as much of the underlying push-service response as we can.
+        // For Apple/APNS the JSON body in err.body is usually the most
+        // diagnostic field — it'll say e.g. {"reason":"BadJwtToken"} or
+        // {"reason":"InvalidProviderToken"}.
         console.warn(
-          `[push] send failed for ${row.deviceId.slice(0, 8)}… status=${status ?? "?"}: ${err?.message ?? err}`
+          `[push] send failed for ${row.deviceId.slice(0, 8)}… status=${status ?? "?"} endpoint=${row.endpoint.slice(0, 60)}…\n` +
+            `       message: ${err?.message ?? err}\n` +
+            `       body: ${err?.body ?? "(none)"}\n` +
+            `       headers: ${err?.headers ? JSON.stringify(err.headers) : "(none)"}`
         );
       }
     })

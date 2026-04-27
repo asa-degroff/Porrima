@@ -196,14 +196,40 @@ export async function getVapidKeys(): Promise<VapidKeys> {
       return keys;
     }
 
+    // Apple's APNS-backed Web Push gateway is strict about the VAPID `sub`
+    // claim — values that contain `.local`, `localhost`, or other non-routable
+    // hostnames trigger BadJwtToken-style rejections. Default to a known-safe
+    // example.com mailto so out-of-the-box installs work on iOS without
+    // requiring the user to set VAPID_SUBJECT.
+    const SAFE_DEFAULT_SUBJECT = "mailto:notifications@example.com";
+    const isSafeSubject = (s: string | undefined | null): s is string => {
+      if (!s || typeof s !== "string") return false;
+      if (!/^(mailto:|https:\/\/)/.test(s)) return false;
+      if (/\.local(\b|$|\/|@)/i.test(s)) return false;
+      if (/localhost/i.test(s)) return false;
+      return true;
+    };
+
     try {
       const data = await readFile(VAPID_FILE, "utf-8");
       const parsed = JSON.parse(data) as VapidKeys;
       if (parsed.publicKey && parsed.privateKey) {
+        const subject = isSafeSubject(parsed.subject) ? parsed.subject : SAFE_DEFAULT_SUBJECT;
+        if (subject !== parsed.subject) {
+          console.warn(
+            `[push] overriding stored VAPID subject "${parsed.subject}" with "${subject}" (Apple/APNS rejects local-style subjects)`
+          );
+          // Persist the corrected subject so subsequent boots are quiet.
+          await writeFile(
+            VAPID_FILE,
+            JSON.stringify({ ...parsed, subject }, null, 2),
+            { mode: 0o600 }
+          );
+        }
         _vapidCache = {
           publicKey: parsed.publicKey,
           privateKey: parsed.privateKey,
-          subject: parsed.subject || "mailto:owner@quje.local",
+          subject,
         };
         return _vapidCache;
       }
@@ -215,7 +241,7 @@ export async function getVapidKeys(): Promise<VapidKeys> {
     const keys: VapidKeys = {
       publicKey: generated.publicKey,
       privateKey: generated.privateKey,
-      subject: envSubject || "mailto:owner@quje.local",
+      subject: envSubject && isSafeSubject(envSubject) ? envSubject : SAFE_DEFAULT_SUBJECT,
     };
     await writeFile(VAPID_FILE, JSON.stringify(keys, null, 2), { mode: 0o600 });
     _vapidCache = keys;

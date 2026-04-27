@@ -7,6 +7,16 @@ import { ExpirationPlugin } from "workbox-expiration";
 
 declare const self: ServiceWorkerGlobalScope;
 
+// Activate immediately on install — without this, an existing PWA install
+// stays on the previous SW (no push handler) until every tab closes. With
+// it, the new SW takes over the open tab on next reload.
+self.addEventListener("install", () => {
+  self.skipWaiting();
+});
+self.addEventListener("activate", (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 precacheAndRoute(self.__WB_MANIFEST);
 
 // Preserve previous behavior: long-cache Google Fonts.
@@ -54,20 +64,20 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     (async () => {
-      // Second line of defense (server-side presence is the first): if any
-      // window for this scope is currently visible, suppress the OS
-      // notification and let the foreground tab render an in-app toast
-      // instead. Covers the same-device race where presence has expired but
-      // the tab is actually focused.
       const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const visibleClient = clients.find((c) => (c as WindowClient).visibilityState === "visible");
 
-      if (visibleClient) {
-        for (const c of clients) {
-          c.postMessage({ kind: "push", payload });
-        }
-        return;
+      // Always post to clients so a foreground tab can show its own toast
+      // (covers the case where the OS won't display while the PWA is front).
+      for (const c of clients) {
+        c.postMessage({ kind: "push", payload });
       }
+
+      // Second line of defense for non-test pushes: if a window is visible,
+      // skip the OS notification — the in-app toast covers it. Test pushes
+      // (from the settings UI) always force the OS notification so the user
+      // can verify the path end-to-end.
+      if (visibleClient && payload.type !== "test") return;
 
       await self.registration.showNotification(title, {
         body: payload.body ?? "",

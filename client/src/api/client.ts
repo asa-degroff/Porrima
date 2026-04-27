@@ -25,7 +25,7 @@ function emitUnauthorized() {
   window.dispatchEvent(new CustomEvent("auth:unauthorized"));
 }
 
-async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   let res: Response;
   try {
     res = await fetch(input, {

@@ -189,40 +189,89 @@ export function usePushNotifications(): UsePushNotificationsResult {
     setStatus("loading");
     setError(null);
 
+    // Time-bound an arbitrary promise so a hung browser API doesn't pin the
+    // toggle in "loading" forever.
+    const withTimeout = <T,>(p: Promise<T>, ms: number, label: string): Promise<T> =>
+      Promise.race<T>([
+        p,
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+        ),
+      ]);
+
+    let resolved = false;
     try {
+      console.log("[push] enable: stage 1 — requesting permission");
       const perm = await Notification.requestPermission();
       setPermission(perm);
+      console.log("[push] enable: permission =", perm);
       if (perm !== "granted") {
         setStatus("denied");
+        resolved = true;
         return;
       }
 
-      const reg = await navigator.serviceWorker.ready;
-      let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
-        const key = await fetchPushPublicKey();
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
-        });
+      if (!("serviceWorker" in navigator)) {
+        throw new Error("Service workers aren't available in this browser.");
       }
+
+      console.log("[push] enable: stage 2 — awaiting SW ready");
+      const reg = await withTimeout(navigator.serviceWorker.ready, 8000, "serviceWorker.ready");
+      console.log("[push] enable: SW ready, scope =", reg.scope, "active =", reg.active?.state);
+
+      console.log("[push] enable: stage 3 — checking existing subscription");
+      let sub = await withTimeout(reg.pushManager.getSubscription(), 5000, "getSubscription");
+      console.log("[push] enable: existing subscription =", !!sub);
+
+      if (!sub) {
+        console.log("[push] enable: stage 4a — fetching VAPID public key");
+        const key = await withTimeout(fetchPushPublicKey(), 5000, "fetchPushPublicKey");
+        console.log("[push] enable: VAPID key length =", key.length);
+
+        console.log("[push] enable: stage 4b — subscribing pushManager");
+        sub = await withTimeout(
+          reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
+          }),
+          15000,
+          "pushManager.subscribe"
+        );
+        console.log("[push] enable: pushManager subscribed, endpoint host =",
+          (() => { try { return new URL(sub.endpoint).host; } catch { return "?"; } })()
+        );
+      }
+
       const json = sub.toJSON();
       if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
         throw new Error("Invalid subscription returned by browser");
       }
-      await subscribePush({
-        deviceId: deviceIdRef.current,
-        subscription: {
-          endpoint: json.endpoint,
-          keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-        },
-        userAgent: navigator.userAgent,
-      });
+
+      console.log("[push] enable: stage 5 — POST /api/push/subscribe");
+      await withTimeout(
+        subscribePush({
+          deviceId: deviceIdRef.current,
+          subscription: {
+            endpoint: json.endpoint,
+            keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+          },
+          userAgent: navigator.userAgent,
+        }),
+        10000,
+        "/api/push/subscribe"
+      );
+      console.log("[push] enable: stage 6 — done, marking subscribed");
+
       setStatus("subscribed");
-      await refreshDevices();
+      resolved = true;
+      refreshDevices().catch((err) => console.warn("[push] device refresh failed:", err));
     } catch (err: any) {
+      console.error("[push] enable failed:", err);
       setStatus("error");
       setError(err?.message || String(err));
+      resolved = true;
+    } finally {
+      if (!resolved) setStatus("idle");
     }
   }, [support, refreshDevices]);
 
@@ -237,8 +286,9 @@ export function usePushNotifications(): UsePushNotificationsResult {
       }
       await unsubscribePush(deviceIdRef.current);
       setStatus("idle");
-      await refreshDevices();
+      refreshDevices().catch((err) => console.warn("[push] device refresh failed:", err));
     } catch (err: any) {
+      console.error("[push] disable failed:", err);
       setStatus("error");
       setError(err?.message || String(err));
     }
