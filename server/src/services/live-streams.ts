@@ -1,7 +1,8 @@
 import type { Request, Response } from "express";
 
 // ---------------------------------------------------------------------------
-// Live stream registry — supports reconnect and grace-on-disconnect.
+// Live stream registry — supports reconnect and runs to completion regardless
+// of subscriber count.
 //
 // Every chat turn (and every server-internal background task that wants to
 // stream output to the system chat — synthesis, wake cycle) gets a LiveStream
@@ -11,10 +12,11 @@ import type { Request, Response } from "express";
 // res — the stream starts headless, and any subscriber attaching via
 // /reconnect/:chatId picks up the buffered events and continues live.
 //
-// If the primary client disconnects mid-stream, the stream is NOT immediately
-// aborted — a grace timer fires if no subscriber reattaches within the window.
-// At end-of-turn the stream is closed and kept briefly so late reconnecters
-// can see the final events.
+// Streams are never aborted just because subscribers disconnected. The model
+// keeps generating in the background; reconnects replay the buffer; the next
+// turn on the same chat replaces the stream; explicit /stop aborts via
+// activeStreams. At end-of-turn the stream is closed and kept briefly so late
+// reconnecters can see the final events.
 // ---------------------------------------------------------------------------
 
 export interface LiveStreamSubscriber {
@@ -31,7 +33,6 @@ export interface LiveStream {
   buffer: string[];
   bufferBytes: number;
   subscribers: Set<LiveStreamSubscriber>;
-  graceTimer: NodeJS.Timeout | null;
   ended: boolean;
   /** Headless streams have no primary subscriber — they outlive disconnect by design. */
   headless: boolean;
@@ -48,10 +49,6 @@ export const activeStreams: Map<string, AbortController> =
 (globalThis as any)._activeChatStreams = activeStreams;
 
 const LIVE_BUFFER_MAX_BYTES = 10 * 1024 * 1024; // 10MB cap per chat
-// Generous grace period so brief client disconnects (tab backgrounded, network
-// hop, page refresh) don't abort an in-flight model call mid-prefill. The
-// /reconnect/:chatId endpoint replays the buffered events on reattach.
-const LIVE_GRACE_MS = 5 * 60_000;
 const LIVE_END_RETENTION_MS = 60_000;
 
 export function emitToStream(stream: LiveStream, chunk: string): void {
@@ -80,27 +77,15 @@ export function emitToStream(stream: LiveStream, chunk: string): void {
 
 export function detachSubscriber(stream: LiveStream, sub: LiveStreamSubscriber): void {
   stream.subscribers.delete(sub);
-  if (stream.ended) return;
-  // Headless streams keep running regardless of subscriber count — they're
-  // driven by a server-internal task (synthesis), not by the HTTP client.
-  if (stream.headless) return;
-  if (stream.subscribers.size > 0) return;
-  // No subscribers left — start grace timer. Generation continues in the
-  // background so a refreshing client can reconnect and resume watching.
-  if (stream.graceTimer) clearTimeout(stream.graceTimer);
-  stream.graceTimer = setTimeout(() => {
-    if (stream.subscribers.size === 0 && !stream.ended) {
-      console.log(`[chat] grace period expired for ${stream.chatId} — aborting stream`);
-      stream.abort.abort();
-    }
-  }, LIVE_GRACE_MS);
+  // Streams run to completion regardless of subscriber count. The model keeps
+  // generating in the background; reconnects replay the buffer; the next turn
+  // on this chat replaces the stream; explicit /stop aborts via activeStreams.
 }
 
 export function endLiveStream(chatId: string): void {
   const stream = liveStreams.get(chatId);
   if (!stream || stream.ended) return;
   stream.ended = true;
-  if (stream.graceTimer) clearTimeout(stream.graceTimer);
   for (const sub of stream.subscribers) {
     try { sub.res.end(); } catch {}
   }
@@ -151,7 +136,6 @@ export function installLiveStream(res: Response, _req: Request, chatId: string):
     buffer: [],
     bufferBytes: 0,
     subscribers: new Set(),
-    graceTimer: null,
     ended: false,
     headless: false,
   };
@@ -207,7 +191,6 @@ export function installHeadlessLiveStream(chatId: string): LiveStream {
     buffer: [],
     bufferBytes: 0,
     subscribers: new Set(),
-    graceTimer: null,
     ended: false,
     headless: true,
   };

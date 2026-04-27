@@ -2761,18 +2761,11 @@ router.get("/reconnect/:chatId", async (req, res) => {
   }
 
   // Attach as a non-primary subscriber. Future events from emitToStream will
-  // fan out here too. On disconnect we simply drop — the primary subscriber
-  // (or the grace timer) governs the stream's lifetime.
+  // fan out here too. On disconnect we simply drop — the stream runs to
+  // completion regardless of subscriber count.
   const subWrite = res.write.bind(res) as (chunk: string) => boolean;
   const sub: LiveStreamSubscriber = { write: subWrite, res, isPrimary: false };
   stream.subscribers.add(sub);
-
-  // If the primary had disconnected and the grace timer was running, reattach
-  // cancels it — the refreshing client is now watching again.
-  if (stream.graceTimer && stream.subscribers.size > 0) {
-    clearTimeout(stream.graceTimer);
-    stream.graceTimer = null;
-  }
 
   res.on("close", () => {
     detachSubscriber(stream, sub);
