@@ -403,11 +403,20 @@ export async function buildMemoryAugmentedPrompt(
   chatType?: string,
   projectPath?: string
 ): Promise<string> {
+  let stablePrefix: string;
   try {
-    const { stablePrefix, blocksSection } = await buildStablePrefix(
+    ({ stablePrefix } = await buildStablePrefix(
       baseSystemPrompt, chatId || "_default", projectId, projectPath
-    );
+    ));
+  } catch (e) {
+    console.error("[memory] buildStablePrefix failed, falling back to base prompt:", e);
+    return baseSystemPrompt;
+  }
 
+  // Retrieval failures (e.g. embedding 500s on long inputs) must not discard
+  // the stablePrefix — persona/user-doc/blocks/zeitgeist live there and are
+  // independent of memory retrieval.
+  try {
     const memories = await retrieveMemories(recentMessages, chatType, projectId);
     updateAccessMetadata(memories);
 
@@ -417,7 +426,6 @@ export async function buildMemoryAugmentedPrompt(
       ? "\n\nAdditional context may be available in memory blocks listed above — use read_memory_block(id) to read your full memories from that block."
       : "";
 
-    // Add zeitgeist archive instruction
     let zeitgeistHint = "";
     try {
       const { getZeitgeistArchiveInstruction } = await import("./zeitgeist.js");
@@ -427,8 +435,8 @@ export async function buildMemoryAugmentedPrompt(
     const memoriesSection = buildMemoriesSection(memories, projectId, blockHint, zeitgeistHint);
     return `${stablePrefix}${memoriesSection}`;
   } catch (e) {
-    console.error("[memory] Context augmentation failed, using base prompt:", e);
-    return baseSystemPrompt;
+    console.error("[memory] Memory retrieval failed, returning stablePrefix without memories:", e);
+    return stablePrefix;
   }
 }
 
@@ -454,29 +462,38 @@ export async function buildSplitAugmentedPrompt(
   chatType?: string,
   projectPath?: string
 ): Promise<AugmentedPromptResult> {
+  const cacheKey = chatId || "_default";
+
+  // Build stablePrefix outside the retrieval try/catch — persona/user-doc/
+  // blocks/zeitgeist must not be lost when memory retrieval fails (e.g.
+  // embedding server 500s on long user inputs).
+  let stablePrefix: string;
   try {
-    const cacheKey = chatId || "_default";
-    const { stablePrefix, blocksSection } = await buildStablePrefix(
+    ({ stablePrefix } = await buildStablePrefix(
       baseSystemPrompt, cacheKey, projectId, projectPath
-    );
+    ));
+  } catch (e) {
+    console.error("[memory] buildStablePrefix failed, falling back to base prompt:", e);
+    return { systemPrompt: baseSystemPrompt, memoriesMessage: "", combined: baseSystemPrompt };
+  }
 
-    const prefixCached = stablePrefixCache.get(cacheKey);
-    const hasIndexedBlocks = prefixCached?.blocksSection?.includes("Available Memory Blocks");
-    const blockHint = hasIndexedBlocks
-      ? "\n\nAdditional context may be available in memory blocks listed above — use read_memory_block(id) to read your full memories from that block."
-      : "";
+  const prefixCached = stablePrefixCache.get(cacheKey);
+  const hasIndexedBlocks = prefixCached?.blocksSection?.includes("Available Memory Blocks");
+  const blockHint = hasIndexedBlocks
+    ? "\n\nAdditional context may be available in memory blocks listed above — use read_memory_block(id) to read your full memories from that block."
+    : "";
 
-    // Add zeitgeist archive instruction
-    let zeitgeistHint = "";
+  let zeitgeistHint = "";
+  try {
+    const { getZeitgeistArchiveInstruction } = await import("./zeitgeist.js");
+    zeitgeistHint = getZeitgeistArchiveInstruction();
+  } catch { /* zeitgeist not available */ }
+
+  const state = chatId ? contextState.get(chatId) : undefined;
+
+  // Case 1: No state — first turn or post-reset. Full retrieval into system prompt.
+  if (!state) {
     try {
-      const { getZeitgeistArchiveInstruction } = await import("./zeitgeist.js");
-      zeitgeistHint = getZeitgeistArchiveInstruction();
-    } catch { /* zeitgeist not available */ }
-
-    const state = chatId ? contextState.get(chatId) : undefined;
-
-    // Case 1: No state — first turn or post-reset. Full retrieval into system prompt.
-    if (!state) {
       const memories = await retrieveMemories(recentMessages, chatType, projectId);
       updateAccessMetadata(memories);
 
@@ -493,18 +510,25 @@ export async function buildSplitAugmentedPrompt(
       }
 
       log(`[memory-context] chat=${chatId} full retrieval: ${memories.length} memories frozen in system prompt`);
-
       return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
+    } catch (e) {
+      // Retrieval failed on first turn — keep stablePrefix (with persona/blocks),
+      // skip memories. Don't establish state so the next turn retries retrieval
+      // with whatever the new query is.
+      console.error(`[memory] chat=${chatId} initial retrieval failed, returning stablePrefix without memories:`, e);
+      return { systemPrompt: stablePrefix, memoriesMessage: "", combined: stablePrefix };
     }
+  }
 
-    // Case 2: State exists, not dirty — reuse frozen system prompt, no delta.
-    if (!state.dirty) {
-      const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;
-      log(`[memory-context] chat=${chatId} cache hit: system prompt stable, no delta needed`);
-      return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
-    }
+  // Case 2: State exists, not dirty — reuse frozen system prompt, no delta.
+  if (!state.dirty) {
+    const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;
+    log(`[memory-context] chat=${chatId} cache hit: system prompt stable, no delta needed`);
+    return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
+  }
 
-    // Case 3: State exists, dirty — re-retrieve and compute delta.
+  // Case 3: State exists, dirty — re-retrieve and compute delta.
+  try {
     const memories = await retrieveMemories(recentMessages, chatType, projectId);
     const inContextIds = new Set([...state.frozenIds, ...state.deltaIds]);
     // Only bump access for memories NOT already in context — frozen memories
@@ -513,15 +537,11 @@ export async function buildSplitAugmentedPrompt(
 
     const newMemories = memories.filter((r) => !inContextIds.has(r.memory.id));
 
-    // Mark as clean
     state.dirty = false;
-
-    // Track new delta IDs
     for (const r of newMemories) {
       state.deltaIds.add(r.memory.id);
     }
 
-    // Build delta message (only new memories)
     let memoriesMessage = "";
     if (newMemories.length > 0) {
       const deltaBlock = newMemories.map((r) => formatMemory(r, projectId)).join("\n");
@@ -532,27 +552,17 @@ export async function buildSplitAugmentedPrompt(
 
     log(`[memory-context] chat=${chatId} delta: ${memories.length} retrieved, ${newMemories.length} new (${state.frozenIds.size} frozen + ${state.deltaIds.size} delta in context)`);
 
-    // If deltas have accumulated too many (>20), schedule a full reset on next compaction.
-    // Don't reset now — that would change the system prompt and invalidate the KV cache.
     if (state.deltaIds.size > 20) {
       log(`[memory-context] chat=${chatId} delta accumulation high (${state.deltaIds.size}), will reset on next compaction`);
     }
 
     return { systemPrompt, memoriesMessage, combined: memoriesMessage ? `${systemPrompt}\n\n${memoriesMessage}` : systemPrompt };
   } catch (e) {
-    console.error("[memory] Context augmentation failed, using base prompt:", e);
-    // If we have existing frozen state, preserve the system prompt rather than falling
-    // back to bare base prompt — the frozen memories are still valid.
-    const state = chatId ? contextState.get(chatId) : undefined;
-    if (state) {
-      const cached = stablePrefixCache.get(chatId || "_default");
-      if (cached) {
-        const systemPrompt = `${cached.prefix}${state.frozenMemoriesSection}`;
-        console.warn(`[memory-context] chat=${chatId} delta retrieval failed, using frozen state (skipping delta)`);
-        state.dirty = false; // Don't retry immediately — wait for next invalidation
-        return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
-      }
-    }
-    return { systemPrompt: baseSystemPrompt, memoriesMessage: "", combined: baseSystemPrompt };
+    // Delta retrieval failed — frozen memories in the system prompt are still
+    // valid, so preserve them and skip the delta.
+    console.warn(`[memory-context] chat=${chatId} delta retrieval failed, using frozen state (skipping delta):`, e);
+    state.dirty = false; // Don't retry immediately — wait for next invalidation
+    const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;
+    return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
   }
 }
