@@ -769,19 +769,24 @@ export function Sidebar({
         {systemChats.length > 0 && (
           <div className="px-3 pb-1 shrink-0 border-b border-white/5">
             <div className="px-1 pb-1">
-              {systemChats.map((chat) => (
-                <button
-                  key={chat.id}
-                  onClick={() => { onSelectChat(chat.id); onClose(); }}
-                  className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors ${
-                    chat.id === activeChatId
-                      ? 'bg-amber-500/15 text-amber-200 border border-amber-400/20'
-                      : 'text-white/50 hover:text-white/70 hover:bg-white/5'
-                  }`}
-                >
-                  <span className="truncate block">{chat.title}</span>
-                </button>
-              ))}
+              {systemChats.map((chat) => {
+                const isLastActive = chat.id === lastActiveChatId;
+                return (
+                  <button
+                    key={chat.id}
+                    onClick={() => { onSelectChat(chat.id); onClose(); }}
+                    className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-all relative border ${
+                      chat.id === activeChatId
+                        ? 'bg-[rgba(var(--theme-accent-muted))] text-[rgba(var(--theme-accent-text))] border-[rgba(var(--theme-accent-border))]'
+                        : isLastActive
+                          ? 'text-white/50 hover:text-white/70 hover:bg-white/5 border-[rgba(var(--theme-accent),0.25)] shadow-[0_0_8px_rgba(var(--theme-accent),0.12)]'
+                          : 'text-white/50 hover:text-white/70 hover:bg-white/5 border-[rgba(var(--theme-accent),0.1)]'
+                    }`}
+                  >
+                    <span className="truncate block">{chat.title}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
