@@ -466,7 +466,8 @@ export async function buildSplitAugmentedPrompt(
 
   // Build stablePrefix outside the retrieval try/catch — persona/user-doc/
   // blocks/zeitgeist must not be lost when memory retrieval fails (e.g.
-  // embedding server 500s on long user inputs).
+  // embedding server 500s on long user inputs). Skills are appended by the
+  // caller after this function returns, so they're also unaffected.
   let stablePrefix: string;
   try {
     ({ stablePrefix } = await buildStablePrefix(
@@ -559,9 +560,10 @@ export async function buildSplitAugmentedPrompt(
     return { systemPrompt, memoriesMessage, combined: memoriesMessage ? `${systemPrompt}\n\n${memoriesMessage}` : systemPrompt };
   } catch (e) {
     // Delta retrieval failed — frozen memories in the system prompt are still
-    // valid, so preserve them and skip the delta.
+    // valid, so preserve them and skip the delta. Leave state.dirty=true so
+    // the next turn retries with a different query string (transient
+    // failures like a brief embed server hiccup recover automatically).
     console.warn(`[memory-context] chat=${chatId} delta retrieval failed, using frozen state (skipping delta):`, e);
-    state.dirty = false; // Don't retry immediately — wait for next invalidation
     const systemPrompt = `${stablePrefix}${state.frozenMemoriesSection}`;
     return { systemPrompt, memoriesMessage: "", combined: systemPrompt };
   }
