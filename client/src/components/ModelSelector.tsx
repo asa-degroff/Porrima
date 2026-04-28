@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import type { OllamaModel } from "../types";
 import { ProviderIcon } from "./ProviderIcon";
-import { DropdownPanel } from "./SettingsModal";
+import { DropdownPanel } from "./ui/DropdownPanel";
 
 interface Props {
   models: OllamaModel[];

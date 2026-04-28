@@ -1,4 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { ToggleSwitch } from "./ui/ToggleSwitch";
+import { DropdownPanel } from "./ui/DropdownPanel";
+import { Chevron } from "./ui/Chevron";
+import { useClickOutside } from "../hooks/useClickOutside";
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -25,68 +29,6 @@ import { PolyhedronLogo } from "./PolyhedronLogo";
 import { ProviderIcon } from "./ProviderIcon";
 import { usePushNotifications } from "../hooks/usePushNotifications";
 import { sendPushTest } from "../api/push";
-
-// Reusable toggle switch with spring animation
-const ACCENT_COLORS: Record<string, { on: string; off: string }> = {
-  purple:  { on: "bg-purple-500/30", off: "bg-white/10" },
-  blue:    { on: "bg-blue-500/30",   off: "bg-white/10" },
-  emerald: { on: "bg-emerald-500/30", off: "bg-white/10" },
-  violet:  { on: "bg-violet-500/30", off: "bg-white/10" },
-};
-
-interface ToggleSwitchProps {
-  checked: boolean;
-  onChange: () => void;
-  accentColor: "purple" | "blue" | "emerald" | "violet";
-  disabled?: boolean;
-}
-
-function ToggleSwitch({ checked, onChange, accentColor, disabled }: ToggleSwitchProps) {
-  const colors = ACCENT_COLORS[accentColor];
-  return (
-    <button
-      onClick={onChange}
-      disabled={disabled}
-      className={`group relative shrink-0 w-12 h-6 rounded-full
-        transition-[background-color] ease-[cubic-bezier(0.4,0,0.2,1)] duration-200
-        ${checked ? colors.on : colors.off}
-        ${disabled ? "opacity-40 cursor-not-allowed pointer-events-none" : "cursor-pointer"}`}
-      role="switch"
-      aria-checked={checked}
-    >
-      <span
-        className={`absolute top-1 w-4 h-4 rounded-full bg-white/80 
-          transition-[left,transform] duration-200 
-          ease-[cubic-bezier(0.34,1.56,0.64,1)]
-          ${checked ? "left-7" : "left-1"} 
-          group-active:scale-90`}
-      />
-    </button>
-  );
-}
-
-// Dropdown panel — owns the visual chrome (backdrop, border, shadow) and the
-// slide-down reveal animation. Callers pass positioning/sizing classes via
-// `className` (e.g. "left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto").
-export function DropdownPanel({ open, className = "", children }: {
-  open: boolean;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  if (!open) return null;
-
-  return (
-    <div
-      className={`absolute z-30 backdrop-blur-xl border rounded-xl shadow-2xl py-1 animate-dropdown-enter ${className}`}
-      style={{
-        backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
-        borderColor: `rgba(var(--theme-primary-border))`,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
 
 const SECTIONS = [
   { id: 'models', label: 'Models' },
@@ -137,34 +79,6 @@ function useActiveSection(sectionIds: readonly string[], root: Element | null) {
 
   return activeId;
 }
-
-function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
-  useEffect(() => {
-    if (!active) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [active, ref, onClose]);
-}
-
-const chevronSvg = (open: boolean) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    width="10"
-    height="10"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
-  >
-    <path d="M6 9l6 6 6-6" />
-  </svg>
-);
 
 type WebSearchProvider = NonNullable<Settings["defaultWebSearchProvider"]>;
 
@@ -1241,7 +1155,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <span className="truncate flex-1 text-left">
                   {defaultModelId ? (models.find((m) => m.id === defaultModelId)?.name || defaultModelId) : "Auto (first available)"}
                 </span>
-                {chevronSvg(modelDropdownOpen)}
+                <Chevron open={modelDropdownOpen} />
               </button>
               <DropdownPanel
                 open={modelDropdownOpen}
@@ -1624,7 +1538,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                    <div className="relative" ref={extractionModelDropdownRef}>
 	                                      <button onClick={() => setExtractionModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
 	                                        <span className="truncate flex-1 text-left">{extractionModelId || "Select…"}</span>
-	                                        {chevronSvg(extractionModelDropdownOpen)}
+	                                        <Chevron open={extractionModelDropdownOpen} />
 	                                      </button>
 	                                      <DropdownPanel open={extractionModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
 	                                        {extractionServerModels.map((m) => (
@@ -1685,7 +1599,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                      <div className="relative" ref={rerankerModelDropdownRef}>
 	                                        <button onClick={() => setRerankerModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
 	                                          <span className="truncate flex-1 text-left">{rerankerModelId || "Select…"}</span>
-	                                          {chevronSvg(rerankerModelDropdownOpen)}
+	                                          <Chevron open={rerankerModelDropdownOpen} />
 	                                        </button>
 	                                        <DropdownPanel open={rerankerModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
 	                                          {rerankerModels.map((m) => (
@@ -1739,7 +1653,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                  <div className="relative" ref={embeddingModelDropdownRef}>
 	                                    <button onClick={() => setEmbeddingModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
 	                                      <span className="truncate flex-1 text-left">{embeddingModel || "Select…"}</span>
-	                                      {chevronSvg(embeddingModelDropdownOpen)}
+	                                      <Chevron open={embeddingModelDropdownOpen} />
 	                                    </button>
 	                                    <DropdownPanel open={embeddingModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
 	                                      {embeddingModels.map((m) => (
@@ -1797,7 +1711,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                      <div className="relative" ref={titleGenerationModelDropdownRef}>
 	                                        <button onClick={() => setTitleGenerationModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
 	                                          <span className="truncate flex-1 text-left">{titleGenerationModelId || "Select…"}</span>
-	                                          {chevronSvg(titleGenerationModelDropdownOpen)}
+	                                          <Chevron open={titleGenerationModelDropdownOpen} />
 	                                        </button>
 	                                        <DropdownPanel open={titleGenerationModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
 	                                          {titleGenerationModels.map((m) => (
@@ -1898,7 +1812,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     ? "No favorites selected"
                     : `${favoriteModels.size} favorite${favoriteModels.size === 1 ? "" : "s"} selected`}
                 </span>
-                {chevronSvg(favoritesDropdownOpen)}
+                <Chevron open={favoritesDropdownOpen} />
               </button>
               <DropdownPanel
                 open={favoritesDropdownOpen}
@@ -2139,7 +2053,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <span className="truncate flex-1 text-left">
                   {defaultVisionModelId ? (models.find((m) => m.id === defaultVisionModelId)?.name || defaultVisionModelId) : "Auto (first vision model)"}
                 </span>
-                {chevronSvg(visionModelDropdownOpen)}
+                <Chevron open={visionModelDropdownOpen} />
               </button>
               <DropdownPanel
                 open={visionModelDropdownOpen}
@@ -2981,7 +2895,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <span className="truncate flex-1 text-left">
                     {WEB_SEARCH_PROVIDER_OPTIONS.find((p) => p.id === defaultWebSearchProvider)?.label || "Brave Search"}
                   </span>
-                  {chevronSvg(webSearchProviderDropdownOpen)}
+                  <Chevron open={webSearchProviderDropdownOpen} />
                 </button>
                 <DropdownPanel
                   open={webSearchProviderDropdownOpen}
@@ -3075,7 +2989,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <span className="truncate flex-1 text-left">
                     {imageBackend === "sdcpp" ? "sd-server (stable-diffusion.cpp)" : "ComfyUI"}
                   </span>
-                  {chevronSvg(imageBackendDropdownOpen)}
+                  <Chevron open={imageBackendDropdownOpen} />
                 </button>
                 <DropdownPanel
                   open={imageBackendDropdownOpen}
@@ -3535,7 +3449,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       <span className="truncate flex-1 text-left">
                         {ttsSettings.backend === "kokoro" ? "Kokoro (Standard)" : "Qwen3-TTS (Streaming)"}
                       </span>
-                      {chevronSvg(backendDropdownOpen)}
+                      <Chevron open={backendDropdownOpen} />
                     </button>
                     <DropdownPanel
                       open={backendDropdownOpen}
@@ -3634,7 +3548,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                               ? "Clause (faster, ~1ms)" 
                               : "Sentence (better prosody, ~5ms)"}
                           </span>
-                          {chevronSvg(boundaryTierDropdownOpen)}
+                          <Chevron open={boundaryTierDropdownOpen} />
                         </button>
                         <DropdownPanel
                           open={boundaryTierDropdownOpen}
@@ -3741,7 +3655,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                           return ttsSettings.voice;
                         })()}
                       </span>
-                      {chevronSvg(voiceDropdownOpen)}
+                      <Chevron open={voiceDropdownOpen} />
                     </button>
                     <DropdownPanel
                       open={voiceDropdownOpen}

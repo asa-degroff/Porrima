@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import type { SystemPromptPreset } from "../types";
-import { DropdownPanel } from "./SettingsModal";
+import { DropdownPanel } from "./ui/DropdownPanel";
 
 interface Props {
   value: string;

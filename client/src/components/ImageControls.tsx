@@ -1,34 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { ImageGenerationParams, GenerationState } from "../types";
-import { DropdownPanel } from "./SettingsModal";
-
-const chevronSvg = (open: boolean) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    width="10"
-    height="10"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
-  >
-    <path d="M6 9l6 6 6-6" />
-  </svg>
-);
-
-function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
-  useEffect(() => {
-    if (!active) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [active, ref, onClose]);
-}
+import { DropdownPanel } from "./ui/DropdownPanel";
+import { Chevron } from "./ui/Chevron";
+import { useClickOutside } from "../hooks/useClickOutside";
 
 const MODEL_PRESETS: Record<string, Partial<ImageGenerationParams>> = {
   "z-image-base": { steps: 30, cfgScale: 4.0, sampler: "euler", scheduler: "normal" },
@@ -300,7 +274,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
             className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
           >
             <span className="truncate flex-1 text-left">{model || "No models found"}</span>
-            {chevronSvg(modelOpen)}
+            <Chevron open={modelOpen} />
           </button>
           <DropdownPanel
             open={modelOpen}
@@ -496,7 +470,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
               className="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none hover:bg-white/10 transition-all cursor-pointer"
             >
               <span className="truncate flex-1 text-left">{sampler}</span>
-              {chevronSvg(samplerOpen)}
+              <Chevron open={samplerOpen} />
             </button>
             <DropdownPanel
               open={samplerOpen}
@@ -530,7 +504,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
               className="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none hover:bg-white/10 transition-all cursor-pointer"
             >
               <span className="truncate flex-1 text-left">{scheduler}</span>
-              {chevronSvg(schedulerOpen)}
+              <Chevron open={schedulerOpen} />
             </button>
             <DropdownPanel
               open={schedulerOpen}

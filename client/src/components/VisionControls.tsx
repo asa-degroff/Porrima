@@ -2,7 +2,9 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import type { VisionPreset, AnalyzedImage } from "../api/client";
 import type { OllamaModel } from "../types";
 import { ProviderIcon } from "./ProviderIcon";
-import { DropdownPanel } from "./SettingsModal";
+import { DropdownPanel } from "./ui/DropdownPanel";
+import { Chevron } from "./ui/Chevron";
+import { useClickOutside } from "../hooks/useClickOutside";
 
 const MAX_DIMENSION = 2048;
 const TARGET_BYTES = 2 * 1024 * 1024; // 2 MB
@@ -40,34 +42,6 @@ function compressImage(file: File): Promise<string> {
     img.onerror = () => reject(new Error("Failed to load image"));
     img.src = URL.createObjectURL(file);
   });
-}
-
-const chevronSvg = (open: boolean) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    width="10"
-    height="10"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
-  >
-    <path d="M6 9l6 6 6-6" />
-  </svg>
-);
-
-function useClickOutside(ref: React.RefObject<HTMLDivElement | null>, onClose: () => void, active: boolean) {
-  useEffect(() => {
-    if (!active) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [active, ref, onClose]);
 }
 
 interface Props {
@@ -165,7 +139,7 @@ export function VisionControls({
               className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all disabled:opacity-40 cursor-pointer"
             >
               <span className="truncate flex-1 text-left">{selectedModelObj?.name || selectedModel}</span>
-              {chevronSvg(modelOpen)}
+              <Chevron open={modelOpen} />
             </button>
             <DropdownPanel
               open={modelOpen}
@@ -207,7 +181,7 @@ export function VisionControls({
               className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all disabled:opacity-40 cursor-pointer"
             >
               <span className="truncate flex-1 text-left">{selectedPresetObj?.name || selectedPreset}</span>
-              {chevronSvg(presetOpen)}
+              <Chevron open={presetOpen} />
             </button>
             <DropdownPanel
               open={presetOpen}
