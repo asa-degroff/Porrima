@@ -1406,6 +1406,13 @@ export async function backfillSupersessions(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_MESSAGE_CAP = 50;
+/**
+ * Hard cap on the previous-memories list injected into the delayed extraction
+ * prompt. Keeps the prompt bounded for long-running chats (system chat) where
+ * total chat memories grow without bound. Vector dedup at save time still
+ * protects against duplicating older memories that fall outside this window.
+ */
+const MAX_PREVIOUS_MEMORIES = 30;
 
 interface IndexedChatMessage {
   index: number;
@@ -1417,9 +1424,19 @@ function isSubstantiveForDelayedExtraction(message: ChatMessage): boolean {
 }
 
 /**
- * Build context for delayed extraction: recent messages + previous memories.
- * For long chats, caps the message window but includes all previous memories
- * to provide semantic compression of earlier conversation.
+ * Build context for delayed extraction: messages added since the last
+ * extraction watermark + memories created during that same window.
+ *
+ * Both the message window and the previous-memories list are bounded by the
+ * same cutoff so the LLM sees aligned content on both sides — the new
+ * messages it should extract from, and the recent memories it should not
+ * duplicate. Without this bound the system chat (single long-running thread)
+ * grows both sides without limit and re-extracts the same trailing window
+ * each run.
+ *
+ * Returns `hasNewContent=false` when no substantive messages have been added
+ * since the watermark — the caller should bump the watermark and skip the LLM
+ * call entirely.
  */
 async function buildDelayedExtractionContext(
   chat: Chat,
@@ -1427,20 +1444,44 @@ async function buildDelayedExtractionContext(
 ): Promise<{
   messages: IndexedChatMessage[];
   previousMemories: Omit<Memory, "embedding">[];
+  hasNewContent: boolean;
 }> {
-  const previousMemories = await getMemoriesByChatId(chat.id);
+  const watermark = chat.lastDelayedExtractionMessageIndex ?? -1;
+
   const substantiveMessages = chat.messages
     .map((message, index) => ({ message, index }))
     .filter(({ message }) => isSubstantiveForDelayedExtraction(message));
-  
-  if (substantiveMessages.length <= messageCap) {
-    // Short chat: send everything
-    return { messages: substantiveMessages, previousMemories };
+
+  // Only include messages added since the last extraction. Cap as a safety
+  // net for chats that have accumulated a huge burst of activity between runs.
+  const newMessages = substantiveMessages.filter(({ index }) => index > watermark);
+  const messages = newMessages.length > messageCap
+    ? newMessages.slice(-messageCap)
+    : newMessages;
+
+  // Align previousMemories with the message window. Cutoff is the timestamp
+  // of the message at the watermark — memories created after that capture both
+  // the prior delayed extraction's output and any immediate-extraction memories
+  // produced from messages in between. Older memories are off-window; the
+  // 0.85 vector-similarity dedup at save time still catches duplicates of them.
+  let memoryCutoff: string | undefined;
+  if (watermark >= 0 && watermark < chat.messages.length) {
+    const watermarkMsg = chat.messages[watermark];
+    if (watermarkMsg?.timestamp) {
+      memoryCutoff = new Date(watermarkMsg.timestamp).toISOString();
+    }
   }
-  
-  // Long chat: send last N messages + all previous memories
-  const recentMessages = substantiveMessages.slice(-messageCap);
-  return { messages: recentMessages, previousMemories };
+
+  const allChatMemories = await getMemoriesByChatId(chat.id);
+  let previousMemories = memoryCutoff
+    ? allChatMemories.filter((m) => m.createdAt >= memoryCutoff!)
+    : allChatMemories;
+  // getMemoriesByChatId returns ASC by createdAt — keep the most recent N.
+  if (previousMemories.length > MAX_PREVIOUS_MEMORIES) {
+    previousMemories = previousMemories.slice(-MAX_PREVIOUS_MEMORIES);
+  }
+
+  return { messages, previousMemories, hasNewContent: newMessages.length > 0 };
 }
 
 /**
@@ -1489,10 +1530,15 @@ export async function extractDelayedMemories(
     return;
   }
   
-  // Build context: recent messages + previous memories
+  // Build context: messages added since last extraction + recent memories
   const context = await buildDelayedExtractionContext(chat, messageCap);
-  if (context.messages.length === 0) {
-    console.log(`[memory-delayed] No substantive messages to process for chat ${chatId}`);
+  if (!context.hasNewContent) {
+    // No substantive messages since the watermark — bump it (covers any
+    // non-substantive activity like synthesis messages that updated
+    // lastModified) and skip the LLM call.
+    console.log(
+      `[memory-delayed] No new substantive messages since last extraction for chat ${chatId}, bumping watermark`
+    );
     await updateChatExtractionState(chatId, new Date().toISOString(), chat.messages.length - 1);
     return;
   }
