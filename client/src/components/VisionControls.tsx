@@ -2,9 +2,8 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import type { VisionPreset, AnalyzedImage } from "../api/client";
 import type { OllamaModel } from "../types";
 import { ProviderIcon } from "./ProviderIcon";
-import { DropdownPanel } from "./ui/DropdownPanel";
-import { Chevron } from "./ui/Chevron";
-import { useClickOutside } from "../hooks/useClickOutside";
+import { Dropdown } from "./ui/Dropdown";
+import { useDropdown } from "../hooks/useDropdown";
 
 const MAX_DIMENSION = 2048;
 const TARGET_BYTES = 2 * 1024 * 1024; // 2 MB
@@ -75,15 +74,10 @@ export function VisionControls({
   selectedPreset,
   setSelectedPreset,
 }: Props) {
-  const [modelOpen, setModelOpen] = useState(false);
-  const [presetOpen, setPresetOpen] = useState(false);
+  const modelDd = useDropdown();
+  const presetDd = useDropdown();
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const modelRef = useRef<HTMLDivElement>(null);
-  const presetRef = useRef<HTMLDivElement>(null);
-
-  useClickOutside(modelRef, () => setModelOpen(false), modelOpen);
-  useClickOutside(presetRef, () => setPresetOpen(false), presetOpen);
 
   const selectedModelObj = models.find((m) => m.id === selectedModel);
   const selectedPresetObj = presets.find((p) => p.key === selectedPreset);
@@ -132,80 +126,64 @@ export function VisionControls({
         {/* Model */}
         <div className="space-y-1.5">
           <label className="block text-xs font-medium text-white/50">Model</label>
-          <div className="relative" ref={modelRef}>
-            <button
-              onClick={() => !analyzing && setModelOpen((o) => !o)}
-              disabled={analyzing}
-              className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all disabled:opacity-40 cursor-pointer"
-            >
-              <span className="truncate flex-1 text-left">{selectedModelObj?.name || selectedModel}</span>
-              <Chevron open={modelOpen} />
-            </button>
-            <DropdownPanel
-              open={modelOpen}
-              className="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
-            >
-              {models.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => { onModelChange(m.id); setModelOpen(false); }}
-                  className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                    m.id === selectedModel
-                      ? "text-white"
-                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                  }`}
-                  style={{
-                    backgroundColor: m.id === selectedModel ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                    color: m.id === selectedModel ? `rgba(var(--theme-secondary-text))` : '',
-                  }}
-                >
-                  <span className="truncate flex-1">{m.name}</span>
-                  <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
-                  <ProviderIcon
-                    provider={m.provider}
-                    className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
-                  />
-                </button>
-              ))}
-            </DropdownPanel>
-          </div>
+          <Dropdown
+            state={modelDd}
+            disabled={analyzing}
+            panelClassName="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
+            trigger={<span className="truncate flex-1 text-left">{selectedModelObj?.name || selectedModel}</span>}
+          >
+            {models.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => { onModelChange(m.id); modelDd.close(); }}
+                className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                  m.id === selectedModel
+                    ? "text-white"
+                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                }`}
+                style={{
+                  backgroundColor: m.id === selectedModel ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                  color: m.id === selectedModel ? `rgba(var(--theme-secondary-text))` : '',
+                }}
+              >
+                <span className="truncate flex-1">{m.name}</span>
+                <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
+                <ProviderIcon
+                  provider={m.provider}
+                  className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                />
+              </button>
+            ))}
+          </Dropdown>
         </div>
 
         {/* Preset */}
         <div className="space-y-1.5">
           <label className="block text-xs font-medium text-white/50">Description Style</label>
-          <div className="relative" ref={presetRef}>
-            <button
-              onClick={() => !analyzing && setPresetOpen((o) => !o)}
-              disabled={analyzing}
-              className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all disabled:opacity-40 cursor-pointer"
-            >
-              <span className="truncate flex-1 text-left">{selectedPresetObj?.name || selectedPreset}</span>
-              <Chevron open={presetOpen} />
-            </button>
-            <DropdownPanel
-              open={presetOpen}
-              className="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
-            >
-              {presets.map((p) => (
-                <button
-                  key={p.key}
-                  onClick={() => { setSelectedPreset(p.key); setPresetOpen(false); }}
-                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                    p.key === selectedPreset
-                      ? "text-white"
-                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                  }`}
-                  style={{
-                    backgroundColor: p.key === selectedPreset ? `rgba(var(--theme-primary), 0.15)` : 'transparent',
-                    color: p.key === selectedPreset ? `rgba(var(--theme-primary-text))` : '',
-                  }}
-                >
-                  {p.name}
-                </button>
-              ))}
-            </DropdownPanel>
-          </div>
+          <Dropdown
+            state={presetDd}
+            disabled={analyzing}
+            panelClassName="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
+            trigger={<span className="truncate flex-1 text-left">{selectedPresetObj?.name || selectedPreset}</span>}
+          >
+            {presets.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => { setSelectedPreset(p.key); presetDd.close(); }}
+                className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                  p.key === selectedPreset
+                    ? "text-white"
+                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                }`}
+                style={{
+                  backgroundColor: p.key === selectedPreset ? `rgba(var(--theme-primary), 0.15)` : 'transparent',
+                  color: p.key === selectedPreset ? `rgba(var(--theme-primary-text))` : '',
+                }}
+              >
+                {p.name}
+              </button>
+            ))}
+          </Dropdown>
         </div>
 
         {/* Drop zone */}

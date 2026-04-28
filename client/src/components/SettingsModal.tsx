@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ToggleSwitch } from "./ui/ToggleSwitch";
-import { DropdownPanel } from "./ui/DropdownPanel";
+import { Dropdown } from "./ui/Dropdown";
 import { Chevron } from "./ui/Chevron";
-import { useClickOutside } from "../hooks/useClickOutside";
+import { useDropdown } from "../hooks/useDropdown";
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -277,47 +277,19 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [blueskyMessage, setBlueskyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [blueskyAuthenticated, setBlueskyAuthenticated] = useState(false);
   const [blueskyHandle, setBlueskyHandle] = useState<string | null>(null);
-  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
-  const [visionModelDropdownOpen, setVisionModelDropdownOpen] = useState(false);
-  const [voiceDropdownOpen, setVoiceDropdownOpen] = useState(false);
-  const [backendDropdownOpen, setBackendDropdownOpen] = useState(false);
-  const [boundaryTierDropdownOpen, setBoundaryTierDropdownOpen] = useState(false);
-  const [extractionModelDropdownOpen, setExtractionModelDropdownOpen] = useState(false);
-  const [embeddingModelDropdownOpen, setEmbeddingModelDropdownOpen] = useState(false);
-  const [rerankerModelDropdownOpen, setRerankerModelDropdownOpen] = useState(false);
-  const [titleGenerationModelDropdownOpen, setTitleGenerationModelDropdownOpen] = useState(false);
-  const [favoritesDropdownOpen, setFavoritesDropdownOpen] = useState(false);
-  const [imageBackendDropdownOpen, setImageBackendDropdownOpen] = useState(false);
-  const [webSearchProviderDropdownOpen, setWebSearchProviderDropdownOpen] = useState(false);
-  const [tocOpen, setTocOpen] = useState(false);
-  const tocRef = useRef<HTMLDivElement>(null);
-  const modelDropdownRef = useRef<HTMLDivElement>(null);
-  const visionModelDropdownRef = useRef<HTMLDivElement>(null);
-  const voiceDropdownRef = useRef<HTMLDivElement>(null);
-  const backendDropdownRef = useRef<HTMLDivElement>(null);
-  const boundaryTierDropdownRef = useRef<HTMLDivElement>(null);
-  const extractionModelDropdownRef = useRef<HTMLDivElement>(null);
-  const embeddingModelDropdownRef = useRef<HTMLDivElement>(null);
-  const rerankerModelDropdownRef = useRef<HTMLDivElement>(null);
-  const titleGenerationModelDropdownRef = useRef<HTMLDivElement>(null);
-  const favoritesDropdownRef = useRef<HTMLDivElement>(null);
-  const imageBackendDropdownRef = useRef<HTMLDivElement>(null);
-  const webSearchProviderDropdownRef = useRef<HTMLDivElement>(null);
-
-
-  useClickOutside(modelDropdownRef, () => setModelDropdownOpen(false), modelDropdownOpen);
-  useClickOutside(visionModelDropdownRef, () => setVisionModelDropdownOpen(false), visionModelDropdownOpen);
-  useClickOutside(voiceDropdownRef, () => setVoiceDropdownOpen(false), voiceDropdownOpen);
-  useClickOutside(backendDropdownRef, () => setBackendDropdownOpen(false), backendDropdownOpen);
-  useClickOutside(boundaryTierDropdownRef, () => setBoundaryTierDropdownOpen(false), boundaryTierDropdownOpen);
-  useClickOutside(extractionModelDropdownRef, () => setExtractionModelDropdownOpen(false), extractionModelDropdownOpen);
-  useClickOutside(embeddingModelDropdownRef, () => setEmbeddingModelDropdownOpen(false), embeddingModelDropdownOpen);
-  useClickOutside(rerankerModelDropdownRef, () => setRerankerModelDropdownOpen(false), rerankerModelDropdownOpen);
-  useClickOutside(titleGenerationModelDropdownRef, () => setTitleGenerationModelDropdownOpen(false), titleGenerationModelDropdownOpen);
-  useClickOutside(imageBackendDropdownRef, () => setImageBackendDropdownOpen(false), imageBackendDropdownOpen);
-  useClickOutside(webSearchProviderDropdownRef, () => setWebSearchProviderDropdownOpen(false), webSearchProviderDropdownOpen);
-  useClickOutside(tocRef, () => setTocOpen(false), tocOpen);
-  useClickOutside(favoritesDropdownRef, () => setFavoritesDropdownOpen(false), favoritesDropdownOpen);
+  const modelDd = useDropdown();
+  const visionModelDd = useDropdown();
+  const voiceDd = useDropdown();
+  const backendDd = useDropdown();
+  const boundaryTierDd = useDropdown();
+  const extractionModelDd = useDropdown();
+  const embeddingModelDd = useDropdown();
+  const rerankerModelDd = useDropdown();
+  const titleGenerationModelDd = useDropdown();
+  const favoritesDd = useDropdown();
+  const imageBackendDd = useDropdown();
+  const webSearchProviderDd = useDropdown();
+  const tocDd = useDropdown();
 
   const refreshLlamaServers = useCallback(async (showSpinner = false) => {
     if (showSpinner) setLlamaServersLoading(true);
@@ -1062,9 +1034,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
         <div className="flex flex-1 overflow-hidden flex-col">
           {/* Collapsible ToC bar — mobile only */}
           <div className="shrink-0 md:hidden border-b border-white/10">
-            <div ref={tocRef} className="relative">
+            <div ref={tocDd.ref} className="relative">
               <button
-                onClick={() => setTocOpen((o) => !o)}
+                onClick={tocDd.toggle}
                 className="w-full flex items-center justify-between px-4 py-2 text-xs text-white/40 hover:text-white/60 hover:bg-white/[0.03] transition-colors cursor-pointer"
               >
                 <span className="flex items-center gap-1.5">
@@ -1075,24 +1047,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   </svg>
                   Navigate to section
                 </span>
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className={`shrink-0 transition-transform ${tocOpen ? "rotate-180" : ""}`}
-                >
-                  <path d="M6 9l6 6 6-6" />
-                </svg>
+                <Chevron open={tocDd.open} size={12} />
               </button>
               <div
                 className={`absolute z-40 left-0 right-0 top-full overflow-hidden transition-all ${
-                  tocOpen ? 'max-h-[60vh]' : 'max-h-0'
+                  tocDd.open ? 'max-h-[60vh]' : 'max-h-0'
                 }`}
                 style={{
                   backgroundColor: `color-mix(in srgb, rgb(var(--theme-primary)) 8%, rgb(15, 15, 20) 92%)`,
@@ -1103,7 +1062,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   {SECTIONS.map((section) => (
                     <button
                       key={section.id}
-                      onClick={() => { scrollToSection(section.id); setTocOpen(false); }}
+                      onClick={() => { scrollToSection(section.id); tocDd.close(); }}
                       className={`block w-full text-left px-3 py-2 text-xs rounded-lg transition-all ${
                         activeSection === section.id
                           ? 'bg-white/15 text-white font-medium'
@@ -1147,54 +1106,47 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           {/* Default Model */}
           <div id="models" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Default Model</label>
-            <div className="relative" ref={modelDropdownRef}>
-              <button
-                onClick={() => setModelDropdownOpen((o) => !o)}
-                className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-              >
+            <Dropdown
+              state={modelDd}
+              trigger={
                 <span className="truncate flex-1 text-left">
                   {defaultModelId ? (models.find((m) => m.id === defaultModelId)?.name || defaultModelId) : "Auto (first available)"}
                 </span>
-                <Chevron open={modelDropdownOpen} />
-              </button>
-              <DropdownPanel
-                open={modelDropdownOpen}
-                className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+              }
+            >
+              <button
+                onClick={() => { setDefaultModelId(""); modelDd.close(); }}
+                className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                  !defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                }`}
+                style={{
+                  backgroundColor: !defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                  color: !defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
+                }}
               >
+                Auto (first available)
+              </button>
+              {models.map((m) => (
                 <button
-                  onClick={() => { setDefaultModelId(""); setModelDropdownOpen(false); }}
-                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                    !defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  key={m.id}
+                  onClick={() => { setDefaultModelId(m.id); modelDd.close(); }}
+                  className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                    m.id === defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                   }`}
                   style={{
-                    backgroundColor: !defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                    color: !defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
+                    backgroundColor: m.id === defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                    color: m.id === defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
                   }}
                 >
-                  Auto (first available)
+                  <span className="truncate flex-1">{m.name}</span>
+                  <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
+                  <ProviderIcon
+                    provider={m.provider}
+                    className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                  />
                 </button>
-                {models.map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => { setDefaultModelId(m.id); setModelDropdownOpen(false); }}
-                    className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                      m.id === defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`}
-                    style={{
-                      backgroundColor: m.id === defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                      color: m.id === defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
-                    }}
-                  >
-                    <span className="truncate flex-1">{m.name}</span>
-                    <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
-                    <ProviderIcon
-                      provider={m.provider}
-                      className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
-                    />
-                  </button>
-                ))}
-              </DropdownPanel>
-            </div>
+              ))}
+            </Dropdown>
           </div>
 
           {/* Inference Servers */}
@@ -1535,23 +1487,22 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                <div className="flex-1">
 	                                  <label className="block text-xs text-white/50 mb-1">Model</label>
 	                                  {extractionServerModels.length > 0 && !extractionUseCustom ? (
-	                                    <div className="relative" ref={extractionModelDropdownRef}>
-	                                      <button onClick={() => setExtractionModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
-	                                        <span className="truncate flex-1 text-left">{extractionModelId || "Select…"}</span>
-	                                        <Chevron open={extractionModelDropdownOpen} />
-	                                      </button>
-	                                      <DropdownPanel open={extractionModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
-	                                        {extractionServerModels.map((m) => (
-	                                          <button key={m.id} onClick={() => {
-	                                            setExtractionModelId(m.id); setExtractionModelDropdownOpen(false);
-	                                            handleLlamaServerSettings("extraction", { modelId: m.id });
-	                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === extractionModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-	                                            {m.name}
-	                                          </button>
-	                                        ))}
-	                                        <button onClick={() => setExtractionUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
-	                                      </DropdownPanel>
-	                                    </div>
+	                                    <Dropdown
+	                                      state={extractionModelDd}
+	                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+	                                      panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+	                                      trigger={<span className="truncate flex-1 text-left">{extractionModelId || "Select…"}</span>}
+	                                    >
+	                                      {extractionServerModels.map((m) => (
+	                                        <button key={m.id} onClick={() => {
+	                                          setExtractionModelId(m.id); extractionModelDd.close();
+	                                          handleLlamaServerSettings("extraction", { modelId: m.id });
+	                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === extractionModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                          {m.name}
+	                                        </button>
+	                                      ))}
+	                                      <button onClick={() => setExtractionUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                    </Dropdown>
 	                                  ) : (
 	                                    <input type="text" value={extractionModelId} onChange={(e) => setExtractionModelId(e.target.value)}
 	                                      onBlur={() => handleLlamaServerSettings("extraction", { modelId: extractionModelId })}
@@ -1596,23 +1547,22 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Model</label>
 	                                    {rerankerModels.length > 0 && !rerankerUseCustom ? (
-	                                      <div className="relative" ref={rerankerModelDropdownRef}>
-	                                        <button onClick={() => setRerankerModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
-	                                          <span className="truncate flex-1 text-left">{rerankerModelId || "Select…"}</span>
-	                                          <Chevron open={rerankerModelDropdownOpen} />
-	                                        </button>
-	                                        <DropdownPanel open={rerankerModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
-	                                          {rerankerModels.map((m) => (
-	                                            <button key={m.id} onClick={() => {
-	                                              setRerankerModelId(m.id); setRerankerModelDropdownOpen(false);
-	                                              handleLlamaServerSettings("reranker", { modelId: m.id });
-	                                            }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === rerankerModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-	                                              {m.name}
-	                                            </button>
-	                                          ))}
-	                                          <button onClick={() => setRerankerUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
-	                                        </DropdownPanel>
-	                                      </div>
+	                                      <Dropdown
+	                                        state={rerankerModelDd}
+	                                        triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+	                                        panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+	                                        trigger={<span className="truncate flex-1 text-left">{rerankerModelId || "Select…"}</span>}
+	                                      >
+	                                        {rerankerModels.map((m) => (
+	                                          <button key={m.id} onClick={() => {
+	                                            setRerankerModelId(m.id); rerankerModelDd.close();
+	                                            handleLlamaServerSettings("reranker", { modelId: m.id });
+	                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === rerankerModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                            {m.name}
+	                                          </button>
+	                                        ))}
+	                                        <button onClick={() => setRerankerUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                      </Dropdown>
 	                                    ) : (
 	                                      <input type="text" value={rerankerModelId} onChange={(e) => setRerankerModelId(e.target.value)}
 	                                        onBlur={() => handleLlamaServerSettings("reranker", { modelId: rerankerModelId })}
@@ -1650,23 +1600,22 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                              <div>
 	                                <label className="block text-xs text-white/50 mb-1">Model</label>
 	                                {embeddingModels.length > 0 && !embeddingUseCustom ? (
-	                                  <div className="relative" ref={embeddingModelDropdownRef}>
-	                                    <button onClick={() => setEmbeddingModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
-	                                      <span className="truncate flex-1 text-left">{embeddingModel || "Select…"}</span>
-	                                      <Chevron open={embeddingModelDropdownOpen} />
-	                                    </button>
-	                                    <DropdownPanel open={embeddingModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
-	                                      {embeddingModels.map((m) => (
-	                                        <button key={m.id} onClick={() => {
-	                                          setEmbeddingModel(m.id); setEmbeddingModelDropdownOpen(false);
-	                                          handleLlamaServerSettings("embedding", { modelId: m.id });
-	                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === embeddingModel ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-	                                          {m.name}
-	                                        </button>
-	                                      ))}
-	                                      <button onClick={() => setEmbeddingUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
-	                                    </DropdownPanel>
-	                                  </div>
+	                                  <Dropdown
+	                                    state={embeddingModelDd}
+	                                    triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+	                                    panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+	                                    trigger={<span className="truncate flex-1 text-left">{embeddingModel || "Select…"}</span>}
+	                                  >
+	                                    {embeddingModels.map((m) => (
+	                                      <button key={m.id} onClick={() => {
+	                                        setEmbeddingModel(m.id); embeddingModelDd.close();
+	                                        handleLlamaServerSettings("embedding", { modelId: m.id });
+	                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === embeddingModel ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                        {m.name}
+	                                      </button>
+	                                    ))}
+	                                    <button onClick={() => setEmbeddingUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                  </Dropdown>
 	                                ) : (
 	                                  <input type="text" value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)}
 	                                    onBlur={() => handleLlamaServerSettings("embedding", { modelId: embeddingModel })}
@@ -1708,23 +1657,22 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Model</label>
 	                                    {titleGenerationModels.length > 0 && !titleGenerationUseCustom ? (
-	                                      <div className="relative" ref={titleGenerationModelDropdownRef}>
-	                                        <button onClick={() => setTitleGenerationModelDropdownOpen((o) => !o)} className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono">
-	                                          <span className="truncate flex-1 text-left">{titleGenerationModelId || "Select…"}</span>
-	                                          <Chevron open={titleGenerationModelDropdownOpen} />
-	                                        </button>
-	                                        <DropdownPanel open={titleGenerationModelDropdownOpen} className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto">
-	                                          {titleGenerationModels.map((m) => (
-	                                            <button key={m.id} onClick={() => {
-	                                              setTitleGenerationModelId(m.id); setTitleGenerationModelDropdownOpen(false);
-	                                              handleLlamaServerSettings("title-generation", { modelId: m.id });
-	                                            }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === titleGenerationModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-	                                              {m.name}
-	                                            </button>
-	                                          ))}
-	                                          <button onClick={() => setTitleGenerationUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
-	                                        </DropdownPanel>
-	                                      </div>
+	                                      <Dropdown
+	                                        state={titleGenerationModelDd}
+	                                        triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+	                                        panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+	                                        trigger={<span className="truncate flex-1 text-left">{titleGenerationModelId || "Select…"}</span>}
+	                                      >
+	                                        {titleGenerationModels.map((m) => (
+	                                          <button key={m.id} onClick={() => {
+	                                            setTitleGenerationModelId(m.id); titleGenerationModelDd.close();
+	                                            handleLlamaServerSettings("title-generation", { modelId: m.id });
+	                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === titleGenerationModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                            {m.name}
+	                                          </button>
+	                                        ))}
+	                                        <button onClick={() => setTitleGenerationUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
+	                                      </Dropdown>
 	                                    ) : (
 	                                      <input type="text" value={titleGenerationModelId} onChange={(e) => setTitleGenerationModelId(e.target.value)}
 	                                        onBlur={() => handleLlamaServerSettings("title-generation", { modelId: titleGenerationModelId })}
@@ -1802,63 +1750,56 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <span className="text-xs text-white/50">Show only favorites in chat</span>
               </label>
             </div>
-            <div className="relative" ref={favoritesDropdownRef}>
-              <button
-                onClick={() => setFavoritesDropdownOpen((o) => !o)}
-                className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-              >
+            <Dropdown
+              state={favoritesDd}
+              trigger={
                 <span className="truncate flex-1 text-left">
                   {favoriteModels.size === 0
                     ? "No favorites selected"
                     : `${favoriteModels.size} favorite${favoriteModels.size === 1 ? "" : "s"} selected`}
                 </span>
-                <Chevron open={favoritesDropdownOpen} />
-              </button>
-              <DropdownPanel
-                open={favoritesDropdownOpen}
-                className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
-              >
-                {models.map((m) => {
-                  const isFav = favoriteModels.has(m.id);
-                  return (
-                    <button
-                      key={`${m.provider || "ollama"}-${m.id}`}
-                      onClick={() => {
-                        setFavoriteModels((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(m.id)) next.delete(m.id);
-                          else next.add(m.id);
-                          return next;
-                        });
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-white/10 transition-all"
-                      title={isFav ? "Remove from favorites" : "Add to favorites"}
+              }
+            >
+              {models.map((m) => {
+                const isFav = favoriteModels.has(m.id);
+                return (
+                  <button
+                    key={`${m.provider || "ollama"}-${m.id}`}
+                    onClick={() => {
+                      setFavoriteModels((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(m.id)) next.delete(m.id);
+                        else next.add(m.id);
+                        return next;
+                      });
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-white/10 transition-all"
+                    title={isFav ? "Remove from favorites" : "Add to favorites"}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill={isFav ? "currentColor" : "none"}
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className={`shrink-0 transition-colors ${isFav ? "text-amber-400" : "text-white/30"}`}
                     >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill={isFav ? "currentColor" : "none"}
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        className={`shrink-0 transition-colors ${isFav ? "text-amber-400" : "text-white/30"}`}
-                      >
-                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                      </svg>
-                      <span className="truncate flex-1 text-white/70">{m.name}</span>
-                      {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
-                      <ProviderIcon
-                        provider={m.provider}
-                        className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
-                      />
-                    </button>
-                  );
-                })}
-              </DropdownPanel>
-            </div>
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                    </svg>
+                    <span className="truncate flex-1 text-white/70">{m.name}</span>
+                    {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
+                    <ProviderIcon
+                      provider={m.provider}
+                      className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                    />
+                  </button>
+                );
+              })}
+            </Dropdown>
           </div>
 
 
@@ -2045,54 +1986,47 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           {/* Default Vision Model */}
           <div id="vision" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Default Vision Model</label>
-            <div className="relative" ref={visionModelDropdownRef}>
-              <button
-                onClick={() => setVisionModelDropdownOpen((o) => !o)}
-                className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-              >
+            <Dropdown
+              state={visionModelDd}
+              trigger={
                 <span className="truncate flex-1 text-left">
                   {defaultVisionModelId ? (models.find((m) => m.id === defaultVisionModelId)?.name || defaultVisionModelId) : "Auto (first vision model)"}
                 </span>
-                <Chevron open={visionModelDropdownOpen} />
-              </button>
-              <DropdownPanel
-                open={visionModelDropdownOpen}
-                className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+              }
+            >
+              <button
+                onClick={() => { setDefaultVisionModelId(""); visionModelDd.close(); }}
+                className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                  !defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                }`}
+                style={{
+                  backgroundColor: !defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                  color: !defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
+                }}
               >
+                Auto (first vision model)
+              </button>
+              {models.map((m) => (
                 <button
-                  onClick={() => { setDefaultVisionModelId(""); setVisionModelDropdownOpen(false); }}
-                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                    !defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                  key={m.id}
+                  onClick={() => { setDefaultVisionModelId(m.id); visionModelDd.close(); }}
+                  className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                    m.id === defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                   }`}
                   style={{
-                    backgroundColor: !defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                    color: !defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
+                    backgroundColor: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                    color: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
                   }}
                 >
-                  Auto (first vision model)
+                  <span className="truncate flex-1">{m.name}</span>
+                  <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
+                  <ProviderIcon
+                    provider={m.provider}
+                    className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                  />
                 </button>
-                {models.map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => { setDefaultVisionModelId(m.id); setVisionModelDropdownOpen(false); }}
-                    className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                      m.id === defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`}
-                    style={{
-                      backgroundColor: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                      color: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
-                    }}
-                  >
-                    <span className="truncate flex-1">{m.name}</span>
-                    <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
-                    <ProviderIcon
-                      provider={m.provider}
-                      className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
-                    />
-                  </button>
-                ))}
-              </DropdownPanel>
-            </div>
+              ))}
+            </Dropdown>
             <p className="text-white/30 text-xs">
               Model used for image analysis in the Vision sandbox.
             </p>
@@ -2887,38 +2821,32 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             <h3 className="text-sm font-medium text-white/70">API Keys</h3>
             <div className="space-y-2">
               <label className="block text-sm text-white/50">Default Web Search Provider</label>
-              <div className="relative" ref={webSearchProviderDropdownRef}>
-                <button
-                  onClick={() => setWebSearchProviderDropdownOpen((o) => !o)}
-                  className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-                >
+              <Dropdown
+                state={webSearchProviderDd}
+                panelClassName="left-0 right-0 top-full mt-1 overflow-hidden"
+                trigger={
                   <span className="truncate flex-1 text-left">
                     {WEB_SEARCH_PROVIDER_OPTIONS.find((p) => p.id === defaultWebSearchProvider)?.label || "Brave Search"}
                   </span>
-                  <Chevron open={webSearchProviderDropdownOpen} />
-                </button>
-                <DropdownPanel
-                  open={webSearchProviderDropdownOpen}
-                  className="left-0 right-0 top-full mt-1 overflow-hidden"
-                >
-                  {WEB_SEARCH_PROVIDER_OPTIONS.map((provider) => (
-                    <button
-                      key={provider.id}
-                      onClick={() => { setDefaultWebSearchProvider(provider.id); setWebSearchProviderDropdownOpen(false); }}
-                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                        defaultWebSearchProvider === provider.id ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                      }`}
-                      style={{
-                        backgroundColor: defaultWebSearchProvider === provider.id ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                        color: defaultWebSearchProvider === provider.id ? `rgba(var(--theme-secondary-text))` : '',
-                      }}
-                    >
-                      <span className="block">{provider.label}</span>
-                      <span className="block text-[11px] text-white/35 mt-0.5">{provider.description}</span>
-                    </button>
-                  ))}
-                </DropdownPanel>
-              </div>
+                }
+              >
+                {WEB_SEARCH_PROVIDER_OPTIONS.map((provider) => (
+                  <button
+                    key={provider.id}
+                    onClick={() => { setDefaultWebSearchProvider(provider.id); webSearchProviderDd.close(); }}
+                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      defaultWebSearchProvider === provider.id ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    }`}
+                    style={{
+                      backgroundColor: defaultWebSearchProvider === provider.id ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                      color: defaultWebSearchProvider === provider.id ? `rgba(var(--theme-secondary-text))` : '',
+                    }}
+                  >
+                    <span className="block">{provider.label}</span>
+                    <span className="block text-[11px] text-white/35 mt-0.5">{provider.description}</span>
+                  </button>
+                ))}
+              </Dropdown>
               <p className="text-white/30 text-xs">
                 Used when the web_search agent tool does not specify a provider. Agents can still override it for a specific search.
               </p>
@@ -2981,37 +2909,31 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             <h3 className="text-sm font-medium text-white/70">Image Generation</h3>
             <div className="space-y-2">
               <label className="block text-sm text-white/50">Backend</label>
-              <div className="relative" ref={imageBackendDropdownRef}>
-                <button
-                  onClick={() => setImageBackendDropdownOpen((o) => !o)}
-                  className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-                >
+              <Dropdown
+                state={imageBackendDd}
+                panelClassName="left-0 right-0 top-full mt-1 overflow-hidden"
+                trigger={
                   <span className="truncate flex-1 text-left">
                     {imageBackend === "sdcpp" ? "sd-server (stable-diffusion.cpp)" : "ComfyUI"}
                   </span>
-                  <Chevron open={imageBackendDropdownOpen} />
-                </button>
-                <DropdownPanel
-                  open={imageBackendDropdownOpen}
-                  className="left-0 right-0 top-full mt-1 overflow-hidden"
-                >
-                  {(["comfyui", "sdcpp"] as const).map((b) => (
-                    <button
-                      key={b}
-                      onClick={() => { setImageBackend(b); setImageBackendDropdownOpen(false); }}
-                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                        imageBackend === b ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                      }`}
-                      style={{
-                        backgroundColor: imageBackend === b ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                        color: imageBackend === b ? `rgba(var(--theme-secondary-text))` : '',
-                      }}
-                    >
-                      {b === "sdcpp" ? "sd-server (stable-diffusion.cpp)" : "ComfyUI"}
-                    </button>
-                  ))}
-                </DropdownPanel>
-              </div>
+                }
+              >
+                {(["comfyui", "sdcpp"] as const).map((b) => (
+                  <button
+                    key={b}
+                    onClick={() => { setImageBackend(b); imageBackendDd.close(); }}
+                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      imageBackend === b ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    }`}
+                    style={{
+                      backgroundColor: imageBackend === b ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                      color: imageBackend === b ? `rgba(var(--theme-secondary-text))` : '',
+                    }}
+                  >
+                    {b === "sdcpp" ? "sd-server (stable-diffusion.cpp)" : "ComfyUI"}
+                  </button>
+                ))}
+              </Dropdown>
               <p className="text-white/30 text-xs">
                 Used by the Image Sandbox and the generate_image agent tool. sd-server loads one model at startup; configure via its launch command.
               </p>
@@ -3441,54 +3363,47 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 {/* Backend selector */}
                 <div className="space-y-1">
                   <label className="block text-sm text-white/50">TTS Backend</label>
-                  <div className="relative">
-                    <button
-                      onClick={() => setBackendDropdownOpen((o) => !o)}
-                      className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-                    >
+                  <Dropdown
+                    state={backendDd}
+                    trigger={
                       <span className="truncate flex-1 text-left">
                         {ttsSettings.backend === "kokoro" ? "Kokoro (Standard)" : "Qwen3-TTS (Streaming)"}
                       </span>
-                      <Chevron open={backendDropdownOpen} />
-                    </button>
-                    <DropdownPanel
-                      open={backendDropdownOpen}
-                      className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+                    }
+                  >
+                    <button
+                      onClick={async () => {
+                        const updated = await updateTTSSettings({ backend: "kokoro", voice: "af_heart" });
+                        if (updated) setTtsSettings(updated);
+                        backendDd.close();
+                      }}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                        ttsSettings.backend === "kokoro" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                      style={{
+                        backgroundColor: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
                     >
-                      <button
-                        onClick={async () => {
-                          const updated = await updateTTSSettings({ backend: "kokoro", voice: "af_heart" });
-                          if (updated) setTtsSettings(updated);
-                          setBackendDropdownOpen(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                          ttsSettings.backend === "kokoro" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                        }`}
-                        style={{
-                          backgroundColor: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                          color: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary-text))` : '',
-                        }}
-                      >
-                        Kokoro (Standard)
-                      </button>
-                      <button
-                        onClick={async () => {
-                          const updated = await updateTTSSettings({ backend: "qwen3-tts", voice: "Ryan" });
-                          if (updated) setTtsSettings(updated);
-                          setBackendDropdownOpen(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                          ttsSettings.backend === "qwen3-tts" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                        }`}
-                        style={{
-                          backgroundColor: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                          color: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary-text))` : '',
-                        }}
-                      >
-                        Qwen3-TTS (Streaming)
-                      </button>
-                    </DropdownPanel>
-                  </div>
+                      Kokoro (Standard)
+                    </button>
+                    <button
+                      onClick={async () => {
+                        const updated = await updateTTSSettings({ backend: "qwen3-tts", voice: "Ryan" });
+                        if (updated) setTtsSettings(updated);
+                        backendDd.close();
+                      }}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                        ttsSettings.backend === "qwen3-tts" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                      style={{
+                        backgroundColor: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
+                    >
+                      Qwen3-TTS (Streaming)
+                    </button>
+                  </Dropdown>
                   <p className="text-white/30 text-xs">
                     {ttsSettings.backend === "kokoro" 
                       ? "Lightweight (~100MB), mature ecosystem"
@@ -3538,56 +3453,49 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     {/* Boundary tier */}
                     <div className="space-y-1">
                       <label className="block text-sm text-white/50">Boundary Detection</label>
-                      <div className="relative" ref={boundaryTierDropdownRef}>
-                        <button
-                          onClick={() => setBoundaryTierDropdownOpen((o) => !o)}
-                          className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-                        >
+                      <Dropdown
+                        state={boundaryTierDd}
+                        trigger={
                           <span className="truncate flex-1 text-left">
-                            {ttsSettings.streamingBoundaryTier === "clause" 
-                              ? "Clause (faster, ~1ms)" 
+                            {ttsSettings.streamingBoundaryTier === "clause"
+                              ? "Clause (faster, ~1ms)"
                               : "Sentence (better prosody, ~5ms)"}
                           </span>
-                          <Chevron open={boundaryTierDropdownOpen} />
-                        </button>
-                        <DropdownPanel
-                          open={boundaryTierDropdownOpen}
-                          className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
+                        }
+                      >
+                        <button
+                          onClick={async () => {
+                            const updated = await updateTTSSettings({ streamingBoundaryTier: "clause" });
+                            if (updated) setTtsSettings(updated);
+                            boundaryTierDd.close();
+                          }}
+                          className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                            ttsSettings.streamingBoundaryTier === "clause" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                          }`}
+                          style={{
+                            backgroundColor: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                            color: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary-text))` : '',
+                          }}
                         >
-                          <button
-                            onClick={async () => {
-                              const updated = await updateTTSSettings({ streamingBoundaryTier: "clause" });
-                              if (updated) setTtsSettings(updated);
-                              setBoundaryTierDropdownOpen(false);
-                            }}
-                            className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                              ttsSettings.streamingBoundaryTier === "clause" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                            }`}
-                            style={{
-                              backgroundColor: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                              color: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary-text))` : '',
-                            }}
-                          >
-                            Clause (faster, ~1ms)
-                          </button>
-                          <button
-                            onClick={async () => {
-                              const updated = await updateTTSSettings({ streamingBoundaryTier: "sentence" });
-                              if (updated) setTtsSettings(updated);
-                              setBoundaryTierDropdownOpen(false);
-                            }}
-                            className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                              ttsSettings.streamingBoundaryTier === "sentence" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                            }`}
-                            style={{
-                              backgroundColor: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                              color: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary-text))` : '',
-                            }}
-                          >
-                            Sentence (better prosody, ~5ms)
-                          </button>
-                        </DropdownPanel>
-                      </div>
+                          Clause (faster, ~1ms)
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const updated = await updateTTSSettings({ streamingBoundaryTier: "sentence" });
+                            if (updated) setTtsSettings(updated);
+                            boundaryTierDd.close();
+                          }}
+                          className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                            ttsSettings.streamingBoundaryTier === "sentence" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                          }`}
+                          style={{
+                            backgroundColor: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                            color: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary-text))` : '',
+                          }}
+                        >
+                          Sentence (better prosody, ~5ms)
+                        </button>
+                      </Dropdown>
                     </div>
                   </>
                 )}
@@ -3641,11 +3549,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 {/* Voice selector */}
                 <div className="space-y-1">
                   <label className="block text-sm text-white/50">Voice</label>
-                  <div className="relative" ref={voiceDropdownRef}>
-                    <button
-                      onClick={() => setVoiceDropdownOpen((o) => !o)}
-                      className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-                    >
+                  <Dropdown
+                    state={voiceDd}
+                    trigger={
                       <span className="truncate flex-1 text-left">
                         {(() => {
                           for (const cat of ttsVoices) {
@@ -3655,42 +3561,37 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                           return ttsSettings.voice;
                         })()}
                       </span>
-                      <Chevron open={voiceDropdownOpen} />
-                    </button>
-                    <DropdownPanel
-                      open={voiceDropdownOpen}
-                      className="left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto"
-                    >
-                      {ttsVoices.map((category) => (
-                        <div key={category.label}>
-                          <div className="px-3 py-1.5 text-[10px] font-medium text-white/30 uppercase tracking-wider">
-                            {category.label}
-                          </div>
-                          {category.voices.map((voice) => (
-                            <button
-                              key={voice.id}
-                              onClick={async () => {
-                                const updated = await updateTTSSettings({ voice: voice.id });
-                                if (updated) setTtsSettings(updated);
-                                setVoiceDropdownOpen(false);
-                              }}
-                              className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                                voice.id === ttsSettings.voice
-                                  ? "text-white"
-                                  : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                              }`}
-                              style={{
-                                backgroundColor: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                                color: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary-text))` : '',
-                              }}
-                            >
-                              {voice.name} ({voice.id})
-                            </button>
-                          ))}
+                    }
+                  >
+                    {ttsVoices.map((category) => (
+                      <div key={category.label}>
+                        <div className="px-3 py-1.5 text-[10px] font-medium text-white/30 uppercase tracking-wider">
+                          {category.label}
                         </div>
-                      ))}
-                    </DropdownPanel>
-                  </div>
+                        {category.voices.map((voice) => (
+                          <button
+                            key={voice.id}
+                            onClick={async () => {
+                              const updated = await updateTTSSettings({ voice: voice.id });
+                              if (updated) setTtsSettings(updated);
+                              voiceDd.close();
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                              voice.id === ttsSettings.voice
+                                ? "text-white"
+                                : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                            }`}
+                            style={{
+                              backgroundColor: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                              color: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary-text))` : '',
+                            }}
+                          >
+                            {voice.name} ({voice.id})
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </Dropdown>
                 </div>
 
                 {/* Speed control */}

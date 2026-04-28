@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import type { SystemPromptPreset } from "../types";
-import { DropdownPanel } from "./ui/DropdownPanel";
+import { Dropdown } from "./ui/Dropdown";
+import { useDropdown } from "../hooks/useDropdown";
 
 interface Props {
   value: string;
@@ -14,10 +15,9 @@ interface Props {
 export function SystemPromptEditor({ value, onChange, disabled, presets, isAgent, hidden }: Props) {
   if (hidden) return null;
   const [expanded, setExpanded] = useState(false);
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dd = useDropdown();
   const [localValue, setLocalValue] = useState(value);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
   const prevValueRef = useRef(value);
 
   // Sync external value changes during render (no effect needed)
@@ -25,18 +25,6 @@ export function SystemPromptEditor({ value, onChange, disabled, presets, isAgent
     prevValueRef.current = value;
     setLocalValue(value);
   }
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    if (!dropdownOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [dropdownOpen]);
 
   const handleBlur = () => {
     const trimmed = localValue.trim();
@@ -64,8 +52,16 @@ export function SystemPromptEditor({ value, onChange, disabled, presets, isAgent
         onChange(preset.content.trim());
       }
     }
-    setDropdownOpen(false);
+    dd.close();
   };
+
+  const triggerClass = `flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border transition-all disabled:opacity-40 ${
+    matchingPreset
+      ? "hover:opacity-90"
+      : isNoneSelected
+      ? "bg-white/5 border-white/10 text-white/40 hover:bg-white/10 hover:text-white/60"
+      : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:text-white/70"
+  }`;
 
   return (
     <div className="border-b border-white/10">
@@ -94,88 +90,63 @@ export function SystemPromptEditor({ value, onChange, disabled, presets, isAgent
           )}
         </button>
         {hasPresets && (
-          <div className="relative ml-auto mr-3 md:mr-6" ref={dropdownRef}>
-            <button
-              onClick={() => !disabled && setDropdownOpen((o) => !o)}
-              disabled={disabled}
-              className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border transition-all disabled:opacity-40 ${
-                matchingPreset
-                  ? "hover:opacity-90"
-                  : isNoneSelected
-                  ? "bg-white/5 border-white/10 text-white/40 hover:bg-white/10 hover:text-white/60"
-                  : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:text-white/70"
-              }`}
-              style={{
-                backgroundColor: matchingPreset ? `rgba(var(--theme-primary), 0.1)` : '',
-                borderColor: matchingPreset ? `rgba(var(--theme-primary-border))` : '',
-                color: matchingPreset ? `rgba(var(--theme-primary-text))` : '',
-              }}
-            >
-              {matchingPreset ? (matchingPreset.name || "Untitled") : isNoneSelected ? "Add preset" : "Custom"}
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="10"
-                height="10"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className={`transition-transform ${dropdownOpen ? "rotate-180" : ""}`}
+          <Dropdown
+            state={dd}
+            disabled={disabled}
+            wrapperClassName="ml-auto mr-3 md:mr-6"
+            triggerClassName={triggerClass}
+            triggerStyle={matchingPreset ? {
+              backgroundColor: `rgba(var(--theme-primary), 0.1)`,
+              borderColor: `rgba(var(--theme-primary-border))`,
+              color: `rgba(var(--theme-primary-text))`,
+            } : undefined}
+            panelClassName="right-0 top-full mt-1 min-w-[180px] overflow-hidden"
+            trigger={matchingPreset ? (matchingPreset.name || "Untitled") : isNoneSelected ? "Add preset" : "Custom"}
+          >
+            {isAgent && (
+              <button
+                onClick={() => handlePresetSelect(null)}
+                className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                  isNoneSelected
+                    ? "text-white"
+                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                }`}
+                style={{
+                  backgroundColor: isNoneSelected ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                  color: isNoneSelected ? `rgba(var(--theme-secondary-text))` : '',
+                }}
               >
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
-            <DropdownPanel
-              open={dropdownOpen}
-              className="right-0 top-full mt-1 min-w-[180px] overflow-hidden"
-            >
-              {isAgent && (
-                <button
-                  onClick={() => handlePresetSelect(null)}
-                  className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                    isNoneSelected
-                      ? "text-white"
-                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                  }`}
-                  style={{
-                    backgroundColor: isNoneSelected ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                    color: isNoneSelected ? `rgba(var(--theme-secondary-text))` : '',
-                  }}
-                >
-                  None (persona only)
-                </button>
-              )}
-              {presets.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => handlePresetSelect(p.id)}
-                  className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                    matchingPreset?.id === p.id
-                      ? "text-white"
-                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                  }`}
-                  style={{
-                    backgroundColor: matchingPreset?.id === p.id ? `rgba(var(--theme-primary), 0.15)` : 'transparent',
-                    color: matchingPreset?.id === p.id ? `rgba(var(--theme-primary-text))` : '',
-                  }}
-                >
-                  <span className="truncate flex-1">{p.name || "Untitled"}</span>
-                  {p.isDefault && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
-                      style={{
-                        backgroundColor: `rgba(var(--theme-primary), 0.15)`,
-                        color: `rgba(var(--theme-primary-text))`,
-                        borderColor: `rgba(var(--theme-primary-border))`,
-                      }}>
-                      default
-                    </span>
-                  )}
-                </button>
-              ))}
-            </DropdownPanel>
-          </div>
+                None (persona only)
+              </button>
+            )}
+            {presets.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => handlePresetSelect(p.id)}
+                className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                  matchingPreset?.id === p.id
+                    ? "text-white"
+                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                }`}
+                style={{
+                  backgroundColor: matchingPreset?.id === p.id ? `rgba(var(--theme-primary), 0.15)` : 'transparent',
+                  color: matchingPreset?.id === p.id ? `rgba(var(--theme-primary-text))` : '',
+                }}
+              >
+                <span className="truncate flex-1">{p.name || "Untitled"}</span>
+                {p.isDefault && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
+                    style={{
+                      backgroundColor: `rgba(var(--theme-primary), 0.15)`,
+                      color: `rgba(var(--theme-primary-text))`,
+                      borderColor: `rgba(var(--theme-primary-border))`,
+                    }}>
+                    default
+                  </span>
+                )}
+              </button>
+            ))}
+          </Dropdown>
         )}
       </div>
       {expanded && (

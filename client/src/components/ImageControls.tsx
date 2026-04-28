@@ -1,8 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { ImageGenerationParams, GenerationState } from "../types";
-import { DropdownPanel } from "./ui/DropdownPanel";
-import { Chevron } from "./ui/Chevron";
-import { useClickOutside } from "../hooks/useClickOutside";
+import { Dropdown } from "./ui/Dropdown";
+import { useDropdown } from "../hooks/useDropdown";
 
 const MODEL_PRESETS: Record<string, Partial<ImageGenerationParams>> = {
   "z-image-base": { steps: 30, cfgScale: 4.0, sampler: "euler", scheduler: "normal" },
@@ -45,21 +44,9 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
   const [scheduler, setScheduler] = useState(initialParams?.scheduler || "normal");
   const [lastSeed, setLastSeed] = useState<number | null>(null);
   const [batchCount, setBatchCount] = useState<string>("1");
-  const [modelOpen, setModelOpen] = useState(false);
-  const [samplerOpen, setSamplerOpen] = useState(false);
-  const [schedulerOpen, setSchedulerOpen] = useState(false);
-
-  const modelRef = useRef<HTMLDivElement>(null);
-  const samplerRef = useRef<HTMLDivElement>(null);
-  const schedulerRef = useRef<HTMLDivElement>(null);
-
-  const closeModel = useCallback(() => setModelOpen(false), []);
-  const closeSampler = useCallback(() => setSamplerOpen(false), []);
-  const closeScheduler = useCallback(() => setSchedulerOpen(false), []);
-
-  useClickOutside(modelRef, closeModel, modelOpen);
-  useClickOutside(samplerRef, closeSampler, samplerOpen);
-  useClickOutside(schedulerRef, closeScheduler, schedulerOpen);
+  const modelDd = useDropdown();
+  const samplerDd = useDropdown();
+  const schedulerDd = useDropdown();
 
   // Track if user is manually editing width/height (for Free mode)
   const editingWidthRef = useRef(false);
@@ -268,40 +255,32 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
       {/* Model */}
       <div className="space-y-1.5">
         <label className="block text-xs font-medium text-white/50">Model</label>
-        <div className="relative" ref={modelRef}>
-          <button
-            onClick={() => setModelOpen((o) => !o)}
-            className="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
-          >
-            <span className="truncate flex-1 text-left">{model || "No models found"}</span>
-            <Chevron open={modelOpen} />
-          </button>
-          <DropdownPanel
-            open={modelOpen}
-            className="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
-          >
-            {models.map((m) => (
-              <button
-                key={m}
-                onClick={() => { setModel(m); setModelOpen(false); }}
-                className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                  m === model
-                    ? "text-white"
-                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                }`}
-                style={{
-                  backgroundColor: m === model ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
-                  color: m === model ? `rgba(var(--theme-accent-text))` : '',
-                }}
-              >
-                {m}
-              </button>
-            ))}
-            {models.length === 0 && (
-              <div className="px-3 py-2 text-xs text-white/40">No models found</div>
-            )}
-          </DropdownPanel>
-        </div>
+        <Dropdown
+          state={modelDd}
+          panelClassName="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
+          trigger={<span className="truncate flex-1 text-left">{model || "No models found"}</span>}
+        >
+          {models.map((m) => (
+            <button
+              key={m}
+              onClick={() => { setModel(m); modelDd.close(); }}
+              className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                m === model
+                  ? "text-white"
+                  : "text-white/60 hover:bg-white/10 hover:text-white/80"
+              }`}
+              style={{
+                backgroundColor: m === model ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
+                color: m === model ? `rgba(var(--theme-accent-text))` : '',
+              }}
+            >
+              {m}
+            </button>
+          ))}
+          {models.length === 0 && (
+            <div className="px-3 py-2 text-xs text-white/40">No models found</div>
+          )}
+        </Dropdown>
       </div>
 
       {/* Steps */}
@@ -464,71 +443,57 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
           <label className="text-[10px] font-medium text-white/40">Sampler</label>
-          <div className="relative" ref={samplerRef}>
-            <button
-              onClick={() => setSamplerOpen((o) => !o)}
-              className="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none hover:bg-white/10 transition-all cursor-pointer"
-            >
-              <span className="truncate flex-1 text-left">{sampler}</span>
-              <Chevron open={samplerOpen} />
-            </button>
-            <DropdownPanel
-              open={samplerOpen}
-              className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
-            >
-              {["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"].map((s) => (
-                <button
-                  key={s}
-                  onClick={() => { setSampler(s); setSamplerOpen(false); }}
-                  className={`w-full text-left px-3 py-1.5 text-xs transition-all ${
-                    s === sampler
-                      ? "text-white"
-                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                  }`}
-                  style={{
-                    backgroundColor: s === sampler ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
-                    color: s === sampler ? `rgba(var(--theme-accent-text))` : '',
-                  }}
-                >
-                  {s}
-                </button>
-              ))}
-            </DropdownPanel>
-          </div>
+          <Dropdown
+            state={samplerDd}
+            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none hover:bg-white/10 transition-all cursor-pointer"
+            panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+            trigger={<span className="truncate flex-1 text-left">{sampler}</span>}
+          >
+            {["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"].map((s) => (
+              <button
+                key={s}
+                onClick={() => { setSampler(s); samplerDd.close(); }}
+                className={`w-full text-left px-3 py-1.5 text-xs transition-all ${
+                  s === sampler
+                    ? "text-white"
+                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                }`}
+                style={{
+                  backgroundColor: s === sampler ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
+                  color: s === sampler ? `rgba(var(--theme-accent-text))` : '',
+                }}
+              >
+                {s}
+              </button>
+            ))}
+          </Dropdown>
         </div>
         <div className="space-y-1">
           <label className="text-[10px] font-medium text-white/40">Scheduler</label>
-          <div className="relative" ref={schedulerRef}>
-            <button
-              onClick={() => setSchedulerOpen((o) => !o)}
-              className="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none hover:bg-white/10 transition-all cursor-pointer"
-            >
-              <span className="truncate flex-1 text-left">{scheduler}</span>
-              <Chevron open={schedulerOpen} />
-            </button>
-            <DropdownPanel
-              open={schedulerOpen}
-              className="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
-            >
-              {["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform", "beta"].map((s) => (
-                <button
-                  key={s}
-                  onClick={() => { setScheduler(s); setSchedulerOpen(false); }}
-                  className={`w-full text-left px-3 py-1.5 text-xs transition-all ${
-                    s === scheduler
-                      ? "text-white"
-                      : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                  }`}
-                  style={{
-                    backgroundColor: s === scheduler ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
-                    color: s === scheduler ? `rgba(var(--theme-accent-text))` : '',
-                  }}
-                >
-                  {s}
-                </button>
-              ))}
-            </DropdownPanel>
-          </div>
+          <Dropdown
+            state={schedulerDd}
+            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 outline-none hover:bg-white/10 transition-all cursor-pointer"
+            panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+            trigger={<span className="truncate flex-1 text-left">{scheduler}</span>}
+          >
+            {["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform", "beta"].map((s) => (
+              <button
+                key={s}
+                onClick={() => { setScheduler(s); schedulerDd.close(); }}
+                className={`w-full text-left px-3 py-1.5 text-xs transition-all ${
+                  s === scheduler
+                    ? "text-white"
+                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                }`}
+                style={{
+                  backgroundColor: s === scheduler ? `rgba(var(--theme-accent), 0.15)` : 'transparent',
+                  color: s === scheduler ? `rgba(var(--theme-accent-text))` : '',
+                }}
+              >
+                {s}
+              </button>
+            ))}
+          </Dropdown>
         </div>
       </div>
 
