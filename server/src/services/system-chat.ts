@@ -388,13 +388,15 @@ async function buildSynthesisTriggerContent(
   }
 
   // --- New memories since last synthesis ---
-  // Importance-based anchors were a bad cut: importance is a noisy scale and
-  // top-N skews to the same saturated 10/10 entries every cycle (many of
-  // which are stale). What actually wants review is what's been written
-  // *since* the last cycle — that's the delta the agent should integrate.
-  // The agent can always reach for older memories via `search_memory`.
+  // Two-tier rendering, each tier sorted by importance DESC and grouped by
+  // source chat. Agent-saved (sourceType='explicit') get priority over
+  // auto-extracted because they reflect a deliberate "this is worth
+  // remembering" call by the agent. Within a tier, importance ordering puts
+  // the highest-signal items at the top so a per-tier cap keeps the most
+  // important entries even when the daily volume overflows the budget.
   const memoryStore = await loadMemoryStore();
   if (memoryStore.memories.length > 0) {
+    const { getChatTitle } = await import("./chat-storage.js");
     const lastSynthesisMs = memoryStore.lastSynthesis
       ? new Date(memoryStore.lastSynthesis).getTime()
       : 0;
@@ -402,26 +404,94 @@ async function buildSynthesisTriggerContent(
     // *something* to review instead of dumping the entire store.
     const cutoffMs = lastSynthesisMs || Date.now() - 24 * 60 * 60 * 1000;
 
-    const newMemories = memoryStore.memories
-      .filter((m) => new Date(m.createdAt).getTime() > cutoffMs)
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const newMemories = memoryStore.memories.filter(
+      (m) => new Date(m.createdAt).getTime() > cutoffMs,
+    );
 
-    // Cap at 50 so a burst doesn't swamp the trigger. Ordered chronologically
-    // so the agent reads the delta in the order it happened.
-    const CAP = 50;
-    const shown = newMemories.slice(0, CAP);
+    const agentSaved = newMemories.filter((m) => m.sourceType === "explicit");
+    const autoExtracted = newMemories.filter((m) => m.sourceType !== "explicit");
 
-    if (shown.length > 0) {
-      const header = memoryStore.lastSynthesis
-        ? `${shown.length} memor${shown.length === 1 ? "y" : "ies"} written since last synthesis${newMemories.length > CAP ? ` (showing first ${CAP} of ${newMemories.length})` : ""}:`
-        : `${shown.length} memor${shown.length === 1 ? "y" : "ies"} from the last 24 hours (no prior synthesis):`;
-      parts.push(
-        [
-          `## New Memories`,
-          header,
-          shown.map((m) => `- [${m.category}] ${m.text}`).join("\n"),
-        ].join("\n\n"),
-      );
+    // Sort by importance DESC, tiebreak by recency DESC so the freshest
+    // important items lead.
+    const byImportanceThenRecency = (
+      a: typeof newMemories[number],
+      b: typeof newMemories[number],
+    ) =>
+      b.importance - a.importance ||
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    agentSaved.sort(byImportanceThenRecency);
+    autoExtracted.sort(byImportanceThenRecency);
+
+    const TIER_CAP = 50;
+    const agentShown = agentSaved.slice(0, TIER_CAP);
+    const autoShown = autoExtracted.slice(0, TIER_CAP);
+
+    // Group a tier by source chat. Memories with no chat (notebook, synthesis)
+    // collect under a single "Other" bucket so they're never silently dropped.
+    // Inside each chat group preserves the importance ordering from the tier sort.
+    type Memo = typeof newMemories[number];
+    const groupByChat = (items: Memo[]): Array<{ chatLabel: string; items: Memo[] }> => {
+      const groups = new Map<string, Memo[]>();
+      for (const m of items) {
+        const key = m.sourceChatId || "__other__";
+        const arr = groups.get(key) ?? [];
+        arr.push(m);
+        groups.set(key, arr);
+      }
+      return Array.from(groups.entries()).map(([chatId, list]) => {
+        let label: string;
+        if (chatId === "__other__") {
+          label = "Other (notebook / synthesis)";
+        } else {
+          const title = getChatTitle(chatId);
+          label = title ?? `Chat ${chatId.slice(0, 8)}`;
+        }
+        return { chatLabel: label, items: list };
+      });
+    };
+
+    const renderTier = (groups: Array<{ chatLabel: string; items: Memo[] }>) =>
+      groups
+        .map(({ chatLabel, items }) => {
+          const lines = items
+            .map((m) => `- [imp:${m.importance}] [${m.category}] ${m.text}`)
+            .join("\n");
+          return `**${chatLabel}**\n${lines}`;
+        })
+        .join("\n\n");
+
+    if (agentShown.length > 0 || autoShown.length > 0) {
+      const sections: string[] = [`## New Memories`];
+
+      if (memoryStore.lastSynthesis) {
+        sections.push(`Memories written since the last synthesis cycle.`);
+      } else {
+        sections.push(`Memories from the last 24 hours (no prior synthesis).`);
+      }
+
+      if (agentShown.length > 0) {
+        const droppedAgent = agentSaved.length - agentShown.length;
+        const header = `### Saved by me (explicit — I chose to remember these)${
+          droppedAgent > 0
+            ? ` — showing top ${TIER_CAP} of ${agentSaved.length} by importance`
+            : ""
+        }`;
+        sections.push(header);
+        sections.push(renderTier(groupByChat(agentShown)));
+      }
+
+      if (autoShown.length > 0) {
+        const droppedAuto = autoExtracted.length - autoShown.length;
+        const header = `### Auto-extracted${
+          droppedAuto > 0
+            ? ` — showing top ${TIER_CAP} of ${autoExtracted.length} by importance`
+            : ""
+        }`;
+        sections.push(header);
+        sections.push(renderTier(groupByChat(autoShown)));
+      }
+
+      parts.push(sections.join("\n\n"));
     }
   }
 

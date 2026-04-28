@@ -21,7 +21,7 @@ import { invalidateMemoriesCache } from "./memory-context.js";
 import { startExtractionRun } from "./memory-extraction-observability.js";
 import { recordModelStats } from "./model-stats.js";
 import type { LlamaTimings } from "./model-stats.js";
-import type { ChatMessage, Memory, MemoryCategory, Chat } from "../types.js";
+import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat } from "../types.js";
 
 const LOG_DIR = join(homedir(), ".quje-agent", "logs");
 
@@ -903,7 +903,7 @@ export async function dedupAndSave(
   embeddings: number[][],
   chatId: string,
   projectId?: string,
-  sourceType: 'chat' | 'notebook' | 'explicit' = 'chat',
+  sourceType: MemorySourceType = 'chat',
   sourceId?: string
 ): Promise<DedupAndSaveOutcome> {
   let added = 0;
@@ -943,7 +943,7 @@ export async function dedupAndSave(
           createdAt: now,
           lastAccessed: now,
           accessCount: 0,
-          sourceChatId: sourceType === 'chat' ? chatId : '',
+          sourceChatId: chatId,
           ...(projectId ? { projectId } : {}),
           sourceType,
           sourceId: sourceId || chatId,
