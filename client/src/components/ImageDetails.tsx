@@ -1,5 +1,5 @@
 import type { GeneratedImage, ImageGenerationParams } from "../types";
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { MarkdownRenderer } from "./ui/MarkdownRenderer";
 
 interface Props {
   image: GeneratedImage;

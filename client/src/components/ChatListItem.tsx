@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import type { ChatListItem as ChatListItemType } from "../types";
-import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
+import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 
 interface Props {
   chat: ChatListItemType;

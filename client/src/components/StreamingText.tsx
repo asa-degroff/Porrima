@@ -1,7 +1,7 @@
 import { lazy, Suspense } from "react";
 
 const MarkdownRenderer = lazy(() =>
-  import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
+  import("./ui/MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
 );
 
 interface Props {

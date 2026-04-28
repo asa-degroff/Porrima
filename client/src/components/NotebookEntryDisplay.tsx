@@ -4,11 +4,11 @@ import type { NotebookEntry, Artifact, NotebookLink, ImageAttachment, InlineVisu
 import type { ChatListItem } from "../types";
 import { ChatLinkPicker } from "./ChatLinkPicker";
 import { NotebookLinkPicker } from "./NotebookLinkPicker";
-import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
+import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 import { ToolCallDisplay } from "./ToolCallDisplay";
 
 const MarkdownRenderer = lazy(() =>
-  import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
+  import("./ui/MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
 );
 const ArtifactPanel = lazy(() =>
   import("./ArtifactPanel").then((m) => ({ default: m.ArtifactPanel }))

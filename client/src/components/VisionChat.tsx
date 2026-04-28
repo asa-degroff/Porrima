@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { AnalyzedImage, VisionMessage } from "../api/client";
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { MarkdownRenderer } from "./ui/MarkdownRenderer";
 import { MessageInput } from "./MessageInput";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { useActivityShape } from "../hooks/useActivityStyle";

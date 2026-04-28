@@ -8,9 +8,9 @@ import { ArtifactPanel } from "./ArtifactPanel";
 import { InlineVisual } from "./InlineVisual";
 import { GeneratedImagePanel } from "./GeneratedImagePanel";
 import { ToolCallDisplay } from "./ToolCallDisplay";
-import { SpeakerButton } from "./SpeakerButton";
+import { SpeakerButton } from "./ui/SpeakerButton";
 import { UserImage } from "./UserImage";
-import { ContextMenu, ContextMenuItem, useLongPress } from "./ContextMenu";
+import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 import { CompactionIndicator } from "./CompactionIndicator";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { useActivityShape } from "../hooks/useActivityStyle";
@@ -18,7 +18,7 @@ import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { useIsDesktop } from "../hooks/useIsDesktop";
 
 const MarkdownRenderer = lazy(() =>
-  import("./MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
+  import("./ui/MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
 );
 
 // Hoisted static skill chip style - avoids new object on every render

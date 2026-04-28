@@ -1,5 +1,5 @@
 import type { AnalyzedImage } from "../api/client";
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { MarkdownRenderer } from "./ui/MarkdownRenderer";
 
 interface Props {
   images: AnalyzedImage[];

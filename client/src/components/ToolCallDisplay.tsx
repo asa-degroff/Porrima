@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ChatToolCall, ChatToolResult, ImageAttachment } from "../types";
 import type { ToolStatus } from "../api/client";
-import { DiffView } from "./DiffView";
+import { DiffView } from "./ui/DiffView";
 import { UserImage } from "./UserImage";
 
 const statusColors = {
