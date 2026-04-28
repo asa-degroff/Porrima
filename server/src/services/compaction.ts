@@ -106,6 +106,10 @@ function charEstimateContextSize(
           total += estimateTokens(r.content) + 20 + MESSAGE_FRAMING_TOKENS;
         }
       }
+    } else if (m.role === "system") {
+      // Persisted system-delta messages (memory injections) take real space
+      // in the prompt — count them so compaction triggers when needed.
+      total += estimateTokens(m.content);
     }
   }
   return total;
@@ -359,7 +363,10 @@ export async function truncateBeforeSend(
     return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools);
   }
 
-  // Per-message token estimates for in-context messages
+  // Per-message token estimates for in-context messages.
+  // Note: system-role messages contribute estimateTokens(m.content) via the
+  // base assignment above — no role-specific addenda needed (no images,
+  // thinking, tool calls, or tool results on system deltas).
   const icEstimates = icIndices.map((idx) => {
     const m = messages[idx];
     let tokens = estimateTokens(m.content);
@@ -513,6 +520,22 @@ export async function truncateBeforeSend(
   };
   messages.splice(insertionIdx, 0, summaryMessage);
   chat.messages = messages;
+
+  // Mark stale memory-delta messages (role: "system") in the kept tail as
+  // out-of-context. The post-compaction memory reset rebuilds the frozen set
+  // into the new system prompt, so these deltas' content is now redundant —
+  // keeping them in-context would just bloat the prompt and the LLM would
+  // see the same memory text twice (once in the prompt, once mid-conversation).
+  let strippedDeltas = 0;
+  for (let i = insertionIdx + 1; i < messages.length; i++) {
+    if (messages[i].role === "system" && !messages[i]._outOfContext) {
+      messages[i]._outOfContext = true;
+      strippedDeltas++;
+    }
+  }
+  if (strippedDeltas > 0) {
+    console.log(`[compaction] Marked ${strippedDeltas} stale system-delta message(s) out-of-context in kept tail`);
+  }
 
   const estimatedRemovedTokens = removedMessages.reduce((sum, m) => {
     let tokens = estimateTokens(m.content);
@@ -945,7 +968,11 @@ async function archiveAndIndex(
 
   // Filter out compaction summary messages — they contain archive indices and
   // system metadata, not actual conversation content worth archiving.
-  const substantiveMessages = removedMessages.filter((m) => !m._isCompactionSummary);
+  // Also filter persisted system-delta (memory injection) messages — they're
+  // duplicates of memory-store entries and produce empty archive blocks.
+  const substantiveMessages = removedMessages.filter(
+    (m) => !m._isCompactionSummary && m.role !== "system"
+  );
   if (substantiveMessages.length === 0) return { summaryText: "", archiveIds: [] };
 
   const blocks = groupIntoBlocks(substantiveMessages);
@@ -1330,6 +1357,20 @@ export async function truncateChatHistory(
   };
   messages.splice(insertionIndex, 0, summaryMessage);
   chat.messages = messages;
+
+  // Mark stale memory-delta messages (role: "system") in the kept tail as
+  // out-of-context — see truncateBeforeSend for rationale (post-compaction
+  // memory reset moves their content into the new frozen system prompt).
+  let strippedDeltas = 0;
+  for (let i = insertionIndex + 1; i < messages.length; i++) {
+    if (messages[i].role === "system" && !messages[i]._outOfContext) {
+      messages[i]._outOfContext = true;
+      strippedDeltas++;
+    }
+  }
+  if (strippedDeltas > 0) {
+    console.log(`[compaction] Marked ${strippedDeltas} stale system-delta message(s) out-of-context in kept tail`);
+  }
 
   // Calculate estimated token count for logging
   const estimatedRemovedTokens = removedMessages.reduce((sum, m) => {

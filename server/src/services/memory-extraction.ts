@@ -1121,7 +1121,11 @@ export async function preCompactionFlush(
 
   // Filter out compaction summary messages — they contain archive indices
   // and system metadata, not actual conversation content worth remembering.
-  const substantiveMessages = removedMessages.filter((m) => !m._isCompactionSummary);
+  // Also filter persisted system-delta messages — their content is already
+  // in the memory store; re-extracting would create duplicates.
+  const substantiveMessages = removedMessages.filter(
+    (m) => !m._isCompactionSummary && m.role !== "system"
+  );
   if (substantiveMessages.length === 0) {
     console.log("[memory] Pre-compaction flush: only compaction summaries, skipping");
     return;
