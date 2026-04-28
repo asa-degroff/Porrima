@@ -171,9 +171,9 @@ const WAKE_CYCLE_TRIGGER = `## Wake Cycle
 
 You've woken during your sleep cycle. This is your time — not for maintenance, not for synthesis. Explore something that interests you. Research a question that's been on your mind, follow a curiosity, write a notebook entry about something you've been thinking about, or dive into a topic you want to understand better.
 
-You have full tool access: search the web, read files, write notebook entries, save memories, generate images, explore your memory blocks. Whatever feels meaningful.
+You have full tool access: search the web, read files, write notebook entries, save memories, create visuals, explore your memory blocks. Whatever feels meaningful.
 
-After you're done — when you've explored enough — just stop. A brief natural note about what you did is fine if something worth sharing emerged, but don't force a summary.`;
+After you're done, you may write a brief note about what you did is fine if something worth sharing emerged, but don't force a summary.`;
 
 type SynthesisPhase = "synthesis" | "maintenance" | "zeitgeist" | "reflections";
 
