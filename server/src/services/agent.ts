@@ -59,6 +59,19 @@ export function chatMessagesToPiMessages(
     // Skip out-of-context messages (preserved for UI, not for LLM)
     if (m._outOfContext) continue;
 
+    if (m.role === "system") {
+      // Persisted memory-delta messages live in chat history with role "system"
+      // so they stay at a stable position between turns (preserves KV cache prefix).
+      // pi-ai's Message union doesn't include "system", so cast through any —
+      // our openai-compat / ollama-native providers handle the role explicitly.
+      result.push({
+        role: "system" as any,
+        content: m.content,
+        timestamp: m.timestamp,
+      } as any);
+      continue;
+    }
+
     if (m.role === "assistant") {
       const dummyUsage = {
         input: 0,

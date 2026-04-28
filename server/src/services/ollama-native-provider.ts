@@ -66,6 +66,14 @@ function convertMessages(model: Model<Api>, context: Context): any[] {
   for (let i = 0; i < transformed.length; i++) {
     const msg = transformed[i];
 
+    if ((msg as any).role === "system") {
+      const content = typeof (msg as any).content === "string" ? (msg as any).content : "";
+      if (content) {
+        params.push({ role: "system", content: sanitizeSurrogates(content) });
+      }
+      continue;
+    }
+
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         params.push({ role: "user", content: sanitizeSurrogates(msg.content) });

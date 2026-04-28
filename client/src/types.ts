@@ -42,7 +42,7 @@ export interface ImageAttachment {
 }
 
 export interface ChatMessage {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   thinking?: string;
   thinkingDurationMs?: number;

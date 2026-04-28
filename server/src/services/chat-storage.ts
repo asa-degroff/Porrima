@@ -428,7 +428,7 @@ export async function saveChat(chat: Chat): Promise<void> {
   let lastMsg: ChatMessage | null = null;
   for (let i = chat.messages.length - 1; i >= 0; i--) {
     const msg = chat.messages[i];
-    if (!msg._isCompactionSummary) {
+    if (!msg._isCompactionSummary && msg.role !== "system") {
       lastMsg = msg;
       break;
     }
@@ -507,7 +507,7 @@ export async function createChat(chat: Chat): Promise<void> {
   let lastMsg: ChatMessage | null = null;
   for (let i = chat.messages.length - 1; i >= 0; i--) {
     const msg = chat.messages[i];
-    if (!msg._isCompactionSummary) {
+    if (!msg._isCompactionSummary && msg.role !== "system") {
       lastMsg = msg;
       break;
     }
@@ -804,6 +804,9 @@ function syncChatMessages(db: Database.Database, chatId: string, messages: ChatM
   const sync = db.transaction(() => {
     for (let i = existingCount; i < messages.length; i++) {
       const msg = messages[i];
+      // Skip persisted system-delta messages — their content is memory text
+      // already present in the memory store; indexing it would duplicate hits.
+      if (msg.role === "system") continue;
       // Build searchable content: main text + tool call arguments + tool results
       const parts: string[] = [];
       if (msg.content) parts.push(msg.content);
@@ -959,10 +962,10 @@ function recomputePreviewsSkippingCompaction(db: Database.Database): void {
   for (const chat of chats) {
     try {
       const messages = JSON.parse(chat.messages) as ChatMessage[];
-      // Find last real message (skip compaction summaries)
+      // Find last real message (skip compaction summaries and persisted system-delta messages)
       let lastMsg: ChatMessage | null = null;
       for (let i = messages.length - 1; i >= 0; i--) {
-        if (!messages[i]._isCompactionSummary) {
+        if (!messages[i]._isCompactionSummary && messages[i].role !== "system") {
           lastMsg = messages[i];
           break;
         }

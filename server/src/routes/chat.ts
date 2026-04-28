@@ -2665,19 +2665,23 @@ router.post("/", async (req, res) => {
     // KV cache efficiency logging
     log(`[kv-cache] chat=${chatId} system_prompt=${systemPrompt.length}ch delta=${memoriesDelta.length}ch new_msg=${message.length}ch type=${memoriesDelta ? "delta" : "stable"}`);
 
-    // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
-    const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
-
-    // Inject memory delta at end of context (only new memories not already in system prompt).
-    // This keeps the system prompt + conversation history stable for KV cache prefix
-    // matching — only the delta + new user message are reprocessed.
+    // Persist the memory delta as a system-role message immediately before the
+    // user's new message. Persisting (rather than injecting transiently) keeps
+    // every previous turn's delta at a stable position in chat history so the
+    // KV cache prefix matches across turns — only the new delta + user msg are
+    // reprocessed each turn instead of the entire prior turn.
     if (memoriesDelta) {
-      contextMessages.push({
-        role: "user",
+      const insertAt = Math.max(0, chat.messages.length - 1);
+      chat.messages.splice(insertAt, 0, {
+        role: "system",
         content: `[System context — updated memories]\n${memoriesDelta}`,
         timestamp: Date.now(),
       });
+      await saveChat(chat);
     }
+
+    // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
+    const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
 
     // Safety check: warn if context is empty for non-first messages
     if (contextMessages.length === 0 && chat.messages.length > 1) {
@@ -2967,19 +2971,21 @@ router.post("/edit", async (req, res) => {
   
   setCachedAugmentedPrompt(chat.id, editMemoriesDelta ? `${systemPrompt}\n\n${editMemoriesDelta}` : systemPrompt);
 
-  // Context = all messages EXCEPT the one we just added
-  const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
-  
-  // Inject memory delta at end of context (only new memories not already in system prompt).
-  // This keeps the system prompt + conversation history stable for KV cache prefix
-  // matching — only the delta + new user message are reprocessed.
+  // Persist the memory delta as a system-role message immediately before the
+  // user's edited message — see chat.ts:/api/chat for the rationale (stable
+  // KV cache prefix across turns).
   if (editMemoriesDelta) {
-    contextMessages.push({
-      role: "user",
+    const insertAt = Math.max(0, chat.messages.length - 1);
+    chat.messages.splice(insertAt, 0, {
+      role: "system",
       content: `[System context — updated memories]\n${editMemoriesDelta}`,
       timestamp: Date.now(),
     });
+    await saveChat(chat);
   }
+
+  // Context = all messages EXCEPT the one we just added
+  const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
   
   // Safety check: warn if context is empty for non-first messages
   if (contextMessages.length === 0 && chat.messages.length > 1) {

@@ -490,6 +490,9 @@ export function ChatView({
 
               return messages.slice(startIndex).map((msg, sliceIdx) => {
                 const i = startIndex + sliceIdx;
+                // Hide persisted system-role messages (memory delta injections) from the UI —
+                // they exist purely to keep the LLM context's prefix stable for KV cache.
+                if (msg.role === "system") return null;
                 const isLast = i === messages.length - 1;
                 const isOutOfContext = !!msg._outOfContext;
                 const isSystemMessage = !!msg._isSystemMessage;

@@ -1420,6 +1420,8 @@ interface IndexedChatMessage {
 }
 
 function isSubstantiveForDelayedExtraction(message: ChatMessage): boolean {
+  // Skip persisted memory-delta messages — they're already memories.
+  if (message.role === "system") return false;
   return !message._isCompactionSummary && !message._outOfContext && !message._isSynthesisMessage;
 }
 
