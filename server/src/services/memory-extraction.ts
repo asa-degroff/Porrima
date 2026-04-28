@@ -492,7 +492,7 @@ function extractionRoleLabel(role: ChatMessage["role"]): string {
  * and would consume the entire context budget of the extraction model. A short
  * preview is enough for the extraction agent to understand what was fetched.
  */
-const EXTRACT_TOOL_RESULT_MAX = 4_000;
+const EXTRACT_TOOL_RESULT_MAX = 500;
 
 /**
  * Tool names whose results are typically large and contain mostly non-extractable
