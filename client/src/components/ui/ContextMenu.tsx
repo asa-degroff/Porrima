@@ -70,15 +70,19 @@ export function ContextMenu({ x, y, onClose, children }: ContextMenuProps) {
 interface ContextMenuItemProps {
   onClick: () => void;
   destructive?: boolean;
+  disabled?: boolean;
   children: React.ReactNode;
 }
 
-export function ContextMenuItem({ onClick, destructive, children }: ContextMenuItemProps) {
+export function ContextMenuItem({ onClick, destructive, disabled, children }: ContextMenuItemProps) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       className={`w-full px-4 py-2 text-left text-sm transition-colors flex items-center gap-2 ${
-        destructive
+        disabled
+          ? "cursor-not-allowed text-white/35"
+          : destructive
           ? "text-red-400 hover:text-red-300 hover:bg-red-500/10"
           : "text-white/80 hover:text-white hover:bg-white/5"
       }`}

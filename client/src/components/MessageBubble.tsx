@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, lazy, Suspense, memo } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, lazy, Suspense, memo } from "react";
 import { createPortal } from "react-dom";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment } from "../types";
 import type { ToolStatus } from "../api/client";
@@ -8,7 +8,6 @@ import { ArtifactPanel } from "./ArtifactPanel";
 import { InlineVisual } from "./InlineVisual";
 import { GeneratedImagePanel } from "./GeneratedImagePanel";
 import { ToolCallDisplay } from "./ToolCallDisplay";
-import { SpeakerButton } from "./ui/SpeakerButton";
 import { UserImage } from "./UserImage";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 import { CompactionIndicator } from "./CompactionIndicator";
@@ -37,6 +36,53 @@ const skillChipStyle: React.CSSProperties = {
 
 // Stable empty array for availableSkills default prop
 const emptySkillsList: string[] = [];
+const ACTION_BUTTON_SIZE = 28;
+const ACTION_BUTTON_GAP = 4;
+const ACTION_RAIL_GAP_TO_BUBBLE = 6;
+const SHORT_USER_BUBBLE_MAX_HEIGHT = 78;
+
+function ReadAloudButton({
+  text,
+  onReadAloud,
+  isPlaying,
+}: {
+  text: string;
+  onReadAloud?: (text: string) => void;
+  isPlaying?: boolean;
+}) {
+  if (!text || !onReadAloud) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onReadAloud(text);
+      }}
+      disabled={isPlaying}
+      className={`flex h-7 w-7 items-center justify-center rounded-md opacity-0 transition-all duration-150 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30 ${
+        isPlaying
+          ? "cursor-not-allowed bg-white/[0.04] text-white/35"
+          : "text-white/35 hover:bg-white/10 hover:text-white/75"
+      }`}
+      title={isPlaying ? "Audio is playing" : "Read aloud"}
+      aria-label={isPlaying ? "Audio is playing" : "Read aloud"}
+    >
+      {isPlaying ? (
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
+          <rect x="6" y="4" width="3" height="16" />
+          <rect x="12" y="4" width="3" height="16" />
+          <rect x="18" y="4" width="3" height="16" />
+        </svg>
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+        </svg>
+      )}
+    </button>
+  );
+}
 
 function isPlaceholderEllipsis(text: string | undefined): boolean {
   if (!text) return false;
@@ -159,12 +205,19 @@ export const MessageBubble = memo(function MessageBubble({
   const [editMinWidth, setEditMinWidth] = useState<number | undefined>(undefined);
   const [lightboxImage, setLightboxImage] = useState<ImageAttachment | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [useHorizontalUserActions, setUseHorizontalUserActions] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
 
+  const canReadAloud = Boolean(message.content && onReadAloud && !editing);
+  const canEditMessage = Boolean(isUser && editable && !editing);
+  const canRetryMessage = Boolean(isUser && onRetryMessage && messageIndex != null && !editing);
+  const canOpenContextMenu = canReadAloud || canEditMessage || canRetryMessage;
+
   const openContextMenu = useCallback((pos: { x: number; y: number }) => {
-    if (isUser && editable && !editing) setContextMenu(pos);
-  }, [isUser, editable, editing]);
+    if (canOpenContextMenu) setContextMenu(pos);
+  }, [canOpenContextMenu]);
   const longPressProps = useLongPress(openContextMenu);
 
   const handleRetry = () => {
@@ -214,6 +267,18 @@ export const MessageBubble = memo(function MessageBubble({
     setEditImages((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const handleReadAloud = useCallback(() => {
+    if (!message.content || !onReadAloud || isPlayingTts) return;
+    onReadAloud(message.content);
+    setContextMenu(null);
+  }, [isPlayingTts, message.content, onReadAloud]);
+
+  const handleCopyTimestamp = useCallback(() => {
+    const timestamp = formatTimestamp(message.timestamp);
+    void navigator.clipboard?.writeText(timestamp).catch(() => {});
+    setContextMenu(null);
+  }, [message.timestamp]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -230,54 +295,118 @@ export const MessageBubble = memo(function MessageBubble({
 
   // Build output segments - use ordered segments if available, otherwise separate arrays
   const renderSegments = !isUser && message.segments && message.segments.length > 0;
+  const showReadAloudButton = canReadAloud;
+  const userActionCount =
+    (canEditMessage ? 2 : 0) +
+    (isUser && showReadAloudButton ? 1 : 0);
+  const hasUserActions = isUser && userActionCount > 0;
+
+  useLayoutEffect(() => {
+    if (!hasUserActions) {
+      setUseHorizontalUserActions(false);
+      return;
+    }
+
+    const row = rowRef.current;
+    const bubble = bubbleRef.current;
+    if (!row || !bubble) return;
+
+    let frame = 0;
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const bubbleRect = bubble.getBoundingClientRect();
+        const parentWidth = row.parentElement?.getBoundingClientRect().width || window.innerWidth;
+        const rowMaxWidth = parentWidth * (window.matchMedia("(min-width: 768px)").matches ? 0.8 : 0.95);
+        const actionWidth =
+          userActionCount * ACTION_BUTTON_SIZE +
+          Math.max(0, userActionCount - 1) * ACTION_BUTTON_GAP;
+        const horizontalFits = bubbleRect.width + actionWidth + ACTION_RAIL_GAP_TO_BUBBLE <= rowMaxWidth;
+        const shortBubble = !message.images?.length && bubbleRect.height <= SHORT_USER_BUBBLE_MAX_HEIGHT;
+
+        setUseHorizontalUserActions(shortBubble && horizontalFits);
+      });
+    };
+
+    scheduleMeasure();
+    window.addEventListener("resize", scheduleMeasure);
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(scheduleMeasure);
+      resizeObserver.observe(bubble);
+      if (row.parentElement) resizeObserver.observe(row.parentElement);
+    }
+
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", scheduleMeasure);
+      resizeObserver?.disconnect();
+    };
+  }, [hasUserActions, message.content, message.images?.length, userActionCount]);
 
   return (
     <div className={`group ${isUser ? "flex justify-end" : "flex justify-start"} mb-4`}>
-      <div className={`flex flex-row items-start max-w-[95%] md:max-w-[80%] min-w-0`}>
-        {isUser && editable && !editing && (
-          <div className="flex flex-col gap-1 mr-1.5 shrink-0">
-            <button
-              onClick={handleStartEdit}
-              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-white/10 mt-2.5"
-              title="Edit message"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
-                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                <path d="m15 5 4 4" />
-              </svg>
-            </button>
-            <div className="opacity-0 group-hover:opacity-100 transition-opacity relative group/info">
-              <button
-                className="p-1 rounded-md hover:bg-white/10"
-                title={formatTimestamp(message.timestamp)}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="12" y1="16" x2="12" y2="12" />
-                  <line x1="12" y1="8" x2="12.01" y2="8" />
-                </svg>
-              </button>
-              <div className="invisible group-hover/info:visible absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded-md text-[11px] whitespace-nowrap pointer-events-none z-50"
-                style={{
-                  backgroundColor: 'rgba(30, 30, 40, 0.95)',
-                  border: '1px solid rgba(255, 255, 255, 0.15)',
-                  color: 'rgba(255, 255, 255, 0.8)',
-                  backdropFilter: 'blur(8px)',
-                }}
-              >
-                {formatTimestamp(message.timestamp)}
-              </div>
-            </div>
+      <div ref={rowRef} className={`flex flex-row items-start max-w-[95%] md:max-w-[80%] min-w-0`}>
+        {hasUserActions && (
+          <div className={`mt-2.5 mr-1.5 flex shrink-0 gap-1 ${useHorizontalUserActions ? "flex-row items-center" : "flex-col"}`}>
+            {canEditMessage && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleStartEdit}
+                  className="flex h-7 w-7 items-center justify-center rounded-md opacity-0 transition-opacity hover:bg-white/10 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+                  title="Edit message"
+                  aria-label="Edit message"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
+                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                    <path d="m15 5 4 4" />
+                  </svg>
+                </button>
+                <div className="relative opacity-0 transition-opacity group-hover:opacity-100 group/info">
+                  <button
+                    type="button"
+                    className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-white/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+                    title={formatTimestamp(message.timestamp)}
+                    aria-label="Message timestamp"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                  </button>
+                  <div className="invisible group-hover/info:visible absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded-md text-[11px] whitespace-nowrap pointer-events-none z-50"
+                    style={{
+                      backgroundColor: 'rgba(30, 30, 40, 0.95)',
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      color: 'rgba(255, 255, 255, 0.8)',
+                      backdropFilter: 'blur(8px)',
+                    }}
+                  >
+                    {formatTimestamp(message.timestamp)}
+                  </div>
+                </div>
+              </>
+            )}
+            {showReadAloudButton && (
+              <ReadAloudButton
+                text={message.content}
+                onReadAloud={onReadAloud}
+                isPlaying={isPlayingTts}
+              />
+            )}
           </div>
         )}
         <div className={`flex flex-col ${isUser ? "items-end" : "items-start"} min-w-0`}>
           <div
             ref={bubbleRef}
-            onContextMenu={isUser && editable && !editing ? (e: React.MouseEvent) => {
+            onContextMenu={canOpenContextMenu ? (e: React.MouseEvent) => {
               e.preventDefault();
               setContextMenu({ x: e.clientX, y: e.clientY });
             } : undefined}
-            {...(isUser && editable && !editing ? longPressProps : {})}
+            {...(canOpenContextMenu ? longPressProps : {})}
             className={`rounded-2xl px-3 md:px-4 py-3 max-w-full min-w-0 overflow-x-hidden ${
               isUser
                 ? "text-white/95"
@@ -386,7 +515,7 @@ export const MessageBubble = memo(function MessageBubble({
                     Queued
                   </div>
                 )}
-              </div>
+            </div>
             ) : (
               <>
                 {visibleThinkingText && (
@@ -453,41 +582,6 @@ export const MessageBubble = memo(function MessageBubble({
             )}
           </div>
 
-          {/* Speaker button for assistant messages - positioned below bubble content */}
-          {!isUser && message.content && onReadAloud && (
-            <button
-              onClick={() => onReadAloud(message.content)}
-              disabled={isPlayingTts}
-              className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md mt-2 ml-1 shrink-0 self-start"
-              style={{
-                backgroundColor: isPlayingTts ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                color: isPlayingTts ? `rgba(var(--theme-secondary-text), 0.9)` : 'rgba(255, 255, 255, 0.4)',
-              }}
-              onMouseEnter={(e) => {
-                if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)';
-                if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
-              }}
-              onMouseLeave={(e) => {
-                if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)';
-                if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'transparent';
-              }}
-              title={isPlayingTts ? "Playing..." : "Read aloud"}
-            >
-              {isPlayingTts ? (
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
-                  <rect x="6" y="4" width="3" height="16" />
-                  <rect x="12" y="4" width="3" height="16" />
-                  <rect x="18" y="4" width="3" height="16" />
-                </svg>
-              ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                </svg>
-              )}
-            </button>
-          )}
-
           {/* Message recap - brief summary shown below long assistant messages */}
           {!isUser && message.recap && (
             <div
@@ -508,55 +602,41 @@ export const MessageBubble = memo(function MessageBubble({
             </div>
           )}
 
-          {/* User message speaker button - positioned below bubble content, right-aligned */}
-          {isUser && message.content && onReadAloud && (
-            <button
-              onClick={() => onReadAloud(message.content)}
-              disabled={isPlayingTts}
-              className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md mt-2 mr-1 shrink-0 self-end"
-              style={{
-                backgroundColor: isPlayingTts ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                color: isPlayingTts ? `rgba(var(--theme-secondary-text), 0.9)` : 'rgba(255, 255, 255, 0.4)',
-              }}
-              onMouseEnter={(e) => {
-                if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)';
-                if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
-              }}
-              onMouseLeave={(e) => {
-                if (!isPlayingTts) e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)';
-                if (!isPlayingTts) e.currentTarget.style.backgroundColor = 'transparent';
-              }}
-              title={isPlayingTts ? "Playing..." : "Read aloud"}
-            >
-              {isPlayingTts ? (
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
-                  <rect x="6" y="4" width="3" height="16" />
-                  <rect x="12" y="4" width="3" height="16" />
-                  <rect x="18" y="4" width="3" height="16" />
-                </svg>
-              ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                </svg>
-              )}
-            </button>
-          )}
         </div>
+        {!isUser && showReadAloudButton && (
+          <div className="mt-2.5 ml-1.5 shrink-0">
+            <ReadAloudButton
+              text={message.content}
+              onReadAloud={onReadAloud}
+              isPlaying={isPlayingTts}
+            />
+          </div>
+        )}
       </div>
 
-      {/* User message context menu */}
-      {contextMenu && isUser && editable && !editing && (
+      {/* Message context menu */}
+      {contextMenu && canOpenContextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
-          <ContextMenuItem onClick={() => { setContextMenu(null); handleStartEdit(); }}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-              <path d="m15 5 4 4" />
-            </svg>
-            Edit message
-          </ContextMenuItem>
-          {onRetryMessage && messageIndex != null && (
-            <ContextMenuItem onClick={() => { setContextMenu(null); onRetryMessage(messageIndex); }}>
+          {canReadAloud && (
+            <ContextMenuItem onClick={handleReadAloud} disabled={isPlayingTts}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+              </svg>
+              {isPlayingTts ? "Audio is playing" : "Read aloud"}
+            </ContextMenuItem>
+          )}
+          {canEditMessage && (
+            <ContextMenuItem onClick={() => { setContextMenu(null); handleStartEdit(); }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                <path d="m15 5 4 4" />
+              </svg>
+              Edit message
+            </ContextMenuItem>
+          )}
+          {canRetryMessage && (
+            <ContextMenuItem onClick={handleRetry}>
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
                 <path d="M21 3v5h-5" />
@@ -566,6 +646,16 @@ export const MessageBubble = memo(function MessageBubble({
               Retry message
             </ContextMenuItem>
           )}
+          <ContextMenuItem onClick={handleCopyTimestamp}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate text-[11px] text-white/40">{formatTimestamp(message.timestamp)}</span>
+            </span>
+          </ContextMenuItem>
         </ContextMenu>
       )}
 
