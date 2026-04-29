@@ -301,6 +301,7 @@ export async function executeMemoryTool(
 
       const resultLimit = Math.min(50, Math.max(1, maxResults || 5));
       const CONTEXT_RADIUS = 2; // messages before/after each match
+      const MAX_CONTENT_CHARS = 6000;
       const matches = searchChatMessages(query, {
         chatId: targetChatId,
         limit: resultLimit,
@@ -322,27 +323,39 @@ export async function executeMemoryTool(
         };
       }
 
-      // Group matches by chat and fetch surrounding context
-      const byChatId = new Map<string, number[]>();
-      for (const m of matches) {
-        const list = byChatId.get(m.chatId) || [];
-        list.push(m.messageIndex);
-        byChatId.set(m.chatId, list);
+      // Group matches by chat, preserving BM25 relevance ordering.
+      // Sort by rank first (BM25: lower = more relevant), then by message index.
+      const sortedMatches = [...matches].sort((a, b) => {
+        const rankDiff = a.rank - b.rank;
+        if (rankDiff !== 0) return rankDiff;
+        return a.messageIndex - b.messageIndex;
+      });
+
+      const byChatId = new Map<string, { indices: number[]; ranks: number[] }>();
+      for (const m of sortedMatches) {
+        const entry = byChatId.get(m.chatId) || { indices: [] as number[], ranks: [] as number[] };
+        entry.indices.push(m.messageIndex);
+        entry.ranks.push(m.rank);
+        byChatId.set(m.chatId, entry);
       }
+
+      // Compute each chat's best rank for relevance-based ordering
+      const bestRank = (ranks: number[]) => Math.min(...ranks);
 
       const sections: string[] = [];
       if (memoryContext) sections.push(memoryContext.trim());
 
-      for (const [cid, indices] of byChatId) {
-        // Show chat title for global searches; skip for single-chat scoped searches
+      let isFirstSection = true;
+      for (const [cid, data] of byChatId) {
         const title = getChatTitle(cid);
-        const chatLabel = targetChatId ? "" : `\n--- ${title || "Untitled"} (${cid}) ---\n`;
-        const messageGroups: string[] = [];
+        const chatLabel = targetChatId
+          ? ""
+          : `\n--- ${title || "Untitled"} (${cid}) [rank: ${Math.abs(bestRank(data.ranks)).toFixed(1)}] ---\n`;
 
         // Merge overlapping context windows
-        const sorted = [...new Set(indices)].sort((a, b) => a - b);
+        const sortedIndices = [...new Set(data.indices)].sort((a, b) => a - b);
         const ranges: Array<[number, number]> = [];
-        for (const idx of sorted) {
+        for (const idx of sortedIndices) {
           const start = Math.max(0, idx - CONTEXT_RADIUS);
           const end = idx + CONTEXT_RADIUS;
           if (ranges.length > 0 && start <= ranges[ranges.length - 1][1] + 1) {
@@ -352,11 +365,12 @@ export async function executeMemoryTool(
           }
         }
 
+        const messageGroups: string[] = [];
         for (const [start, end] of ranges) {
           const contextMsgs = getChatMessageRange(cid, start, end);
           const formatted = contextMsgs
             .map((m) => {
-              const marker = sorted.includes(m.messageIndex) ? " <<<" : "";
+              const marker = sortedIndices.includes(m.messageIndex) ? " <<<" : "";
               const text = truncateAroundMatch(m.content, query, 800);
               return `  [${m.messageIndex}] ${m.role}: ${text}${marker}`;
             })
@@ -364,7 +378,15 @@ export async function executeMemoryTool(
           messageGroups.push(formatted);
         }
 
-        sections.push(chatLabel + messageGroups.join("\n  ...\n"));
+        const section = chatLabel + messageGroups.join("\n  ...\n");
+
+        // Always include first section; enforce budget for additional ones
+        if (!isFirstSection && sections.join("\n").length + section.length > MAX_CONTENT_CHARS) {
+          break;
+        }
+        isFirstSection = false;
+
+        sections.push(section);
       }
 
       // Append archive matches if any
@@ -377,9 +399,11 @@ export async function executeMemoryTool(
         sections.push("  Use read_archived_context(archive_id) to retrieve full content.");
       }
 
+      const content = sections.join("\n");
       const totalMatches = matches.length + archiveMatches.length;
+      const truncated = content.length > MAX_CONTENT_CHARS;
       return {
-        content: `Found ${totalMatches} match(es) (${matches.length} messages, ${archiveMatches.length} archived):\n\n${sections.join("\n")}`,
+        content: `Found ${totalMatches} match(es) (${matches.length} messages, ${archiveMatches.length} archived)${truncated ? " (truncated)" : ""}:\n\n${content}`,
         isError: false,
       };
     }
