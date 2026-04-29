@@ -286,55 +286,6 @@ export function useChat(chatId: string | null) {
     }
   }, [chatId]);
 
-  // Reconnect to a server-side in-flight stream. Runs after the chat-switch
-  // effect resets state. If the server reports an active stream for this chat
-  // and nothing is tracked locally, attach via the reconnect endpoint — the
-  // server replays buffered SSE events then continues live.
-  useEffect(() => {
-    if (!chatId) return;
-    if (bgStreams.has(chatId)) return;
-
-    let cancelled = false;
-    (async () => {
-      const status = await getChatStatus(chatId);
-      if (cancelled) return;
-      if (!status.active) return;
-      // Chat may have switched away during the async check.
-      if (chatId !== activeChatIdRef.current) return;
-      if (bgStreams.has(chatId)) return;
-
-      console.log(`[chat] reconnecting to in-flight stream for ${chatId} (${status.bufferedChunks} buffered chunks)`);
-      let serverChat: Chat | null = null;
-      try {
-        serverChat = await apiFetchChat(chatId);
-      } catch {
-        serverChat = activeChatRef.current?.id === chatId ? activeChatRef.current : null;
-      }
-      if (cancelled) return;
-      if (chatId !== activeChatIdRef.current) return;
-      if (bgStreams.has(chatId)) return;
-
-      const bg = createBgStream(serverChat ?? activeChatRef.current);
-      bg.messages = withLiveAssistant(serverChat?.messages ?? activeChatRef.current?.messages ?? [], bg);
-      bgStreams.set(chatId, bg);
-      prepareStream();
-      setMessages([...bg.messages]);
-      setStreaming(true);
-      if (serverChat) setActiveChatData(serverChat);
-
-      const callbacks = makeStreamCallbacks(chatId);
-      const controller = reconnectChat(chatId, callbacks);
-      bg.abortController = controller;
-      abortRef.current = controller;
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // makeStreamCallbacks/prepareStream are stable via useCallback; chatId is the trigger.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId]);
-
   const loadMessages = useCallback((
     msgs: ChatMessage[],
     window?: { offset?: number; total?: number }
@@ -981,6 +932,96 @@ export function useChat(chatId: string | null) {
       rafRef.current = null;
     }
   }, []);
+
+  // Shared reconnect logic — extracted so it can be reused by both the
+  // chatId-change effect and the visibility-change effect.
+  const tryReconnect = useCallback(async (chatIdToConnect: string) => {
+    if (bgStreams.has(chatIdToConnect)) return;
+
+    let cancelled = false;
+    const status = await getChatStatus(chatIdToConnect);
+    if (cancelled) return;
+    if (!status.active) return;
+    // Chat may have switched away during the async check.
+    if (chatIdToConnect !== activeChatIdRef.current) return;
+    if (bgStreams.has(chatIdToConnect)) return;
+
+    console.log(`[chat] reconnecting to in-flight stream for ${chatIdToConnect} (${status.bufferedChunks} buffered chunks)`);
+    let serverChat: Chat | null = null;
+    try {
+      serverChat = await apiFetchChat(chatIdToConnect);
+    } catch {
+      serverChat = activeChatRef.current?.id === chatIdToConnect ? activeChatRef.current : null;
+    }
+    if (cancelled) return;
+    if (chatIdToConnect !== activeChatIdRef.current) return;
+    if (bgStreams.has(chatIdToConnect)) return;
+
+    const bg = createBgStream(serverChat ?? activeChatRef.current);
+    bg.messages = withLiveAssistant(serverChat?.messages ?? activeChatRef.current?.messages ?? [], bg);
+    bgStreams.set(chatIdToConnect, bg);
+    prepareStream();
+    setMessages([...bg.messages]);
+    setStreaming(true);
+    setError(null);
+    if (serverChat) setActiveChatData(serverChat);
+
+    const callbacks = makeStreamCallbacks(chatIdToConnect);
+    const controller = reconnectChat(chatIdToConnect, callbacks);
+    bg.abortController = controller;
+    abortRef.current = controller;
+
+    return () => { cancelled = true; };
+  }, [prepareStream, makeStreamCallbacks, setActiveChatData]);
+
+  // Reconnect to a server-side in-flight stream. Runs after the chat-switch
+  // effect resets state. If the server reports an active stream for this chat
+  // and nothing is tracked locally, attach via the reconnect endpoint — the
+  // server replays buffered SSE events then continues live.
+  useEffect(() => {
+    if (!chatId) return;
+    if (bgStreams.has(chatId)) return;
+
+    let cancelled = false;
+    (async () => {
+      const cleanup = await tryReconnect(chatId);
+      if (cancelled) return;
+      if (cleanup) cleanup();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chatId, tryReconnect]);
+
+  // When the tab returns from the background, the browser may have killed the
+  // SSE connection during backgrounding (common with fetch-based streams).
+  // Detect this and reconnect automatically instead of requiring a page refresh.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+
+      const activeChatId = activeChatIdRef.current;
+      if (!activeChatId) return;
+
+      (async () => {
+        const status = await getChatStatus(activeChatId);
+        if (document.visibilityState !== "visible") return;
+        if (!status.active) return;
+        if (activeChatId !== activeChatIdRef.current) return;
+        if (bgStreams.has(activeChatId)) return;
+
+        console.log(`[chat] reconnecting on visibility change for ${activeChatId} (${status.bufferedChunks} buffered chunks)`);
+        const cleanup = await tryReconnect(activeChatId);
+        if (cleanup) cleanup();
+      })();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [tryReconnect]);
 
   const send = useCallback(
     (text: string, images?: ImageAttachment[]) => {
