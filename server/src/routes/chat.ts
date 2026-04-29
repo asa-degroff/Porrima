@@ -552,10 +552,7 @@ async function handleChatStream(
     if (state.thinkingStartTime === null) {
       state.thinkingStartTime = Date.now();
     }
-    // Insert a space before appending when there's already thinking content.
-    // This ensures proper spacing between thinking blocks separated by tool calls
-    // (e.g., thinking → tool call → more thinking).
-    state.thinkingText += (state.thinkingText.length > 0 ? ' ' : '') + delta;
+    state.thinkingText += delta;
     res.write(`event: thinking_delta\ndata: ${JSON.stringify({ delta })}\n\n`);
     return true;
   }

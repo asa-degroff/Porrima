@@ -1099,7 +1099,7 @@ export function getChatMessageRange(
 ): Array<{ messageIndex: number; role: string; content: string }> {
   const db = getDb();
   return db.prepare(`
-    SELECT message_index, role, content
+    SELECT message_index AS messageIndex, role, content
     FROM chat_messages
     WHERE chat_id = ? AND message_index >= ? AND message_index <= ?
     ORDER BY message_index ASC
