@@ -457,34 +457,34 @@ function ExtractionTab({
           <li key={run.id} className="text-xs">
             <button
               onClick={() => onToggle(isExpanded ? null : run.id)}
-              className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-white/5 text-left transition-colors"
+              className="w-full flex flex-col gap-1.5 px-4 py-2.5 hover:bg-white/5 text-left transition-colors"
             >
-              <span className={`inline-flex items-center gap-1 ${statusColor(run.status)} w-20 shrink-0`}>
-                {run.status === "running" ? "●" : run.status === "success" ? "✓" : "✗"}
-                <span>{run.status}</span>
-              </span>
-              <span className={`px-1.5 py-0.5 rounded text-[10px] border ${triggerColor(run.trigger)} shrink-0`}>
-                {run.trigger}
-              </span>
-              <span className="flex-1 truncate text-white/70">
-                {run.chatTitle || run.chatId || "—"}
-              </span>
-              <span className="text-white/30 shrink-0">
-                {run.results ? `${run.results.facts.length} fact(s)` : "…"}
-              </span>
-              {run.results?.chunks && (
-                <span className={`shrink-0 ${run.results.chunks.failures > 0 ? "text-amber-300/60" : "text-white/30"}`}>
-                  {run.results.chunks.count === 1
-                    ? "1 call"
-                    : `${run.results.chunks.count} calls${run.results.chunks.failures > 0 ? ` (${run.results.chunks.failures} fail)` : ""}`}
+              <div className="flex items-center gap-2 w-full min-w-0">
+                <span className={`inline-flex items-center gap-1 ${statusColor(run.status)} shrink-0`}>
+                  {run.status === "running" ? "●" : run.status === "success" ? "✓" : "✗"}
+                  <span className="hidden sm:inline">{run.status}</span>
                 </span>
-              )}
-              <span className="text-white/30 w-14 text-right shrink-0">
-                {formatDuration(run.durationMs)}
-              </span>
-              <span className="text-white/20 w-20 text-right shrink-0">
-                {formatTime(run.startedAt)}
-              </span>
+                <span className={`px-1.5 py-0.5 rounded text-[10px] border ${triggerColor(run.trigger)} shrink-0`}>
+                  {run.trigger}
+                </span>
+                <span className="flex-1 min-w-0 truncate text-white/70">
+                  {run.chatTitle || run.chatId || "—"}
+                </span>
+              </div>
+              <div className="flex items-center gap-3 text-white/30 text-[10px]">
+                <span className="shrink-0">
+                  {run.results ? `${run.results.facts.length} fact(s)` : "…"}
+                </span>
+                {run.results?.chunks && (
+                  <span className={`shrink-0 ${run.results.chunks.failures > 0 ? "text-amber-300/60" : "text-white/30"}`}>
+                    {run.results.chunks.count === 1
+                      ? "1 call"
+                      : `${run.results.chunks.count} calls${run.results.chunks.failures > 0 ? ` (${run.results.chunks.failures} fail)` : ""}`}
+                  </span>
+                )}
+                <span className="shrink-0">{formatDuration(run.durationMs)}</span>
+                <span className="text-white/20 shrink-0">{formatTime(run.startedAt)}</span>
+              </div>
             </button>
             {isExpanded && <RunDetail run={run} />}
           </li>
@@ -502,7 +502,7 @@ function RunDetail({ run }: { run: ExtractionRun }) {
           <pre className="text-red-300/80 text-[11px] whitespace-pre-wrap">{run.error}</pre>
         </Section>
       )}
-      <div className="flex gap-4 text-[10px] text-white/40 pt-2">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-white/40 pt-2">
         <span>model: <span className="text-white/60">{run.model}</span></span>
         <span>prior memories: <span className="text-white/60">{run.priorMemoryCount}</span></span>
         {run.results && (
