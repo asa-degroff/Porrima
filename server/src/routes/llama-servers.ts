@@ -9,8 +9,9 @@ import {
   type LlamaServerAction,
 } from "../services/llama-supervisor.js";
 import { findLocalModel, listLocalModels, type LlamaModelKind } from "../services/llama-models-disk.js";
-import { isOverridableSlot, renderExecStart } from "../services/llama-launch-templates.js";
+import { isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart } from "../services/llama-launch-templates.js";
 import { applyModelOverride, clearModelOverride } from "../services/llama-overrides.js";
+import { ensureRouterModelLoaded, invalidateRouterCache } from "../services/llama-router-client.js";
 
 const router = Router();
 
@@ -82,10 +83,15 @@ router.get("/:id/logs", async (req, res) => {
   }
 });
 
-// POST /:id/apply-model — Write a systemd drop-in override for the slot's
-// ExecStart so it loads the requested local GGUF, then daemon-reload + restart
-// the unit. Also persists modelId in settings so consumers send the matching
-// model name in API requests. Body: { modelId: string }.
+// POST /:id/apply-model — Switch the model that a llama.cpp slot serves.
+// Two paths:
+//   - Router mode (title-generation/extraction with --models-dir): hits
+//     /models/load on the slot's URL. No systemd write, no restart, no
+//     downtime — just persist the modelId in settings so consumers send the
+//     matching model name in chat-completion requests.
+//   - Single-model mode: writes a systemd drop-in override that swaps the
+//     ExecStart's -m and --alias, then daemon-reload + restart the unit.
+// Body: { modelId: string }.
 //
 // Must be declared BEFORE the generic POST /:id/:action route below — Express
 // matches in declaration order and "/:id/:action" with action="apply-model"
@@ -114,12 +120,37 @@ router.post("/:id/apply-model", async (req, res) => {
     }
 
     const settings = await getSettings();
-    const execStart = renderExecStart(id, { ggufPath: model.ggufPath, modelId: model.id, settings });
-    const unitName = await resolveSlotUnitName(id);
-    const { overridePath } = await applyModelOverride(unitName, execStart);
+    const preStatus = await getLlamaServerStatus(id, settings);
+    const inRouterMode = preStatus.http.routerMode;
 
-    // Persist the model id so consumer code (title-generation.ts, reranker.ts,
-    // etc.) sends the matching model name in requests.
+    let overridePath: string | null = null;
+    let mode: "router-load" | "override-restart";
+    if (inRouterMode) {
+      // Hot-swap via /models/load. Forwards extraction's per-slot ctx-size
+      // through the load args so larger contexts don't get clipped to the
+      // launch default. For title-gen we leave ctx at the launch default
+      // (4096) since titles are short.
+      const ctxOverride = id === "extraction" ? settings.extractionCtxSize : undefined;
+      const result = await ensureRouterModelLoaded(preStatus.url, model.id, { contextWindow: ctxOverride });
+      if (result === "not-router") {
+        res.status(409).json({ error: `Slot reported router mode but /models/load returned 404. Try refreshing.` });
+        return;
+      }
+      if (result === "error") {
+        res.status(502).json({ error: `Slot accepted but failed to load model ${modelId}. Check service logs.` });
+        return;
+      }
+      mode = "router-load";
+    } else {
+      const execStart = renderExecStart(id, { ggufPath: model.ggufPath, modelId: model.id, settings });
+      const unitName = await resolveSlotUnitName(id);
+      const result = await applyModelOverride(unitName, execStart);
+      overridePath = result.overridePath;
+      // After a unit restart, our in-process /models/load cache is stale.
+      invalidateRouterCache(preStatus.url);
+      mode = "override-restart";
+    }
+
     if (id === "title-generation") settings.titleGenerationModelId = model.id;
     else if (id === "extraction") settings.extractionModelId = model.id;
     else if (id === "reranker") settings.rerankerModelId = model.id;
@@ -127,9 +158,34 @@ router.post("/:id/apply-model", async (req, res) => {
     await saveSettings(settings);
 
     const server = await getLlamaServerStatus(id, settings);
+    res.json({ server, overridePath, mode });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "Failed to apply model" });
+  }
+});
+
+// POST /:id/convert-to-router — Switch a slot to router mode by writing a
+// drop-in override that replaces the launch ExecStart with one that uses
+// --models-dir. After this, model swaps go through /models/load (no restart).
+// Only valid for slots that have a router-mode template (title-generation,
+// extraction). Embedding/reranker pin model-class flags at startup, so they
+// can't multiplex.
+router.post("/:id/convert-to-router", async (req, res) => {
+  const id = req.params.id;
+  if (!isRouterCapableSlot(id)) {
+    res.status(400).json({ error: `Slot does not support router mode: ${id}` });
+    return;
+  }
+  try {
+    const settings = await getSettings();
+    const execStart = renderRouterExecStart(id, settings);
+    const unitName = await resolveSlotUnitName(id);
+    const { overridePath } = await applyModelOverride(unitName, execStart);
+    invalidateRouterCache();
+    const server = await getLlamaServerStatus(id, settings);
     res.json({ server, overridePath });
   } catch (e: any) {
-    res.status(500).json({ error: e?.message || "Failed to apply model override" });
+    res.status(500).json({ error: e?.message || "Failed to convert slot to router mode" });
   }
 });
 
@@ -144,6 +200,7 @@ router.delete("/:id/model-override", async (req, res) => {
   try {
     const unitName = await resolveSlotUnitName(id);
     const result = await clearModelOverride(unitName);
+    invalidateRouterCache();
     const settings = await getSettings();
     const server = await getLlamaServerStatus(id, settings);
     res.json({ server, removed: result.removed });

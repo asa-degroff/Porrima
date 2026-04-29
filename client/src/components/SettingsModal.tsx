@@ -18,7 +18,7 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, type OverridableSlotId } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
 import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
@@ -371,6 +371,20 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setApplyingSlot(null);
     }
   }, [titleGenerationModelId, extractionModelId, rerankerModelId, embeddingModel]);
+
+  const handleConvertToRouter = useCallback(async (slot: RouterCapableSlotId) => {
+    setApplyingSlot(slot);
+    setLlamaServerMessage(null);
+    try {
+      const result = await convertSlotToRouterMode(slot);
+      setLlamaServers((prev) => prev.map((srv) => srv.id === slot ? result.server : srv));
+      setLlamaServerMessage({ type: "ok", text: `${result.server.label} switched to router mode. Model swaps no longer require a restart.` });
+    } catch (e: any) {
+      setLlamaServerMessage({ type: "err", text: e?.message || "Failed to switch to router mode" });
+    } finally {
+      setApplyingSlot(null);
+    }
+  }, []);
 
   const handleClearSlotOverride = useCallback(async (slot: OverridableSlotId) => {
     setApplyingSlot(slot);
@@ -1398,6 +1412,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                  model override
 	                                </span>
 	                              )}
+	                              {server.http.routerMode && (
+	                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/15 text-emerald-200" title="Slot multiplexes models via /v1/models — swaps go through /models/load (no restart)">
+	                                  router mode
+	                                </span>
+	                              )}
 	                            </div>
 	                            <p className="text-xs text-white/35 mt-1">{server.description}</p>
 	                          </div>
@@ -1746,30 +1765,48 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                              <p className="text-xs text-white/30">Tiny CPU-only instance for generating short chat titles.</p>
 	                            </div>
 	                          )}
-	                          {(server.id === "title-generation" || server.id === "extraction" || server.id === "reranker" || server.id === "embedding") && (applyingSlot === server.id || server.override.active) && (
-	                            <div className="flex items-start justify-between gap-2 rounded-lg border border-purple-400/15 bg-purple-500/5 p-2">
-	                              <div className="text-xs text-white/60 min-w-0">
-	                                {applyingSlot === server.id ? (
-	                                  <span className="text-purple-200">Applying… writing override and restarting service.</span>
-	                                ) : (
-	                                  <>
-	                                    <span className="text-purple-200">Drop-in override active.</span>{" "}
-	                                    <span className="text-white/45 font-mono truncate inline-block max-w-full" title={server.override.modelPath || ""}>
-	                                      {server.override.modelPath || "(unknown model path)"}
-	                                    </span>
-	                                  </>
-	                                )}
-	                              </div>
-	                              {server.override.active && applyingSlot !== server.id && (
-	                                <button
-	                                  type="button"
-	                                  onClick={() => handleClearSlotOverride(server.id as OverridableSlotId)}
-	                                  className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all shrink-0"
-	                                >
-	                                  Reset to default
-	                                </button>
+	                          {(server.id === "title-generation" || server.id === "extraction" || server.id === "reranker" || server.id === "embedding") && (
+	                            <>
+	                              {(applyingSlot === server.id || server.override.active) && (
+	                                <div className="flex items-start justify-between gap-2 rounded-lg border border-purple-400/15 bg-purple-500/5 p-2">
+	                                  <div className="text-xs text-white/60 min-w-0">
+	                                    {applyingSlot === server.id ? (
+	                                      <span className="text-purple-200">{server.http.routerMode ? "Loading model via /models/load…" : "Applying… writing override and restarting service."}</span>
+	                                    ) : (
+	                                      <>
+	                                        <span className="text-purple-200">Drop-in override active.</span>{" "}
+	                                        <span className="text-white/45 font-mono truncate inline-block max-w-full" title={server.override.modelPath || ""}>
+	                                          {server.override.modelPath || "(uses --models-dir / router mode)"}
+	                                        </span>
+	                                      </>
+	                                    )}
+	                                  </div>
+	                                  {server.override.active && applyingSlot !== server.id && (
+	                                    <button
+	                                      type="button"
+	                                      onClick={() => handleClearSlotOverride(server.id as OverridableSlotId)}
+	                                      className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all shrink-0"
+	                                    >
+	                                      Reset to default
+	                                    </button>
+	                                  )}
+	                                </div>
 	                              )}
-	                            </div>
+	                              {(server.id === "title-generation" || server.id === "extraction") && !server.http.routerMode && applyingSlot !== server.id && (
+	                                <div className="flex items-center justify-between gap-2 rounded-lg border border-emerald-400/15 bg-emerald-500/5 p-2">
+	                                  <p className="text-xs text-white/60 min-w-0">
+	                                    Switch this slot to router mode to swap models without restarting the service. Reset to default reverts.
+	                                  </p>
+	                                  <button
+	                                    type="button"
+	                                    onClick={() => handleConvertToRouter(server.id as RouterCapableSlotId)}
+	                                    className="px-2 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/25 text-emerald-200 hover:bg-emerald-500/25 transition-all shrink-0"
+	                                  >
+	                                    Switch to router mode
+	                                  </button>
+	                                </div>
+	                              )}
+	                            </>
 	                          )}
 	                        </div>
 	                      )}

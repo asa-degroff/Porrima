@@ -120,3 +120,50 @@ export function renderExecStart(slotId: OverridableSlotId, input: TemplateInput)
 export function isOverridableSlot(slotId: string): slotId is OverridableSlotId {
   return slotId === "title-generation" || slotId === "extraction" || slotId === "reranker" || slotId === "embedding";
 }
+
+export type RouterCapableSlotId = "title-generation" | "extraction";
+
+export function isRouterCapableSlot(slotId: string): slotId is RouterCapableSlotId {
+  return slotId === "title-generation" || slotId === "extraction";
+}
+
+/**
+ * Render a router-mode ExecStart for slots that can multiplex models. Same
+ * runtime flags as the single-model template (CPU-only, ctx, parallelism,
+ * thinking/reasoning settings) but with `--models-dir` instead of `-m`/
+ * `--alias`. Once installed via drop-in override, the slot enumerates every
+ * GGUF in the models dir on /v1/models, and model swaps go through HTTP
+ * /models/load — no systemd restart per swap. Slot's --ctx-size becomes the
+ * default; per-load overrides are passed in /models/load `args`.
+ */
+export function renderRouterExecStart(slotId: RouterCapableSlotId, settings: Settings): string {
+  const modelsDir = getLlamaModelsDir();
+  if (slotId === "title-generation") {
+    const args = [
+      LLAMA_BIN,
+      "--models-dir", shellQuote(modelsDir),
+      "--port", "8085",
+      "--host", "127.0.0.1",
+      ...commonGpuOff(),
+      "--ctx-size", "4096",
+      "--parallel", "1",
+      "--reasoning-format", "deepseek",
+      "--chat-template-kwargs", shellQuote(JSON.stringify({ enable_thinking: false })),
+    ];
+    return joinArgs(args);
+  }
+  // extraction
+  const ctx = Math.max(2048, Math.min(131072, settings.extractionCtxSize ?? 16384));
+  const args = [
+    LLAMA_BIN,
+    "--models-dir", shellQuote(modelsDir),
+    "--port", "8083",
+    "--host", "127.0.0.1",
+    ...commonGpuOff(),
+    "--ctx-size", String(ctx),
+    "--parallel", "1",
+    "--reasoning-format", "deepseek",
+    "--chat-template-kwargs", shellQuote(JSON.stringify({ enable_thinking: false })),
+  ];
+  return joinArgs(args);
+}

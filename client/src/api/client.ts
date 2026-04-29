@@ -1387,6 +1387,8 @@ export interface LlamaServerStatus {
     status: "ok" | "unavailable" | "unknown";
     modelIds: string[];
     error?: string;
+    routerMode: boolean;
+    loadedModelId?: string;
   };
   override: {
     active: boolean;
@@ -1434,6 +1436,17 @@ export async function clearLlamaSlotModelOverride(slot: OverridableSlotId): Prom
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || "Failed to clear model override");
+  }
+  return res.json();
+}
+
+export type RouterCapableSlotId = "title-generation" | "extraction";
+
+export async function convertSlotToRouterMode(slot: RouterCapableSlotId): Promise<{ server: LlamaServerStatus; overridePath: string }> {
+  const res = await apiFetch(`${BASE}/llama-servers/${slot}/convert-to-router`, { method: "POST" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to switch slot to router mode");
   }
   return res.json();
 }

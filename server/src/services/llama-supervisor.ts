@@ -51,6 +51,8 @@ export interface LlamaServerStatus {
     status: HttpHealthStatus;
     modelIds: string[];
     error?: string;
+    routerMode: boolean;
+    loadedModelId?: string;
   };
   override: {
     active: boolean;
@@ -249,27 +251,34 @@ function normalizeBaseUrl(url: string): string {
 
 async function getHttpStatus(baseUrl: string): Promise<LlamaServerStatus["http"]> {
   const url = normalizeBaseUrl(baseUrl);
-  if (!url) return { status: "unknown", modelIds: [], error: "No URL configured" };
+  if (!url) return { status: "unknown", modelIds: [], routerMode: false, error: "No URL configured" };
 
   try {
     const health = await fetch(`${url}/health`, { signal: AbortSignal.timeout(2500) });
     if (!health.ok) {
-      return { status: "unavailable", modelIds: [], error: `/health returned HTTP ${health.status}` };
+      return { status: "unavailable", modelIds: [], routerMode: false, error: `/health returned HTTP ${health.status}` };
     }
   } catch (e: any) {
-    return { status: "unavailable", modelIds: [], error: e?.message || "Health check failed" };
+    return { status: "unavailable", modelIds: [], routerMode: false, error: e?.message || "Health check failed" };
   }
 
   try {
     const modelsRes = await fetch(`${url}/v1/models`, { signal: AbortSignal.timeout(2500) });
-    if (!modelsRes.ok) return { status: "ok", modelIds: [] };
-    const data = await modelsRes.json().catch(() => null) as { data?: Array<{ id?: string }> } | null;
-    const modelIds = Array.isArray(data?.data)
-      ? data.data.map((m) => m.id).filter((id): id is string => Boolean(id))
-      : [];
-    return { status: "ok", modelIds };
+    if (!modelsRes.ok) return { status: "ok", modelIds: [], routerMode: false };
+    type RouterModelEntry = { id?: string; status?: { value?: string } };
+    const data = await modelsRes.json().catch(() => null) as { data?: RouterModelEntry[] } | null;
+    const entries = Array.isArray(data?.data) ? data!.data : [];
+    const modelIds = entries.map((m) => m.id).filter((id): id is string => Boolean(id));
+    // Router mode is the only context where llama-server emits a per-entry
+    // `status` object on /v1/models (loaded/unloaded/loading/error). Single-
+    // model servers omit it entirely. This is more reliable than counting
+    // entries because a router with one GGUF in --models-dir would otherwise
+    // look identical to a single-model launch.
+    const routerMode = entries.some((m) => m.status && typeof m.status === "object");
+    const loaded = entries.find((m) => m.status?.value === "loaded");
+    return { status: "ok", modelIds, routerMode, loadedModelId: loaded?.id };
   } catch {
-    return { status: "ok", modelIds: [] };
+    return { status: "ok", modelIds: [], routerMode: false };
   }
 }
 

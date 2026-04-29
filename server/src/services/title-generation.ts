@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../types.js";
 import { getSettings } from "./chat-storage.js";
+import { ensureRouterModelLoaded } from "./llama-router-client.js";
 
 const DEFAULT_URL = "http://localhost:8085";
 const DEFAULT_MODEL = "qwen3.5-0.8b";
@@ -32,6 +33,10 @@ async function callServer(
   userContent: string,
   label: string
 ): Promise<string | null> {
+  // If the slot is in router mode (--models-dir), preflight /models/load so
+  // the requested model is the active one. In single-model mode this returns
+  // "not-router" (404) and we fall through to the chat completion as before.
+  await ensureRouterModelLoaded(config.baseUrl, config.model);
   try {
     const res = await fetch(`${config.baseUrl}/v1/chat/completions`, {
       method: "POST",
