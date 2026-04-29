@@ -5,6 +5,7 @@ import { homedir } from "os";
 import { streamChat } from "./agent.js";
 import { getSettings } from "./chat-storage.js";
 import { embedBatch } from "./embeddings.js";
+import { ensureRouterModelLoaded } from "./llama-router-client.js";
 import {
   addMemory,
   updateMemory,
@@ -153,6 +154,12 @@ async function callExtractionLLM(
       const truncatedContent = userContent.length > maxInputChars
         ? userContent.slice(0, maxInputChars) + `\n[Truncated: ${(userContent.length / 1024).toFixed(0)}KB → ${(maxInputChars / 1024).toFixed(0)}KB to fit extraction context; sysPrompt=${sysPromptTokens} tok]`
         : userContent;
+
+      // If the slot is in router mode, preflight /models/load with the configured
+      // extraction model and ctx-size. Single-model mode returns "not-router" and
+      // we fall through to the chat completion as before.
+      const extractionModelId = settings.extractionModelId || "extraction";
+      await ensureRouterModelLoaded(extractionUrl, extractionModelId, { contextWindow: ctxSize });
 
       // Direct call to dedicated extraction endpoint (CPU-only, no provider pipeline)
       const res = await fetch(`${extractionUrl}/v1/chat/completions`, {

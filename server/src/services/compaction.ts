@@ -2,6 +2,7 @@ import type { Chat, ChatMessage } from "../types.js";
 import { getNextArchiveSequence, saveArchives, getArchive, getChat, saveChat, type ContextArchive, updateChatTitle } from "./chat-storage.js";
 import { regenerateTitle } from "./title-generation.js";
 import { withExtractionMutex } from "./memory-extraction.js";
+import { ensureRouterModelLoaded } from "./llama-router-client.js";
 
 export interface CompactionResult {
   truncated: boolean;
@@ -882,11 +883,18 @@ async function runIndexGeneration(
 
     if (extractionUrl) {
       outputText = await withExtractionMutex(async () => {
+        const extractionModelId = settings.extractionModelId || "index-gen";
+        // Router-mode preflight: ensure the configured extraction model is the
+        // active one before issuing the chat completion. Single-model mode
+        // returns "not-router" and we proceed with whatever the slot launched.
+        await ensureRouterModelLoaded(extractionUrl, extractionModelId, {
+          contextWindow: settings.extractionCtxSize ?? 16384,
+        });
         const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: settings.extractionModelId || "index-gen",
+            model: extractionModelId,
             messages: [
               { role: "system", content: systemPrompt },
               { role: "user", content: inputParts },
