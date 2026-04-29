@@ -6,11 +6,17 @@ import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import type { Chat } from "../types.js";
 
 const router = Router();
+const MAX_MESSAGE_WINDOW_LIMIT = 1000;
 
 function parsePositiveInt(value: unknown): number | undefined {
   if (typeof value !== "string") return undefined;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseMessageLimit(value: unknown): number | undefined {
+  const parsed = parsePositiveInt(value);
+  return parsed ? Math.min(parsed, MAX_MESSAGE_WINDOW_LIMIT) : undefined;
 }
 
 // List all chats
@@ -25,7 +31,7 @@ router.get("/:id/messages", async (req, res) => {
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
   const before = parsePositiveInt(req.query.before);
-  const limit = parsePositiveInt(req.query.limit);
+  const limit = parseMessageLimit(req.query.limit);
   const window = getChatMessageWindow(chat.id, { before, limit });
   res.json(window);
 });
@@ -35,7 +41,7 @@ router.get("/:id", async (req, res) => {
   const chat = await getChat(req.params.id);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
-  const messageLimit = parsePositiveInt(req.query.messageLimit);
+  const messageLimit = parseMessageLimit(req.query.messageLimit);
   if (messageLimit) {
     const window = getChatMessageWindow(chat.id, { limit: messageLimit });
     chat.messages = window.messages;

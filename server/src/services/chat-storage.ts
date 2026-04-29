@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { readdirSync, readFileSync, existsSync, renameSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import type { Chat, ChatListItem, ChatMessage, Project, Settings } from "../types.js";
+import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, Project, Settings } from "../types.js";
 
 const PROJECT_COLORS = ["emerald", "purple", "blue", "amber", "rose", "cyan", "violet", "orange", "pink", "teal"];
 
@@ -460,14 +460,6 @@ export async function getChat(id: string): Promise<Chat | null> {
   return chat;
 }
 
-export interface ChatMessageWindow {
-  messages: ChatMessage[];
-  offset: number;
-  total: number;
-  hasMoreBefore: boolean;
-  hasMoreAfter: boolean;
-}
-
 export function getChatMessageWindow(
   chatId: string,
   opts: { before?: number; limit?: number } = {}
@@ -481,7 +473,7 @@ export function getChatMessageWindow(
 
   const total = totalRow.total;
   if (total === 0) {
-    return { messages: [], offset: 0, total: 0, hasMoreBefore: false, hasMoreAfter: false };
+    return { messages: [], offset: 0, total: 0, hasMoreBefore: false };
   }
 
   const limit = Math.min(Math.max(Math.floor(opts.limit ?? 200), 1), 1000);
@@ -512,7 +504,6 @@ export function getChatMessageWindow(
     offset,
     total,
     hasMoreBefore: offset > 0,
-    hasMoreAfter: endExclusive < total,
   };
 }
 

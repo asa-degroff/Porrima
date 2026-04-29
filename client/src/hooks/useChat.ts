@@ -205,6 +205,7 @@ export function useChat(chatId: string | null) {
   const activeChatRef = useRef<Chat | null>(null);
   const messageOffsetRef = useRef(0);
   const messageTotalRef = useRef(0);
+  const olderMessagesLoadingRef = useRef(false);
 
   messageOffsetRef.current = messageOffset;
   messageTotalRef.current = messageTotal;
@@ -347,8 +348,9 @@ export function useChat(chatId: string | null) {
   const loadOlderMessages = useCallback(async () => {
     const targetChatId = activeChatIdRef.current;
     const before = messageOffsetRef.current;
-    if (!targetChatId || before <= 0 || olderMessagesLoading) return false;
+    if (!targetChatId || before <= 0 || olderMessagesLoadingRef.current) return false;
 
+    olderMessagesLoadingRef.current = true;
     setOlderMessagesLoading(true);
     try {
       const page = await fetchChatMessages(targetChatId, {
@@ -366,11 +368,12 @@ export function useChat(chatId: string | null) {
       setMessageTotal(page.total);
       return page.messages.length > 0;
     } finally {
+      olderMessagesLoadingRef.current = false;
       if (activeChatIdRef.current === targetChatId) {
         setOlderMessagesLoading(false);
       }
     }
-  }, [olderMessagesLoading]);
+  }, []);
 
   // Store active chat reference for IDB caching
   const setActiveChatData = useCallback((chat: Chat | null) => {

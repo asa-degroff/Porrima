@@ -1,4 +1,4 @@
-import type { Artifact, Chat, ChatListItem, ChatMessage, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
+import type { Artifact, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -1309,14 +1309,6 @@ export async function fetchChat(id: string, opts: { messageLimit?: number } = {}
   const res = await apiFetch(url);
   if (!res.ok) throw new Error("Failed to fetch chat");
   return res.json();
-}
-
-export interface ChatMessageWindow {
-  messages: ChatMessage[];
-  offset: number;
-  total: number;
-  hasMoreBefore: boolean;
-  hasMoreAfter: boolean;
 }
 
 export async function fetchChatMessages(

@@ -268,6 +268,12 @@ export function ChatView({
     }
   }, [streaming, hasMoreMessages, olderMessagesLoading, onLoadOlderMessages]);
 
+  useEffect(() => {
+    return () => {
+      loadingOlderRef.current = false;
+    };
+  }, []);
+
   // Scroll to bottom when switching chats
   useEffect(() => {
     if (chatId !== prevChatIdRef.current) {

@@ -127,6 +127,13 @@ export interface ChatListItem {
   projectId?: string;
 }
 
+export interface ChatMessageWindow {
+  messages: ChatMessage[];
+  offset: number;
+  total: number;
+  hasMoreBefore: boolean;
+}
+
 export type InferenceProvider = "ollama" | "llamacpp";
 
 export type MemoryBlockScope = "global" | "project";
