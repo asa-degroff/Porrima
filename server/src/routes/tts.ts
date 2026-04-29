@@ -63,7 +63,7 @@ router.get("/settings", (req, res) => {
  */
 router.post("/settings", async (req, res) => {
   try {
-    const { voice, speed, pitch, autoReadEnabled, backend, streamingEnabled, streamingChunkSize, streamingBoundaryTier } = req.body;
+    const { voice, speed, pitch, enabled, autoReadEnabled, backend, streamingEnabled, streamingChunkSize, streamingBoundaryTier } = req.body;
 
     if (voice !== undefined) {
       if (typeof voice !== "string" || !voice.trim()) {
@@ -84,6 +84,13 @@ router.post("/settings", async (req, res) => {
         return res.status(400).json({ error: "Pitch must be a number between 0.5 and 2.0" });
       }
       userSettings.pitch = pitch;
+    }
+
+    if (enabled !== undefined) {
+      if (typeof enabled !== "boolean") {
+        return res.status(400).json({ error: "enabled must be a boolean" });
+      }
+      userSettings.enabled = enabled;
     }
 
     if (autoReadEnabled !== undefined) {

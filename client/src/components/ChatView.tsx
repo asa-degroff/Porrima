@@ -65,6 +65,7 @@ interface Props {
   systemPromptPresets?: SystemPromptPreset[];
   chatType?: string;
   isSynthesizing?: boolean;
+  ttsEnabled?: boolean;
   ttsAutoReadEnabled?: boolean;
   onTtsAutoReadToggle?: (enabled: boolean) => void;
   onReadAloud?: (text: string) => void;
@@ -114,6 +115,7 @@ export function ChatView({
   systemPromptPresets,
   chatType,
   isSynthesizing = false,
+  ttsEnabled = false,
   ttsAutoReadEnabled = false,
   playbackState,
   ttsBarVisible,
@@ -536,6 +538,8 @@ export function ChatView({
                         availableSkills={skills.length > 0 ? skills.map(s => s.name) : emptySkills}
                         streamingSegmentIndex={streamingSegmentIndex}
                         showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
+                        onReadAloud={ttsEnabled ? onReadAloud : undefined}
+                        isPlayingTts={ttsEnabled ? (playbackState?.isPlaying || false) : false}
                       />
                     </div>
                   </div>

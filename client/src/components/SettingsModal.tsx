@@ -3360,6 +3360,22 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               <p className="text-white/30 text-sm">Loading TTS settings...</p>
             ) : (
               <div className="space-y-3">
+                {/* Master toggle */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-sm font-medium text-white/60">Enable TTS</label>
+                    <p className="text-xs text-white/30 mt-0.5">Show speaker buttons on messages</p>
+                  </div>
+                  <ToggleSwitch
+                    checked={ttsSettings.enabled}
+                    onChange={async () => {
+                      const updated = await updateTTSSettings({ enabled: !ttsSettings.enabled });
+                      if (updated) setTtsSettings(updated);
+                    }}
+                    accentColor="purple"
+                  />
+                </div>
+
                 {/* Backend selector */}
                 <div className="space-y-1">
                   <label className="block text-sm text-white/50">TTS Backend</label>

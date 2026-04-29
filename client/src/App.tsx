@@ -73,7 +73,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { isOnline } = useOnlineStatus();
   const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
-  const { playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts } = useTTS();
+  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts } = useTTS();
   const {
     userNotebooks,
     agentNotebooks,
@@ -780,6 +780,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         systemPromptPresets={settings.systemPromptPresets}
         chatType={activeChat?.type}
         isSynthesizing={isSynthesizing}
+        ttsEnabled={ttsSettings.enabled}
         ttsAutoReadEnabled={playbackState.isPlaying || playbackState.isPaused}
         playbackState={playbackState}
         ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}
