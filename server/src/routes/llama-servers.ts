@@ -11,7 +11,7 @@ import {
 import { findLocalModel, listLocalModels, type LlamaModelKind } from "../services/llama-models-disk.js";
 import { isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart } from "../services/llama-launch-templates.js";
 import { applyModelOverride, clearModelOverride } from "../services/llama-overrides.js";
-import { ensureRouterModelLoaded, invalidateRouterCache } from "../services/llama-router-client.js";
+import { ensureRouterModelLoaded, invalidateRouterCache, normalizeRouterModelId } from "../services/llama-router-client.js";
 
 const router = Router();
 
@@ -247,24 +247,36 @@ router.patch("/:id", async (req, res) => {
     }
     if (def.id === "extraction") {
       if (body.url !== undefined) settings.extractionModelUrl = (body.url as string).trim() || undefined;
-      if (body.modelId !== undefined) settings.extractionModelId = (body.modelId as string).trim() || undefined;
+      if (body.modelId !== undefined) {
+        const v = (body.modelId as string).trim();
+        settings.extractionModelId = v ? normalizeRouterModelId(v) : undefined;
+      }
       if (body.ctxSize !== undefined) settings.extractionCtxSize = Number(body.ctxSize);
       if (body.fallbackEnabled !== undefined) settings.extractionFallbackEnabled = Boolean(body.fallbackEnabled);
     }
     if (def.id === "reranker") {
       if (body.enabled !== undefined) settings.rerankerEnabled = Boolean(body.enabled);
       if (body.url !== undefined) settings.rerankerUrl = (body.url as string).trim() || undefined;
-      if (body.modelId !== undefined) settings.rerankerModelId = (body.modelId as string).trim() || undefined;
+      if (body.modelId !== undefined) {
+        const v = (body.modelId as string).trim();
+        settings.rerankerModelId = v ? normalizeRouterModelId(v) : undefined;
+      }
     }
     if (def.id === "embedding") {
       if (body.provider !== undefined) settings.embeddingProvider = body.provider as "ollama" | "llamacpp";
       if (body.url !== undefined) settings.embeddingUrl = (body.url as string).trim() || undefined;
-      if (body.modelId !== undefined) settings.embeddingModel = (body.modelId as string).trim() || undefined;
+      if (body.modelId !== undefined) {
+        const v = (body.modelId as string).trim();
+        settings.embeddingModel = v ? normalizeRouterModelId(v) : undefined;
+      }
     }
     if (def.id === "title-generation") {
       if (body.enabled !== undefined) settings.titleGenerationEnabled = Boolean(body.enabled);
       if (body.url !== undefined) settings.titleGenerationUrl = (body.url as string).trim() || undefined;
-      if (body.modelId !== undefined) settings.titleGenerationModelId = (body.modelId as string).trim() || undefined;
+      if (body.modelId !== undefined) {
+        const v = (body.modelId as string).trim();
+        settings.titleGenerationModelId = v ? normalizeRouterModelId(v) : undefined;
+      }
     }
 
     await saveSettings(settings);

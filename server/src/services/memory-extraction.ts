@@ -5,7 +5,7 @@ import { homedir } from "os";
 import { streamChat } from "./agent.js";
 import { getSettings } from "./chat-storage.js";
 import { embedBatch } from "./embeddings.js";
-import { ensureRouterModelLoaded } from "./llama-router-client.js";
+import { ensureRouterModelLoaded, normalizeRouterModelId } from "./llama-router-client.js";
 import {
   addMemory,
   updateMemory,
@@ -157,8 +157,9 @@ async function callExtractionLLM(
 
       // If the slot is in router mode, preflight /models/load with the configured
       // extraction model and ctx-size. Single-model mode returns "not-router" and
-      // we fall through to the chat completion as before.
-      const extractionModelId = settings.extractionModelId || "extraction";
+      // we fall through to the chat completion as before. normalizeRouterModelId
+      // strips legacy `.gguf` suffixes that single-model launches used to carry.
+      const extractionModelId = normalizeRouterModelId(settings.extractionModelId || "extraction");
       await ensureRouterModelLoaded(extractionUrl, extractionModelId, { contextWindow: ctxSize });
 
       // Direct call to dedicated extraction endpoint (CPU-only, no provider pipeline)
@@ -166,7 +167,7 @@ async function callExtractionLLM(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: settings.extractionModelId || "extraction",
+          model: extractionModelId,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: truncatedContent },
@@ -188,7 +189,7 @@ async function callExtractionLLM(
       if (timings) {
         try {
           recordModelStats(
-            settings.extractionModelId || "extraction",
+            extractionModelId,
             "llamacpp-extraction",
             timings
           );

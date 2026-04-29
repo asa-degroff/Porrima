@@ -19,6 +19,18 @@ function normalize(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
 
+/**
+ * Strip a trailing `.gguf` extension from a model id. Single-model llama.cpp
+ * launches without `--alias` default the model id to the filename (e.g.
+ * "Qwen3.5-4B-Q4_K_M.gguf"), so legacy settings often carry the suffix.
+ * Router mode lists models by directory name (no extension) and rejects the
+ * suffixed form with HTTP 400 "model not found". Always normalize before
+ * sending an id to /models/load or /v1/chat/completions on a router-mode slot.
+ */
+export function normalizeRouterModelId(id: string): string {
+  return id.replace(/\.gguf$/i, "");
+}
+
 export interface EnsureRouterLoadOptions {
   contextWindow?: number;
   /** Per-load arg overrides forwarded into the `args` field of /models/load */
@@ -38,11 +50,12 @@ export interface EnsureRouterLoadOptions {
  */
 export async function ensureRouterModelLoaded(
   baseUrl: string,
-  modelId: string,
+  rawModelId: string,
   options: EnsureRouterLoadOptions = {}
 ): Promise<"loaded" | "not-router" | "error"> {
-  if (!baseUrl || !modelId) return "error";
+  if (!baseUrl || !rawModelId) return "error";
   const url = normalize(baseUrl);
+  const modelId = normalizeRouterModelId(rawModelId);
 
   const cached = lastLoadedByBaseUrl.get(url);
   if (cached?.modelId === modelId && cached.contextWindow === options.contextWindow) {

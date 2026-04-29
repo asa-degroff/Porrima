@@ -1,6 +1,6 @@
 import type { ChatMessage } from "../types.js";
 import { getSettings } from "./chat-storage.js";
-import { ensureRouterModelLoaded } from "./llama-router-client.js";
+import { ensureRouterModelLoaded, normalizeRouterModelId } from "./llama-router-client.js";
 
 const DEFAULT_URL = "http://localhost:8085";
 const DEFAULT_MODEL = "qwen3.5-0.8b";
@@ -15,7 +15,7 @@ async function getServerConfig(): Promise<ServerConfig | null> {
   if (settings.titleGenerationEnabled === false) return null;
   return {
     baseUrl: (settings.titleGenerationUrl?.trim() || DEFAULT_URL).replace(/\/+$/, ""),
-    model: settings.titleGenerationModelId?.trim() || DEFAULT_MODEL,
+    model: normalizeRouterModelId(settings.titleGenerationModelId?.trim() || DEFAULT_MODEL),
   };
 }
 
