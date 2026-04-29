@@ -460,6 +460,62 @@ export async function getChat(id: string): Promise<Chat | null> {
   return chat;
 }
 
+export interface ChatMessageWindow {
+  messages: ChatMessage[];
+  offset: number;
+  total: number;
+  hasMoreBefore: boolean;
+  hasMoreAfter: boolean;
+}
+
+export function getChatMessageWindow(
+  chatId: string,
+  opts: { before?: number; limit?: number } = {}
+): ChatMessageWindow {
+  const db = getDb();
+  const totalRow = db.prepare(`
+    SELECT COUNT(*) as total
+    FROM chat_message_rows
+    WHERE chat_id = ?
+  `).get(chatId) as { total: number };
+
+  const total = totalRow.total;
+  if (total === 0) {
+    return { messages: [], offset: 0, total: 0, hasMoreBefore: false, hasMoreAfter: false };
+  }
+
+  const limit = Math.min(Math.max(Math.floor(opts.limit ?? 200), 1), 1000);
+  const rawBefore = opts.before == null ? total : Math.floor(opts.before);
+  const endExclusive = Math.max(0, Math.min(rawBefore, total));
+  const offset = Math.max(0, endExclusive - limit);
+
+  const rows = db.prepare(`
+    SELECT sequence, payload_json
+    FROM chat_message_rows
+    WHERE chat_id = ? AND sequence >= ? AND sequence < ?
+    ORDER BY sequence ASC
+  `).all(chatId, offset, endExclusive) as Array<{ sequence: number; payload_json: string }>;
+
+  const messages: ChatMessage[] = [];
+  for (const row of rows) {
+    try {
+      messages.push(JSON.parse(row.payload_json) as ChatMessage);
+    } catch (e) {
+      console.warn(
+        `[chat-storage] Skipping corrupt message row ${chatId}:${row.sequence} in window: ${(e as Error).message}`
+      );
+    }
+  }
+
+  return {
+    messages,
+    offset,
+    total,
+    hasMoreBefore: offset > 0,
+    hasMoreAfter: endExclusive < total,
+  };
+}
+
 export async function saveChat(chat: Chat): Promise<void> {
   const db = getDb();
   chat.lastModified = new Date().toISOString();

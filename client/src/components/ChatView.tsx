@@ -43,6 +43,10 @@ interface Props {
   chatId: string | null;
   chatTitle: string;
   messages: ChatMessage[];
+  messageOffset?: number;
+  messageTotal?: number;
+  hasMoreMessages?: boolean;
+  olderMessagesLoading?: boolean;
   streaming: boolean;
   streamingThinking: string;
   streamingThinkingActive: boolean;
@@ -74,6 +78,7 @@ interface Props {
   onSend: (text: string, images?: import("../types").ImageAttachment[]) => void;
   onEditMessage: (index: number, newText: string, images?: import("../types").ImageAttachment[]) => void;
   onRetryMessage?: (index: number) => void;
+  onLoadOlderMessages?: () => Promise<boolean>;
   onAbort: () => void;
   onModelChange: (modelId: string) => void;
   onSystemPromptChange: (value: string) => void;
@@ -93,6 +98,10 @@ export function ChatView({
   chatId,
   chatTitle,
   messages,
+  messageOffset = 0,
+  messageTotal,
+  hasMoreMessages = false,
+  olderMessagesLoading = false,
   streaming,
   streamingThinking,
   streamingThinkingActive,
@@ -124,6 +133,7 @@ export function ChatView({
   onSend,
   onEditMessage,
   onRetryMessage,
+  onLoadOlderMessages,
   onAbort,
   onModelChange,
   onSystemPromptChange,
@@ -149,6 +159,7 @@ export function ChatView({
   const prevChatIdRef = useRef<string | null>(null);
   const prevMessageCountRef = useRef(0);
   const manualScrollOverrideRef = useRef(false);
+  const loadingOlderRef = useRef(false);
   const [editingCtx, setEditingCtx] = useState(false);
   const [ctxInput, setCtxInput] = useState("");
   const [promptModal, setPromptModal] = useState<{ systemPrompt: string; tools: { name: string; description: string }[] } | null>(null);
@@ -214,6 +225,31 @@ export function ChatView({
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+
+    if (
+      el.scrollTop < 80 &&
+      hasMoreMessages &&
+      onLoadOlderMessages &&
+      !loadingOlderRef.current &&
+      !olderMessagesLoading
+    ) {
+      loadingOlderRef.current = true;
+      const previousScrollHeight = el.scrollHeight;
+      const previousScrollTop = el.scrollTop;
+      onLoadOlderMessages()
+        .then((loaded) => {
+          if (!loaded || !scrollRef.current) return;
+          const nextEl = scrollRef.current;
+          requestAnimationFrame(() => {
+            nextEl.scrollTop = nextEl.scrollHeight - previousScrollHeight + previousScrollTop;
+          });
+        })
+        .catch(() => {})
+        .finally(() => {
+          loadingOlderRef.current = false;
+        });
+    }
+
     const threshold = 80;
     const wasNearBottom = isNearBottomRef.current;
     isNearBottomRef.current =
@@ -230,7 +266,7 @@ export function ChatView({
       manualScrollOverrideRef.current = false;
       setScrollPaused(false);
     }
-  }, [streaming]);
+  }, [streaming, hasMoreMessages, olderMessagesLoading, onLoadOlderMessages]);
 
   // Scroll to bottom when switching chats
   useEffect(() => {
@@ -480,28 +516,28 @@ export function ChatView({
                 </p>
               </div>
             )}
-            {messages.length > 200 && (
+            {(hasMoreMessages || olderMessagesLoading) && (
               <div className="text-center py-2">
-                <span className="text-xs text-white/30">{messages.length - 200} earlier messages not shown</span>
+                <span className="text-xs text-white/30">
+                  {olderMessagesLoading
+                    ? "Loading earlier messages..."
+                    : `${messageOffset} earlier message${messageOffset === 1 ? "" : "s"} available${messageTotal ? ` (${messages.length}/${messageTotal} loaded)` : ""}`}
+                </span>
               </div>
             )}
             {(() => {
-              // Performance limit: only render the last 200 messages for long chats
-              const MAX_RENDERED = 200;
-              const startIndex = messages.length > MAX_RENDERED ? messages.length - MAX_RENDERED : 0;
-
-              return messages.slice(startIndex).map((msg, sliceIdx) => {
-                const i = startIndex + sliceIdx;
+              return messages.map((msg, localIdx) => {
+                const i = messageOffset + localIdx;
                 // Hide persisted system-role messages (memory delta injections) from the UI —
                 // they exist purely to keep the LLM context's prefix stable for KV cache.
                 if (msg.role === "system") return null;
-                const isLast = i === messages.length - 1;
+                const isLast = localIdx === messages.length - 1;
                 const isOutOfContext = !!msg._outOfContext;
                 const isSystemMessage = !!msg._isSystemMessage;
                 const stableKey = `msg-${i}-${msg.timestamp}-${msg.role}`;
 
                 // Show "In context" divider at the transition from out-of-context to in-context
-                const prevMsg = i > 0 ? messages[i - 1] : null;
+                const prevMsg = localIdx > 0 ? messages[localIdx - 1] : null;
                 const showContextResume = !isOutOfContext && !msg._isCompactionSummary
                   && prevMsg && (prevMsg._outOfContext || prevMsg._isCompactionSummary);
 

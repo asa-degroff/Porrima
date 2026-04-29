@@ -1,11 +1,17 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
-import { listChats, getChat, saveChat, deleteChat, getSettings, createChat, getProject } from "../services/chat-storage.js";
+import { listChats, getChat, saveChat, deleteChat, getSettings, createChat, getProject, getChatMessageWindow } from "../services/chat-storage.js";
 import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import type { Chat } from "../types.js";
 
 const router = Router();
+
+function parsePositiveInt(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
 
 // List all chats
 router.get("/", async (_req, res) => {
@@ -13,10 +19,31 @@ router.get("/", async (_req, res) => {
   res.json(chats);
 });
 
+// Get a page of messages before an absolute sequence index.
+router.get("/:id/messages", async (req, res) => {
+  const chat = await getChat(req.params.id);
+  if (!chat) return res.status(404).json({ error: "Chat not found" });
+
+  const before = parsePositiveInt(req.query.before);
+  const limit = parsePositiveInt(req.query.limit);
+  const window = getChatMessageWindow(chat.id, { before, limit });
+  res.json(window);
+});
+
 // Get a single chat (with messages)
 router.get("/:id", async (req, res) => {
   const chat = await getChat(req.params.id);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
+
+  const messageLimit = parsePositiveInt(req.query.messageLimit);
+  if (messageLimit) {
+    const window = getChatMessageWindow(chat.id, { limit: messageLimit });
+    chat.messages = window.messages;
+    chat.messageOffset = window.offset;
+    chat.messageTotal = window.total;
+    chat.hasMoreMessages = window.hasMoreBefore;
+  }
+
   res.json(chat);
 });
 

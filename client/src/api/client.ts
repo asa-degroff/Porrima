@@ -1,4 +1,4 @@
-import type { Artifact, Chat, ChatListItem, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
+import type { Artifact, Chat, ChatListItem, ChatMessage, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -1301,9 +1301,35 @@ export async function saveUserUIState(state: Partial<UserUIState>): Promise<User
   return res.json();
 }
 
-export async function fetchChat(id: string): Promise<Chat> {
-  const res = await apiFetch(`${BASE}/chats/${id}`);
+export async function fetchChat(id: string, opts: { messageLimit?: number } = {}): Promise<Chat> {
+  const qs = new URLSearchParams();
+  if (opts.messageLimit) qs.set("messageLimit", String(opts.messageLimit));
+  const query = qs.toString();
+  const url = query ? `${BASE}/chats/${id}?${query}` : `${BASE}/chats/${id}`;
+  const res = await apiFetch(url);
   if (!res.ok) throw new Error("Failed to fetch chat");
+  return res.json();
+}
+
+export interface ChatMessageWindow {
+  messages: ChatMessage[];
+  offset: number;
+  total: number;
+  hasMoreBefore: boolean;
+  hasMoreAfter: boolean;
+}
+
+export async function fetchChatMessages(
+  id: string,
+  opts: { before?: number; limit?: number } = {}
+): Promise<ChatMessageWindow> {
+  const qs = new URLSearchParams();
+  if (opts.before !== undefined) qs.set("before", String(opts.before));
+  if (opts.limit) qs.set("limit", String(opts.limit));
+  const query = qs.toString();
+  const url = query ? `${BASE}/chats/${id}/messages?${query}` : `${BASE}/chats/${id}/messages`;
+  const res = await apiFetch(url);
+  if (!res.ok) throw new Error("Failed to fetch chat messages");
   return res.json();
 }
 

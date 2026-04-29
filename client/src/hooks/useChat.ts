@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, getChatStatus, reconnectChat } from "../api/client";
+import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat } from "../api/client";
 import type { StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InlineVisual, MessageSegment, MessageUsage } from "../types";
 import { useStreamingTTS } from "./useStreamingTTS";
@@ -29,6 +29,8 @@ interface BackgroundStream {
   doneCalled: boolean;
   abortController: AbortController | null;
   chatRef: Chat | null;
+  messageOffset: number;
+  messageTotal: number;
   /** Client-side segments built during streaming for interleaved rendering */
   segments: MessageSegment[];
   seqCounter: number;
@@ -61,6 +63,7 @@ interface CompactionInfo {
 }
 
 const drafts = new Map<string, Draft>();
+const MESSAGE_PAGE_SIZE = 200;
 
 /** Check if a chat has an active or completed background stream */
 export function hasBackgroundStream(chatId: string): boolean {
@@ -89,7 +92,7 @@ export function getStreamingChatIds(): string[] {
     .map(([id]) => id);
 }
 
-function createBgStream(chatRef: Chat | null): BackgroundStream {
+function createBgStream(chatRef: Chat | null, messageOffset = chatRef?.messageOffset ?? 0, messageTotal = chatRef?.messageTotal ?? chatRef?.messages?.length ?? 0): BackgroundStream {
   return {
     content: "",
     thinking: "",
@@ -107,6 +110,8 @@ function createBgStream(chatRef: Chat | null): BackgroundStream {
     doneCalled: false,
     abortController: null,
     chatRef,
+    messageOffset,
+    messageTotal,
     segments: [],
     seqCounter: 0,
     thinkingActive: false,
@@ -161,6 +166,9 @@ function withLiveAssistant(messages: ChatMessage[], bg: BackgroundStream): ChatM
 
 export function useChat(chatId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messageOffset, setMessageOffset] = useState(0);
+  const [messageTotal, setMessageTotal] = useState(0);
+  const [olderMessagesLoading, setOlderMessagesLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [streamingThinking, setStreamingThinking] = useState("");
   const [streamingThinkingActive, setStreamingThinkingActive] = useState(false);
@@ -195,6 +203,11 @@ export function useChat(chatId: string | null) {
   const streamingContentRef = useRef("");
   const rafRef = useRef<number | null>(null);
   const activeChatRef = useRef<Chat | null>(null);
+  const messageOffsetRef = useRef(0);
+  const messageTotalRef = useRef(0);
+
+  messageOffsetRef.current = messageOffset;
+  messageTotalRef.current = messageTotal;
 
   /** Always reflects the currently displayed chatId */
   const activeChatIdRef = useRef<string | null>(chatId);
@@ -222,6 +235,9 @@ export function useChat(chatId: string | null) {
       }
       // Restore streaming state from background (chat was switched away from mid-stream)
       setMessages([...bg.messages]);
+      setMessageOffset(bg.messageOffset);
+      setMessageTotal(Math.max(bg.messageTotal, bg.messageOffset + bg.messages.length));
+      setOlderMessagesLoading(false);
       setStreaming(bg.streaming);
       streamingContentRef.current = bg.content;
       setStreamingThinking(bg.thinking);
@@ -249,6 +265,7 @@ export function useChat(chatId: string | null) {
       // In-progress state from persistence is handled by App.tsx selectChat logic
       // which checks for _inProgress flag before calling loadMessages
       setStreaming(false);
+      setOlderMessagesLoading(false);
       setStreamingThinking("");
       setStreamingThinkingActive(false);
       setStreamingThinkingAccumulatedMs(0);
@@ -317,9 +334,43 @@ export function useChat(chatId: string | null) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
 
-  const loadMessages = useCallback((msgs: ChatMessage[]) => {
+  const loadMessages = useCallback((
+    msgs: ChatMessage[],
+    window?: { offset?: number; total?: number }
+  ) => {
     setMessages(msgs);
+    const offset = window?.offset ?? 0;
+    setMessageOffset(offset);
+    setMessageTotal(window?.total ?? offset + msgs.length);
   }, []);
+
+  const loadOlderMessages = useCallback(async () => {
+    const targetChatId = activeChatIdRef.current;
+    const before = messageOffsetRef.current;
+    if (!targetChatId || before <= 0 || olderMessagesLoading) return false;
+
+    setOlderMessagesLoading(true);
+    try {
+      const page = await fetchChatMessages(targetChatId, {
+        before,
+        limit: MESSAGE_PAGE_SIZE,
+      });
+      if (activeChatIdRef.current !== targetChatId) return false;
+
+      setMessages((prev) => {
+        const overlap = Math.max(0, page.offset + page.messages.length - before);
+        const prepend = overlap > 0 ? page.messages.slice(0, page.messages.length - overlap) : page.messages;
+        return [...prepend, ...prev];
+      });
+      setMessageOffset(page.offset);
+      setMessageTotal(page.total);
+      return page.messages.length > 0;
+    } finally {
+      if (activeChatIdRef.current === targetChatId) {
+        setOlderMessagesLoading(false);
+      }
+    }
+  }, [olderMessagesLoading]);
 
   // Store active chat reference for IDB caching
   const setActiveChatData = useCallback((chat: Chat | null) => {
@@ -519,6 +570,7 @@ export function useChat(chatId: string | null) {
           setStreamingSegmentIndex(null);
           setStreamingUsage(null);
           setStreamingEstimate(null);
+          setMessageTotal((prev) => Math.max(prev, messageOffsetRef.current + finalMsgs.length));
           if (wfi) setWaitingForInput(true);
           bgStreams.delete(streamChatId);
         }
@@ -526,7 +578,18 @@ export function useChat(chatId: string | null) {
         // Update IDB cache (both active and background)
         const chatObj = isActive ? activeChatRef.current : bg.chatRef;
         if (chatObj) {
-          setCachedChat({ ...chatObj, messages: finalMsgs }).catch(() => {});
+          const offset = isActive ? messageOffsetRef.current : bg.messageOffset;
+          const total = Math.max(
+            isActive ? messageTotalRef.current : bg.messageTotal,
+            offset + finalMsgs.length
+          );
+          setCachedChat({
+            ...chatObj,
+            messages: finalMsgs,
+            messageOffset: offset,
+            messageTotal: total,
+            hasMoreMessages: offset > 0,
+          }).catch(() => {});
         }
 
         onDoneExtra?.(finalMsgs);
@@ -960,7 +1023,7 @@ export function useChat(chatId: string | null) {
       }
 
       // Create bgStream entry for this chat's stream
-      const bg = createBgStream(activeChatRef.current);
+      const bg = createBgStream(activeChatRef.current, messageOffsetRef.current, messageTotalRef.current);
       bgStreams.set(targetChatId, bg);
 
       const assistantMsg: ChatMessage = {
@@ -990,19 +1053,21 @@ export function useChat(chatId: string | null) {
     (index: number, newText: string, images?: ImageAttachment[]) => {
       if (!chatId || streaming || !navigator.onLine) return;
       const targetChatId = chatId;
+      const localIndex = index - messageOffsetRef.current;
+      if (localIndex < 0 || localIndex >= messages.length) return;
 
       // Use provided images if explicitly passed (including empty array), otherwise preserve originals
-      const originalMessage = messages[index];
+      const originalMessage = messages[localIndex];
       if (!originalMessage) return;
       const originalImages = images !== undefined ? images : (originalMessage.images?.length ? originalMessage.images : undefined);
 
       // Create bgStream entry
-      const bg = createBgStream(activeChatRef.current);
+      const bg = createBgStream(activeChatRef.current, messageOffsetRef.current, messageTotalRef.current);
       bgStreams.set(targetChatId, bg);
 
       // Truncate to edit point, add new user msg (with preserved images) + placeholder assistant msg
       setMessages((prev) => {
-        const truncated = prev.slice(0, index);
+        const truncated = prev.slice(0, localIndex);
         const next = [
           ...truncated,
           { role: "user" as const, content: newText, images: originalImages, timestamp: Date.now() },
@@ -1011,6 +1076,9 @@ export function useChat(chatId: string | null) {
         bg.messages = next;
         return next;
       });
+      bg.messageOffset = index;
+      setMessageOffset(index);
+      setMessageTotal(index + 2);
 
       prepareStream();
 
@@ -1024,7 +1092,8 @@ export function useChat(chatId: string | null) {
 
   const retryMessage = useCallback(
     (index: number) => {
-      const msg = messages[index];
+      const localIndex = index - messageOffsetRef.current;
+      const msg = localIndex >= 0 ? messages[localIndex] : undefined;
       if (msg) {
         editMessage(index, msg.content, msg.images);
       }
@@ -1077,7 +1146,7 @@ export function useChat(chatId: string | null) {
       // Send and wait for completion
       const sent = await new Promise<boolean>((resolve) => {
         // Create bgStream entry
-        const bg = createBgStream(activeChatRef.current);
+        const bg = createBgStream(activeChatRef.current, messageOffsetRef.current, messageTotalRef.current);
         bgStreams.set(targetChatId, bg);
 
         prepareStream();
@@ -1185,6 +1254,10 @@ export function useChat(chatId: string | null) {
 
   return {
     messages,
+    messageOffset,
+    messageTotal: Math.max(messageTotal, messageOffset + messages.length),
+    hasMoreMessages: messageOffset > 0,
+    olderMessagesLoading,
     streaming,
     streamingThinking,
     streamingThinkingActive,
@@ -1207,6 +1280,7 @@ export function useChat(chatId: string | null) {
     retryMessage,
     abort,
     loadMessages,
+    loadOlderMessages,
     setActiveChatData,
     processQueue,
     queueProcessing,

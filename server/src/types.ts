@@ -85,6 +85,12 @@ export interface Chat {
   systemPrompt: string;
   contextWindow?: number;
   messages: ChatMessage[];
+  /** Absolute index of messages[0] when this Chat carries a paged message window. */
+  messageOffset?: number;
+  /** Total persisted messages for this chat when this Chat carries a paged window. */
+  messageTotal?: number;
+  /** True when older messages exist before messageOffset. */
+  hasMoreMessages?: boolean;
   createdAt: string;
   lastModified: string;
   activeSkills?: string[]; // List of active skill names

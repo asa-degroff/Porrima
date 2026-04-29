@@ -27,7 +27,7 @@ import { useSettings } from "./hooks/useSettings";
 import { useAuth } from "./hooks/useAuth";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
 import { useKeyboardInset } from "./hooks/useKeyboardInset";
-import { updateChat as apiUpdateChat } from "./api/client";
+import { fetchChat, updateChat as apiUpdateChat } from "./api/client";
 import { setCachedChat, getCachedChat, clearCachedChat } from "./lib/db";
 import { HapticsProvider } from "./hooks/useHaptics";
 import { ActivityStyleProvider } from "./hooks/useActivityStyle";
@@ -40,6 +40,7 @@ import type { Chat, ChatType, CornerShape, CornerRadius } from "./types";
 
 const CORNER_SHAPE_KEY = "quje-corner-shape";
 const CORNER_RADIUS_KEY = "quje-corner-radius";
+const INITIAL_MESSAGE_LIMIT = 200;
 
 function readCachedCornerShape(): CornerShape {
   try {
@@ -168,6 +169,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   }, [lastActiveChatId, updateSettings]);
   const {
     messages,
+    messageOffset,
+    messageTotal,
+    hasMoreMessages,
+    olderMessagesLoading,
     streaming,
     streamingThinking,
     streamingThinkingActive,
@@ -190,6 +195,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     retryMessage,
     abort,
     loadMessages,
+    loadOlderMessages,
     setActiveChatData,
     processQueue,
     queueProcessing,
@@ -409,11 +415,15 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       if (cached) {
         setActiveChat(cached);
         setActiveChatData(cached);
-        if (!hasBackgroundStream(id)) loadMessages(cached.messages);
+        if (!hasBackgroundStream(id)) {
+          loadMessages(cached.messages, {
+            offset: cached.messageOffset ?? 0,
+            total: cached.messageTotal ?? cached.messages.length,
+          });
+        }
 
         // Background refresh: update cache from server without blocking the UI
-        fetch(`/api/chats/${id}`, { credentials: "include" })
-          .then((res) => res.ok ? res.json() : null)
+        fetchChat(id, { messageLimit: INITIAL_MESSAGE_LIMIT })
           .then((chat: Chat | null) => {
             if (chat) {
               setCachedChat(chat).catch(() => {});
@@ -422,7 +432,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
                 if (currentId === id) {
                   setActiveChat(chat);
                   setActiveChatData(chat);
-                  if (!hasBackgroundStream(id)) loadMessages(chat.messages);
+                  if (!hasBackgroundStream(id)) {
+                    loadMessages(chat.messages, {
+                      offset: chat.messageOffset ?? 0,
+                      total: chat.messageTotal ?? chat.messages.length,
+                    });
+                  }
                 }
                 return currentId;
               });
@@ -434,17 +449,16 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
       // No cache — must fetch from server (blocking)
       try {
-        const res = await fetch(`/api/chats/${id}`, { credentials: "include" });
-        if (res.ok) {
-          const chat: Chat = await res.json();
-          setActiveChat(chat);
-          setActiveChatData(chat);
-          if (!hasBackgroundStream(id)) loadMessages(chat.messages);
-          setCachedChat(chat).catch(() => {});
-        } else {
-          setActiveChatId(null);
-          setActiveChat(null);
+        const chat = await fetchChat(id, { messageLimit: INITIAL_MESSAGE_LIMIT });
+        setActiveChat(chat);
+        setActiveChatData(chat);
+        if (!hasBackgroundStream(id)) {
+          loadMessages(chat.messages, {
+            offset: chat.messageOffset ?? 0,
+            total: chat.messageTotal ?? chat.messages.length,
+          });
         }
+        setCachedChat(chat).catch(() => {});
       } catch {
         setActiveChatId(null);
         setActiveChat(null);
@@ -758,6 +772,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         chatTitle={activeChat?.title || "New Chat"}
         onOpenSidebar={handleOpenSidebar}
         messages={messages}
+        messageOffset={messageOffset}
+        messageTotal={messageTotal}
+        hasMoreMessages={hasMoreMessages}
+        olderMessagesLoading={olderMessagesLoading}
+        onLoadOlderMessages={loadOlderMessages}
         streaming={streaming}
         streamingThinking={streamingThinking}
         streamingThinkingActive={streamingThinkingActive}
