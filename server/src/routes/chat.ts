@@ -9,7 +9,7 @@ import { chatMessagesToPiMessages } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { OllamaModel } from "../types.js";
 import { extractMemories, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
-import { generateTitle } from "../services/title-generation.js";
+import { generateTitle, generateRecap, RECAP_THRESHOLD } from "../services/title-generation.js";
 import { truncateChatHistory, truncateBeforeSend, triggerCompaction, hasStrandedToolCall } from "../services/compaction.js";
 import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
@@ -1943,6 +1943,21 @@ async function handleChatStream(
       }
       await saveChat(chat);
       console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput} content=${assistantMsg.content.length}ch`);
+
+      // Generate a brief recap for long assistant messages (agent/project/system chats only)
+      if ((chat.type === "agent" || chat.type === "system") && assistantMsg.content.length > RECAP_THRESHOLD && !assistantMsg.recap) {
+        try {
+          const recap = await generateRecap(assistantMsg.content);
+          if (recap) {
+            const msgIdx = chat.messages.length - 1;
+            chat.messages[msgIdx] = { ...chat.messages[msgIdx], recap };
+            await saveChat(chat);
+            assistantMsg.recap = recap;
+          }
+        } catch (err) {
+          console.warn("[recap] generation failed:", err);
+        }
+      }
     } else {
       // Remove the in-progress placeholder if present
       const lastMsg = chat.messages[chat.messages.length - 1];

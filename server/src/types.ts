@@ -71,6 +71,8 @@ export interface ChatMessage {
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
   _isSynthesisMessage?: boolean;
+  /** Brief summary of what was done, generated for long assistant messages */
+  recap?: string;
 }
 
 export type ChatType = "agent" | "quick" | "bluesky" | "system";

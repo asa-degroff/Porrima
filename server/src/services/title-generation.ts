@@ -84,6 +84,41 @@ export async function generateTitle(
   return title;
 }
 
+/** Minimum assistant content length (characters) to trigger recap generation */
+export const RECAP_THRESHOLD = 1500;
+
+/**
+ * Generate a brief recap of what was done in a single assistant message.
+ * Feeds the tail of the message content to capture conclusion/outcome.
+ * Returns null on any error.
+ */
+export async function generateRecap(assistantContent: string): Promise<string | null> {
+  const config = await getServerConfig();
+  if (!config) return null;
+
+  // Feed the last ~1500 characters — captures the conclusion and concrete outcome
+  const tailContent = assistantContent.slice(-1500);
+
+  const systemContent =
+    "Write a brief, one-line summary (15-40 words) of what was done in this assistant message. " +
+    "Focus on concrete actions and outcomes. " +
+    "Reply with ONLY the summary text. No quotes, no prefix, no explanation.";
+
+  const raw = await callServer(config, systemContent, tailContent, "recap generation");
+  const recap = postProcessRecap(raw);
+  if (recap) console.log(`[recap] generated: "${recap}"`);
+  return recap;
+}
+
+function postProcessRecap(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  let text = raw.trim().replace(/^["']|["']$/g, "").trim();
+  if (!text) return null;
+  // For recaps, allow longer than titles but cap to prevent runaways
+  if (text.length > 200) text = text.slice(0, 197) + "...";
+  return text;
+}
+
 /**
  * Regenerate a chat title based on recent messages.
  * Used during compaction to keep titles up-to-date with long-running conversations.

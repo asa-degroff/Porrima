@@ -488,6 +488,17 @@ export const MessageBubble = memo(function MessageBubble({
             </button>
           )}
 
+          {/* Message recap - brief summary shown below long assistant messages */}
+          {!isUser && message.recap && (
+            <div
+              className="mt-1.5 ml-1 mb-1 self-start text-[11px] italic"
+              style={{ color: 'rgba(255, 255, 255, 0.3)' }}
+            >
+              <span className="mr-1 opacity-60">▸</span>
+              {message.recap}
+            </div>
+          )}
+
           {/* Streaming indicator - shown below assistant message during active streaming */}
           {!isUser && showStreamingIndicator && (
             <div className="mt-2 ml-1 self-start">

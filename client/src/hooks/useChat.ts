@@ -457,7 +457,7 @@ export function useChat(chatId: string | null) {
           }
         }
       },
-      onDone: ({ content: serverContent, thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi, thinkingPromoted }) => {
+      onDone: ({ content: serverContent, thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi, thinkingPromoted, recap }) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg || bg.doneCalled) return;
         bg.doneCalled = true;
@@ -495,6 +495,7 @@ export function useChat(chatId: string | null) {
             toolCalls: toolCalls || undefined,
             toolResults: toolResults || undefined,
             segments: finalSegments,
+            recap: recap || undefined,
           };
         }
 

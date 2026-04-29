@@ -75,6 +75,8 @@ export interface ChatMessage {
    *  While set, streaming deltas from the pre-steering generation are not applied here
    *  (they land on the previous assistant msg via message_complete). Cleared by follow_up_start. */
   _steeringPending?: boolean;
+  /** Brief summary of what was done, generated for long assistant messages */
+  recap?: string;
 }
 
 export type ChatType = "agent" | "quick" | "bluesky" | "system";
