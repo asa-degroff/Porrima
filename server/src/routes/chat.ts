@@ -838,13 +838,13 @@ async function handleChatStream(
     for await (const event of eventStream) {
       switch (event.type) {
         case "message_start": {
-          // Mirror the message into our outer context. pi-agent-core's agentLoop
-          // spreads context.messages into its internal currentContext and never
-          // mutates our outer copy, so recovery paths that later call
-          // agentLoopContinue(context,...) would otherwise see an empty or
-          // stale history. message_start fires for user prompts, steering
-          // messages, and follow-ups — exactly what the running context needs.
-          if (event.message) {
+          // Mirror user prompts and steering messages into the outer context —
+          // these don't get a turn_end push, so this is the only chance to
+          // capture them. Skip assistant and toolResult roles: turn_end pushes
+          // the final, complete versions, and pushing here would create a
+          // duplicate per turn, gradually inflating the outer context that
+          // recovery paths read from.
+          if (event.message?.role === "user") {
             context.messages.push(event.message);
           }
           break;
@@ -1376,7 +1376,12 @@ async function handleChatStream(
       let continuationProducedContent = false;
 
       try {
-        const continueEventStream = agentLoopContinue(context, config, continueAbortController.signal, safeStreamFn);
+        // Decouple from the outer context — see comment in stranded recovery below.
+        const continueContext: AgentContext = {
+          ...context,
+          messages: [...context.messages],
+        };
+        const continueEventStream = agentLoopContinue(continueContext, config, continueAbortController.signal, safeStreamFn);
 
         // Process the continuation events
         for await (const event of continueEventStream) {
@@ -1452,7 +1457,16 @@ async function handleChatStream(
       }
 
       try {
-        const strandedStream = agentLoopContinue(context, config, strandedAbortController.signal, safeStreamFn);
+        // Decouple the recovery's internal messages array from the outer context.
+        // pi-agent-core's agentLoopContinue does `{ ...context }` (shallow spread),
+        // which shares the messages array. Without this copy, pi-ai's pushes and
+        // chat.ts's event-handler pushes both mutate the same array — every
+        // recovery iteration triples each message and breaks KV cache reuse.
+        const strandedContext: AgentContext = {
+          ...context,
+          messages: [...context.messages],
+        };
+        const strandedStream = agentLoopContinue(strandedContext, config, strandedAbortController.signal, safeStreamFn);
 
         for await (const event of strandedStream) {
           if (event.type === "message_update") {
