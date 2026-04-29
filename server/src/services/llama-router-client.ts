@@ -83,7 +83,17 @@ export async function ensureRouterModelLoaded(
 
     if (res.status === 404) return "not-router";
     if (!res.ok) {
-      console.warn(`[router-client] /models/load ${url} ${modelId} returned ${res.status}`);
+      // The router rejects redundant loads with 400 "model is already running".
+      // That isn't a failure — the model we wanted is already the active one,
+      // so treat it as a successful load and populate the cache. Without this,
+      // every request after a server restart re-pings /models/load and re-eats
+      // the same 400 because the cache never warms up.
+      const text = await res.text().catch(() => "");
+      if (res.status === 400 && /already running/i.test(text)) {
+        lastLoadedByBaseUrl.set(url, { modelId, contextWindow: options.contextWindow, loadedAt: Date.now() });
+        return "loaded";
+      }
+      console.warn(`[router-client] /models/load ${url} ${modelId} returned ${res.status}: ${text.slice(0, 200)}`);
       return "error";
     }
     lastLoadedByBaseUrl.set(url, { modelId, contextWindow: options.contextWindow, loadedAt: Date.now() });

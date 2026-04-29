@@ -1030,7 +1030,11 @@ export async function extractMemories(
 
   const facts = chunkResult.facts;
   if (facts.length === 0) {
-    console.log("[memory] No facts extracted from exchange");
+    // Surface the raw model output so we can tell "model returned []" (legit
+    // no-facts call) apart from "model returned malformed JSON the parser
+    // bailed on" (parser-side miss). Trimmed to keep log lines bounded.
+    const rawSample = (chunkResult.rawOutput || "").trim().slice(0, 400);
+    console.log(`[memory] No facts extracted from exchange (raw output: ${rawSample.length ? JSON.stringify(rawSample) : "<empty>"})`);
     extractionMetrics.successfulExtractions++;
     extractionMetrics.lastExtractionAt = new Date().toISOString();
     runHandle.complete({
