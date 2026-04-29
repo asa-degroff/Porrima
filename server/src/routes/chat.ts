@@ -1248,29 +1248,6 @@ async function handleChatStream(
     // Only emit when the agent is truly done — no pending continuation or mid-turn work.
     if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && !state.incompleteToolTurn && !state.strandedToolCall) {
       res.write(`event: agent_output_complete\ndata: {}\n\n`);
-
-      // Fire-and-forget push notification to the user's other devices. The
-      // device that initiated this turn (if any deviceId was supplied) is
-      // suppressed; presence-tracked devices are also skipped server-side.
-      // System chats (synthesis, wake) are never user-facing — skip them.
-      if (chat.id !== "system" && state.fullText.trim()) {
-        const initiatingDeviceId = (req.body as any)?.deviceId;
-        const previewBody = truncateForBody(state.fullText);
-        sendPush(
-          "owner",
-          {
-            type: "message_complete",
-            title: chat.title || "qu.je",
-            body: previewBody || "Reply ready.",
-            url: `/?chat=${chat.id}`,
-            chatId: chat.id,
-            tag: `chat:${chat.id}`,
-          },
-          {
-            suppressDeviceIds: typeof initiatingDeviceId === "string" ? [initiatingDeviceId] : [],
-          }
-        ).catch((err) => console.warn("[push] message_complete dispatch failed:", err));
-      }
     }
 
     // End-of-turn compaction: if we crossed the 80% threshold during this turn,
@@ -1957,6 +1934,31 @@ async function handleChatStream(
         } catch (err) {
           console.warn("[recap] generation failed:", err);
         }
+      }
+
+      // Fire-and-forget push notification to the user's other devices. The
+      // device that initiated this turn (if any deviceId was supplied) is
+      // suppressed; presence-tracked devices are also skipped server-side.
+      // System chats (synthesis, wake) are never user-facing — skip them.
+      // Use the generated recap as the notification body when available,
+      // falling back to truncated content.
+      if (chat.id !== "system" && !waitingForInput && assistantMsg.content.trim()) {
+        const initiatingDeviceId = (req.body as any)?.deviceId;
+        const pushBody = assistantMsg.recap || truncateForBody(assistantMsg.content);
+        sendPush(
+          "owner",
+          {
+            type: "message_complete",
+            title: chat.title || "qu.je",
+            body: pushBody || "Reply ready.",
+            url: `/?chat=${chat.id}`,
+            chatId: chat.id,
+            tag: `chat:${chat.id}`,
+          },
+          {
+            suppressDeviceIds: typeof initiatingDeviceId === "string" ? [initiatingDeviceId] : [],
+          }
+        ).catch((err) => console.warn("[push] message_complete dispatch failed:", err));
       }
     } else {
       // Remove the in-progress placeholder if present
