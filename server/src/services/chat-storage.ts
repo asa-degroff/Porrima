@@ -12,6 +12,8 @@ const PROJECTS_DIR = join(BASE_DIR, "projects");
 const SETTINGS_PATH = join(BASE_DIR, "settings.json");
 
 const DB_PATH = join(BASE_DIR, "app.db");
+const MESSAGE_ROWS_MIGRATION = "chat_message_rows_v1";
+const CHAT_SEARCH_REBUILD_MIGRATION = "chat_messages_search_from_rows_v1";
 
 // ---------------------------------------------------------------------------
 // Lazy singleton database
@@ -63,6 +65,13 @@ export function getDb(): Database.Database {
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value JSON NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS storage_migrations (
+      name TEXT PRIMARY KEY,
+      appliedAt TEXT NOT NULL
     );
   `);
 
@@ -159,6 +168,29 @@ export function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_chats_projectId ON chats(projectId) WHERE projectId IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_chats_type ON chats(type);
     CREATE INDEX IF NOT EXISTS idx_projects_lastModified ON projects(lastModified DESC);
+  `);
+
+  // ---------------------------------------------------------------------------
+  // Full-fidelity chat messages (compatibility source for Chat.messages)
+  // ---------------------------------------------------------------------------
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_message_rows (
+      chat_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      timestamp INTEGER,
+      payload_json JSON NOT NULL,
+      search_content TEXT NOT NULL DEFAULT '',
+      out_of_context INTEGER NOT NULL DEFAULT 0,
+      is_compaction_summary INTEGER NOT NULL DEFAULT 0,
+      is_system_message INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (chat_id, sequence)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_message_rows_chat_sequence
+      ON chat_message_rows(chat_id, sequence);
+    CREATE INDEX IF NOT EXISTS idx_chat_message_rows_chat_role
+      ON chat_message_rows(chat_id, role);
   `);
 
   // ---------------------------------------------------------------------------
@@ -339,6 +371,9 @@ export function getDb(): Database.Database {
     migrateSettingsFromJson(db);
   }
 
+  backfillChatMessageRows(db);
+  rebuildChatSearchFromRowsOnce(db);
+
   _db = db;
 
   // Backfill chat_messages FTS index for existing chats (one-time on first upgrade)
@@ -399,6 +434,12 @@ export async function getChat(id: string): Promise<Chat | null> {
 
   if (!row) return null;
 
+  const legacyMessages = parseMessagesJson(row.messages, row.id);
+  const rowMessages = loadChatMessageRows(db, row.id);
+  const messages = rowMessages && (rowMessages.length > 0 || legacyMessages.length === 0)
+    ? rowMessages
+    : legacyMessages;
+
   const chat: Chat = {
     id: row.id,
     title: row.title,
@@ -406,7 +447,7 @@ export async function getChat(id: string): Promise<Chat | null> {
     modelId: row.modelId,
     systemPrompt: row.systemPrompt || "You are a helpful assistant.",
     ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
-    messages: JSON.parse(row.messages),
+    messages,
     createdAt: row.createdAt,
     lastModified: row.lastModified,
     ...(row.projectId ? { projectId: row.projectId } : {}),
@@ -422,46 +463,39 @@ export async function getChat(id: string): Promise<Chat | null> {
 export async function saveChat(chat: Chat): Promise<void> {
   const db = getDb();
   chat.lastModified = new Date().toISOString();
+  const preview = computeChatPreview(chat.messages);
 
-  // Compute preview from last real message for fast list queries
-  // Skip compaction summaries; use segment-based text for assistant messages (matches UI display)
-  let lastMsg: ChatMessage | null = null;
-  for (let i = chat.messages.length - 1; i >= 0; i--) {
-    const msg = chat.messages[i];
-    if (!msg._isCompactionSummary && msg.role !== "system") {
-      lastMsg = msg;
-      break;
-    }
-  }
-  const preview = lastMsg ? extractPreviewText(lastMsg) : "";
-
-  db.prepare(`
-    INSERT OR REPLACE INTO chats (
-      id, title, type, modelId, systemPrompt,
-      contextWindow, projectId, activeSkills, messages,
-      createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex,
+  const save = db.transaction(() => {
+    db.prepare(`
+      INSERT OR REPLACE INTO chats (
+        id, title, type, modelId, systemPrompt,
+        contextWindow, projectId, activeSkills, messages,
+        createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex,
+        preview
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      chat.id,
+      chat.title,
+      chat.type,
+      chat.modelId,
+      chat.systemPrompt || "",
+      chat.contextWindow ?? null,
+      chat.projectId ?? null,
+      chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
+      JSON.stringify(chat.messages),
+      chat.createdAt,
+      chat.lastModified,
+      chat.lastDelayedExtractionAt ?? null,
+      chat.lastDelayedExtractionMessageIndex ?? null,
       preview
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    chat.id,
-    chat.title,
-    chat.type,
-    chat.modelId,
-    chat.systemPrompt || "",
-    chat.contextWindow ?? null,
-    chat.projectId ?? null,
-    chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
-    JSON.stringify(chat.messages),
-    chat.createdAt,
-    chat.lastModified,
-    chat.lastDelayedExtractionAt ?? null,
-    chat.lastDelayedExtractionMessageIndex ?? null,
-    preview
-  );
+    );
 
-  // Sync messages to FTS index (append-only, only inserts new messages)
-  syncChatMessages(db, chat.id, chat.messages);
+    const firstChanged = syncChatMessageRows(db, chat.id, chat.messages);
+    syncChatMessages(db, chat.id, chat.messages, firstChanged);
+  });
+
+  save();
 }
 
 export async function updateChatExtractionState(
@@ -493,6 +527,7 @@ export async function deleteChat(id: string): Promise<boolean> {
   const db = getDb();
   const del = db.transaction(() => {
     const result = db.prepare("DELETE FROM chats WHERE id = ?").run(id);
+    db.prepare("DELETE FROM chat_message_rows WHERE chat_id = ?").run(id);
     // Clean up denormalized messages (triggers handle FTS cleanup)
     db.prepare("DELETE FROM chat_messages WHERE chat_id = ?").run(id);
     return result.changes > 0;
@@ -502,45 +537,39 @@ export async function deleteChat(id: string): Promise<boolean> {
 
 export async function createChat(chat: Chat): Promise<void> {
   const db = getDb();
+  const preview = computeChatPreview(chat.messages);
 
-  // Compute preview from last real message
-  let lastMsg: ChatMessage | null = null;
-  for (let i = chat.messages.length - 1; i >= 0; i--) {
-    const msg = chat.messages[i];
-    if (!msg._isCompactionSummary && msg.role !== "system") {
-      lastMsg = msg;
-      break;
-    }
-  }
-  const preview = lastMsg ? extractPreviewText(lastMsg) : "";
-
-  db.prepare(`
-    INSERT INTO chats (
-      id, title, type, modelId, systemPrompt,
-      contextWindow, projectId, activeSkills, messages,
-      createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex,
+  const create = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO chats (
+        id, title, type, modelId, systemPrompt,
+        contextWindow, projectId, activeSkills, messages,
+        createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex,
+        preview
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      chat.id,
+      chat.title,
+      chat.type,
+      chat.modelId,
+      chat.systemPrompt || "",
+      chat.contextWindow ?? null,
+      chat.projectId ?? null,
+      chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
+      JSON.stringify(chat.messages),
+      chat.createdAt,
+      chat.lastModified,
+      chat.lastDelayedExtractionAt ?? null,
+      chat.lastDelayedExtractionMessageIndex ?? null,
       preview
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    chat.id,
-    chat.title,
-    chat.type,
-    chat.modelId,
-    chat.systemPrompt || "",
-    chat.contextWindow ?? null,
-    chat.projectId ?? null,
-    chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
-    JSON.stringify(chat.messages),
-    chat.createdAt,
-    chat.lastModified,
-    chat.lastDelayedExtractionAt ?? null,
-    chat.lastDelayedExtractionMessageIndex ?? null,
-    preview
-  );
+    );
 
-  // Sync messages to FTS index
-  syncChatMessages(db, chat.id, chat.messages);
+    const firstChanged = syncChatMessageRows(db, chat.id, chat.messages);
+    syncChatMessages(db, chat.id, chat.messages, firstChanged);
+  });
+
+  create();
 }
 
 /**
@@ -780,54 +809,166 @@ export async function hasPendingState(chatId: string): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
+// Full-fidelity chat message row sync
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the legacy chats.messages JSON column defensively. The row table is the
+ * preferred source after migration, but the JSON mirror remains the rollback
+ * and recovery path during the compatibility window.
+ */
+function parseMessagesJson(raw: string, chatId: string): ChatMessage[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed as ChatMessage[] : [];
+  } catch (e) {
+    console.warn(`[chat-storage] Failed to parse legacy messages for chat ${chatId}: ${(e as Error).message}`);
+    return [];
+  }
+}
+
+function loadChatMessageRows(db: Database.Database, chatId: string): ChatMessage[] | null {
+  const rows = db.prepare(`
+    SELECT sequence, payload_json
+    FROM chat_message_rows
+    WHERE chat_id = ?
+    ORDER BY sequence ASC
+  `).all(chatId) as Array<{ sequence: number; payload_json: string }>;
+
+  const messages: ChatMessage[] = [];
+  for (const row of rows) {
+    if (row.sequence !== messages.length) {
+      console.warn(`[chat-storage] Message row sequence gap for chat ${chatId}; falling back to legacy JSON`);
+      return null;
+    }
+    try {
+      messages.push(JSON.parse(row.payload_json) as ChatMessage);
+    } catch (e) {
+      console.warn(
+        `[chat-storage] Corrupt message row ${chatId}:${row.sequence}; falling back to legacy JSON: ${(e as Error).message}`
+      );
+      return null;
+    }
+  }
+  return messages;
+}
+
+function buildSearchContent(msg: ChatMessage): string {
+  if (msg.role === "system") return "";
+
+  const parts: string[] = [];
+  if (msg.content) parts.push(msg.content);
+  if (msg.toolCalls) {
+    for (const tc of msg.toolCalls) {
+      parts.push(`[tool:${tc.name}] ${JSON.stringify(tc.arguments)}`);
+    }
+  }
+  if (msg.toolResults) {
+    for (const tr of msg.toolResults) {
+      parts.push(`[result:${tr.toolName}] ${tr.content}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+/**
+ * Mirror Chat.messages into per-message rows. Returns the first changed
+ * sequence, or null when the row table already matches the provided array.
+ *
+ * During the compatibility window, sequence deliberately remains the array
+ * index so existing edit/retry/messageIndex semantics keep working.
+ */
+function syncChatMessageRows(
+  db: Database.Database,
+  chatId: string,
+  messages: ChatMessage[]
+): number | null {
+  const existing = db.prepare(`
+    SELECT sequence, payload_json
+    FROM chat_message_rows
+    WHERE chat_id = ?
+    ORDER BY sequence ASC
+  `).all(chatId) as Array<{ sequence: number; payload_json: string }>;
+
+  const serialized = messages.map((msg) => JSON.stringify(msg));
+  const commonLength = Math.min(existing.length, serialized.length);
+  let firstChanged = commonLength;
+
+  for (let i = 0; i < commonLength; i++) {
+    if (existing[i].sequence !== i || existing[i].payload_json !== serialized[i]) {
+      firstChanged = i;
+      break;
+    }
+  }
+
+  if (existing.length === serialized.length && firstChanged === serialized.length) {
+    return null;
+  }
+
+  db.prepare(`
+    DELETE FROM chat_message_rows
+    WHERE chat_id = ? AND sequence >= ?
+  `).run(chatId, firstChanged);
+
+  const insert = db.prepare(`
+    INSERT INTO chat_message_rows (
+      chat_id, sequence, role, timestamp, payload_json, search_content,
+      out_of_context, is_compaction_summary, is_system_message
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (let i = firstChanged; i < messages.length; i++) {
+    const msg = messages[i];
+    insert.run(
+      chatId,
+      i,
+      msg.role,
+      msg.timestamp || null,
+      serialized[i],
+      buildSearchContent(msg),
+      msg._outOfContext ? 1 : 0,
+      msg._isCompactionSummary ? 1 : 0,
+      msg._isSystemMessage ? 1 : 0
+    );
+  }
+
+  return firstChanged;
+}
+
+// ---------------------------------------------------------------------------
 // Chat message FTS sync
 // ---------------------------------------------------------------------------
 
 /**
- * Sync chat messages to the denormalized chat_messages table for FTS search.
- * Only inserts new messages (append-only — messages are never edited/removed).
+ * Sync the flattened chat_messages search table from a changed message tail.
+ * This fixes the old append-only behavior: edits, compaction rewrites, and
+ * truncation now delete stale search rows before re-indexing the changed tail.
  */
-function syncChatMessages(db: Database.Database, chatId: string, messages: ChatMessage[]): void {
-  // How many messages are already indexed for this chat?
-  const row = db.prepare(
-    "SELECT MAX(message_index) as maxIdx FROM chat_messages WHERE chat_id = ?"
-  ).get(chatId) as { maxIdx: number | null } | undefined;
+function syncChatMessages(
+  db: Database.Database,
+  chatId: string,
+  messages: ChatMessage[],
+  firstChanged: number | null
+): void {
+  if (firstChanged === null) return;
 
-  const existingCount = row?.maxIdx !== null && row?.maxIdx !== undefined ? row.maxIdx + 1 : 0;
-  if (existingCount >= messages.length) return; // nothing new
+  db.prepare(`
+    DELETE FROM chat_messages
+    WHERE chat_id = ? AND message_index >= ?
+  `).run(chatId, firstChanged);
 
   const insert = db.prepare(`
-    INSERT OR IGNORE INTO chat_messages (chat_id, message_index, role, content, timestamp)
+    INSERT INTO chat_messages (chat_id, message_index, role, content, timestamp)
     VALUES (?, ?, ?, ?, ?)
   `);
 
-  const sync = db.transaction(() => {
-    for (let i = existingCount; i < messages.length; i++) {
-      const msg = messages[i];
-      // Skip persisted system-delta messages — their content is memory text
-      // already present in the memory store; indexing it would duplicate hits.
-      if (msg.role === "system") continue;
-      // Build searchable content: main text + tool call arguments + tool results
-      const parts: string[] = [];
-      if (msg.content) parts.push(msg.content);
-      if (msg.toolCalls) {
-        for (const tc of msg.toolCalls) {
-          // Include tool name and stringified arguments for searchability
-          parts.push(`[tool:${tc.name}] ${JSON.stringify(tc.arguments)}`);
-        }
-      }
-      if (msg.toolResults) {
-        for (const tr of msg.toolResults) {
-          parts.push(`[result:${tr.toolName}] ${tr.content}`);
-        }
-      }
-      const content = parts.join("\n");
-      if (!content.trim()) continue; // skip empty messages
-
-      insert.run(chatId, i, msg.role, content, msg.timestamp || null);
-    }
-  });
-  sync();
+  for (let i = firstChanged; i < messages.length; i++) {
+    const msg = messages[i];
+    const content = buildSearchContent(msg);
+    if (!content.trim()) continue;
+    insert.run(chatId, i, msg.role, content, msg.timestamp || null);
+  }
 }
 
 /**
@@ -929,6 +1070,16 @@ export function getChatTitle(chatId: string): string | null {
   return row?.title ?? null;
 }
 
+function computeChatPreview(messages: ChatMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg._isCompactionSummary && msg.role !== "system") {
+      return extractPreviewText(msg);
+    }
+  }
+  return "";
+}
+
 /**
  * Extract preview text from a message.
  * For assistant messages with segments, uses the last text segment (matches what the UI displays).
@@ -961,16 +1112,8 @@ function recomputePreviewsSkippingCompaction(db: Database.Database): void {
 
   for (const chat of chats) {
     try {
-      const messages = JSON.parse(chat.messages) as ChatMessage[];
-      // Find last real message (skip compaction summaries and persisted system-delta messages)
-      let lastMsg: ChatMessage | null = null;
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (!messages[i]._isCompactionSummary && messages[i].role !== "system") {
-          lastMsg = messages[i];
-          break;
-        }
-      }
-      const preview = lastMsg ? extractPreviewText(lastMsg) : "";
+      const messages = parseMessagesJson(chat.messages, chat.id);
+      const preview = computeChatPreview(messages);
       update.run(preview, chat.id);
       updated++;
     } catch (e) {
@@ -981,12 +1124,88 @@ function recomputePreviewsSkippingCompaction(db: Database.Database): void {
   console.log(`[chat-storage] Recomputed previews for ${updated} chats (skipping compaction summaries)`);
 }
 
+function hasStorageMigration(db: Database.Database, name: string): boolean {
+  const row = db.prepare("SELECT 1 FROM storage_migrations WHERE name = ?").get(name);
+  return row !== undefined;
+}
+
+function markStorageMigration(db: Database.Database, name: string): void {
+  db.prepare(`
+    INSERT OR REPLACE INTO storage_migrations (name, appliedAt)
+    VALUES (?, ?)
+  `).run(name, new Date().toISOString());
+}
+
+function backfillChatMessageRows(db: Database.Database): void {
+  if (hasStorageMigration(db, MESSAGE_ROWS_MIGRATION)) return;
+
+  const chats = db.prepare("SELECT id, messages FROM chats").all() as Array<{
+    id: string; messages: string;
+  }>;
+  let chatCount = 0;
+  let messageCount = 0;
+
+  const backfill = db.transaction(() => {
+    for (const chat of chats) {
+      const messages = parseMessagesJson(chat.messages, chat.id);
+      const firstChanged = syncChatMessageRows(db, chat.id, messages);
+      if (firstChanged !== null) {
+        chatCount++;
+        messageCount += messages.length - firstChanged;
+      }
+    }
+    markStorageMigration(db, MESSAGE_ROWS_MIGRATION);
+  });
+
+  backfill();
+  console.log(`[chat-storage] Backfilled chat_message_rows for ${chatCount} chats (${messageCount} changed rows)`);
+}
+
+function rebuildChatSearchFromRowsOnce(db: Database.Database): void {
+  if (hasStorageMigration(db, CHAT_SEARCH_REBUILD_MIGRATION)) return;
+
+  const rows = db.prepare(`
+    SELECT chat_id, sequence, role, timestamp, search_content
+    FROM chat_message_rows
+    ORDER BY chat_id ASC, sequence ASC
+  `).all() as Array<{
+    chat_id: string;
+    sequence: number;
+    role: string;
+    timestamp: number | null;
+    search_content: string;
+  }>;
+
+  const rebuild = db.transaction(() => {
+    db.prepare("DELETE FROM chat_messages").run();
+
+    const insert = db.prepare(`
+      INSERT INTO chat_messages (chat_id, message_index, role, content, timestamp)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    let inserted = 0;
+    for (const row of rows) {
+      if (!row.search_content.trim()) continue;
+      insert.run(row.chat_id, row.sequence, row.role, row.search_content, row.timestamp);
+      inserted++;
+    }
+
+    markStorageMigration(db, CHAT_SEARCH_REBUILD_MIGRATION);
+    return inserted;
+  });
+
+  const inserted = rebuild();
+  console.log(`[chat-storage] Rebuilt chat_messages FTS source from row storage (${inserted} indexed rows)`);
+}
+
 /**
  * Backfill chat_messages table for all existing chats that haven't been indexed yet.
  * Called once on startup if needed.
  */
 export function backfillChatMessages(): void {
   const db = getDb();
+  if (hasStorageMigration(db, CHAT_SEARCH_REBUILD_MIGRATION)) return;
 
   // Check if we've already backfilled
   const meta = db.prepare("SELECT 1 FROM chat_messages LIMIT 1").get();
@@ -1003,8 +1222,8 @@ export function backfillChatMessages(): void {
   let totalMessages = 0;
   for (const chat of chats) {
     try {
-      const messages = JSON.parse(chat.messages) as ChatMessage[];
-      syncChatMessages(db, chat.id, messages);
+      const messages = parseMessagesJson(chat.messages, chat.id);
+      syncChatMessages(db, chat.id, messages, 0);
       totalMessages += messages.length;
     } catch (e) {
       console.warn(`[chat-storage] Skipping chat ${chat.id} during backfill: ${(e as Error).message}`);
