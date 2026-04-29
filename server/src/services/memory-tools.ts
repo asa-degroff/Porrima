@@ -405,7 +405,7 @@ export async function executeMemoryTool(
           lines.push(`user: ${m.content}`);
         } else if (m.role === "assistant") {
           if (m.thinking) lines.push(`thinking: ${m.thinking}`);
-          if (m.content) lines.push(`assistant: ${m.content}`);
+          if (m.content) lines.push(`agent: ${m.content}`);
           if (m.toolCalls?.length) {
             for (const tc of m.toolCalls) {
               lines.push(`tool_call: ${tc.name}(${JSON.stringify(tc.arguments).slice(0, 500)})`);

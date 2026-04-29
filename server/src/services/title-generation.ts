@@ -106,8 +106,8 @@ export async function generateRecap(assistantContent: string): Promise<string | 
 
   const systemContent =
     "Write a brief, one-line summary (15-40 words) of this message. " +
-    "Focus on actions and outcomes. Write from an impersonal, immersive perspective, just the message content. Do not include attribution, do not refer to 'the user', 'the assistant', 'the developer', or any other roles. Prefer active voice. " +
-    "Reply with ONLY the summary text. No quotes, no prefix, no explanation.";
+    "Focus on actions and outcomes. Write from an impersonal, immersive perspective, just the message content. Do not attribute the message to 'the user', 'the assistant', 'the developer', or any other roles. Do not mention the person or role. Prefer active voice. " +
+    "Reply with ONLY the summary text. No quotes, no prefix, no explanation."; 
 
   const raw = await callServer(config, systemContent, tailContent, "recap generation");
   const recap = postProcessRecap(raw);
