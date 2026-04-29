@@ -101,7 +101,7 @@ export async function generateRecap(assistantContent: string): Promise<string | 
 
   const systemContent =
     "Write a brief, one-line summary (15-40 words) of what was done in this message. " +
-    "Focus on concrete actions and outcomes. " +
+    "Focus on concrete actions and outcomes. You do not need to mention the user or author, just the content. " +
     "Reply with ONLY the summary text. No quotes, no prefix, no explanation.";
 
   const raw = await callServer(config, systemContent, tailContent, "recap generation");
@@ -115,7 +115,7 @@ function postProcessRecap(raw: string | null | undefined): string | null {
   let text = raw.trim().replace(/^["']|["']$/g, "").trim();
   if (!text) return null;
   // For recaps, allow longer than titles but cap to prevent runaways
-  if (text.length > 200) text = text.slice(0, 197) + "...";
+  if (text.length > 400) text = text.slice(0, 397) + "...";
   return text;
 }
 
