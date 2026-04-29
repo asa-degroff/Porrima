@@ -145,6 +145,7 @@ CREATE VIRTUAL TABLE context_archives_fts USING fts5(
 Messages are grouped into logical blocks before archiving:
 
 - **Tool call + result pair** → one block (agent needs both to understand what happened)
+- **Canonical split tool-loop rows** → archived as their own assistant/tool-result iteration blocks, preserving replay order
 - **User message + assistant response** (no tools) → one block
 - **Standalone message** → one block
 

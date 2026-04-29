@@ -28,14 +28,17 @@ Tool results are dynamically truncated based on the effective context window to 
 
 - Uses pi-ai's `agentLoop` / `agentLoopContinue` with `createSafeStreamFn` wrapper (inactivity timeout protection)
 - Tool iterations tracked via `turn_end` events from the agent loop
+- Each `turn_end` with `stopReason === "toolUse"` is persisted immediately as a canonical assistant row containing only that iteration's tool calls/results. Rows in the same visible assistant response share `_toolLoopId`; tool-use rows have `_toolLoopFragment: true`.
+- The route emits `message_complete` with `continues: true` after a persisted tool-use row so the client can finalize that raw row and create the next live assistant placeholder without showing multiple bubbles.
 - **Mid-turn overflow detection**: At each `turn_end` with `stopReason === "toolUse"`, checks if token usage > 85% of context. If so, aborts the agent loop and enters compaction cycle.
 - **Multi-cycle compaction** (up to 5): Archives overflow, compacts, injects handoff message (progress summary + tool call log), resumes via `agentLoopContinue`. Each cycle strips all trailing assistant messages before resume.
 - **MAX_ITERATIONS**: 500 guard against runaway tool loops
 - `ask_user` is intercepted — sends SSE `ask_user` event and breaks the loop.
-- SSE events during loop: `text_delta`, `thinking_delta`, `tool_status` (running/done/error), `segment`, `artifact`, `ask_user`, `iteration`, `compaction`.
+- SSE events during loop: `text_delta`, `thinking_delta`, `tool_status` (running/done/error), `segment`, `artifact`, `ask_user`, `iteration`, `message_complete`, `compaction`.
 
 ## Message Reconstruction (`server/src/services/agent.ts`, `chatMessagesToPiMessages()`)
 
-- A single persisted `ChatMessage` (with `toolCalls` + `toolResults` + `content`) is reconstructed as multiple pi-ai messages: `AssistantMessage(stopReason:"toolUse")` → `ToolResultMessage[]` → `AssistantMessage(stopReason:"stop")` with the final text.
-- This split is critical — collapsing tool calls and final text into one message confuses the model into avoiding tool use on replay.
+- Canonical persisted rows already mirror pi-ai's live transcript. A `_toolLoopFragment` row with `toolCalls` reconstructs to `AssistantMessage(stopReason:"toolUse")` with its thinking/text/tool calls, followed by that row's `ToolResultMessage[]`. The final assistant row in the same `_toolLoopId` group reconstructs as a normal `AssistantMessage(stopReason:"stop")`.
+- Legacy collapsed rows are still supported. A single older `ChatMessage` with `toolCalls` + `toolResults` + final `content` reconstructs as: `AssistantMessage(stopReason:"toolUse")` → `ToolResultMessage[]` → `AssistantMessage(stopReason:"stop")`.
+- This shape is critical for KV cache behavior. The follow-up prompt must be byte-compatible with the live tool loop transcript the model previously saw; flattening all tool calls into one assistant row changes the prompt at the first assistant token after the user message and destroys longest-common-prefix reuse.
 - For llama.cpp (OpenAI-compat provider): assistant messages include `reasoning_content` for thinking replay; tool results use `tool_call_id` format instead of Ollama's `tool_name`.

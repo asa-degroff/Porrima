@@ -61,10 +61,15 @@ Memory services are in `server/src/services/memory-*.ts`. They share the pi-ai `
 ## Chat Storage
 
 Chat storage uses SQLite (`server/src/services/chat-storage.ts`). The `app.db` database stores:
-- **Chats** — metadata + JSON `messages` column (hybrid approach: normalized metadata, JSON for nested arrays)
+- **Chats** — metadata + JSON `messages` column retained as a compatibility snapshot for existing `Chat.messages` callers
+- **Chat message rows** — full-fidelity per-message rows in `chat_message_rows`, keyed by `(chat_id, sequence)`. This is the authoritative source when populated and supports paged message-window reads for long-running chats.
 - **Chat messages** — denormalized `chat_messages` table with FTS5 virtual table for full-text search
 - **Context archives** — `context_archives` table with FTS5 for indexed compaction (cross-chat searchable). Archives are created two ways: (a) during compaction, when messages are rolled out of the active context, and (b) by `pre-synthesis-archive.ts` before each synthesis cycle, which writes archives (with LLM-generated one-line `indexEntry` descriptions) for recent unarchived agent chats so the synthesis agent has full-fidelity access via `read_archived_context`.
 - **Projects, settings, pending states** — SQLite tables
+
+The chat API returns a recent message window by default when requested with `messageLimit`; older windows are loaded via `GET /api/chats/:id/messages?before=<sequence>&limit=<n>`. The client keeps absolute message indexes through `messageOffset`, so edit/retry and search jump behavior still refer to persisted sequence positions rather than the local array index.
+
+Tool-loop persistence is canonicalized to match the live pi-ai transcript: each assistant `toolUse` stop is saved as its own assistant row with only that iteration's `toolCalls`/`toolResults`, grouped with `_toolLoopId` and marked `_toolLoopFragment`. The final assistant text is a later row in the same group. This preserves llama.cpp longest-common-prefix KV cache matching on follow-up turns because replay no longer collapses an interleaved live loop into one byte-different assistant row. See [chat-message-architecture.md](chat-message-architecture.md).
 
 **FTS5 search**: `chat_messages_fts` and `context_archives_fts` both support phrase match with fallback to term search. The `search_conversation` tool searches both current messages AND archived context, with archive results showing dereferenceable IDs.
 

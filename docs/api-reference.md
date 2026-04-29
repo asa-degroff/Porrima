@@ -11,7 +11,8 @@
 | POST | `/api/chats` | Create chat (`{ modelId, type: "agent"\|"quick", projectId? }`). The `system` chat is created automatically on server startup — clients don't POST it. |
 | PATCH | `/api/chats/:id` | Update chat metadata |
 | DELETE | `/api/chats/:id` | Delete a chat |
-| GET | `/api/chats/:id` | Get single chat with messages |
+| GET | `/api/chats/:id` | Get single chat with messages. Optional `?messageLimit=N` returns the most recent message window with `messageOffset`, `messageTotal`, and `hasMoreMessages`; `N` is capped at 1000. |
+| GET | `/api/chats/:id/messages` | Get a paged message window before an absolute sequence: `?before=N&limit=M`. Used by scroll-to-top history loading; `limit` is capped at 1000. |
 | POST | `/api/chat` | Send message (SSE stream) |
 | POST | `/api/chat/enqueue` | Queue message for later delivery |
 | POST | `/api/chat/edit` | Edit and resend a message |

@@ -9,7 +9,8 @@
 - Context boundary visualization — messages before the last compaction point render at 45% opacity ("out of context"), with a green "In context" divider marking where active context resumes
 - Messages synced from server after compaction to ensure correct chronological ordering
 - Context window editing restricted to fresh chats (no messages yet) to prevent mid-conversation model reloads
-- Performance limit: max 200 messages rendered, with "N earlier messages not shown" indicator
+- Long-history loading: initial chat fetch requests the most recent 200 messages, and `ChatView` loads older windows on scroll-to-top via `GET /api/chats/:id/messages`. Absolute indexes are preserved with `messageOffset`.
+- Tool-loop display grouping: raw canonical assistant rows remain split for replay/storage, but consecutive rows sharing `_toolLoopId` render as one visible assistant bubble with merged segments, tool cards, artifacts, generated images, thinking, and final text.
 
 ## Mobile & Touch
 
