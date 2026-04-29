@@ -100,7 +100,7 @@ export async function generateRecap(assistantContent: string): Promise<string | 
   const tailContent = assistantContent.slice(-1500);
 
   const systemContent =
-    "Write a brief, one-line summary (15-40 words) of what was done in this assistant message. " +
+    "Write a brief, one-line summary (15-40 words) of what was done in this message. " +
     "Focus on concrete actions and outcomes. " +
     "Reply with ONLY the summary text. No quotes, no prefix, no explanation.";
 
