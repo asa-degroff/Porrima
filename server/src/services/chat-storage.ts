@@ -1025,7 +1025,7 @@ function syncChatMessages(
  */
 export function searchChatMessages(
   query: string,
-  opts: { chatId?: string; limit?: number; contextMessages?: number } = {}
+  opts: { chatId?: string; limit?: number } = {}
 ): Array<{ chatId: string; messageIndex: number; role: string; content: string; rank: number }> {
   const db = getDb();
   const limit = opts.limit || 10;
