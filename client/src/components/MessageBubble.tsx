@@ -585,7 +585,7 @@ export const MessageBubble = memo(function MessageBubble({
           {/* Message recap - brief summary shown below long assistant messages */}
           {!isUser && message.recap && (
             <div
-              className="mt-1.5 ml-1 mb-1 self-start text-[11px] italic"
+              className="mt-1.5 ml-1 mb-1 self-start text-[11px] italic break-words max-w-full"
               style={{ color: 'rgba(255, 255, 255, 0.3)' }}
             >
               <span className="mr-1 opacity-60">▸</span>
