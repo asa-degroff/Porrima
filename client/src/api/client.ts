@@ -137,7 +137,7 @@ export interface StreamWarning {
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { content?: string; thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number; thinkingPromoted?: boolean; recap?: string }) => void;
+  onDone: (message: { content?: string; thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number; thinkingPromoted?: boolean; recap?: string; toolLoopId?: string; toolLoopFragment?: boolean }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
   onArtifact?: (artifact: Artifact) => void;
@@ -160,7 +160,7 @@ export interface StreamCallbacks {
   }) => void;
   onAgentOutputComplete?: () => void;
   onTitleUpdate?: (chatId: string, title: string) => void;
-  onMessageComplete?: (message: any) => void;
+  onMessageComplete?: (message: any, meta?: { continues?: boolean; queuedMessageId?: string }) => void;
   onFollowUpStart?: (data: any) => void;
   onBackgroundActivity?: (info: { type: string; chatId?: string }) => void;
 }
@@ -444,6 +444,8 @@ function processSSEEvent(
         iterations: data.iterations,
         thinkingPromoted: data.message?._thinkingPromoted,
         recap: data.message?.recap,
+        toolLoopId: data.message?._toolLoopId,
+        toolLoopFragment: data.message?._toolLoopFragment,
       });
       break;
     case "tool_status":
@@ -488,7 +490,10 @@ function processSSEEvent(
       callbacks.onTitleUpdate?.(data.chatId, data.title);
       break;
     case "message_complete":
-      callbacks.onMessageComplete?.(data.message);
+      callbacks.onMessageComplete?.(data.message, {
+        continues: data.continues === true,
+        queuedMessageId: data.queuedMessageId,
+      });
       break;
     case "follow_up_start":
       callbacks.onFollowUpStart?.(data);

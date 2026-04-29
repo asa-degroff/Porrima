@@ -86,10 +86,18 @@ export function chatMessagesToPiMessages(
       const visibleThinking = isPlaceholderEllipsis(m.thinking) ? "" : (m.thinking || "");
 
       if (m.toolCalls?.length) {
-        // Reconstruct tool-calling turn: assistant with tool calls only
+        const isCanonicalToolFragment = m._toolLoopFragment === true;
+        // Canonical split rows mirror the live tool loop: any text emitted
+        // before a tool call belongs in the same assistant message as the call.
+        // Legacy collapsed rows kept final answer text on the same ChatMessage,
+        // so those still expand to assistant(tool calls) -> tool results ->
+        // assistant(final text).
         const toolContent: any[] = [];
         if (visibleThinking) {
           toolContent.push({ type: "thinking", thinking: visibleThinking });
+        }
+        if (isCanonicalToolFragment && visibleContent) {
+          toolContent.push({ type: "text", text: visibleContent });
         }
         for (const tc of m.toolCalls) {
           toolContent.push({
@@ -143,8 +151,9 @@ export function chatMessagesToPiMessages(
           }
         }
 
-        // Then the final text response as a separate assistant message
-        if (visibleContent) {
+        // Then the final text response as a separate assistant message for
+        // legacy collapsed rows only.
+        if (!isCanonicalToolFragment && visibleContent) {
           result.push({
             role: "assistant" as const,
             content: [{ type: "text", text: visibleContent }],

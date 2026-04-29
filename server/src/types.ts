@@ -68,6 +68,10 @@ export interface ChatMessage {
   _archiveIds?: string[];
   /** Marks this message's content as promoted from thinking (not useful for previews) */
   _thinkingPromoted?: boolean;
+  /** Groups canonical split assistant rows that belong to one visible assistant turn. */
+  _toolLoopId?: string;
+  /** True when this row is one tool-use iteration, not the final assistant answer. */
+  _toolLoopFragment?: boolean;
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
   _isSynthesisMessage?: boolean;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import type { Artifact, ChatMessage, GeneratedImage, MessageUsage, OllamaModel, SystemPromptPreset } from "../types";
 import type { ToolStatus, StreamWarning, SkillInfo } from "../api/client";
 import { fetchRenderedPrompt, fetchSkills } from "../api/client";
@@ -38,6 +38,92 @@ function formatCtxWindow(n: number): string {
 
 // Stable empty array reference for skills - avoids new [] on every render
 const emptySkills: string[] = [];
+
+interface DisplayMessage {
+  message: ChatMessage;
+  localStartIdx: number;
+  localEndIdx: number;
+  streamingSegmentOffset: number;
+}
+
+function mergeToolLoopMessages(group: ChatMessage[]): ChatMessage {
+  const last = group[group.length - 1];
+  const content = group
+    .map((m) => m.content)
+    .filter((text) => text && text.trim())
+    .join("\n\n");
+  const thinking = group
+    .map((m) => m.thinking)
+    .filter((text): text is string => !!text && text.trim().length > 0)
+    .join("\n\n");
+  const thinkingDurationMs = group.reduce((sum, m) => sum + (m.thinkingDurationMs || 0), 0);
+  const toolCalls = group.flatMap((m) => m.toolCalls || []);
+  const toolResults = group.flatMap((m) => m.toolResults || []);
+  const artifacts = group.flatMap((m) => m.artifacts || []);
+  const generatedImages = group.flatMap((m) => m.generatedImages || []);
+  const visuals = group.flatMap((m) => m.visuals || []);
+  const segments = group.flatMap((m) => m.segments || []);
+
+  return {
+    ...last,
+    content,
+    thinking: thinking || undefined,
+    thinkingDurationMs: thinkingDurationMs > 0 ? thinkingDurationMs : undefined,
+    usage: last.usage,
+    toolCalls: toolCalls.length ? toolCalls : undefined,
+    toolResults: toolResults.length ? toolResults : undefined,
+    artifacts: artifacts.length ? artifacts : undefined,
+    generatedImages: generatedImages.length ? generatedImages : undefined,
+    visuals: visuals.length ? visuals : undefined,
+    segments: segments.length ? segments : undefined,
+    _toolLoopId: last._toolLoopId,
+    _toolLoopFragment: undefined,
+  };
+}
+
+function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
+  const display: DisplayMessage[] = [];
+  let i = 0;
+
+  while (i < messages.length) {
+    const msg = messages[i];
+    if (msg.role === "assistant" && msg._toolLoopId) {
+      const groupStart = i;
+      const group: ChatMessage[] = [msg];
+      i++;
+      while (
+        i < messages.length &&
+        messages[i].role === "assistant" &&
+        messages[i]._toolLoopId === msg._toolLoopId
+      ) {
+        group.push(messages[i]);
+        i++;
+      }
+
+      const streamingSegmentOffset = group
+        .slice(0, -1)
+        .reduce((sum, m) => sum + (m.segments?.length || 0), 0);
+
+      display.push({
+        message: group.length === 1 ? msg : mergeToolLoopMessages(group),
+        localStartIdx: groupStart,
+        localEndIdx: i - 1,
+        streamingSegmentOffset,
+      });
+      continue;
+    }
+
+    display.push({
+      message: msg,
+      localStartIdx: i,
+      localEndIdx: i,
+      streamingSegmentOffset: 0,
+    });
+    i++;
+  }
+
+  return display;
+}
 
 interface Props {
   chatId: string | null;
@@ -170,6 +256,7 @@ export function ChatView({
   const [skillFilter, setSkillFilter] = useState("");
   const [inputRect, setInputRect] = useState<DOMRect | null>(null);
   const [scrollPaused, setScrollPaused] = useState(false);
+  const displayMessages = useMemo(() => buildDisplayMessages(messages), [messages]);
   
   // Cache skills by projectId to avoid refetching on every render
   const skillsCache = useRef<Map<string, SkillInfo[]>>(new Map());
@@ -532,20 +619,32 @@ export function ChatView({
               </div>
             )}
             {(() => {
-              return messages.map((msg, localIdx) => {
-                const i = messageOffset + localIdx;
+              return displayMessages.map(({ message: msg, localStartIdx, localEndIdx, streamingSegmentOffset }) => {
+                const i = messageOffset + localStartIdx;
                 // Hide persisted system-role messages (memory delta injections) from the UI —
                 // they exist purely to keep the LLM context's prefix stable for KV cache.
                 if (msg.role === "system") return null;
-                const isLast = localIdx === messages.length - 1;
+                const isLast = localEndIdx === messages.length - 1;
                 const isOutOfContext = !!msg._outOfContext;
                 const isSystemMessage = !!msg._isSystemMessage;
-                const stableKey = `msg-${i}-${msg.timestamp}-${msg.role}`;
+                const stableKey = localStartIdx === localEndIdx
+                  ? `msg-${i}-${msg.timestamp}-${msg.role}`
+                  : `msg-${i}-${messageOffset + localEndIdx}-${msg._toolLoopId || msg.timestamp}`;
 
                 // Show "In context" divider at the transition from out-of-context to in-context
-                const prevMsg = localIdx > 0 ? messages[localIdx - 1] : null;
+                const prevMsg = localStartIdx > 0 ? messages[localStartIdx - 1] : null;
                 const showContextResume = !isOutOfContext && !msg._isCompactionSummary
                   && prevMsg && (prevMsg._outOfContext || prevMsg._isCompactionSummary);
+                const adjustedStreamingSegmentIndex =
+                  isLast && streamingSegmentIndex !== null
+                    ? streamingSegmentIndex + streamingSegmentOffset
+                    : streamingSegmentIndex;
+                const bubbleStreamingThinking =
+                  isLast && streaming && msg.thinking && streamingThinking
+                    ? `${msg.thinking}\n\n${streamingThinking}`
+                    : isLast ? streamingThinking : undefined;
+                const bubbleStreamingThinkingAccumulatedMs =
+                  isLast ? (msg.thinkingDurationMs || 0) + streamingThinkingAccumulatedMs : 0;
 
                 return (
                   <div key={stableKey} className={!isLast ? "message-item" : undefined}>
@@ -566,9 +665,9 @@ export function ChatView({
                         message={msg}
                         isStreaming={streaming}
                         isLast={isLast}
-                        streamingThinking={isLast ? streamingThinking : undefined}
+                        streamingThinking={bubbleStreamingThinking}
                         streamingThinkingActive={isLast ? streamingThinkingActive : false}
-                        streamingThinkingAccumulatedMs={isLast ? streamingThinkingAccumulatedMs : 0}
+                        streamingThinkingAccumulatedMs={bubbleStreamingThinkingAccumulatedMs}
                         streamingThinkingLastStartRef={streamingThinkingLastStartRef}
                         activeTools={isLast ? activeTools : undefined}
                         artifacts={isLast && streaming ? artifacts : undefined}
@@ -578,7 +677,7 @@ export function ChatView({
                         onRetryMessage={msg.role === "user" ? onRetryMessage : undefined}
                         messageIndex={i}
                         availableSkills={skills.length > 0 ? skills.map(s => s.name) : emptySkills}
-                        streamingSegmentIndex={streamingSegmentIndex}
+                        streamingSegmentIndex={adjustedStreamingSegmentIndex}
                         showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
                         onReadAloud={ttsEnabled ? onReadAloud : undefined}
                         isPlayingTts={ttsEnabled ? (playbackState?.isPlaying || false) : false}

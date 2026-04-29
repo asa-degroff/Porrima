@@ -97,6 +97,62 @@ describe("chatMessagesToPiMessages", () => {
     expect(finalMsg.content).toEqual([{ type: "text", text: "I found the file." }]);
   });
 
+  it("replays canonical split tool-loop rows without collapsing iterations", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "Checking the first file.",
+        thinking: "First I need file A.",
+        toolCalls: [
+          { id: "tc1", name: "read_file", arguments: { path: "a.txt" } },
+        ],
+        toolResults: [
+          { toolCallId: "tc1", toolName: "read_file", content: "aaa", isError: false },
+        ],
+        timestamp: 2000,
+        _toolLoopId: "loop-1",
+        _toolLoopFragment: true,
+      },
+      {
+        role: "assistant",
+        content: "Checking the second file.",
+        toolCalls: [
+          { id: "tc2", name: "read_file", arguments: { path: "b.txt" } },
+        ],
+        toolResults: [
+          { toolCallId: "tc2", toolName: "read_file", content: "bbb", isError: false },
+        ],
+        timestamp: 2100,
+        _toolLoopId: "loop-1",
+        _toolLoopFragment: true,
+      },
+      {
+        role: "assistant",
+        content: "Done with both files.",
+        timestamp: 2200,
+        _toolLoopId: "loop-1",
+      },
+    ];
+
+    const result = chatMessagesToPiMessages(messages, MODEL_ID);
+
+    expect(result).toHaveLength(5);
+    expect((result[0] as AssistantMessage).content).toEqual([
+      { type: "thinking", thinking: "First I need file A." },
+      { type: "text", text: "Checking the first file." },
+      { type: "toolCall", id: "tc1", name: "read_file", arguments: { path: "a.txt" } },
+    ]);
+    expect(result[1].role).toBe("toolResult");
+    expect((result[2] as AssistantMessage).content).toEqual([
+      { type: "text", text: "Checking the second file." },
+      { type: "toolCall", id: "tc2", name: "read_file", arguments: { path: "b.txt" } },
+    ]);
+    expect(result[3].role).toBe("toolResult");
+    expect((result[4] as AssistantMessage).content).toEqual([
+      { type: "text", text: "Done with both files." },
+    ]);
+  });
+
   it("handles multiple tool calls in a single turn", () => {
     const messages: ChatMessage[] = [
       {

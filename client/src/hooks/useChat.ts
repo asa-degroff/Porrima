@@ -156,6 +156,8 @@ function withLiveAssistant(messages: ChatMessage[], bg: BackgroundStream): ChatM
       timestamp: last.timestamp || liveAssistant.timestamp,
       _inProgress: last._inProgress,
       _isSystemMessage: last._isSystemMessage,
+      _toolLoopId: last._toolLoopId,
+      _toolLoopFragment: last._toolLoopFragment,
     };
   } else {
     next.push(liveAssistant);
@@ -462,7 +464,7 @@ export function useChat(chatId: string | null) {
           }
         }
       },
-      onDone: ({ content: serverContent, thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi, thinkingPromoted, recap }) => {
+      onDone: ({ content: serverContent, thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi, thinkingPromoted, recap, toolLoopId, toolLoopFragment }) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg || bg.doneCalled) return;
         bg.doneCalled = true;
@@ -501,6 +503,8 @@ export function useChat(chatId: string | null) {
             toolResults: toolResults || undefined,
             segments: finalSegments,
             recap: recap || undefined,
+            _toolLoopId: toolLoopId || last._toolLoopId,
+            _toolLoopFragment: toolLoopFragment || undefined,
           };
         }
 
@@ -756,7 +760,7 @@ export function useChat(chatId: string | null) {
           }
         }
       },
-      onMessageComplete: (message) => {
+      onMessageComplete: (message, meta) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
 
@@ -798,6 +802,16 @@ export function useChat(chatId: string | null) {
         bg.generatedImages = [];
         bg.segments = [];
         bg.seqCounter = 0;
+
+        if (meta?.continues) {
+          const placeholder: ChatMessage = {
+            role: "assistant",
+            content: "",
+            timestamp: Date.now(),
+            _toolLoopId: message?._toolLoopId,
+          };
+          bg.messages = [...bg.messages, placeholder];
+        }
 
         if (activeChatIdRef.current === streamChatId) {
           streamingContentRef.current = "";

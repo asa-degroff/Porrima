@@ -75,6 +75,10 @@ export interface ChatMessage {
    *  While set, streaming deltas from the pre-steering generation are not applied here
    *  (they land on the previous assistant msg via message_complete). Cleared by follow_up_start. */
   _steeringPending?: boolean;
+  /** Groups canonical split assistant rows that belong to one visible assistant turn. */
+  _toolLoopId?: string;
+  /** True when this row is one tool-use iteration, not the final assistant answer. */
+  _toolLoopFragment?: boolean;
   /** Brief summary of what was done, generated for long assistant messages */
   recap?: string;
 }

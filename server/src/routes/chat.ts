@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
+import { randomUUID } from "crypto";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import { streamSimple, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
@@ -59,6 +60,10 @@ function ensureSSEStream(res: Response, req: Request, chatId: string) {
   res.socket?.setNoDelay(true);
   installLiveStream(res, req, chatId);
   res.write(`: connected\n\n`);
+}
+
+function shouldGenerateInitialTitle(chat: Chat): boolean {
+  return chat.messages.filter((m) => m.role === "user").length === 1;
 }
 
 /**
@@ -419,7 +424,7 @@ async function handleChatStream(
   // Track ordering for interleaved display
   interface OutputSegment {
     seq: number;
-    type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image" | "visual";
+    type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image" | "visual" | "compaction_marker";
     content?: string;
     toolCall?: ChatToolCall;
     toolResult?: ChatToolResult;
@@ -457,6 +462,18 @@ async function handleChatStream(
     lastLlamaTimings: null as any,
     // Track llama.cpp prompt-cache metadata for model-stats recording
     lastLlamaCache: null as any,
+    toolLoopId: randomUUID(),
+    committedTextLength: 0,
+    committedThinkingLength: 0,
+    committedToolCallCount: 0,
+    committedToolResultCount: 0,
+    committedArtifactCount: 0,
+    committedVisualCount: 0,
+    committedGeneratedImageCount: 0,
+    committedSegmentCount: 0,
+    committedThinkingDurationMs: 0,
+    hasCommittedToolLoopRows: false,
+    pendingFinalAssistantMessage: null as ChatMessage | null,
   };
 
   function resetAccumulators() {
@@ -478,6 +495,18 @@ async function handleChatStream(
     state.needsMidTurnCompaction = false;
     state.lastLlamaTimings = null;
     state.lastLlamaCache = null;
+    state.toolLoopId = randomUUID();
+    state.committedTextLength = 0;
+    state.committedThinkingLength = 0;
+    state.committedToolCallCount = 0;
+    state.committedToolResultCount = 0;
+    state.committedArtifactCount = 0;
+    state.committedVisualCount = 0;
+    state.committedGeneratedImageCount = 0;
+    state.committedSegmentCount = 0;
+    state.committedThinkingDurationMs = 0;
+    state.hasCommittedToolLoopRows = false;
+    state.pendingFinalAssistantMessage = null;
   }
 
   function isPlaceholderEllipsis(text: string | undefined): boolean {
@@ -520,6 +549,180 @@ async function handleChatStream(
       timestamp: Date.now(),
       _thinkingPromoted: state.thinkingPromoted || undefined,
     };
+  }
+
+  function cleanOutputSegments(segments: OutputSegment[]): OutputSegment[] {
+    return segments.filter((segment) =>
+      segment.type !== "text" || !isPlaceholderEllipsis(segment.content)
+    );
+  }
+
+  function usageFromAssistantMessage(msg: AssistantMessage): ChatMessage["usage"] | undefined {
+    return msg.usage
+      ? { input: msg.usage.input, output: msg.usage.output, totalTokens: msg.usage.totalTokens }
+      : undefined;
+  }
+
+  function extractTextFromAssistantMessage(msg: AssistantMessage): string {
+    return stripPlaceholderEllipsisBlocks(
+      msg.content
+        .filter((block) => block.type === "text" && block.text && !isPlaceholderEllipsis(block.text))
+        .map((block) => block.type === "text" ? block.text : "")
+        .join("")
+    );
+  }
+
+  function extractThinkingFromAssistantMessage(msg: AssistantMessage): string {
+    return msg.content
+      .filter((block) => block.type === "thinking" && block.thinking && !isPlaceholderEllipsis(block.thinking))
+      .map((block) => block.type === "thinking" ? block.thinking : "")
+      .join("\n");
+  }
+
+  function extractToolCallsFromAssistantMessage(msg: AssistantMessage): ChatToolCall[] {
+    return msg.content
+      .filter((block) => block.type === "toolCall")
+      .map((block) => ({
+        id: block.id,
+        name: block.name,
+        arguments: block.arguments,
+      }));
+  }
+
+  function applyToolLoopMetadata(message: ChatMessage): ChatMessage {
+    if (message.toolCalls?.length || state.hasCommittedToolLoopRows) {
+      message._toolLoopId = state.toolLoopId;
+    }
+    if (message.toolCalls?.length) {
+      message._toolLoopFragment = true;
+    }
+    return message;
+  }
+
+  function buildUncommittedAssistantMessage(): ChatMessage {
+    flushTextSegment();
+    const content = stripPlaceholderEllipsisBlocks(state.fullText.slice(state.committedTextLength));
+    const thinking = isPlaceholderEllipsis(state.thinkingText)
+      ? ""
+      : state.thinkingText.slice(state.committedThinkingLength);
+    const toolCalls = state.allToolCalls.slice(state.committedToolCallCount);
+    const toolCallIds = new Set(toolCalls.map((tc) => tc.id));
+    const toolResults = state.allToolResults
+      .slice(state.committedToolResultCount)
+      .filter((tr) => toolCallIds.size === 0 || toolCallIds.has(tr.toolCallId));
+    const artifacts = state.allArtifacts.slice(state.committedArtifactCount);
+    const visuals = state.allVisuals.slice(state.committedVisualCount);
+    const generatedImages = state.allGeneratedImages.slice(state.committedGeneratedImageCount);
+    const segments = cleanOutputSegments(state.segments.slice(state.committedSegmentCount));
+
+    return applyToolLoopMetadata({
+      role: "assistant",
+      content,
+      thinking: state.thinkingPromoted ? undefined : (thinking || undefined),
+      thinkingDurationMs: state.thinkingDurationMs > state.committedThinkingDurationMs
+        ? state.thinkingDurationMs - state.committedThinkingDurationMs
+        : undefined,
+      usage: state.finalUsage,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      toolResults: toolResults.length > 0 ? toolResults : undefined,
+      artifacts: artifacts.length > 0 ? artifacts : undefined,
+      visuals: visuals.length > 0 ? visuals : undefined,
+      generatedImages: generatedImages.length > 0 ? generatedImages : undefined,
+      segments: segments.length > 0 ? segments : undefined,
+      timestamp: Date.now(),
+      _thinkingPromoted: state.thinkingPromoted || undefined,
+    });
+  }
+
+  function buildAssistantMessageFromTurn(msg: AssistantMessage): ChatMessage {
+    flushTextSegment();
+    const toolCalls = extractToolCallsFromAssistantMessage(msg);
+    const toolCallIds = new Set(toolCalls.map((tc) => tc.id));
+    const toolResults = state.allToolResults
+      .slice(state.committedToolResultCount)
+      .filter((tr) => toolCallIds.has(tr.toolCallId));
+    const artifacts = state.allArtifacts.slice(state.committedArtifactCount);
+    const visuals = state.allVisuals.slice(state.committedVisualCount);
+    const generatedImages = state.allGeneratedImages.slice(state.committedGeneratedImageCount);
+    const segments = cleanOutputSegments(state.segments.slice(state.committedSegmentCount));
+    const textFromMessage = extractTextFromAssistantMessage(msg);
+    const uncommittedText = stripPlaceholderEllipsisBlocks(state.fullText.slice(state.committedTextLength));
+    const content = textFromMessage || uncommittedText;
+    const thinkingFromMessage = extractThinkingFromAssistantMessage(msg);
+
+    return applyToolLoopMetadata({
+      role: "assistant",
+      content,
+      thinking: state.thinkingPromoted ? undefined : (thinkingFromMessage || undefined),
+      thinkingDurationMs: state.thinkingDurationMs > state.committedThinkingDurationMs
+        ? state.thinkingDurationMs - state.committedThinkingDurationMs
+        : undefined,
+      usage: usageFromAssistantMessage(msg),
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      toolResults: toolResults.length > 0 ? toolResults : undefined,
+      artifacts: artifacts.length > 0 ? artifacts : undefined,
+      visuals: visuals.length > 0 ? visuals : undefined,
+      generatedImages: generatedImages.length > 0 ? generatedImages : undefined,
+      segments: segments.length > 0 ? segments : undefined,
+      timestamp: msg.timestamp || Date.now(),
+      _thinkingPromoted: state.thinkingPromoted || undefined,
+    });
+  }
+
+  function upsertAssistantMessage(message: ChatMessage, inProgress = false): ChatMessage {
+    const row = inProgress ? { ...message, _inProgress: true } : message;
+    let inProgressIdx = -1;
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const candidate = chat.messages[i];
+      if (
+        candidate.role === "assistant" &&
+        candidate._inProgress &&
+        (!message._toolLoopId || !candidate._toolLoopId || candidate._toolLoopId === message._toolLoopId)
+      ) {
+        inProgressIdx = i;
+        break;
+      }
+    }
+    if (inProgressIdx >= 0) chat.messages[inProgressIdx] = row;
+    else chat.messages.push(row);
+    return row;
+  }
+
+  function markUncommittedAssistantMessageCommitted(message: ChatMessage) {
+    state.committedTextLength = state.fullText.length;
+    state.committedThinkingLength = state.thinkingText.length;
+    state.committedToolCallCount = state.allToolCalls.length;
+    state.committedToolResultCount = state.allToolResults.length;
+    state.committedArtifactCount = state.allArtifacts.length;
+    state.committedVisualCount = state.allVisuals.length;
+    state.committedGeneratedImageCount = state.allGeneratedImages.length;
+    state.committedSegmentCount = state.segments.length;
+    state.committedThinkingDurationMs = state.thinkingDurationMs;
+    if (message._toolLoopId) state.hasCommittedToolLoopRows = true;
+    state.pendingFinalAssistantMessage = null;
+  }
+
+  function hasAssistantMessageContent(message: ChatMessage): boolean {
+    return !!(message.content.trim() || message.thinking || message.toolCalls?.length);
+  }
+
+  function finalizeUncommittedAssistantMessage(): ChatMessage | null {
+    const message = state.pendingFinalAssistantMessage ?? buildUncommittedAssistantMessage();
+    if (!hasAssistantMessageContent(message)) return null;
+    upsertAssistantMessage(message);
+    markUncommittedAssistantMessageCommitted(message);
+    return message;
+  }
+
+  function hasUncommittedAssistantActivity(): boolean {
+    return (
+      state.pendingFinalAssistantMessage !== null ||
+      state.fullText.length > state.committedTextLength ||
+      state.thinkingText.length > state.committedThinkingLength ||
+      state.allToolCalls.length > state.committedToolCallCount ||
+      state.allToolResults.length > state.committedToolResultCount ||
+      state.segments.length > state.committedSegmentCount
+    );
   }
 
   /** Flush any active thinking timer into accumulated duration */
@@ -567,7 +770,7 @@ async function handleChatStream(
   // ask_user state — owned by the route, set via callback.
   // Uses a ref object so TypeScript can track mutations through closures.
   const askUserRef: { current: { question: string; toolCallId: string } | null } = { current: null };
-  
+
   // SSE keepalive interval — prevents client timeout during gaps in SSE output
   // (model loading, long tool execution, between tool results and next LLM call).
   // Any real SSE event (text_delta, tool_status, etc.) also resets the client timer,
@@ -637,7 +840,7 @@ async function handleChatStream(
   const settings = await getSettings();
   const ttsSettings: TTSSettings = (settings as any).tts || { enabled: false, backend: "kokoro" };
   const ttsEnabled = ttsSettings.enabled && ttsSettings.streamingEnabled && isStreamingCapable(ttsSettings.backend);
-  
+
   // TTS pause controller - aborts TTS stream on tool execution
   let ttsPauseController: AbortController | null = null;
 
@@ -704,14 +907,9 @@ async function handleChatStream(
         const queued = await messageQueue.drainOne(chat.id);
         if (!queued) return [];
 
-        // Save the completed assistant message and the steering user message
-        const assistantMsg = buildCurrentAssistantMessage();
-        const lastMsg = chat.messages[chat.messages.length - 1];
-        if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
-          chat.messages[chat.messages.length - 1] = assistantMsg;
-        } else {
-          chat.messages.push(assistantMsg);
-        }
+        // Save any uncommitted assistant row and the steering user message.
+        // Tool-use fragments may already have been committed at turn_end.
+        const assistantMsg = finalizeUncommittedAssistantMessage();
         const queuedUserMsg: ChatMessage = {
           role: "user",
           content: queued.message,
@@ -722,11 +920,13 @@ async function handleChatStream(
         await saveChat(chat);
 
         // Emit events so client can finalize current response and start the steered turn
-        res.write(`event: message_complete\ndata: ${JSON.stringify({ message: assistantMsg })}\n\n`);
+        if (assistantMsg) {
+          res.write(`event: message_complete\ndata: ${JSON.stringify({ message: assistantMsg })}\n\n`);
+        }
         res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queued.id })}\n\n`);
 
         // Defer memory extraction for the completed turn
-        if (chat.type === "agent" || chat.type === "bluesky") {
+        if (assistantMsg && (chat.type === "agent" || chat.type === "bluesky")) {
           deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: assistantMsg.content });
         }
 
@@ -742,14 +942,8 @@ async function handleChatStream(
         const queued = await messageQueue.drainOne(chat.id);
         if (!queued) return [];
 
-        // Save the completed assistant message and the queued user message
-        const assistantMsg = buildCurrentAssistantMessage();
-        const lastMsg = chat.messages[chat.messages.length - 1];
-        if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
-          chat.messages[chat.messages.length - 1] = assistantMsg;
-        } else {
-          chat.messages.push(assistantMsg);
-        }
+        // Save any uncommitted assistant row and the queued user message.
+        const assistantMsg = finalizeUncommittedAssistantMessage();
         const queuedUserMsg: ChatMessage = {
           role: "user",
           content: queued.message,
@@ -760,17 +954,19 @@ async function handleChatStream(
         await saveChat(chat);
 
         // Emit events so client can finalize current response and start next
-        res.write(`event: message_complete\ndata: ${JSON.stringify({ message: assistantMsg })}\n\n`);
+        if (assistantMsg) {
+          res.write(`event: message_complete\ndata: ${JSON.stringify({ message: assistantMsg })}\n\n`);
+        }
         res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queued.id })}\n\n`);
 
         // Defer memory extraction until after the agent loop finishes
         // to avoid concurrent LLM calls that can interfere with the active tool loop
-        if (chat.type === "agent") {
+        if (assistantMsg && chat.type === "agent") {
           deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: assistantMsg.content });
         }
 
         // Title generation for first exchange
-        if (chat.messages.length === 2) {
+        if (assistantMsg && shouldGenerateInitialTitle(chat)) {
           generateTitle(lastUserMessage, assistantMsg.content)
             .then(title => {
               if (title) {
@@ -875,30 +1071,31 @@ async function handleChatStream(
             state.segments.push(segment);
             res.write(`event: segment\ndata: ${JSON.stringify(segment)}\n\n`);
             res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: "running" })}\n\n`);
-            
+
             // Pause TTS on tool execution
             if (ttsEnabled) {
               ttsPauseController?.abort();
               ttsPauseController = new AbortController();
             }
-            
+
             // CRITICAL: Pre-execution checkpoint for tools that can restart the server
             // If the agent modifies its own source code, tsx watch will restart the server
             // We must flush accumulators to disk BEFORE execution to survive the restart
-            const isSelfModifyingTool = 
-              event.toolName === "write_file" || 
+            const isSelfModifyingTool =
+              event.toolName === "write_file" ||
               event.toolName === "edit_file" ||
               (event.toolName === "bash" && typeof event.args?.command === "string" && (
-                event.args.command.includes("npm run") || 
+                event.args.command.includes("npm run") ||
                 event.args.command.includes("tsx") ||
                 event.args.command.includes("node") ||
                 event.args.command.includes("/server/")
               ));
-            
+
             if (isSelfModifyingTool) {
               console.log(`[tool] Pre-execution checkpoint for self-modifying tool: ${event.toolName}`);
               try {
-                const partialMsg = buildCurrentAssistantMessage();
+                const partialMsg = buildUncommittedAssistantMessage();
+                upsertAssistantMessage(partialMsg, true);
                 await saveChat(chat);
                 await savePendingState(chat.id, {
                   agentMessages: context.messages as any[],
@@ -931,12 +1128,12 @@ async function handleChatStream(
             const images: ImageAttachment[] | undefined = event.result?.content
                 ?.filter((c: any) => c.type === "image")
                 .map((c: any) => ({ data: c.data, mimeType: c.mimeType, name: `generated-${event.toolCallId}.jxl` }));
-            
+
             if (images?.length) {
               console.log(`[chat] Extracted ${images.length} image(s) from tool result ${event.toolCallId} (${event.toolName})`);
               console.log(`[chat] Image sizes: ${images.map(img => `${(img.data.length / 1024).toFixed(1)}KB`).join(", ")}`);
             }
-            
+
             const toolResult: ChatToolResult = {
               toolCallId: event.toolCallId,
               toolName: event.toolName,
@@ -946,7 +1143,7 @@ async function handleChatStream(
             };
             state.allToolResults.push(toolResult);
             console.log(`[chat] Tool result accumulated: ${state.allToolResults.length} total`);
-            
+
             // Insert tool_result immediately after its tool_call segment (not at the end),
             // so that visual/artifact segments emitted during tool execution stay after the pair.
             const callIdx = state.segments.findIndex(
@@ -972,6 +1169,7 @@ async function handleChatStream(
         case "turn_end": {
           const msg = event.message as AssistantMessage;
           const stopReason = msg.stopReason || "stop";
+          flushThinkingTimer();
 
           // Mirror the completed turn into outer context.messages so recovery
           // paths (stranded recovery, incomplete-tool-turn continuation) have a
@@ -1018,7 +1216,7 @@ async function handleChatStream(
           }
 
           iterations++;
-          
+
           // Track incomplete tool turns: if stopReason is "toolUse" but no text content followed
           const hasToolCalls = event.toolResults && event.toolResults.length > 0;
           const hasTextContent = state.fullText.trim().length > 0;
@@ -1035,7 +1233,7 @@ async function handleChatStream(
           } else {
             state.incompleteToolTurn = false;
           }
-          
+
           // Detect stranded tool calls: stopReason is "stop" but thinking block contains
           // tool-call-like syntax that never materialized as a structured call.
           // This happens when the model drafts tool calls in its thinking stream (e.g.
@@ -1065,7 +1263,7 @@ async function handleChatStream(
             ` content=${state.fullText.length}ch thinking=${state.thinkingText.length}ch` +
             ` tokens=${msg.usage?.totalTokens || "?"} incomplete=${state.incompleteToolTurn} stranded=${state.strandedToolCall}`,
           );
-          
+
           // Debug: log tool results if present
           if (event.toolResults?.length) {
             console.log(`[chat] Tool results in turn_end:`, event.toolResults.map(tr => ({
@@ -1074,7 +1272,7 @@ async function handleChatStream(
               hasImage: tr.content?.some((c: any) => c.type === "image"),
             })));
           }
-          
+
           // If stopReason is toolUse, the agent loop should automatically continue
           if (stopReason === "toolUse") {
             console.log(`[chat] stopReason is toolUse - agent loop will continue to next iteration automatically`);
@@ -1100,19 +1298,18 @@ async function handleChatStream(
             state.lastLlamaCache = (msg as any).llamaCache;
           }
 
-          // Stage the in-progress assistant message into chat.messages BEFORE
-          // the mid-turn context check so the estimator sees freshly-accumulated
-          // tool calls/results. Without this, the estimator's last message is
-          // the previous iteration's state and misses the tool result that's
-          // about to become input for the next iteration.
-          const partialMsg = buildCurrentAssistantMessage();
-          {
-            const lastMsg = chat.messages[chat.messages.length - 1];
-            if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
-              chat.messages[chat.messages.length - 1] = { ...partialMsg, _inProgress: true };
-            } else {
-              chat.messages.push({ ...partialMsg, _inProgress: true });
-            }
+          // Materialize the just-finished assistant turn using the same shape
+          // that the live LLM context saw. Tool-use stops are committed
+          // immediately so the next iteration and future replays both see:
+          // assistant(tool call) -> tool result -> assistant(tool call) -> ...
+          // rather than one collapsed assistant row with every tool call.
+          let persistedTurnMsg: ChatMessage | null = null;
+          if (stopReason === "toolUse") {
+            persistedTurnMsg = buildAssistantMessageFromTurn(msg);
+            upsertAssistantMessage(persistedTurnMsg);
+            markUncommittedAssistantMessageCommitted(persistedTurnMsg);
+          } else {
+            state.pendingFinalAssistantMessage = buildAssistantMessageFromTurn(msg);
           }
 
           // Compute a current-context estimate that accounts for accumulated
@@ -1206,7 +1403,10 @@ async function handleChatStream(
               lastUserMessage,
             });
 
-            console.log(`[chat] iteration ${iterations}: saved progress (${partialMsg.toolCalls?.length || 0} tools, ${partialMsg.content.length}ch, est ${estimatedTokens} tokens)`);
+            if (persistedTurnMsg) {
+              res.write(`event: message_complete\ndata: ${JSON.stringify({ message: persistedTurnMsg, continues: true })}\n\n`);
+            }
+            console.log(`[chat] iteration ${iterations}: saved progress (${persistedTurnMsg?.toolCalls?.length || 0} tools, ${persistedTurnMsg?.content.length || 0}ch, est ${estimatedTokens} tokens)`);
           } catch (saveErr) {
             console.error(`[chat] failed to save iteration ${iterations}:`, saveErr);
           }
@@ -1224,7 +1424,7 @@ async function handleChatStream(
           for await (const wavChunk of audioStream) {
             // Check if connection is still open
             if (res.writableEnded) break;
-            
+
             res.write(`event: audio_chunk\ndata: ${JSON.stringify({
               chunkId: crypto.randomUUID(),
               data: wavChunk.toString('base64'),
@@ -1250,6 +1450,14 @@ async function handleChatStream(
       res.write(`event: agent_output_complete\ndata: {}\n\n`);
     }
 
+    // Make the final assistant row visible to end-of-turn compaction without
+    // committing it yet. The shared final handler below replaces this
+    // in-progress row, attaches recap metadata, and emits the done payload.
+    if (state.pendingFinalAssistantMessage && hasAssistantMessageContent(state.pendingFinalAssistantMessage)) {
+      upsertAssistantMessage(state.pendingFinalAssistantMessage, true);
+      await saveChat(chat);
+    }
+
     // End-of-turn compaction: if we crossed the 80% threshold during this turn,
     // compact NOW before building the final message. This prevents the user from
     // waiting on compaction after their response appears complete.
@@ -1266,7 +1474,7 @@ async function handleChatStream(
 
           // Check if we crossed the 80% threshold
           let needsCompaction = hitContextLimit || usageRatio > 0.80;
-          
+
           // Fallback to character estimation if usage is missing
           if (!needsCompaction && lastUsage === 0 && chat.messages.length > 4) {
             const { estimateContextTokens } = await import("../services/compaction.js");
@@ -1554,7 +1762,6 @@ async function handleChatStream(
       // Memory fetch happens AFTER compaction+flush so it includes newly extracted memories.
       flushThinkingTimer();
       const partialAssistant = buildCurrentAssistantMessage();
-      partialAssistant._inProgress = true;
 
       // Build progress summary (content + tools) — memory section added after flush below
       const progressParts: string[] = [];
@@ -1571,12 +1778,7 @@ async function handleChatStream(
         progressParts.push(`Tools you already called (${partialAssistant.toolCalls.length} total):\n${toolSummary}`);
       }
 
-      const lastMsg = chat.messages[chat.messages.length - 1];
-      if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
-        chat.messages[chat.messages.length - 1] = partialAssistant;
-      } else {
-        chat.messages.push(partialAssistant);
-      }
+      finalizeUncommittedAssistantMessage();
       await saveChat(chat);
 
       // 2. Run compaction to free context space
@@ -1739,6 +1941,7 @@ async function handleChatStream(
           } else if (event.type === "turn_end") {
             const msg = event.message as AssistantMessage;
             const sr = msg.stopReason || "stop";
+            flushThinkingTimer();
             if (msg.usage) {
               state.finalUsage = { input: msg.usage.input, output: msg.usage.output, totalTokens: msg.usage.totalTokens };
             }
@@ -1751,6 +1954,21 @@ async function handleChatStream(
             }
             iterations++;
             console.log(`[chat] resume turn_end (cycle ${compactionCycle}): stop=${sr} content=${state.fullText.length}ch tokens=${msg.usage?.totalTokens || "?"}`);
+
+            let persistedResumeMsg: ChatMessage | null = null;
+            if (sr === "toolUse") {
+              persistedResumeMsg = buildAssistantMessageFromTurn(msg);
+              upsertAssistantMessage(persistedResumeMsg);
+              markUncommittedAssistantMessageCommitted(persistedResumeMsg);
+              try {
+                await saveChat(chat);
+                res.write(`event: message_complete\ndata: ${JSON.stringify({ message: persistedResumeMsg, continues: true })}\n\n`);
+              } catch (saveErr) {
+                console.error(`[chat] resume save failed:`, saveErr);
+              }
+            } else {
+              state.pendingFinalAssistantMessage = buildAssistantMessageFromTurn(msg);
+            }
 
             // Emit iteration event so client updates token indicator in real-time
             res.write(`event: iteration\ndata: ${JSON.stringify({
@@ -1781,15 +1999,9 @@ async function handleChatStream(
         break;
       }
 
-      // Update the in-progress message with resumed content.
-      // Keep _inProgress so the final handler at end-of-turn replaces
-      // rather than pushing a duplicate.
-      const updatedMsg = buildCurrentAssistantMessage();
-      updatedMsg._inProgress = true;
-      const lastAssistant = chat.messages[chat.messages.length - 1];
-      if (lastAssistant?.role === "assistant") {
-        chat.messages[chat.messages.length - 1] = updatedMsg;
-      }
+      // Do not stage an aggregate in-progress assistant here. Tool-use rows
+      // are committed as each resume iteration finishes, and any final row is
+      // held in pendingFinalAssistantMessage for the shared final handler.
     }
 
     if (compactionCycle >= MAX_COMPACTION_CYCLES) {
@@ -1801,16 +2013,11 @@ async function handleChatStream(
     const queuedFollowUp = await messageQueue.drainOne(chat.id);
     if (queuedFollowUp && !askUserRef.current && !waitingForInput) {
       console.log(`[chat] post-loop: found queued follow-up message ${queuedFollowUp.id}, processing`);
-      
-      // Build current message first
-      const currentAssistantMsg = buildCurrentAssistantMessage();
-      const lastMsg = chat.messages[chat.messages.length - 1];
-      if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
-        chat.messages[chat.messages.length - 1] = currentAssistantMsg;
-      } else {
-        chat.messages.push(currentAssistantMsg);
-      }
-      
+
+      // Build current message first. Tool-use fragments may already be
+      // committed; only persist an uncommitted final/partial row if present.
+      const currentAssistantMsg = finalizeUncommittedAssistantMessage();
+
       // Add queued user message
       const queuedUserMsg: ChatMessage = {
         role: "user",
@@ -1822,16 +2029,18 @@ async function handleChatStream(
       await saveChat(chat);
 
       // Emit events to finalize current and start follow-up
-      res.write(`event: message_complete\ndata: ${JSON.stringify({ message: currentAssistantMsg })}\n\n`);
+      if (currentAssistantMsg) {
+        res.write(`event: message_complete\ndata: ${JSON.stringify({ message: currentAssistantMsg })}\n\n`);
+      }
       res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queuedFollowUp.id })}\n\n`);
 
       // Defer memory extraction until after the follow-up loop finishes
-      if (chat.type === "agent") {
+      if (currentAssistantMsg && chat.type === "agent") {
         deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: currentAssistantMsg.content });
       }
 
       // Title generation for first exchange
-      if (chat.messages.length === 2) {
+      if (currentAssistantMsg && shouldGenerateInitialTitle(chat)) {
         generateTitle(lastUserMessage, currentAssistantMsg.content)
           .then(title => {
             if (title) {
@@ -1847,19 +2056,19 @@ async function handleChatStream(
       // Reset accumulators and update state
       resetAccumulators();
       lastUserMessage = queuedFollowUp.message;
-      
+
       // Build new context for follow-up (all messages including the queued one)
       const followUpContextMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
-      
+
       // Safety check: ensure context is not empty
       if (followUpContextMessages.length === 0 && chat.messages.length > 1) {
         console.error(`[chat] follow-up context is empty despite ${chat.messages.length} messages - this indicates a conversion bug`);
       }
-      
+
       const followUpSystemPrompt = (chat.type === "agent" || chat.type === "bluesky")
         ? (await buildSplitAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type, projectPath)).systemPrompt
         : chat.systemPrompt || "You are a helpful assistant.";
-      
+
       // Recursively handle the follow-up with a fresh turn abort controller
       await handleChatStream(chat, queuedFollowUp.message, followUpContextMessages, followUpSystemPrompt, null, req, res);
       return; // Exit early since we've recursively handled the follow-up
@@ -1884,7 +2093,7 @@ async function handleChatStream(
         }
         savedMessages.pop();
       }
-      
+
       // Safety: if no ask_user message was found, keep the original context
       // to avoid losing all conversation history due to malformed message structure
       if (!foundAskUser && context.messages.length > 0) {
@@ -1904,27 +2113,25 @@ async function handleChatStream(
     // Flush any remaining thinking timer before building the final message
     flushThinkingTimer();
 
-    // Build the final assistant message
-    const assistantMsg = buildCurrentAssistantMessage();
-    
+    // Build the final assistant row. If the last LLM turn already produced a
+    // concrete assistant message, use that exact row; otherwise fall back to
+    // the uncommitted accumulators for abort/recovery paths.
+    const assistantMsg = state.pendingFinalAssistantMessage ?? buildUncommittedAssistantMessage();
+    const logicalAssistantContent = stripPlaceholderEllipsisBlocks(state.fullText) || assistantMsg.content;
+
     // Check if the message has any actual content
-    const hasContent = assistantMsg.content.trim() || assistantMsg.thinking || assistantMsg.toolCalls?.length;
-    
+    const hasContent = hasAssistantMessageContent(assistantMsg);
+
     if (hasContent) {
-      // Replace the in-progress message if present, otherwise push
-      const lastMsg = chat.messages[chat.messages.length - 1];
-      if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
-        chat.messages[chat.messages.length - 1] = assistantMsg;
-      } else {
-        chat.messages.push(assistantMsg);
-      }
+      upsertAssistantMessage(assistantMsg);
+      markUncommittedAssistantMessageCommitted(assistantMsg);
       await saveChat(chat);
       console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput} content=${assistantMsg.content.length}ch`);
 
       // Generate a brief recap for long assistant messages (agent/project/system chats only)
-      if ((chat.type === "agent" || chat.type === "system") && assistantMsg.content.length > RECAP_THRESHOLD && !assistantMsg.recap) {
+      if ((chat.type === "agent" || chat.type === "system") && logicalAssistantContent.length > RECAP_THRESHOLD && !assistantMsg.recap) {
         try {
-          const recap = await generateRecap(assistantMsg.content);
+          const recap = await generateRecap(logicalAssistantContent);
           if (recap) {
             const msgIdx = chat.messages.length - 1;
             chat.messages[msgIdx] = { ...chat.messages[msgIdx], recap };
@@ -1942,9 +2149,9 @@ async function handleChatStream(
       // System chats (synthesis, wake) are never user-facing — skip them.
       // Use the generated recap as the notification body when available,
       // falling back to truncated content.
-      if (chat.id !== "system" && !waitingForInput && assistantMsg.content.trim()) {
+      if (chat.id !== "system" && !waitingForInput && logicalAssistantContent.trim()) {
         const initiatingDeviceId = (req.body as any)?.deviceId;
-        const pushBody = assistantMsg.recap || truncateForBody(assistantMsg.content);
+        const pushBody = assistantMsg.recap || truncateForBody(logicalAssistantContent);
         sendPush(
           "owner",
           {
@@ -1991,9 +2198,9 @@ async function handleChatStream(
 
       // Generate LLM title after the first exchange (2 messages = 1 user + 1 assistant)
       // Only generate title if we have actual content
-      if (chat.messages.length === 2 && hasContent) {
+      if (shouldGenerateInitialTitle(chat) && hasContent) {
         try {
-          const title = await generateTitle(lastUserMessage, assistantMsg.content);
+          const title = await generateTitle(lastUserMessage, logicalAssistantContent);
           if (title) {
             chat.title = title;
             await saveChat(chat);
@@ -2020,7 +2227,7 @@ async function handleChatStream(
 
       // Memory extraction — runs after agent loop is fully complete (no concurrent LLM interference)
       if ((chat.type === "agent" || chat.type === "bluesky") && hasContent) {
-        extractMemories(chat.modelId, chat.id, lastUserMessage, assistantMsg.content)
+        extractMemories(chat.modelId, chat.id, lastUserMessage, logicalAssistantContent)
           .catch((err) => console.error("[memory] extraction failed:", err));
       }
       // Run any deferred extractions from mid-loop follow-ups
@@ -2035,15 +2242,8 @@ async function handleChatStream(
     if (askUserRef.current) {
       waitingForInput = true;
 
-      // Build partial assistant message with whatever we accumulated
-      const assistantMsg = buildCurrentAssistantMessage();
-      // Replace in-progress message if present, otherwise push
-      const lastMsg = chat.messages[chat.messages.length - 1];
-      if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
-        chat.messages[chat.messages.length - 1] = assistantMsg;
-      } else {
-        chat.messages.push(assistantMsg);
-      }
+      // Build partial assistant message with whatever remains uncommitted.
+      const assistantMsg = finalizeUncommittedAssistantMessage() ?? buildUncommittedAssistantMessage();
 
       // Save immediately - this is critical for durability
       try {
@@ -2074,17 +2274,11 @@ async function handleChatStream(
     } else if (e.name === "AbortError") {
       // AbortError from client disconnect or inactivity timeout
       // Save whatever we've accumulated before the connection dropped
-      if (state.fullText.trim() || state.allToolCalls.length > 0) {
-        const assistantMsg = buildCurrentAssistantMessage();
-        const lastMsg = chat.messages[chat.messages.length - 1];
-        if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
-          chat.messages[chat.messages.length - 1] = assistantMsg;
-        } else {
-          chat.messages.push(assistantMsg);
-        }
+      if (hasUncommittedAssistantActivity()) {
+        const assistantMsg = finalizeUncommittedAssistantMessage();
         try {
           await saveChat(chat);
-          console.log(`[chat] abort: saved partial response (${assistantMsg.content.length}ch, ${assistantMsg.toolCalls?.length || 0} tools)`);
+          console.log(`[chat] abort: saved partial response (${assistantMsg?.content.length || 0}ch, ${assistantMsg?.toolCalls?.length || 0} tools)`);
         } catch (saveErr) {
           console.error(`[chat] abort: failed to save partial response:`, saveErr);
         }
@@ -2092,22 +2286,16 @@ async function handleChatStream(
       console.log(`[chat] stream aborted: ${connectionClosed ? "client disconnected" : "signal aborted"}`);
     } else {
       // Unexpected error - save what we have before reporting
-      if (state.fullText.trim() || state.allToolCalls.length > 0 || state.allToolResults.length > 0) {
-        const assistantMsg = buildCurrentAssistantMessage();
-        const lastMsg = chat.messages[chat.messages.length - 1];
-        if (lastMsg?.role === "assistant" && lastMsg._inProgress) {
-          chat.messages[chat.messages.length - 1] = assistantMsg;
-        } else {
-          chat.messages.push(assistantMsg);
-        }
+      if (hasUncommittedAssistantActivity()) {
+        const assistantMsg = finalizeUncommittedAssistantMessage();
         try {
           await saveChat(chat);
-          console.log(`[chat] error: saved partial state before error (${assistantMsg.content.length}ch)`);
+          console.log(`[chat] error: saved partial state before error (${assistantMsg?.content.length || 0}ch)`);
         } catch (saveErr) {
           console.error(`[chat] error: failed to save partial state:`, saveErr);
         }
       }
-      
+
       // Only write error if the connection is still open
       if (!connectionClosed) {
         res.write(
@@ -2165,14 +2353,14 @@ router.post("/", async (req, res) => {
   const compactResult = parseCompactCommand(message);
   if (compactResult.compact) {
     console.log(`[chat] /compact command detected for chat ${chatId}`);
-    
+
     // Get settings for context window resolution
     const settings = await getSettings();
     const { getEffectiveContextWindow, discoverAllModels } = await import("../services/models.js");
     const allModels = await discoverAllModels();
     const ollamaModel = allModels.find(m => m.id === chat.modelId);
     const contextWindow = getEffectiveContextWindow(chat, ollamaModel, settings);
-    
+
     // Set up SSE stream BEFORE triggering compaction so keepalive pings can
     // flow while the (CPU) extraction model runs index generation. Without
     // this, the client's fetch() would hang until the first byte, and its
@@ -2281,15 +2469,15 @@ router.post("/", async (req, res) => {
   // Check for skill invocations anywhere in the message
   const invokedSkills = parseSkillInvocations(message);
   const activatedSkillNames: string[] = [];
-  
+
   // Always discover skills (global + project if applicable)
   const allSkills = await discoverSkills(chat.projectId);
   console.log(`[skills] Chat ${chatId} (type=${chat.type}, projectId=${chat.projectId}): discovered ${allSkills.length} skills: ${allSkills.map(s => s.name).join(", ")}`);
-  
+
   if (invokedSkills.length > 0) {
     for (const invokedSkill of invokedSkills) {
       const skill = allSkills.find(s => s.name.toLowerCase() === invokedSkill.toLowerCase());
-      
+
       if (skill) {
         // Add skill to active skills if not already present
         if (!chat.activeSkills) {
@@ -2306,11 +2494,11 @@ router.post("/", async (req, res) => {
         console.warn(`[skills] Invoked skill "${invokedSkill}" not found in discovered skills`);
       }
     }
-    
+
     // Keep skill invocations in the message for display (they're already activated)
     // No need to strip them - they serve as visual indicators of activated skills
   }
-  
+
   // Check for pending state (ask_user OR mid-turn crash recovery)
   const pendingState = await loadPendingState(chatId);
 
@@ -2359,7 +2547,7 @@ router.post("/", async (req, res) => {
   if (pendingState && !isMidTurnRecovery) {
     // ASK_USER RESUME: the user's message is the answer to ask_user
     let systemPrompt = pendingState.systemPrompt;
-    
+
     // Load settings for context window resolution
     const settings = await getSettings();
 
@@ -2577,7 +2765,7 @@ router.post("/", async (req, res) => {
       systemPrompt = split.systemPrompt;
       memoriesDelta = split.memoriesMessage;
     }
-    
+
     // Inject active skills into system prompt
     if (chat.activeSkills?.length) {
       const skillsCache = new Map<string, Skill>();
@@ -2591,7 +2779,7 @@ router.post("/", async (req, res) => {
     } else {
       console.log(`[skills] Chat ${chatId}: no activeSkills set (projectId=${chat.projectId})`);
     }
-    
+
     // Discover model for pre-send truncation
     let model: OllamaModel | undefined;
     try {
@@ -2601,7 +2789,7 @@ router.post("/", async (req, res) => {
       console.error("[compaction] model discovery failed:", err.message);
       model = undefined; // Skip truncation if providers are unreachable
     }
-    
+
     // Pre-send context protection: truncate BEFORE sending if >75% of context window.
     // Initialize SSE stream early so compaction progress events (and the extraction
     // model's 10s keepalive) reach the client while pre-send compaction is running.
@@ -2723,7 +2911,7 @@ router.post("/", async (req, res) => {
     if (chat.messages.length <= 3 && chat.messages.length > 1) {
       console.warn(`[chat] WARNING: chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
     }
-    
+
     const userPiMessage = buildUserPiMessage(message, images);
 
     await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
@@ -2866,7 +3054,7 @@ router.post("/edit", async (req, res) => {
 
   // Get the original message to preserve images BEFORE truncating
   const originalMessage = chat.messages[messageIndex];
-  
+
   // Truncate everything from messageIndex onwards
   chat.messages = chat.messages.slice(0, messageIndex);
 
@@ -2902,10 +3090,10 @@ router.post("/edit", async (req, res) => {
     systemPrompt = split.systemPrompt;
     editMemoriesDelta = split.memoriesMessage;
   }
-  
+
   // Load settings for context window resolution
   const settings = await getSettings();
-  
+
   // Inject active skills into system prompt
   if (chat.activeSkills?.length) {
     const skillsCache = new Map<string, Skill>();
@@ -2915,7 +3103,7 @@ router.post("/edit", async (req, res) => {
     }
     systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
   }
-  
+
   // Discover model for pre-send truncation
   let model: OllamaModel | undefined;
   try {
@@ -2925,7 +3113,7 @@ router.post("/edit", async (req, res) => {
     console.error("[compaction] model discovery failed (edit):", err.message);
     model = undefined; // Skip truncation if providers are unreachable
   }
-  
+
   // Pre-send context protection for edit path.
   // Initialize SSE stream BEFORE compaction so `compacting` and keepalive
   // events reach the client while the (CPU) extraction model is generating.
@@ -2999,7 +3187,7 @@ router.post("/edit", async (req, res) => {
       }
     });
   }
-  
+
   setCachedAugmentedPrompt(chat.id, editMemoriesDelta ? `${systemPrompt}\n\n${editMemoriesDelta}` : systemPrompt);
 
   // Persist the memory delta as a system-role message immediately before the
@@ -3017,17 +3205,17 @@ router.post("/edit", async (req, res) => {
 
   // Context = all messages EXCEPT the one we just added
   const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
-  
+
   // Safety check: warn if context is empty for non-first messages
   if (contextMessages.length === 0 && chat.messages.length > 1) {
     console.error(`[chat] CRITICAL: context conversion produced empty array for edit with ${chat.messages.length} messages`);
   }
-  
+
   // Safety check: detect catastrophic context loss from compaction
   if (chat.messages.length <= 3 && chat.messages.length > 1) {
     console.warn(`[chat] WARNING: edit chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
   }
-  
+
   const userPiMessage = buildUserPiMessage(message, editImages);
 
   await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
