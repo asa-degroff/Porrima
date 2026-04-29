@@ -18,7 +18,7 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, type OverridableSlotId } from "../api/client";
 import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
@@ -332,6 +332,60 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   // Track which server card has its config section expanded
   const [llamaConfigExpanded, setLlamaConfigExpanded] = useState<LlamaServerId | null>(null);
 
+  // Slot currently mid-apply (drop-in override write + daemon-reload + restart).
+  const [applyingSlot, setApplyingSlot] = useState<OverridableSlotId | null>(null);
+
+  // Apply a model to an overridable slot: writes the systemd drop-in, reloads,
+  // restarts the unit, and persists the modelId in settings. Replaces the
+  // previous "save modelId only" behavior so dropdown selection actually
+  // changes the running model. Optimistically updates the dropdown trigger so
+  // the selection feels immediate; reverts on error.
+  const handleApplySlotModel = useCallback(async (slot: OverridableSlotId, modelId: string) => {
+    if (!modelId) return;
+    setApplyingSlot(slot);
+    setLlamaServerMessage(null);
+    let previous: string | null = null;
+    if (slot === "title-generation") { previous = titleGenerationModelId; setTitleGenerationModelId(modelId); }
+    else if (slot === "extraction") { previous = extractionModelId; setExtractionModelId(modelId); }
+    else if (slot === "reranker") { previous = rerankerModelId; setRerankerModelId(modelId); }
+    else if (slot === "embedding") { previous = embeddingModel; setEmbeddingModel(modelId); }
+    try {
+      const result = await applyLlamaSlotModel(slot, modelId);
+      const s = result.server;
+      setLlamaServers((prev) => prev.map((srv) => srv.id === slot ? s : srv));
+      if (s.id === "title-generation" && s.expectedModel) setTitleGenerationModelId(s.expectedModel);
+      else if (s.id === "extraction" && s.expectedModel) setExtractionModelId(s.expectedModel);
+      else if (s.id === "reranker" && s.expectedModel) setRerankerModelId(s.expectedModel);
+      else if (s.id === "embedding" && s.expectedModel) setEmbeddingModel(s.expectedModel);
+      setLlamaServerMessage({ type: "ok", text: `Applied ${modelId} to ${s.label}; service restarted.` });
+    } catch (e: any) {
+      // Revert optimistic update so the trigger reflects the still-running model.
+      if (previous !== null) {
+        if (slot === "title-generation") setTitleGenerationModelId(previous);
+        else if (slot === "extraction") setExtractionModelId(previous);
+        else if (slot === "reranker") setRerankerModelId(previous);
+        else if (slot === "embedding") setEmbeddingModel(previous);
+      }
+      setLlamaServerMessage({ type: "err", text: e?.message || "Failed to apply model" });
+    } finally {
+      setApplyingSlot(null);
+    }
+  }, [titleGenerationModelId, extractionModelId, rerankerModelId, embeddingModel]);
+
+  const handleClearSlotOverride = useCallback(async (slot: OverridableSlotId) => {
+    setApplyingSlot(slot);
+    setLlamaServerMessage(null);
+    try {
+      const result = await clearLlamaSlotModelOverride(slot);
+      setLlamaServers((prev) => prev.map((srv) => srv.id === slot ? result.server : srv));
+      setLlamaServerMessage({ type: "ok", text: result.removed ? `Reset ${slot} to unit default.` : `No override was active on ${slot}.` });
+    } catch (e: any) {
+      setLlamaServerMessage({ type: "err", text: e?.message || "Failed to clear override" });
+    } finally {
+      setApplyingSlot(null);
+    }
+  }, []);
+
   // Inline setting update for a specific server — saves immediately via PATCH
   const handleLlamaServerSettings = useCallback(async (id: LlamaServerId, updates: Record<string, unknown>) => {
     setLlamaServerMessage(null);
@@ -455,9 +509,37 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     return () => { cancelled = true; };
   }, [ollamaUrl, llamacppUrl, rerankerUrl, embeddingUrl, embeddingProvider, extractionModelUrl, titleGenerationUrl]);
 
-  // Discover embedding models for the dropdown. Re-runs when provider/url change.
+  // Slot-keyed disk-model loader. Local GGUFs in ~/.local/share/llama-models/
+  // are the source of truth for swappable models. listAvailableLlamaModels
+  // returns kind-filtered entries; we map to the {id,name} shape the dropdowns
+  // already expect.
+  const loadDiskModels = useCallback(async (
+    slot: OverridableSlotId,
+    setModels: (m: DiscoveredModel[]) => void,
+    setLoading: (b: boolean) => void
+  ) => {
+    setLoading(true);
+    try {
+      const r = await listAvailableLlamaModels(slot);
+      setModels(r.models.map((m) => ({ id: m.id, name: m.name })));
+    } catch {
+      setModels([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Embedding dropdown: still uses Ollama discovery for provider=ollama.
+  // For provider=llamacpp, source from local llama-models dir so swaps go
+  // through the systemd-override flow.
   useEffect(() => {
     let cancelled = false;
+    if (embeddingProvider === "llamacpp") {
+      loadDiskModels("embedding",
+        (m) => { if (!cancelled) setEmbeddingModels(m); },
+        (b) => { if (!cancelled) setEmbeddingModelsLoading(b); });
+      return () => { cancelled = true; };
+    }
     const url = embeddingUrl.trim();
     if (!url) {
       setEmbeddingModels([]);
@@ -465,70 +547,39 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     }
     setEmbeddingModelsLoading(true);
     const handle = setTimeout(() => {
-      discoverModels({ provider: embeddingProvider, kind: "embedding", url })
+      discoverModels({ provider: "ollama", kind: "embedding", url })
         .then((r) => { if (!cancelled) setEmbeddingModels(r.models); })
         .catch(() => { if (!cancelled) setEmbeddingModels([]); })
         .finally(() => { if (!cancelled) setEmbeddingModelsLoading(false); });
     }, 300);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [embeddingProvider, embeddingUrl]);
+  }, [embeddingProvider, embeddingUrl, loadDiskModels]);
 
-  // Discover models on the dedicated extraction server. Re-runs when URL changes.
-  // When the URL is empty, fall back to the chat-router models list (the prop).
   useEffect(() => {
     let cancelled = false;
-    const url = extractionModelUrl.trim();
-    if (!url) {
-      setExtractionServerModels([]);
-      return;
-    }
-    setExtractionServerModelsLoading(true);
-    const handle = setTimeout(() => {
-      discoverModels({ provider: "llamacpp", kind: "chat", url })
-        .then((r) => { if (!cancelled) setExtractionServerModels(r.models); })
-        .catch(() => { if (!cancelled) setExtractionServerModels([]); })
-        .finally(() => { if (!cancelled) setExtractionServerModelsLoading(false); });
-    }, 300);
-    return () => { cancelled = true; clearTimeout(handle); };
-  }, [extractionModelUrl]);
+    loadDiskModels("extraction",
+      (m) => { if (!cancelled) setExtractionServerModels(m); },
+      (b) => { if (!cancelled) setExtractionServerModelsLoading(b); });
+    return () => { cancelled = true; };
+  }, [loadDiskModels]);
 
-  // Discover reranker models for the dropdown. Re-runs when URL changes.
   useEffect(() => {
     if (!rerankerEnabled) return;
     let cancelled = false;
-    const url = rerankerUrl.trim();
-    if (!url) {
-      setRerankerModels([]);
-      return;
-    }
-    setRerankerModelsLoading(true);
-    const handle = setTimeout(() => {
-      discoverModels({ provider: "llamacpp", kind: "rerank", url })
-        .then((r) => { if (!cancelled) setRerankerModels(r.models); })
-        .catch(() => { if (!cancelled) setRerankerModels([]); })
-        .finally(() => { if (!cancelled) setRerankerModelsLoading(false); });
-    }, 300);
-    return () => { cancelled = true; clearTimeout(handle); };
-  }, [rerankerEnabled, rerankerUrl]);
+    loadDiskModels("reranker",
+      (m) => { if (!cancelled) setRerankerModels(m); },
+      (b) => { if (!cancelled) setRerankerModelsLoading(b); });
+    return () => { cancelled = true; };
+  }, [rerankerEnabled, loadDiskModels]);
 
-  // Discover title-generation models for the dropdown. Re-runs when URL changes.
   useEffect(() => {
     if (!titleGenerationEnabled) return;
     let cancelled = false;
-    const url = titleGenerationUrl.trim();
-    if (!url) {
-      setTitleGenerationModels([]);
-      return;
-    }
-    setTitleGenerationModelsLoading(true);
-    const handle = setTimeout(() => {
-      discoverModels({ provider: "llamacpp", kind: "chat", url })
-        .then((r) => { if (!cancelled) setTitleGenerationModels(r.models); })
-        .catch(() => { if (!cancelled) setTitleGenerationModels([]); })
-        .finally(() => { if (!cancelled) setTitleGenerationModelsLoading(false); });
-    }, 300);
-    return () => { cancelled = true; clearTimeout(handle); };
-  }, [titleGenerationEnabled, titleGenerationUrl]);
+    loadDiskModels("title-generation",
+      (m) => { if (!cancelled) setTitleGenerationModels(m); },
+      (b) => { if (!cancelled) setTitleGenerationModelsLoading(b); });
+    return () => { cancelled = true; };
+  }, [titleGenerationEnabled, loadDiskModels]);
 
   // Fetch Bluesky status
   useEffect(() => {
@@ -1342,6 +1393,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                  not selected by app
 	                                </span>
 	                              )}
+	                              {server.override.active && (
+	                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-purple-400/30 bg-purple-500/15 text-purple-200" title={server.override.modelPath || server.override.path}>
+	                                  model override
+	                                </span>
+	                              )}
 	                            </div>
 	                            <p className="text-xs text-white/35 mt-1">{server.description}</p>
 	                          </div>
@@ -1495,8 +1551,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                    >
 	                                      {extractionServerModels.map((m) => (
 	                                        <button key={m.id} onClick={() => {
-	                                          setExtractionModelId(m.id); extractionModelDd.close();
-	                                          handleLlamaServerSettings("extraction", { modelId: m.id });
+	                                          extractionModelDd.close();
+	                                          handleApplySlotModel("extraction", m.id);
 	                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === extractionModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 	                                          {m.name}
 	                                        </button>
@@ -1555,8 +1611,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                      >
 	                                        {rerankerModels.map((m) => (
 	                                          <button key={m.id} onClick={() => {
-	                                            setRerankerModelId(m.id); rerankerModelDd.close();
-	                                            handleLlamaServerSettings("reranker", { modelId: m.id });
+	                                            rerankerModelDd.close();
+	                                            handleApplySlotModel("reranker", m.id);
 	                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === rerankerModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 	                                            {m.name}
 	                                          </button>
@@ -1608,8 +1664,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                  >
 	                                    {embeddingModels.map((m) => (
 	                                      <button key={m.id} onClick={() => {
-	                                        setEmbeddingModel(m.id); embeddingModelDd.close();
-	                                        handleLlamaServerSettings("embedding", { modelId: m.id });
+	                                        embeddingModelDd.close();
+	                                        if (embeddingProvider === "llamacpp") {
+	                                          handleApplySlotModel("embedding", m.id);
+	                                        } else {
+	                                          setEmbeddingModel(m.id);
+	                                          handleLlamaServerSettings("embedding", { modelId: m.id });
+	                                        }
 	                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === embeddingModel ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 	                                        {m.name}
 	                                      </button>
@@ -1665,8 +1726,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                      >
 	                                        {titleGenerationModels.map((m) => (
 	                                          <button key={m.id} onClick={() => {
-	                                            setTitleGenerationModelId(m.id); titleGenerationModelDd.close();
-	                                            handleLlamaServerSettings("title-generation", { modelId: m.id });
+	                                            titleGenerationModelDd.close();
+	                                            handleApplySlotModel("title-generation", m.id);
 	                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === titleGenerationModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
 	                                            {m.name}
 	                                          </button>
@@ -1683,6 +1744,31 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                </div>
 	                              )}
 	                              <p className="text-xs text-white/30">Tiny CPU-only instance for generating short chat titles.</p>
+	                            </div>
+	                          )}
+	                          {(server.id === "title-generation" || server.id === "extraction" || server.id === "reranker" || server.id === "embedding") && (applyingSlot === server.id || server.override.active) && (
+	                            <div className="flex items-start justify-between gap-2 rounded-lg border border-purple-400/15 bg-purple-500/5 p-2">
+	                              <div className="text-xs text-white/60 min-w-0">
+	                                {applyingSlot === server.id ? (
+	                                  <span className="text-purple-200">Applying… writing override and restarting service.</span>
+	                                ) : (
+	                                  <>
+	                                    <span className="text-purple-200">Drop-in override active.</span>{" "}
+	                                    <span className="text-white/45 font-mono truncate inline-block max-w-full" title={server.override.modelPath || ""}>
+	                                      {server.override.modelPath || "(unknown model path)"}
+	                                    </span>
+	                                  </>
+	                                )}
+	                              </div>
+	                              {server.override.active && applyingSlot !== server.id && (
+	                                <button
+	                                  type="button"
+	                                  onClick={() => handleClearSlotOverride(server.id as OverridableSlotId)}
+	                                  className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all shrink-0"
+	                                >
+	                                  Reset to default
+	                                </button>
+	                              )}
 	                            </div>
 	                          )}
 	                        </div>

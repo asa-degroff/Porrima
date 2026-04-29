@@ -1388,6 +1388,54 @@ export interface LlamaServerStatus {
     modelIds: string[];
     error?: string;
   };
+  override: {
+    active: boolean;
+    path: string;
+    modelPath?: string;
+  };
+}
+
+export type OverridableSlotId = Exclude<LlamaServerId, "inference">;
+
+export interface AvailableLlamaModel {
+  id: string;
+  name: string;
+  ggufPath: string;
+  sizeBytes: number;
+  kind: "chat" | "embedding" | "rerank";
+  hasMmproj: boolean;
+}
+
+export async function listAvailableLlamaModels(slot?: OverridableSlotId): Promise<{ models: AvailableLlamaModel[] }> {
+  const qs = slot ? `?slot=${encodeURIComponent(slot)}` : "";
+  const res = await apiFetch(`${BASE}/llama-servers/available-models${qs}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to list available llama.cpp models");
+  }
+  return res.json();
+}
+
+export async function applyLlamaSlotModel(slot: OverridableSlotId, modelId: string): Promise<{ server: LlamaServerStatus; overridePath: string }> {
+  const res = await apiFetch(`${BASE}/llama-servers/${slot}/apply-model`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ modelId }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to apply model to slot");
+  }
+  return res.json();
+}
+
+export async function clearLlamaSlotModelOverride(slot: OverridableSlotId): Promise<{ server: LlamaServerStatus; removed: boolean }> {
+  const res = await apiFetch(`${BASE}/llama-servers/${slot}/model-override`, { method: "DELETE" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to clear model override");
+  }
+  return res.json();
 }
 
 export async function getLlamaServers(): Promise<{ servers: LlamaServerStatus[] }> {

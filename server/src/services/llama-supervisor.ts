@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import type { Settings } from "../types.js";
+import { extractOverrideModelPath, readOverride } from "./llama-overrides.js";
 
 const execFileAsync = promisify(execFile);
 const SYSTEMCTL = "systemctl";
@@ -50,6 +51,11 @@ export interface LlamaServerStatus {
     status: HttpHealthStatus;
     modelIds: string[];
     error?: string;
+  };
+  override: {
+    active: boolean;
+    path: string;
+    modelPath?: string;
   };
 }
 
@@ -267,6 +273,15 @@ async function getHttpStatus(baseUrl: string): Promise<LlamaServerStatus["http"]
   }
 }
 
+async function getOverrideInfo(unitName: string): Promise<LlamaServerStatus["override"]> {
+  const info = await readOverride(unitName);
+  return {
+    active: info.exists,
+    path: info.path,
+    modelPath: extractOverrideModelPath(info.contents) ?? undefined,
+  };
+}
+
 export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaServerStatus[]> {
   return Promise.all(
     Object.values(DEFINITIONS).map(async (def) => {
@@ -275,6 +290,7 @@ export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaS
         resolveSystemdUnit(def),
         getHttpStatus(url),
       ]);
+      const override = await getOverrideInfo(unit.unitName);
       return {
         id: def.id,
         label: def.label,
@@ -286,6 +302,7 @@ export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaS
         expectedModel: getExpectedModel(def, settings),
         systemd: unit.systemd,
         http,
+        override,
       };
     })
   );
@@ -299,6 +316,7 @@ export async function getLlamaServerStatus(id: string, settings: Settings): Prom
     resolveSystemdUnit(def),
     getHttpStatus(url),
   ]);
+  const override = await getOverrideInfo(unit.unitName);
   return {
     id: def.id,
     label: def.label,
@@ -310,7 +328,19 @@ export async function getLlamaServerStatus(id: string, settings: Settings): Prom
     expectedModel: getExpectedModel(def, settings),
     systemd: unit.systemd,
     http,
+    override,
   };
+}
+
+/**
+ * Resolve the systemd unit name for a slot id. Used by code paths that need
+ * the exact unit name (override writers, etc.) without the full status.
+ */
+export async function resolveSlotUnitName(id: string): Promise<string> {
+  const def = getDefinition(id);
+  if (!def) throw new Error(`Unknown llama.cpp server: ${id}`);
+  const unit = await resolveSystemdUnit(def);
+  return unit.unitName;
 }
 
 export async function runLlamaServerAction(id: string, action: LlamaServerAction, settings: Settings): Promise<LlamaServerStatus> {

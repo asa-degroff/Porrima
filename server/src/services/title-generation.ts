@@ -101,7 +101,7 @@ export async function generateRecap(assistantContent: string): Promise<string | 
 
   const systemContent =
     "Write a brief, one-line objective summary (15-40 words) of what was done in this message. " +
-    "Focus on concrete actions and outcomes. Do not mention the user, assisstant, system, or author, just the message content. " +
+    "Focus on concrete actions and outcomes. Write from an impersonal, immersive perspective, just the message content. " +
     "Reply with ONLY the summary text. No quotes, no prefix, no explanation.";
 
   const raw = await callServer(config, systemContent, tailContent, "recap generation");

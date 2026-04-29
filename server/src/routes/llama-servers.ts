@@ -4,11 +4,22 @@ import {
   getLlamaServerLogs,
   getLlamaServerStatus,
   getLlamaServerStatuses,
+  resolveSlotUnitName,
   runLlamaServerAction,
   type LlamaServerAction,
 } from "../services/llama-supervisor.js";
+import { findLocalModel, listLocalModels, type LlamaModelKind } from "../services/llama-models-disk.js";
+import { isOverridableSlot, renderExecStart } from "../services/llama-launch-templates.js";
+import { applyModelOverride, clearModelOverride } from "../services/llama-overrides.js";
 
 const router = Router();
+
+const SLOT_KIND: Record<string, LlamaModelKind> = {
+  "title-generation": "chat",
+  extraction: "chat",
+  reranker: "rerank",
+  embedding: "embedding",
+};
 
 router.get("/", async (_req, res) => {
   try {
@@ -17,6 +28,37 @@ router.get("/", async (_req, res) => {
     res.json({ servers });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || "Failed to load llama.cpp server status" });
+  }
+});
+
+// List GGUF models on disk, optionally filtered by slot kind.
+router.get("/available-models", async (req, res) => {
+  try {
+    const slot = (req.query.slot as string | undefined) || undefined;
+    let kindFilter: LlamaModelKind | null = null;
+    if (slot) {
+      const kind = SLOT_KIND[slot];
+      if (!kind) {
+        res.status(400).json({ error: `Unknown slot: ${slot}` });
+        return;
+      }
+      kindFilter = kind;
+    }
+
+    const all = await listLocalModels();
+    const filtered = kindFilter ? all.filter((m) => m.kind === kindFilter) : all;
+    res.json({
+      models: filtered.map((m) => ({
+        id: m.id,
+        name: m.name,
+        ggufPath: m.ggufPath,
+        sizeBytes: m.sizeBytes,
+        kind: m.kind,
+        hasMmproj: m.hasMmproj,
+      })),
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "Failed to list local llama.cpp models" });
   }
 });
 
@@ -37,6 +79,76 @@ router.get("/:id/logs", async (req, res) => {
     res.json(result);
   } catch (e: any) {
     res.status(400).json({ error: e?.message || "Failed to load llama.cpp server logs" });
+  }
+});
+
+// POST /:id/apply-model — Write a systemd drop-in override for the slot's
+// ExecStart so it loads the requested local GGUF, then daemon-reload + restart
+// the unit. Also persists modelId in settings so consumers send the matching
+// model name in API requests. Body: { modelId: string }.
+//
+// Must be declared BEFORE the generic POST /:id/:action route below — Express
+// matches in declaration order and "/:id/:action" with action="apply-model"
+// would otherwise shadow this and 400 with "action must be start/stop/restart".
+router.post("/:id/apply-model", async (req, res) => {
+  const id = req.params.id;
+  if (!isOverridableSlot(id)) {
+    res.status(400).json({ error: `Slot does not support model override: ${id}` });
+    return;
+  }
+  const modelId = typeof req.body?.modelId === "string" ? req.body.modelId.trim() : "";
+  if (!modelId) {
+    res.status(400).json({ error: "modelId is required" });
+    return;
+  }
+
+  try {
+    const model = await findLocalModel(modelId);
+    if (!model) {
+      res.status(404).json({ error: `Model not found in local llama-models directory: ${modelId}` });
+      return;
+    }
+    if (model.kind !== SLOT_KIND[id]) {
+      res.status(400).json({ error: `Model ${modelId} is kind '${model.kind}', not '${SLOT_KIND[id]}' as required by ${id}` });
+      return;
+    }
+
+    const settings = await getSettings();
+    const execStart = renderExecStart(id, { ggufPath: model.ggufPath, modelId: model.id, settings });
+    const unitName = await resolveSlotUnitName(id);
+    const { overridePath } = await applyModelOverride(unitName, execStart);
+
+    // Persist the model id so consumer code (title-generation.ts, reranker.ts,
+    // etc.) sends the matching model name in requests.
+    if (id === "title-generation") settings.titleGenerationModelId = model.id;
+    else if (id === "extraction") settings.extractionModelId = model.id;
+    else if (id === "reranker") settings.rerankerModelId = model.id;
+    else if (id === "embedding") settings.embeddingModel = model.id;
+    await saveSettings(settings);
+
+    const server = await getLlamaServerStatus(id, settings);
+    res.json({ server, overridePath });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "Failed to apply model override" });
+  }
+});
+
+// DELETE /:id/model-override — Remove the drop-in override and restart the
+// unit so it reverts to the original ExecStart from its installed unit file.
+router.delete("/:id/model-override", async (req, res) => {
+  const id = req.params.id;
+  if (!isOverridableSlot(id)) {
+    res.status(400).json({ error: `Slot does not support model override: ${id}` });
+    return;
+  }
+  try {
+    const unitName = await resolveSlotUnitName(id);
+    const result = await clearModelOverride(unitName);
+    const settings = await getSettings();
+    const server = await getLlamaServerStatus(id, settings);
+    res.json({ server, removed: result.removed });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "Failed to clear model override" });
   }
 });
 
