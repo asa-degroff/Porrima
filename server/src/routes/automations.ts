@@ -2,7 +2,6 @@ import { Router } from "express";
 import {
   createCustomAutomationTask,
   deleteAutomationTask,
-  ensureAutomationDefaults,
   getAutomationTask,
   listAutomationRuns,
   listAutomationTasks,
@@ -16,7 +15,6 @@ const router = Router();
 
 router.get("/", async (_req, res) => {
   try {
-    await ensureAutomationDefaults();
     res.json({
       tasks: listAutomationTasks(),
       activeTaskId: getActiveAutomationTaskId(),
@@ -29,7 +27,6 @@ router.get("/", async (_req, res) => {
 
 router.post("/", async (req, res) => {
   try {
-    await ensureAutomationDefaults();
     const task = createCustomAutomationTask(req.body ?? {});
     res.status(201).json(task);
   } catch (e: any) {
@@ -39,7 +36,6 @@ router.post("/", async (req, res) => {
 
 router.patch("/:id", async (req, res) => {
   try {
-    await ensureAutomationDefaults();
     const task = updateAutomationTask(req.params.id, req.body ?? {});
     if (!task) return res.status(404).json({ error: "Automation not found" });
     res.json(task);
@@ -50,7 +46,6 @@ router.patch("/:id", async (req, res) => {
 
 router.delete("/:id", async (req, res) => {
   try {
-    await ensureAutomationDefaults();
     const existing = getAutomationTask(req.params.id);
     if (!existing) return res.status(404).json({ error: "Automation not found" });
     if (existing.builtIn) {
@@ -65,7 +60,6 @@ router.delete("/:id", async (req, res) => {
 
 router.post("/:id/reset-prompts", async (req, res) => {
   try {
-    await ensureAutomationDefaults();
     const task = resetBuiltinAutomationPrompts(req.params.id);
     if (!task) return res.status(404).json({ error: "Built-in automation not found" });
     res.json(task);
@@ -76,7 +70,6 @@ router.post("/:id/reset-prompts", async (req, res) => {
 
 router.post("/:id/run", async (req, res) => {
   try {
-    await ensureAutomationDefaults();
     const task = getAutomationTask(req.params.id);
     if (!task) return res.status(404).json({ error: "Automation not found" });
     if (isAutomationActive()) {
@@ -108,7 +101,6 @@ router.post("/:id/run", async (req, res) => {
 
 router.get("/:id/runs", async (req, res) => {
   try {
-    await ensureAutomationDefaults();
     if (!getAutomationTask(req.params.id)) {
       return res.status(404).json({ error: "Automation not found" });
     }

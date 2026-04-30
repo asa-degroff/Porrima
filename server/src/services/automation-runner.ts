@@ -458,8 +458,9 @@ export async function runAutomationTask(
   if (!task) return makeErrorResult("Automation task not found");
 
   await acquireAutomationLock(task.id);
-  const run = startAutomationRun(task.id, origin);
+  let run: AutomationRun | null = null;
   try {
+    run = startAutomationRun(task.id, origin);
     const result = await executeAutomation(task, run);
     await sendAutomationPush(task, result);
     finishAutomationRun(run.id, result.success ? "success" : "failed", {
@@ -472,7 +473,9 @@ export async function runAutomationTask(
     return result;
   } catch (e: any) {
     const result = makeErrorResult(e?.message || "Automation failed");
-    finishAutomationRun(run.id, "failed", { error: result.error });
+    if (run) {
+      finishAutomationRun(run.id, "failed", { error: result.error });
+    }
     return result;
   } finally {
     releaseAutomationLock(task.id);

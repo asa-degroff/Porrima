@@ -153,6 +153,7 @@ export interface AutomationTask {
   lastRunAt?: string;
   nextRunAt?: string;
   lastStatus?: AutomationRunStatus;
+  consecutiveFailures?: number;
   createdAt: string;
   updatedAt: string;
 }

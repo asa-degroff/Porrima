@@ -356,7 +356,7 @@ export function startScheduler(): void {
   // Check every 30 minutes for corpus enrichment
   setInterval(checkAndRunEnrichment, ENRICHMENT_CHECK_INTERVAL_MS);
   
-  console.log("[scheduler] Started (automations every 1min, delayed extraction every 5min, enrichment every 30min)");
+  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, enrichment every 30min)");
 
   // Start Bluesky poller if enabled
   startBlueskyPoller();

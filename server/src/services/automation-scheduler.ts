@@ -4,7 +4,6 @@ import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js"
 import { getSettings } from "./chat-storage.js";
 import { getMemoryCount } from "./memory-storage.js";
 import {
-  ensureAutomationDefaults,
   listEnabledAutomationTasks,
   SYNTHESIS_AUTOMATION_ID,
 } from "./automation-storage.js";
@@ -12,7 +11,7 @@ import { getActiveAutomationTaskId, isAutomationActive } from "./automation-lock
 import { runAutomationTask } from "./automation-runner.js";
 import { isSynthesisActive, isWakeCycleActive } from "./system-chat.js";
 
-const AUTOMATION_CHECK_INTERVAL_MS = 60 * 1000;
+const AUTOMATION_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES = 60;
 
 let automationCheckRunning = false;
@@ -62,8 +61,6 @@ export async function checkAndRunDueAutomations(): Promise<void> {
 
   automationCheckRunning = true;
   try {
-    await ensureAutomationDefaults();
-
     if (isAutomationActive()) {
       console.log(`[automation] Skipping check — automation active (${getActiveAutomationTaskId()})`);
       return;
@@ -111,5 +108,5 @@ export function startAutomationScheduler(): void {
   }, 30 * 1000);
 
   setInterval(checkAndRunDueAutomations, AUTOMATION_CHECK_INTERVAL_MS);
-  console.log("[automation] Scheduler started (checks every 1min)");
+  console.log("[automation] Scheduler started (checks every 5min)");
 }

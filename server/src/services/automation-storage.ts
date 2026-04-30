@@ -21,6 +21,8 @@ export const WAKE_AUTOMATION_ID = "builtin:wake";
 const DEFAULT_SYNTHESIS_INTERVAL_MINUTES = 24 * 60;
 const DEFAULT_WAKE_INTERVAL_MINUTES = 6 * 60;
 const DEFAULT_CUSTOM_INTERVAL_MINUTES = 24 * 60;
+const MAX_CUSTOM_FAILURES_BEFORE_DISABLE = 5;
+let schemaReady = false;
 
 interface AutomationTaskRow {
   id: string;
@@ -39,6 +41,7 @@ interface AutomationTaskRow {
   lastRunAt: string | null;
   nextRunAt: string | null;
   lastStatus: string | null;
+  consecutiveFailures: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -58,6 +61,8 @@ interface AutomationRunRow {
 }
 
 function ensureSchema(): void {
+  if (schemaReady) return;
+
   const db = getDb();
   db.exec(`
     CREATE TABLE IF NOT EXISTS automation_tasks (
@@ -77,6 +82,7 @@ function ensureSchema(): void {
       lastRunAt TEXT,
       nextRunAt TEXT,
       lastStatus TEXT,
+      consecutiveFailures INTEGER NOT NULL DEFAULT 0,
       createdAt TEXT NOT NULL,
       updatedAt TEXT NOT NULL
     );
@@ -98,6 +104,13 @@ function ensureSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_automation_tasks_order ON automation_tasks(enabled, orderIndex, nextRunAt);
     CREATE INDEX IF NOT EXISTS idx_automation_runs_task ON automation_runs(taskId, startedAt DESC);
   `);
+
+  const taskCols = db.prepare("PRAGMA table_info(automation_tasks)").all() as Array<{ name: string }>;
+  if (!taskCols.some((c) => c.name === "consecutiveFailures")) {
+    db.exec("ALTER TABLE automation_tasks ADD COLUMN consecutiveFailures INTEGER NOT NULL DEFAULT 0");
+    console.log("[automation] Added consecutiveFailures column to automation_tasks");
+  }
+  schemaReady = true;
 }
 
 function parseJson<T>(value: string, fallback: T): T {
@@ -175,6 +188,14 @@ export function computeNextRunAt(task: Pick<AutomationTask, "schedule">, fromMs 
   return new Date(fromMs + minutes * 60 * 1000).toISOString();
 }
 
+function computeFailureRetryAt(task: AutomationTask, consecutiveFailures: number, fromMs = Date.now()): string {
+  const baseMinutes = task.builtIn ? 15 : 30;
+  const capMinutes = task.builtIn ? 6 * 60 : 24 * 60;
+  const multiplier = Math.pow(2, Math.max(0, consecutiveFailures - 1));
+  const delayMinutes = Math.min(baseMinutes * multiplier, capMinutes);
+  return new Date(fromMs + delayMinutes * 60 * 1000).toISOString();
+}
+
 function taskFromRow(row: AutomationTaskRow): AutomationTask {
   return {
     id: row.id,
@@ -196,6 +217,7 @@ function taskFromRow(row: AutomationTaskRow): AutomationTask {
     ...(row.lastRunAt ? { lastRunAt: row.lastRunAt } : {}),
     ...(row.nextRunAt ? { nextRunAt: row.nextRunAt } : {}),
     ...(row.lastStatus ? { lastStatus: row.lastStatus as AutomationRunStatus } : {}),
+    consecutiveFailures: row.consecutiveFailures ?? 0,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -224,11 +246,11 @@ function insertTask(task: AutomationTask): void {
       `INSERT OR REPLACE INTO automation_tasks (
         id, kind, title, enabled, builtIn, orderIndex, chatId, scheduleJson,
         activationPolicy, promptStepsJson, notificationsJson, maxIterations,
-        timeoutMs, lastRunAt, nextRunAt, lastStatus, createdAt, updatedAt
+        timeoutMs, lastRunAt, nextRunAt, lastStatus, consecutiveFailures, createdAt, updatedAt
       ) VALUES (
         @id, @kind, @title, @enabled, @builtIn, @orderIndex, @chatId, @scheduleJson,
         @activationPolicy, @promptStepsJson, @notificationsJson, @maxIterations,
-        @timeoutMs, @lastRunAt, @nextRunAt, @lastStatus, @createdAt, @updatedAt
+        @timeoutMs, @lastRunAt, @nextRunAt, @lastStatus, @consecutiveFailures, @createdAt, @updatedAt
       )`,
     )
     .run({
@@ -248,6 +270,7 @@ function insertTask(task: AutomationTask): void {
       lastRunAt: task.lastRunAt ?? null,
       nextRunAt: task.nextRunAt ?? null,
       lastStatus: task.lastStatus ?? null,
+      consecutiveFailures: task.consecutiveFailures ?? 0,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     });
@@ -286,6 +309,7 @@ function makeBuiltinTask(params: {
     notifications: { enabled: false },
     maxIterations: params.maxIterations,
     timeoutMs: params.timeoutMs,
+    consecutiveFailures: 0,
     ...(lastRunAt ? { lastRunAt } : {}),
     nextRunAt,
     createdAt: now,
@@ -406,6 +430,7 @@ export function createCustomAutomationTask(input: Partial<AutomationTask>): Auto
     notifications: normalizeNotifications(input.notifications),
     maxIterations: input.maxIterations ?? 20,
     timeoutMs: input.timeoutMs ?? 30 * 60 * 1000,
+    consecutiveFailures: 0,
     nextRunAt: computeNextRunAt({ schedule }),
     createdAt: now,
     updatedAt: now,
@@ -440,6 +465,7 @@ export function updateAutomationTask(id: string, patch: Partial<AutomationTask>)
     notifications: patch.notifications ? normalizeNotifications(patch.notifications) : existing.notifications,
     maxIterations: Math.max(1, Math.floor(Number(patch.maxIterations ?? existing.maxIterations))),
     timeoutMs: Math.max(60_000, Math.floor(Number(patch.timeoutMs ?? existing.timeoutMs))),
+    consecutiveFailures: existing.consecutiveFailures ?? 0,
     updatedAt: new Date().toISOString(),
   };
   if (patch.schedule || patch.enabled !== undefined) {
@@ -522,16 +548,35 @@ export function finishAutomationRun(
   if (run) {
     const task = getAutomationTask(run.taskId);
     if (task) {
+      const isSuccess = status === "success";
+      const isFailure = status === "failed";
+      const consecutiveFailures = isSuccess
+        ? 0
+        : isFailure
+          ? (task.consecutiveFailures ?? 0) + 1
+          : task.consecutiveFailures ?? 0;
+      const shouldDisable =
+        isFailure && !task.builtIn && consecutiveFailures >= MAX_CUSTOM_FAILURES_BEFORE_DISABLE;
       insertTask({
         ...task,
-        lastRunAt: status === "success" ? finishedAt : task.lastRunAt,
-        nextRunAt:
-          status === "success"
+        enabled: shouldDisable ? false : task.enabled,
+        lastRunAt: isSuccess ? finishedAt : task.lastRunAt,
+        nextRunAt: shouldDisable
+          ? undefined
+          : isSuccess
             ? computeNextRunAt(task, Date.now())
-            : new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+            : isFailure
+              ? computeFailureRetryAt(task, consecutiveFailures)
+              : task.nextRunAt,
         lastStatus: status,
+        consecutiveFailures,
         updatedAt: finishedAt,
       });
+      if (shouldDisable) {
+        console.warn(
+          `[automation] Disabled ${task.id} after ${consecutiveFailures} consecutive failures`,
+        );
+      }
     }
   }
   return run;
