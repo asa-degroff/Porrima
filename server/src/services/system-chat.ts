@@ -1,6 +1,7 @@
 import type { ToolSideEffects } from "./agent-tools.js";
-import type { Message, StopReason, ToolCall } from "@mariozechner/pi-ai";
+import type { ToolCall } from "@mariozechner/pi-ai";
 import type { AutomationPromptStep, Chat, ChatMessage } from "../types.js";
+import { runHeadlessChatTurn } from "./chat-turn-runner.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -837,11 +838,10 @@ export async function runSystemSynthesis(options?: {
   const { getChat, saveChat } = await import("./chat-storage.js");
   // Notebook persistence is now the agent's responsibility via
   // create_notebook_entry; no server-side auto-save here.
-  const { discoverAllModels } = await import("./models.js");
-  const { streamChat, chatMessagesToPiMessages } = await import("./agent.js");
+  const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastSynthesis } = await import("./memory-storage.js");
-  const { truncateBeforeSend, estimateContextTokens } = await import("./compaction.js");
+  const { truncateBeforeSend } = await import("./compaction.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
   await acquireSynthesisLock();
@@ -894,6 +894,8 @@ export async function runSystemSynthesis(options?: {
       return makeErrorResult(`Model "${modelId}" not available`);
     }
     const contextWindow = piModel.contextWindow || 32768;
+    const runtimeModel = await createPiModelFromProvider(piModel);
+    runtimeModel.contextWindow = contextWindow;
     const phasePrompts = promptMapFromSteps(options?.promptSteps);
 
     // --- Append Phase 1 trigger to persistent history ---
@@ -933,7 +935,6 @@ export async function runSystemSynthesis(options?: {
     const artifacts: any[] = [];
     const visuals: any[] = [];
     const generatedImages: any[] = [];
-    const memoryUpdates: string[] = [];
 
     const effects: ToolSideEffects = createEmitterSideEffects(emitter, {
       artifacts,
@@ -960,180 +961,35 @@ export async function runSystemSynthesis(options?: {
       await saveChat(chat);
     }
 
-    // --- Convert persistent history to pi-ai format ---
-    const piMessages = chatMessagesToPiMessages(chat.messages, modelId);
-
     const MAX_ITERATIONS = 30;
-    let iterations = 0;
     let phaseIndex = 0; // 0=synthesis (already injected), 1=maintenance, 2=zeitgeist, 3=reflections
-    let idleCount = 0; // consecutive idle turns for phase transition detection
-    const messages: Message[] = [...piMessages];
-
-    const textChunks: string[] = [];
-    const thinkingChunks: string[] = [];
-    const allToolCalls: ToolCall[] = [];
-    const allToolResults: {
-      toolCallId: string;
-      toolName: string;
-      content: string;
-      isError: boolean;
-    }[] = [];
-    let stopReason: StopReason = "stop";
-
-    while (iterations < MAX_ITERATIONS) {
-      const iterationToolCalls: ToolCall[] = [];
-      let assistantMessage: Message | undefined;
-      let streamResult: any;
-
-      try {
-        streamResult = await streamChat(
-          modelId,
-          messages,
-          synthesisPrompt,
-          (event) => {
-            // Forward streamSimple events to the SSE emitter so reconnected
-            // clients see deltas in real time. toolcall_end also drives
-            // segment emission so the UI shows a "running" tool card before
-            // execution finishes (matching how regular chats render).
-            if (event.type === "text_delta") {
-              emitter.emitTextDelta(event.delta);
-            } else if (event.type === "thinking_delta") {
-              emitter.emitThinkingDelta(event.delta);
-            } else if (event.type === "toolcall_end") {
-              iterationToolCalls.push(event.toolCall);
-              emitter.emitToolCall({
-                id: event.toolCall.id,
-                name: event.toolCall.name,
-                arguments: event.toolCall.arguments,
-              });
-            }
-          },
-          {
-            // 90 min matches LOCAL_INACTIVITY_TIMEOUT_MS in the chat route.
-            // Cold model loads on large contexts can take 2+ min just to
-            // prefill; the previous 5 min bound aborted right in that window.
-            signal: AbortSignal.timeout(90 * 60 * 1000),
-            tools,
-            keepAlive: "90m",
-          },
-        );
-
-        if (streamResult.content) textChunks.push(streamResult.content);
-        if (streamResult.thinking) thinkingChunks.push(streamResult.thinking);
-        if (streamResult.toolCalls) allToolCalls.push(...streamResult.toolCalls);
-        stopReason = streamResult.stopReason;
-        assistantMessage = streamResult.assistantMessage;
-        // Update token indicator after each iteration — usage from this turn
-        // is the most recent ground truth for the running context size.
-        emitter.setUsage(streamResult.usage);
-      } catch (e: any) {
-        console.error(`[system-chat] Stream failed at iter ${iterations}:`, e.message);
-        stopReason = "error";
-        break;
-      }
-
-      const hasOutput = (streamResult?.content?.length ?? 0) > 0;
-      const hasToolCalls = iterationToolCalls.length > 0;
-
-      // Phase 1 no-text on the very first iteration = complete failure, nothing
-      // to transition from. On later iterations, an idle turn in Phase 1 means
-      // the agent finished its synthesis work and should fall through to the
-      // phase-transition logic below so Phase 2+ can run.
-      if (iterations === 0 && phaseIndex === 0 && !hasOutput && !hasToolCalls) {
-        console.log("[system-chat] Phase 1 produced no output, ending synthesis");
-        break;
-      }
-
-      // Absorb this turn's output into the pi-ai history BEFORE deciding on a
-      // phase transition — otherwise the next phase trigger lands in front of
-      // the assistant reply it was meant to follow.
-      if (assistantMessage) messages.push(assistantMessage);
-
-      for (const toolCall of iterationToolCalls) {
-        const toolDef = tools.find((t) => t.name === toolCall.name);
-        if (!toolDef) {
-          console.warn(`[system-chat] Unknown tool: ${toolCall.name}`);
-          continue;
+    const turn = await runHeadlessChatTurn({
+      chat,
+      modelId,
+      model: runtimeModel,
+      systemPrompt: synthesisPrompt,
+      tools,
+      emitter,
+      maxIterations: MAX_ITERATIONS,
+      timeoutMs: 90 * 60 * 1000,
+      keepAlive: "90m",
+      logPrefix: "system-chat:synthesis",
+      saveChat,
+      getFollowUp: async (state) => {
+        if (
+          state.iterations === 1 &&
+          phaseIndex === 0 &&
+          state.textSummary.length === 0 &&
+          state.toolCalls.length === 0
+        ) {
+          return null;
         }
-        try {
-          const result = await toolDef.execute(toolCall.id, toolCall.arguments);
-          const content = result.content
-            .filter((c) => c.type === "text")
-            .map((c) => c.text)
-            .join("\n");
-          if (content.toLowerCase().includes("memory saved")) {
-            memoryUpdates.push(content.slice(0, 200));
-          }
-          const toolResult = {
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content,
-            isError: false,
-          };
-          allToolResults.push(toolResult);
-          emitter.emitToolResult(toolResult);
-          messages.push({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: content }],
-            isError: false,
-            timestamp: Date.now(),
-          } as Message);
-        } catch (e: any) {
-          console.warn(`[system-chat] Tool execution failed for ${toolCall.name}:`, e.message);
-          const toolResult = {
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: `Error: ${e.message}`,
-            isError: true,
-          };
-          allToolResults.push(toolResult);
-          emitter.emitToolResult(toolResult);
-          messages.push({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: `Error: ${e.message}` }],
-            isError: true,
-            timestamp: Date.now(),
-          } as Message);
-        }
-      }
-
-      // The persisted summary joins per-iteration content with `\n\n` (see
-      // textChunks.join below). Emit a matching separator into the stream so
-      // a watching client sees the same paragraph breaks the persisted
-      // message will have. A trailing separator after the last iteration is
-      // harmless: the final summary is `.trim()`ed and the client overwrites
-      // its accumulated content with the persisted message on `done`.
-      if (hasOutput) {
-        emitter.emitTextDelta("\n\n");
-      }
-
-      // Per-iteration update: matches the regular chat's `iteration` event so
-      // the TokenIndicator reflects current context size mid-loop. The
-      // estimate accounts for accumulated tool results that aren't yet part
-      // of usage.totalTokens (those are next-call input).
-      const estimatedTokens = estimateContextTokens(chat.messages, synthesisPrompt, tools);
-      emitter.emitIteration({
-        iteration: iterations + 1,
-        stopReason,
-        toolCount: iterationToolCalls.length,
-        usage: emitter.state.finalUsage,
-        estimatedTokens,
-      });
-
-      // Phase transition: agent produced output this turn + no tool calls = idle.
-      // One idle turn is sufficient — the agent would naturally keep working if
-      // it had more to do in this phase. Injecting the trigger lets the loop
-      // carry the agent into the next phase on the following iteration.
-      let transitioned = false;
-      if (!hasToolCalls && phaseIndex < PHASE_ORDER.length - 1) {
-        idleCount++;
-        if (idleCount >= 1) {
-          const nextTrigger = await buildPhaseTrigger(phaseIndex + 1, SYSTEM_CHAT_ID, phasePrompts);
-          const phaseTriggerMsg: ChatMessage = {
+        if (phaseIndex >= PHASE_ORDER.length - 1) return null;
+        const nextTrigger = await buildPhaseTrigger(phaseIndex + 1, SYSTEM_CHAT_ID, phasePrompts);
+        const nextPhaseIndex = phaseIndex + 1;
+        phaseIndex = nextPhaseIndex;
+        return {
+          message: {
             role: "user",
             content: nextTrigger,
             timestamp: Date.now(),
@@ -1142,42 +998,29 @@ export async function runSystemSynthesis(options?: {
             _isAutomationMessage: true,
             ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
             ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
-          };
-          chat.messages.push(phaseTriggerMsg);
-          messages.push({
-            role: "user",
-            content: [{ type: "text", text: nextTrigger }],
-            timestamp: Date.now(),
-          } as Message);
-          phaseIndex++;
-          idleCount = 0;
-          transitioned = true;
-          console.log(`[system-chat] Phase ${phaseIndex} trigger injected (${PHASE_ORDER[phaseIndex]})`);
-        }
-      } else if (hasToolCalls) {
-        idleCount = 0;
-      }
+          },
+          label: `phase ${nextPhaseIndex + 1}/${PHASE_ORDER.length} ${PHASE_ORDER[nextPhaseIndex]}`,
+        };
+      },
+      summarize: (state) =>
+        state.textSummary ||
+        `# Daily Synthesis\n\n*The model produced no visible output this cycle (stopReason=${state.stopReason}, thinking=${state.thinking.length}ch, tools=${state.toolCalls.length}). The thinking trace is preserved on the system chat's last assistant message.*`,
+      decorateAssistantMessage: (message) => ({
+        ...message,
+        timestamp: Date.now(),
+        _isSynthesisMessage: true,
+        _isAutomationMessage: true,
+        ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
+        ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
+      }),
+    });
 
-      // Loop exit: only when the agent is idle on the final phase. An idle turn
-      // that produced a phase transition must continue so the agent sees the
-      // new trigger; a non-final phase with no transition yet (e.g. still
-      // accumulating idle counts) should also continue.
-      if (!transitioned && !hasToolCalls && phaseIndex >= PHASE_ORDER.length - 1) {
-        console.log(`[system-chat] All phases complete (${PHASE_ORDER[phaseIndex]} finished)`);
-        break;
-      }
-
-      iterations++;
-    }
-
-    if (iterations >= MAX_ITERATIONS) {
-      console.warn(
-        `[system-chat] Synthesis hit iteration cap (${MAX_ITERATIONS}) with stopReason=${stopReason}`,
-      );
-    }
-
-    const textSummary = textChunks.join("\n\n").trim();
-    const thinking = thinkingChunks.join("\n\n");
+    const iterations = turn.iterations;
+    const stopReason = turn.stopReason;
+    const textSummary = turn.textSummary;
+    const thinking = turn.thinking;
+    const allToolCalls = turn.toolCalls;
+    const memoryUpdates = turn.memoryUpdates;
     const textLen = textSummary.length;
     const thinkLen = thinking.length;
 
@@ -1197,28 +1040,8 @@ export async function runSystemSynthesis(options?: {
       );
     }
 
-    const summary =
-      textSummary ||
-      `# Daily Synthesis\n\n*The model produced no visible output this cycle (stopReason=${stopReason}, thinking=${thinkLen}ch, tools=${allToolCalls.length}). The thinking trace is preserved on the system chat's last assistant message.*`;
-
-    // --- Persist the assistant response to the system chat ---
-    // The emitter built up segments + usage during streaming; reuse them so
-    // the persisted message matches what the user just watched scroll by.
-    const assistantChatMsg: ChatMessage = {
-      ...emitter.buildAssistantMessage(thinking, summary),
-      timestamp: Date.now(),
-      _isSynthesisMessage: true,
-      _isAutomationMessage: true,
-      ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
-      ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
-    };
-    chat.messages.push(assistantChatMsg);
-    await saveChat(chat);
-
-    // Tell connected clients the stream is done. Mirrors the regular chat
-    // route's terminal `done` event so reconnected clients close cleanly
-    // (and the SSE inactivity timer does not spuriously fire).
-    emitter.emitDone(assistantChatMsg, iterations);
+    const summary = turn.summary;
+    const assistantChatMsg = turn.assistantMessage;
 
     await refreshSystemChatTitle(
       chat,
@@ -1272,7 +1095,7 @@ export async function runSystemSynthesis(options?: {
     // --- Gate future scheduler ticks ---
     await setLastSynthesis(new Date().toISOString());
 
-   console.log(
+    console.log(
       `[system-chat] Synthesis complete: ${iterations} iterations, ${allToolCalls.length} tool calls, final phase=${PHASE_ORDER[phaseIndex]}, stopReason=${stopReason}`,
     );
 
@@ -1309,11 +1132,10 @@ export async function runWakeCycle(options?: {
   automationRunId?: string;
 }): Promise<SynthesisResult> {
   const { getChat, saveChat } = await import("./chat-storage.js");
-  const { discoverAllModels } = await import("./models.js");
-  const { streamChat, chatMessagesToPiMessages } = await import("./agent.js");
+  const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
   const { setLastWakeCycleAt } = await import("./memory-storage.js");
-  const { truncateBeforeSend, estimateContextTokens } = await import("./compaction.js");
+  const { truncateBeforeSend } = await import("./compaction.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
   await acquireWakeCycleLock();
@@ -1353,6 +1175,8 @@ export async function runWakeCycle(options?: {
       return makeErrorResult(`Model "${modelId}" not available`);
     }
     const contextWindow = piModel.contextWindow || 32768;
+    const runtimeModel = await createPiModelFromProvider(piModel);
+    runtimeModel.contextWindow = contextWindow;
 
     // Append wake cycle trigger
     const stamp = new Date().toLocaleString("en-US", {
@@ -1385,7 +1209,6 @@ export async function runWakeCycle(options?: {
     const artifacts: any[] = [];
     const visuals: any[] = [];
     const generatedImages: any[] = [];
-    const memoryUpdates: string[] = [];
 
     const effects: ToolSideEffects = createEmitterSideEffects(emitter, {
       artifacts,
@@ -1404,171 +1227,40 @@ export async function runWakeCycle(options?: {
       await saveChat(chat);
     }
 
-    // Convert to pi-ai format
-    const piMessages = chatMessagesToPiMessages(chat.messages, modelId);
-
     const MAX_ITERATIONS = 20; // Generous — no hard resource limits, just iteration cap
-    let iterations = 0;
-    const messages: Message[] = [...piMessages];
-    const textChunks: string[] = [];
-    const thinkingChunks: string[] = [];
-    const allToolCalls: ToolCall[] = [];
-    const allToolResults: {
-      toolCallId: string;
-      toolName: string;
-      content: string;
-      isError: boolean;
-    }[] = [];
-    let stopReason: StopReason = "stop";
+    const turn = await runHeadlessChatTurn({
+      chat,
+      modelId,
+      model: runtimeModel,
+      systemPrompt: wakePrompt,
+      tools,
+      emitter,
+      maxIterations: MAX_ITERATIONS,
+      timeoutMs: 1_800_000,
+      keepAlive: "30m",
+      logPrefix: "system-chat:wake",
+      saveChat,
+      summarize: (state) => state.textSummary || "*The wake cycle ended without visible output.*",
+      decorateAssistantMessage: (message) => ({
+        ...message,
+        timestamp: Date.now(),
+        _isAutomationMessage: true,
+        ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
+        ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
+      }),
+    });
 
-    while (iterations < MAX_ITERATIONS) {
-      const iterationToolCalls: ToolCall[] = [];
-      let assistantMessage: Message | undefined;
-      let streamResult: any;
-
-      try {
-        streamResult = await streamChat(
-          modelId,
-          messages,
-          wakePrompt,
-          (event) => {
-            if (event.type === "text_delta") {
-              emitter.emitTextDelta(event.delta);
-            } else if (event.type === "thinking_delta") {
-              emitter.emitThinkingDelta(event.delta);
-            } else if (event.type === "toolcall_end") {
-              iterationToolCalls.push(event.toolCall);
-              emitter.emitToolCall({
-                id: event.toolCall.id,
-                name: event.toolCall.name,
-                arguments: event.toolCall.arguments,
-              });
-            }
-          },
-          {
-            signal: AbortSignal.timeout(1_800_000), // 30 min
-            tools,
-            keepAlive: "30m",
-          },
-        );
-
-        if (streamResult.content) textChunks.push(streamResult.content);
-        if (streamResult.thinking) thinkingChunks.push(streamResult.thinking);
-        if (streamResult.toolCalls) allToolCalls.push(...streamResult.toolCalls);
-        stopReason = streamResult.stopReason;
-        assistantMessage = streamResult.assistantMessage;
-        emitter.setUsage(streamResult.usage);
-      } catch (e: any) {
-        console.error(`[system-chat] Wake cycle stream failed at iter ${iterations}:`, e.message);
-        stopReason = "error";
-        break;
-      }
-
-      if (iterations === 0 && !streamResult?.content?.length && iterationToolCalls.length === 0) {
-        console.log("[system-chat] Wake cycle produced no output, ending");
-        break;
-      }
-
-      if (assistantMessage) messages.push(assistantMessage);
-
-      // Execute tools
-      for (const toolCall of iterationToolCalls) {
-        const toolDef = tools.find((t) => t.name === toolCall.name);
-        if (!toolDef) continue;
-        try {
-          const result = await toolDef.execute(toolCall.id, toolCall.arguments);
-          const content = result.content
-            .filter((c: any) => c.type === "text")
-            .map((c: any) => c.text)
-            .join("\n");
-          if (content.toLowerCase().includes("memory saved")) {
-            memoryUpdates.push(content.slice(0, 200));
-          }
-          const toolResult = {
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content,
-            isError: false,
-          };
-          allToolResults.push(toolResult);
-          emitter.emitToolResult(toolResult);
-          messages.push({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: content }],
-            isError: false,
-            timestamp: Date.now(),
-          } as Message);
-        } catch (e: any) {
-          console.warn(`[system-chat] Wake cycle tool ${toolCall.name} failed:`, e.message);
-          const toolResult = {
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: `Error: ${e.message}`,
-            isError: true,
-          };
-          allToolResults.push(toolResult);
-          emitter.emitToolResult(toolResult);
-          messages.push({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: `Error: ${e.message}` }],
-            isError: true,
-            timestamp: Date.now(),
-          } as Message);
-        }
-      }
-
-      // Match the persisted summary's `\n\n` between iterations (see
-      // textChunks.join below) so the streamed view doesn't drift from the
-      // final message. Trailing separators are stripped by the summary's
-      // `.trim()` and the client overwrites on `done`.
-      const wakeHasOutput = (streamResult?.content?.length ?? 0) > 0;
-      if (wakeHasOutput) {
-        emitter.emitTextDelta("\n\n");
-      }
-
-      // Per-iteration update for the TokenIndicator.
-      const estimatedTokens = estimateContextTokens(chat.messages, wakePrompt, tools);
-      emitter.emitIteration({
-        iteration: iterations + 1,
-        stopReason,
-        toolCount: iterationToolCalls.length,
-        usage: emitter.state.finalUsage,
-        estimatedTokens,
-      });
-
-      // No more tool calls = done exploring
-      if (iterationToolCalls.length === 0) {
-        console.log(`[system-chat] Wake cycle idle, ending`);
-        break;
-      }
-
-      iterations++;
-    }
-
-    const textSummary = textChunks.join("\n\n").trim();
-    const thinking = thinkingChunks.join("\n\n");
+    const iterations = turn.iterations;
+    const stopReason = turn.stopReason;
+    const textSummary = turn.textSummary;
+    const thinking = turn.thinking;
+    const allToolCalls = turn.toolCalls;
+    const memoryUpdates = turn.memoryUpdates;
+    const assistantChatMsg = turn.assistantMessage;
 
     console.log(
       `[system-chat] Wake cycle done: iters=${iterations}, tools=${allToolCalls.length}, text=${textSummary.length}ch, stopReason=${stopReason}`,
     );
-
-    // Persist assistant response — emitter.buildAssistantMessage carries
-    // segments + usage so persisted shape matches the streamed view.
-    const assistantChatMsg: ChatMessage = {
-      ...emitter.buildAssistantMessage(thinking, textSummary || "*The wake cycle ended without visible output.*"),
-      timestamp: Date.now(),
-      _isAutomationMessage: true,
-      ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
-      ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
-    };
-    chat.messages.push(assistantChatMsg);
-    await saveChat(chat);
-
-    emitter.emitDone(assistantChatMsg, iterations);
 
     await refreshSystemChatTitle(
       chat,
@@ -1592,7 +1284,7 @@ export async function runWakeCycle(options?: {
     releaseWakeCycleLock();
 
     return {
-      summary: textSummary,
+      summary: turn.summary,
       thinking,
       toolCalls: allToolCalls,
       artifacts,

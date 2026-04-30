@@ -48,7 +48,7 @@ export interface SynthesisStreamState {
   segments: OutputSegment[];
   seqCounter: number;
   pendingText: string;
-  /** Most recent usage from a streamChat result — refreshed every iteration. */
+  /** Most recent model usage report, refreshed every iteration. */
   finalUsage?: MessageUsage;
 }
 
@@ -217,6 +217,10 @@ export class SynthesisEmitter {
     this.writeEvent("title_update", { chatId: this.stream.chatId, title });
   }
 
+  emitWarning(warning: { type: string; message: string }): void {
+    this.writeEvent("warning", warning);
+  }
+
   /**
    * After all phases complete and the assistant message has been persisted,
    * emit `done` so reconnected clients close their stream cleanly. Matches
@@ -262,7 +266,7 @@ export class SynthesisEmitter {
   }
 
   /**
-   * Update the most-recent usage. Called once per streamChat iteration.
+   * Update the most-recent usage. Called once per model iteration.
    *
    * The zero-totalTokens guard is intentional: some providers (and some
    * thinking-only outputs that bail before producing tokens) report a usage

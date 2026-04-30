@@ -1,4 +1,3 @@
-import type { Message, StopReason, ToolCall } from "@mariozechner/pi-ai";
 import type { ToolSideEffects } from "./agent-tools.js";
 import type { AutomationRun, AutomationTask, Chat, ChatMessage } from "../types.js";
 import { acquireAutomationLock, releaseAutomationLock } from "./automation-lock.js";
@@ -10,6 +9,7 @@ import {
   WAKE_AUTOMATION_ID,
 } from "./automation-storage.js";
 import { runSystemSynthesis, runWakeCycle, type SynthesisResult } from "./system-chat.js";
+import { runHeadlessChatTurn } from "./chat-turn-runner.js";
 
 interface AutomationExecutionResult extends SynthesisResult {
   chatId?: string;
@@ -142,10 +142,9 @@ async function sendAutomationPush(task: AutomationTask, result: AutomationExecut
 
 async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Promise<AutomationExecutionResult> {
   const { getChat, saveChat } = await import("./chat-storage.js");
-  const { discoverAllModels } = await import("./models.js");
-  const { streamChat, chatMessagesToPiMessages } = await import("./agent.js");
+  const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
-  const { truncateBeforeSend, estimateContextTokens } = await import("./compaction.js");
+  const { truncateBeforeSend } = await import("./compaction.js");
   const { buildStablePrefix, invalidateAllStablePrefixCaches } = await import("./memory-context.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
@@ -174,6 +173,8 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       return makeErrorResult(`Model "${modelId}" not available`);
     }
     const contextWindow = piModel.contextWindow || 32768;
+    const runtimeModel = await createPiModelFromProvider(piModel);
+    runtimeModel.contextWindow = contextWindow;
 
     const steps = task.promptSteps.filter((step) => step.prompt.trim().length > 0);
     if (steps.length === 0) {
@@ -196,7 +197,6 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
     const artifacts: any[] = [];
     const visuals: any[] = [];
     const generatedImages: any[] = [];
-    const memoryUpdates: string[] = [];
 
     const effects: ToolSideEffects = createEmitterSideEffects(emitter, {
       artifacts,
@@ -221,163 +221,47 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       await saveChat(chat);
     }
 
-    const piMessages = chatMessagesToPiMessages(chat.messages, modelId);
-    const messages: Message[] = [...piMessages];
-    const textChunks: string[] = [];
-    const thinkingChunks: string[] = [];
-    const allToolCalls: ToolCall[] = [];
-    let stopReason: StopReason = "stop";
-    let iterations = 0;
     let stepIndex = 0;
-
-    while (iterations < task.maxIterations) {
-      const iterationToolCalls: ToolCall[] = [];
-      let assistantMessage: Message | undefined;
-      let streamResult: any;
-
-      try {
-        streamResult = await streamChat(
-          modelId,
-          messages,
-          systemPrompt,
-          (event) => {
-            if (event.type === "text_delta") {
-              emitter.emitTextDelta(event.delta);
-            } else if (event.type === "thinking_delta") {
-              emitter.emitThinkingDelta(event.delta);
-            } else if (event.type === "toolcall_end") {
-              iterationToolCalls.push(event.toolCall);
-              emitter.emitToolCall({
-                id: event.toolCall.id,
-                name: event.toolCall.name,
-                arguments: event.toolCall.arguments,
-              });
-            }
-          },
-          {
-            signal: AbortSignal.timeout(task.timeoutMs),
-            tools,
-            keepAlive: `${Math.max(1, Math.ceil(task.timeoutMs / 60_000))}m`,
-          },
-        );
-
-        if (streamResult.content) textChunks.push(streamResult.content);
-        if (streamResult.thinking) thinkingChunks.push(streamResult.thinking);
-        if (streamResult.toolCalls) allToolCalls.push(...streamResult.toolCalls);
-        stopReason = streamResult.stopReason;
-        assistantMessage = streamResult.assistantMessage;
-        emitter.setUsage(streamResult.usage);
-      } catch (e: any) {
-        console.error(`[automation] ${task.id} stream failed at iter ${iterations}:`, e.message);
-        stopReason = "error";
-        break;
-      }
-
-      const hasOutput = (streamResult?.content?.length ?? 0) > 0;
-      const hasToolCalls = iterationToolCalls.length > 0;
-      if (iterations === 0 && !hasOutput && !hasToolCalls) {
-        console.log(`[automation] ${task.id} produced no output, ending`);
-        break;
-      }
-
-      if (assistantMessage) messages.push(assistantMessage);
-
-      for (const toolCall of iterationToolCalls) {
-        const toolDef = tools.find((t) => t.name === toolCall.name);
-        if (!toolDef) continue;
-        try {
-          const result = await toolDef.execute(toolCall.id, toolCall.arguments);
-          const content = result.content
-            .filter((c: any) => c.type === "text")
-            .map((c: any) => c.text)
-            .join("\n");
-          if (content.toLowerCase().includes("memory saved")) {
-            memoryUpdates.push(content.slice(0, 200));
-          }
-          const toolResult = {
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content,
-            isError: false,
-          };
-          emitter.emitToolResult(toolResult);
-          messages.push({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: content }],
-            isError: false,
-            timestamp: Date.now(),
-          } as Message);
-        } catch (e: any) {
-          console.warn(`[automation] ${task.id} tool ${toolCall.name} failed:`, e.message);
-          const toolResult = {
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: `Error: ${e.message}`,
-            isError: true,
-          };
-          emitter.emitToolResult(toolResult);
-          messages.push({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: `Error: ${e.message}` }],
-            isError: true,
-            timestamp: Date.now(),
-          } as Message);
+    const turn = await runHeadlessChatTurn({
+      chat,
+      modelId,
+      model: runtimeModel,
+      systemPrompt,
+      tools,
+      emitter,
+      maxIterations: task.maxIterations,
+      timeoutMs: task.timeoutMs,
+      keepAlive: `${Math.max(1, Math.ceil(task.timeoutMs / 60_000))}m`,
+      logPrefix: `automation:${task.id}`,
+      saveChat,
+      getFollowUp: async (state) => {
+        if (
+          state.iterations === 1 &&
+          state.textSummary.length === 0 &&
+          state.toolCalls.length === 0
+        ) {
+          return null;
         }
-      }
-
-      if (hasOutput) {
-        emitter.emitTextDelta("\n\n");
-      }
-
-      emitter.emitIteration({
-        iteration: iterations + 1,
-        stopReason,
-        toolCount: iterationToolCalls.length,
-        usage: emitter.state.finalUsage,
-        estimatedTokens: estimateContextTokens(chat.messages, systemPrompt, tools),
-      });
-
-      let transitioned = false;
-      if (!hasToolCalls && stepIndex < steps.length - 1) {
+        if (stepIndex >= steps.length - 1) return null;
         stepIndex++;
         const nextTrigger = formatAutomationTrigger(task, steps[stepIndex]);
-        chat.messages.push(makeTriggerMessage(task, run, nextTrigger));
-        messages.push({
-          role: "user",
-          content: [{ type: "text", text: nextTrigger }],
-          timestamp: Date.now(),
-        } as Message);
-        transitioned = true;
-        console.log(`[automation] ${task.id} step ${stepIndex + 1}/${steps.length} trigger injected`);
-      }
+        return {
+          message: makeTriggerMessage(task, run, nextTrigger),
+          label: `step ${stepIndex + 1}/${steps.length}`,
+        };
+      },
+      summarize: (state) =>
+        state.textSummary || `*The automation ended without visible output (stopReason=${state.stopReason}).*`,
+      decorateAssistantMessage: (message) => ({
+        ...message,
+        timestamp: Date.now(),
+        _isAutomationMessage: true,
+        _automationTaskId: task.id,
+        _automationRunId: run.id,
+      }),
+    });
 
-      if (!transitioned && !hasToolCalls) {
-        break;
-      }
-
-      iterations++;
-    }
-
-    const textSummary = textChunks.join("\n\n").trim();
-    const thinking = thinkingChunks.join("\n\n");
-    const summary = textSummary || `*The automation ended without visible output (stopReason=${stopReason}).*`;
-    const assistantChatMsg: ChatMessage = {
-      ...emitter.buildAssistantMessage(thinking, summary),
-      timestamp: Date.now(),
-      _isAutomationMessage: true,
-      _automationTaskId: task.id,
-      _automationRunId: run.id,
-    };
-    chat.messages.push(assistantChatMsg);
-    await saveChat(chat);
-    const assistantMessageIndex = chat.messages.length - 1;
-
-    emitter.emitDone(assistantChatMsg, iterations);
-    await refreshAutomationChatTitle(task, chat, assistantChatMsg.content, (title) => {
+    await refreshAutomationChatTitle(task, chat, turn.assistantMessage.content, (title) => {
       emitter.emitTitleUpdate(title);
     });
 
@@ -389,30 +273,25 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
 
     emitter.end();
 
-    const producedNothing =
-      stopReason === "error" &&
-      textSummary.length === 0 &&
-      thinking.length === 0 &&
-      allToolCalls.length === 0;
-    if (producedNothing) {
+    if (!turn.success) {
       return {
-        ...makeErrorResult("Automation failed: model returned error before producing any output"),
+        ...makeErrorResult(`Automation failed: ${turn.error || "model returned error before producing any output"}`),
         chatId: task.chatId,
-        assistantMessageIndex,
+        assistantMessageIndex: turn.assistantMessageIndex,
       };
     }
 
     return {
-      summary,
-      thinking,
-      toolCalls: allToolCalls,
+      summary: turn.summary,
+      thinking: turn.thinking,
+      toolCalls: turn.toolCalls,
       artifacts,
       visuals,
       generatedImages,
-      memoryUpdates,
+      memoryUpdates: turn.memoryUpdates,
       success: true,
       chatId: task.chatId,
-      assistantMessageIndex,
+      assistantMessageIndex: turn.assistantMessageIndex,
     };
   } catch (e: any) {
     console.error(`[automation] ${task.id} failed:`, e);

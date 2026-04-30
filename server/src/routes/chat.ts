@@ -2,9 +2,8 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { randomUUID, createHash } from "crypto";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
-import { streamSimple, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
-import type { AgentContext, AgentLoopConfig, StreamFn } from "@mariozechner/pi-agent-core";
+import type { AgentContext, AgentLoopConfig } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
 import { chatMessagesToPiMessages, mergeSystemContextWithUserContent } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
@@ -25,7 +24,7 @@ import { saveUserImage } from "../services/user-image-storage.js";
 import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
 import { log } from "../services/logger.js";
-import { beginStream as beginLLMStream, endStream as endLLMStream } from "../services/llm-activity.js";
+import { createSafeStreamFn } from "../services/llm-stream.js";
 
 // Live stream registry lives in services/live-streams.ts so server-internal
 // background tasks (synthesis, wake cycle) can also emit through it without
@@ -237,36 +236,8 @@ async function persistImages(images: ImageAttachment[]): Promise<ImageAttachment
   );
 }
 
-/**
- * Create a stream function that handles pre-aborted signals gracefully.
- * When the signal is already aborted (e.g., ask_user triggered abort),
- * returns an event stream that immediately emits an abort error
- * instead of letting the fetch call throw.
- */
-/**
- * Inactivity timeouts for LLM streaming.
- *
- * Local models:  15 min — complex tool chains (bash, python, file ops) can take
- *                several minutes. SSE keepalive pings (every 30s) run throughout
- *                the entire agent turn to prevent client-side timeout.
- * Cloud models:  The cloud provider may buffer large tool-call arguments (not
- *                streaming deltas token-by-token) or take a long time to begin
- *                generating after processing a large context.  Use a much more
- *                generous timeout so that a single 200-line tool call doesn't
- *                get killed mid-generation.
- *
- * "Pre-first-event" timeout: before ANY event arrives the model might be
- * loading / processing context.  We allow extra time here, then switch to the
- * shorter "ongoing" timeout once streaming has started.
- */
-const LOCAL_INACTIVITY_TIMEOUT_MS  = 1_800_000;  // 30 minutes for local (cold model load + large prompt can take 15-20 min)
-const CLOUD_INACTIVITY_TIMEOUT_MS  = 300_000;  // 5 min between events (cloud)
-const CLOUD_FIRST_EVENT_TIMEOUT_MS = 300_000;  // 5 min for first event (cloud)
-const SSE_KEEPALIVE_INTERVAL_MS    = 30_000;   // 30s keepalive pings to prevent client timeout
-
-function isCloudModel(modelId: string): boolean {
-  return modelId.includes(":cloud");
-}
+// Keep SSE connections alive while the model or tools are silent.
+const SSE_KEEPALIVE_INTERVAL_MS = 30_000; // 30s keepalive pings to prevent client timeout
 
 // Noop side effects just to satisfy getAgentTools' signature when we need
 // tool schemas for context-size estimation, not execution.
@@ -304,125 +275,6 @@ async function estimatePostCompactionTokens(
   } catch {
     return 0;
   }
-}
-
-function createSafeStreamFn(chatOllamaOptions?: { keepAlive?: string | number; numGpu?: number; numPredict?: number }): StreamFn {
-  return (model, ctx, options) => {
-    if (options?.signal?.aborted) {
-      console.log(`[stream] signal already aborted, returning empty abort stream`);
-      const stream = createAssistantMessageEventStream();
-      const msg: AssistantMessage = {
-        role: "assistant",
-        content: [],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "aborted",
-        timestamp: Date.now(),
-      };
-      stream.push({ type: "error", reason: "aborted", error: msg });
-      return stream;
-    }
-
-    // Merge per-chat Ollama options into the stream options
-    const mergedOptions = chatOllamaOptions
-      ? { ...options, keepAlive: chatOllamaOptions.keepAlive, numGpu: chatOllamaOptions.numGpu, numPredict: chatOllamaOptions.numPredict }
-      : options;
-
-    // Wrap the raw stream with an inactivity timeout.
-    // If Ollama is stuck loading a model, the stream hangs indefinitely —
-    // this detects that and aborts with a clear error.
-    const rawStream = streamSimple(model, ctx, mergedOptions);
-    const wrappedStream = createAssistantMessageEventStream();
-
-    const cloud = isCloudModel(model.id);
-    const ongoingTimeout = cloud ? CLOUD_INACTIVITY_TIMEOUT_MS : LOCAL_INACTIVITY_TIMEOUT_MS;
-    const firstEventTimeout = cloud ? CLOUD_FIRST_EVENT_TIMEOUT_MS : LOCAL_INACTIVITY_TIMEOUT_MS;
-
-    (async () => {
-      let timer: ReturnType<typeof setTimeout> | null = null;
-      let ended = false;
-      let receivedFirstEvent = false;
-
-      const endStream = () => {
-        if (!ended) {
-          ended = true;
-          wrappedStream.end();
-        }
-      };
-
-      const resetTimer = () => {
-        if (timer) clearTimeout(timer);
-        const timeout = receivedFirstEvent ? ongoingTimeout : firstEventTimeout;
-        timer = setTimeout(() => {
-          console.error(`[stream] inactivity timeout (${timeout}ms, cloud=${cloud}, firstEvent=${receivedFirstEvent}) — model may be stuck: ${model.id}`);
-          const errorMsg: AssistantMessage = {
-            role: "assistant",
-            content: [],
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "error",
-            errorMessage: `Model unresponsive for ${timeout / 1000}s — it may be stuck loading. Try again or use a different model.`,
-            timestamp: Date.now(),
-          };
-          wrappedStream.push({
-            type: "error",
-            reason: "error",
-            error: errorMsg,
-          } as any);
-          endStream();
-        }, timeout);
-      };
-
-      resetTimer();
-      beginLLMStream();
-
-      try {
-        for await (const event of rawStream) {
-          if (ended) break;
-          receivedFirstEvent = true;
-          resetTimer();
-          wrappedStream.push(event);
-        }
-      } catch (err) {
-        console.error(`[stream] error from LLM stream:`, err);
-        const errorMsg: AssistantMessage = {
-          role: "assistant",
-          content: [],
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: {
-            input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "error",
-          errorMessage: err instanceof Error ? err.message : String(err),
-          timestamp: Date.now(),
-        };
-        wrappedStream.push({
-          type: "error",
-          reason: "error",
-          error: errorMsg,
-        } as any);
-      } finally {
-        if (timer) clearTimeout(timer);
-        endLLMStream();
-        endStream();
-      }
-    })();
-
-    return wrappedStream;
-  };
 }
 
 const router = Router();
