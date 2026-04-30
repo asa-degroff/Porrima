@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { randomUUID } from "crypto";
+import { randomUUID, createHash } from "crypto";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import { streamSimple, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
@@ -64,6 +64,83 @@ function ensureSSEStream(res: Response, req: Request, chatId: string) {
 
 function shouldGenerateInitialTitle(chat: Chat): boolean {
   return chat.messages.filter((m) => m.role === "user").length === 1;
+}
+
+// ---------------------------------------------------------------------------
+// KV cache prefix diagnostics
+// ---------------------------------------------------------------------------
+// At end of each completed turn we snapshot a digest of the reconstructed
+// pi-message history. On the next turn we compare the new context's digest
+// against the snapshot — equality means the prefix llama.cpp cached on the
+// previous turn is reusable. Divergence means something invalidated it (a
+// compaction rewrite, a retroactive message edit, a replay-shape change).
+// This is what would have caught the canonical-row collapse bug at log time.
+// ---------------------------------------------------------------------------
+
+interface SentPrefixSnapshot {
+  digest: string;
+  piMsgCount: number;
+}
+
+const lastSentPrefixSnapshot = new Map<string, SentPrefixSnapshot>();
+
+function digestPiMessages(piMessages: Message[]): string {
+  const hash = createHash("sha1");
+  for (const m of piMessages) {
+    hash.update(JSON.stringify(m));
+    hash.update("\0");
+  }
+  return hash.digest("hex").slice(0, 12);
+}
+
+function summarizeReplayShape(messages: ChatMessage[]): { lastLoop: string; fragments: number } {
+  let fragments = 0;
+  let lastLoopId: string | undefined;
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    if (m._toolLoopFragment) fragments++;
+    if (m._toolLoopId) lastLoopId = m._toolLoopId;
+  }
+  return { lastLoop: lastLoopId ? lastLoopId.slice(0, 8) : "-", fragments };
+}
+
+function logKvCacheState(opts: {
+  chatId: string;
+  source: "send" | "edit";
+  systemPromptChars: number;
+  deltaChars: number;
+  newMsgChars: number;
+  persistedRows: number;
+  contextPiMessages: Message[];
+  shape: { lastLoop: string; fragments: number };
+}): void {
+  const digest = digestPiMessages(opts.contextPiMessages);
+  const prev = lastSentPrefixSnapshot.get(opts.chatId);
+  let prefixState: string;
+  if (!prev) {
+    prefixState = "baseline";
+  } else if (prev.digest === digest && prev.piMsgCount === opts.contextPiMessages.length) {
+    prefixState = "match";
+  } else {
+    prefixState =
+      `diverged(prev_msgs=${prev.piMsgCount},now_msgs=${opts.contextPiMessages.length},` +
+      `prev_digest=${prev.digest},now_digest=${digest})`;
+  }
+  log(
+    `[kv-cache] chat=${opts.chatId} src=${opts.source} ` +
+    `system_prompt=${opts.systemPromptChars}ch delta=${opts.deltaChars}ch new_msg=${opts.newMsgChars}ch ` +
+    `type=${opts.deltaChars > 0 ? "delta" : "stable"} ` +
+    `persisted=${opts.persistedRows} pi_msgs=${opts.contextPiMessages.length} ` +
+    `last_loop=${opts.shape.lastLoop} frags=${opts.shape.fragments} prefix=${prefixState}`
+  );
+}
+
+function snapshotSentPrefix(chatId: string, chatMessages: ChatMessage[], modelId: string): void {
+  const piMessages = chatMessagesToPiMessages(chatMessages, modelId);
+  lastSentPrefixSnapshot.set(chatId, {
+    digest: digestPiMessages(piMessages),
+    piMsgCount: piMessages.length,
+  });
 }
 
 /**
@@ -2126,6 +2203,10 @@ async function handleChatStream(
       upsertAssistantMessage(assistantMsg);
       markUncommittedAssistantMessageCommitted(assistantMsg);
       await saveChat(chat);
+      // Capture what we just sent + got back so the next turn's kv-cache log
+      // can detect prefix divergence. Recap/title mutations after this point
+      // don't affect pi messages, so this snapshot stays accurate.
+      snapshotSentPrefix(chat.id, chat.messages, chat.modelId);
       console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput} content=${assistantMsg.content.length}ch`);
 
       // Generate a brief recap for long assistant messages (agent/project/system chats only)
@@ -2881,9 +2962,6 @@ router.post("/", async (req, res) => {
 
     setCachedAugmentedPrompt(chat.id, memoriesDelta ? `${systemPrompt}\n\n${memoriesDelta}` : systemPrompt);
 
-    // KV cache efficiency logging
-    log(`[kv-cache] chat=${chatId} system_prompt=${systemPrompt.length}ch delta=${memoriesDelta.length}ch new_msg=${message.length}ch type=${memoriesDelta ? "delta" : "stable"}`);
-
     // Persist the memory delta as a system-role message immediately before the
     // user's new message. Persisting (rather than injecting transiently) keeps
     // every previous turn's delta at a stable position in chat history so the
@@ -2900,7 +2978,8 @@ router.post("/", async (req, res) => {
     }
 
     // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
-    const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
+    const persistedHistory = chat.messages.slice(0, -1);
+    const contextMessages = chatMessagesToPiMessages(persistedHistory, chat.modelId);
 
     // Safety check: warn if context is empty for non-first messages
     if (contextMessages.length === 0 && chat.messages.length > 1) {
@@ -2911,6 +2990,20 @@ router.post("/", async (req, res) => {
     if (chat.messages.length <= 3 && chat.messages.length > 1) {
       console.warn(`[chat] WARNING: chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
     }
+
+    // KV cache efficiency logging — compares the reconstructed pi-message
+    // prefix against the previous turn's snapshot so silent invalidations
+    // (replay-shape changes, mid-history rewrites) are visible at log time.
+    logKvCacheState({
+      chatId,
+      source: "send",
+      systemPromptChars: systemPrompt.length,
+      deltaChars: memoriesDelta.length,
+      newMsgChars: message.length,
+      persistedRows: persistedHistory.length,
+      contextPiMessages: contextMessages,
+      shape: summarizeReplayShape(persistedHistory),
+    });
 
     const userPiMessage = buildUserPiMessage(message, images);
 
@@ -3204,12 +3297,26 @@ router.post("/edit", async (req, res) => {
   }
 
   // Context = all messages EXCEPT the one we just added
-  const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
+  const editPersistedHistory = chat.messages.slice(0, -1);
+  const contextMessages = chatMessagesToPiMessages(editPersistedHistory, chat.modelId);
 
   // Safety check: warn if context is empty for non-first messages
   if (contextMessages.length === 0 && chat.messages.length > 1) {
     console.error(`[chat] CRITICAL: context conversion produced empty array for edit with ${chat.messages.length} messages`);
   }
+
+  // /edit truncates history before the edit point, so a divergence here is
+  // expected and tells us how far back the rewrite reaches.
+  logKvCacheState({
+    chatId: chat.id,
+    source: "edit",
+    systemPromptChars: systemPrompt.length,
+    deltaChars: editMemoriesDelta.length,
+    newMsgChars: message.length,
+    persistedRows: editPersistedHistory.length,
+    contextPiMessages: contextMessages,
+    shape: summarizeReplayShape(editPersistedHistory),
+  });
 
   // Safety check: detect catastrophic context loss from compaction
   if (chat.messages.length <= 3 && chat.messages.length > 1) {
