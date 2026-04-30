@@ -639,10 +639,16 @@ export function ChatView({
                   isLast && streamingSegmentIndex !== null
                     ? streamingSegmentIndex + streamingSegmentOffset
                     : streamingSegmentIndex;
-                const bubbleStreamingThinking =
-                  isLast && streaming && msg.thinking && streamingThinking
-                    ? `${msg.thinking}\n\n${streamingThinking}`
-                    : isLast ? streamingThinking : undefined;
+                // In a tool loop, msg.thinking is merged from prior fragments while
+                // streamingThinking is the live current fragment. Between fragments
+                // (after onMessageComplete resets bg.thinking, before the next fragment
+                // begins), streamingThinking is empty — fall back to msg.thinking so the
+                // block stays visible instead of blinking out.
+                const bubbleStreamingThinking = isLast
+                  ? (msg.thinking && streamingThinking
+                      ? `${msg.thinking}\n\n${streamingThinking}`
+                      : streamingThinking || msg.thinking || undefined)
+                  : undefined;
                 const bubbleStreamingThinkingAccumulatedMs =
                   isLast ? (msg.thinkingDurationMs || 0) + streamingThinkingAccumulatedMs : 0;
 
