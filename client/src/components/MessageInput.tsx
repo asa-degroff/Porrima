@@ -552,14 +552,14 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
             onInput={handleInput}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            className="min-h-8 py-1.5 outline-none text-white/90 text-sm md:text-base leading-snug break-words whitespace-pre-wrap"
+            className="min-h-8 py-1.5 outline-none text-white/90 text-sm md:text-base leading-5 md:leading-6 break-words whitespace-pre-wrap"
             style={{ wordBreak: 'break-word' }}
           >
             {/* Skill chips are inserted dynamically */}
           </div>
 
           {!hasContent && images.length === 0 && (
-            <div className="absolute top-1.5 left-0 pointer-events-none text-white/30 text-sm md:text-base leading-snug select-none">
+            <div className="absolute top-1.5 left-0 pointer-events-none text-white/30 text-sm md:text-base leading-5 md:leading-6 select-none">
               {placeholder || (waitingForInput ? "Answer the agent's question..." : "Send a message...")}
             </div>
           )}
