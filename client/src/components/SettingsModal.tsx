@@ -18,11 +18,11 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
 import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
+import type { AutomationRun, AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
@@ -83,6 +83,11 @@ function useActiveSection(sectionIds: readonly string[], root: Element | null) {
 
 type WebSearchProvider = NonNullable<Settings["defaultWebSearchProvider"]>;
 
+const AUTOMATION_INTERVAL_MINUTES_MIN = 5;
+const AUTOMATION_INTERVAL_MINUTES_MAX = 366 * 24 * 60;
+const DEFAULT_AUTOMATION_INTERVAL_MINUTES = 24 * 60;
+const DEFAULT_AUTOMATION_DAILY_TIME = "09:00";
+
 const WEB_SEARCH_PROVIDER_OPTIONS: Array<{ id: WebSearchProvider; label: string; description: string }> = [
   { id: "brave", label: "Brave Search", description: "Fast snippets from Brave Search API." },
   { id: "exa", label: "Exa", description: "Richer search with highlights, summaries, and deep modes." },
@@ -109,6 +114,53 @@ function llamaHealthTone(status: LlamaServerStatus["http"]["status"]): string {
 function formatSystemdTimestamp(value: string): string {
   if (!value || value === "n/a") return "n/a";
   return value.replace(/\s+UTC$/, "");
+}
+
+function clampAutomationIntervalMinutes(value: unknown, fallback = DEFAULT_AUTOMATION_INTERVAL_MINUTES): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(n, AUTOMATION_INTERVAL_MINUTES_MIN), AUTOMATION_INTERVAL_MINUTES_MAX);
+}
+
+function normalizeAutomationTimeOfDay(value: unknown): string {
+  return typeof value === "string" && /^\d{2}:\d{2}$/.test(value)
+    ? value
+    : DEFAULT_AUTOMATION_DAILY_TIME;
+}
+
+function formatAutomationDate(value?: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : value;
+}
+
+function formatAutomationSchedule(task: AutomationTask): string {
+  if (task.schedule.type === "daily") {
+    return `Daily at ${normalizeAutomationTimeOfDay(task.schedule.timeOfDay)}`;
+  }
+  const minutes = clampAutomationIntervalMinutes(task.schedule.everyMinutes);
+  if (minutes % (24 * 60) === 0) return `Every ${minutes / (24 * 60)}d`;
+  if (minutes % 60 === 0) return `Every ${minutes / 60}h`;
+  return `Every ${minutes}m`;
+}
+
+function automationStatusTone(status?: AutomationRun["status"]): string {
+  if (status === "success") return "bg-green-500/10 text-green-300/80 border-green-400/20";
+  if (status === "failed") return "bg-red-500/10 text-red-300/80 border-red-400/20";
+  if (status === "running") return "bg-purple-500/10 text-purple-200/80 border-purple-400/20";
+  return "bg-white/5 text-white/45 border-white/10";
+}
+
+function formatAutomationDuration(startedAt: string, finishedAt?: string): string {
+  if (!finishedAt) return "";
+  const start = new Date(startedAt).getTime();
+  const finish = new Date(finishedAt).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(finish) || finish < start) return "";
+  const seconds = Math.round((finish - start) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
 }
 
 interface Props {
@@ -254,6 +306,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [automationsRunningTaskId, setAutomationsRunningTaskId] = useState<string | null>(null);
   const [automationMessage, setAutomationMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [automationHistoryOpenTaskId, setAutomationHistoryOpenTaskId] = useState<string | null>(null);
+  const [automationRunsByTaskId, setAutomationRunsByTaskId] = useState<Record<string, AutomationRun[]>>({});
+  const [automationRunsLoadingTaskId, setAutomationRunsLoadingTaskId] = useState<string | null>(null);
   const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
   const [extractionModelUrl, setExtractionModelUrl] = useState(settings.extractionModelUrl || "");
   const [extractionModelStatus, setExtractionModelStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
@@ -722,6 +777,88 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     }
   };
 
+  const loadAutomationRuns = async (id: string) => {
+    setAutomationRunsLoadingTaskId(id);
+    try {
+      const runs = await fetchAutomationRuns(id, 25);
+      setAutomationRunsByTaskId((prev) => ({ ...prev, [id]: runs }));
+    } catch (err: any) {
+      setAutomationMessage({ type: "err", text: err?.message || "Failed to load automation history" });
+    } finally {
+      setAutomationRunsLoadingTaskId(null);
+    }
+  };
+
+  const handleToggleAutomationHistory = async (id: string) => {
+    setAutomationMessage(null);
+    if (automationHistoryOpenTaskId === id) {
+      setAutomationHistoryOpenTaskId(null);
+      return;
+    }
+    setAutomationHistoryOpenTaskId(id);
+    await loadAutomationRuns(id);
+  };
+
+  const handleAutomationScheduleTypeChange = async (
+    task: AutomationTask,
+    type: AutomationTask["schedule"]["type"],
+  ) => {
+    const schedule =
+      type === "daily"
+        ? {
+            type,
+            timeOfDay: task.schedule.type === "daily"
+              ? normalizeAutomationTimeOfDay(task.schedule.timeOfDay)
+              : DEFAULT_AUTOMATION_DAILY_TIME,
+          }
+        : {
+            type,
+            everyMinutes: task.schedule.type === "interval"
+              ? clampAutomationIntervalMinutes(task.schedule.everyMinutes)
+              : DEFAULT_AUTOMATION_INTERVAL_MINUTES,
+          };
+    updateAutomationDraft(task.id, { schedule });
+    await saveAutomationPatch(task.id, { schedule });
+  };
+
+  const handleAutomationIntervalChange = (task: AutomationTask, value: string) => {
+    const current = task.schedule.type === "interval"
+      ? clampAutomationIntervalMinutes(task.schedule.everyMinutes)
+      : DEFAULT_AUTOMATION_INTERVAL_MINUTES;
+    const schedule = {
+      type: "interval" as const,
+      everyMinutes: clampAutomationIntervalMinutes(value, current),
+    };
+    updateAutomationDraft(task.id, { schedule });
+  };
+
+  const handleAutomationIntervalBlur = async (task: AutomationTask) => {
+    const schedule = {
+      type: "interval" as const,
+      everyMinutes: task.schedule.type === "interval"
+        ? clampAutomationIntervalMinutes(task.schedule.everyMinutes)
+        : DEFAULT_AUTOMATION_INTERVAL_MINUTES,
+    };
+    updateAutomationDraft(task.id, { schedule });
+    await saveAutomationPatch(task.id, { schedule });
+  };
+
+  const handleAutomationDailyTimeChange = (task: AutomationTask, value: string) => {
+    const schedule = { type: "daily" as const, timeOfDay: value };
+    updateAutomationDraft(task.id, { schedule });
+  };
+
+  const handleAutomationDailyTimeBlur = async (task: AutomationTask) => {
+    const schedule = {
+      type: "daily" as const,
+      timeOfDay: task.schedule.type === "daily"
+        ? normalizeAutomationTimeOfDay(task.schedule.timeOfDay)
+        : DEFAULT_AUTOMATION_DAILY_TIME,
+    };
+    updateAutomationDraft(task.id, { schedule });
+    await saveAutomationPatch(task.id, { schedule });
+  };
+
   const handleAddAutomation = async () => {
     setAutomationMessage(null);
     try {
@@ -744,6 +881,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     try {
       await deleteAutomation(id);
       setAutomations((prev) => prev.filter((task) => task.id !== id));
+      if (automationHistoryOpenTaskId === id) {
+        setAutomationHistoryOpenTaskId(null);
+      }
     } catch (err: any) {
       setAutomationMessage({ type: "err", text: err?.message || "Failed to delete automation" });
     }
@@ -755,6 +895,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       await runAutomationNow(id);
       setAutomationsRunningTaskId(id);
       setAutomationMessage({ type: "ok", text: "Automation started" });
+      if (automationHistoryOpenTaskId === id) {
+        await loadAutomationRuns(id);
+      }
     } catch (err: any) {
       setAutomationMessage({ type: "err", text: err?.message || "Failed to start automation" });
     }
@@ -3370,8 +3513,16 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	            ) : (
 	              <div className="space-y-3">
 	                {[...automations].sort((a, b) => a.orderIndex - b.orderIndex).map((task, index, list) => {
-	                  const everyMinutes = task.schedule.type === "interval" ? task.schedule.everyMinutes ?? 1440 : 1440;
+	                  const everyMinutes = task.schedule.type === "interval"
+	                    ? clampAutomationIntervalMinutes(task.schedule.everyMinutes)
+	                    : DEFAULT_AUTOMATION_INTERVAL_MINUTES;
+	                  const dailyTime = task.schedule.type === "daily"
+	                    ? normalizeAutomationTimeOfDay(task.schedule.timeOfDay)
+	                    : DEFAULT_AUTOMATION_DAILY_TIME;
 	                  const isRunning = automationsRunningTaskId === task.id;
+	                  const historyOpen = automationHistoryOpenTaskId === task.id;
+	                  const historyLoading = automationRunsLoadingTaskId === task.id;
+	                  const historyRuns = automationRunsByTaskId[task.id] || [];
 	                  return (
 	                    <div key={task.id} className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
 	                      <div className="flex items-start justify-between gap-3">
@@ -3390,8 +3541,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                            {task.builtIn && <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-white/35">Built-in</span>}
 	                          </div>
 	                          <p className="text-[11px] text-white/30 mt-1">
-	                            {task.lastRunAt ? `Last ran ${new Date(task.lastRunAt).toLocaleString()}` : "Not run yet"}
-	                            {task.nextRunAt ? ` · Next ${new Date(task.nextRunAt).toLocaleString()}` : ""}
+	                            {formatAutomationSchedule(task)}
+	                            {task.lastRunAt ? ` · Last ran ${formatAutomationDate(task.lastRunAt)}` : " · Not run yet"}
+	                            {task.nextRunAt ? ` · Next ${formatAutomationDate(task.nextRunAt)}` : ""}
+	                            {task.lastStatus ? ` · ${task.lastStatus}` : ""}
+	                            {task.consecutiveFailures ? ` · ${task.consecutiveFailures} failures` : ""}
 	                          </p>
 	                        </div>
 	                        <ToggleSwitch
@@ -3404,21 +3558,54 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                        />
 	                      </div>
 
-	                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+	                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
 	                        <label className="space-y-1">
-	                          <span className="block text-[11px] text-white/45">Interval</span>
+	                          <span className="block text-[11px] text-white/45">Schedule</span>
+	                          <select
+	                            value={task.schedule.type}
+	                            onChange={(e) => {
+	                              handleAutomationScheduleTypeChange(
+	                                task,
+	                                e.target.value as AutomationTask["schedule"]["type"],
+	                              );
+	                            }}
+	                            className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                          >
+	                            <option value="interval">Interval</option>
+	                            <option value="daily">Daily</option>
+	                          </select>
+	                        </label>
+
+	                        {task.schedule.type === "daily" ? (
+	                          <label className="space-y-1">
+	                            <span className="block text-[11px] text-white/45">Time</span>
+	                            <input
+	                              type="time"
+	                              step={300}
+	                              value={dailyTime}
+	                              onChange={(e) => handleAutomationDailyTimeChange(task, e.target.value)}
+	                              onBlur={() => handleAutomationDailyTimeBlur(task)}
+	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                            />
+	                          </label>
+	                        ) : (
+	                          <label className="space-y-1">
+	                            <span className="block text-[11px] text-white/45">Every</span>
 	                          <div className="flex items-center gap-2">
 	                            <input
 	                              type="number"
-	                              min={1}
+	                              min={AUTOMATION_INTERVAL_MINUTES_MIN}
+	                              max={AUTOMATION_INTERVAL_MINUTES_MAX}
+	                              step={5}
 	                              value={everyMinutes}
-	                              onChange={(e) => updateAutomationDraft(task.id, { schedule: { type: "interval", everyMinutes: Number(e.target.value) } })}
-	                              onBlur={() => saveAutomationPatch(task.id, { schedule: task.schedule })}
+	                              onChange={(e) => handleAutomationIntervalChange(task, e.target.value)}
+	                              onBlur={() => handleAutomationIntervalBlur(task)}
 	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
 	                            />
 	                            <span className="text-[11px] text-white/35">min</span>
 	                          </div>
-	                        </label>
+	                          </label>
+	                        )}
 
 	                        <label className="space-y-1">
 	                          <span className="block text-[11px] text-white/45">Activation</span>
@@ -3494,6 +3681,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                        >
 	                          {isRunning ? "Running" : "Run now"}
 	                        </button>
+	                        <button
+	                          onClick={() => handleToggleAutomationHistory(task.id)}
+	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 transition-all"
+	                        >
+	                          {historyOpen ? "Hide history" : "History"}
+	                        </button>
 	                        {task.builtIn && (
 	                          <button
 	                            onClick={() => handleResetAutomationPrompts(task.id)}
@@ -3511,6 +3704,57 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                          </button>
 	                        )}
 	                      </div>
+
+	                      {historyOpen && (
+	                        <div className="border-t border-white/10 pt-3 space-y-2">
+	                          <div className="flex items-center justify-between gap-2">
+	                            <h5 className="text-xs font-medium text-white/60">Run history</h5>
+	                            <button
+	                              onClick={() => loadAutomationRuns(task.id)}
+	                              disabled={historyLoading}
+	                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 disabled:opacity-40 transition-all"
+	                            >
+	                              {historyLoading ? "Loading" : "Refresh"}
+	                            </button>
+	                          </div>
+	                          {historyLoading && historyRuns.length === 0 ? (
+	                            <p className="text-xs text-white/35">Loading run history...</p>
+	                          ) : historyRuns.length === 0 ? (
+	                            <p className="text-xs text-white/35">No runs recorded.</p>
+	                          ) : (
+	                            <div className="max-h-72 overflow-y-auto divide-y divide-white/10">
+	                              {historyRuns.map((run) => {
+	                                const duration = formatAutomationDuration(run.startedAt, run.finishedAt);
+	                                return (
+	                                  <div key={run.id} className="py-2 space-y-1.5">
+	                                    <div className="flex flex-wrap items-center gap-2 text-[11px]">
+	                                      <span className={`px-1.5 py-0.5 rounded border ${automationStatusTone(run.status)}`}>
+	                                        {run.status}
+	                                      </span>
+	                                      <span className="text-white/45">{formatAutomationDate(run.startedAt)}</span>
+	                                      <span className="text-white/30">{run.origin}</span>
+	                                      {duration && <span className="text-white/30">{duration}</span>}
+	                                      {typeof run.toolCallCount === "number" && (
+	                                        <span className="text-white/30">{run.toolCallCount} tools</span>
+	                                      )}
+	                                      {typeof run.assistantMessageIndex === "number" && (
+	                                        <span className="text-white/25">message {run.assistantMessageIndex + 1}</span>
+	                                      )}
+	                                    </div>
+	                                    {run.error ? (
+	                                      <p className="text-xs text-red-200/70 whitespace-pre-wrap">{run.error}</p>
+	                                    ) : run.summary ? (
+	                                      <p className="text-xs text-white/50 whitespace-pre-wrap">{run.summary}</p>
+	                                    ) : (
+	                                      <p className="text-xs text-white/25">No summary captured.</p>
+	                                    )}
+	                                  </div>
+	                                );
+	                              })}
+	                            </div>
+	                          )}
+	                        </div>
+	                      )}
 	                    </div>
 	                  );
 	                })}
