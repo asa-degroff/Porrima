@@ -766,7 +766,7 @@ export function ChatView({
             // Create the skill chip
             const chip = document.createElement('span');
             chip.className = 'skill-chip';
-            chip.style.cssText = 'display:inline-block;padding:2px 8px;margin:0 4px;background:rgba(59,130,246,0.25);border:1px solid rgba(59,130,246,0.4);border-radius:12px;font-size:12px;color:rgb(147,197,253);font-weight:500;vertical-align:middle;';
+            chip.style.cssText = 'display:inline-block;padding:2px 8px;margin:0 4px;background:rgba(var(--theme-accent-muted));border:1px solid rgba(var(--theme-accent-border));border-radius:12px;font-size:12px;color:rgba(var(--theme-accent-text));font-weight:500;vertical-align:middle;';
             chip.textContent = `/${skillName}`;
             chip.setAttribute('data-skill', skillName);
             chip.setAttribute('contenteditable', 'false');
