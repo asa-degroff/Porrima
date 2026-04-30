@@ -14,6 +14,7 @@ const SETTINGS_PATH = join(BASE_DIR, "settings.json");
 const DB_PATH = join(BASE_DIR, "app.db");
 const MESSAGE_ROWS_MIGRATION = "chat_message_rows_v1";
 const CHAT_SEARCH_REBUILD_MIGRATION = "chat_messages_search_from_rows_v1";
+const CHAT_SEARCH_TOOLLOOP_MERGE_MIGRATION = "chat_messages_search_toolloop_merge_v1";
 
 // ---------------------------------------------------------------------------
 // Lazy singleton database
@@ -373,6 +374,7 @@ export function getDb(): Database.Database {
 
   backfillChatMessageRows(db);
   rebuildChatSearchFromRowsOnce(db);
+  remergeChatSearchToolLoopRowsOnce(db);
 
   _db = db;
 
@@ -988,9 +990,35 @@ function syncChatMessageRows(
 // ---------------------------------------------------------------------------
 
 /**
+ * Walk backwards from `index` while preceding rows belong to the same
+ * `_toolLoopId` group, returning the group's first sequence. Used to widen
+ * the FTS rebuild window so a merged search row is never left stale.
+ */
+function findToolLoopGroupStart(messages: ChatMessage[], index: number): number {
+  if (index <= 0) return index;
+  const m = messages[index];
+  if (m.role !== "assistant" || !m._toolLoopId) return index;
+  const loopId = m._toolLoopId;
+  let start = index;
+  while (
+    start > 0 &&
+    messages[start - 1].role === "assistant" &&
+    messages[start - 1]._toolLoopId === loopId
+  ) {
+    start--;
+  }
+  return start;
+}
+
+/**
  * Sync the flattened chat_messages search table from a changed message tail.
- * This fixes the old append-only behavior: edits, compaction rewrites, and
- * truncation now delete stale search rows before re-indexing the changed tail.
+ *
+ * Edits, compaction rewrites, and truncation delete stale search rows before
+ * re-indexing. Consecutive `_toolLoopId` rows are merged into one FTS document
+ * keyed at the group's first sequence, so a multi-tool visible turn surfaces
+ * as one search hit instead of N. When the changed tail starts inside an
+ * existing group, the rebuild window is widened to that group's first row so
+ * the merged document is rewritten rather than left stale.
  */
 function syncChatMessages(
   db: Database.Database,
@@ -1000,21 +1028,55 @@ function syncChatMessages(
 ): void {
   if (firstChanged === null) return;
 
+  const effectiveFirst = findToolLoopGroupStart(messages, firstChanged);
+
   db.prepare(`
     DELETE FROM chat_messages
     WHERE chat_id = ? AND message_index >= ?
-  `).run(chatId, firstChanged);
+  `).run(chatId, effectiveFirst);
 
   const insert = db.prepare(`
     INSERT INTO chat_messages (chat_id, message_index, role, content, timestamp)
     VALUES (?, ?, ?, ?, ?)
   `);
 
-  for (let i = firstChanged; i < messages.length; i++) {
+  let i = effectiveFirst;
+  while (i < messages.length) {
     const msg = messages[i];
+
+    if (msg.role === "assistant" && msg._toolLoopId) {
+      const loopId = msg._toolLoopId;
+      const groupStart = i;
+      const parts: string[] = [];
+      while (
+        i < messages.length &&
+        messages[i].role === "assistant" &&
+        messages[i]._toolLoopId === loopId
+      ) {
+        const piece = buildSearchContent(messages[i]);
+        if (piece.trim()) parts.push(piece);
+        i++;
+      }
+      const content = parts.join("\n");
+      if (content.trim()) {
+        insert.run(
+          chatId,
+          groupStart,
+          "assistant",
+          content,
+          messages[groupStart].timestamp || null
+        );
+      }
+      continue;
+    }
+
     const content = buildSearchContent(msg);
-    if (!content.trim()) continue;
+    if (!content.trim()) {
+      i++;
+      continue;
+    }
     insert.run(chatId, i, msg.role, content, msg.timestamp || null);
+    i++;
   }
 }
 
@@ -1244,6 +1306,58 @@ function rebuildChatSearchFromRowsOnce(db: Database.Database): void {
 
   const inserted = rebuild();
   console.log(`[chat-storage] Rebuilt chat_messages FTS source from row storage (${inserted} indexed rows)`);
+}
+
+/**
+ * One-shot rebuild that re-runs `syncChatMessages` over every chat so that
+ * already-indexed canonical tool-loop fragments collapse into the merged
+ * search row introduced alongside this migration. Without it, chats stored
+ * after the canonical-row fix but before the merge logic would keep one FTS
+ * document per fragment until they were edited again.
+ */
+function remergeChatSearchToolLoopRowsOnce(db: Database.Database): void {
+  if (hasStorageMigration(db, CHAT_SEARCH_TOOLLOOP_MERGE_MIGRATION)) return;
+
+  const chatIds = db.prepare(`
+    SELECT DISTINCT chat_id FROM chat_message_rows ORDER BY chat_id ASC
+  `).all() as Array<{ chat_id: string }>;
+
+  if (chatIds.length === 0) {
+    markStorageMigration(db, CHAT_SEARCH_TOOLLOOP_MERGE_MIGRATION);
+    return;
+  }
+
+  const remerge = db.transaction(() => {
+    let touched = 0;
+    for (const { chat_id } of chatIds) {
+      const rows = db.prepare(`
+        SELECT payload_json FROM chat_message_rows
+        WHERE chat_id = ?
+        ORDER BY sequence ASC
+      `).all(chat_id) as Array<{ payload_json: string }>;
+
+      const messages: ChatMessage[] = [];
+      for (const row of rows) {
+        try {
+          messages.push(JSON.parse(row.payload_json) as ChatMessage);
+        } catch {
+          // Skip corrupt rows; they'll get cleaned up next time the chat is saved.
+        }
+      }
+      if (messages.length === 0) continue;
+
+      const hasLoopRows = messages.some((m) => m.role === "assistant" && m._toolLoopId);
+      if (!hasLoopRows) continue;
+
+      syncChatMessages(db, chat_id, messages, 0);
+      touched++;
+    }
+    markStorageMigration(db, CHAT_SEARCH_TOOLLOOP_MERGE_MIGRATION);
+    return touched;
+  });
+
+  const touched = remerge();
+  console.log(`[chat-storage] Remerged tool-loop FTS rows for ${touched} chats`);
 }
 
 /**
