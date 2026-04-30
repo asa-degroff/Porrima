@@ -31,7 +31,8 @@ async function callServer(
   config: ServerConfig,
   systemContent: string,
   userContent: string,
-  label: string
+  label: string,
+  maxTokens: number = 30
 ): Promise<string | null> {
   // If the slot is in router mode (--models-dir), preflight /models/load so
   // the requested model is the active one. In single-model mode this returns
@@ -48,7 +49,7 @@ async function callServer(
           { role: "user", content: userContent },
         ],
         stream: false,
-        max_tokens: 30,
+        max_tokens: maxTokens,
         temperature: 0.3,
       }),
       signal: AbortSignal.timeout(10000),
@@ -109,7 +110,7 @@ export async function generateRecap(assistantContent: string): Promise<string | 
     "Focus on actions and outcomes. Write from an impersonal, immersive perspective, just the message content. Do not attribute the message to 'the user', 'the assistant', 'the developer', or any other roles. Do not mention the person or role. Prefer active voice. " +
     "Reply with ONLY the summary text. No quotes, no prefix, no explanation."; 
 
-  const raw = await callServer(config, systemContent, tailContent, "recap generation");
+  const raw = await callServer(config, systemContent, tailContent, "recap generation", 80);
   const recap = postProcessRecap(raw);
   if (recap) console.log(`[recap] generated: "${recap}"`);
   return recap;
