@@ -23,6 +23,8 @@ Chat storage has three message-related layers:
 
 During the compatibility window, `sequence` is deliberately the absolute `Chat.messages` index. That keeps edit/retry, search jumps, compaction markers, and paged windows aligned.
 
+**Sequence indexes are not durable identifiers.** They are current positions in the live `Chat.messages` array, not stable references across turns. A tool-heavy assistant turn now inserts N canonical rows instead of one collapsed row, so any subsequent message's sequence shifts by `N - 1` relative to where it would have been under the legacy storage. Callers that resolve a sequence to a message (search jumps, edit/retry indexes) should re-resolve after each turn instead of caching across turns.
+
 ## Message Windows
 
 The API supports recent-window and older-window reads:
@@ -74,7 +76,7 @@ The client keeps the raw canonical rows in `messages` and IndexedDB. `ChatView` 
 - The raw `localStartIdx` is preserved for message indexes, and `localEndIdx` determines whether the merged bubble is the streaming tail.
 - Streaming segment indexes are offset by the number of segments in earlier rows in the group.
 
-This keeps the UI behavior close to the old single-bubble experience while preserving the canonical storage/replay shape underneath.
+This keeps the UI behavior close to the old single-bubble experience while preserving the canonical storage/replay shape underneath. Note that the merge is **display-only**: visible content joins with a blank-line separator (`\n\n`) so the bubble reads as one coherent response, while LLM replay preserves separate `AssistantMessage` rows per fragment with no joiner. This asymmetry is deliberate — the LLM needs the original token boundaries to keep prefix-cache reuse, while the human reader benefits from the joined view.
 
 ## Compatibility Rules
 
