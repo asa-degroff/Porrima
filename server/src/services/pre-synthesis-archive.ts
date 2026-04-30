@@ -193,34 +193,67 @@ async function archiveChatForSynthesis(chatId: string): Promise<boolean> {
 
 /**
  * Group messages into logical archive blocks:
- * - Tool call + result pairs → one block each
- * - User + assistant exchanges (no tools) → one block
+ * - User + visible assistant turn (including all _toolLoopId fragments) → one block
+ * - Standalone visible assistant turn (all _toolLoopId fragments) → one block
+ * - Legacy collapsed assistant-with-tools row → one block
  * - Standalone messages → one block
  */
 function groupIntoBlocks(messages: ChatMessage[]): ChatMessage[][] {
   const blocks: ChatMessage[][] = [];
   let i = 0;
+
+  const collectLoopFragments = (start: number, loopId: string, into: ChatMessage[]): number => {
+    let j = start;
+    while (
+      j < messages.length &&
+      messages[j].role === "assistant" &&
+      messages[j]._toolLoopId === loopId
+    ) {
+      into.push(messages[j]);
+      j++;
+    }
+    return j;
+  };
+
   while (i < messages.length) {
     const m = messages[i];
-    // Assistant message with tool calls: include it + all subsequent tool results
-    if (m.role === "assistant" && m.toolCalls?.length) {
-      blocks.push([m]);
-      i++;
-      continue;
-    }
-    // User message: pair with next assistant response if available
+
+    // User + following visible assistant turn. Canonical multi-fragment
+    // turns share a _toolLoopId across N rows; archive them together so a
+    // single visible exchange becomes a single archive block.
     if (m.role === "user") {
-      const block = [m];
-      if (i + 1 < messages.length && messages[i + 1].role === "assistant") {
-        block.push(messages[i + 1]);
-        i += 2;
+      const block: ChatMessage[] = [m];
+      const next = i + 1 < messages.length ? messages[i + 1] : null;
+      if (next?.role === "assistant") {
+        if (next._toolLoopId) {
+          i = collectLoopFragments(i + 1, next._toolLoopId, block);
+        } else {
+          block.push(next);
+          i += 2;
+        }
       } else {
         i++;
       }
       blocks.push(block);
       continue;
     }
-    // Anything else: standalone block
+
+    // Canonical tool-loop fragments not preceded by a user message.
+    if (m.role === "assistant" && m._toolLoopId) {
+      const block: ChatMessage[] = [];
+      i = collectLoopFragments(i, m._toolLoopId, block);
+      blocks.push(block);
+      continue;
+    }
+
+    // Legacy collapsed assistant message with tool calls.
+    if (m.role === "assistant" && m.toolCalls?.length) {
+      blocks.push([m]);
+      i++;
+      continue;
+    }
+
+    // Anything else: standalone block.
     blocks.push([m]);
     i++;
   }

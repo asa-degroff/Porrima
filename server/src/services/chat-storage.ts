@@ -996,10 +996,19 @@ function syncChatMessageRows(
  */
 function findToolLoopGroupStart(messages: ChatMessage[], index: number): number {
   if (index <= 0) return index;
-  const m = messages[index];
-  if (m.role !== "assistant" || !m._toolLoopId) return index;
+
+  // Tail deletion can report firstChanged === messages.length. If the new
+  // remaining tail ends inside a merged tool-loop search row, back up to that
+  // group's first sequence so the stale merged row is deleted and rewritten.
+  if (messages.length === 0) return 0;
+  const candidateIndex = Math.min(index, messages.length - 1);
+  const m = messages[candidateIndex];
+  if (m.role !== "assistant" || !m._toolLoopId) {
+    return Math.min(index, messages.length);
+  }
+
   const loopId = m._toolLoopId;
-  let start = index;
+  let start = candidateIndex;
   while (
     start > 0 &&
     messages[start - 1].role === "assistant" &&
