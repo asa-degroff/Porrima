@@ -336,6 +336,19 @@ async function* parseSSE(
   const decoder = new TextDecoder();
   let buffer = "";
 
+  // Cancel the reader on abort so the underlying body stream is closed and
+  // undici destroys the TCP socket. Without this, breaking the read loop only
+  // releases the lock — the socket can linger in the keep-alive pool and
+  // llama.cpp keeps generating tokens until its next sink.write fails.
+  const onAbort = () => {
+    reader.cancel(new Error("aborted")).catch(() => {});
+  };
+  if (signal?.aborted) {
+    onAbort();
+  } else {
+    signal?.addEventListener("abort", onAbort, { once: true });
+  }
+
   try {
     while (true) {
       if (signal?.aborted) break;
@@ -371,6 +384,7 @@ async function* parseSSE(
       }
     }
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
 }

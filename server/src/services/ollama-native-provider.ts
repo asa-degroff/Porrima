@@ -224,6 +224,19 @@ async function* parseNDJSON(
   const decoder = new TextDecoder();
   let buffer = "";
 
+  // Cancel the reader on abort so the underlying body stream is closed and
+  // the HTTP socket is destroyed. Without this, breaking the read loop only
+  // releases the lock and Ollama keeps generating tokens until its next write
+  // fails on the now-orphaned connection.
+  const onAbort = () => {
+    reader.cancel(new Error("aborted")).catch(() => {});
+  };
+  if (signal?.aborted) {
+    onAbort();
+  } else {
+    signal?.addEventListener("abort", onAbort, { once: true });
+  }
+
   try {
     while (true) {
       if (signal?.aborted) break;
@@ -254,6 +267,7 @@ async function* parseNDJSON(
       }
     }
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
 }
