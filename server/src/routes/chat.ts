@@ -556,6 +556,11 @@ async function handleChatStream(
     committedThinkingDurationMs: 0,
     hasCommittedToolLoopRows: false,
     pendingFinalAssistantMessage: null as ChatMessage | null,
+    // Dedup guard: count of consecutive iterations whose tool calls were
+    // byte-identical to the prior iteration. Breaks loops where the model
+    // re-emits the same tool call instead of moving on.
+    duplicateToolCallStreak: 0,
+    lastIterationToolCallSignature: null as string | null,
   };
 
   function resetAccumulators() {
@@ -589,6 +594,8 @@ async function handleChatStream(
     state.committedThinkingDurationMs = 0;
     state.hasCommittedToolLoopRows = false;
     state.pendingFinalAssistantMessage = null;
+    state.duplicateToolCallStreak = 0;
+    state.lastIterationToolCallSignature = null;
   }
 
   function isPlaceholderEllipsis(text: string | undefined): boolean {
@@ -1380,6 +1387,11 @@ async function handleChatStream(
             state.lastLlamaCache = (msg as any).llamaCache;
           }
 
+          // Snapshot this iteration's new tool calls before the commit below
+          // advances committedToolCallCount — the dedup check further down
+          // needs the per-iteration slice.
+          const newToolCallsThisIter = state.allToolCalls.slice(state.committedToolCallCount);
+
           // Materialize the just-finished assistant turn using the same shape
           // that the live LLM context saw. Tool-use stops are committed
           // immediately so the next iteration and future replays both see:
@@ -1453,6 +1465,35 @@ async function handleChatStream(
                 state.needsMidTurnCompaction = true;
               }
             }
+          }
+
+          // Dedup guard: detect when the model is stuck re-emitting the same
+          // tool call. Compare this iteration's new tool calls against the
+          // prior iteration's signature. After DUPLICATE_TOOL_CALL_LIMIT
+          // consecutive identical iterations, abort the loop so the user
+          // isn't stuck watching the same call run.
+          const DUPLICATE_TOOL_CALL_LIMIT = 3;
+          if (newToolCallsThisIter.length > 0) {
+            const sig = JSON.stringify(newToolCallsThisIter.map(c => ({ name: c.name, args: c.arguments })));
+            if (sig === state.lastIterationToolCallSignature) {
+              state.duplicateToolCallStreak++;
+            } else {
+              state.duplicateToolCallStreak = 1;
+            }
+            state.lastIterationToolCallSignature = sig;
+
+            if (state.duplicateToolCallStreak >= DUPLICATE_TOOL_CALL_LIMIT) {
+              const dupNames = newToolCallsThisIter.map(c => c.name).join(", ");
+              console.warn(`[chat] duplicate tool call streak hit ${state.duplicateToolCallStreak} (${dupNames}) at iteration ${iterations}, aborting`);
+              res.write(`event: warning\ndata: ${JSON.stringify({
+                type: "duplicate_tool_call",
+                message: `Stopped — model called the same tool ${state.duplicateToolCallStreak} times in a row (${dupNames})`,
+              })}\n\n`);
+              turnAbortController.abort();
+            }
+          } else {
+            state.duplicateToolCallStreak = 0;
+            state.lastIterationToolCallSignature = null;
           }
 
           // Guard against runaway tool loops
