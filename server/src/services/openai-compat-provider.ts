@@ -171,7 +171,8 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
     if ((msg as any).role === "system") {
       const content = typeof (msg as any).content === "string" ? (msg as any).content : "";
       if (content) {
-        params.push({ role: "system", content: sanitizeSurrogates(content) });
+        const role = params.length === 0 ? "system" : "user";
+        params.push({ role, content: sanitizeSurrogates(content) });
       }
       continue;
     }

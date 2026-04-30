@@ -1111,6 +1111,7 @@ export function useChat(chatId: string | null) {
     (index: number, newText: string, images?: ImageAttachment[]) => {
       if (!chatId || streaming || !navigator.onLine) return;
       const targetChatId = chatId;
+      const currentOffset = messageOffsetRef.current;
       const localIndex = index - messageOffsetRef.current;
       if (localIndex < 0 || localIndex >= messages.length) return;
 
@@ -1134,8 +1135,9 @@ export function useChat(chatId: string | null) {
         bg.messages = next;
         return next;
       });
-      bg.messageOffset = index;
-      setMessageOffset(index);
+      bg.messageOffset = currentOffset;
+      bg.messageTotal = index + 2;
+      setMessageOffset(currentOffset);
       setMessageTotal(index + 2);
 
       prepareStream();

@@ -6,7 +6,7 @@ import { streamSimple, createAssistantMessageEventStream } from "@mariozechner/p
 import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
 import type { AgentContext, AgentLoopConfig, StreamFn } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
-import { chatMessagesToPiMessages } from "../services/agent.js";
+import { chatMessagesToPiMessages, mergeSystemContextWithUserContent } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { OllamaModel } from "../types.js";
 import { extractMemories, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
@@ -201,16 +201,21 @@ function truncateTitle(text: string, maxChars: number = 50): string {
 }
 
 /** Build a pi-ai Message from user input (text and/or images) */
-function buildUserPiMessage(message: string, images?: ImageAttachment[]): Message {
+function buildUserPiMessage(
+  message: string,
+  images?: ImageAttachment[],
+  systemContext?: string
+): Message {
+  const contentWithSystemContext = mergeSystemContextWithUserContent(systemContext, message);
   if (images?.length) {
     const content: any[] = [];
-    if (message) content.push({ type: "text", text: message });
+    if (contentWithSystemContext) content.push({ type: "text", text: contentWithSystemContext });
     for (const img of images) {
       content.push({ type: "image", data: img.data, mimeType: img.mimeType });
     }
     return { role: "user", content, timestamp: Date.now() };
   }
-  return { role: "user", content: message, timestamp: Date.now() };
+  return { role: "user", content: contentWithSystemContext, timestamp: Date.now() };
 }
 
 /** Persist images to disk and enrich attachments with id/url/thumbUrl (fire-and-forget safe) */
@@ -2960,25 +2965,42 @@ router.post("/", async (req, res) => {
       });
     }
 
-    setCachedAugmentedPrompt(chat.id, memoriesDelta ? `${systemPrompt}\n\n${memoriesDelta}` : systemPrompt);
+    setCachedAugmentedPrompt(chat.id, systemPrompt);
+
+    const memoryDeltaContext = memoriesDelta
+      ? `[System context — updated memories]\n${memoriesDelta}`
+      : "";
 
     // Persist the memory delta as a system-role message immediately before the
     // user's new message. Persisting (rather than injecting transiently) keeps
     // every previous turn's delta at a stable position in chat history so the
     // KV cache prefix matches across turns — only the new delta + user msg are
-    // reprocessed each turn instead of the entire prior turn.
-    if (memoriesDelta) {
+    // reprocessed each turn instead of the entire prior turn. Replay merges
+    // this hidden row into the following user message, so llama.cpp never sees
+    // a mid-transcript system role.
+    if (memoryDeltaContext) {
       const insertAt = Math.max(0, chat.messages.length - 1);
       chat.messages.splice(insertAt, 0, {
         role: "system",
-        content: `[System context — updated memories]\n${memoriesDelta}`,
+        content: memoryDeltaContext,
         timestamp: Date.now(),
       });
       await saveChat(chat);
     }
 
-    // Context = all messages EXCEPT the one we just added (agentLoop adds it as prompt)
-    const persistedHistory = chat.messages.slice(0, -1);
+    // Context = all messages before the current user prompt. If this turn has
+    // a fresh memory delta, exclude that hidden row here and merge it into the
+    // current user message below. Future replays reconstruct the same shape by
+    // merging the persisted system row with the following persisted user row.
+    const currentUserIndex = chat.messages.length - 1;
+    const persistedHistoryEnd =
+      memoryDeltaContext &&
+      currentUserIndex > 0 &&
+      chat.messages[currentUserIndex - 1]?.role === "system" &&
+      chat.messages[currentUserIndex - 1]?.content === memoryDeltaContext
+        ? currentUserIndex - 1
+        : currentUserIndex;
+    const persistedHistory = chat.messages.slice(0, persistedHistoryEnd);
     const contextMessages = chatMessagesToPiMessages(persistedHistory, chat.modelId);
 
     // Safety check: warn if context is empty for non-first messages
@@ -3005,7 +3027,7 @@ router.post("/", async (req, res) => {
       shape: summarizeReplayShape(persistedHistory),
     });
 
-    const userPiMessage = buildUserPiMessage(message, images);
+    const userPiMessage = buildUserPiMessage(message, images, memoryDeltaContext);
 
     await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
   }
@@ -3281,23 +3303,38 @@ router.post("/edit", async (req, res) => {
     });
   }
 
-  setCachedAugmentedPrompt(chat.id, editMemoriesDelta ? `${systemPrompt}\n\n${editMemoriesDelta}` : systemPrompt);
+  setCachedAugmentedPrompt(chat.id, systemPrompt);
+
+  const editMemoryDeltaContext = editMemoriesDelta
+    ? `[System context — updated memories]\n${editMemoriesDelta}`
+    : "";
 
   // Persist the memory delta as a system-role message immediately before the
   // user's edited message — see chat.ts:/api/chat for the rationale (stable
-  // KV cache prefix across turns).
-  if (editMemoriesDelta) {
+  // KV cache prefix across turns). Replay merges this hidden row into the
+  // following user message, so llama.cpp never sees a mid-transcript system role.
+  if (editMemoryDeltaContext) {
     const insertAt = Math.max(0, chat.messages.length - 1);
     chat.messages.splice(insertAt, 0, {
       role: "system",
-      content: `[System context — updated memories]\n${editMemoriesDelta}`,
+      content: editMemoryDeltaContext,
       timestamp: Date.now(),
     });
     await saveChat(chat);
   }
 
-  // Context = all messages EXCEPT the one we just added
-  const editPersistedHistory = chat.messages.slice(0, -1);
+  // Context = all messages before the current edited user prompt. If this edit
+  // has a fresh memory delta, merge that delta into the current user message
+  // instead of sending it as a standalone mid-transcript system message.
+  const currentEditUserIndex = chat.messages.length - 1;
+  const editPersistedHistoryEnd =
+    editMemoryDeltaContext &&
+    currentEditUserIndex > 0 &&
+    chat.messages[currentEditUserIndex - 1]?.role === "system" &&
+    chat.messages[currentEditUserIndex - 1]?.content === editMemoryDeltaContext
+      ? currentEditUserIndex - 1
+      : currentEditUserIndex;
+  const editPersistedHistory = chat.messages.slice(0, editPersistedHistoryEnd);
   const contextMessages = chatMessagesToPiMessages(editPersistedHistory, chat.modelId);
 
   // Safety check: warn if context is empty for non-first messages
@@ -3323,7 +3360,7 @@ router.post("/edit", async (req, res) => {
     console.warn(`[chat] WARNING: edit chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
   }
 
-  const userPiMessage = buildUserPiMessage(message, editImages);
+  const userPiMessage = buildUserPiMessage(message, editImages, editMemoryDeltaContext);
 
   await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
 });

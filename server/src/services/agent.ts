@@ -48,12 +48,42 @@ function visibleAssistantContent(message: ChatMessage): string {
   return stripPlaceholderEllipsisBlocks(message.content || "");
 }
 
+export function mergeSystemContextWithUserContent(
+  systemContext: string | string[] | undefined,
+  userContent: string
+): string {
+  const systemParts = Array.isArray(systemContext) ? systemContext : systemContext ? [systemContext] : [];
+  const parts = [...systemParts, userContent].filter((part) => part && part.trim().length > 0);
+  return parts.join("\n\n");
+}
+
 /** Convert our ChatMessage[] to pi-ai Message[] for the initial context */
 export function chatMessagesToPiMessages(
   messages: ChatMessage[],
   modelId: string
 ): Message[] {
   const result: Message[] = [];
+  const pendingSystemContexts: string[] = [];
+  let pendingSystemTimestamp: number | undefined;
+
+  const takePendingSystemContext = () => {
+    const content = pendingSystemContexts.splice(0);
+    const timestamp = pendingSystemTimestamp;
+    pendingSystemTimestamp = undefined;
+    return { content, timestamp };
+  };
+
+  const flushPendingSystemContext = (fallbackTimestamp?: number) => {
+    if (pendingSystemContexts.length === 0) return;
+    const pending = takePendingSystemContext();
+    const content = mergeSystemContextWithUserContent(pending.content, "");
+    if (!content) return;
+    result.push({
+      role: "user" as const,
+      content,
+      timestamp: pending.timestamp ?? fallbackTimestamp ?? Date.now(),
+    });
+  };
 
   for (const m of messages) {
     // Skip out-of-context messages (preserved for UI, not for LLM)
@@ -61,18 +91,20 @@ export function chatMessagesToPiMessages(
 
     if (m.role === "system") {
       // Persisted memory-delta messages live in chat history with role "system"
-      // so they stay at a stable position between turns (preserves KV cache prefix).
-      // pi-ai's Message union doesn't include "system", so cast through any —
-      // our openai-compat / ollama-native providers handle the role explicitly.
-      result.push({
-        role: "system" as any,
-        content: m.content,
-        timestamp: m.timestamp,
-      } as any);
+      // so the UI can hide them. Model replay merges them into the following
+      // user turn instead of emitting a mid-transcript system role, which Qwen
+      // llama.cpp templates reject and which would otherwise differ from the
+      // live turn's KV-cacheable prompt shape.
+      if (m.content?.trim()) {
+        pendingSystemContexts.push(m.content);
+        pendingSystemTimestamp = m.timestamp;
+      }
       continue;
     }
 
     if (m.role === "assistant") {
+      flushPendingSystemContext(m.timestamp);
+
       const dummyUsage = {
         input: 0,
         output: 0,
@@ -186,9 +218,17 @@ export function chatMessagesToPiMessages(
         } as AssistantMessage);
       }
     } else {
+      const pending = pendingSystemContexts.length > 0
+        ? takePendingSystemContext()
+        : { content: [], timestamp: undefined };
+      const contentWithSystemContext = mergeSystemContextWithUserContent(
+        pending.content,
+        m.content
+      );
+
       if (m.images?.length) {
         const content: any[] = [];
-        if (m.content) content.push({ type: "text", text: m.content });
+        if (contentWithSystemContext) content.push({ type: "text", text: contentWithSystemContext });
         for (const img of m.images) {
           content.push({ type: "image", data: img.data, mimeType: img.mimeType });
         }
@@ -196,12 +236,14 @@ export function chatMessagesToPiMessages(
       } else {
         result.push({
           role: "user" as const,
-          content: m.content,
+          content: contentWithSystemContext,
           timestamp: m.timestamp,
         });
       }
     }
   }
+
+  flushPendingSystemContext();
 
   return result;
 }

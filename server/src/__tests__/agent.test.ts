@@ -19,6 +19,59 @@ describe("chatMessagesToPiMessages", () => {
     });
   });
 
+  it("merges persisted system memory deltas into the following user message", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "system",
+        content: "[System context - updated memories]\nRemember the recap token setting.",
+        timestamp: 900,
+      },
+      { role: "user", content: "Make it configurable.", timestamp: 1000 },
+    ];
+
+    const result = chatMessagesToPiMessages(messages, MODEL_ID);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      role: "user",
+      content: "[System context - updated memories]\nRemember the recap token setting.\n\nMake it configurable.",
+      timestamp: 1000,
+    });
+  });
+
+  it("merges persisted system memory deltas into image user messages", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "system",
+        content: "[System context - updated memories]\nPrefer concise visual analysis.",
+        timestamp: 900,
+      },
+      {
+        role: "user",
+        content: "What changed here?",
+        images: [
+          { data: "base64data", mimeType: "image/png", name: "screenshot.png" },
+        ],
+        timestamp: 1000,
+      },
+    ];
+
+    const result = chatMessagesToPiMessages(messages, MODEL_ID);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "[System context - updated memories]\nPrefer concise visual analysis.\n\nWhat changed here?",
+        },
+        { type: "image", data: "base64data", mimeType: "image/png" },
+      ],
+      timestamp: 1000,
+    });
+  });
+
   it("converts a simple assistant message", () => {
     const messages: ChatMessage[] = [
       { role: "assistant", content: "Hi there!", timestamp: 1000 },
