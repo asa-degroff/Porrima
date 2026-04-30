@@ -44,7 +44,7 @@ html .rounded { border-radius: calc(0.25rem * var(--radius-scale)); }
 html {
   /* Ensure the document can extend behind the keyboard area */
   min-height: 100lvh;
-  background-color: #0f172a;
+  background-color: var(--theme-bg-flat, #0f172a);
 }
 
 body {
