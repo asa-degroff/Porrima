@@ -71,6 +71,10 @@ export interface ChatMessage {
   _isSystemMessage?: boolean;
   /** Marks this message as a synthesis trigger — excluded from delayed extraction */
   _isSynthesisMessage?: boolean;
+  /** Automation metadata for scheduled system-chat turns. */
+  _isAutomationMessage?: boolean;
+  _automationTaskId?: string;
+  _automationRunId?: string;
   /** Empty assistant placeholder inserted when the user sends a steering message.
    *  While set, streaming deltas from the pre-steering generation are not applied here
    *  (they land on the previous assistant msg via message_complete). Cleared by follow_up_start. */
@@ -106,6 +110,65 @@ export interface Chat {
   // Delayed extraction tracking
   lastDelayedExtractionAt?: string;
   lastDelayedExtractionMessageIndex?: number;
+}
+
+export type AutomationKind = "synthesis" | "wake" | "custom";
+export type AutomationScheduleType = "interval" | "daily";
+export type AutomationActivationPolicy = "idle" | "sleep_only" | "manual_only";
+export type AutomationRunStatus = "running" | "success" | "failed" | "skipped";
+
+export interface AutomationSchedule {
+  type: AutomationScheduleType;
+  /** Interval schedule, in minutes. */
+  everyMinutes?: number;
+  /** Daily schedule, "HH:mm" in local server time. */
+  timeOfDay?: string;
+}
+
+export interface AutomationPromptStep {
+  id: string;
+  title: string;
+  prompt: string;
+}
+
+export interface AutomationNotificationSettings {
+  enabled: boolean;
+  titleTemplate?: string;
+}
+
+export interface AutomationTask {
+  id: string;
+  kind: AutomationKind;
+  title: string;
+  enabled: boolean;
+  builtIn: boolean;
+  orderIndex: number;
+  chatId: string;
+  schedule: AutomationSchedule;
+  activationPolicy: AutomationActivationPolicy;
+  promptSteps: AutomationPromptStep[];
+  notifications: AutomationNotificationSettings;
+  maxIterations: number;
+  timeoutMs: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastStatus?: AutomationRunStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationRun {
+  id: string;
+  taskId: string;
+  status: AutomationRunStatus;
+  origin: "scheduler" | "manual" | "migration";
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  summary?: string;
+  toolCallCount?: number;
+  chatId?: string;
+  assistantMessageIndex?: number;
 }
 
 export interface ChatListItem {

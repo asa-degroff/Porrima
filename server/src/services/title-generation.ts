@@ -165,13 +165,18 @@ export async function regenerateTitle(
  * context package with generic headings.
  */
 export async function generateSystemCycleTitle(
-  cycleKind: "synthesis" | "wake",
+  cycleKind: "synthesis" | "wake" | "automation" | string,
   assistantResponse: string
 ): Promise<string | null> {
   const config = await getServerConfig();
   if (!config) return null;
 
-  const cycleLabel = cycleKind === "wake" ? "wake cycle" : "system synthesis";
+  const cycleLabel =
+    cycleKind === "wake"
+      ? "wake cycle"
+      : cycleKind === "synthesis"
+        ? "system synthesis"
+        : `${cycleKind} automation`;
   const truncatedResponse = assistantResponse.slice(0, 1200);
 
   const systemContent =

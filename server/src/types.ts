@@ -75,6 +75,10 @@ export interface ChatMessage {
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
   _isSynthesisMessage?: boolean;
+  /** Automation metadata for scheduled system-chat turns. */
+  _isAutomationMessage?: boolean;
+  _automationTaskId?: string;
+  _automationRunId?: string;
   /** Brief summary of what was done, generated for long assistant messages */
   recap?: string;
 }
@@ -129,6 +133,65 @@ export interface ChatListItem {
   lastModified: string;
   preview: string;
   projectId?: string;
+}
+
+export type AutomationKind = "synthesis" | "wake" | "custom";
+export type AutomationScheduleType = "interval" | "daily";
+export type AutomationActivationPolicy = "idle" | "sleep_only" | "manual_only";
+export type AutomationRunStatus = "running" | "success" | "failed" | "skipped";
+
+export interface AutomationSchedule {
+  type: AutomationScheduleType;
+  /** Interval schedule, in minutes. */
+  everyMinutes?: number;
+  /** Daily schedule, "HH:mm" in local server time. */
+  timeOfDay?: string;
+}
+
+export interface AutomationPromptStep {
+  id: string;
+  title: string;
+  prompt: string;
+}
+
+export interface AutomationNotificationSettings {
+  enabled: boolean;
+  titleTemplate?: string;
+}
+
+export interface AutomationTask {
+  id: string;
+  kind: AutomationKind;
+  title: string;
+  enabled: boolean;
+  builtIn: boolean;
+  orderIndex: number;
+  chatId: string;
+  schedule: AutomationSchedule;
+  activationPolicy: AutomationActivationPolicy;
+  promptSteps: AutomationPromptStep[];
+  notifications: AutomationNotificationSettings;
+  maxIterations: number;
+  timeoutMs: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastStatus?: AutomationRunStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationRun {
+  id: string;
+  taskId: string;
+  status: AutomationRunStatus;
+  origin: "scheduler" | "manual" | "migration";
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  summary?: string;
+  toolCallCount?: number;
+  chatId?: string;
+  assistantMessageIndex?: number;
 }
 
 export interface ChatMessageWindow {

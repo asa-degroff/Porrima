@@ -14,6 +14,7 @@ import { getBlueskyPoller } from "./bluesky-poller.js";
 import { BLUESKY_SYSTEM_PROMPT } from "../routes/bluesky.js";
 import { enrichCorpusBatch } from "./image-corpus.js";
 import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js";
+import { startAutomationScheduler } from "./automation-scheduler.js";
 
 const SYNTHESIS_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -333,8 +334,8 @@ async function checkAndRunDelayedExtractions() {
 // ---------------------------------------------------------------------------
 
 export function startScheduler(): void {
-  // Run synthesis check immediately on startup (catches overdue synthesis)
-  checkAndRunSynthesis();
+  // User-configurable automations own synthesis/wake scheduling.
+  startAutomationScheduler();
   
   // Delayed extraction: wait 2 minutes on startup before processing backlog
   // This gives the server time to stabilize and avoids immediate resource spike
@@ -349,19 +350,13 @@ export function startScheduler(): void {
     checkAndRunEnrichment();
   }, 1 * 60 * 1000);
   
-  // Then check every 15 minutes for synthesis
-  setInterval(checkAndRunSynthesis, SYNTHESIS_CHECK_INTERVAL_MS);
-  
   // Check every 5 minutes for delayed extractions
   setInterval(checkAndRunDelayedExtractions, DELAYED_EXTRACTION_CHECK_INTERVAL_MS);
   
   // Check every 30 minutes for corpus enrichment
   setInterval(checkAndRunEnrichment, ENRICHMENT_CHECK_INTERVAL_MS);
   
-  // Check every 15 minutes for wake cycles
-  setInterval(checkAndRunWakeCycle, WAKE_CYCLE_CHECK_INTERVAL_MS);
-  
-  console.log("[scheduler] Started (synthesis every 15min, delayed extraction every 5min, enrichment every 30min, wake cycle every 15min)");
+  console.log("[scheduler] Started (automations every 1min, delayed extraction every 5min, enrichment every 30min)");
 
   // Start Bluesky poller if enabled
   startBlueskyPoller();

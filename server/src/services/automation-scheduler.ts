@@ -1,0 +1,115 @@
+import type { AutomationTask, Settings } from "../types.js";
+import { hasActiveChats } from "./memory-extraction.js";
+import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js";
+import { getSettings } from "./chat-storage.js";
+import { getMemoryCount } from "./memory-storage.js";
+import {
+  ensureAutomationDefaults,
+  listEnabledAutomationTasks,
+  SYNTHESIS_AUTOMATION_ID,
+} from "./automation-storage.js";
+import { getActiveAutomationTaskId, isAutomationActive } from "./automation-lock.js";
+import { runAutomationTask } from "./automation-runner.js";
+import { isSynthesisActive, isWakeCycleActive } from "./system-chat.js";
+
+const AUTOMATION_CHECK_INTERVAL_MS = 60 * 1000;
+const DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES = 60;
+
+let automationCheckRunning = false;
+
+function taskIsDue(task: AutomationTask, nowMs: number): boolean {
+  if (!task.nextRunAt) return true;
+  const dueMs = new Date(task.nextRunAt).getTime();
+  return Number.isFinite(dueMs) && dueMs <= nowMs;
+}
+
+function sleepCycleActive(settings: Settings): boolean {
+  return computeSleepCycleActive(settings, {
+    hasActiveChats: hasActiveChats(),
+    defaultThresholdMinutes: DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES,
+  });
+}
+
+async function shouldRunTask(task: AutomationTask, settings: Settings, nowMs: number): Promise<boolean> {
+  if (!task.enabled) return false;
+  if (task.activationPolicy === "manual_only") return false;
+  if (!taskIsDue(task, nowMs)) return false;
+
+  if (task.activationPolicy === "sleep_only" && !sleepCycleActive(settings)) {
+    return false;
+  }
+
+  if (task.id === SYNTHESIS_AUTOMATION_ID || task.kind === "synthesis") {
+    const memoryCount = await getMemoryCount();
+    if (memoryCount === 0) return false;
+    if (settings.sleepModeTriggeredAt) {
+      const elapsedMs = Date.now() - new Date(settings.sleepModeTriggeredAt).getTime();
+      if (elapsedMs < 2 * 60 * 60 * 1000) {
+        console.log("[automation] Skipping synthesis — sleep mode cooldown active");
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+export async function checkAndRunDueAutomations(): Promise<void> {
+  if (automationCheckRunning) {
+    console.log("[automation] Skipping check — previous automation check still running");
+    return;
+  }
+
+  automationCheckRunning = true;
+  try {
+    await ensureAutomationDefaults();
+
+    if (isAutomationActive()) {
+      console.log(`[automation] Skipping check — automation active (${getActiveAutomationTaskId()})`);
+      return;
+    }
+    if (isSynthesisActive()) {
+      console.log("[automation] Skipping check — legacy synthesis active");
+      return;
+    }
+    if (isWakeCycleActive()) {
+      console.log("[automation] Skipping check — legacy wake cycle active");
+      return;
+    }
+    if (hasActiveChats()) {
+      console.log("[automation] Skipping check — active chat(s) in progress");
+      return;
+    }
+
+    const settings = await getSettings();
+    const nowMs = Date.now();
+    const tasks = listEnabledAutomationTasks();
+    for (const task of tasks) {
+      if (!(await shouldRunTask(task, settings, nowMs))) continue;
+      console.log(`[automation] ${task.title} due, starting task ${task.id}`);
+      const result = await runAutomationTask(task, "scheduler");
+      if (result.success) {
+        console.log(
+          `[automation] ${task.id} complete: ${result.summary.length} chars, ${result.toolCalls.length} tools`,
+        );
+      } else {
+        console.error(`[automation] ${task.id} failed: ${result.error}`);
+      }
+      break;
+    }
+  } catch (e) {
+    console.error("[automation] Check failed:", e);
+  } finally {
+    automationCheckRunning = false;
+  }
+}
+
+export function startAutomationScheduler(): void {
+  setTimeout(() => {
+    console.log("[automation] Running initial automation check...");
+    checkAndRunDueAutomations();
+  }, 30 * 1000);
+
+  setInterval(checkAndRunDueAutomations, AUTOMATION_CHECK_INTERVAL_MS);
+  console.log("[automation] Scheduler started (checks every 1min)");
+}

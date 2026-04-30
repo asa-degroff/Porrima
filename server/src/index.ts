@@ -29,11 +29,13 @@ import embeddingMigrationRouter from "./routes/embedding-migration.js";
 import modelStatsRouter from "./routes/model-stats.js";
 import llamaServersRouter from "./routes/llama-servers.js";
 import pushRouter from "./routes/push.js";
+import automationsRouter from "./routes/automations.js";
 import { requireAuth } from "./middleware/auth.js";
 import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
 import { initializePersona } from "./services/persona-store.js";
 import { createSystemChat } from "./services/system-chat.js";
+import { ensureAutomationDefaults } from "./services/automation-storage.js";
 import { migrateAgentNotebookToBlocks } from "./services/notebook-storage.js";
 import { registerOllamaNativeProvider } from "./services/ollama-native-provider.js";
 import { registerOpenAICompatProvider } from "./services/openai-compat-provider.js";
@@ -58,6 +60,7 @@ await initializePersona();
 
 // Create system chat for synthesis/reflection
 await createSystemChat();
+await ensureAutomationDefaults();
 
 // One-shot migration: move agent notebook JSON files into memory_blocks.
 // Idempotent — does nothing once the JSON files are in the .backup/ folder.
@@ -130,6 +133,7 @@ app.use("/api/embedding", embeddingMigrationRouter);
 app.use("/api/model-stats", modelStatsRouter);
 app.use("/api/llama-servers", llamaServersRouter);
 app.use("/api/push", pushRouter);
+app.use("/api/automations", automationsRouter);
 
 // Optional: Run corpus cleanup on startup to fix orphans from before the deletion fix
 // Set CORPUS_CLEANUP=true to enable

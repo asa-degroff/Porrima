@@ -18,11 +18,11 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
 import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
+import type { AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
@@ -47,6 +47,7 @@ const SECTIONS = [
   { id: 'images', label: 'Images' },
   { id: 'skills', label: 'Skills' },
   { id: 'extraction', label: 'Extraction' },
+  { id: 'automations', label: 'Automations' },
   { id: 'tools', label: 'Tool Options' },
   { id: 'bluesky', label: 'Bluesky' },
   { id: 'tts', label: 'TTS' },
@@ -249,6 +250,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [sleepCycleThreshold, setSleepCycleThreshold] = useState(settings.sleepCycleThresholdMinutes ?? 60);
   const [wakeCycleEnabled, setWakeCycleEnabled] = useState(settings.wakeCycleEnabled ?? false);
   const [wakeCycleInterval, setWakeCycleInterval] = useState(settings.wakeCycleIntervalHours ?? 6);
+  const [automations, setAutomations] = useState<AutomationTask[]>([]);
+  const [automationsLoading, setAutomationsLoading] = useState(false);
+  const [automationsRunningTaskId, setAutomationsRunningTaskId] = useState<string | null>(null);
+  const [automationMessage, setAutomationMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
   const [extractionModelUrl, setExtractionModelUrl] = useState(settings.extractionModelUrl || "");
   const [extractionModelStatus, setExtractionModelStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
@@ -462,6 +467,23 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       })
       .catch(() => {});
   }, []);
+
+  const refreshAutomations = useCallback(async () => {
+    setAutomationsLoading(true);
+    try {
+      const data = await fetchAutomations();
+      setAutomations(data.tasks);
+      setAutomationsRunningTaskId(data.activeTaskId);
+    } catch (err: any) {
+      setAutomationMessage({ type: "err", text: err?.message || "Failed to load automations" });
+    } finally {
+      setAutomationsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshAutomations();
+  }, [refreshAutomations]);
 
   // Fetch TTS settings and voices
   useEffect(() => {
@@ -677,6 +699,88 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       window.dispatchEvent(new CustomEvent('tts-settings-updated', { detail: ttsSettings }));
       console.log("[SettingsModal] Emitted tts-settings-updated:", ttsSettings);
     }
+  };
+
+  const replaceAutomation = (task: AutomationTask) => {
+    setAutomations((prev) => prev.map((item) => (item.id === task.id ? task : item)));
+  };
+
+  const updateAutomationDraft = (id: string, patch: Partial<AutomationTask>) => {
+    setAutomations((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  };
+
+  const saveAutomationPatch = async (id: string, patch: Partial<AutomationTask>) => {
+    setAutomationMessage(null);
+    try {
+      const updated = await updateAutomation(id, patch);
+      replaceAutomation(updated);
+      return updated;
+    } catch (err: any) {
+      setAutomationMessage({ type: "err", text: err?.message || "Failed to update automation" });
+      await refreshAutomations();
+      return null;
+    }
+  };
+
+  const handleAddAutomation = async () => {
+    setAutomationMessage(null);
+    try {
+      const task = await createAutomation({
+        title: "New Automation",
+        enabled: false,
+        schedule: { type: "interval", everyMinutes: 24 * 60 },
+        activationPolicy: "idle",
+        promptSteps: [{ id: "step-1", title: "Prompt", prompt: "Describe what this automation should do." }],
+        notifications: { enabled: false },
+      });
+      setAutomations((prev) => [...prev, task].sort((a, b) => a.orderIndex - b.orderIndex));
+    } catch (err: any) {
+      setAutomationMessage({ type: "err", text: err?.message || "Failed to create automation" });
+    }
+  };
+
+  const handleDeleteAutomation = async (id: string) => {
+    setAutomationMessage(null);
+    try {
+      await deleteAutomation(id);
+      setAutomations((prev) => prev.filter((task) => task.id !== id));
+    } catch (err: any) {
+      setAutomationMessage({ type: "err", text: err?.message || "Failed to delete automation" });
+    }
+  };
+
+  const handleRunAutomation = async (id: string) => {
+    setAutomationMessage(null);
+    try {
+      await runAutomationNow(id);
+      setAutomationsRunningTaskId(id);
+      setAutomationMessage({ type: "ok", text: "Automation started" });
+    } catch (err: any) {
+      setAutomationMessage({ type: "err", text: err?.message || "Failed to start automation" });
+    }
+  };
+
+  const handleResetAutomationPrompts = async (id: string) => {
+    setAutomationMessage(null);
+    try {
+      const task = await resetAutomationPrompts(id);
+      replaceAutomation(task);
+      setAutomationMessage({ type: "ok", text: "Prompts reset" });
+    } catch (err: any) {
+      setAutomationMessage({ type: "err", text: err?.message || "Failed to reset prompts" });
+    }
+  };
+
+  const moveAutomation = async (id: string, direction: -1 | 1) => {
+    const sorted = [...automations].sort((a, b) => a.orderIndex - b.orderIndex);
+    const idx = sorted.findIndex((task) => task.id === id);
+    const swapIdx = idx + direction;
+    if (idx < 0 || swapIdx < 0 || swapIdx >= sorted.length) return;
+    const current = sorted[idx];
+    const other = sorted[swapIdx];
+    await saveAutomationPatch(current.id, { orderIndex: other.orderIndex });
+    await saveAutomationPatch(other.id, { orderIndex: current.orderIndex });
+    await refreshAutomations();
   };
 
   const handleAddPreset = () => {
@@ -3236,42 +3340,186 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <p className="text-xs text-white/30">After this period of inactivity, the sleep cycle begins and autonomous modes activate</p>
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="block text-sm font-medium text-white/60">Wake cycle</label>
-                    <p className="text-xs text-white/30">Periodic autonomous exploration during sleep — web research, notebook writing, curiosity</p>
-                  </div>
-                  <ToggleSwitch
-                    checked={wakeCycleEnabled}
-                    onChange={() => setWakeCycleEnabled(!wakeCycleEnabled)}
-                    accentColor="purple"
-                  />
-                </div>
+	              </div>
+	            </div>
+	          </div>
 
-                {wakeCycleEnabled && (
-                  <div>
-                    <label className="block text-sm font-medium text-white/60">Wake interval</label>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="range"
-                        min={1}
-                        max={24}
-                        step={1}
-                        value={wakeCycleInterval}
-                        onChange={(e) => setWakeCycleInterval(Number(e.target.value))}
-                        className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
-                      />
-                      <span className="text-xs text-white/40 w-16 text-right">{wakeCycleInterval}h</span>
-                    </div>
-                    <p className="text-xs text-white/30">How often to wake during the sleep cycle</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+	          {/* Automations Section */}
+	          <div id="automations" className="border-t border-white/10 pt-6">
+	            <div className="flex items-center justify-between gap-3 mb-4">
+	              <div>
+	                <h3 className="text-sm font-semibold text-white/80">Automations</h3>
+	                <p className="text-xs text-white/30 mt-0.5">Recurring system-chat tasks with ordered schedules, editable prompts, and optional push notifications.</p>
+	              </div>
+	              <button
+	                onClick={handleAddAutomation}
+	                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0"
+	              >
+	                Add
+	              </button>
+	            </div>
 
-          {/* Tool Options Section */}
-          <div id="tools" className="border-t border-white/10 pt-6">
+	            {automationMessage && (
+	              <div className={`text-xs p-2 rounded mb-3 ${automationMessage.type === "ok" ? "bg-green-500/10 text-green-300/80" : "bg-red-500/10 text-red-300/80"}`}>
+	                {automationMessage.text}
+	              </div>
+	            )}
+
+	            {automationsLoading ? (
+	              <p className="text-xs text-white/40">Loading automations...</p>
+	            ) : (
+	              <div className="space-y-3">
+	                {[...automations].sort((a, b) => a.orderIndex - b.orderIndex).map((task, index, list) => {
+	                  const everyMinutes = task.schedule.type === "interval" ? task.schedule.everyMinutes ?? 1440 : 1440;
+	                  const isRunning = automationsRunningTaskId === task.id;
+	                  return (
+	                    <div key={task.id} className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
+	                      <div className="flex items-start justify-between gap-3">
+	                        <div className="min-w-0 flex-1">
+	                          <div className="flex items-center gap-2">
+	                            {task.builtIn ? (
+	                              <h4 className="text-sm font-medium text-white/70 truncate">{task.title}</h4>
+	                            ) : (
+	                              <input
+	                                value={task.title}
+	                                onChange={(e) => updateAutomationDraft(task.id, { title: e.target.value })}
+	                                onBlur={() => saveAutomationPatch(task.id, { title: task.title })}
+	                                className="min-w-0 flex-1 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-sm text-white/80 outline-none focus:border-purple-400/30"
+	                              />
+	                            )}
+	                            {task.builtIn && <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-white/35">Built-in</span>}
+	                          </div>
+	                          <p className="text-[11px] text-white/30 mt-1">
+	                            {task.lastRunAt ? `Last ran ${new Date(task.lastRunAt).toLocaleString()}` : "Not run yet"}
+	                            {task.nextRunAt ? ` · Next ${new Date(task.nextRunAt).toLocaleString()}` : ""}
+	                          </p>
+	                        </div>
+	                        <ToggleSwitch
+	                          checked={task.enabled}
+	                          onChange={() => {
+	                            updateAutomationDraft(task.id, { enabled: !task.enabled });
+	                            saveAutomationPatch(task.id, { enabled: !task.enabled });
+	                          }}
+	                          accentColor="purple"
+	                        />
+	                      </div>
+
+	                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+	                        <label className="space-y-1">
+	                          <span className="block text-[11px] text-white/45">Interval</span>
+	                          <div className="flex items-center gap-2">
+	                            <input
+	                              type="number"
+	                              min={1}
+	                              value={everyMinutes}
+	                              onChange={(e) => updateAutomationDraft(task.id, { schedule: { type: "interval", everyMinutes: Number(e.target.value) } })}
+	                              onBlur={() => saveAutomationPatch(task.id, { schedule: task.schedule })}
+	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                            />
+	                            <span className="text-[11px] text-white/35">min</span>
+	                          </div>
+	                        </label>
+
+	                        <label className="space-y-1">
+	                          <span className="block text-[11px] text-white/45">Activation</span>
+	                          <select
+	                            value={task.activationPolicy}
+	                            onChange={(e) => {
+	                              const activationPolicy = e.target.value as AutomationTask["activationPolicy"];
+	                              updateAutomationDraft(task.id, { activationPolicy });
+	                              saveAutomationPatch(task.id, { activationPolicy });
+	                            }}
+	                            className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                          >
+	                            <option value="idle">Idle</option>
+	                            <option value="sleep_only">Sleep only</option>
+	                            <option value="manual_only">Manual only</option>
+	                          </select>
+	                        </label>
+
+	                        <div className="flex items-end justify-between gap-2">
+	                          <label className="flex items-center gap-2 pb-1">
+	                            <input
+	                              type="checkbox"
+	                              checked={task.notifications.enabled}
+	                              onChange={(e) => {
+	                                const notifications = { ...task.notifications, enabled: e.target.checked };
+	                                updateAutomationDraft(task.id, { notifications });
+	                                saveAutomationPatch(task.id, { notifications });
+	                              }}
+	                              className="w-3.5 h-3.5 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
+	                            />
+	                            <span className="text-[11px] text-white/45">Push on response</span>
+	                          </label>
+	                        </div>
+	                      </div>
+
+	                      <div className="space-y-2">
+	                        {task.promptSteps.map((step, stepIndex) => (
+	                          <label key={step.id} className="block space-y-1">
+	                            <span className="block text-[11px] text-white/45">{step.title}</span>
+	                            <textarea
+	                              value={step.prompt}
+	                              onChange={(e) => {
+	                                const promptSteps = task.promptSteps.map((s, i) => i === stepIndex ? { ...s, prompt: e.target.value } : s);
+	                                updateAutomationDraft(task.id, { promptSteps });
+	                              }}
+	                              onBlur={() => saveAutomationPatch(task.id, { promptSteps: task.promptSteps })}
+	                              rows={task.kind === "synthesis" ? 5 : 4}
+	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-2 text-xs text-white/75 placeholder-white/25 outline-none focus:border-purple-400/30 resize-y"
+	                            />
+	                          </label>
+	                        ))}
+	                      </div>
+
+	                      <div className="flex flex-wrap items-center gap-2">
+	                        <button
+	                          onClick={() => moveAutomation(task.id, -1)}
+	                          disabled={index === 0}
+	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 disabled:opacity-30 disabled:hover:text-white/50 transition-all"
+	                        >
+	                          Up
+	                        </button>
+	                        <button
+	                          onClick={() => moveAutomation(task.id, 1)}
+	                          disabled={index === list.length - 1}
+	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 disabled:opacity-30 disabled:hover:text-white/50 transition-all"
+	                        >
+	                          Down
+	                        </button>
+	                        <button
+	                          onClick={() => handleRunAutomation(task.id)}
+	                          disabled={!!automationsRunningTaskId}
+	                          className="px-2 py-1 rounded-md text-xs bg-purple-500/10 border border-purple-400/20 text-purple-200/80 hover:bg-purple-500/20 disabled:opacity-40 transition-all"
+	                        >
+	                          {isRunning ? "Running" : "Run now"}
+	                        </button>
+	                        {task.builtIn && (
+	                          <button
+	                            onClick={() => handleResetAutomationPrompts(task.id)}
+	                            className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 transition-all"
+	                          >
+	                            Reset prompts
+	                          </button>
+	                        )}
+	                        {!task.builtIn && (
+	                          <button
+	                            onClick={() => handleDeleteAutomation(task.id)}
+	                            className="ml-auto px-2 py-1 rounded-md text-xs bg-red-500/10 border border-red-400/20 text-red-200/70 hover:bg-red-500/20 transition-all"
+	                          >
+	                            Delete
+	                          </button>
+	                        )}
+	                      </div>
+	                    </div>
+	                  );
+	                })}
+	              </div>
+	            )}
+	          </div>
+
+	          {/* Tool Options Section */}
+	          <div id="tools" className="border-t border-white/10 pt-6">
             <h3 className="text-sm font-semibold text-white/80 mb-4">Tool Options</h3>
 
             <div className="space-y-4">

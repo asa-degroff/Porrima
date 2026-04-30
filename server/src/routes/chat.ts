@@ -15,6 +15,7 @@ import { truncateChatHistory, truncateBeforeSend, triggerCompaction, hasStranded
 import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
+import { getAutomationLock } from "../services/automation-lock.js";
 import type { ToolSideEffects } from "../services/agent-tools.js";
 import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
 import type { Skill } from "../services/skills.js";
@@ -448,6 +449,27 @@ async function stampAssistantCompletion(chat: Chat): Promise<void> {
     await saveSettings(settings);
   } catch (e) {
     console.warn("[chat] Failed to stamp assistant completion:", e);
+  }
+}
+
+async function waitForBackgroundAutomation(chatId: string): Promise<void> {
+  const pendingAutomation = getAutomationLock();
+  if (pendingAutomation) {
+    console.log(
+      `[chat] Waiting for automation to complete before processing message for chat ${chatId}`,
+    );
+    await pendingAutomation;
+    return;
+  }
+
+  // Compatibility for any legacy synthesis dispatch path that did not acquire
+  // the general automation lock.
+  const pendingSynthesis = getSynthesisLock();
+  if (pendingSynthesis) {
+    console.log(
+      `[chat] Waiting for system synthesis to complete before processing message for chat ${chatId}`,
+    );
+    await pendingSynthesis;
   }
 }
 
@@ -2457,16 +2479,10 @@ router.post("/", async (req, res) => {
   // soon as the user starts a turn, even if processing is temporarily queued.
   await stampUserActivity(chat);
 
-  // Wait for any running system synthesis to complete before processing user messages.
-  // This prevents race conditions where synthesis modifies memories/context while a
-  // user message is being processed with stale context.
-  const pendingSynthesis = getSynthesisLock();
-  if (pendingSynthesis) {
-    console.log(
-      `[chat] Waiting for system synthesis to complete before processing message for chat ${chatId}`,
-    );
-    await pendingSynthesis;
-  }
+  // Wait for any running scheduled automation before processing user messages.
+  // This prevents system-chat maintenance from contending with the user's turn
+  // or mutating memories/context while prompt construction is starting.
+  await waitForBackgroundAutomation(chatId);
 
   // Restore any queued messages from a previous SSE drop
   await messageQueue.loadFromDisk(chatId);
@@ -3207,6 +3223,7 @@ router.post("/edit", async (req, res) => {
   }
 
   await stampUserActivity(chat);
+  await waitForBackgroundAutomation(chatId);
 
   // Get the original message to preserve images BEFORE truncating
   const originalMessage = chat.messages[messageIndex];

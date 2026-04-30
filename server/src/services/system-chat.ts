@@ -1,6 +1,6 @@
 import type { ToolSideEffects } from "./agent-tools.js";
 import type { Message, StopReason, ToolCall } from "@mariozechner/pi-ai";
-import type { Chat, ChatMessage } from "../types.js";
+import type { AutomationPromptStep, Chat, ChatMessage } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -185,6 +185,41 @@ const PHASE_INSTRUCTIONS: Record<SynthesisPhase, string> = {
   reflections: SYNTHESIS_PHASE4_INSTRUCTIONS,
 };
 
+export function getDefaultSynthesisPromptSteps(): AutomationPromptStep[] {
+  return PHASE_ORDER.map((phase) => ({
+    id: phase,
+    title:
+      phase === "synthesis"
+        ? "Daily Synthesis"
+        : phase === "maintenance"
+          ? "Memory Block Maintenance"
+          : phase === "zeitgeist"
+            ? "Zeitgeist Update"
+            : "Reflections",
+    prompt: PHASE_INSTRUCTIONS[phase],
+  }));
+}
+
+export function getDefaultWakePromptSteps(): AutomationPromptStep[] {
+  return [{ id: "wake", title: "Wake Cycle", prompt: WAKE_CYCLE_TRIGGER }];
+}
+
+function promptMapFromSteps(steps?: AutomationPromptStep[]): Record<SynthesisPhase, string> {
+  const map: Record<SynthesisPhase, string> = { ...PHASE_INSTRUCTIONS };
+  if (!steps) return map;
+  for (const phase of PHASE_ORDER) {
+    const step = steps.find((s) => s.id === phase);
+    if (step?.prompt?.trim()) {
+      map[phase] = step.prompt;
+    }
+  }
+  return map;
+}
+
+function wakePromptFromSteps(steps?: AutomationPromptStep[]): string {
+  return steps?.find((s) => s.prompt.trim())?.prompt ?? WAKE_CYCLE_TRIGGER;
+}
+
 // Kept as export for backward compatibility with the rendered-prompt viewer.
 // The Phase 1 instructions are the primary composition; Phase 2-4 are
 // injected as separate turn-based messages during synthesis execution.
@@ -307,6 +342,7 @@ export async function createSystemChat(): Promise<void> {
 async function buildSynthesisTriggerContent(
   digestChatIds: string[],
   archive: { archivedCount: number; newlyArchivedIds: string[] },
+  phase1Instructions = SYNTHESIS_PHASE1_INSTRUCTIONS,
 ): Promise<string> {
   const { getDb } = await import("./chat-storage.js");
   const { listNotebookEntries, getNotebookEntry } = await import("./notebook-storage.js");
@@ -553,7 +589,7 @@ async function buildSynthesisTriggerContent(
     parts.push(`## Notebook Entries\n\n${sub.join("\n\n")}`);
   }
 
-  parts.push(SYNTHESIS_PHASE1_INSTRUCTIONS);
+  parts.push(phase1Instructions);
 
   return parts.join("\n\n");
 }
@@ -567,7 +603,10 @@ async function buildSynthesisTriggerContent(
 // via read_memory_block when it decides a block needs attention.
 // ---------------------------------------------------------------------------
 
-async function buildMaintenancePhase2Trigger(chatId: string): Promise<string> {
+async function buildMaintenancePhase2Trigger(
+  chatId: string,
+  phase2Instructions = SYNTHESIS_PHASE2_INSTRUCTIONS,
+): Promise<string> {
   const { getDb } = await import("./chat-storage.js");
   const { getMemoryBlocksByScope, getAllMemoryBlocks, getLastSynthesis } = await import("./memory-storage.js");
 
@@ -665,7 +704,7 @@ async function buildMaintenancePhase2Trigger(chatId: string): Promise<string> {
     ...inventoryLines,
     budgetLine,
     ``,
-    SYNTHESIS_PHASE2_INSTRUCTIONS,
+    phase2Instructions,
   ].join("\n");
 }
 
@@ -674,14 +713,18 @@ async function buildMaintenancePhase2Trigger(chatId: string): Promise<string> {
 // Phase 1 is built separately (it includes the context package).
 // ---------------------------------------------------------------------------
 
-async function buildPhaseTrigger(phaseIndex: number, chatId: string): Promise<string> {
+async function buildPhaseTrigger(
+  phaseIndex: number,
+  chatId: string,
+  phasePrompts: Record<SynthesisPhase, string> = PHASE_INSTRUCTIONS,
+): Promise<string> {
   switch (phaseIndex) {
     case 1: // maintenance
-      return buildMaintenancePhase2Trigger(chatId);
+      return buildMaintenancePhase2Trigger(chatId, phasePrompts.maintenance);
     case 2: // zeitgeist
-      return buildZeitgeistPhase3Trigger();
+      return buildZeitgeistPhase3Trigger(phasePrompts.zeitgeist);
     case 3: // reflections
-      return SYNTHESIS_PHASE4_INSTRUCTIONS;
+      return phasePrompts.reflections;
     default:
       throw new Error(`Unknown phase index: ${phaseIndex}`);
   }
@@ -689,16 +732,18 @@ async function buildPhaseTrigger(phaseIndex: number, chatId: string): Promise<st
 
 // Measure the current zeitgeist and append an archive directive only when
 // the block is actually over threshold. Avoids making the agent guess.
-async function buildZeitgeistPhase3Trigger(): Promise<string> {
+async function buildZeitgeistPhase3Trigger(
+  phase3Instructions = SYNTHESIS_PHASE3_INSTRUCTIONS,
+): Promise<string> {
   const { getZeitgeistContent } = await import("./zeitgeist.js");
   const content = getZeitgeistContent() ?? "";
   const charCount = content.length;
   const statusLine = `Current zeitgeist: ${charCount.toLocaleString()} characters.`;
 
   if (charCount > ZEITGEIST_ARCHIVE_THRESHOLD) {
-    return [SYNTHESIS_PHASE3_INSTRUCTIONS, statusLine, ZEITGEIST_ARCHIVE_DIRECTIVE].join("\n\n");
+    return [phase3Instructions, statusLine, ZEITGEIST_ARCHIVE_DIRECTIVE].join("\n\n");
   }
-  return [SYNTHESIS_PHASE3_INSTRUCTIONS, statusLine].join("\n\n");
+  return [phase3Instructions, statusLine].join("\n\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -784,6 +829,9 @@ async function refreshSystemChatTitle(
 export async function runSystemSynthesis(options?: {
   modelId?: string;
   skipArchive?: boolean;
+  promptSteps?: AutomationPromptStep[];
+  automationTaskId?: string;
+  automationRunId?: string;
 }): Promise<SynthesisResult> {
   const { preSynthesisArchive } = await import("./pre-synthesis-archive.js");
   const { getChat, saveChat } = await import("./chat-storage.js");
@@ -846,35 +894,37 @@ export async function runSystemSynthesis(options?: {
       return makeErrorResult(`Model "${modelId}" not available`);
     }
     const contextWindow = piModel.contextWindow || 32768;
+    const phasePrompts = promptMapFromSteps(options?.promptSteps);
 
     // --- Append Phase 1 trigger to persistent history ---
     const phase1Content = await buildSynthesisTriggerContent(archivedChatIds, {
       archivedCount,
       newlyArchivedIds: archivedChatIds,
-    });
+    }, phasePrompts.synthesis);
     const phase1Msg: ChatMessage = {
       role: "user",
       content: phase1Content,
       timestamp: Date.now(),
       _isSystemMessage: true,
       _isSynthesisMessage: true,
+      _isAutomationMessage: true,
+      ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
+      ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
     };
     chat.messages.push(phase1Msg);
     // Keep modelId in sync so user-initiated messages also hit this model.
     if (chat.modelId !== modelId) chat.modelId = modelId;
     await saveChat(chat);
 
-    // Compose the full synthesis-mode prompt. Uses the same stable prefix
-    // as regular agent chats (chat.systemPrompt + persona + user doc +
-    // memory blocks + zeitgeist), then appends the synthesis instructions
-    // addendum. This keeps voice/identity consistent with every other
-    // surface and is byte-identical across cycles for KV caching.
+    // Compose the synthesis prompt from the stable prefix only. Phase
+    // instructions live in user-role tail messages so editing automation text
+    // does not invalidate the system chat's longest-common-prefix cache.
     const { buildStablePrefix, invalidateAllStablePrefixCaches } = await import("./memory-context.js");
     const { stablePrefix } = await buildStablePrefix(
       chat.systemPrompt || "You are a helpful assistant.",
       SYSTEM_CHAT_ID,
     );
-    const synthesisPrompt = `${stablePrefix}\n\n${SYNTHESIS_INSTRUCTIONS}`;
+    const synthesisPrompt = stablePrefix;
 
     // Build tools up front so the pre-send compaction estimator can account
     // for tool-schema tokens — otherwise the schema (5–10K tokens for the
@@ -891,7 +941,8 @@ export async function runSystemSynthesis(options?: {
       generatedImages,
     });
 
-    const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system");
+    const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system")
+      .filter((tool) => tool.name !== "ask_user");
 
     // --- Pre-send compaction keeps history bounded ---
     const compactionResult = await truncateBeforeSend(
@@ -1081,13 +1132,16 @@ export async function runSystemSynthesis(options?: {
       if (!hasToolCalls && phaseIndex < PHASE_ORDER.length - 1) {
         idleCount++;
         if (idleCount >= 1) {
-          const nextTrigger = await buildPhaseTrigger(phaseIndex + 1, SYSTEM_CHAT_ID);
+          const nextTrigger = await buildPhaseTrigger(phaseIndex + 1, SYSTEM_CHAT_ID, phasePrompts);
           const phaseTriggerMsg: ChatMessage = {
             role: "user",
             content: nextTrigger,
             timestamp: Date.now(),
             _isSystemMessage: true,
             _isSynthesisMessage: true,
+            _isAutomationMessage: true,
+            ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
+            ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
           };
           chat.messages.push(phaseTriggerMsg);
           messages.push({
@@ -1154,6 +1208,9 @@ export async function runSystemSynthesis(options?: {
       ...emitter.buildAssistantMessage(thinking, summary),
       timestamp: Date.now(),
       _isSynthesisMessage: true,
+      _isAutomationMessage: true,
+      ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
+      ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
     };
     chat.messages.push(assistantChatMsg);
     await saveChat(chat);
@@ -1247,6 +1304,9 @@ export async function runSystemSynthesis(options?: {
  */
 export async function runWakeCycle(options?: {
   modelId?: string;
+  promptSteps?: AutomationPromptStep[];
+  automationTaskId?: string;
+  automationRunId?: string;
 }): Promise<SynthesisResult> {
   const { getChat, saveChat } = await import("./chat-storage.js");
   const { discoverAllModels } = await import("./models.js");
@@ -1299,12 +1359,15 @@ export async function runWakeCycle(options?: {
       year: "numeric", month: "long", day: "numeric",
       hour: "2-digit", minute: "2-digit",
     });
-    const triggerContent = `# Wake Cycle — ${stamp}\n\n${WAKE_CYCLE_TRIGGER}`;
+    const triggerContent = `# Wake Cycle — ${stamp}\n\n${wakePromptFromSteps(options?.promptSteps)}`;
     const triggerMsg: ChatMessage = {
       role: "user",
       content: triggerContent,
       timestamp: Date.now(),
       _isSystemMessage: true,
+      _isAutomationMessage: true,
+      ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
+      ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
     };
     chat.messages.push(triggerMsg);
     if (chat.modelId !== modelId) chat.modelId = modelId;
@@ -1329,7 +1392,8 @@ export async function runWakeCycle(options?: {
       visuals,
       generatedImages,
     });
-    const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system");
+    const tools = getAgentTools(SYSTEM_CHAT_ID, effects, contextWindow, undefined, "system")
+      .filter((tool) => tool.name !== "ask_user");
 
     // Pre-send compaction
     const compactionResult = await truncateBeforeSend(
@@ -1497,6 +1561,9 @@ export async function runWakeCycle(options?: {
     const assistantChatMsg: ChatMessage = {
       ...emitter.buildAssistantMessage(thinking, textSummary || "*The wake cycle ended without visible output.*"),
       timestamp: Date.now(),
+      _isAutomationMessage: true,
+      ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
+      ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
     };
     chat.messages.push(assistantChatMsg);
     await saveChat(chat);

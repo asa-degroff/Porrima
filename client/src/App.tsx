@@ -105,6 +105,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [isExtractionRunning, setIsExtractionRunning] = useState(false);
   const [sleepCycleActive, setSleepCycleActive] = useState(false);
   const [isWakeCycleRunning, setIsWakeCycleRunning] = useState(false);
+  const [isAutomationRunning, setIsAutomationRunning] = useState(false);
 
   // Load UI state from server on mount
   useEffect(() => {
@@ -138,6 +139,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         const prev = wasSynthesizingRef.current;
         wasSynthesizingRef.current = status.isSynthesizing;
         setIsSynthesizing(status.isSynthesizing);
+        setIsAutomationRunning(!!status.isAutomationRunning && !status.isSynthesizing && !status.isWakeCycleRunning);
         setIsExtractionRunning(status.isExtractionRunning);
         setSleepCycleActive(status.sleepCycleActive);
         setIsWakeCycleRunning(status.isWakeCycleRunning);
@@ -732,6 +734,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         hasBackgroundActivity={hasBackgroundActivity}
         lastActiveChatId={lastActiveChatId}
         isSynthesizing={isSynthesizing}
+        isAutomationRunning={isAutomationRunning}
         synthesisComplete={synthesisComplete}
         sleepModeActive={sleepModeActive}
         sleepCycleActive={sleepCycleActive}

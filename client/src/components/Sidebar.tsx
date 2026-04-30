@@ -36,6 +36,7 @@ interface Props {
   hasBackgroundActivity?: boolean;
   lastActiveChatId?: string | null;
   isSynthesizing?: boolean;
+  isAutomationRunning?: boolean;
   synthesisComplete?: boolean;
   sleepModeActive?: boolean;
   sleepCycleActive?: boolean;
@@ -428,6 +429,7 @@ export function Sidebar({
   hasBackgroundActivity = false,
   lastActiveChatId = null,
   isSynthesizing = false,
+  isAutomationRunning = false,
   synthesisComplete = false,
   sleepModeActive = false,
   sleepCycleActive = false,
@@ -621,14 +623,14 @@ export function Sidebar({
             >
               <div className="relative flex items-center">
                 {/* Static logo + title — hidden during background activity, extraction, or synthesis */}
-                <div className={`flex items-center gap-2 transition-opacity duration-300 ${(hasBackgroundActivity || isExtractionRunning || isSynthesizing) ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+                <div className={`flex items-center gap-2 transition-opacity duration-300 ${(hasBackgroundActivity || isExtractionRunning || isSynthesizing || isAutomationRunning) ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
                   <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
                   <h1 className="text-lg font-semibold text-white/90 tracking-tight">
                     qu.je
                   </h1>
                 </div>
                 {/* Background activity indicator — octahedron for memory extraction, synthesis, creative directions */}
-                <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${(hasBackgroundActivity || isExtractionRunning || isSynthesizing) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${(hasBackgroundActivity || isExtractionRunning || isSynthesizing || isAutomationRunning) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
                   <PolyhedronLogo isActive={true} shape={activityShape} />
                 </div>
               </div>
@@ -663,6 +665,11 @@ export function Sidebar({
                 <>
                   <span className="text-violet-400/60">●</span>
                   <span className="text-violet-300/60">Waking</span>
+                </>
+              ) : isAutomationRunning ? (
+                <>
+                  <span className="text-violet-400/60">●</span>
+                  <span className="text-violet-300/60">Automating</span>
                 </>
               ) : synthesisComplete ? (
                 <>

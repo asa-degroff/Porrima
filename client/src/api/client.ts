@@ -1,4 +1,4 @@
-import type { Artifact, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
+import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -1032,6 +1032,8 @@ export interface SynthesisStatus {
   lastSynthesis: string | null;
   memoryCount: number;
   isSynthesizing: boolean;
+  isAutomationRunning?: boolean;
+  activeAutomationTaskId?: string | null;
   isExtractionRunning: boolean;
   // Sleep cycle
   sleepCycleActive: boolean;
@@ -1043,6 +1045,79 @@ export interface SynthesisStatus {
   isWakeCycleRunning: boolean;
   lastWakeCycleAt: string | null;
   wakeCycleEnabled: boolean;
+}
+
+// --- Automations API ---
+
+export interface AutomationsResponse {
+  tasks: AutomationTask[];
+  isRunning: boolean;
+  activeTaskId: string | null;
+}
+
+export async function fetchAutomations(): Promise<AutomationsResponse> {
+  const res = await apiFetch(`${BASE}/automations`);
+  if (!res.ok) throw new Error("Failed to fetch automations");
+  return res.json();
+}
+
+export async function createAutomation(data: Partial<AutomationTask>): Promise<AutomationTask> {
+  const res = await apiFetch(`${BASE}/automations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || "Failed to create automation");
+  }
+  return res.json();
+}
+
+export async function updateAutomation(id: string, data: Partial<AutomationTask>): Promise<AutomationTask> {
+  const res = await apiFetch(`${BASE}/automations/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || "Failed to update automation");
+  }
+  return res.json();
+}
+
+export async function deleteAutomation(id: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/automations/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || "Failed to delete automation");
+  }
+}
+
+export async function runAutomationNow(id: string): Promise<SynthesisDispatchResult> {
+  const res = await apiFetch(`${BASE}/automations/${encodeURIComponent(id)}/run`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || "Failed to run automation");
+  }
+  return res.json();
+}
+
+export async function resetAutomationPrompts(id: string): Promise<AutomationTask> {
+  const res = await apiFetch(`${BASE}/automations/${encodeURIComponent(id)}/reset-prompts`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || "Failed to reset automation prompts");
+  }
+  return res.json();
+}
+
+export async function fetchAutomationRuns(id: string, limit = 20): Promise<AutomationRun[]> {
+  const res = await apiFetch(`${BASE}/automations/${encodeURIComponent(id)}/runs?limit=${limit}`);
+  if (!res.ok) throw new Error("Failed to fetch automation runs");
+  const data = await res.json();
+  return data.runs || [];
 }
 
 // Response from POST /synthesis/run and /synthesis/sleep. Synthesis is

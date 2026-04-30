@@ -21,11 +21,13 @@ import {
   getBlockHistory,
   MAX_BLOCK_CHARS,
 } from "../services/memory-storage.js";
-import { runSystemSynthesis } from "../services/system-chat.js";
 import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
 import { getRecentExtractionRuns, subscribeExtractionEvents } from "../services/memory-extraction-observability.js";
 import { invalidateAllMemoriesCaches, invalidateAllStablePrefixCaches } from "../services/memory-context.js";
 import { isSleepCycleActive as computeSleepCycleActive } from "../services/sleep-cycle.js";
+import { getActiveAutomationTaskId, isAutomationActive } from "../services/automation-lock.js";
+import { runAutomationTask } from "../services/automation-runner.js";
+import { getAutomationTask, SYNTHESIS_AUTOMATION_ID, WAKE_AUTOMATION_ID } from "../services/automation-storage.js";
 import type { Memory, MemorySummary } from "../types.js";
 
 const router = Router();
@@ -109,11 +111,14 @@ router.get("/synthesis/status", async (_req, res) => {
   });
 
   const lastWakeCycleAt = await getLastWakeCycleAt();
+  const wakeTask = getAutomationTask(WAKE_AUTOMATION_ID);
 
   res.json({
     lastSynthesis,
     memoryCount,
     isSynthesizing: isSynthesisActive(),
+    isAutomationRunning: isAutomationActive(),
+    activeAutomationTaskId: getActiveAutomationTaskId(),
     isExtractionRunning,
     // Sleep cycle
     sleepCycleActive,
@@ -124,7 +129,7 @@ router.get("/synthesis/status", async (_req, res) => {
     // Wake cycle
     isWakeCycleRunning: isWakeCycleActive(),
     lastWakeCycleAt,
-    wakeCycleEnabled: settings.wakeCycleEnabled ?? false,
+    wakeCycleEnabled: wakeTask?.enabled ?? settings.wakeCycleEnabled ?? false,
   });
 });
 
@@ -134,7 +139,7 @@ router.get("/synthesis/status", async (_req, res) => {
 // by polling /synthesis/status (isSynthesizing goes false, lastSynthesis
 // advances).
 function dispatchSynthesis(origin: string): void {
-  runSystemSynthesis()
+  runAutomationTask(SYNTHESIS_AUTOMATION_ID, "manual")
     .then((result) => {
       if (!result.success) {
         console.error(`[synthesis/${origin}] failed:`, result.error);
@@ -154,8 +159,11 @@ function dispatchSynthesis(origin: string): void {
 router.post("/synthesis/run", async (_req, res) => {
   try {
     const { isSynthesisActive } = await import("../services/system-chat.js");
-    if (isSynthesisActive()) {
-      return res.status(409).json({ error: "Synthesis already in progress" });
+    if (isSynthesisActive() || isAutomationActive()) {
+      return res.status(409).json({
+        error: "Synthesis or automation already in progress",
+        activeAutomationTaskId: getActiveAutomationTaskId(),
+      });
     }
     dispatchSynthesis("run");
     res.status(202).json({ started: true });
@@ -189,11 +197,13 @@ router.post("/synthesis/sleep", async (_req, res) => {
 router.post("/wake/run", async (_req, res) => {
   try {
     const { isWakeCycleActive } = await import("../services/system-chat.js");
-    if (isWakeCycleActive()) {
-      return res.status(409).json({ error: "Wake cycle already in progress" });
+    if (isWakeCycleActive() || isAutomationActive()) {
+      return res.status(409).json({
+        error: "Wake cycle or automation already in progress",
+        activeAutomationTaskId: getActiveAutomationTaskId(),
+      });
     }
-    const { runWakeCycle } = await import("../services/system-chat.js");
-    runWakeCycle()
+    runAutomationTask(WAKE_AUTOMATION_ID, "manual")
       .then((result) => {
         if (!result.success) {
           console.error(`[wake/manual] failed:`, result.error);
