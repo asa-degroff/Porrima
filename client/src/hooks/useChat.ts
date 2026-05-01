@@ -1057,9 +1057,12 @@ export function useChat(chatId: string | null) {
         return;
       }
 
-      // If streaming, enqueue the message for follow-up
-      if (streaming) {
-        const bg = bgStreams.get(targetChatId);
+      // If streaming, enqueue the message for follow-up. Also consult the
+      // module-level stream map so stale React state cannot start a duplicate
+      // /api/chat POST while this chat already has an active background stream.
+      const existingBg = bgStreams.get(targetChatId);
+      if (streaming || existingBg?.streaming) {
+        const bg = existingBg;
         // Append user msg + an empty assistant placeholder so the spinner stays
         // visible and an empty bubble renders during the gap before the server
         // picks up the queued message. _steeringPending gates delta application

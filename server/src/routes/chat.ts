@@ -62,6 +62,33 @@ function ensureSSEStream(res: Response, req: Request, chatId: string) {
   res.write(`: connected\n\n`);
 }
 
+function attachToLiveStreamResponse(req: Request, res: Response, stream: LiveStream, label: string) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.socket?.setNoDelay(true);
+  res.write(`: ${label}\n\n`);
+
+  // Stamp push-presence so a device attached to a live turn does not also get
+  // a push notification when that turn completes.
+  stampStreamPresence(req);
+
+  for (const chunk of stream.buffer) {
+    try { res.write(chunk); } catch { return; }
+  }
+
+  const subWrite = res.write.bind(res) as (chunk: string) => boolean;
+  const sub: LiveStreamSubscriber = { write: subWrite, res, isPrimary: false };
+  stream.subscribers.add(sub);
+
+  res.on("close", () => {
+    detachSubscriber(stream, sub);
+  });
+}
+
 function shouldGenerateInitialTitle(chat: Chat): boolean {
   return chat.messages.filter((m) => m.role === "user").length === 1;
 }
@@ -2736,15 +2763,22 @@ router.post("/", async (req, res) => {
     // after a server restart, the last message may be an assistant response
     // (partial or in-progress) that was persisted before the crash.
     const recentMessages = chat.messages.slice(-5);
+    const incomingImageCount = persistedImages?.length ?? images?.length ?? 0;
     const isLikelyDuplicate = recentMessages.some(m =>
       m.role === "user" &&
       m.content === message &&
-      m.images?.length === (persistedImages?.length || images?.length || 0) &&
+      (m.images?.length ?? 0) === incomingImageCount &&
       (Date.now() - (m.timestamp || 0)) < 60_000
     );
 
     if (isLikelyDuplicate) {
       console.warn(`[chat] Deduplicating user message for chat ${chatId} — identical message found in recent history within 60s`);
+      const stream = liveStreams.get(chatId);
+      if (stream && !stream.ended && !stream.abort.signal.aborted) {
+        console.warn(`[chat] duplicate POST for active chat ${chatId}; attaching to existing live stream`);
+        attachToLiveStreamResponse(req, res, stream, "duplicate-attached");
+        return;
+      }
     } else {
       const userMsg: ChatMessage = {
         role: "user",
@@ -3048,34 +3082,7 @@ router.get("/reconnect/:chatId", async (req, res) => {
     return res.status(404).json({ error: "no_active_stream" });
   }
 
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
-  res.socket?.setNoDelay(true);
-  res.write(`: reconnected\n\n`);
-
-  // Stamp push-presence so a device that just reconnected to a live turn
-  // doesn't also get a push when that turn completes.
-  stampStreamPresence(req);
-
-  // Replay the buffered events so the client catches up on what it missed.
-  for (const chunk of stream.buffer) {
-    try { res.write(chunk); } catch { return; }
-  }
-
-  // Attach as a non-primary subscriber. Future events from emitToStream will
-  // fan out here too. On disconnect we simply drop — the stream runs to
-  // completion regardless of subscriber count.
-  const subWrite = res.write.bind(res) as (chunk: string) => boolean;
-  const sub: LiveStreamSubscriber = { write: subWrite, res, isPrimary: false };
-  stream.subscribers.add(sub);
-
-  res.on("close", () => {
-    detachSubscriber(stream, sub);
-  });
+  attachToLiveStreamResponse(req, res, stream, "reconnected");
 
   console.log(`[chat] reconnect: attached to live stream for ${chatId} (replayed ${stream.buffer.length} chunks)`);
 });
