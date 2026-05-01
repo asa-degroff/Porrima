@@ -7,7 +7,7 @@ Dual user/agent notebook for structured notes, reflections, and cross-referencin
 - **Entry types**: user-created and agent-created entries (e.g., synthesis summaries)
 - **Linking**: `NotebookLink` cross-references between notebooks, chats, and external URLs
 - **Attachments**: image attachments, tool results, artifacts, visuals, and memory associations
-- **Daily synthesis integration**: synthesis loads today's notebook entries (user + agent, excluding prior synthesis entries) as context; writes an agent notebook entry with the synthesis summary
+- **Synthesis integration**: synthesis loads recent notebook entries (user + agent, excluding prior synthesis entries) as context. The synthesis prompt tells the agent to persist narrative output through `create_notebook_entry`; the server no longer auto-saves assistant text as a notebook entry.
 - **UI**: `NotebookView.tsx`, `NotebookEntryComposer.tsx`, `NotebookEntryDisplay.tsx`, `NotebookLinkPicker.tsx`
 - **Routes** (`notebooks.ts`): CRUD for entries, filtered by author (user/agent)
 
@@ -52,7 +52,7 @@ Social media integration with the AT Protocol (Bluesky):
 ## Persona
 
 - Dynamic persona synthesis from memories
-- Daily persona updates
+- Updated through synthesis and memory-block maintenance
 - Persona-aware responses
 
 ## Authentication

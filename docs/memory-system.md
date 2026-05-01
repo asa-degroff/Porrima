@@ -109,21 +109,21 @@ Synthesis runs the main model inside a persistent **system chat** (`chat.type ==
 
 1. **Pre-archives** recent unarchived agent chats via `pre-synthesis-archive.ts` — creates `context_archives` rows with LLM-generated one-line `indexEntry` descriptions so the synthesis agent can pull full transcripts via `read_archived_context`.
 2. **Builds a synthesis trigger** — a single user-role `ChatMessage` containing: archive index entries grouped by chat, memories written since the last synthesis (delta-based, not importance-based; fallback to last 24h on first run; capped at 50), recent notebook entries. Persona, user doc, memory blocks, and zeitgeist are injected via the stable system-prompt prefix instead, not the trigger body — keeps them byte-identical across cycles for KV caching.
-3. **Appends the trigger** to the persistent system chat and runs the tool loop with the full agent tool suite (memory, filesystem, web, image, artifacts, notebook). `truncateBeforeSend` handles history growth.
-4. **Composes the system prompt** as: `chat.systemPrompt` (the user's `defaultSystemPrompt`) → `buildStablePrefix(...)` (persona + user doc + memory blocks + zeitgeist) → `SYNTHESIS_INSTRUCTIONS` addendum.
-5. **Persists output** — writes the assistant response to the system chat (with `_isSystemMessage: true`) and, when text is produced, creates a matching agent notebook entry with paired `toolCalls` + `toolResults`.
-6. **Marks the cycle** — calls `setLastSynthesis(now)` so the next `shouldRunSystemSynthesis()` check respects the 24h gate.
+3. **Appends the trigger** to the persistent system chat and runs pre-send compaction before dispatch so the system chat stays within context before the model begins prefill.
+4. **Composes the system prompt** from the stable prefix only: `chat.systemPrompt` → `buildStablePrefix(...)` (persona + user doc + memory blocks + zeitgeist). Phase instructions live in user-role trigger/follow-up messages, so editing automation prompts does not invalidate the system chat's longest-common-prefix KV cache.
+5. **Runs the shared headless tool loop** via `runHeadlessChatTurn()` / `runAgentLoop()` with the full system tool suite except `ask_user`. Later synthesis phases are injected through `getFollowUp` after turn boundaries.
+6. **Persists output** — writes the assistant response to the system chat (with `_isSystemMessage`, `_isSynthesisMessage`, and automation metadata when present). Notebook persistence is the agent's responsibility through the `create_notebook_entry` tool; the server warns if synthesis text is produced without a notebook tool call.
+7. **Marks the cycle** — calls `setLastSynthesis(now)` only after a successful run so failed/no-output runs can retry on a later automation tick.
 
 Synthesis owns both the daily narrative (notebook entry) and zeitgeist maintenance (the agent calls `update_memory_block` on `blk-zeitgeist-continuity` when the continuity narrative has shifted). See [zeitgeist.md](zeitgeist.md).
 
 **Triggers:**
-- Scheduler: `checkAndRunSynthesis()` runs every 15 min; fires `runSystemSynthesis()` if `shouldRunSystemSynthesis()` returns true (more than 24h since last) and no sleep-mode cooldown is active.
-- Manual: `POST /api/memory/synthesis/run` and `POST /api/memory/synthesis/sleep` dispatch the run asynchronously (202 Accepted) and return immediately. Clients poll `/api/memory/synthesis/status` (which exposes `isSynthesizing`) to observe progress. `/sleep` stamps `settings.sleepModeTriggeredAt` so the scheduler skips periodic runs for 2 hours.
+- Scheduler: the built-in automation `builtin:synthesis` is checked by `automation-scheduler.ts` every 5 minutes and defaults to a 24-hour interval. It is ordered with other automations, skipped while user chat/automation work is active, and respects the sleep-mode cooldown.
+- Manual automation: `POST /api/automations/builtin%3Asynthesis/run` dispatches the built-in task and records an `automation_runs` row.
+- Legacy/manual memory endpoints: `POST /api/memory/synthesis/run` and `POST /api/memory/synthesis/sleep` still dispatch synthesis asynchronously (202 Accepted) and return immediately. Clients poll `/api/memory/synthesis/status` (which exposes `isSynthesizing`) to observe progress. `/sleep` stamps `settings.sleepModeTriggeredAt` so periodic synthesis is suppressed for 2 hours.
 
 **Synthesis lock:** `system-chat.ts` exports `acquireSynthesisLock` / `releaseSynthesisLock` / `getSynthesisLock` / `isSynthesisActive`. The chat route waits on `getSynthesisLock()` before processing a user message, so synthesis and user chat are strictly serialized on the main model. Enrichment and delayed-extraction checks in the scheduler also skip while synthesis is active.
 
+**Automation lock:** scheduled and manual automation runs also use `automation-lock.ts` so built-in synthesis, wake cycles, and custom automations cannot overlap each other.
+
 **Reflections:** `reflection` memories (importance 7–9) are created by the agent via `save_memory` calls during synthesis, not batch-generated post-hoc.
-
-## Creative Cycle Integration
-
-After synthesis, the scheduler runs `runCorpusCreativeCycle()` — rebuilds clusters, generates creative directions via LLM, saves top directions as `context` memories, then executes top directions as autonomous image generations.

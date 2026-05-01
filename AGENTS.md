@@ -23,13 +23,13 @@
 
 See [docs/architecture.md](docs/architecture.md) for full details.
 
-Three chat types: **agent** (memory-augmented), **quick** (standalone), **bluesky** (social). The chat route (`server/src/routes/chat.ts`) orchestrates memory augmentation, LLM streaming via pi-ai, tool execution, and memory extraction. Chat storage is SQLite with FTS5 full-text search. Multi-provider LLM system supports Ollama native and OpenAI-compatible (llama.cpp) backends.
+Four chat types: **agent** (memory-augmented), **quick** (standalone), **bluesky** (social), and **system** (synthesis, wake cycles, and automations). The chat route (`server/src/routes/chat.ts`) owns memory augmentation, SSE/persistence, compaction, and extraction around the shared agent loop in `agent-loop-runner.ts`. Chat storage is SQLite with FTS5 full-text search. Multi-provider LLM system supports Ollama native and OpenAI-compatible (llama.cpp) backends.
 
 ## Tool System
 
 See [docs/tool-system.md](docs/tool-system.md) for full details.
 
-Native pi-ai tool calling with TypeBox schemas. Registry in `agent-tools.ts` with memory, filesystem, sandbox, and Bluesky tools. Tool loop (max 20 iterations) in `chat.ts`. `ask_user` pauses the loop and persists state. Message reconstruction splits persisted messages back into the pi-ai multi-message format.
+Native pi-ai tool calling with TypeBox schemas. Registry in `agent-tools.ts` with memory, filesystem, sandbox, and Bluesky tools. The low-level loop lives in `agent-loop-runner.ts`; the HTTP chat route and headless automation runner provide their own callbacks for transport, persistence, compaction, and follow-up prompts. `ask_user` pauses the HTTP loop and persists state. Message reconstruction splits persisted messages back into the pi-ai multi-message format.
 
 ## Memory System
 
@@ -39,7 +39,13 @@ Two complementary memory systems: **atomic memories** (8 categories: preference,
 
 Hybrid retrieval: vector search + FTS5 with RRF fusion, then cross-encoder reranking via Qwen3-Reranker-0.6B with chat-type-specific instructions. Memory blocks loaded by scope (global/project) with progressive disclosure — descriptions always in context, full content via `read_memory_block` tool. Extraction pipeline sees loaded blocks to prevent redundant extraction.
 
-Indexed compaction archives full-fidelity messages in `context_archives` table with cross-chat FTS search. KV cache optimization uses delta-based memory injection — frozen memories in system prompt, new memories appended as delta messages to preserve longest-common-prefix caching. Key files: `memory-storage.ts`, `memory-extraction.ts`, `memory-context.ts`, `memory-tools.ts`, `reranker.ts`, `synthesis.ts`.
+Indexed compaction archives full-fidelity messages in `context_archives` table with cross-chat FTS search. KV cache optimization uses delta-based memory injection — frozen memories in system prompt, new memories appended as delta messages to preserve longest-common-prefix caching. Key files: `memory-storage.ts`, `memory-extraction.ts`, `memory-context.ts`, `memory-tools.ts`, `reranker.ts`, `system-chat.ts`, `automation-storage.ts`, `automation-scheduler.ts`, `automation-runner.ts`, `chat-turn-runner.ts`, `agent-loop-runner.ts`, `llm-stream.ts`.
+
+## Automations
+
+See [docs/automations.md](docs/automations.md) for full details.
+
+Automations are configurable recurring system-chat tasks. Built-ins cover synthesis and wake cycles; custom tasks support interval or daily schedules, order, activation policy, editable prompt steps, run history, and optional push notifications. Startup calls `ensureAutomationDefaults()` once, then `automation-scheduler.ts` checks due tasks every 5 minutes. Prompt text stays in user-role trigger/follow-up messages so the stable system-chat prefix remains KV-cache friendly.
 
 See also: [docs/memory-blocks.md](docs/memory-blocks.md) for the block system details.
 
@@ -49,8 +55,8 @@ See [docs/artifacts-and-images.md](docs/artifacts-and-images.md) for full detail
 
 - **Artifacts**: `create_artifact` tool writes HTML to `~/.quje-agent/artifacts/`. Blob URLs for iframe src (critical for Chrome animation performance).
 - **Image Corpus**: SQLite + sqlite-vec + FTS5. Hybrid search via RRF. Density-based clustering (0.85 threshold).
-- **Creative Engine**: 5 direction types (gap-fill, remix, deepen, contrast, explore). 24h direction cache. Async job queue.
-- **Image Generation**: ComfyUI integration with autonomous generation during synthesis. GPU coordination via `waitForFreeVRAM` — checks ComfyUI's `/system_stats` VRAM, unloads all LLM models (Ollama + llama.cpp) if needed.
+- **Corpus/Clustering**: SQLite corpus storage, enrichment, FTS/vector search, density-based clustering, and D3 visualization.
+- **Image Generation**: ComfyUI integration with GPU/resource coordination for agent/tool-initiated image work.
 - **Vision**: Pluggable analysis presets with conversation support.
 
 ## Integrations & Features
@@ -84,6 +90,7 @@ quje-agent/
 │   │   ├── chats.ts                 # Chat CRUD
 │   │   ├── projects.ts              # Project CRUD + AGENTS.md injection
 │   │   ├── memory.ts                # Memory CRUD + search + synthesis + conversation search
+│   │   ├── automations.ts           # Automation CRUD + manual run + run history
 │   │   ├── models.ts                # Model discovery (Ollama + llama.cpp)
 │   │   ├── settings.ts              # User preferences
 │   │   ├── tts.ts                   # TTS settings + voice info
@@ -102,16 +109,23 @@ quje-agent/
 │   │   ├── user.ts                  # User profile document
 │   │   └── visuals.ts               # Visual artifact serving
 │   └── services/
-│       ├── agent.ts                 # pi-ai streaming wrapper
+│       ├── agent.ts                 # One-shot LLM calls + message reconstruction
+│       ├── agent-loop-runner.ts     # Shared pi-agent loop driver
+│       ├── chat-turn-runner.ts      # Headless system/automation turn adapter
+│       ├── llm-stream.ts            # Safe stream wrapper + activity tracking
 │       ├── agent-tools.ts           # Tool registry + execution
 │       ├── chat-storage.ts          # SQLite storage for chats/projects/settings + FTS5
+│       ├── automation-storage.ts    # Automation task/run persistence
+│       ├── automation-scheduler.ts  # Configurable recurring task scheduler
+│       ├── automation-runner.ts     # Built-in/custom automation execution
+│       ├── automation-lock.ts       # Global automation run lock
 │       ├── embeddings.ts            # Ollama embedding API wrapper
 │       ├── memory-storage.ts        # Memory + block SQLite + sqlite-vec persistence + KNN search
 │       ├── memory-extraction.ts     # Immediate + delayed extraction + supersession tracking
 │       ├── memory-context.ts        # System prompt augmentation with memories + blocks + stable prefix caching
 │       ├── memory-tools.ts          # Agent tool definitions: memories, blocks, archives, conversation search
-│       ├── synthesis.ts             # Daily memory consolidation
-│       ├── scheduler.ts             # Synthesis check + delayed extraction + creative cycle
+│       ├── system-chat.ts           # Synthesis and wake cycles in persistent system chat
+│       ├── scheduler.ts             # Automations, delayed extraction, enrichment, pollers
 │       ├── compaction.ts            # Message compaction + indexed archival
 │       ├── reranker.ts              # Qwen3-Reranker client for memory retrieval
 │       ├── ollama-native-provider.ts # Ollama native API provider for pi-ai
@@ -131,14 +145,9 @@ quje-agent/
 │       ├── generate-review.ts       # Multi-iteration image gen with agent review loop
 │       ├── cluster-engine.ts        # Density-based clustering with cosine similarity
 │       ├── cluster-storage.ts       # Cluster persistence + centroid/element computation
-│       ├── creative-engine.ts       # Direction generation (remix/gap-fill/deepen/contrast)
-│       ├── direction-cache.ts       # 24h direction cache with corpus invalidation
-│       ├── job-queue.ts             # Async direction generation job queue
-│       ├── autonomous-generation.ts # Execute creative directions with GPU coordination
 │       ├── visualization.ts         # D3 force-directed graph HTML generation
 │       ├── vision-analysis.ts       # Vision model analysis
 │       ├── user-image-storage.ts    # User image upload + thumb generation
-│       ├── artifact-storage.ts      # Artifact HTML file management
 │       ├── skills.ts                # Skill definitions + activation
 │       ├── persona-store.ts         # Persona synthesis + storage
 │       ├── auth-storage.ts          # Passkey credential storage
@@ -166,6 +175,7 @@ quje-agent/
 ## Further Documentation
 
 - [API Reference](docs/api-reference.md) — Full endpoint table
+- [Automations](docs/automations.md) — Configurable recurring system-chat tasks
 - [Data Storage](docs/data-storage.md) — Directory layout and SQLite schemas
 - [Key Patterns](docs/key-patterns.md) — Cross-cutting patterns and important notes
 - [Memory Blocks](docs/memory-blocks.md) — Structured knowledge document system

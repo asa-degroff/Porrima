@@ -2,16 +2,18 @@
 
 ## Chat Types
 
-Four chat types: **agent** (memory-augmented), **quick** (standalone), **bluesky** (social media integration), and **system** (synthesis and reflection). The system chat is a singleton (id `"system"`) created on server startup; synthesis cycles append to it, and the user can view/interact with it through the sidebar like any other chat. Existing chats without a `type` field default to "quick".
+Four chat types: **agent** (memory-augmented), **quick** (standalone), **bluesky** (social media integration), and **system** (synthesis, wake cycles, and automations). The built-in system chat is a singleton (id `"system"`) created on server startup; synthesis and wake cycles append to it, and the user can view/interact with it through the sidebar like any other chat. Custom automations can create additional `system` chats such as `automation:<id>`. Existing chats without a `type` field default to "quick".
 
-The server is the integration hub. The chat route (`server/src/routes/chat.ts`) orchestrates:
+The server is the integration hub. The chat route (`server/src/routes/chat.ts`) owns HTTP-specific behavior:
 1. Memory context augmentation (agent chats only)
-2. LLM streaming via pi-ai (`streamChat`)
-3. Memory tool parsing and execution (agent chats only)
+2. SSE emission and reconnectable live-stream state
+3. Tool status and artifact/visual/image side effects
 4. Deferred memory extraction after the agent loop completes (prevents concurrent LLM calls)
 5. Mid-turn compaction with indexed archival when token usage > 85% during tool loops
 6. Multi-cycle compaction loop (up to 5 cycles) for long-running tasks
 7. Handoff messages for post-compaction continuity
+
+The core pi-agent loop is shared through `server/src/services/agent-loop-runner.ts`. The chat route passes route-owned callbacks for steering messages, follow-up messages, SSE emission, persistence, and compaction. Headless system/automation turns use the same low-level runner through `chat-turn-runner.ts`.
 
 ## Projects
 
@@ -52,11 +54,19 @@ Multi-provider system supporting multiple inference backends through pi-ai's pro
 
 ## Memory Services
 
-Memory services are in `server/src/services/memory-*.ts`. They share the pi-ai `streamChat` function for LLM calls (extraction, synthesis, tool execution all use it with different system prompts).
+Memory services are in `server/src/services/memory-*.ts`. Simple one-shot LLM calls still use `streamChat()` from `agent.ts` (extraction, compaction indexing, archive descriptions). Tool-loop conversations use `runAgentLoop()` through the chat route or `runHeadlessChatTurn()`.
 
 **Memory extraction** is deferred during active tool loops — queued and executed after the agent loop completes to prevent concurrent LLM calls from interfering with the active conversation (e.g., triggering model reloads on llama.cpp).
 
-**Synthesis** runs inside the persistent system chat (`server/src/services/system-chat.ts`) using the main model with full tool access. Synthesis is serialized against user chat via the `synthesisLock` mutex: the chat route awaits `getSynthesisLock()` before processing user messages, and the scheduler's enrichment/delayed-extraction passes skip while `isSynthesisActive()` is true. See [memory-system.md](memory-system.md) § Synthesis.
+**Synthesis** runs inside the persistent system chat (`server/src/services/system-chat.ts`) using the main model with full tool access. Synthesis is now a built-in automation, so scheduler dispatch flows through `automation-scheduler.ts` / `automation-runner.ts`, while manual memory endpoints remain for direct dispatch. Synthesis is serialized against user chat via the `synthesisLock` mutex: the chat route awaits `getSynthesisLock()` before processing user messages, and the scheduler's enrichment/delayed-extraction passes skip while `isSynthesisActive()` is true. See [memory-system.md](memory-system.md) § Synthesis.
+
+## Automations
+
+Automations are stored in `automation_tasks` and `automation_runs` in `app.db`, exposed via `/api/automations`, and configured from Settings. Built-ins provide synthesis and wake cycle defaults; users can add custom recurring tasks with interval or daily schedules, ordered execution, editable prompt steps, activation policies, run history, and optional push notifications.
+
+The automation scheduler checks every 5 minutes and starts at most one due task per tick. It skips while another automation, synthesis, wake cycle, or user chat is active. A global automation lock guards manual and scheduled runs, and failures use exponential backoff; custom tasks are disabled after repeated failures.
+
+Custom automations append trigger/follow-up prompts as user-role messages in their system chat, build the stable prefix with `buildStablePrefix()`, run pre-send compaction before dispatch, and then execute through the shared headless chat turn runner. Keeping automation prompt text out of the system prompt preserves the longest-common-prefix KV cache for the stable system-chat prefix. See [automations.md](automations.md).
 
 ## Chat Storage
 
@@ -65,6 +75,7 @@ Chat storage uses SQLite (`server/src/services/chat-storage.ts`). The `app.db` d
 - **Chat message rows** — full-fidelity per-message rows in `chat_message_rows`, keyed by `(chat_id, sequence)`. This is the authoritative source when populated and supports paged message-window reads for long-running chats.
 - **Chat messages** — denormalized `chat_messages` table with FTS5 virtual table for full-text search
 - **Context archives** — `context_archives` table with FTS5 for indexed compaction (cross-chat searchable). Archives are created two ways: (a) during compaction, when messages are rolled out of the active context, and (b) by `pre-synthesis-archive.ts` before each synthesis cycle, which writes archives (with LLM-generated one-line `indexEntry` descriptions) for recent unarchived agent chats so the synthesis agent has full-fidelity access via `read_archived_context`.
+- **Automations** — `automation_tasks` stores built-in/custom task configuration; `automation_runs` stores status, summary/error, tool-call count, chat ID, and assistant message index for audit history.
 - **Projects, settings, pending states** — SQLite tables
 
 The chat API returns a recent message window by default when requested with `messageLimit`; older windows are loaded via `GET /api/chats/:id/messages?before=<sequence>&limit=<n>`. The client keeps absolute message indexes through `messageOffset`, so edit/retry and search jump behavior still refer to persisted sequence positions rather than the local array index.

@@ -24,15 +24,18 @@ Tool results are dynamically truncated based on the effective context window to 
 - Truncated results include a message telling the model to use `offset`/`limit` parameters
 - `contextWindow` is passed to `getAgentTools()` after model discovery
 
-## Tool Loop (`server/src/routes/chat.ts`)
+## Tool Loop (`agent-loop-runner.ts`)
 
-- Uses pi-ai's `agentLoop` / `agentLoopContinue` with `createSafeStreamFn` wrapper (inactivity timeout protection)
+- `server/src/services/agent-loop-runner.ts` is the shared low-level driver around pi-ai's `agentLoop` / `agentLoopContinue`.
+- `createSafeStreamFn` in `llm-stream.ts` wraps model streaming with inactivity timeout protection and LLM activity tracking.
+- The HTTP chat route owns SSE, persistence, memory extraction, compaction, and pending `ask_user` behavior through callbacks around the shared runner.
+- Headless system-chat, wake, and custom automation turns use `runHeadlessChatTurn()` in `chat-turn-runner.ts`, which adapts the same runner to `SynthesisEmitter` events and persisted system-chat rows.
 - Tool iterations tracked via `turn_end` events from the agent loop
 - Each `turn_end` with `stopReason === "toolUse"` is persisted immediately as a canonical assistant row containing only that iteration's tool calls/results. Rows in the same visible assistant response share `_toolLoopId`; tool-use rows have `_toolLoopFragment: true`.
 - The route emits `message_complete` with `continues: true` after a persisted tool-use row so the client can finalize that raw row and create the next live assistant placeholder without showing multiple bubbles.
 - **Mid-turn overflow detection**: At each `turn_end` with `stopReason === "toolUse"`, checks if token usage > 85% of context. If so, aborts the agent loop and enters compaction cycle.
 - **Multi-cycle compaction** (up to 5): Archives overflow, compacts, injects handoff message (progress summary + tool call log), resumes via `agentLoopContinue`. Each cycle strips all trailing assistant messages before resume.
-- **MAX_ITERATIONS**: 500 guard against runaway tool loops
+- **MAX_ITERATIONS**: the HTTP chat route uses a 500-iteration guard; headless automation tasks use each task's `maxIterations`.
 - `ask_user` is intercepted — sends SSE `ask_user` event and breaks the loop.
 - SSE events during loop: `text_delta`, `thinking_delta`, `tool_status` (running/done/error), `segment`, `artifact`, `ask_user`, `iteration`, `message_complete`, `compaction`.
 

@@ -35,31 +35,14 @@
 - **Persistence**: clusters saved to `~/.quje-agent/clusters/clusters.json`
 - **UI**: CorpusView with force-directed graph visualization (D3), cluster detail panels
 
-## Creative Engine
+## Corpus Utilities
 
-**Direction Generation** (`server/src/services/creative-engine.ts`):
-- Analyzes corpus to propose novel creative directions for autonomous generation
-- **5 direction types**:
-  - `gap-fill` — fills underrepresented themes (e.g., "first cyberpunk image")
-  - `remix` — cross-pollinates distant clusters (similarity < 0.7)
-  - `deepen` — adds intricate details to large clusters (>5 members)
-  - `contrast` — opposes dominant corpus patterns (e.g., dark → luminous)
-  - `explore` — variations within a cluster theme
-- **LLM integration**: Uses qwen3.5:9b with Z_IMAGE_INSTRUCTIONS prompt for detailed image descriptions
-- **Image context**: Loads representative cluster member thumbnails (up to 3) as vision input to LLM
-- **Novelty scoring**: `scoreNovelty(embedding, corpus)` computes 1.0 - avgTop5Similarity; default threshold 0.15
-- **Degenerate output detection**: Validates LLM output for token repetition, n-gram loops, malformed markdown
+The current corpus backend focuses on storage, enrichment, clustering, cleanup, and visualization:
 
-**Direction Cache** (`server/src/services/direction-cache.ts`):
-- 24-hour TTL with invalidation on corpus size change (>10%) or cluster count change
-- Persists to `~/.quje-agent/directions/cache.json`
-- In-memory cache + disk fallback for fast access
-
-**Job Queue** (`server/src/services/job-queue.ts`):
-- Async direction generation to avoid blocking UI requests
-- Job statuses: `pending` → `running` → `complete` | `failed`
-- Processes pending jobs sequentially with 1s delay between jobs
-- Auto-unloads Ollama model after LLM work to free VRAM
+- `image-corpus.ts` stores entries, embeddings, FTS rows, enrichment metadata, and orphan cleanup.
+- `cluster-engine.ts` rebuilds density-based clusters from the current corpus.
+- `cluster-storage.ts` persists cluster maps in `~/.quje-agent/clusters/clusters.json`.
+- `visualization.ts` generates the D3 force-directed graph served by `/api/corpus/visualization`.
 
 ## Image Generation
 
@@ -69,12 +52,9 @@
 - Links ComfyUI promptId to internal generationId for progress correlation
 - Stored in `~/.quje-agent/images/{uuid}/` with metadata JSON
 
-**Autonomous Generation** (`server/src/services/autonomous-generation.ts`):
-- Executes creative directions automatically during synthesis cycle
-- **Dimension analysis**: Detects portrait/landscape/square from prompt keywords (person, landscape, vehicle, etc.)
-- **GPU coordination**: Unloads Ollama model (keep_alive: "0s") before ComfyUI execution to avoid VRAM contention
-- **Config**: CFG scale, steps, model override via `creativeDirections` settings
-- Tracks `generatedBy: 'agent'` and `directionId` on GeneratedImage metadata
+**Agent-driven generation**:
+- Agent/tool-initiated image work flows through the image tools and ComfyUI services rather than a dedicated synthesis-time creative-direction scheduler.
+- **GPU coordination**: model/resource coordination unloads LLMs as needed before ComfyUI execution to avoid VRAM contention.
 
 **UI**: `ImageSandbox`, `ImageGallery`, `GeneratedImagePanel`, `CorpusView`
 
