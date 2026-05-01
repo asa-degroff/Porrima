@@ -351,7 +351,33 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const webSearchProviderDd = useDropdown();
   const tocDd = useDropdown();
 
-  const refreshLlamaServers = useCallback(async (showSpinner = false) => {
+  // Per-task dropdown state for automations (avoids hooks-in-map issues)
+  const [scheduleOpen, setScheduleOpen] = useState<Record<string, boolean>>({});
+  const [activationOpen, setActivationOpen] = useState<Record<string, boolean>>({});
+  const scheduleRefMap = useRef<Record<string, React.RefObject<HTMLDivElement | null>>>({});
+  const activationRefMap = useRef<Record<string, React.RefObject<HTMLDivElement | null>>>({});
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      const target = e.target as Node;
+      for (const taskId in scheduleRefMap.current) {
+        const ref = scheduleRefMap.current[taskId];
+        if (ref.current && !ref.current.contains(target)) {
+          setScheduleOpen(prev => ({ ...prev, [taskId]: false }));
+        }
+      }
+      for (const taskId in activationRefMap.current) {
+        const ref = activationRefMap.current[taskId];
+        if (ref.current && !ref.current.contains(target)) {
+          setActivationOpen(prev => ({ ...prev, [taskId]: false }));
+        }
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+   const refreshLlamaServers = useCallback(async (showSpinner = false) => {
     if (showSpinner) setLlamaServersLoading(true);
     try {
       const data = await getLlamaServers();
@@ -3523,7 +3549,23 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                  const historyOpen = automationHistoryOpenTaskId === task.id;
 	                  const historyLoading = automationRunsLoadingTaskId === task.id;
 	                  const historyRuns = automationRunsByTaskId[task.id] || [];
-	                  return (
+                  const schedRef = scheduleRefMap.current[task.id] || (scheduleRefMap.current[task.id] = { current: null });
+                  const actRef = activationRefMap.current[task.id] || (activationRefMap.current[task.id] = { current: null });
+                  const scheduleState = {
+                    open: scheduleOpen[task.id] ?? false,
+                    setOpen: (v: boolean) => setScheduleOpen(prev => ({ ...prev, [task.id]: v })),
+                    toggle: () => setScheduleOpen(prev => ({ ...prev, [task.id]: !prev[task.id] })),
+                    close: () => setScheduleOpen(prev => ({ ...prev, [task.id]: false })),
+                    ref: schedRef,
+                  };
+                  const activationState = {
+                    open: activationOpen[task.id] ?? false,
+                    setOpen: (v: boolean) => setActivationOpen(prev => ({ ...prev, [task.id]: v })),
+                    toggle: () => setActivationOpen(prev => ({ ...prev, [task.id]: !prev[task.id] })),
+                    close: () => setActivationOpen(prev => ({ ...prev, [task.id]: false })),
+                    ref: actRef,
+                  };
+                  return (
 	                    <div key={task.id} className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
 	                      <div className="flex items-start justify-between gap-3">
 	                        <div className="min-w-0 flex-1">
@@ -3561,19 +3603,39 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
 	                        <label className="space-y-1">
 	                          <span className="block text-[11px] text-white/45">Schedule</span>
-	                          <select
-	                            value={task.schedule.type}
-	                            onChange={(e) => {
-	                              handleAutomationScheduleTypeChange(
-	                                task,
-	                                e.target.value as AutomationTask["schedule"]["type"],
-	                              );
-	                            }}
-	                            className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                          <Dropdown
+	                            state={scheduleState}
+	                            trigger={
+	                              <span className="truncate flex-1 text-left">
+	                                {task.schedule.type === "interval" ? "Interval" : "Daily"}
+	                              </span>
+	                            }
+	                            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none hover:bg-white/10 transition-all cursor-pointer"
+	                            panelClassName="left-0 right-0 top-full mt-1 max-h-[120px] overflow-y-auto"
 	                          >
-	                            <option value="interval">Interval</option>
-	                            <option value="daily">Daily</option>
-	                          </select>
+	                            <button
+	                              onClick={() => {
+	                                handleAutomationScheduleTypeChange(task, "interval");
+	                                scheduleState.close();
+	                              }}
+	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
+	                                task.schedule.type === "interval" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
+	                              }`}
+	                            >
+	                              Interval
+	                            </button>
+	                            <button
+	                              onClick={() => {
+	                                handleAutomationScheduleTypeChange(task, "daily");
+	                                scheduleState.close();
+	                              }}
+	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
+	                                task.schedule.type === "daily" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
+	                              }`}
+	                            >
+	                              Daily
+	                            </button>
+	                          </Dropdown>
 	                        </label>
 
 	                        {task.schedule.type === "daily" ? (
@@ -3609,19 +3671,53 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 
 	                        <label className="space-y-1">
 	                          <span className="block text-[11px] text-white/45">Activation</span>
-	                          <select
-	                            value={task.activationPolicy}
-	                            onChange={(e) => {
-	                              const activationPolicy = e.target.value as AutomationTask["activationPolicy"];
-	                              updateAutomationDraft(task.id, { activationPolicy });
-	                              saveAutomationPatch(task.id, { activationPolicy });
-	                            }}
-	                            className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                          <Dropdown
+	                            state={activationState}
+	                            trigger={
+	                              <span className="truncate flex-1 text-left">
+	                                {task.activationPolicy === "idle" ? "Idle" : task.activationPolicy === "sleep_only" ? "Sleep only" : "Manual only"}
+	                              </span>
+	                            }
+	                            triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none hover:bg-white/10 transition-all cursor-pointer"
+	                            panelClassName="left-0 right-0 top-full mt-1 max-h-[150px] overflow-y-auto"
 	                          >
-	                            <option value="idle">Idle</option>
-	                            <option value="sleep_only">Sleep only</option>
-	                            <option value="manual_only">Manual only</option>
-	                          </select>
+	                            <button
+	                              onClick={() => {
+	                                updateAutomationDraft(task.id, { activationPolicy: "idle" as const });
+	                                saveAutomationPatch(task.id, { activationPolicy: "idle" });
+	                                activationState.close();
+	                              }}
+	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
+	                                task.activationPolicy === "idle" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
+	                              }`}
+	                            >
+	                              Idle
+	                            </button>
+	                            <button
+	                              onClick={() => {
+	                                updateAutomationDraft(task.id, { activationPolicy: "sleep_only" as const });
+	                                saveAutomationPatch(task.id, { activationPolicy: "sleep_only" });
+	                                activationState.close();
+	                              }}
+	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
+	                                task.activationPolicy === "sleep_only" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
+	                              }`}
+	                            >
+	                              Sleep only
+	                            </button>
+	                            <button
+	                              onClick={() => {
+	                                updateAutomationDraft(task.id, { activationPolicy: "manual_only" as const });
+	                                saveAutomationPatch(task.id, { activationPolicy: "manual_only" });
+	                                activationState.close();
+	                              }}
+	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
+	                                task.activationPolicy === "manual_only" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
+	                              }`}
+	                            >
+	                              Manual only
+	                            </button>
+	                          </Dropdown>
 	                        </label>
 
 	                        <div className="flex items-end justify-between gap-2">
