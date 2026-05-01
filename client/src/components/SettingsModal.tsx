@@ -309,6 +309,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [automationHistoryOpenTaskId, setAutomationHistoryOpenTaskId] = useState<string | null>(null);
   const [automationRunsByTaskId, setAutomationRunsByTaskId] = useState<Record<string, AutomationRun[]>>({});
   const [automationRunsLoadingTaskId, setAutomationRunsLoadingTaskId] = useState<string | null>(null);
+  const [automationPromptExpandedTaskId, setAutomationPromptExpandedTaskId] = useState<string | null>(null);
   const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
   const [extractionModelUrl, setExtractionModelUrl] = useState(settings.extractionModelUrl || "");
   const [extractionModelStatus, setExtractionModelStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
@@ -3737,22 +3738,44 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                        </div>
 	                      </div>
 
-	                      <div className="space-y-2">
-	                        {task.promptSteps.map((step, stepIndex) => (
-	                          <label key={step.id} className="block space-y-1">
-	                            <span className="block text-[11px] text-white/45">{step.title}</span>
-	                            <textarea
-	                              value={step.prompt}
-	                              onChange={(e) => {
-	                                const promptSteps = task.promptSteps.map((s, i) => i === stepIndex ? { ...s, prompt: e.target.value } : s);
-	                                updateAutomationDraft(task.id, { promptSteps });
-	                              }}
-	                              onBlur={() => saveAutomationPatch(task.id, { promptSteps: task.promptSteps })}
-	                              rows={task.kind === "synthesis" ? 5 : 4}
-	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-2 text-xs text-white/75 placeholder-white/25 outline-none focus:border-purple-400/30 resize-y"
-	                            />
-	                          </label>
-	                        ))}
+	                      <div>
+	                        <button
+	                              onClick={() => setAutomationPromptExpandedTaskId(automationPromptExpandedTaskId === task.id ? null : task.id)}
+	                              className="flex items-center gap-1.5 text-[11px] font-medium text-white/45 hover:text-white/60 transition-colors mb-1.5"
+	                        >
+	                              <Chevron open={automationPromptExpandedTaskId === task.id} size={10} />
+	                              Prompts ({task.promptSteps.length})
+	                        </button>
+	                        {automationPromptExpandedTaskId === task.id ? (
+	                              <div className="space-y-2">
+	                                    {task.promptSteps.map((step, stepIndex) => (
+	                                          <label key={step.id} className="block space-y-1">
+	                                                <span className="block text-[11px] text-white/45">{step.title}</span>
+	                                                <textarea
+	                                                      value={step.prompt}
+	                                                      onChange={(e) => {
+	                                                            const promptSteps = task.promptSteps.map((s, i) => i === stepIndex ? { ...s, prompt: e.target.value } : s);
+	                                                            updateAutomationDraft(task.id, { promptSteps });
+	                                                      }}
+	                                                      onBlur={() => saveAutomationPatch(task.id, { promptSteps: task.promptSteps })}
+	                                                      rows={task.kind === "synthesis" ? 5 : 4}
+	                                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-2 text-xs text-white/75 placeholder-white/25 outline-none focus:border-purple-400/30 resize-y"
+	                                                />
+	                                          </label>
+	                                    ))}
+	                              </div>
+	                        ) : (
+	                              <div className="space-y-1.5">
+	                                    {task.promptSteps.map((step) => (
+	                                          <div key={step.id} className="flex items-start gap-2">
+	                                                <span className="text-[11px] text-white/35 shrink-0 mt-px">{step.title}</span>
+	                                                <span className="text-[11px] text-white/20 truncate flex-1">
+	                                                      {step.prompt ? step.prompt.split("\n")[0]?.substring(0, 80) : "—"}
+	                                                </span>
+	                                          </div>
+	                                    ))}
+	                              </div>
+	                        )}
 	                      </div>
 
 	                      <div className="flex flex-wrap items-center gap-2">
