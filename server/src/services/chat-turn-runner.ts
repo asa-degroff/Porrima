@@ -1,11 +1,11 @@
-import type { AgentContext, AgentLoopConfig, AgentTool } from "@mariozechner/pi-agent-core";
-import { agentLoopContinue } from "@mariozechner/pi-agent-core";
+import type { AgentContext, AgentTool } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Message, Model, StopReason, ToolCall } from "@mariozechner/pi-ai";
 import type { Chat, ChatMessage, ChatToolResult, ImageAttachment } from "../types.js";
 import { chatMessagesToPiMessages } from "./agent.js";
 import { estimateContextTokens } from "./compaction.js";
 import type { SynthesisEmitter } from "./synthesis-stream.js";
 import { createSafeStreamFn } from "./llm-stream.js";
+import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
 
 export interface HeadlessFollowUp {
   message: ChatMessage;
@@ -166,11 +166,9 @@ export async function runHeadlessChatTurn(
     memoryUpdates,
   });
 
-  const config: AgentLoopConfig = {
+  const config = createAgentLoopConfig({
     model,
-    apiKey: "ollama",
-    reasoning: model.reasoning ? "medium" : undefined,
-    convertToLlm: (msgs) => msgs as Message[],
+    keepAlive,
     getFollowUpMessages: async () => {
       if (controller.signal.aborted || iterations >= maxIterations) return [];
       const followUp = await options.getFollowUp?.(currentState());
@@ -188,105 +186,103 @@ export async function runHeadlessChatTurn(
         },
       ];
     },
-  };
-  if (keepAlive !== undefined) {
-    (config as any).keepAlive = keepAlive;
-  }
+  });
 
   try {
-    const stream = agentLoopContinue(
+    await runAgentLoop({
+      mode: "continue",
       context,
       config,
-      controller.signal,
-      createSafeStreamFn(chat.ollamaOptions),
-    );
+      signal: controller.signal,
+      streamFn: createSafeStreamFn(chat.ollamaOptions),
+      logPrefix,
+      onEvent: async (event) => {
+        if (event.type === "message_update") {
+          const update = event.assistantMessageEvent;
+          if (update.type === "text_delta") {
+            emitter.emitTextDelta(update.delta);
+          } else if (update.type === "thinking_delta") {
+            emitter.emitThinkingDelta(update.delta);
+          }
+        } else if (event.type === "tool_execution_start") {
+          const toolCall: ToolCall = {
+            type: "toolCall",
+            id: event.toolCallId,
+            name: event.toolName,
+            arguments: event.args,
+          };
+          allToolCalls.push(toolCall);
+          emitter.emitToolCall({
+            id: toolCall.id,
+            name: toolCall.name,
+            arguments: toolCall.arguments,
+          });
+        } else if (event.type === "tool_execution_end") {
+          const content = resultText(event.result);
+          if (content.toLowerCase().includes("memory saved")) {
+            memoryUpdates.push(content.slice(0, 200));
+          }
+          const toolResult: ChatToolResult = {
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            content,
+            isError: event.isError,
+            images: resultImages(event.result, event.toolCallId),
+          };
+          emitter.emitToolResult(toolResult);
+        } else if (event.type === "turn_end") {
+          const msg = event.message as AssistantMessage;
+          stopReason = msg.stopReason || "stop";
+          iterations++;
 
-    for await (const event of stream) {
-      if (event.type === "message_update") {
-        const update = event.assistantMessageEvent;
-        if (update.type === "text_delta") {
-          emitter.emitTextDelta(update.delta);
-        } else if (update.type === "thinking_delta") {
-          emitter.emitThinkingDelta(update.delta);
-        }
-      } else if (event.type === "tool_execution_start") {
-        const toolCall: ToolCall = {
-          type: "toolCall",
-          id: event.toolCallId,
-          name: event.toolName,
-          arguments: event.args,
-        };
-        allToolCalls.push(toolCall);
-        emitter.emitToolCall({
-          id: toolCall.id,
-          name: toolCall.name,
-          arguments: toolCall.arguments,
-        });
-      } else if (event.type === "tool_execution_end") {
-        const content = resultText(event.result);
-        if (content.toLowerCase().includes("memory saved")) {
-          memoryUpdates.push(content.slice(0, 200));
-        }
-        const toolResult: ChatToolResult = {
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          content,
-          isError: event.isError,
-          images: resultImages(event.result, event.toolCallId),
-        };
-        emitter.emitToolResult(toolResult);
-      } else if (event.type === "turn_end") {
-        const msg = event.message as AssistantMessage;
-        stopReason = msg.stopReason || "stop";
-        iterations++;
+          const text = extractTextFromAssistantMessage(msg);
+          const thinking = extractThinkingFromAssistantMessage(msg);
+          const turnToolCalls = extractToolCallsFromAssistantMessage(msg);
+          if (text) {
+            textChunks.push(text);
+            emitter.emitTextDelta("\n\n");
+          }
+          if (thinking) thinkingChunks.push(thinking);
+          emitter.setUsage(usageFromAssistantMessage(msg));
 
-        const text = extractTextFromAssistantMessage(msg);
-        const thinking = extractThinkingFromAssistantMessage(msg);
-        const turnToolCalls = extractToolCallsFromAssistantMessage(msg);
-        if (text) {
-          textChunks.push(text);
-          emitter.emitTextDelta("\n\n");
-        }
-        if (thinking) thinkingChunks.push(thinking);
-        emitter.setUsage(usageFromAssistantMessage(msg));
+          const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, tools);
+          emitter.emitIteration({
+            iteration: iterations,
+            stopReason,
+            toolCount: event.toolResults?.length || 0,
+            usage: emitter.state.finalUsage,
+            estimatedTokens,
+          });
 
-        const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, tools);
-        emitter.emitIteration({
-          iteration: iterations,
-          stopReason,
-          toolCount: event.toolResults?.length || 0,
-          usage: emitter.state.finalUsage,
-          estimatedTokens,
-        });
+          if (turnToolCalls.length > 0) {
+            const sig = JSON.stringify(turnToolCalls.map((c) => ({ name: c.name, args: c.arguments })));
+            duplicateToolCallStreak = sig === lastToolCallSignature ? duplicateToolCallStreak + 1 : 1;
+            lastToolCallSignature = sig;
+            if (duplicateToolCallStreak >= 3) {
+              const names = turnToolCalls.map((c) => c.name).join(", ");
+              console.warn(`[${logPrefix}] duplicate tool call streak hit ${duplicateToolCallStreak}: ${names}`);
+              emitter.emitWarning({
+                type: "duplicate_tool_call",
+                message: `Stopped - model called the same tool ${duplicateToolCallStreak} times in a row (${names})`,
+              });
+              controller.abort();
+            }
+          } else {
+            duplicateToolCallStreak = 0;
+            lastToolCallSignature = null;
+          }
 
-        if (turnToolCalls.length > 0) {
-          const sig = JSON.stringify(turnToolCalls.map((c) => ({ name: c.name, args: c.arguments })));
-          duplicateToolCallStreak = sig === lastToolCallSignature ? duplicateToolCallStreak + 1 : 1;
-          lastToolCallSignature = sig;
-          if (duplicateToolCallStreak >= 3) {
-            const names = turnToolCalls.map((c) => c.name).join(", ");
-            console.warn(`[${logPrefix}] duplicate tool call streak hit ${duplicateToolCallStreak}: ${names}`);
+          if (iterations >= maxIterations) {
+            console.warn(`[${logPrefix}] hit iteration cap (${maxIterations}), aborting`);
             emitter.emitWarning({
-              type: "duplicate_tool_call",
-              message: `Stopped - model called the same tool ${duplicateToolCallStreak} times in a row (${names})`,
+              type: "iteration_limit",
+              message: `Stopped - reached ${maxIterations} iteration limit`,
             });
             controller.abort();
           }
-        } else {
-          duplicateToolCallStreak = 0;
-          lastToolCallSignature = null;
         }
-
-        if (iterations >= maxIterations) {
-          console.warn(`[${logPrefix}] hit iteration cap (${maxIterations}), aborting`);
-          emitter.emitWarning({
-            type: "iteration_limit",
-            message: `Stopped - reached ${maxIterations} iteration limit`,
-          });
-          controller.abort();
-        }
-      }
-    }
+      },
+    });
   } catch (e: any) {
     console.error(`[${logPrefix}] agent loop failed:`, e?.message || e);
     stopReason = "error";

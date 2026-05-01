@@ -2,8 +2,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { randomUUID, createHash } from "crypto";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
-import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
-import type { AgentContext, AgentLoopConfig } from "@mariozechner/pi-agent-core";
+import type { AgentContext } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
 import { chatMessagesToPiMessages, mergeSystemContextWithUserContent } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
@@ -25,6 +24,7 @@ import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
 import { log } from "../services/logger.js";
 import { createSafeStreamFn } from "../services/llm-stream.js";
+import { createAgentLoopConfig, runAgentLoop, stopAgentLoop } from "../services/agent-loop-runner.js";
 
 // Live stream registry lives in services/live-streams.ts so server-internal
 // background tasks (synthesis, wake cycle) can also emit through it without
@@ -436,6 +436,7 @@ async function handleChatStream(
     duplicateToolCallStreak: 0,
     lastIterationToolCallSignature: null as string | null,
   };
+  const ttsTextChunks: string[] = [];
 
   function resetAccumulators() {
     state.fullText = "";
@@ -470,6 +471,7 @@ async function handleChatStream(
     state.pendingFinalAssistantMessage = null;
     state.duplicateToolCallStreak = 0;
     state.lastIterationToolCallSignature = null;
+    ttsTextChunks.length = 0;
   }
 
   function isPlaceholderEllipsis(text: string | undefined): boolean {
@@ -709,6 +711,7 @@ async function handleChatStream(
     flushThinkingTimer();
     state.fullText += delta;
     state.pendingText += delta;
+    ttsTextChunks.push(delta);
     res.write(`event: text_delta\ndata: ${JSON.stringify({ delta })}\n\n`);
     return true;
   }
@@ -855,11 +858,8 @@ async function handleChatStream(
     const safeStreamFn = createSafeStreamFn(chat.ollamaOptions);
 
     // Build config
-    const config: AgentLoopConfig = {
+    const config = createAgentLoopConfig({
       model: piModel,
-      apiKey: "ollama",
-      reasoning: piModel.reasoning ? "medium" : undefined,
-      convertToLlm: (msgs) => msgs as Message[],
       getSteeringMessages: async () => {
         if (askUserRef.current) {
           return [{ role: "user" as const, content: "[paused for user input]", timestamp: Date.now() }];
@@ -949,7 +949,7 @@ async function handleChatStream(
 
         return [{ role: "user" as const, content: queued.message, timestamp: queued.timestamp }];
       },
-    };
+    });
 
     // Start the agent loop (uses turnAbortController declared earlier)
     console.log(`[chat] Starting agent loop: userPiMessage=${!!userPiMessage}, context.messages.length=${context.messages.length}, tools=${context.tools?.length || 0}`);
@@ -969,20 +969,14 @@ async function handleChatStream(
       }
       return `${m.role}:?`;
     }).join(", ")}`);
-    const eventStream = userPiMessage
-      ? agentLoop([userPiMessage], context, config, turnAbortController.signal, safeStreamFn)
-      : agentLoopContinue(context, config, turnAbortController.signal, safeStreamFn);
-    console.log(`[chat] Agent loop started, waiting for events...`);
+    console.log("[chat] Agent loop started, waiting for events...");
 
-    // Extract token stream for TTS (if enabled)
+    // Extract token stream for TTS (if enabled). The shared loop callback
+    // accumulates text deltas into ttsTextChunks; TTS is still emitted after
+    // the main model stream, matching the route's previous lifecycle.
     async function* extractTokenStream() {
-      for await (const event of eventStream) {
-        if (event.type === "message_update") {
-          const ame = event.assistantMessageEvent;
-          if (ame.type === "text_delta") {
-            yield ame.delta;
-          }
-        }
+      for (const token of ttsTextChunks) {
+        yield token;
       }
     }
 
@@ -993,8 +987,16 @@ async function handleChatStream(
       boundaryTier: ttsSettings.streamingBoundaryTier ?? 'clause',
     }) : null;
 
-    // Process LLM events → SSE (main loop)
-    for await (const event of eventStream) {
+    // Process LLM events -> SSE (main loop)
+    await runAgentLoop({
+      mode: userPiMessage ? "start" : "continue",
+      prompts: userPiMessage ? [userPiMessage] : undefined,
+      context,
+      config,
+      signal: turnAbortController.signal,
+      streamFn: safeStreamFn,
+      logPrefix: "chat",
+      onEvent: async (event) => {
       switch (event.type) {
         case "message_start": {
           // Mirror user prompts and steering messages into the outer context —
@@ -1411,7 +1413,8 @@ async function handleChatStream(
           break;
         }
       }
-    }
+      },
+    });
 
     // Parallel: Stream audio chunks if TTS enabled
     if (audioStream) {
@@ -1563,10 +1566,16 @@ async function handleChatStream(
           ...context,
           messages: [...context.messages],
         };
-        const continueEventStream = agentLoopContinue(continueContext, config, continueAbortController.signal, safeStreamFn);
 
         // Process the continuation events
-        for await (const event of continueEventStream) {
+        await runAgentLoop({
+          mode: "continue",
+          context: continueContext,
+          config,
+          signal: continueAbortController.signal,
+          streamFn: safeStreamFn,
+          logPrefix: "chat:continuation",
+          onEvent: async (event) => {
           if (event.type === "message_update") {
             const ame = event.assistantMessageEvent;
             if (ame.type === "text_delta") {
@@ -1598,10 +1607,12 @@ async function handleChatStream(
             }
 
             if (stopReason !== "toolUse") {
-              break; // Got final text, exit continuation loop
+              continueAbortController.abort(); // Got final text, exit continuation loop
+              stopAgentLoop();
             }
           }
-        }
+          },
+        });
       } catch (contErr: any) {
         console.error(`[chat] continuation loop crashed: ${contErr.message}`);
         // Don't let a crash in the continuation loop take down the server.
@@ -1648,9 +1659,15 @@ async function handleChatStream(
           ...context,
           messages: [...context.messages],
         };
-        const strandedStream = agentLoopContinue(strandedContext, config, strandedAbortController.signal, safeStreamFn);
 
-        for await (const event of strandedStream) {
+        await runAgentLoop({
+          mode: "continue",
+          context: strandedContext,
+          config,
+          signal: strandedAbortController.signal,
+          streamFn: safeStreamFn,
+          logPrefix: "chat:stranded-recovery",
+          onEvent: async (event) => {
           if (event.type === "message_update") {
             const ame = event.assistantMessageEvent;
             if (ame.type === "text_delta") {
@@ -1713,7 +1730,8 @@ async function handleChatStream(
             // If the model stopped again without producing anything useful, bail
             if (!strandedProducedSomething && !state.fullText.trim() && state.thinkingText.trim().length === 0) {
               console.error(`[chat] stranded recovery produced NOTHING — giving up`);
-              break;
+              strandedAbortController.abort();
+              stopAgentLoop();
             }
 
             // If model is now on a proper tool loop, let the main for-await pick it up
@@ -1721,10 +1739,12 @@ async function handleChatStream(
               console.log(`[chat] stranded recovery: model entered tool loop — continuing main iteration`);
               // Don't break — let the main event loop continue processing
             } else {
-              break;
+              strandedAbortController.abort();
+              stopAgentLoop();
             }
           }
-        }
+          },
+        });
       } catch (err: any) {
         console.error(`[chat] stranded recovery loop crashed: ${err.message}`);
       }
@@ -1895,9 +1915,14 @@ async function handleChatStream(
       res.write(`event: segment\ndata: ${JSON.stringify(compactionSegment)}\n\n`);
 
       try {
-        const resumeStream = agentLoopContinue(resumeContext, config, resumeAbortController.signal, safeStreamFn);
-
-        for await (const event of resumeStream) {
+        await runAgentLoop({
+          mode: "continue",
+          context: resumeContext,
+          config,
+          signal: resumeAbortController.signal,
+          streamFn: safeStreamFn,
+          logPrefix: "chat:mid-turn-resume",
+          onEvent: async (event) => {
           if (event.type === "message_update") {
             const ame = event.assistantMessageEvent;
             if (ame.type === "text_delta") {
@@ -1975,7 +2000,10 @@ async function handleChatStream(
               usage: state.finalUsage || undefined,
             })}\n\n`);
 
-            if (sr !== "toolUse") break;
+            if (sr !== "toolUse") {
+              resumeAbortController.abort();
+              stopAgentLoop();
+            }
 
             // Check for overflow — if hit, set flag and break to trigger another compaction cycle
             const resumeEffectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
@@ -1987,10 +2015,12 @@ async function handleChatStream(
             if (resumeEffectiveCW > 0 && resumeTokens > 0 && resumeTokens / resumeEffectiveCW > 0.85) {
               console.warn(`[chat] Resume loop overflow (cycle ${compactionCycle}): ${resumeTokens}/${resumeEffectiveCW} (${((resumeTokens / resumeEffectiveCW) * 100).toFixed(0)}%) — triggering another compaction cycle`);
               state.needsMidTurnCompaction = true;
-              break;
+              resumeAbortController.abort();
+              stopAgentLoop();
             }
           }
-        }
+          },
+        });
       } catch (resumeErr: any) {
         console.error(`[chat] resume loop failed (cycle ${compactionCycle}): ${resumeErr.message}`);
         break;
