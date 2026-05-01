@@ -74,6 +74,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { isOnline } = useOnlineStatus();
   const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
+  const selectChatRef = useRef<((id: string) => Promise<void>) | null>(null);
   const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts } = useTTS();
   const {
     userNotebooks,
@@ -108,23 +109,44 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [isAutomationRunning, setIsAutomationRunning] = useState(false);
 
   // Load UI state from server on mount
+  // Priority: URL ?chat= param > server state > localStorage
+  // The URL param is set by the service worker when opening from a push notification.
+  // We call selectChat directly here rather than relying on the restore effect,
+  // because selectChatRef isn't populated until after effects run in order.
   useEffect(() => {
+    // Check for ?chat= URL parameter (push notification deep-link)
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlChatId = urlParams.get("chat");
+    if (urlChatId) {
+      setActiveChatId(urlChatId);
+      selectChat(urlChatId);
+      setUiStateSynced(true);
+      return;
+    }
+
     fetchUserUIState()
       .then((state) => {
-        if (state.activeChatId) setActiveChatId(state.activeChatId);
+        if (state.activeChatId) {
+          setActiveChatId(state.activeChatId);
+          selectChat(state.activeChatId);
+        }
         if (state.activeView) setActiveView(state.activeView as 'chats' | 'notebooks');
         if (state.activeView === 'image-sandbox') setImageSandboxOpen(true);
         setUiStateSynced(true);
       })
       .catch((err) => {
         console.warn("Failed to load UI state from server, using localStorage:", err);
-        // Fall back to localStorage for backward compatibility
-        setActiveChatId(localStorage.getItem("quje-active-chat-id"));
+        const cachedChatId = localStorage.getItem("quje-active-chat-id");
+        if (cachedChatId) {
+          setActiveChatId(cachedChatId);
+          selectChat(cachedChatId);
+        }
         if (localStorage.getItem("quje-active-view") === "image-sandbox") {
           setImageSandboxOpen(true);
         }
         setUiStateSynced(true);
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectChat is useCallback-stable; this effect runs once on mount
   }, []);
 
   // Poll synthesis status. Synthesis runs server-side as a background task
@@ -319,13 +341,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     return () => clearTimeout(timer);
   }, [activeView, uiStateSynced]);
 
-  // Restore active chat on mount
-  useEffect(() => {
-    if (activeChatId && !activeChat) {
-      selectChat(activeChatId);
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Load TTS settings on mount
   useEffect(() => {
     loadTtsSettings();
@@ -468,6 +483,30 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     },
     [loadMessages, setActiveChatData]
   );
+
+  // Keep ref in sync so the push-click listener always uses the latest selectChat
+  useEffect(() => {
+    selectChatRef.current = selectChat;
+  }, [selectChat]);
+
+  // Handle push notification clicks from the service worker.
+  // When the user taps a notification, the SW posts a "push-click" message
+  // with the target chatId — we navigate to that chat.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+
+    const handler = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || data.kind !== "push-click") return;
+      const chatId = data.payload?.chatId;
+      if (chatId && selectChatRef.current) {
+        selectChatRef.current(chatId);
+      }
+    };
+
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
+  }, []);
 
   const handleNewChat = useCallback((type: ChatType = "quick", projectId?: string) => {
     const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
