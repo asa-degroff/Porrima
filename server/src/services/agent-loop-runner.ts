@@ -63,7 +63,9 @@ export function stopAgentLoop(): never {
  * Low-level pi-agent-core loop driver shared by HTTP chats and headless
  * automations. Callers own prompt construction, compaction, history mutation,
  * transport events, and persistence so KV-cache-sensitive replay shape stays
- * outside this core.
+ * outside this core. Callback and stream-result errors are intentionally
+ * propagated; adapters decide whether to map them to SSE errors or a headless
+ * failed turn.
  */
 export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAgentLoopResult> {
   const {
@@ -95,6 +97,11 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<RunAge
     throw e;
   }
 
-  const messages = await stream.result().catch(() => [] as AgentMessage[]);
-  return { events, messages };
+  try {
+    const messages = await stream.result();
+    return { events, messages };
+  } catch (e: any) {
+    console.error(`[${logPrefix}] result retrieval failed:`, e?.message || e);
+    throw e;
+  }
 }

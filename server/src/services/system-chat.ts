@@ -1068,21 +1068,18 @@ export async function runSystemSynthesis(options?: {
     }
 
     // --- Detect "ran but produced nothing" failure (e.g., upstream LLM error) ---
-    // If the stream errored AND we have no text, no tool calls, no thinking,
-    // there's nothing to gate on. Returning success: true here would burn the
-    // 24h synthesis slot on a transient failure (model load race, brief 500),
-    // and the next periodic check would skip until tomorrow. Bail out without
-    // calling setLastSynthesis so the next scheduler tick re-runs the cycle.
-    const producedNothing =
-      stopReason === "error" && textLen === 0 && thinkLen === 0 && allToolCalls.length === 0;
-    if (producedNothing) {
+    // The headless runner is the authoritative source for this classification.
+    // If it failed before producing text, thinking, or tools, do not burn the
+    // 24h synthesis slot; let the scheduler retry on a later tick.
+    if (!turn.success) {
+      const errorMessage = turn.error || "model returned error before producing any output";
       console.warn(
-        `[system-chat] Synthesis failed at iter ${iterations} (stopReason=error, no output) — NOT updating lastSynthesis so the next scheduler tick can retry.`,
+        `[system-chat] Synthesis failed at iter ${iterations} (${errorMessage}) - NOT updating lastSynthesis so the next scheduler tick can retry.`,
       );
-      emitter.emitError("Synthesis failed: model returned error before producing any output");
+      emitter.emitError(`Synthesis failed: ${errorMessage}`);
       emitter.end();
       releaseSynthesisLock();
-      return makeErrorResult("Synthesis failed: model returned error before producing any output");
+      return makeErrorResult(errorMessage);
     }
 
     // --- Invalidate stable prefix caches so next chats pick up block changes ---
