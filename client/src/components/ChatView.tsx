@@ -465,7 +465,7 @@ export function ChatView({
   return (
     <div className="flex-1 flex flex-col min-w-0">
       {/* Chat Header */}
-      <div className="px-3 md:px-6 py-3 border-b border-white/10 flex items-center justify-between gap-3 backdrop-blur-xs bg-white/[0.03] relative z-20">
+      <div className="px-3 md:px-6 py-2 border-b border-white/10 flex items-center justify-between gap-3 backdrop-blur-xs bg-white/[0.03] relative z-20">
         <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={onOpenSidebar}
@@ -492,57 +492,55 @@ export function ChatView({
             <BlockIndicator projectId={projectId} />
           </span>
           {/* Context window editor — integrated into TokenIndicator */}
-          <span className="hidden md:contents">
-            {editingCtx ? (
-              <form
-                className="flex items-center gap-1"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const val = parseInt(ctxInput, 10);
-                  if (val && val > 0) onContextWindowChange(val);
-                  setEditingCtx(false);
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <input
-                  type="number"
-                  className="w-20 px-1.5 py-0.5 text-xs bg-white/10 border border-white/20 rounded text-white/80 outline-none focus:border-white/40"
-                  value={ctxInput}
-                  onChange={(e) => setCtxInput(e.target.value)}
-                  autoFocus
-                  onBlur={() => setEditingCtx(false)}
-                  min={1}
-                />
-                {hasContextWindowOverride && (
-                  <button
-                    type="button"
-                    className="text-xs text-white/30 hover:text-white/60 px-1"
-                    title="Reset to model default"
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      onContextWindowChange(null);
-                      setEditingCtx(false);
-                    }}
-                  >
-                    &#x21ba;
-                  </button>
-                )}
-              </form>
-            ) : (
-              <TokenIndicator
-                usage={totalUsage}
-                isEstimated={isUsageEstimated}
-                contextWindow={contextWindow}
-                compacting={compacting}
-                compaction={compaction}
-                hasCompactionSummary={hasCompactionSummary}
-                onClick={messages.length === 0 ? () => {
-                  setCtxInput(String(contextWindow));
-                  setEditingCtx(true);
-                } : undefined}
+          {editingCtx ? (
+            <form
+              className="flex items-center gap-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const val = parseInt(ctxInput, 10);
+                if (val && val > 0) onContextWindowChange(val);
+                setEditingCtx(false);
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <input
+                type="number"
+                className="w-20 px-1.5 py-0.5 text-xs bg-white/10 border border-white/20 rounded text-white/80 outline-none focus:border-white/40"
+                value={ctxInput}
+                onChange={(e) => setCtxInput(e.target.value)}
+                autoFocus
+                onBlur={() => setEditingCtx(false)}
+                min={1}
               />
-            )}
-          </span>
+              {hasContextWindowOverride && (
+                <button
+                  type="button"
+                  className="text-xs text-white/30 hover:text-white/60 px-1"
+                  title="Reset to model default"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    onContextWindowChange(null);
+                    setEditingCtx(false);
+                  }}
+                >
+                  &#x21ba;
+                </button>
+              )}
+            </form>
+          ) : (
+            <TokenIndicator
+              usage={totalUsage}
+              isEstimated={isUsageEstimated}
+              contextWindow={contextWindow}
+              compacting={compacting}
+              compaction={compaction}
+              hasCompactionSummary={hasCompactionSummary}
+              onClick={messages.length === 0 ? () => {
+                setCtxInput(String(contextWindow));
+                setEditingCtx(true);
+              } : undefined}
+            />
+          )}
           <button
             className="hidden md:inline-block text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors text-white/30 hover:text-white/50"
             title="View rendered system prompt and tools"

@@ -36,10 +36,12 @@ export function ModelSelector({ models, selectedId, onChange, disabled }: Props)
         <>
           <span className="truncate">{selected?.name || selectedId}</span>
           {selected && (
-            <ProviderIcon
-              provider={selected.provider}
-              className={selected.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/60 shrink-0"}
-            />
+            <span className="hidden sm:inline">
+              <ProviderIcon
+                provider={selected.provider}
+                className={selected.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/60 shrink-0"}
+              />
+            </span>
           )}
         </>
       }
