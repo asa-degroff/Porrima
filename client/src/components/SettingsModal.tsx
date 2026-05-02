@@ -320,6 +320,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   // Tool options — read_file truncation
   const [readFileDefaultLines, setReadFileDefaultLines] = useState(settings.readFileDefaultLines ?? 1000);
   const [readFileMaxBytes, setReadFileMaxBytes] = useState(settings.readFileMaxBytes ?? 256 * 1024);
+  const [maxBlockChars, setMaxBlockChars] = useState(settings.maxBlockChars ?? 4000);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
   const [passkeyMessage, setPasskeyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [ttsSettings, setTtsSettings] = useState<TTSSettings | null>(null);
@@ -766,6 +767,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       extractionFallbackEnabled,
       readFileDefaultLines,
       readFileMaxBytes,
+      maxBlockChars,
       bluesky: {
         ...settings.bluesky,
         enabled: blueskyEnabled,
@@ -3489,6 +3491,24 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                 />
                 <p className="text-xs text-white/30">How many unenriched images to process every 10 minutes</p>
+              </div>
+
+              {/* Max block characters */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-white/60">Max block characters</label>
+                  <span className="text-xs text-white/40">{maxBlockChars.toLocaleString()} chars</span>
+                </div>
+                <input
+                  type="range"
+                  min={1000}
+                  max={10000}
+                  step={500}
+                  value={maxBlockChars}
+                  onChange={(e) => setMaxBlockChars(Number(e.target.value))}
+                  className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                />
+                <p className="text-xs text-white/30">Maximum characters per memory block. Changes apply at next synthesis cycle.</p>
               </div>
 
               {/* Sleep Cycle & Wake Cycle */}

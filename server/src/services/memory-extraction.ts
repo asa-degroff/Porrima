@@ -16,6 +16,7 @@ import {
   getDb,
   getMemoriesByChatId,
   getMemoryById,
+  getMaxBlockChars,
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
 import { invalidateMemoriesCache } from "./memory-context.js";
@@ -338,20 +339,21 @@ const SYS_PROMPT_CTX_RATIO = 0.40;
  * SYS_PROMPT_CTX_RATIO of the extraction context window. Static prefix/
  * instructions are fixed; blocks are the only variable part we can trim.
  */
-function computeBlockCharBudget(
+async function computeBlockCharBudget(
   blockCount: number,
   staticChars: number,
   ctxSize: number,
-): number {
+): Promise<number> {
   if (blockCount === 0) return 0;
+  const maxBlockChars = await getMaxBlockChars();
   // sysPrompt target tokens = ctxSize * ratio; × 3 chars/token (conservative).
   const sysPromptCharBudget = Math.floor(ctxSize * SYS_PROMPT_CTX_RATIO * 3);
   const remaining = Math.max(0, sysPromptCharBudget - staticChars);
   const perBlock = Math.floor(remaining / blockCount);
   // Never let per-block drop below a useful minimum, and never exceed the
-  // original 4000-char slice (so small ctx models get tighter budgets but
+  // configured maxBlockChars (so small ctx models get tighter budgets but
   // large ctx models don't inflate block summaries beyond what callers expect).
-  return Math.max(300, Math.min(4000, perBlock));
+  return Math.max(300, Math.min(maxBlockChars, perBlock));
 }
 
 async function buildExtractionSystemPrompt(projectId?: string): Promise<string> {
@@ -378,7 +380,7 @@ async function buildExtractionSystemPrompt(projectId?: string): Promise<string> 
     if (allBlocks.length > 0) {
       const staticChars =
         EXTRACTION_AGENT_PREFIX.length + EXTRACTION_INSTRUCTIONS.length + 400;
-      const perBlockChars = computeBlockCharBudget(allBlocks.length, staticChars, ctxSize);
+      const perBlockChars = await computeBlockCharBudget(allBlocks.length, staticChars, ctxSize);
       const summaries = allBlocks
         .map((b) => `- ${b.name}: ${b.content.slice(0, perBlockChars)}`)
         .join("\n");

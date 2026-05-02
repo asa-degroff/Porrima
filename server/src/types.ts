@@ -329,6 +329,8 @@ export interface Settings {
   // read_file hard byte cap on returned content, applied after line slicing
   // as a safety net for pathological lines / minified bundles (default 262144).
   readFileMaxBytes?: number;
+  // Max characters per memory block (note blocks only; synthesis/notebook/archived exempt)
+  maxBlockChars?: number;
 }
 
 export interface BlueskySettings {

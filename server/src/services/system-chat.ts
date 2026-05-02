@@ -609,7 +609,7 @@ async function buildMaintenancePhase2Trigger(
   phase2Instructions = SYNTHESIS_PHASE2_INSTRUCTIONS,
 ): Promise<string> {
   const { getDb } = await import("./chat-storage.js");
-  const { getMemoryBlocksByScope, getAllMemoryBlocks, getLastSynthesis } = await import("./memory-storage.js");
+  const { getMemoryBlocksByScope, getAllMemoryBlocks, getLastSynthesis, getMaxBlockChars } = await import("./memory-storage.js");
 
   // System-managed blocks are excluded from the inventory — they have
   // dedicated discovery paths and would otherwise bloat the context.
@@ -687,7 +687,8 @@ async function buildMaintenancePhase2Trigger(
   const totalBlocks = allActiveBlocks.length;
   const totalChars = allActiveBlocks.reduce((sum, b) => sum + b.content.length, 0);
   const BLOCK_LIMIT = 15;
-  const CHAR_LIMIT = 50000;
+  const maxBlockChars = await getMaxBlockChars();
+  const CHAR_LIMIT = BLOCK_LIMIT * maxBlockChars;
   const BLOCK_WARN = BLOCK_LIMIT * 0.7;
   const CHAR_WARN = CHAR_LIMIT * 0.7;
 

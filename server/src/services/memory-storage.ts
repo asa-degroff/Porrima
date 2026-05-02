@@ -1360,12 +1360,18 @@ export async function saveDailyLog(
 // Memory Blocks — structured, editable knowledge documents
 // ---------------------------------------------------------------------------
 
-const MAX_BLOCK_CHARS = 4000;
+const DEFAULT_MAX_BLOCK_CHARS = 4000;
+
+export async function getMaxBlockChars(): Promise<number> {
+  const { getSettings } = await import("./chat-storage.js");
+  const settings = await getSettings();
+  return settings.maxBlockChars ?? DEFAULT_MAX_BLOCK_CHARS;
+}
 
 // blockType distinguishes the different kinds of entries that all live in the
 // memory_blocks table:
 //   - 'note': plain agent-managed knowledge block (the default). Subject to
-//     MAX_BLOCK_CHARS; eligible for auto-loading when active-scoped.
+//     configurable maxBlockChars setting; eligible for auto-loading when active-scoped.
 //   - 'notebook': agent-authored narrative/reflection entry. Archived by
 //     default; exempt from the char cap.
 //   - 'synthesis': agent-authored daily synthesis output from runSystemSynthesis.
@@ -1674,4 +1680,4 @@ export function getBlockHistory(blockId: string): MemoryBlock[] {
   return history.reverse();
 }
 
-export { MAX_BLOCK_CHARS };
+export { DEFAULT_MAX_BLOCK_CHARS };

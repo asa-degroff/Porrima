@@ -11,7 +11,7 @@ import {
   supersedeBlock,
   listMemoryBlocks,
   getBlockHistory,
-  MAX_BLOCK_CHARS,
+  getMaxBlockChars,
 } from "./memory-storage.js";
 import { searchChatMessages, getChatMessageRange, getChatTitle, getArchive, searchArchives } from "./chat-storage.js";
 import { dedupAndSave } from "./memory-extraction.js";
@@ -102,7 +102,7 @@ export const MEMORY_TOOLS: Tool[] = [
     parameters: Type.Object({
       name: Type.String({ description: "Block name (e.g. 'Tech Stack', 'User Preferences', 'Architecture', 'Topic Details')" }),
       description: Type.String({ description: "One-line summary of what this block covers — used for retrieval and indexing" }),
-      content: Type.String({ description: "Full block content — structured text, up to ~4000 characters" }),
+      content: Type.String({ description: "Full block content — structured text, up to the configured limit" }),
       scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Scope: 'global' (all chats), 'project' (project-scoped), or 'archived' (hidden from context, searchable). Default: global" })),
       project_id: Type.Optional(Type.String({ description: "Project ID for project-scoped blocks" })),
     }),
@@ -110,7 +110,7 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "update_memory_block",
     description:
-      "Update an existing memory block's content or description. Use this to refine, expand, or correct knowledge in a block. If the block would exceed ~4000 characters, consider splitting into a new block.",
+      "Update an existing memory block's content or description. Use this to refine, expand, or correct knowledge in a block. If the block would exceed the configured character limit, consider splitting into a new block.",
     parameters: Type.Object({
       block_id: Type.String({ description: "Block ID (e.g. blk-...)" }),
       content: Type.Optional(Type.String({ description: "New content to replace the block's content" })),
@@ -451,8 +451,9 @@ export async function executeMemoryTool(
       if (!name || !description || !content) {
         return { content: "Missing required fields: name, description, content", isError: true };
       }
-      if (content.length > MAX_BLOCK_CHARS) {
-        return { content: `Content exceeds ${MAX_BLOCK_CHARS} character limit (${content.length} chars). Please shorten or split into multiple blocks.`, isError: true };
+      const maxChars = await getMaxBlockChars();
+      if (content.length > maxChars) {
+        return { content: `Content exceeds ${maxChars} character limit (${content.length} chars). Please shorten or split into multiple blocks.`, isError: true };
       }
       const { v4: uuid } = await import("uuid");
       // Route blocks created during the notebook cycle through the notebook
@@ -501,7 +502,8 @@ export async function executeMemoryTool(
 
       const scopeChanged = newScope !== undefined && newScope !== existing.scope;
       const finalContent = newContent ?? existing.content;
-      if (finalContent.length > MAX_BLOCK_CHARS) {
+      const maxChars = await getMaxBlockChars();
+      if (finalContent.length > maxChars) {
         // Content too large — create a superseding block instead.
         // Preserve notebook/synthesis prefix so the replacement inherits the
         // same system-block exclusion as the original.
@@ -517,7 +519,7 @@ export async function executeMemoryTool(
           id: newId,
           name: existing.name,
           description: newDesc ?? existing.description,
-          content: finalContent.slice(0, MAX_BLOCK_CHARS),
+          content: finalContent.slice(0, maxChars),
           scope: newScope ?? existing.scope,
           projectId: existing.projectId || "",
           createdAt: now,
@@ -527,7 +529,7 @@ export async function executeMemoryTool(
           supersedes: existing.id,
         });
         return {
-          content: `Block exceeded ${MAX_BLOCK_CHARS} char limit — created new version [${newBlock.id}] superseding [${existing.id}]. Content was truncated to fit.`,
+          content: `Block exceeded ${maxChars} char limit — created new version [${newBlock.id}] superseding [${existing.id}]. Content was truncated to fit.`,
           isError: false,
         };
       }

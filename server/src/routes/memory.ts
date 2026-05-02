@@ -19,7 +19,7 @@ import {
   deleteMemoryBlock,
   listMemoryBlocks,
   getBlockHistory,
-  MAX_BLOCK_CHARS,
+  getMaxBlockChars,
 } from "../services/memory-storage.js";
 import { getExtractionMetrics, backfillSupersessions } from "../services/memory-extraction.js";
 import { getRecentExtractionRuns, subscribeExtractionEvents } from "../services/memory-extraction-observability.js";
@@ -300,8 +300,9 @@ router.post("/blocks", async (req, res) => {
   if (!name || !description || !content) {
     return res.status(400).json({ error: "name, description, and content are required" });
   }
-  if (content.length > MAX_BLOCK_CHARS) {
-    return res.status(400).json({ error: `Content exceeds ${MAX_BLOCK_CHARS} character limit` });
+  const maxChars = await getMaxBlockChars();
+  if (content.length > maxChars) {
+    return res.status(400).json({ error: `Content exceeds ${maxChars} character limit` });
   }
   const id = `blk-${uuid()}`;
   const now = new Date().toISOString();
