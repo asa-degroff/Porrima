@@ -172,6 +172,7 @@ export function useChat(chatId: string | null) {
   const [messageTotal, setMessageTotal] = useState(0);
   const [olderMessagesLoading, setOlderMessagesLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [streamingThinking, setStreamingThinking] = useState("");
   const [streamingThinkingActive, setStreamingThinkingActive] = useState(false);
   const [streamingThinkingAccumulatedMs, setStreamingThinkingAccumulatedMs] = useState(0);
@@ -268,6 +269,7 @@ export function useChat(chatId: string | null) {
       // In-progress state from persistence is handled by App.tsx selectChat logic
       // which checks for _inProgress flag before calling loadMessages
       setStreaming(false);
+      setReconnecting(false);
       setOlderMessagesLoading(false);
       setStreamingThinking("");
       setStreamingThinkingActive(false);
@@ -865,9 +867,63 @@ export function useChat(chatId: string | null) {
       },
       onError: (err) => {
         const bg = bgStreams.get(streamChatId);
+        const isOfflineError = err.startsWith("__OFFLINE__:");
+        const isConnectionError = err.startsWith("Connection error:");
 
-        if (err.startsWith("__OFFLINE__:")) {
-          const errorMsg = "Network unavailable — message queued";
+        // Determine whether the server received the message before the
+        // connection dropped. If any streaming data was received, the server
+        // already processed the request.
+        const receivedData = bg ? (bg.content.length > 0 || bg.thinking.length > 0 || bg.tools.length > 0 || bg.segments.length > 0) : false;
+
+        // When the connection drops after receiving data and the browser
+        // reports we're online, this is a background connection kill (especially
+        // on mobile Safari). Don't show an error — silently reconnect to the
+        // server stream so the in-progress response continues seamlessly.
+        // Covers both __OFFLINE__ errors (when navigator.onLine is incorrectly
+        // false during a visibility change) and Connection errors (fetch killed
+        // while online).
+        if (bg && receivedData && (isOfflineError || isConnectionError) && navigator.onLine) {
+          // Don't show error or delete bgStreams. The partial content stays
+          // visible. The reconnect attempt below will pick up the server stream.
+          console.log(`[chat] stream dropped after receiving data, attempting reconnect for ${streamChatId}`);
+          if (activeChatIdRef.current === streamChatId) {
+            setReconnecting(true);
+          }
+          // Initiate silent reconnect — if it fails, no error is shown since
+          // the server will persist the response for the next page load.
+          (async () => {
+            const status = await getChatStatus(streamChatId);
+            if (bgStreams.get(streamChatId) !== bg) return; // raced with another reconnect/switch
+            if (!status.active) {
+              // Server stream ended naturally — clean up quietly
+              bg.streaming = false;
+              if (activeChatIdRef.current === streamChatId) {
+                setStreaming(false);
+                setReconnecting(false);
+              }
+              bgStreams.delete(streamChatId);
+              return;
+            }
+            // Reconnect to the live server stream
+            const callbacks = makeStreamCallbacks(streamChatId);
+            bg.abortController = reconnectChat(streamChatId, callbacks);
+            abortRef.current = bg.abortController;
+            if (activeChatIdRef.current === streamChatId) {
+              setError(null);
+              setReconnecting(false);
+            }
+            console.log(`[chat] silently reconnected to ${streamChatId} (${status.bufferedChunks} buffered chunks)`);
+          })();
+          return;
+        }
+
+        if (isOfflineError) {
+          // Use a context-appropriate error message:
+          // - If we received data, the server already has the message — no queueing needed
+          // - If no data was received, the message will be queued for retry
+          const errorMsg = receivedData
+            ? "Network unavailable — response may be incomplete"
+            : "Network unavailable — message queued";
           if (bg) {
             bg.streaming = false;
             bg.error = errorMsg;
@@ -877,7 +933,6 @@ export function useChat(chatId: string | null) {
             // the server already processed the message — retrying would create
             // a duplicate. Only the initial fetch failure (no data received)
             // should be retried.
-            const receivedData = bg.content.length > 0 || bg.thinking.length > 0 || bg.tools.length > 0 || bg.segments.length > 0;
 
             // Find and enqueue the last user message — only if no data was received
             const lastUserIdx = bg.messages.map((m) => m.role).lastIndexOf("user");
@@ -912,12 +967,21 @@ export function useChat(chatId: string | null) {
             bgStreams.delete(streamChatId);
           }
         } else {
+          // Non-offline error (could be Connection error, auth error, model error, etc.)
           if (bg) {
             bg.streaming = false;
             bg.error = err;
           }
+
+          // For transient connection errors when we're online but the fetch was
+          // killed (e.g. backgrounded tab), show a more helpful message.
+          // Don't queue since we can't tell if the server received the request.
+          const displayErr = isConnectionError
+            ? "Connection interrupted — tap Retry to resend"
+            : err;
+
           if (activeChatIdRef.current === streamChatId) {
-            setError(err);
+            setError(displayErr);
             setStreaming(false);
             bgStreams.delete(streamChatId);
           }
@@ -1338,6 +1402,7 @@ export function useChat(chatId: string | null) {
     warning,
     streamingSegmentIndex,
     hasBackgroundActivity,
+    reconnecting,
     send,
     editMessage,
     retryMessage,

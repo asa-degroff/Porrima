@@ -175,6 +175,7 @@ interface Props {
   onOpenSidebar: () => void;
   isOnline?: boolean;
   queueProcessing?: boolean;
+  reconnecting?: boolean;
   activeSkills?: string[];
   projectId?: string;
   streamingSegmentIndex: number | null;
@@ -230,6 +231,7 @@ export function ChatView({
   onOpenSidebar,
   isOnline = true,
   queueProcessing = false,
+  reconnecting = false,
   activeSkills,
   projectId,
   streamingSegmentIndex,
@@ -256,7 +258,32 @@ export function ChatView({
   const [skillFilter, setSkillFilter] = useState("");
   const [inputRect, setInputRect] = useState<DOMRect | null>(null);
   const [scrollPaused, setScrollPaused] = useState(false);
+  const [dismissedError, setDismissedError] = useState<string | null>(null);
   const displayMessages = useMemo(() => buildDisplayMessages(messages), [messages]);
+
+  // Auto-dismiss network-related errors after a delay, since the
+  // OfflineIndicator in the header already communicates connection state.
+  // Switching chats resets the dismissed-error tracking.
+  useEffect(() => {
+    setDismissedError(null);
+  }, [chatId]);
+  useEffect(() => {
+    if (!error) {
+      setDismissedError(null);
+      return;
+    }
+    // Auto-dismiss transient network errors after 8 seconds
+    const isNetworkError = error.includes("Network unavailable") || error.includes("Connection error");
+    if (isNetworkError) {
+      const timer = setTimeout(() => setDismissedError(error), 8000);
+      return () => clearTimeout(timer);
+    } else {
+      // For persistent errors, don't auto-dismiss, but still allow manual dismissal
+      setDismissedError(null);
+    }
+  }, [error]);
+
+  const displayError = dismissedError === error ? null : error;
   
   // Cache skills by projectId to avoid refetching on every render
   const skillsCache = useRef<Map<string, SkillInfo[]>>(new Map());
@@ -669,9 +696,24 @@ export function ChatView({
                 {warning.message}
               </div>
             )}
-            {error && (
-              <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-400/20 text-red-300 text-sm">
-                {error}
+            {reconnecting && (
+              <div className="mb-4 px-3 py-2 rounded-lg bg-blue-500/8 border border-blue-400/15 text-blue-300/80 text-xs flex items-center gap-2">
+                <div className="w-3 h-3 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
+                <span>Reconnecting…</span>
+              </div>
+            )}
+            {displayError && (
+              <div className="mb-4 px-3 py-2 rounded-lg bg-red-500/8 border border-red-400/15 text-red-300/80 text-xs flex items-center justify-between gap-3">
+                <span>{displayError}</span>
+                <button
+                  onClick={() => setDismissedError(error!)}
+                  className="text-red-300/40 hover:text-red-300/70 shrink-0"
+                  aria-label="Dismiss error"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
               </div>
             )}
           </div>

@@ -225,6 +225,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     queueProcessing,
     titleUpdate,
     hasCompactionSummary,
+    reconnecting,
   } = useChat(activeChatId);
 
   // Any chat streaming — includes background chats so the sidebar indicator stays correct when viewing a different chat
@@ -868,6 +869,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         waitingForInput={waitingForInput}
         isOnline={isOnline}
         queueProcessing={queueProcessing}
+        reconnecting={reconnecting}
         activeSkills={activeChat?.activeSkills}
         projectId={activeChat?.projectId}
         streamingSegmentIndex={streamingSegmentIndex}

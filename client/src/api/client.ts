@@ -295,7 +295,12 @@ function streamSSE(
     .catch((e) => {
       if (e.name === "AbortError") return;
       if (e instanceof TypeError || e.name === "TypeError") {
-        callbacks.onError("__OFFLINE__:" + e.message);
+        // Only mark as offline if the browser confirms we're offline.
+        // If we're online but the fetch failed (e.g. browser killed the
+        // connection when the tab was backgrounded on mobile), treat it as
+        // a regular connection error so the caller can handle it gracefully
+        // instead of queueing/retrying unnecessarily.
+        callbacks.onError(navigator.onLine ? ("Connection error: " + e.message) : ("__OFFLINE__:" + e.message));
       } else {
         callbacks.onError(e.message);
       }
@@ -369,7 +374,11 @@ export function reconnectChat(chatId: string, callbacks: StreamCallbacks): Abort
     .catch((e) => {
       if (e.name === "AbortError") return;
       if (e instanceof TypeError || e.name === "TypeError") {
-        callbacks.onError("__OFFLINE__:" + e.message);
+        // Only mark as offline if the browser confirms we're offline.
+        // If we're online but the fetch failed (e.g. browser killed the
+        // connection when the tab was backgrounded on mobile), treat it as
+        // a regular connection error so the reconnect can handle it gracefully.
+        callbacks.onError(navigator.onLine ? ("Connection error: " + e.message) : ("__OFFLINE__:" + e.message));
       } else {
         callbacks.onError(e.message);
       }
