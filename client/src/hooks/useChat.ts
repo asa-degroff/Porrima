@@ -889,30 +889,43 @@ export function useChat(chatId: string | null) {
           if (activeChatIdRef.current === streamChatId) {
             setReconnecting(true);
           }
-          // Initiate silent reconnect — if it fails, no error is shown since
-          // the server will persist the response for the next page load.
+          // Initiate silent reconnect — if it fails, fall back to showing
+          // the user so they know something went wrong.
           (async () => {
-            const status = await getChatStatus(streamChatId);
-            if (bgStreams.get(streamChatId) !== bg) return; // raced with another reconnect/switch
-            if (!status.active) {
-              // Server stream ended naturally — clean up quietly
-              bg.streaming = false;
+            try {
+              const status = await getChatStatus(streamChatId);
+              if (bgStreams.get(streamChatId) !== bg) return; // raced with another reconnect/switch
+              if (!status.active) {
+                // Server stream ended naturally — clean up quietly
+                bg.streaming = false;
+                if (activeChatIdRef.current === streamChatId) {
+                  setStreaming(false);
+                  setReconnecting(false);
+                }
+                bgStreams.delete(streamChatId);
+                return;
+              }
+              // Reconnect to the live server stream
+              const callbacks = makeStreamCallbacks(streamChatId);
+              bg.abortController = reconnectChat(streamChatId, callbacks);
+              abortRef.current = bg.abortController;
               if (activeChatIdRef.current === streamChatId) {
-                setStreaming(false);
+                setError(null);
                 setReconnecting(false);
               }
-              bgStreams.delete(streamChatId);
-              return;
+              console.log(`[chat] silently reconnected to ${streamChatId} (${status.bufferedChunks} buffered chunks)`);
+            } catch (_reconnectErr) {
+              // Reconnect failed — clear the indicator and let the user know.
+              // The message is already persisted on the server.
+              if (bgStreams.get(streamChatId) === bg) {
+                bg.streaming = false;
+                bgStreams.delete(streamChatId);
+              }
+              if (activeChatIdRef.current === streamChatId) {
+                setReconnecting(false);
+                setError("Connection lost — your message was saved on the server");
+              }
             }
-            // Reconnect to the live server stream
-            const callbacks = makeStreamCallbacks(streamChatId);
-            bg.abortController = reconnectChat(streamChatId, callbacks);
-            abortRef.current = bg.abortController;
-            if (activeChatIdRef.current === streamChatId) {
-              setError(null);
-              setReconnecting(false);
-            }
-            console.log(`[chat] silently reconnected to ${streamChatId} (${status.bufferedChunks} buffered chunks)`);
           })();
           return;
         }
