@@ -395,13 +395,8 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                 title="Vision controls"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z" />
-                  <path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />
-                  <path d="M12 2v2" />
-                  <path d="M12 22v-2" />
-                  <path d="m17 20.66-1-1" />
-                  <path d="M11 10a2 2 0 0 0-1-1.73V10" />
-                  <path d="M7 12a2 2 0 0 0 1-1.73V12" />
+                  <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
+                  <circle cx="12" cy="12" r="3" />
                 </svg>
               </button>
             )}
