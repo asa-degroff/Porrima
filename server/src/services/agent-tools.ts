@@ -315,7 +315,9 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       const id = uuid();
       const result = await createArtifact(id, args.html, args.title);
       effects.onArtifact({ id, title: args.title, url: result.url, version: result.version });
-      return { content: [{ type: "text", text: `Artifact created: ${args.title} (${result.url})` }], details: {} };
+      return { content: [{ type: "text", text: `Artifact created: "${args.title}"
+Canonical ID: ${id}
+URL: ${result.url}` }], details: {} };
     },
   });
 
@@ -345,7 +347,9 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       const id = uuid();
       const result = await createVisual(id, args.html, args.title);
       effects.onVisual({ id, title: args.title, html: args.html, url: result.url, version: result.version });
-      return { content: [{ type: "text", text: `Visual created: ${args.title} (${result.url})` }], details: {} };
+      return { content: [{ type: "text", text: `Visual created: "${args.title}"
+Canonical ID: ${id}
+URL: ${result.url}` }], details: {} };
     },
   });
 
