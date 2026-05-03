@@ -600,9 +600,9 @@ export function Sidebar({
         style={gestureStyle}
       >
         {/* Header */}
-      <div ref={headerRef} className="px-3 pt-3 pb-0 shrink-0">
+      <div ref={headerRef} className="px-3 pt-2 pb-0 shrink-0">
         {/* Search or Logo */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           {searchActive ? (
             <div
               className="flex-1 min-w-0 rounded-full bg-black/20 border border-white/[0.05] px-4 py-2.5 shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)] h-[42px] flex items-center"

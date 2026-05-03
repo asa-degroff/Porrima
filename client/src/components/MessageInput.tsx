@@ -411,7 +411,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
   };
 
   return (
-    <div className="p-3 md:p-4 bg-white/3">
+    <div className="p-2 md:p-3 bg-white/3">
       <div
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
