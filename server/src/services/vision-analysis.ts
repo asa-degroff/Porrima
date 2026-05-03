@@ -8,6 +8,7 @@ import { getSettings } from "./chat-storage.js";
 import {
   isLlamaCppModelLoaded,
   ensureModelLoaded,
+  isLlamaCppChildConnectionError,
   normalizeImageForLlamaCpp,
 } from "./openai-compat-provider.js";
 import { getOllamaUrl } from "./ollama-url.js";
@@ -320,6 +321,11 @@ export async function analyzeImage(
     const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
     const modelName = model || getVLMModel();
     const backend = await resolveVisionBackend(modelName);
+    console.log(
+      `[vision] analyze model=${modelName} backend=${backend.provider}${
+        backend.provider === "llamacpp" && backend.contextWindow ? ` ctx=${backend.contextWindow}` : ""
+      }`
+    );
 
     if (backend.provider === "llamacpp") {
       const description = await analyzeViaLlamaCpp(
@@ -388,6 +394,11 @@ export async function analyzeImageStream(
     const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
     const modelName = model || getVLMModel();
     const backend = await resolveVisionBackend(modelName);
+    console.log(
+      `[vision] analyze-stream model=${modelName} backend=${backend.provider}${
+        backend.provider === "llamacpp" && backend.contextWindow ? ` ctx=${backend.contextWindow}` : ""
+      }`
+    );
 
     // Send initial keepalive to show we're starting
     onEvent({ event: "keepalive", data: { status: "starting", timestamp: Date.now() } });
@@ -574,7 +585,6 @@ async function analyzeViaLlamaCpp(
   contextWindow: number | undefined,
   onDelta?: (delta: string) => void
 ): Promise<string> {
-  await ensureModelLoaded(baseUrl, modelId, contextWindow);
   const dataUrl = await buildImageDataUrl(imageData);
 
   const body = {
@@ -593,16 +603,13 @@ async function analyzeViaLlamaCpp(
     ],
   };
 
-  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => res.statusText);
-    throw new Error(`Vision analysis failed (${res.status}): ${errorText}`);
-  }
+  const res = await requestLlamaCppVisionCompletion(
+    "Vision analysis failed",
+    baseUrl,
+    modelId,
+    contextWindow,
+    body
+  );
 
   if (!onDelta) {
     const json = await res.json();
@@ -610,6 +617,56 @@ async function analyzeViaLlamaCpp(
   }
 
   return cleanOutput(await streamLlamaCppContent(res, onDelta));
+}
+
+async function requestLlamaCppVisionCompletion(
+  errorPrefix: string,
+  baseUrl: string,
+  modelId: string,
+  contextWindow: number | undefined,
+  body: Record<string, unknown>
+): Promise<Response> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await ensureModelLoaded(
+      baseUrl,
+      modelId,
+      contextWindow,
+      attempt === 0 ? undefined : { forceReload: true, reason: "retrying after proxy connection failure" }
+    );
+
+    let res: Response;
+    try {
+      res = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      if (attempt === 0) {
+        console.warn(
+          `[vision] llama.cpp request for ${modelId} failed before a response; reloading and retrying:`,
+          err instanceof Error ? err.message : err
+        );
+        continue;
+      }
+      throw err;
+    }
+
+    if (res.ok) {
+      return res;
+    }
+
+    const errorText = await res.text().catch(() => res.statusText);
+    if (attempt === 0 && isLlamaCppChildConnectionError(res.status, errorText)) {
+      console.warn(
+        `[vision] llama.cpp child for ${modelId} appears unavailable (${errorText}); reloading and retrying once`
+      );
+      continue;
+    }
+    throw new Error(`${errorPrefix} (${res.status}): ${errorText}`);
+  }
+
+  throw new Error(`${errorPrefix}: llama.cpp request failed after retry`);
 }
 
 async function chatAboutImageViaLlamaCpp(
@@ -621,7 +678,6 @@ async function chatAboutImageViaLlamaCpp(
   baseUrl: string,
   contextWindow: number | undefined
 ): Promise<string> {
-  await ensureModelLoaded(baseUrl, modelId, contextWindow);
   const dataUrl = await buildImageDataUrl(imageData);
 
   const messages: any[] = [
@@ -637,21 +693,12 @@ async function chatAboutImageViaLlamaCpp(
     { role: "user", content: userMessage },
   ];
 
-  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: modelId,
-      stream: false,
-      temperature: 0.7,
-      messages,
-    }),
+  const res = await requestLlamaCppVisionCompletion("Vision chat failed", baseUrl, modelId, contextWindow, {
+    model: modelId,
+    stream: false,
+    temperature: 0.7,
+    messages,
   });
-
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => res.statusText);
-    throw new Error(`Vision chat failed (${res.status}): ${errorText}`);
-  }
 
   const json = await res.json();
   return cleanOutput(json.choices?.[0]?.message?.content ?? "");
