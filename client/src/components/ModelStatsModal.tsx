@@ -184,8 +184,8 @@ function ModelCard({
 
   return (
     <div className="bg-white/5 rounded-lg p-3 space-y-2 border border-white/5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm font-mono text-white/80 truncate">{truncateModelId(record.modelId)}</span>
           <span className="text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded">{record.provider}</span>
         </div>
@@ -200,33 +200,58 @@ function ModelCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <SpeedBar value={summary.avgPredictedTokensPerSec} maxRef={80} isDecode label="avg decode" />
-          {last && (
-            <SpeedBar value={last.predictedTokensPerSec} maxRef={80} isDecode label="last decode" />
-          )}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-2">
+        <div>
+          <div className="text-[10px] text-white/30">avg decode</div>
+          <div className={`text-sm font-mono ${speedColor(summary.avgPredictedTokensPerSec)}`}>
+            {summary.avgPredictedTokensPerSec !== null ? summary.avgPredictedTokensPerSec.toFixed(1) : "—"}
+            <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
+          </div>
         </div>
-        <div className="space-y-1.5">
-          <SpeedBar value={summary.avgPromptTokensPerSec} maxRef={200} isDecode={false} label="avg prefill" />
-          {last && (
-            <SpeedBar value={last.promptTokensPerSec} maxRef={200} isDecode={false} label="last prefill" />
-          )}
+        <div>
+          <div className="text-[10px] text-white/30">last decode</div>
+          <div className={`text-sm font-mono ${speedColor(last?.predictedTokensPerSec ?? null)}`}>
+            {last ? last.predictedTokensPerSec.toFixed(1) : "—"}
+            <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] text-white/30">avg prefill</div>
+          <div className={`text-sm font-mono ${speedColor(summary.avgPromptTokensPerSec, false)}`}>
+            {summary.avgPromptTokensPerSec !== null ? summary.avgPromptTokensPerSec.toFixed(1) : "—"}
+            <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] text-white/30">last prefill</div>
+          <div className={`text-sm font-mono ${speedColor(last?.promptTokensPerSec ?? null, false)}`}>
+            {last ? last.promptTokensPerSec.toFixed(1) : "—"}
+            <span className="text-[9px] text-white/20 ml-0.5">t/s</span>
+          </div>
         </div>
       </div>
 
-      <div className="space-y-1.5 pt-1 border-t border-white/5">
-        <div className="flex items-center justify-between text-[10px]">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] pt-1 border-t border-white/5">
+        <div className="flex items-center gap-1.5">
           <span className="text-white/40">cache prompt</span>
           <span className={last?.cachePrompt ? "text-cyan-200/80" : "text-white/30"}>
             {last?.cachePrompt ? "enabled" : "not recorded"}
           </span>
         </div>
-        <CacheBar ratio={summary.avgInferredCacheHitRatio} label="avg hit" />
+        <div className="flex items-center gap-2">
+          <span className="text-white/40">avg hit</span>
+          <div className="w-16 h-1 bg-white/5 rounded-full overflow-hidden">
+            <div
+              className="h-full rounded-full bg-cyan-300/70"
+              style={{ width: summary.avgInferredCacheHitRatio != null ? `${Math.round(summary.avgInferredCacheHitRatio * 100)}%` : "0%" }}
+            />
+          </div>
+          <span className="text-cyan-200/80 font-mono">{formatPercent(summary.avgInferredCacheHitRatio)}</span>
+        </div>
       </div>
 
       {last && (
-        <div className="flex gap-4 text-[10px] text-white/30 pt-1 border-t border-white/5">
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-white/30 pt-1 border-t border-white/5">
           <span>last: {formatTimeAgo(last.timestamp)}</span>
           <span>prefill: {formatDuration(last.promptMs)}</span>
           <span>decode: {formatDuration(last.predictedMs)}</span>
@@ -431,7 +456,7 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center flex-wrap gap-2">
             <h2 className="text-sm font-medium text-white/90">Model Stats & Cache</h2>
             <div className="flex items-center bg-white/5 rounded-lg p-0.5">
               <button
