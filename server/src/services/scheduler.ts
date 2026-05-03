@@ -13,6 +13,7 @@ import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-e
 import { getBlueskyPoller } from "./bluesky-poller.js";
 import { BLUESKY_SYSTEM_PROMPT } from "../routes/bluesky.js";
 import { enrichCorpusBatch } from "./image-corpus.js";
+import { normalizeRouterModelId } from "./llama-router-client.js";
 import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js";
 import { startAutomationScheduler } from "./automation-scheduler.js";
 
@@ -98,7 +99,10 @@ async function checkAndRunEnrichment() {
 
     const settings = await getSettings();
     const batchSize = settings.enrichmentBatchSize ?? DEFAULT_ENRICHMENT_BATCH_SIZE;
-    const extractionModelId = settings.extractionModelId || settings.defaultModelId;
+    const configuredExtractionModelId = settings.extractionModelId || settings.defaultModelId;
+    const extractionModelId = configuredExtractionModelId
+      ? normalizeRouterModelId(configuredExtractionModelId)
+      : configuredExtractionModelId;
 
     console.log(`[scheduler] Running enrichment batch (size: ${batchSize}, model: ${extractionModelId || 'default'})...`);
     const enrichedCount = await enrichCorpusBatch(batchSize, extractionModelId);
@@ -248,7 +252,9 @@ async function checkAndRunDelayedExtractions() {
     const configuredExtractionModelId = settings.extractionModelId || settings.defaultModelId;
     const fallbackEnabled = settings.extractionFallbackEnabled ?? true;
 
-    let extractionModelId = configuredExtractionModelId;
+    let extractionModelId = configuredExtractionModelId
+      ? normalizeRouterModelId(configuredExtractionModelId)
+      : configuredExtractionModelId;
 
     // If a dedicated extraction server is configured, trust it as authoritative
     // for the extraction model — streamChat will route to that URL directly.

@@ -1,6 +1,7 @@
 import type { Model } from "@mariozechner/pi-ai";
 import type { OllamaModel, Settings } from "../types.js";
 import { getSettings } from "./chat-storage.js";
+import { normalizeRouterModelId } from "./llama-router-client.js";
 import { getOllamaUrl } from "./ollama-url.js";
 
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
@@ -361,7 +362,7 @@ export async function getExtractionRoute(): Promise<ExtractionRoute | null> {
   if (!baseUrl || !modelId) return null;
   return {
     baseUrl,
-    modelId,
+    modelId: normalizeRouterModelId(modelId),
     ctxSize: settings.extractionCtxSize ?? 16384,
   };
 }

@@ -10,6 +10,7 @@ import {
   type StopReason,
 } from "@mariozechner/pi-ai";
 import { createPiModelFromProvider, discoverAllModels, getExtractionRoute } from "./models.js";
+import { normalizeRouterModelId } from "./llama-router-client.js";
 import type { Model } from "@mariozechner/pi-ai";
 import type { ChatMessage, MessageUsage } from "../types.js";
 
@@ -262,7 +263,8 @@ export async function streamChat(
   // pass extractionModelId here and benefit automatically.
   let piModel: Model<string>;
   const extractionRoute = await getExtractionRoute();
-  if (extractionRoute && extractionRoute.modelId === modelId) {
+  const normalizedModelId = normalizeRouterModelId(modelId);
+  if (extractionRoute && extractionRoute.modelId === normalizedModelId) {
     piModel = {
       id: extractionRoute.modelId,
       name: extractionRoute.modelId,
@@ -277,7 +279,8 @@ export async function streamChat(
     };
   } else {
     const allModels = await discoverAllModels();
-    const model = allModels.find((m) => m.id === modelId);
+    const model = allModels.find((m) => m.id === modelId) ??
+      (normalizedModelId !== modelId ? allModels.find((m) => m.id === normalizedModelId) : undefined);
     if (!model) throw new Error(`Model not found: ${modelId}`);
     piModel = await createPiModelFromProvider(model);
   }
