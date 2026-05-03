@@ -480,29 +480,60 @@ function parseCtxSizeFromArgs(args: unknown): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+interface LoadedLlamaModel {
+  id: string;
+  contextWindow?: number;
+}
+
+/**
+ * Query llama.cpp for every model currently resident in router mode.
+ * `contextWindow` is parsed from the model's argv (`--ctx-size`) and may be
+ * undefined if the flag was omitted.
+ */
+async function getLoadedModels(baseUrl: string): Promise<LoadedLlamaModel[]> {
+  try {
+    const res = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.data || [])
+      .filter((m: any) => m.status?.value === "loaded" && typeof m.id === "string")
+      .map((m: any) => ({
+        id: m.id,
+        contextWindow: parseCtxSizeFromArgs(m.status?.args),
+      }));
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Query llama.cpp to find which model is actually loaded right now.
  * Returns { id, contextWindow } if exactly one model is in "loaded" state.
- * `contextWindow` is parsed from the model's argv (`--ctx-size`) and may be
- * undefined if the flag was omitted (in which case llama-server's default
- * applies — caller should treat undefined as "unknown but likely matches").
+ * Callers that need to clean up stale concurrent children should use
+ * `getLoadedModels()` instead.
  */
-async function getActualLoadedModel(baseUrl: string): Promise<{ id: string; contextWindow?: number } | null> {
-  try {
-    const res = await fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const loaded = data.data?.filter((m: any) => m.status?.value === "loaded");
-    if (loaded?.length === 1) {
-      return {
-        id: loaded[0].id,
-        contextWindow: parseCtxSizeFromArgs(loaded[0].status?.args),
-      };
-    }
-    return null;
-  } catch {
-    return null;
+async function getActualLoadedModel(baseUrl: string): Promise<LoadedLlamaModel | null> {
+  const loaded = await getLoadedModels(baseUrl);
+  if (loaded.length === 1) {
+    return loaded[0];
   }
+  return null;
+}
+
+async function unloadModel(baseUrl: string, modelId: string): Promise<boolean> {
+  const unloadRes = await fetch(`${baseUrl}/models/unload`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: modelId }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (unloadRes.ok) {
+    console.log(`[openai-compat] Unloaded model: ${modelId}`);
+    await waitForModelUnloaded(baseUrl, modelId);
+    return true;
+  }
+  console.warn(`[openai-compat] Unload returned ${unloadRes.status} for ${modelId}`);
+  return false;
 }
 
 /**
@@ -512,16 +543,38 @@ async function getActualLoadedModel(baseUrl: string): Promise<{ id: string; cont
  * In single-model mode, the endpoint doesn't exist — we catch and ignore 404s.
  */
 export async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow?: number): Promise<void> {
-  // Skip if we already loaded this model — context window is set on first load only.
-  // We don't reload for context window changes because:
-  // 1. Background callers (extraction, title gen) may request a different ctx than the active chat
-  // 2. Reloading mid-turn kills active connections and disrupts the agent loop
-  // 3. The application layer (compaction, token counting) handles context limits
-  if (lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel?.modelId === modelId) {
-    return;
-  }
-
   try {
+    const loadedModels = await getLoadedModels(baseUrl);
+    const extraLoadedModels = loadedModels.filter((m) => m.id !== modelId);
+    if (extraLoadedModels.length > 0) {
+      lastLoadedModel = null;
+      console.log(
+        `[openai-compat] Unloading stale loaded model(s) before using ${modelId}: ${extraLoadedModels.map((m) => m.id).join(", ")}`
+      );
+      for (const loaded of extraLoadedModels) {
+        await unloadModel(baseUrl, loaded.id).catch((err) => {
+          console.warn(`[openai-compat] Unload failed for ${loaded.id}:`, err instanceof Error ? err.message : err);
+          return false;
+        });
+      }
+    }
+
+    const targetLive = loadedModels.find((m) => m.id === modelId);
+    if (targetLive && extraLoadedModels.length > 0) {
+      await waitForModelReady(baseUrl, modelId).catch(() => {});
+      lastLoadedModel = { baseUrl, modelId, contextWindow: targetLive.contextWindow ?? contextWindow };
+      return;
+    }
+
+    // Skip if we already loaded this model — context window is set on first load only.
+    // We don't reload for context window changes because:
+    // 1. Background callers (extraction, title gen) may request a different ctx than the active chat
+    // 2. Reloading mid-turn kills active connections and disrupts the agent loop
+    // 3. The application layer (compaction, token counting) handles context limits
+    if (lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel?.modelId === modelId) {
+      return;
+    }
+
     // Unload the previous model first to free VRAM. After a Node restart the
     // in-memory `lastLoadedModel` cache is empty even when the router has a
     // different model loaded — without recovering that live state we'd skip
@@ -547,18 +600,7 @@ export async function ensureModelLoaded(baseUrl: string, modelId: string, contex
     if (needsUnload || needsReload) {
       try {
         const unloadModelId = needsUnload ? previousModelId! : modelId;
-        const unloadRes = await fetch(`${baseUrl}/models/unload`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: unloadModelId }),
-          signal: AbortSignal.timeout(30_000),
-        });
-        if (unloadRes.ok) {
-          console.log(`[openai-compat] Unloaded model: ${unloadModelId}`);
-          await waitForModelUnloaded(baseUrl, unloadModelId);
-        } else {
-          console.warn(`[openai-compat] Unload returned ${unloadRes.status} for ${unloadModelId}`);
-        }
+        await unloadModel(baseUrl, unloadModelId);
       } catch (err) {
         console.warn(`[openai-compat] Unload failed:`, err instanceof Error ? err.message : err);
       }
