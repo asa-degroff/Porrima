@@ -98,6 +98,18 @@ function coerceWebSearchProvider(provider: Settings["defaultWebSearchProvider"])
   return WEB_SEARCH_PROVIDER_OPTIONS.some((option) => option.id === provider) ? provider! : "brave";
 }
 
+function isVisionModel(model: OllamaModel): boolean {
+  const family = model.family.toLowerCase();
+  const id = model.id.toLowerCase();
+  return Boolean(model.supportsImages) ||
+    family.includes("vl") ||
+    family.startsWith("qwen35") ||
+    id.includes("-vl") ||
+    id.includes("vision") ||
+    id.includes("llava") ||
+    id.includes("pixtral");
+}
+
 function llamaSystemdTone(status: LlamaServerStatus["systemd"]["activeState"]): string {
   if (status === "active") return "bg-green-500/15 text-green-300 border-green-400/25";
   if (status === "activating" || status === "deactivating") return "bg-amber-500/15 text-amber-300 border-amber-400/25";
@@ -172,6 +184,10 @@ interface Props {
 }
 
 export function SettingsModal({ settings, models, onSave, onClose, onLogout }: Props) {
+  const visionModelOptions = (() => {
+    const capable = models.filter(isVisionModel);
+    return capable.length > 0 ? capable : models;
+  })();
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
   const [defaultVisionModelId, setDefaultVisionModelId] = useState(settings.defaultVisionModelId || "");
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
@@ -2411,7 +2427,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               >
                 Auto (first vision model)
               </button>
-              {models.map((m) => (
+              {visionModelOptions.map((m) => (
                 <button
                   key={m.id}
                   onClick={() => { setDefaultVisionModelId(m.id); visionModelDd.close(); }}

@@ -27,14 +27,26 @@ interface Props {
 type SandboxMode = "generate" | "analyze" | "corpus" | "directions";
 type ViewMode = "gallery" | "detail";
 
-function isVisionCapable(family: string): boolean {
-  return family.includes("vl") || family.startsWith("qwen35");
+function isVisionCapable(model: OllamaModel): boolean {
+  const family = model.family.toLowerCase();
+  const id = model.id.toLowerCase();
+  return Boolean(model.supportsImages) ||
+    family.includes("vl") ||
+    family.startsWith("qwen35") ||
+    id.includes("-vl") ||
+    id.includes("vision") ||
+    id.includes("llava") ||
+    id.includes("pixtral");
 }
 
 export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisionModelId, onClose }: Props) {
   const activityShape = useActivityShape();
   const { settings } = useSettings();
   const backendLabel = settings.imageBackend === "sdcpp" ? "sd-server" : "ComfyUI";
+  const visionModels = useMemo(() => {
+    const capable = ollamaModels.filter(isVisionCapable);
+    return capable.length > 0 ? capable : ollamaModels;
+  }, [ollamaModels]);
 
   const {
     images,
@@ -179,18 +191,19 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     // 1. Check localStorage for a previously selected vision model
     try {
       const saved = localStorage.getItem("quje-vision-model");
-      if (saved && ollamaModels.some((m) => m.id === saved)) return saved;
+      const savedModel = ollamaModels.find((m) => m.id === saved);
+      if (saved && savedModel && isVisionCapable(savedModel)) return saved;
     } catch {}
     // 2. Use explicit vision model setting if set
     if (defaultVisionModelId) {
       const configured = ollamaModels.find((m) => m.id === defaultVisionModelId);
-      if (configured) return defaultVisionModelId;
+      if (configured && isVisionCapable(configured)) return defaultVisionModelId;
     }
     // 3. Use chat default if it's vision-capable
     const chatDefault = ollamaModels.find((m) => m.id === defaultModelId);
-    if (chatDefault && isVisionCapable(chatDefault.family)) return defaultModelId;
+    if (chatDefault && isVisionCapable(chatDefault)) return defaultModelId;
     // 4. Fall back to first vision model
-    const visionDefault = ollamaModels.find((m) => isVisionCapable(m.family));
+    const visionDefault = ollamaModels.find(isVisionCapable);
     return visionDefault?.id || defaultModelId;
   });
 
@@ -203,17 +216,17 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   useEffect(() => {
     if (ollamaModels.length === 0) return;
     // Current selection is valid — keep it
-    if (ollamaModels.some((m) => m.id === visionModel)) return;
+    if (ollamaModels.some((m) => m.id === visionModel && isVisionCapable(m))) return;
     // Try localStorage
     try {
       const saved = localStorage.getItem("quje-vision-model");
-      if (saved && ollamaModels.some((m) => m.id === saved)) {
+      if (saved && ollamaModels.some((m) => m.id === saved && isVisionCapable(m))) {
         setVisionModelRaw(saved);
         return;
       }
     } catch {}
     // Fall back to best vision model
-    const visionDefault = ollamaModels.find((m) => isVisionCapable(m.family));
+    const visionDefault = ollamaModels.find(isVisionCapable);
     setVisionModelRaw(visionDefault?.id || ollamaModels[0].id);
   }, [ollamaModels]);
 
@@ -857,7 +870,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
             <div className="hidden lg:block w-80 shrink-0 border-r border-white/10 backdrop-blur-xl bg-white/[0.03]">
               <VisionControls
                 presets={presets}
-                models={ollamaModels}
+                models={visionModels}
                 selectedModel={visionModel}
                 onModelChange={setVisionModel}
                 analyzing={analyzing}
@@ -995,7 +1008,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
                   <div className="flex-1 overflow-y-auto p-4">
                     <VisionControls
                       presets={presets}
-                      models={ollamaModels}
+                      models={visionModels}
                       selectedModel={visionModel}
                       onModelChange={setVisionModel}
                       analyzing={analyzing}
