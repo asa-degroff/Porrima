@@ -189,6 +189,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [exaApiKey, setExaApiKey] = useState(settings.exaApiKey || "");
   const [tavilyApiKey, setTavilyApiKey] = useState(settings.tavilyApiKey || "");
+  const [braveSearchEnabled, setBraveSearchEnabled] = useState(settings.braveSearchEnabled ?? true);
+  const [exaSearchEnabled, setExaSearchEnabled] = useState(settings.exaSearchEnabled ?? false);
+  const [tavilySearchEnabled, setTavilySearchEnabled] = useState(settings.tavilySearchEnabled ?? false);
   const [defaultWebSearchProvider, setDefaultWebSearchProvider] = useState<WebSearchProvider>(coerceWebSearchProvider(settings.defaultWebSearchProvider));
   const [comfyuiUrl, setComfyuiUrl] = useState(settings.comfyuiUrl || "http://127.0.0.1:8188");
   const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
@@ -722,6 +725,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       braveApiKey: braveApiKey.trim(),
       exaApiKey: exaApiKey.trim(),
       tavilyApiKey: tavilyApiKey.trim(),
+      braveSearchEnabled,
+      exaSearchEnabled,
+      tavilySearchEnabled,
       defaultWebSearchProvider,
       comfyuiUrl: comfyuiUrl.trim() || undefined,
       sdcppUrl: sdcppUrl.trim() || undefined,
@@ -3250,57 +3256,81 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 Used when the web_search agent tool does not specify a provider. Agents can still override it for a specific search.
               </p>
             </div>
-            <div className="space-y-2">
-              <label className="block text-sm text-white/50">Brave Search API Key</label>
-              <input
-                type="password"
-                value={braveApiKey}
-                onChange={(e) => setBraveApiKey(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
-                placeholder="BSA..."
-                autoComplete="off"
-              />
-              <p className="text-white/30 text-xs">
-                Required for the web_search agent tool. Get a key at{" "}
-                <a href="https://brave.com/search/api/" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
-                  brave.com/search/api
-                </a>
-              </p>
+            {/* Provider enable toggles */}
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
+              <label className="flex items-center gap-2 text-sm text-white/60 cursor-pointer select-none">
+                <input type="checkbox" checked={braveSearchEnabled} onChange={(e) => setBraveSearchEnabled(e.target.checked)} className="rounded border-white/20 bg-white/5 text-blue-400 focus:ring-blue-400/30" />
+                Brave Search
+              </label>
+              <label className="flex items-center gap-2 text-sm text-white/60 cursor-pointer select-none">
+                <input type="checkbox" checked={exaSearchEnabled} onChange={(e) => setExaSearchEnabled(e.target.checked)} className="rounded border-white/20 bg-white/5 text-blue-400 focus:ring-blue-400/30" />
+                Exa
+              </label>
+              <label className="flex items-center gap-2 text-sm text-white/60 cursor-pointer select-none">
+                <input type="checkbox" checked={tavilySearchEnabled} onChange={(e) => setTavilySearchEnabled(e.target.checked)} className="rounded border-white/20 bg-white/5 text-blue-400 focus:ring-blue-400/30" />
+                Tavily
+              </label>
             </div>
-            <div className="space-y-2">
-              <label className="block text-sm text-white/50">Exa Search API Key</label>
-              <input
-                type="password"
-                value={exaApiKey}
-                onChange={(e) => setExaApiKey(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
-                placeholder="exa_api_key..."
-                autoComplete="off"
-              />
-              <p className="text-white/30 text-xs">
-                Required for Exa-powered web search. Provides richer results with highlights, summaries, and deep reasoning. Get a key at{" "}
-                <a href="https://exa.ai" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
-                  exa.ai
-                </a>
-              </p>
-            </div>
-            <div className="space-y-2">
-              <label className="block text-sm text-white/50">Tavily Search API Key</label>
-              <input
-                type="password"
-                value={tavilyApiKey}
-                onChange={(e) => setTavilyApiKey(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
-                placeholder="tvly-..."
-                autoComplete="off"
-              />
-              <p className="text-white/30 text-xs">
-                Required for Tavily-powered web search. Supports ranked results, optional generated answers, and date/domain filters. Get a key at{" "}
-                <a href="https://app.tavily.com" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
-                  app.tavily.com
-                </a>
-              </p>
-            </div>
+            {/* Brave key — shown when enabled */}
+            {braveSearchEnabled && (
+              <div className="space-y-2">
+                <label className="block text-sm text-white/50">Brave Search API Key</label>
+                <input
+                  type="password"
+                  value={braveApiKey}
+                  onChange={(e) => setBraveApiKey(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
+                  placeholder="BSA..."
+                  autoComplete="off"
+                />
+                <p className="text-white/30 text-xs">
+                  Required for the web_search agent tool. Get a key at{" "}
+                  <a href="https://brave.com/search/api/" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
+                    brave.com/search/api
+                  </a>
+                </p>
+              </div>
+            )}
+            {/* Exa key — shown when enabled */}
+            {exaSearchEnabled && (
+              <div className="space-y-2">
+                <label className="block text-sm text-white/50">Exa Search API Key</label>
+                <input
+                  type="password"
+                  value={exaApiKey}
+                  onChange={(e) => setExaApiKey(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
+                  placeholder="exa_api_key..."
+                  autoComplete="off"
+                />
+                <p className="text-white/30 text-xs">
+                  Required for Exa-powered web search. Provides richer results with highlights, summaries, and deep reasoning. Get a key at{" "}
+                  <a href="https://exa.ai" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
+                    exa.ai
+                  </a>
+                </p>
+              </div>
+            )}
+            {/* Tavily key — shown when enabled */}
+            {tavilySearchEnabled && (
+              <div className="space-y-2">
+                <label className="block text-sm text-white/50">Tavily Search API Key</label>
+                <input
+                  type="password"
+                  value={tavilyApiKey}
+                  onChange={(e) => setTavilyApiKey(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 focus:border-blue-400/30 transition-all"
+                  placeholder="tvly-..."
+                  autoComplete="off"
+                />
+                <p className="text-white/30 text-xs">
+                  Required for Tavily-powered web search. Supports ranked results, optional generated answers, and date/domain filters. Get a key at{" "}
+                  <a href="https://app.tavily.com" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
+                    app.tavily.com
+                  </a>
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Image Generation */}

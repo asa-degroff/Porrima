@@ -216,9 +216,16 @@ async function getTavilyApiKey(): Promise<string> {
 async function getDefaultWebSearchProvider(): Promise<WebSearchProvider> {
   const settings = await getSettings();
   const provider = normalizeString(settings.defaultWebSearchProvider);
-  return isWebSearchProvider(provider)
-    ? provider
-    : "brave";
+  if (!isWebSearchProvider(provider)) return "brave";
+  // Respect enabled flags — if the configured default is disabled, fall back
+  const enabled: WebSearchProvider[] = [
+    ...(settings.braveSearchEnabled ? ["brave" as const] : []),
+    ...(settings.exaSearchEnabled ? ["exa" as const] : []),
+    ...(settings.tavilySearchEnabled ? ["tavily" as const] : []),
+  ];
+  if (enabled.includes(provider)) return provider;
+  // Default provider is disabled — use first enabled, or brave
+  return enabled.length > 0 ? enabled[0] : "brave";
 }
 
 async function executeWebSearch(

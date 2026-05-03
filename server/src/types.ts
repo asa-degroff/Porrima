@@ -251,6 +251,9 @@ export interface Settings {
   braveApiKey: string;
   exaApiKey: string;
   tavilyApiKey: string;
+  braveSearchEnabled?: boolean;
+  exaSearchEnabled?: boolean;
+  tavilySearchEnabled?: boolean;
   defaultWebSearchProvider?: WebSearchProvider;
   comfyuiUrl?: string;
   sdcppUrl?: string;            // default "http://127.0.0.1:1234" — stable-diffusion.cpp sd-server
