@@ -399,10 +399,34 @@ async function* parseSSE(
  * to a single server per baseUrl.
  */
 let lastLoadedModel: { baseUrl: string; modelId: string; contextWindow?: number } | null = null;
+const modelsNeedingReload = new Set<string>();
+
+interface EnsureModelLoadedOptions {
+  forceReload?: boolean;
+  reason?: string;
+}
+
+function modelStateKey(baseUrl: string, modelId: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}::${modelId}`;
+}
 
 /** Clear the cached model state (e.g., after GPU coordination unloads slots). */
 export function invalidateLoadedModel() {
   lastLoadedModel = null;
+}
+
+/** Mark a router model as needing an unload/load cycle before the next request. */
+export function markModelForReload(baseUrl: string, modelId: string, reason?: string) {
+  lastLoadedModel = null;
+  modelsNeedingReload.add(modelStateKey(baseUrl, modelId));
+  console.warn(
+    `[openai-compat] Marked ${modelId} for reload${reason ? `: ${reason}` : ""}`
+  );
+}
+
+export function isLlamaCppChildConnectionError(status: number | undefined, errorText: string): boolean {
+  if (status === undefined || status < 500) return false;
+  return /proxy error:\s*(failed to read connection|could not establish connection)/i.test(errorText);
 }
 
 /** Check whether llama.cpp currently has a model loaded on GPU. */
@@ -542,8 +566,22 @@ async function unloadModel(baseUrl: string, modelId: string): Promise<boolean> {
  * If the context window changed, the model is reloaded with the new size.
  * In single-model mode, the endpoint doesn't exist — we catch and ignore 404s.
  */
-export async function ensureModelLoaded(baseUrl: string, modelId: string, contextWindow?: number): Promise<void> {
+export async function ensureModelLoaded(
+  baseUrl: string,
+  modelId: string,
+  contextWindow?: number,
+  options: EnsureModelLoadedOptions = {}
+): Promise<void> {
   try {
+    const stateKey = modelStateKey(baseUrl, modelId);
+    const forcedReload = options.forceReload === true || modelsNeedingReload.delete(stateKey);
+    if (forcedReload) {
+      lastLoadedModel = null;
+      console.log(
+        `[openai-compat] Force reloading ${modelId}${options.reason ? `: ${options.reason}` : ""}`
+      );
+    }
+
     const loadedModels = await getLoadedModels(baseUrl);
     const extraLoadedModels = loadedModels.filter((m) => m.id !== modelId);
     if (extraLoadedModels.length > 0) {
@@ -560,7 +598,7 @@ export async function ensureModelLoaded(baseUrl: string, modelId: string, contex
     }
 
     const targetLive = loadedModels.find((m) => m.id === modelId);
-    if (targetLive && extraLoadedModels.length > 0) {
+    if (!forcedReload && targetLive && extraLoadedModels.length > 0) {
       await waitForModelReady(baseUrl, modelId).catch(() => {});
       lastLoadedModel = { baseUrl, modelId, contextWindow: targetLive.contextWindow ?? contextWindow };
       return;
@@ -571,7 +609,7 @@ export async function ensureModelLoaded(baseUrl: string, modelId: string, contex
     // 1. Background callers (extraction, title gen) may request a different ctx than the active chat
     // 2. Reloading mid-turn kills active connections and disrupts the agent loop
     // 3. The application layer (compaction, token counting) handles context limits
-    if (lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel?.modelId === modelId) {
+    if (!forcedReload && lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel?.modelId === modelId) {
       return;
     }
 
@@ -590,7 +628,7 @@ export async function ensureModelLoaded(baseUrl: string, modelId: string, contex
       }
     }
     const needsUnload = previousModelId !== undefined && previousModelId !== modelId;
-    const needsReload = lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel?.modelId === modelId;
+    const needsReload = forcedReload || (lastLoadedModel?.baseUrl === baseUrl && lastLoadedModel?.modelId === modelId);
 
     // Invalidate cache before any model change so failures don't leave stale state
     if (needsUnload) {
@@ -700,8 +738,12 @@ export async function ensureModelLoaded(baseUrl: string, modelId: string, contex
         if (lastLoadedModel?.contextWindow === undefined && liveCtx !== undefined) {
           console.log(`[openai-compat] Recovered live ctx=${liveCtx} for ${modelId} from /v1/models (in-memory cache was empty)`);
         }
-        if (contextWindow && (!knownCtx || knownCtx < contextWindow)) {
-          console.log(`[openai-compat] Model already running (ctx=${knownCtx ?? "unknown"}) but need ctx=${contextWindow}, reloading`);
+        if (forcedReload || (contextWindow && (!knownCtx || knownCtx < contextWindow))) {
+          console.log(
+            forcedReload
+              ? `[openai-compat] Model still reported already running after reload request, unloading ${modelId} and retrying`
+              : `[openai-compat] Model already running (ctx=${knownCtx ?? "unknown"}) but need ctx=${contextWindow}, reloading`
+          );
           try {
             const unloadRes = await fetch(`${baseUrl}/models/unload`, {
               method: "POST",
@@ -735,6 +777,11 @@ export async function ensureModelLoaded(baseUrl: string, modelId: string, contex
           }
           // Reload failed — wait for whatever state the model is in before proceeding
           await waitForModelReady(baseUrl, modelId).catch(() => {});
+          if (forcedReload) {
+            lastLoadedModel = null;
+            modelsNeedingReload.add(stateKey);
+            return;
+          }
         }
         // No reload needed — populate the cache with the live ctx (if recovered)
         // or the requested ctx (which the running instance already satisfies).
@@ -874,7 +921,7 @@ export const streamOpenAICompat = (
       if (lastFetchError) {
         // Invalidate loaded model cache — connection failure likely means the child
         // process crashed and the router can't proxy to it.
-        invalidateLoadedModel();
+        markModelForReload(model.baseUrl, model.id, lastFetchError.message);
         throw lastFetchError;
       }
 
@@ -883,8 +930,12 @@ export const streamOpenAICompat = (
         // Invalidate loaded model cache on server errors — the child process may have
         // crashed (common with vision models on ROCm) and needs to be reloaded.
         if (response && (response.status === 500 || response.status === 502 || response.status === 503)) {
-          console.warn(`[openai-compat] Server error ${response.status}, invalidating model cache`);
-          invalidateLoadedModel();
+          if (isLlamaCppChildConnectionError(response.status, errorText)) {
+            markModelForReload(model.baseUrl, model.id, `server error ${response.status}: ${errorText}`);
+          } else {
+            console.warn(`[openai-compat] Server error ${response.status}, invalidating model cache`);
+            invalidateLoadedModel();
+          }
         }
         throw new Error(`llama.cpp API error ${response?.status ?? "?"}: ${errorText}`);
       }
