@@ -25,6 +25,7 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView }: Prop
   const pinned = isPinned("artifact", artifact.id);
   const [showCode, setShowCode] = useState(false);
   const [iframeError, setIframeError] = useState(false);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [sourceCode, setSourceCode] = useState<string | null>(null);
   const [iframeLoaded, setIframeLoaded] = useState(false);
@@ -37,6 +38,7 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView }: Prop
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const heightRef = useRef(DEFAULT_HEIGHT);
   const versionMenuRef = useRef<HTMLDivElement>(null);
+  const runtimeErrorRef = useRef<string | null>(null);
 
   const handleIframeLoad = useCallback(() => {
     setIframeLoaded(true);
@@ -104,7 +106,13 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView }: Prop
         if (cancelled) return;
         setSourceCode(html);
         setIframeLoaded(false);
-        const blob = new Blob([html], { type: "text/html" });
+        setRuntimeError(null);
+        runtimeErrorRef.current = null;
+        // Inject error-forwarding script so JS runtime errors in the iframe
+        // surface as messages the parent can display (iframe onError only
+        // fires on network failures, not JS exceptions).
+        const injected = html.replace(/<\/head>/, `<script>window.addEventListener('error',function(e){if(e.filename&&e.filename.includes('blob:')){window.parent.postMessage({type:'artifact-error',message:e.message,filename:e.filename,lineno:e.lineno,colno:e.colno,stack:e.error&&e.error.stack},'*');}});window.addEventListener('unhandledrejection',function(e){window.parent.postMessage({type:'artifact-error',message:e.reason&&e.reason.message||String(e.reason),stack:e.reason&&e.reason.stack},'*');});<\/script></head>`);
+        const blob = new Blob([injected], { type: "text/html" });
         url = URL.createObjectURL(blob);
         setBlobUrl(url);
       })
@@ -117,6 +125,20 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView }: Prop
       if (url) URL.revokeObjectURL(url);
     };
   }, [artifact.id, selectedVersion]);
+
+  // Listen for runtime errors forwarded from the iframe
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data?.type === "artifact-error") {
+        const msg = e.data.message || "Unknown runtime error";
+        setRuntimeError(msg);
+        runtimeErrorRef.current = msg;
+        setIframeError(false);
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
 
   // Close version menu on outside click
   useEffect(() => {
@@ -253,6 +275,23 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView }: Prop
             {iframeError ? (
               <div className="p-4 text-center text-sm text-gray-500">
                 Failed to load artifact preview
+              </div>
+            ) : runtimeError ? (
+              <div className="p-4 space-y-2">
+                <div className="flex items-center gap-2 text-amber-400">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                  <span className="text-sm font-medium">Runtime Error</span>
+                </div>
+                <pre className="text-xs text-red-300/80 font-mono whitespace-pre-wrap bg-red-950/30 rounded-lg p-3 border border-red-500/20">
+                  {runtimeError}
+                </pre>
+                <p className="text-[10px] text-white/30">
+                  This is a JavaScript error from the artifact. The preview is hidden. Switch to the Code tab to inspect the source.
+                </p>
               </div>
             ) : blobUrl ? (
               <iframe
