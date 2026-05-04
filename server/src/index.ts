@@ -39,6 +39,7 @@ import { ensureAutomationDefaults } from "./services/automation-storage.js";
 import { migrateAgentNotebookToBlocks } from "./services/notebook-storage.js";
 import { registerOllamaNativeProvider } from "./services/ollama-native-provider.js";
 import { registerOpenAICompatProvider } from "./services/openai-compat-provider.js";
+import { initSshMux } from "./services/workspace.js";
 
 // Register API providers before any requests
 registerOllamaNativeProvider();
@@ -67,6 +68,9 @@ await ensureAutomationDefaults();
 await migrateAgentNotebookToBlocks().catch((err) => {
   console.error("[notebook] Agent notebook migration failed:", err);
 });
+
+// Initialize SSH infrastructure: create mux directory, clean stale sockets.
+await initSshMux();
 
 const app = express();
 

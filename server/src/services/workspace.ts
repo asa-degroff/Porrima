@@ -1,5 +1,5 @@
 import { execFile } from "child_process";
-import { access, mkdir, readFile, readdir, writeFile } from "fs/promises";
+import { access, mkdir, readFile, readdir, writeFile, stat, unlink } from "fs/promises";
 import { constants } from "fs";
 import { dirname, join, resolve } from "path";
 import { homedir } from "os";
@@ -8,6 +8,42 @@ import type { Project, ProjectLocationType, SshConnection } from "../types.js";
 import { getSshConnection } from "./chat-storage.js";
 
 const HOME = homedir();
+const QUJE_DIR = join(HOME, ".quje-agent");
+const SSH_MUX_DIR = join(QUJE_DIR, "ssh-mux");
+const SSH_KNOWN_HOSTS = join(QUJE_DIR, "ssh-known-hosts");
+
+/**
+ * Initialize SSH infrastructure: create mux directory and clean stale sockets.
+ * Call once at server startup.
+ */
+export async function initSshMux(): Promise<void> {
+  try {
+    await mkdir(SSH_MUX_DIR, { recursive: true, mode: 0o700 });
+  } catch {
+    // Directory already exists or permission issue — non-fatal.
+  }
+
+  // Clean up stale sockets from previous runs.
+  try {
+    const entries = await readdir(SSH_MUX_DIR);
+    for (const entry of entries) {
+      if (entry.endsWith(".sock")) {
+        const fullPath = join(SSH_MUX_DIR, entry);
+        try {
+          const s = await stat(fullPath);
+          // Only delete if it's actually a socket and stale (>5 min old).
+          if (s.isSocket() && Date.now() - s.mtimeMs > 5 * 60 * 1000) {
+            await unlink(fullPath);
+          }
+        } catch {
+          // stat/unlink failure — ignore.
+        }
+      }
+    }
+  } catch {
+    // readdir failure — non-fatal, mux will work fine without cleanup.
+  }
+}
 
 export interface WorkspaceValidationResult {
   valid: boolean;
@@ -247,53 +283,184 @@ function sshTarget(connection: SshConnection): string {
   return connection.username ? `${connection.username}@${connection.host}` : connection.host;
 }
 
-function sshArgs(connection: SshConnection, remoteCommand: string): string[] {
+/** Base SSH options shared by both master and client connections. */
+function sshBaseOptions(connection: SshConnection): string[] {
   const strictMode = connection.knownHostsMode === "strict"
     ? "yes"
     : connection.knownHostsMode === "off"
       ? "no"
       : "accept-new";
-  const args = [
-    "-T",
+  const opts = [
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
     "-o", `StrictHostKeyChecking=${strictMode}`,
+    "-o", `UserKnownHostsFile=${SSH_KNOWN_HOSTS}`,
     "-p", String(connection.port || 22),
   ];
   if (connection.identityFile) {
-    args.push("-i", connection.identityFile, "-o", "IdentitiesOnly=yes");
+    opts.push("-i", connection.identityFile, "-o", "IdentitiesOnly=yes");
   }
-  args.push(sshTarget(connection), remoteCommand);
-  return args;
+  return opts;
+}
+
+/** Build SSH args for a multiplexed client command. */
+function sshClientArgs(controlSocket: string, connection: SshConnection, remoteCommand: string): string[] {
+  return [
+    "-S", controlSocket,
+    "-o", "ControlMaster=no",
+    ...sshBaseOptions(connection),
+    sshTarget(connection),
+    remoteCommand,
+  ];
+}
+
+/** Build SSH args for establishing a master connection. */
+function sshMasterArgs(controlSocket: string, connection: SshConnection): string[] {
+  return [
+    "-fMN",
+    "-S", controlSocket,
+    "-o", "ControlPersist=600",
+    "-o", "ServerAliveInterval=30",
+    "-o", "ServerAliveCountMax=2",
+    ...sshBaseOptions(connection),
+    sshTarget(connection),
+  ];
 }
 
 export class SshWorkspaceAdapter implements WorkspaceAdapter {
   readonly label: string;
+  private readonly _controlSocket: string;
+  private _masterReady: boolean = false;
 
   constructor(private readonly connection: SshConnection, private readonly root: string) {
     this.label = `ssh:${sshTarget(connection)}:${root}`;
+    this._controlSocket = join(SSH_MUX_DIR, `${connection.id}.sock`);
   }
 
+  /** Returns the control socket path (useful for external tooling or debugging). */
+  get controlSocket(): string {
+    return this._controlSocket;
+  }
+
+  /** Check if master connection is alive. */
+  private async masterCheck(): Promise<boolean> {
+    return new Promise((resolveResult) => {
+      execFile("ssh", [
+        "-S", this._controlSocket,
+        "-O", "check",
+        sshTarget(this.connection),
+      ], { timeout: 5000 }, (_error, stdout, stderr) => {
+        const output = [stdout, stderr].filter(Boolean).join("").trim();
+        // "Master is running" or "Master running (pid=...)"
+        resolveResult(!output.includes("no such file") && !output.includes("not alive"));
+      });
+    });
+  }
+
+  /** Establish or verify the master connection. */
+  private async ensureMaster(): Promise<boolean> {
+    if (this._masterReady && await this.masterCheck()) {
+      return true;
+    }
+
+    // Try to establish master connection
+    return new Promise((resolveResult) => {
+      execFile("ssh", sshMasterArgs(this._controlSocket, this.connection), {
+        timeout: 15000,
+      }, (error, stdout, stderr) => {
+        if (error) {
+          this._masterReady = false;
+          resolveResult(false);
+          return;
+        }
+        const output = [stdout, stderr].filter(Boolean).join("").trim();
+        // Master may print "Warning: ... " which is fine
+        if (output.includes("connect") || output.includes("Connection refused") || output.includes("Permission denied")) {
+          this._masterReady = false;
+          resolveResult(false);
+        } else {
+          // Give master a moment to fork and establish
+          setTimeout(() => {
+            this._masterReady = true;
+            resolveResult(true);
+          }, 200);
+        }
+      });
+    });
+  }
+
+  /** Tear down the master connection. */
+  async destroyMaster(): Promise<void> {
+    if (!this._masterReady) return;
+    this._masterReady = false;
+    try {
+      await new Promise((resolveResult) => {
+        execFile("ssh", [
+          "-S", this._controlSocket,
+          "-O", "exit",
+          sshTarget(this.connection),
+        ], { timeout: 5000 }, () => resolveResult(null));
+      });
+    } catch {
+      // Teardown failure — non-fatal.
+    }
+  }
+
+  /** Execute a command over SSH, using the multiplexed connection. */
   exec(remoteCommand: string, timeoutMs = 30000, stdin?: string): Promise<{ content: string; isError: boolean }> {
     if (!this.connection.enabled) {
       return Promise.resolve({ content: `SSH connection "${this.connection.name}" is disabled`, isError: true });
     }
-    return new Promise((resolveResult) => {
-      const proc = execFile("ssh", sshArgs(this.connection, remoteCommand), {
-        timeout: timeoutMs,
-        maxBuffer: 1024 * 1024,
-      }, (error, stdout, stderr) => {
-        const output = [stdout ? stdout.trimEnd() : "", stderr ? `[stderr] ${stderr.trimEnd()}` : ""].filter(Boolean).join("\n");
-        if (error) {
-          resolveResult({ content: error.killed ? `SSH command timed out after ${Math.round(timeoutMs / 1000)}s\n${output}` : (output || error.message), isError: true });
-        } else {
-          resolveResult({ content: output || "(no output)", isError: false });
+
+    const runWithMux = async (): Promise<{ content: string; isError: boolean }> => {
+      // Ensure master is ready
+      const masterOk = await this.ensureMaster();
+      if (!masterOk) {
+        // Fall back to direct connection (no multiplexing)
+        return new Promise((resolveResult) => {
+          const args = [...sshBaseOptions(this.connection), sshTarget(this.connection), remoteCommand];
+          const proc = execFile("ssh", args, {
+            timeout: timeoutMs,
+            maxBuffer: 1024 * 1024,
+          }, (error, stdout, stderr) => {
+            const output = [stdout ? stdout.trimEnd() : "", stderr ? `[stderr] ${stderr.trimEnd()}` : ""].filter(Boolean).join("\n");
+            if (error) {
+              resolveResult({ content: error.killed ? `SSH command timed out after ${Math.round(timeoutMs / 1000)}s\n${output}` : (output || error.message), isError: true });
+            } else {
+              resolveResult({ content: output || "(no output)", isError: false });
+            }
+          });
+          if (stdin !== undefined) {
+            proc.stdin?.end(stdin);
+          }
+        });
+      }
+
+      // Use multiplexed connection
+      return new Promise((resolveResult) => {
+        const args = sshClientArgs(this._controlSocket, this.connection, remoteCommand);
+        const proc = execFile("ssh", args, {
+          timeout: timeoutMs,
+          maxBuffer: 1024 * 1024,
+        }, (error, stdout, stderr) => {
+          const output = [stdout ? stdout.trimEnd() : "", stderr ? `[stderr] ${stderr.trimEnd()}` : ""].filter(Boolean).join("\n");
+          if (error) {
+            // If socket error, mark master as dead for automatic retry next call
+            if (output.includes("connect") || output.includes("socket")) {
+              this._masterReady = false;
+            }
+            resolveResult({ content: error.killed ? `SSH command timed out after ${Math.round(timeoutMs / 1000)}s\n${output}` : (output || error.message), isError: true });
+          } else {
+            resolveResult({ content: output || "(no output)", isError: false });
+          }
+        });
+        if (stdin !== undefined) {
+          proc.stdin?.end(stdin);
         }
       });
-      if (stdin !== undefined) {
-        proc.stdin?.end(stdin);
-      }
-    });
+    };
+
+    return runWithMux();
   }
 
   private inRoot(command: string, timeoutMs = 30000, stdin?: string): Promise<{ content: string; isError: boolean }> {
