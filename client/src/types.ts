@@ -188,12 +188,34 @@ export interface ChatMessageWindow {
   hasMoreBefore: boolean;
 }
 
+export type ProjectLocationType = "local" | "ssh";
+
 export interface Project {
   id: string;
   name: string;
   path: string;
+  locationType?: ProjectLocationType;
+  sshConnectionId?: string;
   color: string;
   pinned: boolean;
+  createdAt: string;
+  lastModified: string;
+}
+
+export type SshKnownHostsMode = "strict" | "accept-new" | "off";
+
+export interface SshConnection {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username?: string;
+  identityFile?: string;
+  knownHostsMode: SshKnownHostsMode;
+  enabled: boolean;
+  allowBash: boolean;
+  allowFileWrite: boolean;
+  allowAbsolutePaths: boolean;
   createdAt: string;
   lastModified: string;
 }

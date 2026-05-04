@@ -543,8 +543,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     setProjectModalOpen(true);
   }, []);
 
-  const handleCreateProject = useCallback(async (name: string, path: string) => {
-    await createProject(name, path);
+  const handleCreateProject = useCallback(async (name: string, path: string, locationType?: "local" | "ssh", sshConnectionId?: string) => {
+    await createProject(name, path, locationType, sshConnectionId);
     refresh();
   }, [createProject, refresh]);
 

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { fetchSshConnections, type ProjectLocationType, type SshConnection } from "../api/client";
 
 interface Props {
   onClose: () => void;
-  onCreate: (name: string, path: string) => Promise<void>;
+  onCreate: (name: string, path: string, locationType?: ProjectLocationType, sshConnectionId?: string) => Promise<void>;
 }
 
 interface PathValidation {
@@ -18,6 +19,10 @@ interface PathValidation {
 export function CreateProjectModal({ onClose, onCreate }: Props) {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
+  const [locationType, setLocationType] = useState<ProjectLocationType>("local");
+  const [sshConnectionId, setSshConnectionId] = useState("");
+  const [sshConnections, setSshConnections] = useState<SshConnection[]>([]);
+  const [loadingSshConnections, setLoadingSshConnections] = useState(false);
   const [validation, setValidation] = useState<PathValidation | null>(null);
   const [validating, setValidating] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -43,6 +48,17 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
     
     // Focus name input
     nameInputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    setLoadingSshConnections(true);
+    fetchSshConnections()
+      .then((connections) => {
+        setSshConnections(connections);
+        setSshConnectionId((current) => current || connections[0]?.id || "");
+      })
+      .catch(() => setSshConnections([]))
+      .finally(() => setLoadingSshConnections(false));
   }, []);
 
   // Escape key to close
@@ -76,7 +92,7 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
     }, 400);
 
     return () => clearTimeout(timer);
-  }, [path]);
+  }, [path, locationType, sshConnectionId]);
 
   const validatePath = useCallback(async (pathToValidate: string) => {
     setValidating(true);
@@ -86,7 +102,7 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: pathToValidate }),
+        body: JSON.stringify({ path: pathToValidate, locationType, sshConnectionId: locationType === "ssh" ? sshConnectionId : undefined }),
       });
       const data = await res.json();
       setValidation(data);
@@ -95,7 +111,7 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
     } finally {
       setValidating(false);
     }
-  }, []);
+  }, [locationType, sshConnectionId]);
 
   const handleCreateDirectory = async () => {
     if (!validation?.canCreate) return;
@@ -107,7 +123,7 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: path.trim() }),
+        body: JSON.stringify({ path: path.trim(), locationType, sshConnectionId: locationType === "ssh" ? sshConnectionId : undefined }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -129,7 +145,7 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
     setCreating(true);
     setError(null);
     try {
-      await onCreate(name.trim(), path.trim());
+      await onCreate(name.trim(), path.trim(), locationType, locationType === "ssh" ? sshConnectionId : undefined);
       onClose();
     } catch (e: any) {
       setError(e.message || "Failed to create project");
@@ -143,6 +159,7 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
   };
 
   const isValid = name.trim().length > 0 && validation?.valid === true;
+  const hasRemoteTarget = locationType === "local" || Boolean(sshConnectionId);
   const isInvalid = path.trim().length > 0 && validation && !validation.valid;
 
   return (
@@ -183,12 +200,72 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
               placeholder="My Project"
               className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
               onKeyDown={(e) => {
-                if (e.key === "Enter" && isValid) {
+                if (e.key === "Enter" && isValid && hasRemoteTarget) {
                   handleCreate();
                 }
               }}
             />
           </div>
+
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-white/60">Location</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setLocationType("local");
+                  setValidation(null);
+                }}
+                className={`px-3 py-2 text-sm rounded-lg border transition-all ${
+                  locationType === "local"
+                    ? "bg-emerald-500/15 border-emerald-400/30 text-emerald-200"
+                    : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10"
+                }`}
+              >
+                Local
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLocationType("ssh");
+                  setValidation(null);
+                }}
+                className={`px-3 py-2 text-sm rounded-lg border transition-all ${
+                  locationType === "ssh"
+                    ? "bg-emerald-500/15 border-emerald-400/30 text-emerald-200"
+                    : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10"
+                }`}
+              >
+                SSH
+              </button>
+            </div>
+          </div>
+
+          {locationType === "ssh" && (
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-white/60">SSH Connection</label>
+              <select
+                value={sshConnectionId}
+                onChange={(e) => {
+                  setSshConnectionId(e.target.value);
+                  setValidation(null);
+                }}
+                className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+              >
+                <option value="">{loadingSshConnections ? "Loading connections..." : "Select a connection"}</option>
+                {sshConnections.map((connection) => (
+                  <option key={connection.id} value={connection.id}>
+                    {connection.name} ({connection.username ? `${connection.username}@` : ""}{connection.host})
+                  </option>
+                ))}
+              </select>
+              {sshConnections.length === 0 && !loadingSshConnections && (
+                <p className="text-xs text-amber-300/80 bg-amber-500/10 border border-amber-400/20 rounded-lg px-3 py-2">
+                  Add an SSH connection in Settings before creating a remote project.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Project Path */}
           <div className="space-y-2">
@@ -198,12 +275,12 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
                 type="text"
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
-                placeholder="/home/user/projects/my-project"
+                placeholder={locationType === "ssh" ? "/home/user/projects/my-project on the remote host" : "/home/user/projects/my-project"}
                 className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all pr-10"
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && isValid) {
-                    handleCreate();
-                  }
+                if (e.key === "Enter" && isValid && hasRemoteTarget) {
+                  handleCreate();
+                }
                 }}
               />
               {validating && (
@@ -230,7 +307,12 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
             </div>
 
             {/* Validation Feedback */}
-            {validation && (
+            {locationType === "ssh" && !sshConnectionId && (
+              <div className="text-xs px-3 py-2 rounded-lg border bg-amber-500/10 border-amber-400/20 text-amber-300">
+                Select an SSH connection to validate the remote path.
+              </div>
+            )}
+            {validation && hasRemoteTarget && (
               <div className={`text-xs px-3 py-2 rounded-lg border ${
                 validation.valid 
                   ? "bg-emerald-500/10 border-emerald-400/20 text-emerald-300" 
@@ -290,9 +372,9 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
           </button>
           <button
             onClick={handleCreate}
-            disabled={!isValid || creating}
+            disabled={!isValid || !hasRemoteTarget || creating}
             className={`px-4 py-2 text-sm rounded-lg font-medium transition-all flex items-center gap-2 ${
-              isValid && !creating
+              isValid && hasRemoteTarget && !creating
                 ? "bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 hover:bg-emerald-500/30"
                 : "bg-white/5 border border-white/10 text-white/30 cursor-not-allowed"
             }`}

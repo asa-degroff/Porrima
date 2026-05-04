@@ -1258,12 +1258,34 @@ export async function deleteSkill(name: string): Promise<{ success: boolean; mes
 
 // --- Projects API ---
 
+export type ProjectLocationType = "local" | "ssh";
+
 export interface Project {
   id: string;
   name: string;
   path: string;
+  locationType?: ProjectLocationType;
+  sshConnectionId?: string;
   color: string;
   pinned: boolean;
+  createdAt: string;
+  lastModified: string;
+}
+
+export type SshKnownHostsMode = "strict" | "accept-new" | "off";
+
+export interface SshConnection {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username?: string;
+  identityFile?: string;
+  knownHostsMode: SshKnownHostsMode;
+  enabled: boolean;
+  allowBash: boolean;
+  allowFileWrite: boolean;
+  allowAbsolutePaths: boolean;
   createdAt: string;
   lastModified: string;
 }
@@ -1274,11 +1296,14 @@ export async function fetchProjects(): Promise<Project[]> {
   return res.json();
 }
 
-export async function createProject(name: string, path: string): Promise<Project> {
+export async function createProject(input: { name: string; path: string; locationType?: ProjectLocationType; sshConnectionId?: string } | string, pathArg?: string): Promise<Project> {
+  const body = typeof input === "string"
+    ? { name: input, path: pathArg || "" }
+    : input;
   const res = await apiFetch(`${BASE}/projects`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, path }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -1287,7 +1312,7 @@ export async function createProject(name: string, path: string): Promise<Project
   return res.json();
 }
 
-export async function updateProject(id: string, updates: { name?: string; path?: string }): Promise<Project> {
+export async function updateProject(id: string, updates: { name?: string; path?: string; locationType?: ProjectLocationType; sshConnectionId?: string; color?: string; pinned?: boolean }): Promise<Project> {
   const res = await apiFetch(`${BASE}/projects/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -1309,6 +1334,52 @@ export async function getProjectAgentsMd(id: string): Promise<{ content: string 
   const res = await apiFetch(`${BASE}/projects/${id}/agents-md`);
   if (!res.ok) throw new Error("Failed to fetch AGENTS.md");
   return res.json();
+}
+
+export async function fetchSshConnections(): Promise<SshConnection[]> {
+  const res = await apiFetch(`${BASE}/settings/ssh-connections`);
+  if (!res.ok) throw new Error("Failed to fetch SSH connections");
+  return res.json();
+}
+
+export async function createSshConnection(input: Omit<SshConnection, "id" | "createdAt" | "lastModified">): Promise<SshConnection> {
+  const res = await apiFetch(`${BASE}/settings/ssh-connections`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to create SSH connection");
+  }
+  return res.json();
+}
+
+export async function updateSshConnection(id: string, updates: Partial<SshConnection>): Promise<SshConnection> {
+  const res = await apiFetch(`${BASE}/settings/ssh-connections/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).error || "Failed to update SSH connection");
+  }
+  return res.json();
+}
+
+export async function deleteSshConnection(id: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/settings/ssh-connections/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete SSH connection");
+}
+
+export async function testSshConnection(id: string): Promise<{ ok: boolean; output: string }> {
+  const res = await apiFetch(`${BASE}/settings/ssh-connections/${id}/test`, { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data as any).output || (data as any).error || "SSH connection test failed");
+  }
+  return data;
 }
 
 // --- Notebook API ---

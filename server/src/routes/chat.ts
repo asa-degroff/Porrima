@@ -22,7 +22,7 @@ import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from
 import type { Skill } from "../services/skills.js";
 import * as messageQueue from "../services/message-queue.js";
 import type { QueuedUserMessage } from "../services/message-queue.js";
-import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment, InlineVisual } from "../types.js";
+import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment, InlineVisual, Project } from "../types.js";
 import { saveUserImage } from "../services/user-image-storage.js";
 import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
@@ -449,10 +449,10 @@ const NOOP_TOOL_EFFECTS: ToolSideEffects = {
 function toolsForEstimate(
   chat: Chat,
   contextWindow: number,
-  projectPath?: string,
+  project?: Project | string,
 ): unknown {
   if (chat.type === "quick") return undefined;
-  return getAgentTools(chat.id, NOOP_TOOL_EFFECTS, contextWindow, projectPath, chat.type);
+  return getAgentTools(chat.id, NOOP_TOOL_EFFECTS, contextWindow, project, chat.type);
 }
 
 // Post-compaction context size estimate, used to populate the compaction SSE
@@ -1041,7 +1041,7 @@ async function handleChatStream(
 
     // Create tools AFTER model discovery so we can pass the effective context window
     const project = chat.projectId ? await getProject(chat.projectId) : null;
-    const agentTools = isAgent ? getAgentTools(chat.id, effects, piModel.contextWindow, project?.path, chat.type) : undefined;
+    const agentTools = isAgent ? getAgentTools(chat.id, effects, piModel.contextWindow, project || undefined, chat.type) : undefined;
 
     // Build agent context
     const context: AgentContext = {

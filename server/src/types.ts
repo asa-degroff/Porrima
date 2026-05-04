@@ -116,12 +116,34 @@ export interface Chat {
   };
 }
 
+export type ProjectLocationType = "local" | "ssh";
+
 export interface Project {
   id: string;
   name: string;
   path: string; // project root directory
+  locationType?: ProjectLocationType;
+  sshConnectionId?: string;
   color: string; // UI accent color (e.g., "emerald", "purple", "blue")
   pinned: boolean;
+  createdAt: string;
+  lastModified: string;
+}
+
+export type SshKnownHostsMode = "strict" | "accept-new" | "off";
+
+export interface SshConnection {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username?: string;
+  identityFile?: string;
+  knownHostsMode: SshKnownHostsMode;
+  enabled: boolean;
+  allowBash: boolean;
+  allowFileWrite: boolean;
+  allowAbsolutePaths: boolean;
   createdAt: string;
   lastModified: string;
 }

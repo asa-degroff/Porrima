@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { readdirSync, readFileSync, existsSync, renameSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, Project, Settings } from "../types.js";
+import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, Project, Settings, SshConnection } from "../types.js";
 
 const PROJECT_COLORS = ["emerald", "purple", "blue", "amber", "rose", "cyan", "violet", "orange", "pink", "teal"];
 
@@ -55,8 +55,28 @@ export function getDb(): Database.Database {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       path TEXT NOT NULL,
+      locationType TEXT NOT NULL DEFAULT 'local',
+      sshConnectionId TEXT,
       color TEXT NOT NULL DEFAULT 'emerald',
       pinned INTEGER NOT NULL DEFAULT 0,
+      createdAt TEXT NOT NULL,
+      lastModified TEXT NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ssh_connections (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      host TEXT NOT NULL,
+      port INTEGER NOT NULL DEFAULT 22,
+      username TEXT,
+      identityFile TEXT,
+      knownHostsMode TEXT NOT NULL DEFAULT 'accept-new',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      allowBash INTEGER NOT NULL DEFAULT 1,
+      allowFileWrite INTEGER NOT NULL DEFAULT 1,
+      allowAbsolutePaths INTEGER NOT NULL DEFAULT 0,
       createdAt TEXT NOT NULL,
       lastModified TEXT NOT NULL
     );
@@ -311,6 +331,16 @@ export function getDb(): Database.Database {
   if (!projectCols.some((c) => c.name === "pinned")) {
     db.exec("ALTER TABLE projects ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
     console.log("[chat-storage] Added pinned column to projects");
+  }
+
+  if (!projectCols.some((c) => c.name === "locationType")) {
+    db.exec("ALTER TABLE projects ADD COLUMN locationType TEXT NOT NULL DEFAULT 'local'");
+    console.log("[chat-storage] Added locationType column to projects");
+  }
+
+  if (!projectCols.some((c) => c.name === "sshConnectionId")) {
+    db.exec("ALTER TABLE projects ADD COLUMN sshConnectionId TEXT");
+    console.log("[chat-storage] Added sshConnectionId column to projects");
   }
 
   // Auto-add delayed extraction tracking columns
@@ -640,24 +670,38 @@ export async function findBlueskyChatId(): Promise<string | null> {
 export async function listProjects(): Promise<Project[]> {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT id, name, path, color, pinned, createdAt, lastModified
+    SELECT id, name, path, locationType, sshConnectionId, color, pinned, createdAt, lastModified
     FROM projects
     ORDER BY pinned DESC, lastModified DESC
-  `).all() as Array<{ id: string; name: string; path: string; color: string; pinned: number; createdAt: string; lastModified: string }>;
+  `).all() as Array<{ id: string; name: string; path: string; locationType?: string; sshConnectionId?: string | null; color: string; pinned: number; createdAt: string; lastModified: string }>;
   
   return rows.map(r => ({
-    ...r,
+    id: r.id,
+    name: r.name,
+    path: r.path,
+    locationType: r.locationType === "ssh" ? "ssh" : "local",
+    sshConnectionId: r.sshConnectionId || undefined,
+    color: r.color,
     pinned: r.pinned === 1,
+    createdAt: r.createdAt,
+    lastModified: r.lastModified,
   }));
 }
 
 export async function getProject(id: string): Promise<Project | null> {
   const db = getDb();
-  const row = db.prepare("SELECT id, name, path, color, pinned, createdAt, lastModified FROM projects WHERE id = ?").get(id) as { id: string; name: string; path: string; color: string; pinned: number; createdAt: string; lastModified: string } | undefined;
+  const row = db.prepare("SELECT id, name, path, locationType, sshConnectionId, color, pinned, createdAt, lastModified FROM projects WHERE id = ?").get(id) as { id: string; name: string; path: string; locationType?: string; sshConnectionId?: string | null; color: string; pinned: number; createdAt: string; lastModified: string } | undefined;
   if (!row) return null;
   return {
-    ...row,
+    id: row.id,
+    name: row.name,
+    path: row.path,
+    locationType: row.locationType === "ssh" ? "ssh" : "local",
+    sshConnectionId: row.sshConnectionId || undefined,
+    color: row.color,
     pinned: row.pinned === 1,
+    createdAt: row.createdAt,
+    lastModified: row.lastModified,
   };
 }
 
@@ -671,9 +715,19 @@ export async function createProject(project: Project): Promise<void> {
     project.color = nextColor;
   }
   db.prepare(`
-    INSERT INTO projects (id, name, path, color, pinned, createdAt, lastModified)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(project.id, project.name, project.path, project.color, project.pinned ? 1 : 0, project.createdAt, project.lastModified);
+    INSERT INTO projects (id, name, path, locationType, sshConnectionId, color, pinned, createdAt, lastModified)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    project.id,
+    project.name,
+    project.path,
+    project.locationType === "ssh" ? "ssh" : "local",
+    project.sshConnectionId || null,
+    project.color,
+    project.pinned ? 1 : 0,
+    project.createdAt,
+    project.lastModified
+  );
 }
 
 export async function updateProject(id: string, updates: Partial<Project>): Promise<boolean> {
@@ -686,9 +740,18 @@ export async function updateProject(id: string, updates: Partial<Project>): Prom
 
   db.prepare(`
     UPDATE projects
-    SET name = ?, path = ?, color = ?, pinned = ?, lastModified = ?
+    SET name = ?, path = ?, locationType = ?, sshConnectionId = ?, color = ?, pinned = ?, lastModified = ?
     WHERE id = ?
-  `).run(project.name, project.path, project.color, project.pinned ? 1 : 0, project.lastModified, project.id);
+  `).run(
+    project.name,
+    project.path,
+    project.locationType === "ssh" ? "ssh" : "local",
+    project.sshConnectionId || null,
+    project.color,
+    project.pinned ? 1 : 0,
+    project.lastModified,
+    project.id
+  );
 
   return true;
 }
@@ -696,6 +759,133 @@ export async function updateProject(id: string, updates: Partial<Project>): Prom
 export async function deleteProject(id: string): Promise<boolean> {
   const db = getDb();
   const result = db.prepare("DELETE FROM projects WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+// ---------------------------------------------------------------------------
+// SSH connection CRUD
+// ---------------------------------------------------------------------------
+
+type SshConnectionRow = {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username?: string | null;
+  identityFile?: string | null;
+  knownHostsMode?: string | null;
+  enabled: number;
+  allowBash: number;
+  allowFileWrite: number;
+  allowAbsolutePaths: number;
+  createdAt: string;
+  lastModified: string;
+};
+
+function rowToSshConnection(row: SshConnectionRow): SshConnection {
+  const knownHostsMode = row.knownHostsMode === "strict" || row.knownHostsMode === "off"
+    ? row.knownHostsMode
+    : "accept-new";
+  return {
+    id: row.id,
+    name: row.name,
+    host: row.host,
+    port: row.port || 22,
+    username: row.username || undefined,
+    identityFile: row.identityFile || undefined,
+    knownHostsMode,
+    enabled: row.enabled === 1,
+    allowBash: row.allowBash === 1,
+    allowFileWrite: row.allowFileWrite === 1,
+    allowAbsolutePaths: row.allowAbsolutePaths === 1,
+    createdAt: row.createdAt,
+    lastModified: row.lastModified,
+  };
+}
+
+export async function listSshConnections(): Promise<SshConnection[]> {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT id, name, host, port, username, identityFile, knownHostsMode,
+           enabled, allowBash, allowFileWrite, allowAbsolutePaths, createdAt, lastModified
+    FROM ssh_connections
+    ORDER BY name COLLATE NOCASE ASC
+  `).all() as SshConnectionRow[];
+  return rows.map(rowToSshConnection);
+}
+
+export async function getSshConnection(id: string): Promise<SshConnection | null> {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT id, name, host, port, username, identityFile, knownHostsMode,
+           enabled, allowBash, allowFileWrite, allowAbsolutePaths, createdAt, lastModified
+    FROM ssh_connections
+    WHERE id = ?
+  `).get(id) as SshConnectionRow | undefined;
+  return row ? rowToSshConnection(row) : null;
+}
+
+export async function createSshConnection(connection: SshConnection): Promise<void> {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO ssh_connections (
+      id, name, host, port, username, identityFile, knownHostsMode,
+      enabled, allowBash, allowFileWrite, allowAbsolutePaths, createdAt, lastModified
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    connection.id,
+    connection.name,
+    connection.host,
+    connection.port || 22,
+    connection.username || null,
+    connection.identityFile || null,
+    connection.knownHostsMode || "accept-new",
+    connection.enabled ? 1 : 0,
+    connection.allowBash ? 1 : 0,
+    connection.allowFileWrite ? 1 : 0,
+    connection.allowAbsolutePaths ? 1 : 0,
+    connection.createdAt,
+    connection.lastModified
+  );
+}
+
+export async function updateSshConnection(id: string, updates: Partial<SshConnection>): Promise<boolean> {
+  const existing = await getSshConnection(id);
+  if (!existing) return false;
+  const connection: SshConnection = {
+    ...existing,
+    ...updates,
+    id: existing.id,
+    lastModified: new Date().toISOString(),
+  };
+
+  const db = getDb();
+  db.prepare(`
+    UPDATE ssh_connections
+    SET name = ?, host = ?, port = ?, username = ?, identityFile = ?, knownHostsMode = ?,
+        enabled = ?, allowBash = ?, allowFileWrite = ?, allowAbsolutePaths = ?, lastModified = ?
+    WHERE id = ?
+  `).run(
+    connection.name,
+    connection.host,
+    connection.port || 22,
+    connection.username || null,
+    connection.identityFile || null,
+    connection.knownHostsMode || "accept-new",
+    connection.enabled ? 1 : 0,
+    connection.allowBash ? 1 : 0,
+    connection.allowFileWrite ? 1 : 0,
+    connection.allowAbsolutePaths ? 1 : 0,
+    connection.lastModified,
+    id
+  );
+  return true;
+}
+
+export async function deleteSshConnection(id: string): Promise<boolean> {
+  const db = getDb();
+  const result = db.prepare("DELETE FROM ssh_connections WHERE id = ?").run(id);
   return result.changes > 0;
 }
 
@@ -1467,8 +1657,8 @@ function migrateChatsFromJson(db: Database.Database): void {
 function migrateProjectsFromJson(db: Database.Database): void {
   try {
     const insert = db.prepare(`
-      INSERT OR REPLACE INTO projects (id, name, path, createdAt, lastModified)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO projects (id, name, path, locationType, sshConnectionId, createdAt, lastModified)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
     const migrate = db.transaction(() => {
@@ -1480,7 +1670,15 @@ function migrateProjectsFromJson(db: Database.Database): void {
         try {
           const data = readFileSync(join(PROJECTS_DIR, file), "utf-8");
           const project = JSON.parse(data) as Project;
-          insert.run(project.id, project.name, project.path, project.createdAt, project.lastModified);
+          insert.run(
+            project.id,
+            project.name,
+            project.path,
+            project.locationType === "ssh" ? "ssh" : "local",
+            project.sshConnectionId || null,
+            project.createdAt,
+            project.lastModified
+          );
           count++;
         } catch (e) {
           console.warn(`[chat-storage] Skipping corrupt project file: ${file}`);

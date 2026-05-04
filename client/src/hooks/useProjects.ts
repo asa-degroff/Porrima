@@ -6,6 +6,7 @@ import {
   deleteProject as apiDeleteProject,
   OfflineError,
   type Project,
+  type ProjectLocationType,
 } from "../api/client";
 
 export function useProjects() {
@@ -35,8 +36,8 @@ export function useProjects() {
   }, [refresh]);
 
   const createProject = useCallback(
-    async (name: string, path: string) => {
-      const project = await apiCreateProject(name, path);
+    async (name: string, path: string, locationType?: ProjectLocationType, sshConnectionId?: string) => {
+      const project = await apiCreateProject({ name, path, locationType, sshConnectionId });
       await refresh();
       return project;
     },

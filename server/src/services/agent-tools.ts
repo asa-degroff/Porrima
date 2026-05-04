@@ -13,8 +13,9 @@ import { BLUESKY_TOOLS, executeBlueskyTool } from "./bluesky-tools.js";
 import { executePython, createArtifact, createVisual, updateArtifact, updateVisual } from "./sandbox.js";
 import { P5_INSTANCE_MODE_GUIDANCE, formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
 import { getSettings } from "./chat-storage.js";
+import { getWorkspaceForProject } from "./workspace.js";
 import { v4 as uuid } from "uuid";
-import type { Artifact, GeneratedImage, InlineVisual } from "../types.js";
+import type { Artifact, GeneratedImage, InlineVisual, Project } from "../types.js";
 
 const HOME = homedir();
 const VISUALS_DIR = join(homedir(), ".quje-agent", "visuals");
@@ -196,8 +197,9 @@ export function getAgentToolDefinitions(chatType?: string): { name: string; desc
 }
 
 /** Get all tools available for agent chats, wrapped as AgentTool */
-export function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768, projectPath?: string, chatType?: string): AgentTool[] {
-  const baseDir = projectPath || HOME;
+export function getAgentTools(chatId: string, effects: ToolSideEffects, contextWindow = 32768, project?: Project | string, chatType?: string): AgentTool[] {
+  const workspacePromise = getWorkspaceForProject(project);
+  const baseDir = typeof project === "string" ? project : project?.path || HOME;
   const wrapResult = createWrapResult(contextWindow);
   const tools: AgentTool[] = [];
 
@@ -264,7 +266,8 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
     label: "read_file",
     execute: async (_id, params) => {
       const settings = await getSettings().catch(() => undefined);
-      return wrapResult(await executeReadFile(params as Record<string, any>, baseDir, {
+      const workspace = await workspacePromise;
+      return wrapResult(await workspace.readFile(params as Record<string, any>, {
         defaultLines: settings?.readFileDefaultLines,
         maxBytes: settings?.readFileMaxBytes,
       }));
@@ -274,25 +277,37 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
   tools.push({
     ...WRITE_FILE_TOOL,
     label: "write_file",
-    execute: async (_id, params) => wrapResult(await executeWriteFile(params as Record<string, any>, baseDir)),
+    execute: async (_id, params) => {
+      const workspace = await workspacePromise;
+      return wrapResult(await workspace.writeFile(params as Record<string, any>));
+    },
   });
 
   tools.push({
     ...EDIT_FILE_TOOL,
     label: "edit_file",
-    execute: async (_id, params) => wrapResult(await executeEditFile(params as Record<string, any>, baseDir)),
+    execute: async (_id, params) => {
+      const workspace = await workspacePromise;
+      return wrapResult(await workspace.editFile(params as Record<string, any>));
+    },
   });
 
   tools.push({
     ...LIST_FILES_TOOL,
     label: "list_files",
-    execute: async (_id, params) => wrapResult(await executeListFiles(params as Record<string, any>, baseDir)),
+    execute: async (_id, params) => {
+      const workspace = await workspacePromise;
+      return wrapResult(await workspace.listFiles(params as Record<string, any>));
+    },
   });
 
   tools.push({
     ...BASH_TOOL,
     label: "bash",
-    execute: async (_id, params) => wrapResult(await executeBash(params as Record<string, any>, baseDir)),
+    execute: async (_id, params) => {
+      const workspace = await workspacePromise;
+      return wrapResult(await workspace.bash(params as Record<string, any>));
+    },
   });
 
   tools.push({
