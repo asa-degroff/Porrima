@@ -11,6 +11,7 @@ import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
 import { IMAGE_TOOLS, executeImageTool } from "./image-tools.js";
 import { BLUESKY_TOOLS, executeBlueskyTool } from "./bluesky-tools.js";
 import { executePython, createArtifact, createVisual, updateArtifact, updateVisual } from "./sandbox.js";
+import { P5_INSTANCE_MODE_GUIDANCE, formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
 import { getSettings } from "./chat-storage.js";
 import { v4 as uuid } from "uuid";
 import type { Artifact, GeneratedImage, InlineVisual } from "../types.js";
@@ -88,29 +89,29 @@ const READ_PDF_TOOL: Tool = {
 
 const CREATE_ARTIFACT_TOOL: Tool = {
   name: "create_artifact",
-  description: "Create an HTML/JS artifact that will be rendered in a sandboxed iframe. Use for interactive demos, visualizations, or web pages.",
+  description: `Create an HTML/JS artifact that will be rendered in a sandboxed iframe. Use for interactive demos, visualizations, or web pages. ${P5_INSTANCE_MODE_GUIDANCE}`,
   parameters: Type.Object({
     title: Type.String({ description: "Title for the artifact" }),
-    html: Type.String({ description: "Complete HTML document (including <html>, <head>, <body> tags)" }),
+    html: Type.String({ description: `Complete HTML document (including <html>, <head>, <body> tags). ${P5_INSTANCE_MODE_GUIDANCE}` }),
   }),
 };
 
 const UPDATE_ARTIFACT_TOOL: Tool = {
   name: "update_artifact",
-  description: "Update an existing artifact with new HTML content. Use when the user asks to modify or improve a previously created artifact. The artifact ID should reference a previously created artifact.",
+  description: `Update an existing artifact with new HTML content. Use when the user asks to modify or improve a previously created artifact. The artifact ID should reference a previously created artifact. ${P5_INSTANCE_MODE_GUIDANCE}`,
   parameters: Type.Object({
     artifactId: Type.String({ description: "The canonical ID of the artifact to update (from a previous create_artifact call)" }),
-    html: Type.String({ description: "Complete HTML document with the updated content" }),
+    html: Type.String({ description: `Complete HTML document with the updated content. ${P5_INSTANCE_MODE_GUIDANCE}` }),
     changeSummary: Type.Optional(Type.String({ description: "Brief description of what changed (e.g., 'Made background blue, added reset button')" })),
   }),
 };
 
 const CREATE_VISUAL_TOOL: Tool = {
   name: "create_visual",
-  description: "Create an inline HTML/SVG visualization rendered directly in the chat. Use for charts, diagrams, flowcharts, data visualizations, comparisons, timelines, and other visual aids. You can use any web technology: SVG, Canvas, CSS animations, or libraries like D3.js, Chart.js, or Mermaid (loaded via CDN). The visual renders in an iframe so full HTML documents work. For complex multi-page interactive apps, use create_artifact instead.",
+  description: `Create an inline HTML/SVG visualization rendered directly in the chat. Use for charts, diagrams, flowcharts, data visualizations, comparisons, timelines, and other visual aids. You can use any web technology: SVG, Canvas, CSS animations, or libraries like D3.js, Chart.js, or Mermaid (loaded via CDN). The visual renders in an iframe so full HTML documents work. For complex multi-page interactive apps, use create_artifact instead. ${P5_INSTANCE_MODE_GUIDANCE}`,
   parameters: Type.Object({
     title: Type.String({ description: "Short title for the visual" }),
-    html: Type.String({ description: "Complete HTML content for the visualization. Can be a full HTML document with <script> tags loading CDN libraries, or simple inline SVG. Will be rendered in a same-origin iframe." }),
+    html: Type.String({ description: `Complete HTML content for the visualization. Can be a full HTML document with <script> tags loading CDN libraries, or simple inline SVG. Will be rendered in a same-origin iframe. ${P5_INSTANCE_MODE_GUIDANCE}` }),
   }),
 };
 
@@ -314,10 +315,11 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       const args = params as Record<string, any>;
       const id = uuid();
       const result = await createArtifact(id, args.html, args.title);
+      const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
       effects.onArtifact({ id, title: args.title, url: result.url, version: result.version });
       return { content: [{ type: "text", text: `Artifact created: "${args.title}"
 Canonical ID: ${id}
-URL: ${result.url}` }], details: {} };
+URL: ${result.url}${warningText}` }], details: {} };
     },
   });
 
@@ -329,9 +331,10 @@ URL: ${result.url}` }], details: {} };
       const args = params as Record<string, any>;
       try {
         const result = await updateArtifact(args.artifactId, args.html, args.changeSummary);
+        const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
         // Emit artifact event with new version - client will update the display
         effects.onArtifact({ id: args.artifactId, title: "Updated artifact", url: result.url, version: result.version });
-        return { content: [{ type: "text", text: `Artifact updated to version ${result.version} (${result.url})` }], details: {} };
+        return { content: [{ type: "text", text: `Artifact updated to version ${result.version} (${result.url})${warningText}` }], details: {} };
       } catch (e: any) {
         return { content: [{ type: "text", text: `Error updating artifact: ${e.message}` }], details: {}, isError: true };
       }
@@ -346,10 +349,11 @@ URL: ${result.url}` }], details: {} };
       const args = params as Record<string, any>;
       const id = uuid();
       const result = await createVisual(id, args.html, args.title);
+      const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
       effects.onVisual({ id, title: args.title, html: args.html, url: result.url, version: result.version });
       return { content: [{ type: "text", text: `Visual created: "${args.title}"
 Canonical ID: ${id}
-URL: ${result.url}` }], details: {} };
+URL: ${result.url}${warningText}` }], details: {} };
     },
   });
 
@@ -366,14 +370,16 @@ URL: ${result.url}` }], details: {} };
         const visualPath = join(VISUALS_DIR, args.artifactId, "metadata.json");
         await access(visualPath);
         const result = await updateVisual(args.artifactId, args.html, args.changeSummary);
+        const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
         effects.onVisual({ id: args.artifactId, title: "Updated visual", html: args.html, url: result.url, version: result.version });
-        return { content: [{ type: "text", text: `Visual updated to version ${result.version} (${result.url})` }], details: {} };
+        return { content: [{ type: "text", text: `Visual updated to version ${result.version} (${result.url})${warningText}` }], details: {} };
       } catch (e: any) {
         // Not a visual, try artifact
         try {
           const result = await updateArtifact(args.artifactId, args.html, args.changeSummary);
+          const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
           effects.onArtifact({ id: args.artifactId, title: "Updated artifact", url: result.url, version: result.version });
-          return { content: [{ type: "text", text: `Artifact updated to version ${result.version} (${result.url})` }], details: {} };
+          return { content: [{ type: "text", text: `Artifact updated to version ${result.version} (${result.url})${warningText}` }], details: {} };
         } catch (e2: any) {
           return { content: [{ type: "text", text: `Error updating: ${e2.message}. Make sure the ID is from a previously created artifact or visual.` }], details: {}, isError: true };
         }

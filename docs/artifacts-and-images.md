@@ -16,6 +16,41 @@
 - "Code" tab shows the fetched source; "Open" link opens the raw `/api/artifacts/{id}` URL in a new tab.
 - In `MessageBubble.tsx`, artifacts render via `(artifacts || message.artifacts)?.map(...)` — live streaming prop takes precedence, falls back to persisted `message.artifacts`.
 
+**p5.js artifact guidance**:
+- Prefer p5 instance mode for generated sketches. Global mode exposes lifecycle callbacks (`setup`, `draw`, `mouseMoved`, etc.) as global functions, which can interact badly with top-level `let`/`const` state and browser events during script initialization.
+- Keep sketch state inside the `new p5((p) => { ... })` closure, define lifecycle handlers as `p.setup`, `p.draw`, and `p.mouseMoved`, and call p5 APIs through the instance object (`p.createCanvas`, `p.color`, `p.randomSeed`, `p.noiseSeed`).
+- Avoid helper function names that shadow p5 APIs, especially `randomSeed`, `noiseSeed`, `color`, `createCanvas`, `resizeCanvas`, and `saveCanvas`.
+
+Minimal pattern:
+
+```html
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+<div id="sketch"></div>
+<script>
+  new p5((p) => {
+    const canvasSize = 1200;
+    let particles = [];
+    let bg;
+
+    p.setup = () => {
+      const canvas = p.createCanvas(canvasSize, canvasSize);
+      canvas.parent("sketch");
+      bg = p.color(8, 8, 15);
+      p.randomSeed(1);
+      particles = [];
+    };
+
+    p.draw = () => {
+      p.background(bg);
+    };
+
+    p.mouseMoved = () => {
+      // Use p.mouseX/p.mouseY and other p.* APIs here.
+    };
+  });
+</script>
+```
+
 ## Image Corpus & Clustering
 
 **Corpus Storage** (`server/src/services/image-corpus.ts`):
