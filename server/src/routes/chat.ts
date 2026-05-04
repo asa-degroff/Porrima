@@ -3467,19 +3467,27 @@ router.post("/edit", async (req, res) => {
   // Get the original message to preserve images BEFORE truncating
   const originalMessage = chat.messages[targetIndex];
 
-  // Safety guard: verify that truncating won't discard persisted messages
-  // that are missing from the in-memory chat.messages. This protects against
-  // a corrupted in-memory state (e.g. after a model error or server restart)
+  // Safety guard: verify that the in-memory chat.messages count matches the
+  // database row count. This protects against a corrupted in-memory state
+  // (e.g. after a model error or server restart where some rows were lost)
   // from overwriting the database with a truncated history.
+  //
+  // Crucially, this guard must NOT block legitimate edits where the user
+  // retries from a mid-conversation point (e.g. retrying after a model error
+  // that left partial assistant messages in the DB). In that case,
+  // chat.messages.length === dbRowCount (both reflect the full state including
+  // the partial response), and the user intentionally wants to truncate from
+  // targetIndex. Only when the in-memory state is genuinely out of sync
+  // (fewer messages than DB rows) should we refuse the edit.
   const db = getDb();
   const dbRowCount = (db.prepare(
     "SELECT COUNT(*) as cnt FROM chat_message_rows WHERE chat_id = ?"
   ).get(chat.id) as { cnt: number })?.cnt ?? 0;
 
-  if (dbRowCount > 0 && targetIndex < dbRowCount) {
+  if (chat.messages.length < dbRowCount) {
     console.error(
-      `[chat] CRITICAL: edit would truncate from ${dbRowCount} persisted rows to ${targetIndex} — ` +
-      `in-memory state is corrupted (chat.messages has ${chat.messages.length} messages). Refusing to save.`
+      `[chat] CRITICAL: in-memory state has ${chat.messages.length} messages but database has ${dbRowCount} rows — ` +
+      `possible corruption. Refusing to edit from index ${targetIndex}.`
     );
     return res.status(500).json({
       error: "Chat state is corrupted — the in-memory message history doesn't match the database. Please reload the page and try again."
@@ -3504,7 +3512,7 @@ router.post("/edit", async (req, res) => {
     chat.title = truncateTitle(message);
   }
 
-  await saveChat(chat);
+  await saveChat(chat, { allowTruncation: true });
 
   // Build context with skills (using delta-aware prompt builder for agent chats)
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";

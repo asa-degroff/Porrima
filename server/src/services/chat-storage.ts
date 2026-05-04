@@ -539,7 +539,7 @@ export function getChatMessageWindow(
   };
 }
 
-export async function saveChat(chat: Chat): Promise<void> {
+export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean }): Promise<void> {
   const db = getDb();
   chat.lastModified = new Date().toISOString();
   const preview = computeChatPreview(chat.messages);
@@ -570,7 +570,7 @@ export async function saveChat(chat: Chat): Promise<void> {
       preview
     );
 
-    const firstChanged = syncChatMessageRows(db, chat.id, chat.messages);
+    const firstChanged = syncChatMessageRows(db, chat.id, chat.messages, opts?.allowTruncation ?? false);
     syncChatMessages(db, chat.id, chat.messages, firstChanged);
   });
 
@@ -1123,7 +1123,8 @@ function buildSearchContent(msg: ChatMessage): string {
 function syncChatMessageRows(
   db: Database.Database,
   chatId: string,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  allowTruncation: boolean = false
 ): number | null {
   const existing = db.prepare(`
     SELECT sequence, payload_json
@@ -1131,6 +1132,27 @@ function syncChatMessageRows(
     WHERE chat_id = ?
     ORDER BY sequence ASC
   `).all(chatId) as Array<{ sequence: number; payload_json: string }>;
+
+  // Safety guard: prevent catastrophic message loss when in-memory state
+  // has been corrupted (e.g., shrunk to 1 message after a model error).
+  // Legitimate truncation only happens via the /edit endpoint which explicitly
+  // opts in with allowTruncation=true.
+  //
+  // Threshold: refuse if new count is > 3 fewer AND < 50% of existing count.
+  // This catches the corruption pattern (10 → 1) while allowing the normal
+  // incremental saves where messages grow by 1-2 at a time.
+  if (!allowTruncation) {
+    const existingCount = existing.length;
+    const newCount = messages.length;
+    if (newCount < existingCount - 3 && newCount < existingCount * 0.5) {
+      console.error(
+        `[chat-storage] CRITICAL: refusing to sync chat ${chatId} — ` +
+        `in-memory state has ${newCount} messages but database has ${existingCount}. ` +
+        `Possible corruption detected. The in-memory state will NOT be persisted.`
+      );
+      return null;
+    }
+  }
 
   const serialized = messages.map((msg) => JSON.stringify(msg));
   const commonLength = Math.min(existing.length, serialized.length);
