@@ -2409,19 +2409,19 @@ async function handleChatStream(
         `event: done\ndata: ${JSON.stringify({ message: assistantMsg, iterations })}\n\n`
       );
 
-      // Generate LLM title after the first exchange (2 messages = 1 user + 1 assistant)
-      // Only generate title if we have actual content
+      // Generate LLM title after the first exchange (2 messages = 1 user + 1 assistant).
+      // Fire-and-forget so slow title generation doesn't delay the done event reaching
+      // the client (which would cause a spurious "Connection lost" error).
       if (!currentTurnIsHidden && shouldGenerateInitialTitle(chat) && hasContent) {
-        try {
-          const title = await generateTitle(lastUserMessage, logicalAssistantContent);
-          if (title) {
-            chat.title = title;
-            await saveChat(chat);
-            res.write(`event: title_update\ndata: ${JSON.stringify({ chatId: chat.id, title })}\n\n`);
-          }
-        } catch (err) {
-          console.warn("[title] post-stream generation failed:", err);
-        }
+        generateTitle(lastUserMessage, logicalAssistantContent)
+          .then(async (title) => {
+            if (title) {
+              chat.title = title;
+              await saveChat(chat);
+              res.write(`event: title_update\ndata: ${JSON.stringify({ chatId: chat.id, title })}\n\n`);
+            }
+          })
+          .catch((err) => console.warn("[title] post-stream generation failed:", err));
       }
 
       // Record model performance stats for llama.cpp models (per-message, not per-turn)
