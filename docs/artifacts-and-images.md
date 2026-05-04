@@ -15,6 +15,7 @@
 - **Blob URLs are same-origin**, which avoids Chrome's `requestAnimationFrame` throttling on cross-origin iframes. Do NOT use `sandbox` attribute or direct `/api/artifacts/` URLs as iframe src — animations will freeze.
 - "Code" tab shows the fetched source; "Open" link opens the raw `/api/artifacts/{id}` URL in a new tab.
 - In `MessageBubble.tsx`, artifacts render via `(artifacts || message.artifacts)?.map(...)` — live streaming prop takes precedence, falls back to persisted `message.artifacts`.
+- The iframe injects a small runtime-error forwarder for `error` and `unhandledrejection` events. The client reports the first runtime error for each artifact/version to `POST /api/chat/artifact-error`, which starts or queues a hidden repair turn. The server persists the repair prompt as a hidden system row and live-injects it as user-role context so provider replay avoids mid-transcript system messages.
 
 **p5.js artifact guidance**:
 - Prefer p5 instance mode for generated sketches. Global mode exposes lifecycle callbacks (`setup`, `draw`, `mouseMoved`, etc.) as global functions, which can interact badly with top-level `let`/`const` state and browser events during script initialization.

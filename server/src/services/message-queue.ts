@@ -11,6 +11,9 @@ export interface QueuedUserMessage {
   message: string;
   images?: ImageAttachment[];
   timestamp: number;
+  hidden?: boolean;
+  kind?: "user" | "artifact_repair";
+  metadata?: Record<string, unknown>;
 }
 
 /** In-memory queues per chat */
@@ -30,13 +33,21 @@ async function persistQueue(chatId: string): Promise<void> {
 export async function enqueue(
   chatId: string,
   message: string,
-  images?: ImageAttachment[]
+  images?: ImageAttachment[],
+  options?: {
+    hidden?: boolean;
+    kind?: QueuedUserMessage["kind"];
+    metadata?: Record<string, unknown>;
+  }
 ): Promise<QueuedUserMessage> {
   const item: QueuedUserMessage = {
     id: crypto.randomUUID(),
     message,
     images,
     timestamp: Date.now(),
+    hidden: options?.hidden || undefined,
+    kind: options?.kind || undefined,
+    metadata: options?.metadata,
   };
   let queue = queues.get(chatId);
   if (!queue) {

@@ -1,6 +1,9 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { randomUUID, createHash } from "crypto";
+import { readFile } from "fs/promises";
+import { homedir } from "os";
+import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { AgentContext } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
@@ -18,6 +21,7 @@ import type { ToolSideEffects } from "../services/agent-tools.js";
 import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from "../services/skills.js";
 import type { Skill } from "../services/skills.js";
 import * as messageQueue from "../services/message-queue.js";
+import type { QueuedUserMessage } from "../services/message-queue.js";
 import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment, InlineVisual } from "../types.js";
 import { saveUserImage } from "../services/user-image-storage.js";
 import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
@@ -42,6 +46,169 @@ import {
   stampStreamPresence,
 } from "../services/live-streams.js";
 import { sendPush, truncateForBody } from "../services/push-dispatch.js";
+
+const ARTIFACTS_DIR = join(homedir(), ".quje-agent", "artifacts");
+const ARTIFACT_ERROR_REPAIR_TTL_MS = 30 * 60 * 1000;
+const artifactErrorRepairAttempts = new Map<string, number>();
+const artifactAutoRepairAttempts = new Map<string, number>();
+
+interface ArtifactRuntimeErrorReport {
+  chatId: string;
+  artifactId: string;
+  version: number;
+  title?: string;
+  url?: string;
+  message: string;
+  stack?: string;
+  filename?: string;
+  lineno?: number;
+  colno?: number;
+  sourceExcerpt?: string;
+  stream?: boolean;
+}
+
+function isSafeArtifactId(id: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(id);
+}
+
+function clampText(value: unknown, maxChars: number): string {
+  if (typeof value !== "string") return "";
+  return value.length > maxChars ? value.slice(0, maxChars) + "\n[truncated]" : value;
+}
+
+function artifactSourcePath(artifactId: string, version: number): string {
+  return join(ARTIFACTS_DIR, artifactId, "versions", String(version), "index.html");
+}
+
+async function getArtifactCurrentVersion(artifactId: string): Promise<number | null> {
+  try {
+    const metadataPath = join(ARTIFACTS_DIR, artifactId, "metadata.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf-8"));
+    return typeof metadata.currentVersion === "number" ? metadata.currentVersion : null;
+  } catch {
+    return null;
+  }
+}
+
+function messageReferencesArtifact(message: ChatMessage, artifactId: string, version: number): boolean {
+  const artifacts = [
+    ...(message.artifacts || []),
+    ...(message.segments?.flatMap((segment) => segment.artifact ? [segment.artifact] : []) || []),
+  ];
+  return artifacts.some((artifact) =>
+    artifact.id === artifactId &&
+    (artifact.version == null || artifact.version === version)
+  );
+}
+
+function chatReferencesArtifact(chat: Chat, artifactId: string, version: number): boolean {
+  return chat.messages.some((message) => messageReferencesArtifact(message, artifactId, version));
+}
+
+function makeArtifactRepairDedupKey(report: ArtifactRuntimeErrorReport): string {
+  const hash = createHash("sha256")
+    .update([
+      report.chatId,
+      report.artifactId,
+      String(report.version),
+      report.message || "",
+      report.stack || "",
+      String(report.lineno ?? ""),
+      String(report.colno ?? ""),
+    ].join("\n"))
+    .digest("hex");
+  return `${report.chatId}:${report.artifactId}:${report.version}:${hash}`;
+}
+
+function hasRecentArtifactRepairAttempt(key: string): boolean {
+  const now = Date.now();
+  for (const [attemptKey, createdAt] of artifactErrorRepairAttempts) {
+    if (now - createdAt > ARTIFACT_ERROR_REPAIR_TTL_MS) {
+      artifactErrorRepairAttempts.delete(attemptKey);
+    }
+  }
+  const existing = artifactErrorRepairAttempts.get(key);
+  if (existing && now - existing < ARTIFACT_ERROR_REPAIR_TTL_MS) return true;
+  artifactErrorRepairAttempts.set(key, now);
+  return false;
+}
+
+function hasRecentArtifactAutoRepair(chatId: string, artifactId: string): boolean {
+  const now = Date.now();
+  for (const [attemptKey, createdAt] of artifactAutoRepairAttempts) {
+    if (now - createdAt > ARTIFACT_ERROR_REPAIR_TTL_MS) {
+      artifactAutoRepairAttempts.delete(attemptKey);
+    }
+  }
+  const key = `${chatId}:${artifactId}`;
+  const existing = artifactAutoRepairAttempts.get(key);
+  if (existing && now - existing < ARTIFACT_ERROR_REPAIR_TTL_MS) return true;
+  artifactAutoRepairAttempts.set(key, now);
+  return false;
+}
+
+function buildArtifactRepairPrompt(report: ArtifactRuntimeErrorReport): string {
+  const location = [
+    typeof report.lineno === "number" ? `line ${report.lineno}` : "",
+    typeof report.colno === "number" ? `column ${report.colno}` : "",
+  ].filter(Boolean).join(", ");
+  const sourcePath = artifactSourcePath(report.artifactId, report.version);
+  const parts = [
+    "[System context - artifact runtime error]",
+    `The browser rendered artifact ${report.artifactId} version ${report.version} and reported a JavaScript runtime error.`,
+    report.title ? `Artifact title: ${report.title}` : "",
+    report.url ? `Artifact URL: ${report.url}` : "",
+    `Stored source path: ${sourcePath}`,
+    "",
+    "Runtime error:",
+    `Message: ${clampText(report.message, 1000) || "Unknown runtime error"}`,
+    location ? `Location: ${location}` : "",
+    report.filename ? `Filename: ${clampText(report.filename, 500)}` : "",
+    report.stack ? `Stack:\n${clampText(report.stack, 3000)}` : "",
+    report.sourceExcerpt ? `Relevant source excerpt:\n${clampText(report.sourceExcerpt, 4000)}` : "",
+    "",
+    "Please repair the existing artifact by calling update_artifact with the complete corrected HTML.",
+    "Do not create a new artifact. Preserve the visual intent and existing controls.",
+    "If this is a p5.js sketch, prefer p5 instance mode and avoid global callbacks or helper names that shadow p5 APIs.",
+    "Keep the final response brief.",
+  ];
+  return parts.filter((part) => part !== "").join("\n");
+}
+
+async function getArtifactSourceExcerpt(report: ArtifactRuntimeErrorReport): Promise<string> {
+  const provided = clampText(report.sourceExcerpt, 4000);
+  if (provided) return provided;
+  if (typeof report.lineno !== "number" || report.lineno < 1) return "";
+  try {
+    const source = await readFile(artifactSourcePath(report.artifactId, report.version), "utf-8");
+    const lines = source.split("\n");
+    const start = Math.max(0, report.lineno - 6);
+    const end = Math.min(lines.length, report.lineno + 5);
+    return lines
+      .slice(start, end)
+      .map((line, idx) => `${start + idx + 1}: ${line}`)
+      .join("\n");
+  } catch {
+    return "";
+  }
+}
+
+function queuedMessageToChatMessage(queued: QueuedUserMessage): ChatMessage {
+  if (queued.hidden) {
+    return {
+      role: "system",
+      content: queued.message,
+      timestamp: queued.timestamp,
+      _isSystemMessage: true,
+    };
+  }
+  return {
+    role: "user",
+    content: queued.message,
+    images: queued.images?.length ? queued.images : undefined,
+    timestamp: queued.timestamp,
+  };
+}
 
 /**
  * Initialize an SSE response: write headers, disable Nagle, install the live
@@ -366,7 +533,8 @@ async function handleChatStream(
   systemPrompt: string,
   userPiMessage: Message | null,
   req: Request,
-  res: Response
+  res: Response,
+  options: { hiddenUserMessage?: boolean } = {}
 ) {
   // Mark chat as active so the scheduler skips extraction for it —
   // compaction cycles already use the extraction server heavily.
@@ -844,6 +1012,7 @@ async function handleChatStream(
   // LLM calls that can interfere with the active tool loop (e.g., model unload/reload)
   const deferredExtractions: Array<{ userMsg: string; assistantMsg: string }> = [];
   let lastUserMessage = userMessage; // tracks the current user message text for title gen / memory
+  let currentTurnIsHidden = options.hiddenUserMessage === true;
 
   console.log(`[chat] type=${chat.type} isAgent=${isAgent} tts=${ttsEnabled}`);
 
@@ -900,13 +1069,7 @@ async function handleChatStream(
         // Save any uncommitted assistant row and the steering user message.
         // Tool-use fragments may already have been committed at turn_end.
         const assistantMsg = finalizeUncommittedAssistantMessage();
-        const queuedUserMsg: ChatMessage = {
-          role: "user",
-          content: queued.message,
-          images: queued.images?.length ? queued.images : undefined,
-          timestamp: queued.timestamp,
-        };
-        chat.messages.push(queuedUserMsg);
+        chat.messages.push(queuedMessageToChatMessage(queued));
         await saveChat(chat);
 
         // Emit events so client can finalize current response and start the steered turn
@@ -916,12 +1079,13 @@ async function handleChatStream(
         res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queued.id })}\n\n`);
 
         // Defer memory extraction for the completed turn
-        if (assistantMsg && (chat.type === "agent" || chat.type === "bluesky")) {
+        if (assistantMsg && !currentTurnIsHidden && (chat.type === "agent" || chat.type === "bluesky")) {
           deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: assistantMsg.content });
         }
 
         // Reset accumulators for the new response
         resetAccumulators();
+        currentTurnIsHidden = queued.hidden === true;
         lastUserMessage = queued.message;
 
         console.log(`[chat] steering: injecting queued message ${queued.id} mid-loop`);
@@ -934,13 +1098,7 @@ async function handleChatStream(
 
         // Save any uncommitted assistant row and the queued user message.
         const assistantMsg = finalizeUncommittedAssistantMessage();
-        const queuedUserMsg: ChatMessage = {
-          role: "user",
-          content: queued.message,
-          images: queued.images?.length ? queued.images : undefined,
-          timestamp: queued.timestamp,
-        };
-        chat.messages.push(queuedUserMsg);
+        chat.messages.push(queuedMessageToChatMessage(queued));
         await saveChat(chat);
 
         // Emit events so client can finalize current response and start next
@@ -951,12 +1109,12 @@ async function handleChatStream(
 
         // Defer memory extraction until after the agent loop finishes
         // to avoid concurrent LLM calls that can interfere with the active tool loop
-        if (assistantMsg && chat.type === "agent") {
+        if (assistantMsg && !currentTurnIsHidden && chat.type === "agent") {
           deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: assistantMsg.content });
         }
 
         // Title generation for first exchange
-        if (assistantMsg && shouldGenerateInitialTitle(chat)) {
+        if (assistantMsg && !currentTurnIsHidden && shouldGenerateInitialTitle(chat)) {
           generateTitle(lastUserMessage, assistantMsg.content)
             .then(title => {
               if (title) {
@@ -970,6 +1128,7 @@ async function handleChatStream(
 
         // Reset accumulators for the new response
         resetAccumulators();
+        currentTurnIsHidden = queued.hidden === true;
         lastUserMessage = queued.message;
 
         console.log(`[chat] follow-up: draining queued message ${queued.id}`);
@@ -2072,14 +2231,7 @@ async function handleChatStream(
       // committed; only persist an uncommitted final/partial row if present.
       const currentAssistantMsg = finalizeUncommittedAssistantMessage();
 
-      // Add queued user message
-      const queuedUserMsg: ChatMessage = {
-        role: "user",
-        content: queuedFollowUp.message,
-        images: queuedFollowUp.images?.length ? queuedFollowUp.images : undefined,
-        timestamp: queuedFollowUp.timestamp,
-      };
-      chat.messages.push(queuedUserMsg);
+      chat.messages.push(queuedMessageToChatMessage(queuedFollowUp));
       await saveChat(chat);
 
       // Emit events to finalize current and start follow-up
@@ -2089,12 +2241,12 @@ async function handleChatStream(
       res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queuedFollowUp.id })}\n\n`);
 
       // Defer memory extraction until after the follow-up loop finishes
-      if (currentAssistantMsg && chat.type === "agent") {
+      if (currentAssistantMsg && !currentTurnIsHidden && chat.type === "agent") {
         deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: currentAssistantMsg.content });
       }
 
       // Title generation for first exchange
-      if (currentAssistantMsg && shouldGenerateInitialTitle(chat)) {
+      if (currentAssistantMsg && !currentTurnIsHidden && shouldGenerateInitialTitle(chat)) {
         generateTitle(lastUserMessage, currentAssistantMsg.content)
           .then(title => {
             if (title) {
@@ -2109,6 +2261,7 @@ async function handleChatStream(
       // Continue processing the follow-up by recursively calling handleChatStream
       // Reset accumulators and update state
       resetAccumulators();
+      currentTurnIsHidden = queuedFollowUp.hidden === true;
       lastUserMessage = queuedFollowUp.message;
 
       // Build new context for follow-up (all messages including the queued one)
@@ -2124,7 +2277,9 @@ async function handleChatStream(
         : chat.systemPrompt || "You are a helpful assistant.";
 
       // Recursively handle the follow-up with a fresh turn abort controller
-      await handleChatStream(chat, queuedFollowUp.message, followUpContextMessages, followUpSystemPrompt, null, req, res);
+      await handleChatStream(chat, queuedFollowUp.message, followUpContextMessages, followUpSystemPrompt, null, req, res, {
+        hiddenUserMessage: queuedFollowUp.hidden === true,
+      });
       return; // Exit early since we've recursively handled the follow-up
     }
 
@@ -2207,7 +2362,7 @@ async function handleChatStream(
       // System chats (synthesis, wake) are never user-facing — skip them.
       // Use the generated recap as the notification body when available,
       // falling back to truncated content.
-      if (chat.id !== "system" && !waitingForInput && logicalAssistantContent.trim()) {
+      if (chat.id !== "system" && !currentTurnIsHidden && !waitingForInput && logicalAssistantContent.trim()) {
         const initiatingDeviceId = (req.body as any)?.deviceId;
         const pushBody = assistantMsg.recap || truncateForBody(logicalAssistantContent);
         sendPush(
@@ -2256,7 +2411,7 @@ async function handleChatStream(
 
       // Generate LLM title after the first exchange (2 messages = 1 user + 1 assistant)
       // Only generate title if we have actual content
-      if (shouldGenerateInitialTitle(chat) && hasContent) {
+      if (!currentTurnIsHidden && shouldGenerateInitialTitle(chat) && hasContent) {
         try {
           const title = await generateTitle(lastUserMessage, logicalAssistantContent);
           if (title) {
@@ -2284,7 +2439,7 @@ async function handleChatStream(
       }
 
       // Memory extraction — runs after agent loop is fully complete (no concurrent LLM interference)
-      if ((chat.type === "agent" || chat.type === "bluesky") && hasContent) {
+      if (!currentTurnIsHidden && (chat.type === "agent" || chat.type === "bluesky") && hasContent) {
         extractMemories(chat.modelId, chat.id, lastUserMessage, logicalAssistantContent)
           .catch((err) => console.error("[memory] extraction failed:", err));
       }
@@ -3004,6 +3159,167 @@ router.post("/", async (req, res) => {
 
     await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
   }
+});
+
+// Report an artifact runtime error and ask the agent to repair it as a hidden follow-up.
+router.post("/artifact-error", async (req, res) => {
+  const body = req.body as Partial<ArtifactRuntimeErrorReport>;
+  const report: ArtifactRuntimeErrorReport = {
+    chatId: typeof body.chatId === "string" ? body.chatId : "",
+    artifactId: typeof body.artifactId === "string" ? body.artifactId : "",
+    version: Number(body.version),
+    title: typeof body.title === "string" ? body.title : undefined,
+    url: typeof body.url === "string" ? body.url : undefined,
+    message: typeof body.message === "string" ? body.message : "",
+    stack: typeof body.stack === "string" ? body.stack : undefined,
+    filename: typeof body.filename === "string" ? body.filename : undefined,
+    lineno: typeof body.lineno === "number" ? body.lineno : undefined,
+    colno: typeof body.colno === "number" ? body.colno : undefined,
+    sourceExcerpt: typeof body.sourceExcerpt === "string" ? body.sourceExcerpt : undefined,
+    stream: body.stream === true,
+  };
+
+  if (!report.chatId || !report.artifactId || !Number.isInteger(report.version) || report.version < 1 || !report.message) {
+    return res.status(400).json({ error: "chatId, artifactId, version, and message are required" });
+  }
+  if (!isSafeArtifactId(report.artifactId)) {
+    return res.status(400).json({ error: "Invalid artifactId" });
+  }
+
+  const chat = await getChat(report.chatId);
+  if (!chat) return res.status(404).json({ error: "Chat not found" });
+  if (!(chat.type === "agent" || chat.type === "bluesky" || chat.type === "system")) {
+    return res.status(400).json({ error: "Artifact repair requires a tool-capable chat" });
+  }
+
+  const currentVersion = await getArtifactCurrentVersion(report.artifactId);
+  if (!currentVersion) return res.status(404).json({ error: "Artifact not found" });
+  if (report.version !== currentVersion) {
+    return res.status(409).json({ error: "Only the latest artifact version can be auto-repaired" });
+  }
+
+  const stream = liveStreams.get(report.chatId);
+  const active = !!stream && !stream.ended && !stream.abort.signal.aborted;
+  if (!active && !chatReferencesArtifact(chat, report.artifactId, report.version)) {
+    return res.status(400).json({ error: "Artifact is not associated with this chat" });
+  }
+
+  const dedupKey = makeArtifactRepairDedupKey(report);
+  if (hasRecentArtifactRepairAttempt(dedupKey)) {
+    if (report.stream) {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      res.write(`event: error\ndata: ${JSON.stringify({ error: "Artifact repair already requested for this error" })}\n\n`);
+      res.end();
+      return;
+    }
+    return res.json({ accepted: false, duplicate: true });
+  }
+  if (hasRecentArtifactAutoRepair(report.chatId, report.artifactId)) {
+    if (report.stream) {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      res.write(`event: error\ndata: ${JSON.stringify({ error: "Automatic artifact repair was already attempted for this artifact" })}\n\n`);
+      res.end();
+      return;
+    }
+    return res.json({ accepted: false, repairLimit: true });
+  }
+
+  report.sourceExcerpt = await getArtifactSourceExcerpt(report);
+  const repairPrompt = buildArtifactRepairPrompt(report);
+  const metadata = {
+    artifactId: report.artifactId,
+    version: report.version,
+    errorMessage: report.message,
+    errorHash: dedupKey.split(":").pop(),
+  };
+
+  if (active || !report.stream) {
+    await messageQueue.enqueue(report.chatId, repairPrompt, undefined, {
+      hidden: true,
+      kind: "artifact_repair",
+      metadata,
+    });
+    console.log(`[artifact-repair] queued repair for ${report.artifactId} v${report.version} in chat ${report.chatId}`);
+    return res.json({ accepted: true, queued: true, active });
+  }
+
+  await waitForBackgroundAutomation(report.chatId);
+
+  chat.messages.push({
+    role: "system",
+    content: repairPrompt,
+    timestamp: Date.now(),
+    _isSystemMessage: true,
+  });
+  await saveChat(chat);
+
+  let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+  let memoriesDelta = "";
+  if (chat.type === "agent" || chat.type === "bluesky") {
+    let projectPath: string | undefined;
+    if (chat.projectId) {
+      const project = await getProject(chat.projectId);
+      projectPath = project?.path;
+    }
+    const split = await buildSplitAugmentedPrompt(
+      systemPrompt,
+      chat.messages,
+      chat.id,
+      chat.projectId,
+      chat.type,
+      projectPath
+    );
+    systemPrompt = split.systemPrompt;
+    memoriesDelta = split.memoriesMessage;
+  }
+
+  if (chat.activeSkills?.length) {
+    const skillsCache = new Map<string, Skill>();
+    const allSkills = await discoverSkills(chat.projectId);
+    for (const s of allSkills) skillsCache.set(s.name, s);
+    systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+  }
+
+  const memoryDeltaContext = memoriesDelta
+    ? `[System context — updated memories]\n${memoriesDelta}`
+    : "";
+  if (memoryDeltaContext) {
+    const insertAt = Math.max(0, chat.messages.length - 1);
+    chat.messages.splice(insertAt, 0, {
+      role: "system",
+      content: memoryDeltaContext,
+      timestamp: Date.now(),
+    });
+    await saveChat(chat);
+  }
+
+  setCachedAugmentedPrompt(chat.id, systemPrompt);
+
+  const currentPromptIndex = chat.messages.length - 1;
+  const persistedHistoryEnd =
+    memoryDeltaContext &&
+    currentPromptIndex > 0 &&
+    chat.messages[currentPromptIndex - 1]?.role === "system" &&
+    chat.messages[currentPromptIndex - 1]?.content === memoryDeltaContext
+      ? currentPromptIndex - 1
+      : currentPromptIndex;
+  const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, persistedHistoryEnd), chat.modelId);
+  const userPiMessage = buildUserPiMessage("", undefined, mergeSystemContextWithUserContent(memoryDeltaContext, repairPrompt));
+
+  console.log(`[artifact-repair] starting repair for ${report.artifactId} v${report.version} in chat ${report.chatId}`);
+  await handleChatStream(chat, repairPrompt, contextMessages, systemPrompt, userPiMessage, req, res, {
+    hiddenUserMessage: true,
+  });
 });
 
 // Enqueue a message while the agent is streaming

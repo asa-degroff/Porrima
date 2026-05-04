@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import type { Artifact, ChatMessage, GeneratedImage, MessageUsage, OllamaModel, SystemPromptPreset } from "../types";
-import type { ToolStatus, StreamWarning, SkillInfo } from "../api/client";
+import type { ArtifactRuntimeErrorReport, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
 import { fetchRenderedPrompt, fetchSkills } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
 import { MessageInput } from "./MessageInput";
@@ -179,6 +179,7 @@ interface Props {
   activeSkills?: string[];
   projectId?: string;
   streamingSegmentIndex: number | null;
+  onArtifactRuntimeError?: (report: ArtifactRuntimeErrorReport) => void;
 }
 
 export function ChatView({
@@ -235,6 +236,7 @@ export function ChatView({
   activeSkills,
   projectId,
   streamingSegmentIndex,
+  onArtifactRuntimeError,
 }: Props) {
   const { unpin, pinnedItem } = usePinnedItem();
   useEffect(() => {
@@ -685,6 +687,8 @@ export function ChatView({
                         showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
                         onReadAloud={ttsEnabled ? onReadAloud : undefined}
                         isPlayingTts={ttsEnabled ? (playbackState?.isPlaying || false) : false}
+                        chatId={chatId || undefined}
+                        onArtifactRuntimeError={onArtifactRuntimeError}
                       />
                     </div>
                   </div>
@@ -737,7 +741,7 @@ export function ChatView({
         {/* Vertical divider between messages and pinned panel (desktop only, only when pinned) */}
         {pinnedItem && <div className="hidden lg:block w-px bg-white/10" />}
 
-        <PinnedPanel />
+        <PinnedPanel chatId={chatId || undefined} onArtifactRuntimeError={onArtifactRuntimeError} />
 
         {/* Vignette overlay — spans both messages and pinned panel */}
         <div className="absolute inset-0 pointer-events-none z-10 shadow-[inset_0_16px_80px_-16px_rgba(0,0,0,0.35),inset_0px_-16px_80px_-16px_rgba(0,0,0,0.35)]" />

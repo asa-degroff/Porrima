@@ -39,6 +39,30 @@ describe("chatMessagesToPiMessages", () => {
     });
   });
 
+  it("flushes hidden system context before a following assistant message", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Create an artifact.", timestamp: 1000 },
+      { role: "assistant", content: "Created it.", timestamp: 2000 },
+      {
+        role: "system",
+        content: "[System context - artifact runtime error]\nMessage: CANVAS_SIZE before initialization",
+        timestamp: 3000,
+        _isSystemMessage: true,
+      },
+      { role: "assistant", content: "I updated the artifact.", timestamp: 4000 },
+    ];
+
+    const result = chatMessagesToPiMessages(messages, MODEL_ID);
+
+    expect(result).toHaveLength(4);
+    expect(result[2]).toEqual({
+      role: "user",
+      content: "[System context - artifact runtime error]\nMessage: CANVAS_SIZE before initialization",
+      timestamp: 3000,
+    });
+    expect(result[3].role).toBe("assistant");
+  });
+
   it("merges persisted system memory deltas into image user messages", () => {
     const messages: ChatMessage[] = [
       {

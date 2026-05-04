@@ -134,6 +134,20 @@ export interface StreamWarning {
   message: string;
 }
 
+export interface ArtifactRuntimeErrorReport {
+  chatId: string;
+  artifactId: string;
+  version: number;
+  title?: string;
+  url?: string;
+  message: string;
+  stack?: string;
+  filename?: string;
+  lineno?: number;
+  colno?: number;
+  sourceExcerpt?: string;
+}
+
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
@@ -318,6 +332,32 @@ export function sendMessage(
   return streamSSE(
     `${BASE}/chat`,
     withDeviceId({ chatId, message, images: images?.length ? images : undefined }),
+    callbacks
+  );
+}
+
+export async function queueArtifactErrorRepair(
+  report: ArtifactRuntimeErrorReport
+): Promise<{ accepted: boolean; queued?: boolean; active?: boolean; duplicate?: boolean; repairLimit?: boolean }> {
+  const res = await apiFetch(`${BASE}/chat/artifact-error`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...report, stream: false }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(data.error || "Failed to report artifact error");
+  }
+  return res.json();
+}
+
+export function streamArtifactErrorRepair(
+  report: ArtifactRuntimeErrorReport,
+  callbacks: StreamCallbacks
+): AbortController {
+  return streamSSE(
+    `${BASE}/chat/artifact-error`,
+    { ...report, stream: true },
     callbacks
   );
 }

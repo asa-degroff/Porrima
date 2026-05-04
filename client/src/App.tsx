@@ -215,6 +215,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     streamingSegmentIndex,
     hasBackgroundActivity,
     send,
+    reportArtifactRuntimeError,
     editMessage,
     retryMessage,
     abort,
@@ -873,6 +874,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         activeSkills={activeChat?.activeSkills}
         projectId={activeChat?.projectId}
         streamingSegmentIndex={streamingSegmentIndex}
+        onArtifactRuntimeError={reportArtifactRuntimeError}
       />
       )}
       {settingsOpen && !settingsLoading && (

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { Artifact } from "../types";
+import type { ArtifactRuntimeErrorReport } from "../api/client";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { useIsDesktop } from "../hooks/useIsDesktop";
 
@@ -11,6 +12,8 @@ interface Props {
   artifact: Artifact;
   onArtifactUpdate?: (artifactId: string, newVersion: number) => void;
   isPinnedView?: boolean;
+  chatId?: string;
+  onArtifactRuntimeError?: (report: ArtifactRuntimeErrorReport) => void;
 }
 
 interface VersionInfo {
@@ -19,7 +22,25 @@ interface VersionInfo {
   changeSummary?: string;
 }
 
-export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView }: Props) {
+function getSourceExcerpt(source: string | null, lineNumber?: number, radius = 5): string | undefined {
+  if (!source || !lineNumber || lineNumber < 1) return undefined;
+  const lines = source.split("\n");
+  const start = Math.max(0, lineNumber - radius - 1);
+  const end = Math.min(lines.length, lineNumber + radius);
+  return lines
+    .slice(start, end)
+    .map((line, idx) => `${start + idx + 1}: ${line}`)
+    .join("\n");
+}
+
+function injectArtifactErrorForwarder(html: string): string {
+  const script = `<script>window.addEventListener('error',function(e){window.parent.postMessage({type:'artifact-error',message:e.message||'Unknown runtime error',filename:e.filename,lineno:e.lineno,colno:e.colno,stack:e.error&&e.error.stack},'*');});window.addEventListener('unhandledrejection',function(e){window.parent.postMessage({type:'artifact-error',message:e.reason&&e.reason.message||String(e.reason),stack:e.reason&&e.reason.stack},'*');});<\/script>`;
+  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${script}</head>`);
+  if (/<body\b/i.test(html)) return html.replace(/<body\b/i, `${script}<body`);
+  return `${script}${html}`;
+}
+
+export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId, onArtifactRuntimeError }: Props) {
   const { pinArtifact, unpin, isPinned } = usePinnedItem();
   const isDesktop = useIsDesktop();
   const pinned = isPinned("artifact", artifact.id);
@@ -39,6 +60,7 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView }: Prop
   const heightRef = useRef(DEFAULT_HEIGHT);
   const versionMenuRef = useRef<HTMLDivElement>(null);
   const runtimeErrorRef = useRef<string | null>(null);
+  const reportedErrorKeyRef = useRef<string | null>(null);
 
   const handleIframeLoad = useCallback(() => {
     setIframeLoaded(true);
@@ -108,10 +130,11 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView }: Prop
         setIframeLoaded(false);
         setRuntimeError(null);
         runtimeErrorRef.current = null;
+        reportedErrorKeyRef.current = null;
         // Inject error-forwarding script so JS runtime errors in the iframe
         // surface as messages the parent can display (iframe onError only
         // fires on network failures, not JS exceptions).
-        const injected = html.replace(/<\/head>/, `<script>window.addEventListener('error',function(e){if(e.filename&&e.filename.includes('blob:')){window.parent.postMessage({type:'artifact-error',message:e.message,filename:e.filename,lineno:e.lineno,colno:e.colno,stack:e.error&&e.error.stack},'*');}});window.addEventListener('unhandledrejection',function(e){window.parent.postMessage({type:'artifact-error',message:e.reason&&e.reason.message||String(e.reason),stack:e.reason&&e.reason.stack},'*');});<\/script></head>`);
+        const injected = injectArtifactErrorForwarder(html);
         const blob = new Blob([injected], { type: "text/html" });
         url = URL.createObjectURL(blob);
         setBlobUrl(url);
@@ -129,16 +152,42 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView }: Prop
   // Listen for runtime errors forwarded from the iframe
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
+      if (e.source !== iframeRef.current?.contentWindow) return;
       if (e.data?.type === "artifact-error") {
         const msg = e.data.message || "Unknown runtime error";
         setRuntimeError(msg);
         runtimeErrorRef.current = msg;
         setIframeError(false);
+        if (chatId && onArtifactRuntimeError) {
+          const key = [
+            artifact.id,
+            selectedVersion,
+            msg,
+            e.data.lineno ?? "",
+            e.data.colno ?? "",
+          ].join(":");
+          if (reportedErrorKeyRef.current !== key) {
+            reportedErrorKeyRef.current = key;
+            onArtifactRuntimeError({
+              chatId,
+              artifactId: artifact.id,
+              version: selectedVersion,
+              title: artifact.title,
+              url: `/api/artifacts/${artifact.id}/versions/${selectedVersion}`,
+              message: msg,
+              stack: typeof e.data.stack === "string" ? e.data.stack : undefined,
+              filename: typeof e.data.filename === "string" ? e.data.filename : undefined,
+              lineno: typeof e.data.lineno === "number" ? e.data.lineno : undefined,
+              colno: typeof e.data.colno === "number" ? e.data.colno : undefined,
+              sourceExcerpt: getSourceExcerpt(sourceCode, typeof e.data.lineno === "number" ? e.data.lineno : undefined),
+            });
+          }
+        }
       }
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, []);
+  }, [artifact.id, artifact.title, chatId, onArtifactRuntimeError, selectedVersion, sourceCode]);
 
   // Close version menu on outside click
   useEffect(() => {

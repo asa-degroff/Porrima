@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat } from "../api/client";
-import type { StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
+import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat, queueArtifactErrorRepair, streamArtifactErrorRepair } from "../api/client";
+import type { ArtifactRuntimeErrorReport, StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InlineVisual, MessageSegment, MessageUsage } from "../types";
 import { useStreamingTTS } from "./useStreamingTTS";
 import {
@@ -205,6 +205,7 @@ export function useChat(chatId: string | null) {
   const doneCalledRef = useRef(false);
   const streamingContentRef = useRef("");
   const rafRef = useRef<number | null>(null);
+  const reportedArtifactRepairRef = useRef<Set<string>>(new Set());
   const activeChatRef = useRef<Chat | null>(null);
   const messageOffsetRef = useRef(0);
   const messageTotalRef = useRef(0);
@@ -1187,6 +1188,47 @@ export function useChat(chatId: string | null) {
     [chatId, streaming, prepareStream, makeStreamCallbacks]
   );
 
+  const reportArtifactRuntimeError = useCallback(
+    (report: ArtifactRuntimeErrorReport) => {
+      const targetChatId = report.chatId || chatId;
+      if (!targetChatId || targetChatId !== chatId) return;
+      const repairKey = `${targetChatId}:${report.artifactId}`;
+      if (reportedArtifactRepairRef.current.has(repairKey)) return;
+      reportedArtifactRepairRef.current.add(repairKey);
+
+      const existingBg = bgStreams.get(targetChatId);
+      if (streaming || existingBg?.streaming) {
+        queueArtifactErrorRepair(report).catch((err) => {
+          console.warn("[artifact-repair] failed to queue repair:", err);
+        });
+        return;
+      }
+
+      const bg = createBgStream(activeChatRef.current, messageOffsetRef.current, messageTotalRef.current);
+      bgStreams.set(targetChatId, bg);
+
+      const assistantMsg: ChatMessage = {
+        role: "assistant",
+        content: "",
+        timestamp: Date.now(),
+      };
+
+      setMessages((prev) => {
+        const next = [...prev, assistantMsg];
+        bg.messages = next;
+        return next;
+      });
+
+      prepareStream();
+
+      const callbacks = makeStreamCallbacks(targetChatId);
+      const controller = streamArtifactErrorRepair(report, callbacks);
+      bg.abortController = controller;
+      abortRef.current = controller;
+    },
+    [chatId, streaming, prepareStream, makeStreamCallbacks]
+  );
+
   const editMessage = useCallback(
     (index: number, newText: string, images?: ImageAttachment[]) => {
       if (!chatId || streaming || !navigator.onLine) return;
@@ -1417,6 +1459,7 @@ export function useChat(chatId: string | null) {
     hasBackgroundActivity,
     reconnecting,
     send,
+    reportArtifactRuntimeError,
     editMessage,
     retryMessage,
     abort,

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, lazy, Suspense, memo } from "react";
 import { createPortal } from "react-dom";
 import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment } from "../types";
-import type { ToolStatus } from "../api/client";
+import type { ArtifactRuntimeErrorReport, ToolStatus } from "../api/client";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ArtifactPanel } from "./ArtifactPanel";
@@ -119,6 +119,8 @@ interface Props {
   availableSkills?: string[];
   streamingSegmentIndex?: number | null;
   showStreamingIndicator?: boolean;
+  chatId?: string;
+  onArtifactRuntimeError?: (report: ArtifactRuntimeErrorReport) => void;
 }
 
 /**
@@ -179,6 +181,8 @@ export const MessageBubble = memo(function MessageBubble({
   availableSkills = emptySkillsList,
   streamingSegmentIndex,
   showStreamingIndicator,
+  chatId,
+  onArtifactRuntimeError,
 }: Props) {
   const activityShape = useActivityShape();
   const isUser = message.role === "user";
@@ -545,6 +549,8 @@ export const MessageBubble = memo(function MessageBubble({
                     showStreaming={showStreaming}
                     isThinkingStreaming={isThinkingStreaming}
                     streamingSegmentIndex={streamingSegmentIndex ?? null}
+                    chatId={chatId}
+                    onArtifactRuntimeError={onArtifactRuntimeError}
                   />
                 ) : (
                   // Legacy fallback (no segments — old messages or non-agent chats)
@@ -570,7 +576,12 @@ export const MessageBubble = memo(function MessageBubble({
                       isDesktopView && isItemPinned("artifact", artifact.id) ? (
                         <PinnedPlaceholder key={artifact.id} title={artifact.title} onUnpin={unpinItem} />
                       ) : (
-                        <ArtifactPanel key={artifact.id} artifact={artifact} />
+                        <ArtifactPanel
+                          key={artifact.id}
+                          artifact={artifact}
+                          chatId={chatId}
+                          onArtifactRuntimeError={onArtifactRuntimeError}
+                        />
                       )
                     )}
 
@@ -681,11 +692,15 @@ function MessageSegments({
   showStreaming,
   isThinkingStreaming,
   streamingSegmentIndex,
+  chatId,
+  onArtifactRuntimeError,
 }: {
   segments: ChatMessage["segments"];
   showStreaming: boolean;
   isThinkingStreaming: boolean;
   streamingSegmentIndex: number | null;
+  chatId?: string;
+  onArtifactRuntimeError?: (report: ArtifactRuntimeErrorReport) => void;
 }) {
   const MAX_CONSECUTIVE_TOOLS = 6;
   
@@ -763,6 +778,8 @@ function MessageSegments({
                     showStreaming={showStreaming}
                     isThinkingStreaming={isThinkingStreaming}
                     streamingSegmentIndex={streamingSegmentIndex}
+                    chatId={chatId}
+                    onArtifactRuntimeError={onArtifactRuntimeError}
                   />
                 ))}
               </ScrollableToolContainer>
@@ -783,6 +800,8 @@ function MessageSegments({
             showStreaming={showStreaming}
             isThinkingStreaming={isThinkingStreaming}
             streamingSegmentIndex={streamingSegmentIndex}
+            chatId={chatId}
+            onArtifactRuntimeError={onArtifactRuntimeError}
           />
         ));
       })}
@@ -978,6 +997,8 @@ function SegmentRenderer({
   showStreaming,
   isThinkingStreaming,
   streamingSegmentIndex,
+  chatId,
+  onArtifactRuntimeError,
 }: {
   segment: NonNullable<ChatMessage["segments"]>[number];
   index: number;
@@ -985,6 +1006,8 @@ function SegmentRenderer({
   showStreaming: boolean;
   isThinkingStreaming: boolean;
   streamingSegmentIndex: number | null;
+  chatId?: string;
+  onArtifactRuntimeError?: (report: ArtifactRuntimeErrorReport) => void;
 }) {
   const { isPinned, unpin } = usePinnedItem();
   const isDesktop = useIsDesktop();
@@ -1025,7 +1048,14 @@ function SegmentRenderer({
       if (isDesktop && isPinned("artifact", segment.artifact.id)) {
         return <PinnedPlaceholder title={segment.artifact.title} onUnpin={unpin} />;
       }
-      return <ArtifactPanel key={`artifact-${segment.artifact.id}`} artifact={segment.artifact} />;
+      return (
+        <ArtifactPanel
+          key={`artifact-${segment.artifact.id}`}
+          artifact={segment.artifact}
+          chatId={chatId}
+          onArtifactRuntimeError={onArtifactRuntimeError}
+        />
+      );
     }
     case "visual": {
       if (!segment.visual) return null;
