@@ -3423,18 +3423,52 @@ router.post("/edit", async (req, res) => {
     return res.status(400).json({ error: "messageIndex out of bounds" });
   }
 
-  if (chat.messages[messageIndex].role !== "user") {
-    return res.status(400).json({ error: "messageIndex must point to a user message" });
+  // Resolve the target index: if the client's index is off (e.g. due to a stale
+  // empty assistant message from a prior provider error), scan backwards to find
+  // the actual user message and clean up the orphaned assistant.
+  let targetIndex = messageIndex;
+  if (chat.messages[targetIndex].role !== "user") {
+    // Scan backwards from the given index to find the nearest user message
+    let scanIdx = targetIndex;
+    while (scanIdx >= 0 && chat.messages[scanIdx].role !== "user") {
+      scanIdx--;
+    }
+    if (scanIdx < 0) {
+      return res.status(400).json({ error: "messageIndex must point to a user message" });
+    }
+    console.log(`[chat] edit: client index ${targetIndex} points to ${chat.messages[targetIndex].role}, resolved to user message at index ${scanIdx}`);
+    targetIndex = scanIdx;
+
+    // Remove any empty assistant messages after the resolved user message
+    // These are orphaned from prior provider errors where the server didn't persist
+    // but the client kept a local placeholder, causing index drift.
+    const afterUser = chat.messages.slice(targetIndex + 1);
+    const firstNonEmptyAssistant = afterUser.findIndex(m =>
+      m.role === "assistant" && (m.content?.trim() || m.toolCalls?.length || m.thinking?.trim())
+    );
+    if (firstNonEmptyAssistant === 0) {
+      // The first message after the user is a valid assistant — nothing to clean
+    } else if (firstNonEmptyAssistant > 0) {
+      // Remove empty assistant(s) between the user and the first valid assistant
+      const messagesToRemove = firstNonEmptyAssistant;
+      chat.messages.splice(targetIndex + 1, messagesToRemove);
+      console.log(`[chat] edit: removed ${messagesToRemove} empty assistant message(s) after user message at ${targetIndex}`);
+    } else if (afterUser.length > 0) {
+      // All messages after the user are assistants but none have content — remove them all
+      const messagesToRemove = afterUser.length;
+      chat.messages.splice(targetIndex + 1, messagesToRemove);
+      console.log(`[chat] edit: removed ${messagesToRemove} empty assistant message(s) after user message at ${targetIndex}`);
+    }
   }
 
   await stampUserActivity(chat);
   await waitForBackgroundAutomation(chatId);
 
   // Get the original message to preserve images BEFORE truncating
-  const originalMessage = chat.messages[messageIndex];
+  const originalMessage = chat.messages[targetIndex];
 
-  // Truncate everything from messageIndex onwards
-  chat.messages = chat.messages.slice(0, messageIndex);
+  // Truncate everything from targetIndex onwards
+  chat.messages = chat.messages.slice(0, targetIndex);
 
   // Add edited user message — use new images if provided, otherwise preserve originals
   const editImages = images?.length ? images : (originalMessage.images?.length ? originalMessage.images : undefined);
@@ -3447,7 +3481,7 @@ router.post("/edit", async (req, res) => {
   chat.messages.push(userMsg);
 
   // Update title if editing the first message
-  if (messageIndex === 0) {
+  if (targetIndex === 0) {
     chat.title = truncateTitle(message);
   }
 
