@@ -6,7 +6,7 @@ import { homedir } from "os";
 import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { AgentContext } from "@mariozechner/pi-agent-core";
-import { getChat, saveChat, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
+import { getChat, saveChat, getDb, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
 import { chatMessagesToPiMessages, mergeSystemContextWithUserContent } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { OllamaModel } from "../types.js";
@@ -3466,6 +3466,25 @@ router.post("/edit", async (req, res) => {
 
   // Get the original message to preserve images BEFORE truncating
   const originalMessage = chat.messages[targetIndex];
+
+  // Safety guard: verify that truncating won't discard persisted messages
+  // that are missing from the in-memory chat.messages. This protects against
+  // a corrupted in-memory state (e.g. after a model error or server restart)
+  // from overwriting the database with a truncated history.
+  const db = getDb();
+  const dbRowCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM chat_message_rows WHERE chat_id = ?"
+  ).get(chat.id) as { cnt: number })?.cnt ?? 0;
+
+  if (dbRowCount > 0 && targetIndex < dbRowCount) {
+    console.error(
+      `[chat] CRITICAL: edit would truncate from ${dbRowCount} persisted rows to ${targetIndex} — ` +
+      `in-memory state is corrupted (chat.messages has ${chat.messages.length} messages). Refusing to save.`
+    );
+    return res.status(500).json({
+      error: "Chat state is corrupted — the in-memory message history doesn't match the database. Please reload the page and try again."
+    });
+  }
 
   // Truncate everything from targetIndex onwards
   chat.messages = chat.messages.slice(0, targetIndex);
