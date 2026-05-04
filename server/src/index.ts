@@ -39,7 +39,7 @@ import { ensureAutomationDefaults } from "./services/automation-storage.js";
 import { migrateAgentNotebookToBlocks } from "./services/notebook-storage.js";
 import { registerOllamaNativeProvider } from "./services/ollama-native-provider.js";
 import { registerOpenAICompatProvider } from "./services/openai-compat-provider.js";
-import { initSshMux } from "./services/workspace.js";
+import { initSshMux, destroyAllMasters } from "./services/workspace.js";
 
 // Register API providers before any requests
 registerOllamaNativeProvider();
@@ -51,6 +51,13 @@ registerOpenAICompatProvider();
 process.on("unhandledRejection", (reason, promise) => {
   console.error("[process] unhandled rejection (caught, not crashing):", reason);
 });
+
+// Graceful shutdown: tear down SSH master connections before exiting.
+const shutdownMasters = async () => {
+  await destroyAllMasters();
+};
+process.on("SIGTERM", shutdownMasters);
+process.on("SIGINT", shutdownMasters);
 
 const isProd = process.env.NODE_ENV === "production";
 const PORT = parseInt(process.env.PORT || "3001");

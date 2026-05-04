@@ -283,32 +283,32 @@ function sshTarget(connection: SshConnection): string {
   return connection.username ? `${connection.username}@${connection.host}` : connection.host;
 }
 
-/** Base SSH options shared by both master and client connections. */
-function sshBaseOptions(connection: SshConnection): string[] {
-  const strictMode = connection.knownHostsMode === "strict"
-    ? "yes"
-    : connection.knownHostsMode === "off"
-      ? "no"
-      : "accept-new";
-  const opts = [
-    "-o", "BatchMode=yes",
-    "-o", "ConnectTimeout=10",
-    "-o", `StrictHostKeyChecking=${strictMode}`,
-    "-o", `UserKnownHostsFile=${SSH_KNOWN_HOSTS}`,
-    "-p", String(connection.port || 22),
-  ];
-  if (connection.identityFile) {
-    opts.push("-i", connection.identityFile, "-o", "IdentitiesOnly=yes");
-  }
-  return opts;
+// ---------------------------------------------------------------------------
+// Shared master state — keyed by connection ID so multiple adapters
+// (different projects, different chats) sharing the same connection
+// coordinate on a single master.
+// ---------------------------------------------------------------------------
+
+interface MasterState {
+  establishing: Promise<boolean> | null;
 }
 
-/** Build SSH args for a multiplexed client command. */
+const masterRegistry = new Map<string, MasterState>();
+
+function getMasterState(connectionId: string): MasterState {
+  let state = masterRegistry.get(connectionId);
+  if (!state) {
+    state = { establishing: null };
+    masterRegistry.set(connectionId, state);
+  }
+  return state;
+}
+
+/** Build SSH args for a multiplexed client command.
+ *  Client connections inherit all options from the master — only need -S, target, and command. */
 function sshClientArgs(controlSocket: string, connection: SshConnection, remoteCommand: string): string[] {
   return [
     "-S", controlSocket,
-    "-o", "ControlMaster=no",
-    ...sshBaseOptions(connection),
     sshTarget(connection),
     remoteCommand,
   ];
@@ -316,21 +316,55 @@ function sshClientArgs(controlSocket: string, connection: SshConnection, remoteC
 
 /** Build SSH args for establishing a master connection. */
 function sshMasterArgs(controlSocket: string, connection: SshConnection): string[] {
-  return [
+  const strictMode = connection.knownHostsMode === "strict"
+    ? "yes"
+    : connection.knownHostsMode === "off"
+      ? "no"
+      : "accept-new";
+  const args = [
     "-fMN",
     "-S", controlSocket,
     "-o", "ControlPersist=600",
     "-o", "ServerAliveInterval=30",
     "-o", "ServerAliveCountMax=2",
-    ...sshBaseOptions(connection),
-    sshTarget(connection),
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=10",
+    "-o", `StrictHostKeyChecking=${strictMode}`,
+    "-o", `UserKnownHostsFile=${SSH_KNOWN_HOSTS}`,
+    "-p", String(connection.port || 22),
   ];
+  if (connection.identityFile) {
+    args.push("-i", connection.identityFile, "-o", "IdentitiesOnly=yes");
+  }
+  args.push(sshTarget(connection));
+  return args;
+}
+
+/** Build SSH args for a direct (non-multiplexed) connection — used as fallback. */
+function sshDirectArgs(connection: SshConnection, remoteCommand: string): string[] {
+  const strictMode = connection.knownHostsMode === "strict"
+    ? "yes"
+    : connection.knownHostsMode === "off"
+      ? "no"
+      : "accept-new";
+  const args = [
+    "-T",
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=10",
+    "-o", `StrictHostKeyChecking=${strictMode}`,
+    "-o", `UserKnownHostsFile=${SSH_KNOWN_HOSTS}`,
+    "-p", String(connection.port || 22),
+  ];
+  if (connection.identityFile) {
+    args.push("-i", connection.identityFile, "-o", "IdentitiesOnly=yes");
+  }
+  args.push(sshTarget(connection), remoteCommand);
+  return args;
 }
 
 export class SshWorkspaceAdapter implements WorkspaceAdapter {
   readonly label: string;
   private readonly _controlSocket: string;
-  private _masterReady: boolean = false;
 
   constructor(private readonly connection: SshConnection, private readonly root: string) {
     this.label = `ssh:${sshTarget(connection)}:${root}`;
@@ -342,64 +376,79 @@ export class SshWorkspaceAdapter implements WorkspaceAdapter {
     return this._controlSocket;
   }
 
-  /** Check if master connection is alive. */
+  /** Check if master connection is alive using exit code (reliable) rather than output parsing. */
   private async masterCheck(): Promise<boolean> {
     return new Promise((resolveResult) => {
       execFile("ssh", [
         "-S", this._controlSocket,
         "-O", "check",
         sshTarget(this.connection),
-      ], { timeout: 5000 }, (_error, stdout, stderr) => {
-        const output = [stdout, stderr].filter(Boolean).join("").trim();
-        // "Master is running" or "Master running (pid=...)"
-        resolveResult(!output.includes("no such file") && !output.includes("not alive"));
+      ], { timeout: 5000 }, (error) => {
+        // ssh -O check exits 0 on success, non-zero on failure
+        resolveResult(error?.code === 0 || error === null);
       });
     });
   }
 
-  /** Establish or verify the master connection. */
+  /** Establish or verify the master connection. Deduplicated via shared state. */
   private async ensureMaster(): Promise<boolean> {
-    if (this._masterReady && await this.masterCheck()) {
+    const state = getMasterState(this.connection.id);
+
+    // If another caller is already establishing, wait on their promise
+    if (state.establishing) {
+      return state.establishing;
+    }
+
+    // Fast path: socket exists and master responds
+    if (await this.masterCheck()) {
       return true;
     }
 
-    // Try to establish master connection
-    return new Promise((resolveResult) => {
-      execFile("ssh", sshMasterArgs(this._controlSocket, this.connection), {
-        timeout: 15000,
-      }, (error, stdout, stderr) => {
-        if (error) {
-          this._masterReady = false;
-          resolveResult(false);
-          return;
+    // Establish — wrap in a promise that all concurrent callers share
+    const promise = (async () => {
+      try {
+        const ok = await new Promise<boolean>((resolve) => {
+          execFile("ssh", sshMasterArgs(this._controlSocket, this.connection), {
+            timeout: 15000,
+          }, (error, _stdout, stderr) => {
+            // Master establishment: exit 0 = success, but also check for "remote host key" errors
+            const stderrMsg = stderr || "";
+            const failed = error !== null && stderrMsg.length > 0
+              && (stderrMsg.includes("Connection refused")
+                  || stderrMsg.includes("Permission denied")
+                  || stderrMsg.includes("No more authentication methods")
+                  || stderrMsg.includes("Control master already running"));
+            resolve(!failed);
+          });
+        });
+
+        if (ok) {
+          // Give the forked master a moment to establish the socket
+          await new Promise((r) => setTimeout(r, 300));
+          // Verify it actually came up
+          return await this.masterCheck();
         }
-        const output = [stdout, stderr].filter(Boolean).join("").trim();
-        // Master may print "Warning: ... " which is fine
-        if (output.includes("connect") || output.includes("Connection refused") || output.includes("Permission denied")) {
-          this._masterReady = false;
-          resolveResult(false);
-        } else {
-          // Give master a moment to fork and establish
-          setTimeout(() => {
-            this._masterReady = true;
-            resolveResult(true);
-          }, 200);
-        }
-      });
-    });
+        return false;
+      } finally {
+        state.establishing = null;
+      }
+    })();
+
+    state.establishing = promise;
+    return promise;
   }
 
   /** Tear down the master connection. */
   async destroyMaster(): Promise<void> {
-    if (!this._masterReady) return;
-    this._masterReady = false;
+    const state = getMasterState(this.connection.id);
+    state.establishing = null;
     try {
-      await new Promise((resolveResult) => {
+      await new Promise<void>((resolve) => {
         execFile("ssh", [
           "-S", this._controlSocket,
           "-O", "exit",
           sshTarget(this.connection),
-        ], { timeout: 5000 }, () => resolveResult(null));
+        ], { timeout: 5000 }, () => resolve());
       });
     } catch {
       // Teardown failure — non-fatal.
@@ -413,43 +462,32 @@ export class SshWorkspaceAdapter implements WorkspaceAdapter {
     }
 
     const runWithMux = async (): Promise<{ content: string; isError: boolean }> => {
-      // Ensure master is ready
       const masterOk = await this.ensureMaster();
-      if (!masterOk) {
-        // Fall back to direct connection (no multiplexing)
-        return new Promise((resolveResult) => {
-          const args = [...sshBaseOptions(this.connection), sshTarget(this.connection), remoteCommand];
-          const proc = execFile("ssh", args, {
-            timeout: timeoutMs,
-            maxBuffer: 1024 * 1024,
-          }, (error, stdout, stderr) => {
-            const output = [stdout ? stdout.trimEnd() : "", stderr ? `[stderr] ${stderr.trimEnd()}` : ""].filter(Boolean).join("\n");
-            if (error) {
-              resolveResult({ content: error.killed ? `SSH command timed out after ${Math.round(timeoutMs / 1000)}s\n${output}` : (output || error.message), isError: true });
-            } else {
-              resolveResult({ content: output || "(no output)", isError: false });
-            }
-          });
-          if (stdin !== undefined) {
-            proc.stdin?.end(stdin);
-          }
-        });
-      }
 
-      // Use multiplexed connection
+      const args = masterOk
+        ? sshClientArgs(this._controlSocket, this.connection, remoteCommand)
+        : sshDirectArgs(this.connection, remoteCommand);
+
       return new Promise((resolveResult) => {
-        const args = sshClientArgs(this._controlSocket, this.connection, remoteCommand);
         const proc = execFile("ssh", args, {
           timeout: timeoutMs,
           maxBuffer: 1024 * 1024,
         }, (error, stdout, stderr) => {
           const output = [stdout ? stdout.trimEnd() : "", stderr ? `[stderr] ${stderr.trimEnd()}` : ""].filter(Boolean).join("\n");
+
           if (error) {
-            // If socket error, mark master as dead for automatic retry next call
-            if (output.includes("connect") || output.includes("socket")) {
-              this._masterReady = false;
+            // If we were using mux and got a socket/connection error, invalidate
+            // so the next call retries master establishment
+            if (masterOk) {
+              const state = getMasterState(this.connection.id);
+              state.establishing = null;
             }
-            resolveResult({ content: error.killed ? `SSH command timed out after ${Math.round(timeoutMs / 1000)}s\n${output}` : (output || error.message), isError: true });
+            resolveResult({
+              content: error.killed
+                ? `SSH command timed out after ${Math.round(timeoutMs / 1000)}s\n${output}`
+                : (output || error.message),
+              isError: true,
+            });
           } else {
             resolveResult({ content: output || "(no output)", isError: false });
           }
@@ -724,6 +762,36 @@ export async function getWorkspaceForLocation(locationType: ProjectLocationType 
     return new SshWorkspaceAdapter(connection, path);
   }
   return new LocalWorkspaceAdapter(resolveLocalPath(path, HOME));
+}
+
+/**
+ * Tear down all active SSH master connections. Call on process shutdown.
+ */
+export async function destroyAllMasters(): Promise<void> {
+  const promises: Promise<void>[] = [];
+  for (const connectionId of masterRegistry.keys()) {
+    // Reconstruct enough to call destroy — we need the connection details
+    // but we can just use the socket path directly via ssh -O exit
+    const socketPath = join(SSH_MUX_DIR, `${connectionId}.sock`);
+    // We don't have the target handy here, so use ssh -O exit with a placeholder
+    // Actually, ssh -O exit needs the same target. Let's fetch from storage.
+    try {
+      const conn = await getSshConnection(connectionId);
+      if (conn) {
+        promises.push(new Promise<void>((resolve) => {
+          execFile("ssh", [
+            "-S", socketPath,
+            "-O", "exit",
+            sshTarget(conn),
+          ], { timeout: 5000 }, () => resolve());
+        }));
+      }
+    } catch {
+      // Connection record gone — non-fatal
+    }
+  }
+  await Promise.allSettled(promises);
+  masterRegistry.clear();
 }
 
 export async function testSshConnection(connection: SshConnection): Promise<{ ok: boolean; output: string }> {
