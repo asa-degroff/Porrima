@@ -3050,21 +3050,21 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 value={sshDraft.name}
                 onChange={(e) => setSshDraft((prev) => ({ ...prev, name: e.target.value }))}
                 placeholder="Name"
-                className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
               />
               <input
                 type="text"
                 value={sshDraft.host}
                 onChange={(e) => setSshDraft((prev) => ({ ...prev, host: e.target.value }))}
                 placeholder="Host or Tailscale DNS name"
-                className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
               />
               <input
                 type="text"
                 value={sshDraft.username}
                 onChange={(e) => setSshDraft((prev) => ({ ...prev, username: e.target.value }))}
                 placeholder="Username"
-                className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
               />
               <input
                 type="number"
@@ -3073,14 +3073,14 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 value={sshDraft.port}
                 onChange={(e) => setSshDraft((prev) => ({ ...prev, port: Number(e.target.value) || 22 }))}
                 placeholder="Port"
-                className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+                className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
               />
               <input
                 type="text"
                 value={sshDraft.identityFile}
                 onChange={(e) => setSshDraft((prev) => ({ ...prev, identityFile: e.target.value }))}
                 placeholder="Identity file, optional"
-                className="md:col-span-2 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+                className="md:col-span-2 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
               />
               <Dropdown
                 state={sshKnownHostsDd}
@@ -3110,7 +3110,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 type="button"
                 onClick={handleCreateSshConnection}
                 disabled={sshSaving}
-                className="px-3 py-2 rounded-lg text-sm font-medium bg-emerald-500/15 border border-emerald-400/25 text-emerald-200 hover:bg-emerald-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-500/15 border border-emerald-400/25 text-emerald-200 hover:bg-emerald-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {sshSaving ? "Saving..." : "Add Host"}
               </button>
