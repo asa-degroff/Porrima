@@ -1,5 +1,5 @@
 import type { Chat, ChatMessage } from "../types.js";
-import { getNextArchiveSequence, saveArchives, getArchive, getChat, saveChat, type ContextArchive, updateChatTitle } from "./chat-storage.js";
+import { getNextArchiveSequence, saveArchives, getArchive, getChat, saveChat, withChatWriteLock, type ContextArchive, updateChatTitle } from "./chat-storage.js";
 import { regenerateTitle } from "./title-generation.js";
 import { withExtractionMutex } from "./memory-extraction.js";
 import { ensureRouterModelLoaded, normalizeRouterModelId } from "./llama-router-client.js";
@@ -1159,23 +1159,39 @@ export async function enrichArchiveDescriptions(
   console.log(`[compaction] Enriched ${assigned}/${archives.length} archives for chat ${chatId}`);
 
   // Patch the chat's compaction-summary message so future context uses the richer text.
-  try {
-    const chat = await getChat(chatId);
-    if (!chat) return;
-    const targetKey = [...archiveIds].sort().join(",");
-    const summaryIdx = chat.messages.findIndex(
-      (m) => m._isCompactionSummary && m._archiveIds && [...m._archiveIds].sort().join(",") === targetKey,
-    );
-    if (summaryIdx === -1) {
-      // Summary may have been compacted further or removed — acceptable drop.
-      return;
+  // Wrapped in the per-chat write lock so a mid-turn saveChat from the agent loop
+  // can't interleave between our getChat and saveChat.
+  const MAX_PATCH_RETRIES = 3;
+  for (let attempt = 0; attempt < MAX_PATCH_RETRIES; attempt++) {
+    try {
+      await withChatWriteLock(chatId, async () => {
+        const chat = await getChat(chatId);
+        if (!chat) return;
+        const targetKey = [...archiveIds].sort().join(",");
+        const summaryIdx = chat.messages.findIndex(
+          (m) => m._isCompactionSummary && m._archiveIds && [...m._archiveIds].sort().join(",") === targetKey,
+        );
+        if (summaryIdx === -1) {
+          // Summary may have been compacted further or removed — acceptable drop.
+          return;
+        }
+        const updated = { ...chat.messages[summaryIdx], content: buildSummaryText(archives) };
+        chat.messages[summaryIdx] = updated;
+        await saveChat(chat);
+        console.log(`[compaction] Patched summary message for chat ${chatId} at index ${summaryIdx}`);
+      });
+      break; // success — exit retry loop
+    } catch (err) {
+      if (attempt < MAX_PATCH_RETRIES - 1) {
+        console.warn(
+          `[compaction] Retry ${attempt + 1}/${MAX_PATCH_RETRIES} patching summary for ${chatId}:`,
+          (err as Error).message,
+        );
+        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+      } else {
+        console.error(`[compaction] Failed to patch summary message for chat ${chatId} after ${MAX_PATCH_RETRIES} attempts:`, err);
+      }
     }
-    const updated = { ...chat.messages[summaryIdx], content: buildSummaryText(archives) };
-    chat.messages[summaryIdx] = updated;
-    await saveChat(chat);
-    console.log(`[compaction] Patched summary message for chat ${chatId} at index ${summaryIdx}`);
-  } catch (err) {
-    console.error(`[compaction] Failed to patch summary message for chat ${chatId}:`, err);
   }
 }
 

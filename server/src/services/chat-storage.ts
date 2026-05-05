@@ -13,6 +13,68 @@ const SETTINGS_PATH = join(BASE_DIR, "settings.json");
 
 const DB_PATH = join(BASE_DIR, "app.db");
 const MESSAGE_ROWS_MIGRATION = "chat_message_rows_v1";
+
+// ---------------------------------------------------------------------------
+// Per-chat write lock — serializes concurrent saveChat / enrichArchive calls
+// so a read-modify-write cycle can't be interleaved by a background task.
+// Re-entrant: a call to saveChat from inside an existing withChatWriteLock
+// will not deadlock (depth counter tracks nested acquisitions).
+// ---------------------------------------------------------------------------
+
+interface ChatLockEntry {
+  promise: Promise<void>;
+  depth: number;
+}
+
+const chatWriteLocks = new Map<string, ChatLockEntry>();
+
+/**
+ * Acquire an exclusive write lock for a given chat, execute fn, and release.
+ * Calls for the same chatId are serialized; calls for different chatIds run
+ * concurrently. Re-entrant: if fn itself acquires the same lock (e.g. saveChat
+ * called from inside enrichArchiveDescriptions), it executes immediately
+ * without deadlocking.
+ */
+export async function withChatWriteLock<T>(chatId: string, fn: () => Promise<T>): Promise<T> {
+  let entry = chatWriteLocks.get(chatId);
+  if (!entry) {
+    entry = { promise: Promise.resolve(), depth: 0 };
+    chatWriteLocks.set(chatId, entry);
+  }
+
+  if (entry.depth > 0) {
+    // Re-entrant acquisition — we're already inside a lock for this chat.
+    // Just bump depth so the outer release doesn't pop the lock prematurely.
+    entry.depth++;
+    try {
+      return await fn();
+    } finally {
+      entry.depth--;
+      if (entry.depth === 0) {
+        chatWriteLocks.delete(chatId);
+      }
+    }
+  }
+
+  // First acquisition — wait for all previous writes to complete.
+  const prev = entry.promise;
+  let release: () => void;
+  const next = new Promise<void>((resolve) => { release = resolve; });
+  entry.promise = prev.then(() => next);
+  entry.depth = 1;
+
+  await prev;
+
+  try {
+    return await fn();
+  } finally {
+    entry.depth--;
+    release!();
+    if (entry.depth === 0) {
+      chatWriteLocks.delete(chatId);
+    }
+  }
+}
 const CHAT_SEARCH_REBUILD_MIGRATION = "chat_messages_search_from_rows_v1";
 const CHAT_SEARCH_TOOLLOOP_MERGE_MIGRATION = "chat_messages_search_toolloop_merge_v1";
 
@@ -584,41 +646,47 @@ export function getChatMessageWindow(
 }
 
 export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean }): Promise<void> {
-  const db = getDb();
-  chat.lastModified = new Date().toISOString();
-  const preview = computeChatPreview(chat.messages);
+  await withChatWriteLock(chat.id, async () => {
+    const db = getDb();
+    chat.lastModified = new Date().toISOString();
+    const preview = computeChatPreview(chat.messages);
 
-  const save = db.transaction(() => {
-    db.prepare(`
-      INSERT OR REPLACE INTO chats (
-        id, title, type, modelId, systemPrompt,
-        contextWindow, projectId, activeSkills, messages,
-        createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex,
+    const save = db.transaction(() => {
+      // Sync row table first — if the row sync encounters an error,
+      // the JSON column hasn't been touched yet, so there's no
+      // inconsistency to recover from on the next load.
+      const firstChanged = syncChatMessageRows(db, chat.id, chat.messages, opts?.allowTruncation ?? false);
+      syncChatMessages(db, chat.id, chat.messages, firstChanged);
+
+      // JSON column mirrors the now-synced row table.
+      db.prepare(`
+        INSERT OR REPLACE INTO chats (
+          id, title, type, modelId, systemPrompt,
+          contextWindow, projectId, activeSkills, messages,
+          createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex,
+          preview
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        chat.id,
+        chat.title,
+        chat.type,
+        chat.modelId,
+        chat.systemPrompt || "",
+        chat.contextWindow ?? null,
+        chat.projectId ?? null,
+        chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
+        JSON.stringify(chat.messages),
+        chat.createdAt,
+        chat.lastModified,
+        chat.lastDelayedExtractionAt ?? null,
+        chat.lastDelayedExtractionMessageIndex ?? null,
         preview
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      chat.id,
-      chat.title,
-      chat.type,
-      chat.modelId,
-      chat.systemPrompt || "",
-      chat.contextWindow ?? null,
-      chat.projectId ?? null,
-      chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
-      JSON.stringify(chat.messages),
-      chat.createdAt,
-      chat.lastModified,
-      chat.lastDelayedExtractionAt ?? null,
-      chat.lastDelayedExtractionMessageIndex ?? null,
-      preview
-    );
+      );
+    });
 
-    const firstChanged = syncChatMessageRows(db, chat.id, chat.messages, opts?.allowTruncation ?? false);
-    syncChatMessages(db, chat.id, chat.messages, firstChanged);
+    save();
   });
-
-  save();
 }
 
 export async function updateChatExtractionState(
