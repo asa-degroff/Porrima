@@ -1685,7 +1685,7 @@ async function handleChatStream(
                 if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
                   await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
                 }
-                await saveChat(chat);
+                await saveChat(chat, { allowTruncation: true });
 
                 // Full reset of memory context after compaction — rebuild with
                 // fresh retrieval, all memories frozen into the new system prompt.
@@ -1995,7 +1995,7 @@ async function handleChatStream(
         try {
           const compaction = await truncateChatHistory(chat, effectiveCW, true, emitCompacting, emitKeepalive, undefined, systemPrompt, agentTools);
           if (compaction?.truncated) {
-            await saveChat(chat);
+            await saveChat(chat, { allowTruncation: true });
             console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: removed ${compaction.removedCount} messages, estimated ${compaction.estimatedTokenCount} tokens remaining`);
 
             // Extract memories from removed messages and await completion so they're
@@ -2855,7 +2855,7 @@ router.post("/", async (req, res) => {
               }
             }
 
-            await saveChat(chat);
+            await saveChat(chat, { allowTruncation: true });
             // Rebuild system prompt after truncation with full memory reset
             resetMemoryContext(chat.id);
             if (chat.type === "agent" || chat.type === "bluesky") {
@@ -3036,7 +3036,7 @@ router.post("/", async (req, res) => {
               }
             }
 
-            await saveChat(chat);
+            await saveChat(chat, { allowTruncation: true });
             // Full reset of memory context — compaction reshapes the entire context,
             // so we need fresh retrieval with all memories frozen into the new system prompt.
             // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
@@ -3577,7 +3577,7 @@ router.post("/edit", async (req, res) => {
             }
           }
 
-          await saveChat(chat);
+          await saveChat(chat, { allowTruncation: true });
           // Rebuild system prompt after truncation with full memory reset
           resetMemoryContext(chat.id);
           if (chat.type === "agent" || chat.type === "bluesky") {

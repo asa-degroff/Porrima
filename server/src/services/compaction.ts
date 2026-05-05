@@ -468,16 +468,51 @@ export async function truncateBeforeSend(
     return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools);
   }
 
-  // Collect removed messages for archiving. The split head (if any) joins this
-  // batch so all archive IDs end up referenced in a single summary.
+  // Collect removed messages for archiving. Deep-copy each message so that
+  // subsequent content stripping (ARCHIVED_CONTENT_CAP) does not mutate the
+  // objects passed to archiveAndIndex or the CompactionResult returned to the
+  // caller (which is used for memory extraction by preCompactionFlush).
+  // Without deep-copying, stripping truncates toolResults.content and
+  // thinking in the SAME objects, causing archives to see already-stripped
+  // content if saveArchives runs asynchronously, and causing memory
+  // extraction to see truncated tool results.
   const removedMessages: ChatMessage[] = [];
   const markedIndices: number[] = [];
   for (let ic = 0; ic < keepFromIC; ic++) {
     const origIdx = icIndices[ic];
-    removedMessages.push(messages[origIdx]);
+    removedMessages.push(structuredClone(messages[origIdx]));
     markedIndices.push(origIdx);
   }
-  if (splitInfo) removedMessages.push(splitInfo.head);
+  if (splitInfo) removedMessages.push(structuredClone(splitInfo.head));
+
+  // Also include any already-`_outOfContext` messages that have been stripped
+  // by a previous compaction pass. These messages precede the newly-compacted
+  // block and their content in archives may be thin (fallback descriptions
+  // or truncated tool results). Re-archiving them alongside the new block
+  // ensures the archive has full-fidelity content for the entire region
+  // of the conversation that is being pushed out of context.
+  const alreadyOutOfContextIndices: number[] = [];
+  // Walk backwards from the first in-context message to find contiguous
+  // _outOfContext messages in the array that aren't compaction summaries.
+  // These are predecessors that were archived in a prior pass — their
+  // content is already stripped but their archives may have thin descriptions.
+  const insertionOrigIdx = icIndices[keepFromIC];
+  for (let i = insertionOrigIdx - 1; i >= 0; i--) {
+    if (messages[i]._outOfContext && !messages[i]._isCompactionSummary) {
+      alreadyOutOfContextIndices.unshift(i);
+    } else if (!messages[i]._outOfContext) {
+      // In-context messages between _outOfContext ones and the insertion
+      // point shouldn't exist by construction, but stop if we see one to
+      // avoid pulling in non-contiguous _outOfContext blocks from earlier.
+      break;
+    }
+    // Compaction summaries mark the boundary of a prior compaction block;
+    // stop here so we don't re-archive messages from a different era.
+    if (messages[i]._isCompactionSummary) break;
+  }
+  for (const idx of alreadyOutOfContextIndices) {
+    removedMessages.push(structuredClone(messages[idx]));
+  }
 
   // Archive in deferred mode — mechanical descriptions now, LLM enrichment
   // runs in the background so the user turn isn't blocked on a CPU model call.
@@ -1342,16 +1377,40 @@ export async function truncateChatHistory(
   onCompacting?.();
 
   // Collect the messages being marked out (for archiving and estimation).
-  // The split head (if any) joins this batch so all archive IDs end up
-  // referenced in a single summary marker.
+  // Deep-copy each message so that subsequent content stripping does not
+  // mutate the objects passed to archiveAndIndex or the CompactionResult
+  // returned to the caller — the same objects are still referenced from
+  // chat.messages, so stripping would otherwise corrupt the in-memory state
+  // AND cause preCompactionFlush (memory extraction) to see truncated
+  // tool results instead of the original full-fidelity content.
   const removedMessages: ChatMessage[] = [];
   const markedOriginalIndices: number[] = [];
   for (let ic = 0; ic < keepFromICIdx; ic++) {
     const origIdx = inContextIndices[ic];
-    removedMessages.push(messages[origIdx]);
+    removedMessages.push(structuredClone(messages[origIdx]));
     markedOriginalIndices.push(origIdx);
   }
-  if (splitInfo) removedMessages.push(splitInfo.head);
+  if (splitInfo) removedMessages.push(structuredClone(splitInfo.head));
+
+  // Also include any already-`_outOfContext` messages that have been stripped
+  // by a previous compaction pass. These messages precede the newly-compacted
+  // block and their content in archives may be thin (fallback descriptions
+  // or truncated tool results). Re-archiving them alongside the new block
+  // ensures the archive has full-fidelity content for the entire region
+  // of the conversation that is being pushed out of context.
+  const insertionOrigIdx = inContextIndices[keepFromICIdx];
+  const alreadyOutOfContextIndices: number[] = [];
+  for (let i = insertionOrigIdx - 1; i >= 0; i--) {
+    if (messages[i]._outOfContext && !messages[i]._isCompactionSummary) {
+      alreadyOutOfContextIndices.unshift(i);
+    } else if (!messages[i]._outOfContext) {
+      break;
+    }
+    if (messages[i]._isCompactionSummary) break;
+  }
+  for (const idx of alreadyOutOfContextIndices) {
+    removedMessages.push(structuredClone(messages[idx]));
+  }
 
   // Archive removed messages and generate indexed summary (post-response
   // path uses sync mode — the agent loop may consume the summary immediately).

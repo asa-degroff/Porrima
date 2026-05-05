@@ -467,7 +467,51 @@ export async function getChat(id: string): Promise<Chat | null> {
   if (!row) return null;
 
   const legacyMessages = parseMessagesJson(row.messages, row.id);
-  const rowMessages = loadChatMessageRows(db, row.id);
+  let rowMessages = loadChatMessageRows(db, row.id);
+
+  // Consistency check: detect divergence between row table and JSON column.
+  // When they disagree on message count, the source with more messages is
+  // authoritative — it preserves data that the other may have lost due to a
+  // partial write or a sync guard rejection. Log the discrepancy and
+  // reconcile on the spot so subsequent saves don't magnify the divergence.
+  //
+  // Previously, the row table was preferred unconditionally. But if the
+  // safety guard in syncChatMessageRows blocked a sync (the old v1 guard
+  // returned null, skipping both row and FTS updates), the JSON column could
+  // be newer than the rows. In that case, preferring the stale rows would
+  // silently drop messages that survived in the JSON column.
+  if (rowMessages && legacyMessages.length > 0 && rowMessages.length !== legacyMessages.length) {
+    const diff = Math.abs(rowMessages.length - legacyMessages.length);
+    if (rowMessages.length > legacyMessages.length) {
+      console.warn(
+        `[chat-storage] getChat inconsistency for ${row.id}: row table has ${rowMessages.length} messages, ` +
+        `JSON column has ${legacyMessages.length}. Using rows (larger source). ` +
+        `Difference: ${diff} messages.`
+      );
+    } else {
+      console.warn(
+        `[chat-storage] getChat inconsistency for ${row.id}: JSON column has ${legacyMessages.length} messages, ` +
+        `row table has ${rowMessages.length}. Using JSON (larger source) — ` +
+        `rows may be stale from a prior sync guard rejection. Difference: ${diff} messages.`
+      );
+      // JSON column has more messages — likely the rows fell behind after a
+      // sync guard rejection. Override rowMessages so the caller gets the
+      // complete data, then immediately re-sync the row table to match.
+      rowMessages = legacyMessages;
+      try {
+        const firstChanged = syncChatMessageRows(db, row.id, legacyMessages, true);
+        if (firstChanged !== null) {
+          syncChatMessages(db, row.id, legacyMessages, firstChanged);
+          console.log(
+            `[chat-storage] Reconciled ${row.id}: re-synced ${legacyMessages.length} rows from JSON column (firstChanged=${firstChanged})`
+          );
+        }
+      } catch (err) {
+        console.error(`[chat-storage] Failed to reconcile ${row.id} from JSON column:`, err);
+      }
+    }
+  }
+
   const messages = rowMessages && (rowMessages.length > 0 || legacyMessages.length === 0)
     ? rowMessages
     : legacyMessages;
@@ -1080,7 +1124,10 @@ function loadChatMessageRows(db: Database.Database, chatId: string): ChatMessage
   const messages: ChatMessage[] = [];
   for (const row of rows) {
     if (row.sequence !== messages.length) {
-      console.warn(`[chat-storage] Message row sequence gap for chat ${chatId}; falling back to legacy JSON`);
+      console.warn(
+        `[chat-storage] Message row sequence gap for chat ${chatId} at ${row.sequence} (expected ${messages.length}); ` +
+        `falling back to legacy JSON`
+      );
       return null;
     }
     try {
@@ -1133,24 +1180,40 @@ function syncChatMessageRows(
     ORDER BY sequence ASC
   `).all(chatId) as Array<{ sequence: number; payload_json: string }>;
 
-  // Safety guard: prevent catastrophic message loss when in-memory state
-  // has been corrupted (e.g., shrunk to 1 message after a model error).
-  // Legitimate truncation only happens via the /edit endpoint which explicitly
-  // opts in with allowTruncation=true.
+  // Safety guard: detect and log significant message shrinkage when in-memory
+  // state may have been corrupted (e.g., shrunk to 1 message after a model
+  // error). Legitimate truncation happens via the /edit endpoint or compaction,
+  // which explicitly opt in with allowTruncation=true.
   //
-  // Threshold: refuse if new count is > 3 fewer AND < 50% of existing count.
-  // This catches the corruption pattern (10 → 1) while allowing the normal
-  // incremental saves where messages grow by 1-2 at a time.
+  // OLD BEHAVIOR (v1): When the guard triggered, sync was refused entirely
+  // (returned null), creating an inconsistency between chats.messages (JSON
+  // column, updated by INSERT OR REPLACE) and chat_message_rows (stale). On
+  // the next getChat, loadChatMessageRows could return stale row data, and
+  // the in-memory chat.messages would be rebuilt from that — losing any
+  // messages that appeared only in the JSON column. This caused silent
+  // message loss during compaction when the count shrinks due to _outOfContext
+  // marking + content stripping.
+  //
+  // NEW BEHAVIOR (v2): Always proceed with the sync regardless. The guard
+  // only controls logging — a warning fires for significant shrinkage
+  // (> 3 messages AND > 50% of existing count) when allowTruncation is false.
+  // This ensures the DB always reflects current in-memory state, and the JSON
+  // column serves as the recovery path if genuine corruption occurs.
   if (!allowTruncation) {
     const existingCount = existing.length;
     const newCount = messages.length;
-    if (newCount < existingCount - 3 && newCount < existingCount * 0.5) {
-      console.error(
-        `[chat-storage] CRITICAL: refusing to sync chat ${chatId} — ` +
+    const shrinkage = existingCount - newCount;
+    const shrinkagePct = existingCount > 0 ? shrinkage / existingCount : 0;
+    if (shrinkage > 3 && shrinkagePct > 0.5) {
+      // Extreme shrinkage — still sync but log prominently. The JSON column
+      // already has this state (set above), so refusing sync would leave the
+      // row table inconsistent with the JSON column. Syncing ensures both
+      // sources agree and subsequent loads see the same data.
+      console.warn(
+        `[chat-storage] WARNING: syncing chat ${chatId} with significant shrinkage — ` +
         `in-memory state has ${newCount} messages but database has ${existingCount}. ` +
-        `Possible corruption detected. The in-memory state will NOT be persisted.`
+        `Syncing anyway to maintain consistency between storage layers.`
       );
-      return null;
     }
   }
 
@@ -1167,6 +1230,19 @@ function syncChatMessageRows(
 
   if (existing.length === serialized.length && firstChanged === serialized.length) {
     return null;
+  }
+
+  // Log significant sync operations for diagnosability. In normal operation,
+  // syncs update 1-3 messages at a time (incremental saves during streaming).
+  // Large syncs indicate either initial backfill, compaction, or a data issue.
+  const rowsDeleted = Math.max(0, existing.length - firstChanged);
+  const rowsInserted = serialized.length - firstChanged;
+  if (rowsDeleted > 10 || rowsInserted > 10 || Math.abs(existing.length - serialized.length) > 3) {
+    console.log(
+      `[chat-storage] syncChatMessageRows(${chatId.slice(0, 8)}): firstChanged=${firstChanged}, ` +
+      `deleting ${rowsDeleted} rows, inserting ${rowsInserted} rows. ` +
+      `Total: ${existing.length} -> ${serialized.length} messages.`
+    );
   }
 
   db.prepare(`
