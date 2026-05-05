@@ -356,6 +356,12 @@ export interface Settings {
   readFileMaxBytes?: number;
   // Max characters per memory block (note blocks only; synthesis/notebook/archived exempt)
   maxBlockChars?: number;
+  // Per-slot llama.cpp binary overrides. Maps slot id → absolute path to llama-server binary.
+  // When set for a slot, that slot uses this binary instead of the global llama-current.
+  // E.g. { "extraction": "/home/asa/bin/ik-llama/llama-server" }
+  llamaServerBins?: Record<string, string>;
+  // The default llama.cpp binary path (from llama-current symlink). Used by UI for display.
+  llamaServerDefaultBin?: string;
 }
 
 export interface BlueskySettings {

@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import type { Settings } from "../types.js";
 import { extractOverrideModelPath, readOverride } from "./llama-overrides.js";
+import { getDefaultLlamaBin, resolveBin } from "./llama-launch-templates.js";
 
 const execFileAsync = promisify(execFile);
 const SYSTEMCTL = "systemctl";
@@ -59,6 +60,8 @@ export interface LlamaServerStatus {
     path: string;
     modelPath?: string;
   };
+  resolvedBinary: string;
+  defaultBinary: string;
 }
 
 const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
@@ -292,6 +295,7 @@ async function getOverrideInfo(unitName: string): Promise<LlamaServerStatus["ove
 }
 
 export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaServerStatus[]> {
+  const defaultBin = getDefaultLlamaBin();
   return Promise.all(
     Object.values(DEFINITIONS).map(async (def) => {
       const url = getConfiguredUrl(def, settings);
@@ -312,6 +316,8 @@ export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaS
         systemd: unit.systemd,
         http,
         override,
+        resolvedBinary: resolveBin(def.id, settings),
+        defaultBinary: defaultBin,
       };
     })
   );
@@ -338,6 +344,8 @@ export async function getLlamaServerStatus(id: string, settings: Settings): Prom
     systemd: unit.systemd,
     http,
     override,
+    resolvedBinary: resolveBin(def.id, settings),
+    defaultBinary: getDefaultLlamaBin(),
   };
 }
 

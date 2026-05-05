@@ -54,11 +54,18 @@ export function extractOverrideModelPath(contents: string | undefined): string |
   return match[1] || match[2] || match[3] || null;
 }
 
-export async function writeOverride(unitName: string, execStart: string): Promise<string> {
+export interface WriteOverrideOptions {
+  /** Additional Environment= lines to include in the drop-in. */
+  environmentLines?: string[];
+}
+
+export async function writeOverride(unitName: string, execStart: string, options: WriteOverrideOptions = {}): Promise<string> {
   const target = overridePath(unitName);
   const dir = path.dirname(target);
   await ensureDir(dir);
-  const body = `${HEADER}\n[Service]\nExecStart=\nExecStart=${execStart}\n`;
+  const envLines = options.environmentLines?.map((v) => `Environment=${v}`).join("\n");
+  const envSection = envLines ? `${envLines}\n` : "";
+  const body = `${HEADER}\n[Service]\nExecStart=\n${envSection}ExecStart=${execStart}\n`;
   await fs.writeFile(target, body, "utf-8");
   return target;
 }
@@ -101,8 +108,8 @@ export async function restartUnit(unitName: string): Promise<void> {
  * On any failure after the file is written, attempts to delete it so the
  * unit reverts to its default on next manual restart. Re-throws the error.
  */
-export async function applyModelOverride(unitName: string, execStart: string): Promise<{ overridePath: string }> {
-  const target = await writeOverride(unitName, execStart);
+export async function applyModelOverride(unitName: string, execStart: string, options: WriteOverrideOptions = {}): Promise<{ overridePath: string }> {
+  const target = await writeOverride(unitName, execStart, options);
   try {
     await daemonReload();
     await restartUnit(unitName);

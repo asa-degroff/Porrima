@@ -19,10 +19,32 @@ export type OverridableSlotId = Exclude<LlamaServerId, "inference">;
 
 const LLAMA_BIN = path.join(os.homedir(), "bin", "llama-current", "llama-server");
 
+export function getDefaultLlamaBin(): string {
+  return LLAMA_BIN;
+}
+
 interface TemplateInput {
   ggufPath: string;
   modelId: string;
   settings: Settings;
+}
+
+/** Resolve the llama-server binary for a slot, using per-slot override if set. */
+export function resolveBin(slotId: string, settings: Settings): string {
+  return settings.llamaServerBins?.[slotId] || LLAMA_BIN;
+}
+
+/**
+ * Resolve environment variables needed for a slot's binary.
+ * Custom binaries (e.g. ik_llama.cpp with dynamic .so libs) need
+ * LD_LIBRARY_PATH pointing to their library directory.
+ */
+export function resolveSlotEnvironment(slotId: string, settings: Settings): string[] {
+  const bin = resolveBin(slotId, settings);
+  if (bin === LLAMA_BIN) return [];
+  // Custom binary — set LD_LIBRARY_PATH to the directory containing it
+  // so dynamic .so libraries (libggml.so, libllama.so) can be found.
+  return [`LD_LIBRARY_PATH=${path.dirname(bin)}`];
 }
 
 function joinArgs(parts: string[]): string {
@@ -40,7 +62,7 @@ function commonGpuOff(): string[] {
 
 function buildTitleGenerationExecStart(input: TemplateInput): string {
   const args = [
-    LLAMA_BIN,
+    resolveBin("title-generation", input.settings),
     "-m", shellQuote(input.ggufPath),
     "--alias", shellQuote(input.modelId),
     "--port", "8085",
@@ -57,7 +79,7 @@ function buildTitleGenerationExecStart(input: TemplateInput): string {
 function buildExtractionExecStart(input: TemplateInput): string {
   const ctx = Math.max(2048, Math.min(131072, input.settings.extractionCtxSize ?? 16384));
   const args = [
-    LLAMA_BIN,
+    resolveBin("extraction", input.settings),
     "-m", shellQuote(input.ggufPath),
     "--alias", shellQuote(input.modelId),
     "--port", "8083",
@@ -73,7 +95,7 @@ function buildExtractionExecStart(input: TemplateInput): string {
 
 function buildRerankerExecStart(input: TemplateInput): string {
   const args = [
-    LLAMA_BIN,
+    resolveBin("reranker", input.settings),
     "-m", shellQuote(input.ggufPath),
     "--alias", shellQuote(input.modelId),
     "--embedding",
@@ -89,7 +111,7 @@ function buildRerankerExecStart(input: TemplateInput): string {
 
 function buildEmbeddingExecStart(input: TemplateInput): string {
   const args = [
-    LLAMA_BIN,
+    resolveBin("embedding", input.settings),
     "-m", shellQuote(input.ggufPath),
     "--alias", shellQuote(input.modelId),
     "--embedding",
@@ -140,7 +162,7 @@ export function renderRouterExecStart(slotId: RouterCapableSlotId, settings: Set
   const modelsDir = getLlamaModelsDir();
   if (slotId === "title-generation") {
     const args = [
-      LLAMA_BIN,
+      resolveBin("title-generation", settings),
       "--models-dir", shellQuote(modelsDir),
       "--port", "8085",
       "--host", "127.0.0.1",
@@ -155,7 +177,7 @@ export function renderRouterExecStart(slotId: RouterCapableSlotId, settings: Set
   // extraction
   const ctx = Math.max(2048, Math.min(131072, settings.extractionCtxSize ?? 16384));
   const args = [
-    LLAMA_BIN,
+    resolveBin("extraction", settings),
     "--models-dir", shellQuote(modelsDir),
     "--port", "8083",
     "--host", "127.0.0.1",

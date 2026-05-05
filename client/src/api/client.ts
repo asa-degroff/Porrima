@@ -1613,6 +1613,8 @@ export interface LlamaServerStatus {
     path: string;
     modelPath?: string;
   };
+  resolvedBinary: string;
+  defaultBinary: string;
 }
 
 export type OverridableSlotId = Exclude<LlamaServerId, "inference">;
@@ -1701,6 +1703,7 @@ export interface LlamaServerUpdate {
   ctxSize?: number;
   fallbackEnabled?: boolean;
   provider?: "ollama" | "llamacpp";
+  binaryPath?: string;
 }
 
 export async function updateLlamaServerSettings(id: LlamaServerId, updates: LlamaServerUpdate): Promise<{ server: LlamaServerStatus }> {

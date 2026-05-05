@@ -9,7 +9,7 @@ import {
   type LlamaServerAction,
 } from "../services/llama-supervisor.js";
 import { findLocalModel, listLocalModels, type LlamaModelKind } from "../services/llama-models-disk.js";
-import { isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart } from "../services/llama-launch-templates.js";
+import { isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart, resolveSlotEnvironment } from "../services/llama-launch-templates.js";
 import { applyModelOverride, clearModelOverride } from "../services/llama-overrides.js";
 import { ensureRouterModelLoaded, invalidateRouterCache, normalizeRouterModelId } from "../services/llama-router-client.js";
 
@@ -144,7 +144,8 @@ router.post("/:id/apply-model", async (req, res) => {
     } else {
       const execStart = renderExecStart(id, { ggufPath: model.ggufPath, modelId: model.id, settings });
       const unitName = await resolveSlotUnitName(id);
-      const result = await applyModelOverride(unitName, execStart);
+      const envLines = resolveSlotEnvironment(id, settings);
+      const result = await applyModelOverride(unitName, execStart, { environmentLines: envLines.length ? envLines : undefined });
       overridePath = result.overridePath;
       // After a unit restart, our in-process /models/load cache is stale.
       invalidateRouterCache(preStatus.url);
@@ -180,7 +181,8 @@ router.post("/:id/convert-to-router", async (req, res) => {
     const settings = await getSettings();
     const execStart = renderRouterExecStart(id, settings);
     const unitName = await resolveSlotUnitName(id);
-    const { overridePath } = await applyModelOverride(unitName, execStart);
+    const envLines = resolveSlotEnvironment(id, settings);
+    const { overridePath } = await applyModelOverride(unitName, execStart, { environmentLines: envLines.length ? envLines : undefined });
     invalidateRouterCache();
     const server = await getLlamaServerStatus(id, settings);
     res.json({ server, overridePath });
@@ -253,6 +255,12 @@ router.patch("/:id", async (req, res) => {
       }
       if (body.ctxSize !== undefined) settings.extractionCtxSize = Number(body.ctxSize);
       if (body.fallbackEnabled !== undefined) settings.extractionFallbackEnabled = Boolean(body.fallbackEnabled);
+      if (body.binaryPath !== undefined) {
+        const v = (body.binaryPath as string)?.trim();
+        if (!settings.llamaServerBins) settings.llamaServerBins = {};
+        if (v) settings.llamaServerBins["extraction"] = v;
+        else delete settings.llamaServerBins["extraction"];
+      }
     }
     if (def.id === "reranker") {
       if (body.enabled !== undefined) settings.rerankerEnabled = Boolean(body.enabled);
@@ -276,6 +284,12 @@ router.patch("/:id", async (req, res) => {
       if (body.modelId !== undefined) {
         const v = (body.modelId as string).trim();
         settings.titleGenerationModelId = v ? normalizeRouterModelId(v) : undefined;
+      }
+      if (body.binaryPath !== undefined) {
+        const v = (body.binaryPath as string)?.trim();
+        if (!settings.llamaServerBins) settings.llamaServerBins = {};
+        if (v) settings.llamaServerBins["title-generation"] = v;
+        else delete settings.llamaServerBins["title-generation"];
       }
     }
 
