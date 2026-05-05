@@ -34,6 +34,11 @@ const chatWriteLocks = new Map<string, ChatLockEntry>();
  * concurrently. Re-entrant: if fn itself acquires the same lock (e.g. saveChat
  * called from inside enrichArchiveDescriptions), it executes immediately
  * without deadlocking.
+ *
+ * Entries are never deleted from the map — they persist with depth=0 between
+ * uses. This avoids a race where a new caller slips in between depth-- and
+ * map.delete(), creating a fresh entry and running concurrently. One entry
+ * per chat is negligible memory.
  */
 export async function withChatWriteLock<T>(chatId: string, fn: () => Promise<T>): Promise<T> {
   let entry = chatWriteLocks.get(chatId);
@@ -45,14 +50,12 @@ export async function withChatWriteLock<T>(chatId: string, fn: () => Promise<T>)
   if (entry.depth > 0) {
     // Re-entrant acquisition — we're already inside a lock for this chat.
     // Just bump depth so the outer release doesn't pop the lock prematurely.
+    // Don't touch entry.promise — only the first acquirer manages the chain.
     entry.depth++;
     try {
       return await fn();
     } finally {
       entry.depth--;
-      if (entry.depth === 0) {
-        chatWriteLocks.delete(chatId);
-      }
     }
   }
 
@@ -68,11 +71,9 @@ export async function withChatWriteLock<T>(chatId: string, fn: () => Promise<T>)
   try {
     return await fn();
   } finally {
-    entry.depth--;
+    entry.depth = 0;
     release!();
-    if (entry.depth === 0) {
-      chatWriteLocks.delete(chatId);
-    }
+    // Don't delete the entry — see function comment.
   }
 }
 const CHAT_SEARCH_REBUILD_MIGRATION = "chat_messages_search_from_rows_v1";
