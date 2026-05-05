@@ -48,6 +48,7 @@ const SECTIONS = [
   { id: 'images', label: 'Images' },
   { id: 'skills', label: 'Skills' },
   { id: 'extraction', label: 'Extraction' },
+  { id: 'memory-blocks', label: 'Memory Blocks' },
   { id: 'automations', label: 'Automations' },
   { id: 'tools', label: 'Tool Options' },
   { id: 'bluesky', label: 'Bluesky' },
@@ -190,7 +191,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     return capable.length > 0 ? capable : models;
   })();
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
-  const [defaultVisionModelId, setDefaultVisionModelId] = useState(settings.defaultVisionModelId || "");
+  const [defaultVisionModelId, setDefaultVisionModelId] = useState(settings.defaultVisionModelId || settings.defaultModelId);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [defaultSystemPromptExpanded, setDefaultSystemPromptExpanded] = useState(false);
   const [persona, setPersona] = useState<PersonaStore | null>(null);
@@ -388,6 +389,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const favoritesDd = useDropdown();
   const imageBackendDd = useDropdown();
   const webSearchProviderDd = useDropdown();
+  const sshKnownHostsDd = useDropdown();
   const tocDd = useDropdown();
 
   // Per-task dropdown state for automations (avoids hooks-in-map issues)
@@ -2507,22 +2509,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               state={visionModelDd}
               trigger={
                 <span className="truncate flex-1 text-left">
-                  {defaultVisionModelId ? (models.find((m) => m.id === defaultVisionModelId)?.name || defaultVisionModelId) : "Auto (first vision model)"}
+                  {models.find((m) => m.id === defaultVisionModelId)?.name || defaultVisionModelId}
                 </span>
               }
             >
-              <button
-                onClick={() => { setDefaultVisionModelId(""); visionModelDd.close(); }}
-                className={`w-full text-left px-3 py-2 text-xs transition-all ${
-                  !defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                }`}
-                style={{
-                  backgroundColor: !defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                  color: !defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
-                }}
-              >
-                Auto (first vision model)
-              </button>
               {visionModelOptions.map((m) => (
                 <button
                   key={m.id}
@@ -2545,7 +2535,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               ))}
             </Dropdown>
             <p className="text-white/30 text-xs">
-              Model used for image analysis in the Vision sandbox.
+              Model used for image analysis. Defaults to your chat model.
             </p>
           </div>
 
@@ -3092,15 +3082,30 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 placeholder="Identity file, optional"
                 className="md:col-span-2 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
               />
-              <select
-                value={sshDraft.knownHostsMode}
-                onChange={(e) => setSshDraft((prev) => ({ ...prev, knownHostsMode: e.target.value as SshKnownHostsMode }))}
-                className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+              <Dropdown
+                state={sshKnownHostsDd}
+                trigger={
+                  <span className="truncate flex-1 text-left">
+                    {sshDraft.knownHostsMode === "accept-new" ? "Accept new" : sshDraft.knownHostsMode === "strict" ? "Strict" : "Disabled"}
+                  </span>
+                }
               >
-                <option value="accept-new">Accept new host keys</option>
-                <option value="strict">Strict known hosts</option>
-                <option value="off">Disable host key checks</option>
-              </select>
+                {(["accept-new", "strict", "off"] as SshKnownHostsMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => { setSshDraft((prev) => ({ ...prev, knownHostsMode: mode })); sshKnownHostsDd.close(); }}
+                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      mode === sshDraft.knownHostsMode ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    }`}
+                    style={{
+                      backgroundColor: mode === sshDraft.knownHostsMode ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                      color: mode === sshDraft.knownHostsMode ? `rgba(var(--theme-secondary-text))` : '',
+                    }}
+                  >
+                    {mode === "accept-new" ? "Accept new host keys" : mode === "strict" ? "Strict known hosts" : "Disable host key checks"}
+                  </button>
+                ))}
+              </Dropdown>
               <button
                 type="button"
                 onClick={handleCreateSshConnection}
@@ -3783,24 +3788,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <p className="text-xs text-white/30">How many unenriched images to process every 10 minutes</p>
               </div>
 
-              {/* Max block characters */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="block text-sm font-medium text-white/60">Max block characters</label>
-                  <span className="text-xs text-white/40">{maxBlockChars.toLocaleString()} chars</span>
-                </div>
-                <input
-                  type="range"
-                  min={1000}
-                  max={10000}
-                  step={500}
-                  value={maxBlockChars}
-                  onChange={(e) => setMaxBlockChars(Number(e.target.value))}
-                  className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
-                />
-                <p className="text-xs text-white/30">Maximum characters per memory block. Changes apply at next synthesis cycle.</p>
-              </div>
-
               {/* Sleep Cycle & Wake Cycle */}
               <div className="pt-4 border-t border-white/10 space-y-4">
                 <div>
@@ -3821,6 +3808,29 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </div>
 
 	              </div>
+	            </div>
+	          </div>
+
+	          {/* Memory Blocks */}
+	          <div id="memory-blocks" className="border-t border-white/10 pt-6">
+	            <h3 className="text-sm font-semibold text-white/80 mb-4">Memory Blocks</h3>
+	            <div className="space-y-2">
+	              <div className="flex items-center justify-between">
+	                <div>
+	                  <label className="block text-sm font-medium text-white/60">Max block characters</label>
+	                  <p className="text-xs text-white/30 mt-0.5">Maximum characters per memory block. Changes apply at next synthesis cycle.</p>
+	                </div>
+	                <span className="text-xs text-white/40">{maxBlockChars.toLocaleString()} chars</span>
+	              </div>
+	              <input
+	                type="range"
+	                min={1000}
+	                max={10000}
+	                step={500}
+	                value={maxBlockChars}
+	                onChange={(e) => setMaxBlockChars(Number(e.target.value))}
+	                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+	              />
 	            </div>
 	          </div>
 
