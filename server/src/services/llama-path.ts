@@ -223,6 +223,63 @@ export async function updateLlamaPath(newPath: string): Promise<LlamaPathUpdateR
 }
 
 /**
+ * Scan ~/bin/ for directories containing a llama-server binary.
+ * Returns path, version, and whether it's the default (llama-current symlink target).
+ */
+export async function listLlamaBinaries(): Promise<Array<{ path: string; version: string; isDefault: boolean }>> {
+  const binDir = join(process.env.HOME || "/home/asa", "bin");
+  const results: Array<{ path: string; version: string; isDefault: boolean }> = [];
+
+  // Get the current default target
+  let defaultTarget = "";
+  try {
+    const target = await readlink(LLAMA_CURRENT_LINK);
+    defaultTarget = resolve(join(LLAMA_CURRENT_LINK, ".."), target);
+  } catch { /* no symlink */ }
+
+  try {
+    const entries = await readdir(binDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dirPath = join(binDir, entry.name);
+      // Skip the symlink itself — we already have its target
+      if (entry.name === "llama-current") continue;
+      const binaryPath = join(dirPath, "llama-server");
+      if (!existsSync(binaryPath)) continue;
+
+      // Extract version
+      let version = "";
+      try {
+        const { stdout } = await execFileAsync(binaryPath, ["--version"], {
+          timeout: 5000,
+          env: { ...process.env, LD_LIBRARY_PATH: dirPath },
+        });
+        const match = stdout.match(/version:\s*(\d+)/);
+        if (match) version = match[1];
+      } catch { /* version optional */ }
+
+      results.push({
+        path: dirPath,
+        version,
+        isDefault: dirPath === defaultTarget,
+      });
+    }
+  } catch { /* binDir doesn't exist or unreadable */ }
+
+  // Sort: default first, then by version descending
+  results.sort((a, b) => {
+    if (a.isDefault && !b.isDefault) return -1;
+    if (!a.isDefault && b.isDefault) return 1;
+    // Try numeric sort by version
+    const va = Number.parseInt(a.version) || 0;
+    const vb = Number.parseInt(b.version) || 0;
+    return vb - va;
+  });
+
+  return results;
+}
+
+/**
  * Get the status of all llama.cpp systemd services.
  */
 export async function getLlamaServicesStatus(): Promise<Record<string, "active" | "inactive" | "failed" | "unknown">> {

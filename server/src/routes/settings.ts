@@ -8,7 +8,7 @@ import {
   saveSettings,
   updateSshConnection,
 } from "../services/chat-storage.js";
-import { getLlamaPathInfo, updateLlamaPath, validateLlamaPath, getLlamaServicesStatus } from "../services/llama-path.js";
+import { getLlamaPathInfo, updateLlamaPath, validateLlamaPath, getLlamaServicesStatus, listLlamaBinaries } from "../services/llama-path.js";
 import { testSshConnection } from "../services/workspace.js";
 import type { SshConnection } from "../types.js";
 
