@@ -2079,6 +2079,27 @@ async function handleChatStream(
       // Append the handoff message so the resumed agent has continuity
       resumeMessages.push({ role: "user", content: handoffText, timestamp: Date.now() });
 
+      // Persist the handoff as a hidden message so future turns reconstruct
+      // the same token sequence that llama.cpp caches during this continuation.
+      // Without this, reconstruction places compaction summaries at a position
+      // where the cache has the transient handoff, breaking KV cache prefix
+      // matching and forcing a 66K+ token reprocess on the next turn.
+      //
+      // Also mark any compaction summaries as out-of-context — the handoff
+      // plus rebuilt frozen memories already capture the pre-compaction state.
+      for (const m of chat.messages) {
+        if (m._isCompactionSummary && !m._outOfContext) {
+          m._outOfContext = true;
+        }
+      }
+      chat.messages.splice(resumeEndIndex, 0, {
+        role: "user",
+        content: handoffText,
+        timestamp: Date.now(),
+        _isSystemMessage: true,
+      });
+      await saveChat(chat);
+
       // 4. Resume the agent loop with compacted context
       const resumeContext: AgentContext = {
         systemPrompt,
