@@ -1474,6 +1474,7 @@ export function updateMemoryBlock(id: string, updates: {
   blockType?: BlockType;
   attachments?: BlockAttachments | null;
   updatedBy?: "agent" | "user";
+  projectId?: string | null;
 }): boolean {
   const db = getDb();
   const existing = getMemoryBlock(id);
@@ -1492,12 +1493,16 @@ export function updateMemoryBlock(id: string, updates: {
       : existing.attachments
         ? JSON.stringify(existing.attachments)
         : null;
+  // `projectId: null` explicitly clears; `undefined` keeps the existing.
+  const newProjectId = updates.projectId !== undefined
+    ? updates.projectId
+    : existing.projectId;
 
   db.prepare(`
     UPDATE memory_blocks SET
       content = ?, description = ?, name = ?, scope = ?,
       updatedAt = ?, updatedBy = ?, tokenEstimate = ?,
-      blockType = ?, attachments = ?
+      blockType = ?, attachments = ?, projectId = ?
     WHERE id = ?
   `).run(
     content,
@@ -1509,6 +1514,7 @@ export function updateMemoryBlock(id: string, updates: {
     tokenEstimate,
     newType,
     attachmentsJson,
+    newProjectId,
     id
   );
   return true;

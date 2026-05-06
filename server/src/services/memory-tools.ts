@@ -116,6 +116,7 @@ export const MEMORY_TOOLS: Tool[] = [
       content: Type.Optional(Type.String({ description: "New content to replace the block's content" })),
       description: Type.Optional(Type.String({ description: "Updated one-line description" })),
       scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Change scope (e.g. 'archived' to hide from context while keeping searchable)" })),
+      project_id: Type.Optional(Type.String({ description: "Reassign to a different project (pass empty string to clear)" })),
     }),
   },
   {
@@ -494,13 +495,14 @@ export async function executeMemoryTool(
     }
 
     case "update_memory_block": {
-      const { block_id, content: newContent, description: newDesc, scope: newScope } = toolCall.arguments;
+      const { block_id, content: newContent, description: newDesc, scope: newScope, project_id } = toolCall.arguments;
       if (!block_id) return { content: "Missing block_id", isError: true };
 
       const existing = getMemoryBlock(block_id);
       if (!existing) return { content: `Block not found: ${block_id}`, isError: false };
 
       const scopeChanged = newScope !== undefined && newScope !== existing.scope;
+      const projectIdVal = project_id !== undefined ? (project_id === "" ? null : project_id) : undefined;
       const finalContent = newContent ?? existing.content;
       const maxChars = await getMaxBlockChars();
       if (finalContent.length > maxChars) {
@@ -521,7 +523,7 @@ export async function executeMemoryTool(
           description: newDesc ?? existing.description,
           content: finalContent.slice(0, maxChars),
           scope: newScope ?? existing.scope,
-          projectId: existing.projectId || "",
+          projectId: projectIdVal !== undefined ? projectIdVal : (existing.projectId || ""),
           createdAt: now,
           updatedAt: now,
           updatedBy: "agent",
@@ -538,10 +540,13 @@ export async function executeMemoryTool(
         content: newContent,
         description: newDesc,
         scope: newScope,
+        projectId: projectIdVal,
         updatedBy: "agent",
       });
       const scopeNote = scopeChanged ? ` scope: ${existing.scope} → ${newScope}` : "";
-      return { content: `Updated block [${block_id}] "${existing.name}"${scopeNote}`, isError: false };
+      const projectNote = projectIdVal !== undefined && projectIdVal !== existing.projectId
+        ? ` projectId: ${existing.projectId || "(none)"} → ${projectIdVal || "(none)"}` : "";
+      return { content: `Updated block [${block_id}] "${existing.name}"${scopeNote}${projectNote}`, isError: false };
     }
 
     case "read_memory_block": {
