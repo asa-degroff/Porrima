@@ -1,9 +1,5 @@
 import { Router } from "express";
-import {
-  getClusters,
-  getClusterById,
-} from "../services/cluster-storage.js";
-import { buildClusters } from "../services/cluster-engine.js";
+import { buildClusters, ensureClustersFresh } from "../services/cluster-engine.js";
 import { getAllCorpusEntries, cleanupOrphanedEntries } from "../services/image-corpus.js";
 
 const router = Router();
@@ -11,8 +7,9 @@ const router = Router();
 // GET /api/corpus/clusters - Get all clusters
 router.get("/clusters", async (req, res) => {
   try {
-    const clusterMap = await getClusters();
-    res.json(clusterMap || { clusters: [], similarityThreshold: 0.85, lastRebuilt: 0 });
+    const corpus = await getAllCorpusEntries();
+    const clusterMap = await ensureClustersFresh(corpus);
+    res.json(clusterMap);
   } catch (err) {
     console.error("[corpus] clusters error:", err);
     res.status(500).json({ error: "Failed to get clusters" });
@@ -22,13 +19,14 @@ router.get("/clusters", async (req, res) => {
 // GET /api/corpus/clusters/:id - Get single cluster with members
 router.get("/clusters/:id", async (req, res) => {
   try {
-    const cluster = await getClusterById(req.params.id);
+    const corpus = await getAllCorpusEntries();
+    const clusterMap = await ensureClustersFresh(corpus);
+    const cluster = clusterMap.clusters.find(c => c.id === req.params.id);
     if (!cluster) {
       return res.status(404).json({ error: "Cluster not found" });
     }
     
     // Enrich with member details
-    const corpus = await getAllCorpusEntries();
     const members = corpus.filter(e => cluster.memberIds.includes(e.id));
     
     res.json({ ...cluster, members });
@@ -63,10 +61,10 @@ router.post("/rebuild-clusters", async (req, res) => {
 router.get("/visualization", async (req, res) => {
   try {
     const { generateForceGraphHTML } = await import("../services/visualization.js");
-    const clusterMap = await getClusters();
     const corpus = await getAllCorpusEntries();
+    const clusterMap = await ensureClustersFresh(corpus);
     
-    const html = generateForceGraphHTML(clusterMap || { clusters: [], similarityThreshold: 0.85, lastRebuilt: 0, corpusSize: 0 }, corpus);
+    const html = generateForceGraphHTML(clusterMap, corpus);
     
     res.setHeader("Content-Type", "text/html");
     res.send(html);
@@ -80,13 +78,13 @@ router.get("/visualization", async (req, res) => {
 router.get("/stats-public", async (req, res) => {
   try {
     const corpus = await getAllCorpusEntries();
-    const clusterMap = await getClusters();
+    const clusterMap = await ensureClustersFresh(corpus);
     
     res.json({
       total: corpus.length,
       enriched: corpus.filter(e => e.elements && Object.keys(e.elements).length > 0).length,
-      clusters: clusterMap?.clusters.length || 0,
-      lastRebuilt: clusterMap?.lastRebuilt || 0,
+      clusters: clusterMap.clusters.length,
+      lastRebuilt: clusterMap.lastRebuilt,
     });
   } catch (err) {
     console.error("[corpus] stats error:", err);
@@ -98,7 +96,7 @@ router.get("/stats-public", async (req, res) => {
 router.get("/stats", async (req, res) => {
   try {
     const corpus = await getAllCorpusEntries();
-    const clusterMap = await getClusters();
+    const clusterMap = await ensureClustersFresh(corpus);
     
     const enriched = corpus.filter(e => e.elements && Object.keys(e.elements).length > 0);
     const withEmbeddings = corpus.filter(e => e.promptEmbedding && e.promptEmbedding.length > 0);
@@ -123,8 +121,8 @@ router.get("/stats", async (req, res) => {
       total: corpus.length,
       enriched: enriched.length,
       withEmbeddings: withEmbeddings.length,
-      clusters: clusterMap?.clusters.length || 0,
-      lastRebuilt: clusterMap?.lastRebuilt || 0,
+      clusters: clusterMap.clusters.length,
+      lastRebuilt: clusterMap.lastRebuilt,
       topThemes: Object.entries(themeCounts)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 10)

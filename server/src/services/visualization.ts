@@ -26,8 +26,9 @@ export function generateForceGraphHTML(
   // Build nodes from corpus
   const nodes = corpus.map(entry => {
     const cluster = findClusterForImage(entry.id, clusterMap);
-    const primaryTheme = entry.elements?.themes?.[0]?.toLowerCase() || "unknown";
+    const primaryTheme = getPrimaryTheme(entry);
     const clusterSize = cluster?.memberIds.length || 1;
+    const semanticName = getSemanticEntryName(entry);
 
     // Build thumbnail URL based on entry type
     let thumbUrl: string;
@@ -40,7 +41,8 @@ export function generateForceGraphHTML(
     return {
       id: entry.id,
       clusterId: cluster?.id || null,
-      clusterName: cluster?.name || "Unclassified",
+      clusterName: cluster?.name || semanticName,
+      clusterStatus: cluster ? `${cluster.memberIds.length} image cluster` : "Unclustered",
       theme: primaryTheme,
       color: getThemeColor(primaryTheme),
       size: Math.min(15, 5 + clusterSize * 0.5),  // Scale node size by cluster density
@@ -570,22 +572,23 @@ export function generateForceGraphHTML(
       tooltip.classed("visible", true);
 
       let html = '<img class="tooltip-thumb" src="' + d.thumbUrl + '" alt="" onerror="this.style.display=\\'none\\'" />';
-      html += '<div class="tooltip-title">' + d.clusterName + '</div>';
-      html += '<div class="tooltip-elements">' + d.prompt + (d.prompt.length >= 100 ? '...' : '') + '</div>';
+      html += '<div class="tooltip-title">' + escapeHtml(d.clusterName) + '</div>';
+      html += '<div class="tooltip-cluster">' + escapeHtml(d.clusterStatus) + '</div>';
+      html += '<div class="tooltip-elements">' + escapeHtml(d.prompt) + (d.prompt.length >= 100 ? '...' : '') + '</div>';
 
       if (d.elements.themes?.length) {
         html += '<div class="tooltip-element-label">Themes</div>';
-        html += '<div class="tooltip-element-value">' + d.elements.themes.slice(0, 3).join(", ") + '</div>';
+        html += '<div class="tooltip-element-value">' + d.elements.themes.slice(0, 3).map(escapeHtml).join(", ") + '</div>';
       }
 
       if (d.elements.settings?.length) {
         html += '<div class="tooltip-element-label">Settings</div>';
-        html += '<div class="tooltip-element-value">' + d.elements.settings.slice(0, 2).join(", ") + '</div>';
+        html += '<div class="tooltip-element-value">' + d.elements.settings.slice(0, 2).map(escapeHtml).join(", ") + '</div>';
       }
 
       if (d.elements.colors?.length) {
         html += '<div class="tooltip-element-label">Colors</div>';
-        html += '<div class="tooltip-element-value">' + d.elements.colors.slice(0, 3).join(", ") + '</div>';
+        html += '<div class="tooltip-element-value">' + d.elements.colors.slice(0, 3).map(escapeHtml).join(", ") + '</div>';
       }
 
       tooltip.html(html);
@@ -633,6 +636,15 @@ export function generateForceGraphHTML(
 
       tooltip.style("left", x + "px")
         .style("top", y + "px");
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     }
 
     // Build legend
@@ -770,6 +782,60 @@ function getThemeColor(theme: string): string {
   
   // Default grey
   return "#9ca3af";
+}
+
+function getPrimaryTheme(entry: ImageCorpusEntry): string {
+  const elements = entry.elements || {};
+  return (
+    pickFirst(elements.themes) ||
+    pickFirst(elements.concepts) ||
+    pickFirst(elements.styles) ||
+    pickFirst(elements.mood) ||
+    "unknown"
+  ).toLowerCase();
+}
+
+function getSemanticEntryName(entry: ImageCorpusEntry): string {
+  const elements = entry.elements || {};
+  const theme =
+    pickFirst(elements.themes) ||
+    pickFirst(elements.concepts) ||
+    pickFirst(elements.styles) ||
+    pickFirst(elements.mood);
+  const subject =
+    pickFirst(elements.settings) ||
+    pickFirst(elements.characters) ||
+    pickFirst(elements.composition) ||
+    pickFirst(elements.colors);
+
+  if (theme && subject) {
+    const normalizedTheme = normalizeLabel(theme);
+    const normalizedSubject = normalizeLabel(subject);
+    if (normalizedSubject.includes(normalizedTheme)) {
+      return titleCase(subject);
+    }
+    return `${titleCase(theme)} / ${titleCase(subject)}`;
+  }
+
+  if (theme) return titleCase(theme);
+  if (subject) return titleCase(subject);
+  return "Unclustered";
+}
+
+function pickFirst(items: string[] | undefined): string | undefined {
+  return items?.find(item => item.trim().length > 0)?.trim();
+}
+
+function normalizeLabel(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function titleCase(value: string): string {
+  return value
+    .trim()
+    .split(/\s+/)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 /**

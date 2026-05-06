@@ -8,6 +8,7 @@ import {
   computeVariance,
   generateClusterName,
   cosineSimilarity,
+  getClusters,
   setClusters,
 } from "./cluster-storage.js";
 
@@ -114,6 +115,41 @@ export async function buildClusters(
   console.log(`[cluster-engine] largest cluster: ${clusterObjects[0].size} members`);
   console.log(`[cluster-engine] smallest cluster: ${clusterObjects[clusterObjects.length - 1].size} members`);
   
+  return clusterMap;
+}
+
+export function clusterMapNeedsRebuild(
+  clusterMap: ClusterMap | null,
+  corpus: ImageCorpusEntry[]
+): boolean {
+  if (!clusterMap) return true;
+
+  const embeddedIds = new Set(
+    corpus
+      .filter(e => e.promptEmbedding && e.promptEmbedding.length > 0)
+      .map(e => e.id)
+  );
+  const clusteredIds = new Set(clusterMap.clusters.flatMap(c => c.memberIds));
+
+  if (clusterMap.corpusSize !== embeddedIds.size) return true;
+  if (clusteredIds.size !== embeddedIds.size) return true;
+
+  for (const id of embeddedIds) {
+    if (!clusteredIds.has(id)) return true;
+  }
+
+  return false;
+}
+
+export async function ensureClustersFresh(
+  corpus: ImageCorpusEntry[],
+  options: ClusterEngineOptions = {}
+): Promise<ClusterMap> {
+  const clusterMap = await getClusters();
+  if (!clusterMap || clusterMapNeedsRebuild(clusterMap, corpus)) {
+    console.log("[cluster-engine] cluster map is stale; rebuilding");
+    return buildClusters(corpus, options);
+  }
   return clusterMap;
 }
 

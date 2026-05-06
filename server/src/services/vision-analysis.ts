@@ -823,12 +823,12 @@ export async function saveAnalyzedImage(
     visionId: id,
   };
 
-  // Enrich with elements (async, non-blocking)
+  await addCorpusEntry(corpusEntry);
+
+  // Enrich with embedding and elements (async, non-blocking)
   const settings = await getSettings();
   const extractionModelId = settings.extractionModelId || settings.defaultModelId;
   enrichCorpusEntry(corpusEntry.id, undefined, description, extractionModelId).catch(console.error);
-  
-  await addCorpusEntry(corpusEntry);
 
   return analyzedImage;
 }

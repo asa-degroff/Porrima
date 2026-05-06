@@ -173,12 +173,12 @@ export async function completeGeneration(
       generationId: updated.id,
     };
     
+    await addCorpusEntry(corpusEntry);
+
     // Enrich with embedding and elements (async, non-blocking)
     const settings = await getSettings();
     const extractionModelId = settings.extractionModelId || settings.defaultModelId;
     enrichCorpusEntry(corpusEntry.id, updated.params.positivePrompt, undefined, extractionModelId).catch(console.error);
-    
-    await addCorpusEntry(corpusEntry);
   }
   
   return updated;

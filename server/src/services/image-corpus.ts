@@ -618,25 +618,29 @@ export async function enrichCorpusEntry(
   if (!entry) return undefined;
 
   const updates: Partial<ImageCorpusEntry> = {};
+  const effectivePrompt = prompt ?? entry.prompt;
+  const effectiveDescription = description ?? entry.description;
+  const embeddingSource = effectivePrompt?.trim() || effectiveDescription?.trim();
 
-  // Embed prompt if available and missing
-  if (prompt && (!entry.promptEmbedding || entry.promptEmbedding.length === 0)) {
-    const embedding = await embedPrompt(prompt);
+  // Embed whichever text is available. Generated images use prompts; analyzed
+  // and uploaded images often only have a description.
+  if (embeddingSource && (!entry.promptEmbedding || entry.promptEmbedding.length === 0)) {
+    const embedding = await embedPrompt(embeddingSource);
     if (embedding.length > 0) {
       updates.promptEmbedding = embedding;
     }
   }
 
   // Extract elements from description or prompt
-  if (description && Object.keys(entry.elements).length === 0) {
+  if (effectiveDescription && Object.keys(entry.elements).length === 0) {
     const { extractElements } = await import("./element-extraction.js");
-    const elements = await extractElements(description, prompt, modelId);
+    const elements = await extractElements(effectiveDescription, effectivePrompt, modelId);
     if (Object.keys(elements).length > 0) {
       updates.elements = elements;
     }
-  } else if (prompt && Object.keys(entry.elements).length === 0) {
+  } else if (effectivePrompt && Object.keys(entry.elements).length === 0) {
     const { extractElements } = await import("./element-extraction.js");
-    const elements = await extractElements("", prompt, modelId);
+    const elements = await extractElements("", effectivePrompt, modelId);
     if (Object.keys(elements).length > 0) {
       updates.elements = elements;
     }
@@ -652,11 +656,12 @@ export async function enrichCorpusEntry(
 export async function enrichCorpusBatch(batchSize = 10, modelId?: string): Promise<number> {
   const db = getDb();
 
-  // Find entries needing embeddings (have prompt but no embedding)
+  // Find entries needing embeddings (have prompt or description but no embedding)
   const needsEmbed = db.prepare(`
     SELECT ce.id, ce.prompt, ce.description FROM corpus_entries ce
     LEFT JOIN vec_corpus vc ON vc.id = ce.id
-    WHERE ce.prompt IS NOT NULL AND ce.prompt != '' AND vc.id IS NULL
+    WHERE ((ce.prompt IS NOT NULL AND ce.prompt != '') OR ce.description != '')
+      AND vc.id IS NULL
     LIMIT ?
   `).all(batchSize) as Array<{ id: string; prompt: string; description: string }>;
 
