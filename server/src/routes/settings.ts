@@ -146,4 +146,14 @@ router.post("/llama-path/validate", async (req, res) => {
   }
 });
 
+// GET /api/settings/llama-binaries — List discovered llama-server binaries
+router.get("/llama-binaries", async (_req, res) => {
+  try {
+    const binaries = await listLlamaBinaries();
+    res.json(binaries);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 export default router;

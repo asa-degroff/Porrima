@@ -386,6 +386,12 @@ export interface LlamaPathUpdateResult {
   error?: string;
 }
 
+export interface LlamaBinaryInfo {
+  path: string;
+  version: string;
+  isDefault: boolean;
+}
+
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
 
 export type MemorySourceType = "chat" | "chat_delayed" | "chat_immediate" | "notebook" | "explicit";

@@ -269,6 +269,12 @@ router.patch("/:id", async (req, res) => {
         const v = (body.modelId as string).trim();
         settings.rerankerModelId = v ? normalizeRouterModelId(v) : undefined;
       }
+      if (body.binaryPath !== undefined) {
+        const v = (body.binaryPath as string)?.trim();
+        if (!settings.llamaServerBins) settings.llamaServerBins = {};
+        if (v) settings.llamaServerBins["reranker"] = v;
+        else delete settings.llamaServerBins["reranker"];
+      }
     }
     if (def.id === "embedding") {
       if (body.provider !== undefined) settings.embeddingProvider = body.provider as "ollama" | "llamacpp";
@@ -276,6 +282,12 @@ router.patch("/:id", async (req, res) => {
       if (body.modelId !== undefined) {
         const v = (body.modelId as string).trim();
         settings.embeddingModel = v ? normalizeRouterModelId(v) : undefined;
+      }
+      if (body.binaryPath !== undefined) {
+        const v = (body.binaryPath as string)?.trim();
+        if (!settings.llamaServerBins) settings.llamaServerBins = {};
+        if (v) settings.llamaServerBins["embedding"] = v;
+        else delete settings.llamaServerBins["embedding"];
       }
     }
     if (def.id === "title-generation") {

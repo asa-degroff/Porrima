@@ -1,4 +1,4 @@
-import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
+import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -1571,6 +1571,12 @@ export async function validateLlamaPathApi(candidatePath: string): Promise<{ val
     body: JSON.stringify({ path: candidatePath }),
   });
   if (!res.ok) throw new Error("Failed to validate path");
+  return res.json();
+}
+
+export async function listLlamaBinaries(): Promise<LlamaBinaryInfo[]> {
+  const res = await apiFetch(`${BASE}/settings/llama-binaries`);
+  if (!res.ok) throw new Error("Failed to list binaries");
   return res.json();
 }
 
