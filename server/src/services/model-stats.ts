@@ -41,6 +41,7 @@ export interface ModelStatsEntry {
   inferredCacheHitRatio?: number;
   requestMessageCount?: number;
   requestCharCount?: number;
+  requestDigest?: string;
 }
 
 export interface ModelStatsSummary {
@@ -59,6 +60,7 @@ export interface CacheMetrics {
   cacheMode?: string;
   requestMessageCount?: number;
   requestCharCount?: number;
+  requestDigest?: string;
   reportedPromptTokens?: number;
   promptEvalTokens?: number;
   inferredCachedTokens?: number;
@@ -68,6 +70,7 @@ export interface CacheMetrics {
 type Row = Record<string, unknown>;
 
 let db: Database.Database | null = null;
+let runSequence = 0;
 
 function getDb(): Database.Database {
   if (!db) {
@@ -116,6 +119,7 @@ function initSchema() {
   addColumn("inferredCacheHitRatio", "inferredCacheHitRatio REAL");
   addColumn("requestMessageCount", "requestMessageCount INTEGER");
   addColumn("requestCharCount", "requestCharCount INTEGER");
+  addColumn("requestDigest", "requestDigest TEXT");
 }
 
 /**
@@ -131,7 +135,7 @@ export function recordModelStats(
 ): ModelStatsEntry {
   const database = getDb();
   const ts = timestamp ?? Date.now();
-  const id = `${modelId}_${ts}`;
+  const id = `${modelId}_${ts}_${runSequence++}`;
 
   const stmt = database.prepare(`
     INSERT INTO model_stats (
@@ -140,13 +144,13 @@ export function recordModelStats(
       promptMs, predictedMs, sampleMs,
       promptTokensPerSec, predictedTokensPerSec,
       cachePrompt, cacheMode, reportedPromptTokens, inferredCachedTokens,
-      inferredCacheHitRatio, requestMessageCount, requestCharCount
+      inferredCacheHitRatio, requestMessageCount, requestCharCount, requestDigest
     ) VALUES (@id, @modelId, @provider, @timestamp,
       @promptTokens, @predictedTokens,
       @promptMs, @predictedMs, @sampleMs,
       @promptTokensPerSec, @predictedTokensPerSec,
       @cachePrompt, @cacheMode, @reportedPromptTokens, @inferredCachedTokens,
-      @inferredCacheHitRatio, @requestMessageCount, @requestCharCount)
+      @inferredCacheHitRatio, @requestMessageCount, @requestCharCount, @requestDigest)
   `);
 
   const reportedPromptTokens = cacheMetrics?.reportedPromptTokens;
@@ -178,6 +182,7 @@ export function recordModelStats(
     inferredCacheHitRatio,
     requestMessageCount: cacheMetrics?.requestMessageCount,
     requestCharCount: cacheMetrics?.requestCharCount,
+    requestDigest: cacheMetrics?.requestDigest,
   };
 
   stmt.run({
@@ -199,6 +204,7 @@ export function recordModelStats(
     inferredCacheHitRatio: inferredCacheHitRatio ?? null,
     requestMessageCount: cacheMetrics?.requestMessageCount ?? null,
     requestCharCount: cacheMetrics?.requestCharCount ?? null,
+    requestDigest: cacheMetrics?.requestDigest ?? null,
   });
 
   pruneOldRuns(modelId);
@@ -230,7 +236,7 @@ export function getModelRuns(modelId: string, limit = 20): ModelStatsEntry[] {
       promptMs, predictedMs, sampleMs,
       promptTokensPerSec, predictedTokensPerSec,
       cachePrompt, cacheMode, reportedPromptTokens, inferredCachedTokens,
-      inferredCacheHitRatio, requestMessageCount, requestCharCount
+      inferredCacheHitRatio, requestMessageCount, requestCharCount, requestDigest
     FROM model_stats
     WHERE modelId = ?
     ORDER BY timestamp DESC
@@ -257,6 +263,7 @@ export function getModelRuns(modelId: string, limit = 20): ModelStatsEntry[] {
     inferredCacheHitRatio: r.inferredCacheHitRatio != null ? r.inferredCacheHitRatio as number : undefined,
     requestMessageCount: r.requestMessageCount != null ? r.requestMessageCount as number : undefined,
     requestCharCount: r.requestCharCount != null ? r.requestCharCount as number : undefined,
+    requestDigest: r.requestDigest != null ? r.requestDigest as string : undefined,
   }));
 }
 
@@ -272,7 +279,7 @@ export function getModelStatsSummary(modelId: string): ModelStatsSummary {
       promptMs, predictedMs, sampleMs,
       promptTokensPerSec, predictedTokensPerSec,
       cachePrompt, cacheMode, reportedPromptTokens, inferredCachedTokens,
-      inferredCacheHitRatio, requestMessageCount, requestCharCount
+      inferredCacheHitRatio, requestMessageCount, requestCharCount, requestDigest
     FROM model_stats
     WHERE modelId = ?
     ORDER BY timestamp DESC
@@ -299,6 +306,7 @@ export function getModelStatsSummary(modelId: string): ModelStatsSummary {
     inferredCacheHitRatio: lastRow.inferredCacheHitRatio != null ? lastRow.inferredCacheHitRatio as number : undefined,
     requestMessageCount: lastRow.requestMessageCount != null ? lastRow.requestMessageCount as number : undefined,
     requestCharCount: lastRow.requestCharCount != null ? lastRow.requestCharCount as number : undefined,
+    requestDigest: lastRow.requestDigest != null ? lastRow.requestDigest as string : undefined,
   } as ModelStatsEntry) : null;
 
   // Compute EMA from all runs (chronological order for proper EMA)

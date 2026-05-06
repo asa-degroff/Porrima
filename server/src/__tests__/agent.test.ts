@@ -126,6 +126,51 @@ describe("chatMessagesToPiMessages", () => {
     ]);
   });
 
+  it("preserves persisted assistant provider identity for replay", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "I checked it.",
+        thinking: "Use the current llama.cpp context.",
+        timestamp: 1000,
+        _api: "openai-compat",
+        _provider: "llamacpp",
+        _model: "Qwen3.6-27B-Q5_K_S",
+      },
+    ];
+    const result = chatMessagesToPiMessages(messages, MODEL_ID);
+    const msg = result[0] as AssistantMessage;
+
+    expect(msg.api).toBe("openai-compat");
+    expect(msg.provider).toBe("llamacpp");
+    expect(msg.model).toBe("Qwen3.6-27B-Q5_K_S");
+    expect(msg.content).toEqual([
+      { type: "thinking", thinking: "Use the current llama.cpp context." },
+      { type: "text", text: "I checked it." },
+    ]);
+  });
+
+  it("uses the caller identity fallback for legacy assistant rows", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "Legacy row.",
+        thinking: "Still same provider for this chat.",
+        timestamp: 1000,
+      },
+    ];
+    const result = chatMessagesToPiMessages(messages, MODEL_ID, {
+      api: "openai-compat",
+      provider: "llamacpp",
+      model: "Qwen3.6-27B-Q5_K_S",
+    });
+    const msg = result[0] as AssistantMessage;
+
+    expect(msg.api).toBe("openai-compat");
+    expect(msg.provider).toBe("llamacpp");
+    expect(msg.model).toBe("Qwen3.6-27B-Q5_K_S");
+  });
+
   it("reconstructs tool-calling turn into three separate messages", () => {
     const messages: ChatMessage[] = [
       {

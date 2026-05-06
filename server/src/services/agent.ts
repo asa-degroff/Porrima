@@ -26,6 +26,12 @@ export interface StreamChatResult {
   assistantMessage: AssistantMessage;
 }
 
+export interface ReplayModelIdentity {
+  api: string;
+  provider: string;
+  model: string;
+}
+
 function isPlaceholderEllipsis(text: string | undefined): boolean {
   if (!text) return false;
   const normalized = text.replace(/\s/g, "").replace(/…/g, "...");
@@ -61,11 +67,23 @@ export function mergeSystemContextWithUserContent(
 /** Convert our ChatMessage[] to pi-ai Message[] for the initial context */
 export function chatMessagesToPiMessages(
   messages: ChatMessage[],
-  modelId: string
+  modelId: string,
+  fallbackIdentity?: Partial<ReplayModelIdentity>
 ): Message[] {
   const result: Message[] = [];
   const pendingSystemContexts: string[] = [];
   let pendingSystemTimestamp: number | undefined;
+  const defaultAssistantIdentity: ReplayModelIdentity = {
+    api: fallbackIdentity?.api ?? "ollama-native",
+    provider: fallbackIdentity?.provider ?? "ollama",
+    model: fallbackIdentity?.model ?? modelId,
+  };
+
+  const assistantIdentityFor = (message: ChatMessage): ReplayModelIdentity => ({
+    api: message._api ?? defaultAssistantIdentity.api,
+    provider: message._provider ?? defaultAssistantIdentity.provider,
+    model: message._model ?? defaultAssistantIdentity.model,
+  });
 
   const takePendingSystemContext = () => {
     const content = pendingSystemContexts.splice(0);
@@ -117,6 +135,7 @@ export function chatMessagesToPiMessages(
 
       const visibleContent = visibleAssistantContent(m);
       const visibleThinking = isPlaceholderEllipsis(m.thinking) ? "" : (m.thinking || "");
+      const assistantIdentity = assistantIdentityFor(m);
 
       if (m.toolCalls?.length) {
         const isCanonicalToolFragment = m._toolLoopFragment === true;
@@ -143,9 +162,9 @@ export function chatMessagesToPiMessages(
         result.push({
           role: "assistant" as const,
           content: toolContent,
-          api: "ollama-native" as const,
-          provider: "ollama",
-          model: modelId,
+          api: assistantIdentity.api,
+          provider: assistantIdentity.provider,
+          model: assistantIdentity.model,
           usage: dummyUsage,
           stopReason: "toolUse" as StopReason,
           timestamp: m.timestamp,
@@ -190,9 +209,9 @@ export function chatMessagesToPiMessages(
           result.push({
             role: "assistant" as const,
             content: [{ type: "text", text: visibleContent }],
-            api: "ollama-native" as const,
-            provider: "ollama",
-            model: modelId,
+            api: assistantIdentity.api,
+            provider: assistantIdentity.provider,
+            model: assistantIdentity.model,
             usage: dummyUsage,
             stopReason: "stop" as StopReason,
             timestamp: m.timestamp,
@@ -210,9 +229,9 @@ export function chatMessagesToPiMessages(
         result.push({
           role: "assistant" as const,
           content,
-          api: "ollama-native" as const,
-          provider: "ollama",
-          model: modelId,
+          api: assistantIdentity.api,
+          provider: assistantIdentity.provider,
+          model: assistantIdentity.model,
           usage: dummyUsage,
           stopReason: "stop" as StopReason,
           timestamp: m.timestamp,

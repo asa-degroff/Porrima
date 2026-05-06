@@ -7,7 +7,7 @@ import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { AgentContext } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat, getDb, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
-import { chatMessagesToPiMessages, mergeSystemContextWithUserContent } from "../services/agent.js";
+import { chatMessagesToPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { OllamaModel } from "../types.js";
 import { extractMemories, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
@@ -278,6 +278,21 @@ interface SentPrefixSnapshot {
 
 const lastSentPrefixSnapshot = new Map<string, SentPrefixSnapshot>();
 
+function replayIdentityForModel(modelId: string, model?: OllamaModel | null): ReplayModelIdentity {
+  if (model?.provider === "llamacpp") {
+    return { api: "openai-compat", provider: "llamacpp", model: modelId };
+  }
+  return { api: "ollama-native", provider: "ollama", model: modelId };
+}
+
+function replayIdentityFromPiModel(model: Model<string>): ReplayModelIdentity {
+  return {
+    api: String(model.api),
+    provider: String(model.provider),
+    model: model.id,
+  };
+}
+
 function digestPiMessages(piMessages: Message[]): string {
   const hash = createHash("sha1");
   for (const m of piMessages) {
@@ -329,8 +344,13 @@ function logKvCacheState(opts: {
   );
 }
 
-function snapshotSentPrefix(chatId: string, chatMessages: ChatMessage[], modelId: string): void {
-  const piMessages = chatMessagesToPiMessages(chatMessages, modelId);
+function snapshotSentPrefix(
+  chatId: string,
+  chatMessages: ChatMessage[],
+  modelId: string,
+  fallbackIdentity?: ReplayModelIdentity,
+): void {
+  const piMessages = chatMessagesToPiMessages(chatMessages, modelId, fallbackIdentity);
   lastSentPrefixSnapshot.set(chatId, {
     digest: digestPiMessages(piMessages),
     piMsgCount: piMessages.length,
@@ -613,6 +633,7 @@ async function handleChatStream(
     lastLlamaTimings: null as any,
     // Track llama.cpp prompt-cache metadata for model-stats recording
     lastLlamaCache: null as any,
+    llamaRuns: [] as Array<{ timings: any; cache?: any }>,
     toolLoopId: randomUUID(),
     committedTextLength: 0,
     committedThinkingLength: 0,
@@ -652,6 +673,7 @@ async function handleChatStream(
     state.needsMidTurnCompaction = false;
     state.lastLlamaTimings = null;
     state.lastLlamaCache = null;
+    state.llamaRuns = [];
     state.toolLoopId = randomUUID();
     state.committedTextLength = 0;
     state.committedThinkingLength = 0;
@@ -708,6 +730,7 @@ async function handleChatStream(
       segments: cleanSegments.length > 0 ? cleanSegments : undefined,
       timestamp: Date.now(),
       _thinkingPromoted: state.thinkingPromoted || undefined,
+      ...assistantProviderFields(),
     };
   }
 
@@ -791,6 +814,7 @@ async function handleChatStream(
       segments: segments.length > 0 ? segments : undefined,
       timestamp: Date.now(),
       _thinkingPromoted: state.thinkingPromoted || undefined,
+      ...assistantProviderFields(),
     });
   }
 
@@ -826,6 +850,7 @@ async function handleChatStream(
       segments: segments.length > 0 ? segments : undefined,
       timestamp: msg.timestamp || Date.now(),
       _thinkingPromoted: state.thinkingPromoted || undefined,
+      ...assistantProviderFields(msg),
     });
   }
 
@@ -1013,6 +1038,42 @@ async function handleChatStream(
   const deferredExtractions: Array<{ userMsg: string; assistantMsg: string }> = [];
   let lastUserMessage = userMessage; // tracks the current user message text for title gen / memory
   let currentTurnIsHidden = options.hiddenUserMessage === true;
+  let activeAssistantIdentity: ReplayModelIdentity | undefined;
+
+  function assistantProviderFields(msg?: AssistantMessage): Pick<ChatMessage, "_api" | "_provider" | "_model"> {
+    const identity = msg
+      ? {
+          api: String((msg as any).api),
+          provider: String((msg as any).provider),
+          model: String((msg as any).model),
+        }
+      : activeAssistantIdentity;
+    return identity
+      ? { _api: identity.api, _provider: identity.provider, _model: identity.model }
+      : {};
+  }
+
+  function captureLlamaRun(msg: AssistantMessage, iterationLabel: number, phase: string): void {
+    const timings = (msg as any).llamaTimings;
+    if (!timings) return;
+    const cache = (msg as any).llamaCache;
+    state.lastLlamaTimings = timings;
+    state.lastLlamaCache = cache;
+    state.llamaRuns.push({ timings, cache });
+
+    const reported = cache?.reportedPromptTokens;
+    const hitRatio = typeof cache?.inferredCacheHitRatio === "number"
+      ? `${(cache.inferredCacheHitRatio * 100).toFixed(1)}%`
+      : "n/a";
+    const digest = cache?.requestDigest ?? "-";
+    console.log(
+      `[llama-cache] chat=${chat.id} iter=${iterationLabel} phase=${phase} ` +
+      `prompt_eval=${timings.prompt_n}/${reported ?? "?"} ` +
+      `prompt_ms=${timings.prompt_ms?.toFixed?.(0) ?? timings.prompt_ms} ` +
+      `hit=${hitRatio} digest=${digest} ` +
+      `messages=${cache?.requestMessageCount ?? "?"} chars=${cache?.requestCharCount ?? "?"}`,
+    );
+  }
 
   console.log(`[chat] type=${chat.type} isAgent=${isAgent} tts=${ttsEnabled}`);
 
@@ -1031,6 +1092,7 @@ async function handleChatStream(
       // respects per-chat and per-model settings. Without this, Ollama receives
       // the full detected context window (e.g. 128k) and may overflow VRAM.
       piModel.contextWindow = getEffectiveContextWindow(chat, ollamaModel, settings);
+      activeAssistantIdentity = replayIdentityFromPiModel(piModel);
     } catch (modelError: any) {
       console.error("[chat] model discovery failed:", modelError.message);
       // Send error event and end response cleanly
@@ -1441,13 +1503,7 @@ async function handleChatStream(
               totalTokens: msg.usage.totalTokens,
             };
           }
-          // Capture llama.cpp timings for model-stats recording
-          if ((msg as any).llamaTimings) {
-            state.lastLlamaTimings = (msg as any).llamaTimings;
-          }
-          if ((msg as any).llamaCache) {
-            state.lastLlamaCache = (msg as any).llamaCache;
-          }
+          captureLlamaRun(msg, iterations + 1, "main");
 
           // Snapshot this iteration's new tool calls before the commit below
           // advances committedToolCallCount — the dedup check further down
@@ -2074,7 +2130,7 @@ async function handleChatStream(
         resumeEndIndex = 1; // Keep at least the first user message
       }
       const messagesForResume = chat.messages.slice(0, resumeEndIndex);
-      const resumeMessages = chatMessagesToPiMessages(messagesForResume, chat.modelId);
+      const resumeMessages = chatMessagesToPiMessages(messagesForResume, chat.modelId, activeAssistantIdentity);
 
       // Append the handoff message so the resumed agent has continuity
       resumeMessages.push({ role: "user", content: handoffText, timestamp: Date.now() });
@@ -2174,13 +2230,7 @@ async function handleChatStream(
             if (msg.usage) {
               state.finalUsage = { input: msg.usage.input, output: msg.usage.output, totalTokens: msg.usage.totalTokens };
             }
-            // Capture llama.cpp timings from resume loop too
-            if ((msg as any).llamaTimings) {
-              state.lastLlamaTimings = (msg as any).llamaTimings;
-            }
-            if ((msg as any).llamaCache) {
-              state.lastLlamaCache = (msg as any).llamaCache;
-            }
+            captureLlamaRun(msg, iterations + 1, `resume-${compactionCycle}`);
             iterations++;
             console.log(`[chat] resume turn_end (cycle ${compactionCycle}): stop=${sr} content=${state.fullText.length}ch tokens=${msg.usage?.totalTokens || "?"}`);
 
@@ -2286,7 +2336,7 @@ async function handleChatStream(
       lastUserMessage = queuedFollowUp.message;
 
       // Build new context for follow-up (all messages including the queued one)
-      const followUpContextMessages = chatMessagesToPiMessages(chat.messages, chat.modelId);
+      const followUpContextMessages = chatMessagesToPiMessages(chat.messages, chat.modelId, activeAssistantIdentity);
 
       // Safety check: ensure context is not empty
       if (followUpContextMessages.length === 0 && chat.messages.length > 1) {
@@ -2359,7 +2409,7 @@ async function handleChatStream(
       // Capture what we just sent + got back so the next turn's kv-cache log
       // can detect prefix divergence. Recap/title mutations after this point
       // don't affect pi messages, so this snapshot stays accurate.
-      snapshotSentPrefix(chat.id, chat.messages, chat.modelId);
+      snapshotSentPrefix(chat.id, chat.messages, chat.modelId, activeAssistantIdentity);
       console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput} content=${assistantMsg.content.length}ch`);
 
       // Generate a brief recap for long assistant messages (agent/project/system chats only)
@@ -2445,15 +2495,23 @@ async function handleChatStream(
           .catch((err) => console.warn("[title] post-stream generation failed:", err));
       }
 
-      // Record model performance stats for llama.cpp models (per-message, not per-turn)
-      if (ollamaModel?.provider === "llamacpp" && state.lastLlamaTimings) {
+      // Record model performance stats for every llama.cpp provider call in
+      // this visible turn. A tool loop can make multiple model calls, and a
+      // slow first prefill must not be hidden by a later tiny follow-up call.
+      if (ollamaModel?.provider === "llamacpp" && state.llamaRuns.length > 0) {
         try {
           const { recordModelStats } = await import("../services/model-stats.js");
-          const stats = recordModelStats(ollamaModel.id, "llamacpp", state.lastLlamaTimings, state.lastLlamaCache ?? undefined);
-          const cacheText = stats.inferredCachedTokens !== undefined
-            ? ` cache=${stats.inferredCachedTokens}/${stats.reportedPromptTokens ?? "?"}`
-            : "";
-          console.log(`[model-stats] recorded: ${ollamaModel.id} decode=${state.lastLlamaTimings.predicted_per_second.toFixed(1)} tok/s${cacheText}`);
+          state.llamaRuns.forEach((run, idx) => {
+            const stats = recordModelStats(ollamaModel.id, "llamacpp", run.timings, run.cache ?? undefined);
+            const cacheText = stats.inferredCachedTokens !== undefined
+              ? ` cache=${stats.inferredCachedTokens}/${stats.reportedPromptTokens ?? "?"}`
+              : "";
+            const digestText = stats.requestDigest ? ` digest=${stats.requestDigest}` : "";
+            console.log(
+              `[model-stats] recorded: ${ollamaModel.id} run=${idx + 1}/${state.llamaRuns.length} ` +
+              `decode=${run.timings.predicted_per_second.toFixed(1)} tok/s${cacheText}${digestText}`,
+            );
+          });
         } catch (err) {
           console.warn("[model-stats] recording failed:", err);
         }
@@ -2810,7 +2868,17 @@ router.post("/", async (req, res) => {
     if (contextMessages.length === 0 && chat.messages.length > 0) {
       console.warn(`[chat] pending state has empty context, rebuilding from chat.messages (${chat.messages.length} messages)`);
       // Exclude the last message (current user message) from context
-      const rebuiltContext = chatMessagesToPiMessages(chat.messages.slice(0, -1), chat.modelId);
+      let resumeModel: OllamaModel | undefined;
+      try {
+        resumeModel = (await discoverAllModels()).find((m) => m.id === chat.modelId);
+      } catch {
+        resumeModel = undefined;
+      }
+      const rebuiltContext = chatMessagesToPiMessages(
+        chat.messages.slice(0, -1),
+        chat.modelId,
+        replayIdentityForModel(chat.modelId, resumeModel),
+      );
       contextMessages.push(...rebuiltContext);
     }
 
@@ -3150,7 +3218,8 @@ router.post("/", async (req, res) => {
         ? currentUserIndex - 1
         : currentUserIndex;
     const persistedHistory = chat.messages.slice(0, persistedHistoryEnd);
-    const contextMessages = chatMessagesToPiMessages(persistedHistory, chat.modelId);
+    const replayIdentity = replayIdentityForModel(chat.modelId, model);
+    const contextMessages = chatMessagesToPiMessages(persistedHistory, chat.modelId, replayIdentity);
 
     // Safety check: warn if context is empty for non-first messages
     if (contextMessages.length === 0 && chat.messages.length > 1) {
@@ -3358,7 +3427,18 @@ router.post("/artifact-error", async (req, res) => {
     chat.messages[currentPromptIndex - 1]?.content === memoryDeltaContext
       ? currentPromptIndex - 1
       : currentPromptIndex;
-  const contextMessages = chatMessagesToPiMessages(chat.messages.slice(0, persistedHistoryEnd), chat.modelId);
+  let repairModel: OllamaModel | undefined;
+  try {
+    repairModel = (await discoverAllModels()).find((m) => m.id === chat.modelId);
+  } catch {
+    repairModel = undefined;
+  }
+  const repairReplayIdentity = replayIdentityForModel(chat.modelId, repairModel);
+  const contextMessages = chatMessagesToPiMessages(
+    chat.messages.slice(0, persistedHistoryEnd),
+    chat.modelId,
+    repairReplayIdentity,
+  );
   const userPiMessage = buildUserPiMessage("", undefined, mergeSystemContextWithUserContent(memoryDeltaContext, repairPrompt));
 
   console.log(`[artifact-repair] starting repair for ${report.artifactId} v${report.version} in chat ${report.chatId}`);
@@ -3704,7 +3784,8 @@ router.post("/edit", async (req, res) => {
       ? currentEditUserIndex - 1
       : currentEditUserIndex;
   const editPersistedHistory = chat.messages.slice(0, editPersistedHistoryEnd);
-  const contextMessages = chatMessagesToPiMessages(editPersistedHistory, chat.modelId);
+  const editReplayIdentity = replayIdentityForModel(chat.modelId, model);
+  const contextMessages = chatMessagesToPiMessages(editPersistedHistory, chat.modelId, editReplayIdentity);
 
   // Safety check: warn if context is empty for non-first messages
   if (contextMessages.length === 0 && chat.messages.length > 1) {

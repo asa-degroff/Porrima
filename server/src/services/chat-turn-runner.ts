@@ -1,7 +1,7 @@
 import type { AgentContext, AgentTool } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Message, Model, StopReason, ToolCall } from "@mariozechner/pi-ai";
 import type { Chat, ChatMessage, ChatToolResult, ImageAttachment } from "../types.js";
-import { chatMessagesToPiMessages } from "./agent.js";
+import { chatMessagesToPiMessages, type ReplayModelIdentity } from "./agent.js";
 import { estimateContextTokens } from "./compaction.js";
 import type { SynthesisEmitter } from "./synthesis-stream.js";
 import { createSafeStreamFn } from "./llm-stream.js";
@@ -136,7 +136,12 @@ export async function runHeadlessChatTurn(
     saveChat,
   } = options;
 
-  const contextMessages = chatMessagesToPiMessages(chat.messages, modelId);
+  const replayIdentity: ReplayModelIdentity = {
+    api: String(model.api),
+    provider: String(model.provider),
+    model: model.id,
+  };
+  const contextMessages = chatMessagesToPiMessages(chat.messages, modelId, replayIdentity);
   const context: AgentContext = {
     systemPrompt,
     messages: [...contextMessages],
@@ -295,6 +300,9 @@ export async function runHeadlessChatTurn(
   const assistantMessage = options.decorateAssistantMessage
     ? options.decorateAssistantMessage(emitter.buildAssistantMessage(state.thinking, summary), state)
     : emitter.buildAssistantMessage(state.thinking, summary);
+  assistantMessage._api = replayIdentity.api;
+  assistantMessage._provider = replayIdentity.provider;
+  assistantMessage._model = replayIdentity.model;
 
   chat.messages.push(assistantMessage);
   await saveChat(chat);

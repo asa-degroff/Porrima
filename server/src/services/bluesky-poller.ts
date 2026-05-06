@@ -311,6 +311,7 @@ Review the notifications above. For mentions and replies, use bluesky_get_thread
       let finalContent = '';
       const allToolCalls: any[] = [];
       const allToolResults: Array<{ toolCallId: string; toolName: string; content: string; isError: boolean }> = [];
+      let lastAssistantIdentity: { api: string; provider: string; model: string } | null = null;
 
       const effects = {
         onArtifact: () => {},
@@ -354,6 +355,11 @@ Review the notifications above. For mentions and replies, use bluesky_get_thread
           toolCalls = result.toolCalls || [];
           stopReason = result.stopReason;
           assistantMessage = result.assistantMessage;
+          lastAssistantIdentity = {
+            api: String(assistantMessage.api),
+            provider: String(assistantMessage.provider),
+            model: String(assistantMessage.model),
+          };
 
           console.log(`[bluesky-poller] Iteration ${iteration} result: stopReason=${stopReason}, toolCalls=${toolCalls.length}, contentLen=${iterationContent.length}, thinkingLen=${result.thinking?.length ?? 0}, usage=${JSON.stringify(result.usage)}, content=${iterationContent.slice(0, 200)}`);
 
@@ -417,6 +423,9 @@ Review the notifications above. For mentions and replies, use bluesky_get_thread
             arguments: tc.input ?? tc.arguments,
           })) : undefined,
           toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+          _api: lastAssistantIdentity?.api,
+          _provider: lastAssistantIdentity?.provider,
+          _model: lastAssistantIdentity?.model,
         };
 
         // Re-read chat in case it changed during the loop

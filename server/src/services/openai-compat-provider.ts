@@ -16,7 +16,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { transformMessages } from "@mariozechner/pi-ai/dist/providers/transform-messages.js";
 import { sanitizeSurrogates } from "@mariozechner/pi-ai/dist/utils/sanitize-unicode.js";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
 import sharp from "sharp";
 
@@ -117,6 +117,7 @@ interface OpenAIChatChunk {
 export interface LlamaCacheMetadata {
   cachePrompt: boolean;
   cacheMode: "cache_prompt" | "disabled";
+  requestDigest: string;
   requestMessageCount: number;
   requestCharCount: number;
   reportedPromptTokens?: number;
@@ -133,14 +134,29 @@ function estimateRequestChars(messages: any[], tools: any[] | undefined): number
   }
 }
 
+function digestPromptPayload(body: any): string {
+  const promptPayload = {
+    model: body.model,
+    messages: body.messages,
+    tools: body.tools ?? [],
+    chat_template_kwargs: body.chat_template_kwargs,
+  };
+  return createHash("sha1")
+    .update(JSON.stringify(promptPayload))
+    .digest("hex")
+    .slice(0, 12);
+}
+
 function buildCacheMetadata(
   cachePrompt: boolean,
-  messages: any[],
-  tools: any[] | undefined,
+  body: any,
 ): LlamaCacheMetadata {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const tools = body.tools;
   return {
     cachePrompt,
     cacheMode: cachePrompt ? "cache_prompt" : "disabled",
+    requestDigest: digestPromptPayload(body),
     requestMessageCount: messages.length,
     requestCharCount: estimateRequestChars(messages, tools),
   };
@@ -892,7 +908,7 @@ export const streamOpenAICompat = (
       } catch { /* non-critical */ }
 
       const url = `${model.baseUrl}/v1/chat/completions`;
-      const cacheMetadata = buildCacheMetadata(cachePrompt, messages, body.tools);
+      const cacheMetadata = buildCacheMetadata(cachePrompt, body);
 
       // Retry on transient connection failures (fetch failed / ECONNRESET).
       // llama.cpp's router can briefly refuse connections between rapid iterations.

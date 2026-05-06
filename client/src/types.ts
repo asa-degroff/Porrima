@@ -83,6 +83,10 @@ export interface ChatMessage {
   _toolLoopId?: string;
   /** True when this row is one tool-use iteration, not the final assistant answer. */
   _toolLoopFragment?: boolean;
+  /** pi-ai provider identity used when this assistant row was generated. */
+  _provider?: string;
+  _api?: string;
+  _model?: string;
   /** Brief summary of what was done, generated for long assistant messages */
   recap?: string;
 }

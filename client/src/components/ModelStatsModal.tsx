@@ -22,6 +22,7 @@ interface LlamaTimingsEntry {
   inferredCacheHitRatio?: number;
   requestMessageCount?: number;
   requestCharCount?: number;
+  requestDigest?: string;
 }
 
 interface ModelSummary {
@@ -341,6 +342,7 @@ function ModelDetail({
               "Cache prompt": summary.lastRun.cachePrompt ? "enabled" : "disabled/not recorded",
               "Request messages": formatNumber(summary.lastRun.requestMessageCount),
               "Request size": formatChars(summary.lastRun.requestCharCount),
+              "Request digest": summary.lastRun.requestDigest || "n/a",
               "Predicted tokens": summary.lastRun.predictedTokens,
             }) as [string, string][]).map(([k, v]) => (
               <div key={k} className="flex justify-between">
