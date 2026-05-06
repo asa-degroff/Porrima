@@ -29,6 +29,7 @@ import type { TTSSettings } from "../types/tts.js";
 import { log } from "../services/logger.js";
 import { createSafeStreamFn } from "../services/llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop, stopAgentLoop } from "../services/agent-loop-runner.js";
+import { restoreSlot, saveSlot, slotFileName } from "../services/kv-slot-cache.js";
 
 // Live stream registry lives in services/live-streams.ts so server-internal
 // background tasks (synthesis, wake cycle) can also emit through it without
@@ -1030,6 +1031,11 @@ async function handleChatStream(
   // TTS pause controller - aborts TTS stream on tool execution
   let ttsPauseController: AbortController | null = null;
 
+  // Model references — declared here so they're accessible in the finally block
+  // (needed for KV slot cache save on turn completion)
+  let ollamaModel: OllamaModel | undefined;
+  let piModel: Model<string> | undefined;
+
   let iterations = 0;
   let waitingForInput = false;
   let hitContextLimit = false;
@@ -1080,8 +1086,6 @@ async function handleChatStream(
   try {
     // Discover model with timeout protection
     let allModels: OllamaModel[];
-    let ollamaModel: OllamaModel | undefined;
-    let piModel: Model<string>;
 
     try {
       allModels = await discoverAllModels();
@@ -1234,6 +1238,14 @@ async function handleChatStream(
       chunkSize: ttsSettings.streamingChunkSize ?? 50,
       boundaryTier: ttsSettings.streamingBoundaryTier ?? 'clause',
     }) : null;
+
+    // Restore KV cache slot from disk (if available) before first LLM call.
+    // This skips full prefill on returning conversations. Only applies to
+    // llama.cpp models that have --slot-save-path configured.
+    if (ollamaModel?.provider === "llamacpp" && piModel.baseUrl) {
+      const fileName = slotFileName(chat.id);
+      await restoreSlot(piModel.baseUrl, 0, fileName);
+    }
 
     // Process LLM events -> SSE (main loop)
     await runAgentLoop({
@@ -2501,14 +2513,15 @@ async function handleChatStream(
       if (ollamaModel?.provider === "llamacpp" && state.llamaRuns.length > 0) {
         try {
           const { recordModelStats } = await import("../services/model-stats.js");
+          const modelId = ollamaModel!.id;
           state.llamaRuns.forEach((run, idx) => {
-            const stats = recordModelStats(ollamaModel.id, "llamacpp", run.timings, run.cache ?? undefined);
+            const stats = recordModelStats(modelId, "llamacpp", run.timings, run.cache ?? undefined);
             const cacheText = stats.inferredCachedTokens !== undefined
               ? ` cache=${stats.inferredCachedTokens}/${stats.reportedPromptTokens ?? "?"}`
               : "";
             const digestText = stats.requestDigest ? ` digest=${stats.requestDigest}` : "";
             console.log(
-              `[model-stats] recorded: ${ollamaModel.id} run=${idx + 1}/${state.llamaRuns.length} ` +
+              `[model-stats] recorded: ${modelId} run=${idx + 1}/${state.llamaRuns.length} ` +
               `decode=${run.timings.predicted_per_second.toFixed(1)} tok/s${cacheText}${digestText}`,
             );
           });
@@ -2596,6 +2609,15 @@ async function handleChatStream(
       }
     }
   } finally {
+    // Save KV cache slot to disk after the turn completes (success or error).
+    // This persists the full context so the next turn can restore it and skip prefill.
+    if (ollamaModel?.provider === "llamacpp" && piModel?.baseUrl) {
+      const fileName = slotFileName(chat.id);
+      saveSlot(piModel.baseUrl, 0, fileName).catch((err) => {
+        console.warn("[kv-slot] post-turn save failed:", err);
+      });
+    }
+
     markChatInactive(chat.id);
     stopSSEKeepalive();
     endLiveStream(chat.id);
