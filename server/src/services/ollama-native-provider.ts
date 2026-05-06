@@ -130,8 +130,7 @@ function convertMessages(model: Model<Api>, context: Context): any[] {
         }));
       }
 
-      // Skip empty assistant messages with no tool calls
-      if (!content && !ollamaMsg.thinking && toolCalls.length === 0) continue;
+      if (!content && toolCalls.length === 0) continue;
 
       params.push(ollamaMsg);
     } else if (msg.role === "toolResult") {

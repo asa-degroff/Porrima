@@ -253,7 +253,7 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
         }));
       }
 
-      if (!content && !thinkingText && toolCalls.length === 0) continue;
+      if (!content && toolCalls.length === 0) continue;
       params.push(openaiMsg);
     } else if (msg.role === "toolResult") {
       // Collect consecutive tool results
