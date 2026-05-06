@@ -1893,6 +1893,11 @@ async function handleChatStream(
 
       const strandedAbortController = new AbortController();
       let strandedProducedSomething = false;
+      // The main loop staged the stranded assistant row as a possible final
+      // message. Once recovery begins that row is known-stale; the recovered
+      // turn_end events below must replace it, otherwise final persistence can
+      // save the pre-recovery text while the UI saw the recovered response.
+      state.pendingFinalAssistantMessage = null;
 
       // agentLoopContinue rejects contexts ending with an assistant message.
       // The stranded assistant (stopReason=stop with no structured call) is
@@ -1979,7 +1984,51 @@ async function handleChatStream(
           } else if (event.type === "turn_end") {
             const msg = event.message as AssistantMessage;
             const stopReason = msg.stopReason || "stop";
+            flushThinkingTimer();
+
+            if (msg.usage && (msg.usage.totalTokens > 0 || stopReason !== "error")) {
+              state.finalUsage = {
+                input: msg.usage.input,
+                output: msg.usage.output,
+                totalTokens: msg.usage.totalTokens,
+              };
+            }
+            captureLlamaRun(msg, iterations + 1, "stranded-recovery");
+            iterations++;
             console.log(`[chat] stranded recovery turn_end: stop=${stopReason} text=${state.fullText.length}ch tools=${event.toolResults?.length || 0}`);
+
+            let persistedRecoveryMsg: ChatMessage | null = null;
+            if (stopReason === "toolUse") {
+              persistedRecoveryMsg = buildAssistantMessageFromTurn(msg);
+              upsertAssistantMessage(persistedRecoveryMsg);
+              markUncommittedAssistantMessageCommitted(persistedRecoveryMsg);
+            } else {
+              state.pendingFinalAssistantMessage = buildAssistantMessageFromTurn(msg);
+              if (hasAssistantMessageContent(state.pendingFinalAssistantMessage)) {
+                upsertAssistantMessage(state.pendingFinalAssistantMessage, true);
+              }
+            }
+
+            try {
+              await saveChat(chat);
+              const recoveryAgentMessages = chatMessagesToPiMessages(chat.messages, chat.modelId, activeAssistantIdentity);
+              await savePendingState(chat.id, {
+                agentMessages: recoveryAgentMessages as any[],
+                systemPrompt,
+                askToolCallId: askUserRef.current?.toolCallId || "",
+                fullText: state.fullText,
+                thinkingText: state.thinkingText,
+                toolCalls: state.allToolCalls,
+                toolResults: state.allToolResults,
+                iterations,
+                lastUserMessage,
+              });
+              if (persistedRecoveryMsg) {
+                res.write(`event: message_complete\ndata: ${JSON.stringify({ message: persistedRecoveryMsg, continues: true })}\n\n`);
+              }
+            } catch (saveErr) {
+              console.error(`[chat] stranded recovery save failed:`, saveErr);
+            }
 
             // If the model stopped again without producing anything useful, bail
             if (!strandedProducedSomething && !state.fullText.trim() && state.thinkingText.trim().length === 0) {
@@ -2013,6 +2062,7 @@ async function handleChatStream(
           state.fullText = state.thinkingText;
           state.thinkingText = "";
           state.thinkingPromoted = true;
+          state.pendingFinalAssistantMessage = null;
         }
       }
       state.strandedToolCall = false;
