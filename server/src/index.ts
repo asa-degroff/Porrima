@@ -52,12 +52,29 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("[process] unhandled rejection (caught, not crashing):", reason);
 });
 
-// Graceful shutdown: tear down SSH master connections before exiting.
-const shutdownMasters = async () => {
+// Graceful shutdown: tear down SSH master connections and close the HTTP
+// server before exiting.  If the process doesn't exit within 10s, force it
+// so systemd doesn't have to wait 90s for the stop-sigterm timeout.
+let httpServer: ReturnType<typeof app.listen> | null = null;
+const gracefulShutdown = async () => {
+  console.log("[shutdown] Received signal, shutting down gracefully...");
+  // Close the HTTP server first so new requests are rejected immediately.
+  if (httpServer) {
+    httpServer.close();
+  }
   await destroyAllMasters();
+  process.exit(0);
 };
-process.on("SIGTERM", shutdownMasters);
-process.on("SIGINT", shutdownMasters);
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);
+// Safety net: force exit after 10s if graceful shutdown hangs.
+const forceExitTimer = (signal: string) =>
+  setTimeout(() => {
+    console.error(`[shutdown] Graceful shutdown timed out after 10s (${signal}), forcing exit`);
+    process.exit(1);
+  }, 10_000);
+process.once("SIGTERM", () => forceExitTimer("SIGTERM"));
+process.once("SIGINT", () => forceExitTimer("SIGINT"));
 
 const isProd = process.env.NODE_ENV === "production";
 const PORT = parseInt(process.env.PORT || "3001");
@@ -181,7 +198,7 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   res.status(err.status || 500).json({ error: err.message || "Internal server error" });
 });
 
-app.listen(PORT, () => {
+httpServer = app.listen(PORT, () => {
   console.log(`qu.je agent server running on http://localhost:${PORT}`);
   startScheduler();
 });
