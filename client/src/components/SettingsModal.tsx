@@ -397,6 +397,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const webSearchProviderDd = useDropdown();
   const sshKnownHostsDd = useDropdown();
   const tocDd = useDropdown();
+  // Binary selectors
+  const extractionBinaryDd = useDropdown();
+  const rerankerBinaryDd = useDropdown();
+  const embeddingBinaryDd = useDropdown();
+  const titleGenBinaryDd = useDropdown();
 
   // Per-task dropdown state for automations (avoids hooks-in-map issues)
   const [scheduleOpen, setScheduleOpen] = useState<Record<string, boolean>>({});
@@ -2122,16 +2127,35 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                               {/* Binary selector */}
                               <div>
                                 <label className="block text-xs text-white/50 mb-1">Binary</label>
-                                <select
-                                  value={server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : ""}
-                                  onChange={(e) => handleAssignBinary(server.id as any, e.target.value)}
-                                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono appearance-none cursor-pointer"
-                                >
-                                  <option value="">default (llama-current)</option>
-                                  {llamaBinaries.filter(b => !b.isDefault).map(b => (
-                                    <option key={b.path} value={b.path}>{b.path.split("/").pop()} (v{b.version || "?"})</option>
-                                  ))}
-                                </select>
+                                {(() => {
+                                  const selected = server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : "";
+                                  const label = selected
+                                    ? llamaBinaries.find(b => b.path === selected)?.path.split("/").pop() || selected.split("/").pop() || selected
+                                    : "default (llama-current)";
+                                  return (
+                                    <Dropdown
+                                      state={extractionBinaryDd}
+                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+                                      panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+                                      trigger={<span className="truncate flex-1 text-left">{label}</span>}
+                                    >
+                                      <button onClick={() => {
+                                        extractionBinaryDd.close();
+                                        handleAssignBinary(server.id as any, "");
+                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                        default (llama-current)
+                                      </button>
+                                      {llamaBinaries.filter(b => !b.isDefault).map(b => (
+                                        <button key={b.path} onClick={() => {
+                                          extractionBinaryDd.close();
+                                          handleAssignBinary(server.id as any, b.path);
+                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                          {b.path.split("/").pop()} (v{b.version || "?"})
+                                        </button>
+                                      ))}
+                                    </Dropdown>
+                                  );
+                                })()}
                               </div>
                               <p className="text-xs text-white/30">Dedicated instance for memory extraction tasks.</p>
 	                            </div>
@@ -2188,16 +2212,35 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                               {/* Binary selector */}
                               <div>
                                 <label className="block text-xs text-white/50 mb-1">Binary</label>
-                                <select
-                                  value={server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : ""}
-                                  onChange={(e) => handleAssignBinary(server.id as any, e.target.value)}
-                                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono appearance-none cursor-pointer"
-                                >
-                                  <option value="">default (llama-current)</option>
-                                  {llamaBinaries.filter(b => !b.isDefault).map(b => (
-                                    <option key={b.path} value={b.path}>{b.path.split("/").pop()} (v{b.version || "?"})</option>
-                                  ))}
-                                </select>
+                                {(() => {
+                                  const selected = server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : "";
+                                  const label = selected
+                                    ? llamaBinaries.find(b => b.path === selected)?.path.split("/").pop() || selected.split("/").pop() || selected
+                                    : "default (llama-current)";
+                                  return (
+                                    <Dropdown
+                                      state={rerankerBinaryDd}
+                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+                                      panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+                                      trigger={<span className="truncate flex-1 text-left">{label}</span>}
+                                    >
+                                      <button onClick={() => {
+                                        rerankerBinaryDd.close();
+                                        handleAssignBinary(server.id as any, "");
+                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                        default (llama-current)
+                                      </button>
+                                      {llamaBinaries.filter(b => !b.isDefault).map(b => (
+                                        <button key={b.path} onClick={() => {
+                                          rerankerBinaryDd.close();
+                                          handleAssignBinary(server.id as any, b.path);
+                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                          {b.path.split("/").pop()} (v{b.version || "?"})
+                                        </button>
+                                      ))}
+                                    </Dropdown>
+                                  );
+                                })()}
                               </div>
                               <p className="text-xs text-white/30">Cross-encoder reranker for memory retrieval.</p>
 	                            </div>
@@ -2269,16 +2312,35 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 							{embeddingProvider === "llamacpp" && (
 							  <div>
 							    <label className="block text-xs text-white/50 mb-1">Binary</label>
-							    <select
-							      value={server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : ""}
-							      onChange={(e) => handleAssignBinary(server.id as any, e.target.value)}
-							      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono appearance-none cursor-pointer"
-							    >
-							      <option value="">default (llama-current)</option>
-							      {llamaBinaries.filter(b => !b.isDefault).map(b => (
-							        <option key={b.path} value={b.path}>{b.path.split("/").pop()} (v{b.version || "?"})</option>
-							      ))}
-							    </select>
+							    {(() => {
+							      const selected = server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : "";
+							      const label = selected
+							        ? llamaBinaries.find(b => b.path === selected)?.path.split("/").pop() || selected.split("/").pop() || selected
+							        : "default (llama-current)";
+							      return (
+							        <Dropdown
+							          state={embeddingBinaryDd}
+							          triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+							          panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+							          trigger={<span className="truncate flex-1 text-left">{label}</span>}
+							        >
+							          <button onClick={() => {
+							            embeddingBinaryDd.close();
+							            handleAssignBinary(server.id as any, "");
+							          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+							            default (llama-current)
+							          </button>
+							          {llamaBinaries.filter(b => !b.isDefault).map(b => (
+							            <button key={b.path} onClick={() => {
+							              embeddingBinaryDd.close();
+							              handleAssignBinary(server.id as any, b.path);
+							            }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+							              {b.path.split("/").pop()} (v{b.version || "?"})
+							            </button>
+							          ))}
+							        </Dropdown>
+							      );
+							    })()}
 							  </div>
 							)}
 							</div>
@@ -2335,16 +2397,35 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                               {/* Binary selector */}
                               <div>
                                 <label className="block text-xs text-white/50 mb-1">Binary</label>
-                                <select
-                                  value={server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : ""}
-                                  onChange={(e) => handleAssignBinary(server.id as any, e.target.value)}
-                                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono appearance-none cursor-pointer"
-                                >
-                                  <option value="">default (llama-current)</option>
-                                  {llamaBinaries.filter(b => !b.isDefault).map(b => (
-                                    <option key={b.path} value={b.path}>{b.path.split("/").pop()} (v{b.version || "?"})</option>
-                                  ))}
-                                </select>
+                                {(() => {
+                                  const selected = server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : "";
+                                  const label = selected
+                                    ? llamaBinaries.find(b => b.path === selected)?.path.split("/").pop() || selected.split("/").pop() || selected
+                                    : "default (llama-current)";
+                                  return (
+                                    <Dropdown
+                                      state={titleGenBinaryDd}
+                                      triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+                                      panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+                                      trigger={<span className="truncate flex-1 text-left">{label}</span>}
+                                    >
+                                      <button onClick={() => {
+                                        titleGenBinaryDd.close();
+                                        handleAssignBinary(server.id as any, "");
+                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                        default (llama-current)
+                                      </button>
+                                      {llamaBinaries.filter(b => !b.isDefault).map(b => (
+                                        <button key={b.path} onClick={() => {
+                                          titleGenBinaryDd.close();
+                                          handleAssignBinary(server.id as any, b.path);
+                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                                          {b.path.split("/").pop()} (v{b.version || "?"})
+                                        </button>
+                                      ))}
+                                    </Dropdown>
+                                  );
+                                })()}
                               </div>
                               <p className="text-xs text-white/30">Tiny CPU-only instance for generating short chat titles.</p>
 	                            </div>
