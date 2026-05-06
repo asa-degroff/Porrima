@@ -19,10 +19,10 @@ function useMediaQuery(query: string): boolean {
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
-import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaBinaryInfo } from "../api/client";
+import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { AutomationRun, AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, BlueskySettings, PersonaStore, UserDocument, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
+import type { AutomationRun, AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, BlueskySettings, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
 import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
@@ -2264,9 +2264,26 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                  <p className="text-amber-100/70">Save settings, then re-embed existing memories and corpus with the new model.</p>
 	                                </div>
 	                              )}
-	                            </div>
-	                          )}
-	                          {server.id === "title-generation" && (
+
+							{/* Binary selector — llama.cpp only */}
+							{embeddingProvider === "llamacpp" && (
+							  <div>
+							    <label className="block text-xs text-white/50 mb-1">Binary</label>
+							    <select
+							      value={server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : ""}
+							      onChange={(e) => handleAssignBinary(server.id as any, e.target.value)}
+							      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono appearance-none cursor-pointer"
+							    >
+							      <option value="">default (llama-current)</option>
+							      {llamaBinaries.filter(b => !b.isDefault).map(b => (
+							        <option key={b.path} value={b.path}>{b.path.split("/").pop()} (v{b.version || "?"})</option>
+							      ))}
+							    </select>
+							  </div>
+							)}
+							</div>
+						  )}
+						  {server.id === "title-generation" && (
 	                            <div className="space-y-2">
 	                              <div className="flex items-center gap-2">
 	                                <label className="flex items-center gap-2 cursor-pointer">
