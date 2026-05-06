@@ -3157,6 +3157,30 @@ router.post("/", async (req, res) => {
       console.error(`[chat] CRITICAL: context conversion produced empty array for chat with ${chat.messages.length} messages`);
     }
 
+    // Diagnose missing recent turns: compare in-context messages against total.
+    // If the last 2+ in-context messages were dropped, log the state for diagnosis.
+    const inContextCount = chat.messages.filter(m => !m._outOfContext).length;
+    const outOfContextCount = chat.messages.length - inContextCount;
+    if (outOfContextCount > 0 && chat.messages.length > 4) {
+      const lastInContext = (() => {
+        for (let i = chat.messages.length - 1; i >= 0; i--) {
+          if (!chat.messages[i]._outOfContext) return i;
+        }
+        return -1;
+      })();
+      const lastMsg = chat.messages[chat.messages.length - 1];
+      const secondLastMsg = chat.messages[chat.messages.length - 2];
+      const lastOoc = chat.messages.length - 1 - lastInContext;
+      if (lastOoc > 2) {
+        console.warn(
+          `[chat] ${chatId.slice(0,8)}: ${lastOoc} messages after last in-context (total ${chat.messages.length}, ${inContextCount} in-context, ${outOfContextCount} OOC). ` +
+          `Last msg: ${lastMsg?.role}/${(lastMsg?.content || '').slice(0,50).replace(/\n/g,' ')} ` +
+          `Second-last: ${secondLastMsg?.role}/${(secondLastMsg?.content || '').slice(0,50).replace(/\n/g,' ')} ` +
+          `Last in-context idx=${lastInContext}: ${chat.messages[lastInContext]?.role}/${(chat.messages[lastInContext]?.content || '').slice(0,50).replace(/\n/g,' ')}`
+        );
+      }
+    }
+
     // Safety check: detect catastrophic context loss from compaction
     if (chat.messages.length <= 3 && chat.messages.length > 1) {
       console.warn(`[chat] WARNING: chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
