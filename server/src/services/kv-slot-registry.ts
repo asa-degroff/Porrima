@@ -25,8 +25,14 @@ export interface SlotAssignment {
   leaseId?: string;
   lastRestoredAt?: number;
   lastRestoreOk?: boolean;
+  lastRestoreStatus?: number;
+  lastRestoreError?: string;
+  lastRestoreTokens?: number;
   lastSavedAt?: number;
   lastSaveOk?: boolean;
+  lastSaveStatus?: number;
+  lastSaveError?: string;
+  lastSaveTokens?: number;
 }
 
 export interface SlotPool {
@@ -68,6 +74,13 @@ export interface SlotLeaseRecord {
   maxInstances: number;
   evictedChatId: string | null;
   disabledReason?: "single-slot" | "all-slots-active" | "discovery-failed";
+}
+
+export interface SlotActionRecord {
+  ok: boolean;
+  status?: number;
+  error?: string;
+  tokens?: number;
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -151,8 +164,14 @@ class SlotRegistry {
           active: false,
           lastRestoredAt: typeof a.lastRestoredAt === "number" ? a.lastRestoredAt : undefined,
           lastRestoreOk: typeof a.lastRestoreOk === "boolean" ? a.lastRestoreOk : undefined,
+          lastRestoreStatus: typeof a.lastRestoreStatus === "number" ? a.lastRestoreStatus : undefined,
+          lastRestoreError: typeof a.lastRestoreError === "string" ? a.lastRestoreError : undefined,
+          lastRestoreTokens: typeof a.lastRestoreTokens === "number" ? a.lastRestoreTokens : undefined,
           lastSavedAt: typeof a.lastSavedAt === "number" ? a.lastSavedAt : undefined,
           lastSaveOk: typeof a.lastSaveOk === "boolean" ? a.lastSaveOk : undefined,
+          lastSaveStatus: typeof a.lastSaveStatus === "number" ? a.lastSaveStatus : undefined,
+          lastSaveError: typeof a.lastSaveError === "string" ? a.lastSaveError : undefined,
+          lastSaveTokens: typeof a.lastSaveTokens === "number" ? a.lastSaveTokens : undefined,
         };
       }
       if (typeof v?.baseUrl !== "string" || typeof v?.modelId !== "string") continue;
@@ -389,12 +408,12 @@ class SlotRegistry {
     });
   }
 
-  async markRestore(lease: SlotLeaseRecord, ok: boolean): Promise<void> {
-    await this.markLeaseResult(lease, "restore", ok);
+  async markRestore(lease: SlotLeaseRecord, result: boolean | SlotActionRecord): Promise<void> {
+    await this.markLeaseResult(lease, "restore", result);
   }
 
-  async markSave(lease: SlotLeaseRecord, ok: boolean): Promise<void> {
-    await this.markLeaseResult(lease, "save", ok);
+  async markSave(lease: SlotLeaseRecord, result: boolean | SlotActionRecord): Promise<void> {
+    await this.markLeaseResult(lease, "save", result);
   }
 
   async clear(): Promise<void> {
@@ -478,20 +497,27 @@ class SlotRegistry {
   private async markLeaseResult(
     lease: SlotLeaseRecord,
     kind: "restore" | "save",
-    ok: boolean,
+    result: boolean | SlotActionRecord,
   ): Promise<void> {
     if (lease.slotId == null) return;
     await this.withLock(async () => {
       await this.load();
       const assignment = this.state.pools[lease.poolKey]?.assignments[lease.chatId];
       if (!assignment || assignment.leaseId !== lease.leaseId) return;
+      const record: SlotActionRecord = typeof result === "boolean" ? { ok: result } : result;
       const now = Date.now();
       if (kind === "restore") {
         assignment.lastRestoredAt = now;
-        assignment.lastRestoreOk = ok;
+        assignment.lastRestoreOk = record.ok;
+        assignment.lastRestoreStatus = record.status;
+        assignment.lastRestoreError = record.error;
+        assignment.lastRestoreTokens = record.tokens;
       } else {
         assignment.lastSavedAt = now;
-        assignment.lastSaveOk = ok;
+        assignment.lastSaveOk = record.ok;
+        assignment.lastSaveStatus = record.status;
+        assignment.lastSaveError = record.error;
+        assignment.lastSaveTokens = record.tokens;
       }
       await this.persist();
     });

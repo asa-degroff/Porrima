@@ -19,6 +19,19 @@ export interface KvSlotLease extends SlotLeaseRecord {
   saved: boolean;
 }
 
+export interface KvSlotActionResult {
+  action: "restore" | "save";
+  ok: boolean;
+  found: boolean;
+  slotId: number;
+  fileName: string;
+  modelId?: string;
+  status?: number;
+  statusText?: string;
+  error?: string;
+  tokens?: number;
+}
+
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
@@ -39,7 +52,11 @@ async function responseErrorDetail(response: Response): Promise<string> {
   return ` - ${text.slice(0, 500)}`;
 }
 
-
+function parseTokens(data: unknown): number | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const tokens = (data as any).tokens;
+  return typeof tokens === "number" ? tokens : undefined;
+}
 
 /**
  * Generate a slot file name from a chat ID.
@@ -127,6 +144,16 @@ export async function restoreSlot(
   fileName: string,
   modelId?: string,
 ): Promise<boolean> {
+  const result = await restoreSlotDetailed(baseUrl, slotId, fileName, modelId);
+  return result.ok;
+}
+
+export async function restoreSlotDetailed(
+  baseUrl: string,
+  slotId: number,
+  fileName: string,
+  modelId?: string,
+): Promise<KvSlotActionResult> {
   try {
     const url = slotEndpoint(baseUrl, slotId, "restore");
     const response = await fetch(url, {
@@ -138,28 +165,68 @@ export async function restoreSlot(
 
     if (response.ok) {
       const data = await response.json().catch(() => null);
+      const tokens = parseTokens(data);
       console.log(
         `[kv-slot] restored slot ${slotId} from ${fileName}: ` +
-        `${data?.tokens ?? "?"} tokens`,
+        `${tokens ?? "?"} tokens`,
       );
-      return true;
+      return {
+        action: "restore",
+        ok: true,
+        found: true,
+        slotId,
+        fileName,
+        modelId,
+        status: response.status,
+        statusText: response.statusText,
+        tokens,
+      };
     } else if (response.status === 404) {
       // No slot file exists yet — this is normal for first turns
-      return false;
+      return {
+        action: "restore",
+        ok: false,
+        found: false,
+        slotId,
+        fileName,
+        modelId,
+        status: response.status,
+        statusText: response.statusText,
+      };
     } else {
       const detail = await responseErrorDetail(response);
+      const error = detail.replace(/^ - /, "") || `${response.status} ${response.statusText}`;
       console.warn(
         `[kv-slot] restore failed for slot ${slotId}: ${response.status} ${response.statusText}${detail}`,
       );
-      return false;
+      return {
+        action: "restore",
+        ok: false,
+        found: true,
+        slotId,
+        fileName,
+        modelId,
+        status: response.status,
+        statusText: response.statusText,
+        error,
+      };
     }
   } catch (err) {
     // Non-fatal — the turn can proceed without the cache
+    const error = err instanceof Error ? err.message : String(err);
     console.warn(
       `[kv-slot] restore error for slot ${slotId}:`,
-      err instanceof Error ? err.message : String(err),
+      error,
     );
-    return false;
+    return {
+      action: "restore",
+      ok: false,
+      found: true,
+      slotId,
+      fileName,
+      modelId,
+      error,
+    };
   }
 }
 
@@ -168,14 +235,15 @@ export async function restoreSlotForLease(lease: KvSlotLease): Promise<boolean> 
   lease.restoreAttempted = true;
   if (lease.slotId == null) return false;
 
-  const restored = await restoreSlot(
+  const result = await restoreSlotDetailed(
     lease.baseUrl,
     lease.slotId,
     lease.fileName,
     lease.modelId,
   );
+  const restored = result.ok;
   lease.restored = restored;
-  await slotRegistry.markRestore(lease, restored).catch(() => {});
+  await slotRegistry.markRestore(lease, result).catch(() => {});
   if (!restored) {
     console.log(
       `[kv-slot] no cached slot for chat ${lease.chatId.slice(0, 8)}... ` +
@@ -199,6 +267,16 @@ export async function saveSlot(
   fileName: string,
   modelId?: string,
 ): Promise<boolean> {
+  const result = await saveSlotDetailed(baseUrl, slotId, fileName, modelId);
+  return result.ok;
+}
+
+export async function saveSlotDetailed(
+  baseUrl: string,
+  slotId: number,
+  fileName: string,
+  modelId?: string,
+): Promise<KvSlotActionResult> {
   try {
     const url = slotEndpoint(baseUrl, slotId, "save");
     const response = await fetch(url, {
@@ -210,25 +288,56 @@ export async function saveSlot(
 
     if (response.ok) {
       const data = await response.json().catch(() => null);
+      const tokens = parseTokens(data);
       console.log(
         `[kv-slot] saved slot ${slotId} to ${fileName}: ` +
-        `${data?.tokens ?? "?"} tokens`,
+        `${tokens ?? "?"} tokens`,
       );
-      return true;
+      return {
+        action: "save",
+        ok: true,
+        found: true,
+        slotId,
+        fileName,
+        modelId,
+        status: response.status,
+        statusText: response.statusText,
+        tokens,
+      };
     } else {
       const detail = await responseErrorDetail(response);
+      const error = detail.replace(/^ - /, "") || `${response.status} ${response.statusText}`;
       console.warn(
         `[kv-slot] save failed for slot ${slotId}: ${response.status} ${response.statusText}${detail}`,
       );
-      return false;
+      return {
+        action: "save",
+        ok: false,
+        found: true,
+        slotId,
+        fileName,
+        modelId,
+        status: response.status,
+        statusText: response.statusText,
+        error,
+      };
     }
   } catch (err) {
     // Non-fatal — the turn completed, just the cache wasn't persisted
+    const error = err instanceof Error ? err.message : String(err);
     console.warn(
       `[kv-slot] save error for slot ${slotId}:`,
-      err instanceof Error ? err.message : String(err),
+      error,
     );
-    return false;
+    return {
+      action: "save",
+      ok: false,
+      found: true,
+      slotId,
+      fileName,
+      modelId,
+      error,
+    };
   }
 }
 
@@ -237,15 +346,14 @@ export async function saveSlotForLease(lease: KvSlotLease): Promise<boolean> {
   lease.saveAttempted = true;
   if (lease.slotId == null) return false;
 
-  const saved = await saveSlot(
+  const result = await saveSlotDetailed(
     lease.baseUrl,
     lease.slotId,
     lease.fileName,
     lease.modelId,
   );
+  const saved = result.ok;
   lease.saved = saved;
-  await slotRegistry.markSave(lease, saved).catch(() => {});
+  await slotRegistry.markSave(lease, result).catch(() => {});
   return saved;
 }
-
-

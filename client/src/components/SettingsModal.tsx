@@ -18,8 +18,8 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
-import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, getLlamaKvCacheStatus, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
+import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, KvCacheStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
 import type { AutomationRun, AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, BlueskySettings, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
@@ -130,6 +130,38 @@ function formatSystemdTimestamp(value: string): string {
   return value.replace(/\s+UTC$/, "");
 }
 
+function formatBytes(value?: number): string {
+  if (value == null || !Number.isFinite(value)) return "n/a";
+  if (value < 1024) return `${value} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let size = value / 1024;
+  let unit = units[0];
+  for (let i = 1; i < units.length && size >= 1024; i++) {
+    size /= 1024;
+    unit = units[i];
+  }
+  return `${size >= 10 ? size.toFixed(0) : size.toFixed(1)} ${unit}`;
+}
+
+function formatTimestampMs(value?: number): string {
+  if (value == null || !Number.isFinite(value)) return "n/a";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : "n/a";
+}
+
+function kvResultTone(ok?: boolean): string {
+  if (ok === true) return "text-green-300";
+  if (ok === false) return "text-amber-300";
+  return "text-white/35";
+}
+
+function kvResultText(ok?: boolean, at?: number, error?: string): string {
+  if (error) return "error";
+  if (ok === true) return at ? "ok" : "ok";
+  if (ok === false) return at ? "miss" : "not recorded";
+  return "not recorded";
+}
+
 function clampAutomationIntervalMinutes(value: unknown, fallback = DEFAULT_AUTOMATION_INTERVAL_MINUTES): number {
   const n = Math.floor(Number(value));
   if (!Number.isFinite(n)) return fallback;
@@ -175,6 +207,169 @@ function formatAutomationDuration(startedAt: string, finishedAt?: string): strin
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
+function KvCacheSummary({ status, loading, error }: { status: KvCacheStatus | null; loading: boolean; error: string | null }) {
+  const capacity = status?.maxInstances ?? status?.liveSlots.length;
+  const assigned = status?.summary.assignedSlots ?? 0;
+  const active = status?.summary.activeAssignments ?? 0;
+  const saved = status?.summary.savedFiles ?? 0;
+  const slotSaveTone = status?.slotSavePathConfigured === true
+    ? "border-green-400/20 bg-green-500/10 text-green-300/80"
+    : status?.slotSavePathConfigured === false
+      ? "border-amber-400/20 bg-amber-500/10 text-amber-200/80"
+      : "border-white/10 bg-white/5 text-white/45";
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
+      <span className="px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/45">
+        KV {loading && !status ? "loading" : `${assigned}/${capacity ?? "?"} assigned`}
+      </span>
+      <span className="px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/45">
+        {active} active
+      </span>
+      <span className="px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/45">
+        {saved} saved
+      </span>
+      <span className={`px-1.5 py-0.5 rounded border ${slotSaveTone}`}>
+        {status?.slotSavePathConfigured === true ? "slot-save-path" : status?.slotSavePathConfigured === false ? "no slot-save-path" : "slot-save-path unknown"}
+      </span>
+      {status && status.summary.orphanFiles > 0 && (
+        <span className="px-1.5 py-0.5 rounded border border-amber-400/20 bg-amber-500/10 text-amber-200/80">
+          {status.summary.orphanFiles} orphan files
+        </span>
+      )}
+      {error && (
+        <span className="px-1.5 py-0.5 rounded border border-red-400/20 bg-red-500/10 text-red-300/80" title={error}>
+          KV status error
+        </span>
+      )}
+    </div>
+  );
+}
+
+function KvCacheDetails({ status, loading, error }: { status: KvCacheStatus | null; loading: boolean; error: string | null }) {
+  if (loading && !status) {
+    return <p className="text-xs text-white/35">Loading KV cache status...</p>;
+  }
+  if (!status) {
+    return <p className="text-xs text-red-300/75">{error || "KV cache status unavailable."}</p>;
+  }
+
+  const currentPool = status.pools.find((pool) => pool.isCurrent);
+  const currentAssignmentsBySlot = new Map(
+    currentPool?.assignments.map((assignment) => [assignment.slotId, assignment]) ?? []
+  );
+  const capacity = status.maxInstances ?? status.liveSlots.length;
+  const liveSlotIds = new Set<number>();
+  for (const slot of status.liveSlots) liveSlotIds.add(slot.id);
+  for (let i = 0; i < (capacity ?? 0); i++) liveSlotIds.add(i);
+  const liveSlots = [...liveSlotIds].sort((a, b) => a - b).map((slotId) => ({
+    slotId,
+    live: status.liveSlots.find((slot) => slot.id === slotId),
+    assignment: currentAssignmentsBySlot.get(slotId),
+  }));
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+        <div><span className="text-white/30">Capacity</span><p className="text-white/60 font-mono">{capacity ?? "n/a"}</p></div>
+        <div><span className="text-white/30">Loaded model</span><p className="text-white/60 font-mono truncate" title={status.loadedModelId}>{status.loadedModelId || "n/a"}</p></div>
+        <div><span className="text-white/30">Assigned</span><p className="text-white/60 font-mono">{status.summary.assignedSlots}</p></div>
+        <div><span className="text-white/30">Saved files</span><p className="text-white/60 font-mono">{status.summary.savedFiles}</p></div>
+        {status.summary.orphanFiles > 0 && (
+          <div><span className="text-white/30">Orphan files</span><p className="text-white/60 font-mono">{status.summary.orphanFiles}</p></div>
+        )}
+      </div>
+
+      {status.errors.length > 0 && (
+        <div className="rounded-lg border border-amber-400/20 bg-amber-500/10 p-2 text-xs text-amber-100/80">
+          {status.errors.slice(0, 2).join(" | ")}
+        </div>
+      )}
+
+      <div>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <span className="text-xs text-white/30">Live physical slots</span>
+          <span className="text-[10px] text-white/30 font-mono truncate" title={status.slotSavePath || ""}>
+            {status.slotSavePathConfigured === true ? status.slotSavePath : "slot-save-path not confirmed"}
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          {liveSlots.length === 0 ? (
+            <div className="rounded-md border border-white/10 bg-white/[0.02] p-2 text-xs text-white/35">No live slot data.</div>
+          ) : liveSlots.map(({ slotId, live, assignment }) => (
+            <div key={slotId} className="rounded-md border border-white/10 bg-black/10 p-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-white/70 font-mono">slot {slotId}</span>
+                <span className={`text-[10px] ${live?.isProcessing ? "text-purple-200" : "text-white/35"}`}>
+                  {live?.isProcessing ? "processing" : "idle"}
+                </span>
+              </div>
+              <div className="mt-1 flex items-center gap-2 text-[11px] text-white/35 font-mono">
+                <span>ctx {live?.nCtx ?? "?"}</span>
+                {live?.nTokens != null && <span>tok {live.nTokens}</span>}
+              </div>
+              <p className="mt-1 text-[11px] text-white/45 truncate" title={assignment?.chatTitle || assignment?.chatId}>
+                {assignment ? assignment.chatTitle || assignment.chatId.slice(0, 8) : "unassigned"}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <span className="text-xs text-white/30">Model-aware assignment pools</span>
+        {status.pools.length === 0 ? (
+          <div className="rounded-md border border-white/10 bg-white/[0.02] p-2 text-xs text-white/35">No assigned slot pools yet.</div>
+        ) : status.pools.map((pool) => (
+          <div key={pool.poolKey} className="rounded-md border border-white/10 bg-black/10 overflow-hidden">
+            <div className="flex items-center justify-between gap-2 px-2 py-1.5 border-b border-white/5">
+              <p className="text-xs text-white/60 font-mono truncate" title={pool.modelId}>{pool.modelId}</p>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {pool.contextWindow != null && <span className="text-[10px] text-white/30 font-mono">{pool.contextWindow}</span>}
+                {pool.isCurrent && <span className="text-[10px] text-emerald-200/80">current</span>}
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-[11px]">
+                <thead className="text-white/30">
+                  <tr>
+                    <th className="px-2 py-1 font-normal">Slot</th>
+                    <th className="px-2 py-1 font-normal">Chat</th>
+                    <th className="px-2 py-1 font-normal">File</th>
+                    <th className="px-2 py-1 font-normal">Restore</th>
+                    <th className="px-2 py-1 font-normal">Save</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pool.assignments.map((assignment) => (
+                    <tr key={assignment.chatId} className="border-t border-white/5">
+                      <td className="px-2 py-1 text-white/55 font-mono">
+                        {assignment.slotId}{assignment.active ? <span className="ml-1 text-purple-200">active</span> : null}
+                      </td>
+                      <td className="px-2 py-1 text-white/55 max-w-[180px] truncate" title={assignment.chatTitle || assignment.chatId}>
+                        {assignment.chatTitle || assignment.chatId.slice(0, 8)}
+                      </td>
+                      <td className="px-2 py-1 text-white/45 font-mono" title={`${assignment.file.fileName} | ${formatTimestampMs(assignment.file.mtimeMs)}`}>
+                        {assignment.file.exists ? formatBytes(assignment.file.sizeBytes) : "missing"}
+                      </td>
+                      <td className={`px-2 py-1 ${kvResultTone(assignment.lastRestoreOk)}`} title={assignment.lastRestoreError || formatTimestampMs(assignment.lastRestoredAt)}>
+                        {kvResultText(assignment.lastRestoreOk, assignment.lastRestoredAt, assignment.lastRestoreError)}
+                      </td>
+                      <td className={`px-2 py-1 ${kvResultTone(assignment.lastSaveOk)}`} title={assignment.lastSaveError || formatTimestampMs(assignment.lastSavedAt)}>
+                        {kvResultText(assignment.lastSaveOk, assignment.lastSavedAt, assignment.lastSaveError)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 interface Props {
@@ -281,6 +476,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [llamaPathUpdateResult, setLlamaPathUpdateResult] = useState<LlamaPathUpdateResult | null>(null);
   const [llamaServers, setLlamaServers] = useState<LlamaServerStatus[]>([]);
   const [llamaServersLoading, setLlamaServersLoading] = useState(false);
+  const [kvCacheStatus, setKvCacheStatus] = useState<KvCacheStatus | null>(null);
+  const [kvCacheLoading, setKvCacheLoading] = useState(false);
+  const [kvCacheError, setKvCacheError] = useState<string | null>(null);
   const [llamaServerActionInFlight, setLlamaServerActionInFlight] = useState<string | null>(null);
   const [llamaServerMessage, setLlamaServerMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [expandedLlamaServerId, setExpandedLlamaServerId] = useState<LlamaServerId | null>(null);
@@ -429,7 +627,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-   const refreshLlamaServers = useCallback(async (showSpinner = false) => {
+  const refreshLlamaServers = useCallback(async (showSpinner = false) => {
     if (showSpinner) setLlamaServersLoading(true);
     try {
       const data = await getLlamaServers();
@@ -438,6 +636,19 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setLlamaServerMessage({ type: "err", text: e?.message || "Failed to load llama.cpp server status" });
     } finally {
       if (showSpinner) setLlamaServersLoading(false);
+    }
+  }, []);
+
+  const refreshKvCacheStatus = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setKvCacheLoading(true);
+    try {
+      const data = await getLlamaKvCacheStatus("inference");
+      setKvCacheStatus(data.kvCache);
+      setKvCacheError(null);
+    } catch (e: any) {
+      setKvCacheError(e?.message || "Failed to load KV cache status");
+    } finally {
+      if (showSpinner) setKvCacheLoading(false);
     }
   }, []);
 
@@ -720,9 +931,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 
   useEffect(() => {
     refreshLlamaServers(true);
-    const interval = window.setInterval(() => refreshLlamaServers(), 5000);
+    refreshKvCacheStatus(true);
+    const interval = window.setInterval(() => {
+      refreshLlamaServers();
+      refreshKvCacheStatus();
+    }, 5000);
     return () => window.clearInterval(interval);
-  }, [refreshLlamaServers]);
+  }, [refreshLlamaServers, refreshKvCacheStatus]);
 
   // Aggregate health pings for all five configured servers. Re-runs when URL
   // fields change so the dots update as the user edits settings.
@@ -1890,11 +2105,14 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                </div>
 	                <button
 	                  type="button"
-	                  onClick={() => refreshLlamaServers(true)}
+	                  onClick={() => {
+	                    refreshLlamaServers(true);
+	                    refreshKvCacheStatus(true);
+	                  }}
 	                  disabled={llamaServersLoading}
 	                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0"
 	                >
-	                  {llamaServersLoading ? "Refreshing..." : "Refresh"}
+	                  {llamaServersLoading || kvCacheLoading ? "Refreshing..." : "Refresh"}
 	                </button>
 	              </div>
 
@@ -1946,6 +2164,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                              )}
 	                            </div>
 	                            <p className="text-xs text-white/35 mt-1">{server.description}</p>
+	                            {server.id === "inference" && (
+	                              <KvCacheSummary status={kvCacheStatus} loading={kvCacheLoading} error={kvCacheError} />
+	                            )}
 	                          </div>
 	                          <div className="flex items-center gap-1.5 shrink-0">
 	                            <span className={`px-2 py-1 rounded-full border text-[10px] font-medium ${llamaSystemdTone(server.systemd.activeState)}`}>
@@ -2491,6 +2712,14 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                            <span className="text-xs text-white/30">Models from /v1/models</span>
 	                            <p className="text-xs text-white/60 font-mono truncate" title={server.http.modelIds.join(", ")}>{modelsPreview}</p>
 	                          </div>
+	                          {server.id === "inference" && (
+	                            <div>
+	                              <span className="text-xs text-white/30">KV cache slots</span>
+	                              <div className="mt-1">
+	                                <KvCacheDetails status={kvCacheStatus} loading={kvCacheLoading} error={kvCacheError} />
+	                              </div>
+	                            </div>
+	                          )}
 	                          <div>
 	                            <span className="text-xs text-white/30">ExecStart</span>
 	                            <pre className="mt-1 max-h-28 overflow-auto rounded-md border border-white/10 bg-black/20 p-2 text-[10px] text-white/55 whitespace-pre-wrap break-words">
