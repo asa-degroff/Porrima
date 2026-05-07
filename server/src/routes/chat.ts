@@ -29,6 +29,7 @@ import type { TTSSettings } from "../types/tts.js";
 import { log } from "../services/logger.js";
 import { createSafeStreamFn } from "../services/llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop, stopAgentLoop } from "../services/agent-loop-runner.js";
+import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } from "../services/llama-slot-leases.js";
 
 // Live stream registry lives in services/live-streams.ts so server-internal
 // background tasks (synthesis, wake cycle) can also emit through it without
@@ -1033,6 +1034,7 @@ async function handleChatStream(
   let iterations = 0;
   let waitingForInput = false;
   let hitContextLimit = false;
+  let llamaSlotLease: LlamaSlotLease | null = null;
   // Defer memory extractions until the agent loop finishes to avoid concurrent
   // LLM calls that can interfere with the active tool loop (e.g., model unload/reload)
   const deferredExtractions: Array<{ userMsg: string; assistantMsg: string }> = [];
@@ -1066,8 +1068,10 @@ async function handleChatStream(
       ? `${(cache.inferredCacheHitRatio * 100).toFixed(1)}%`
       : "n/a";
     const digest = cache?.requestDigest ?? "-";
+    const slot = typeof cache?.slotId === "number" ? String(cache.slotId) : "auto";
     console.log(
       `[llama-cache] chat=${chat.id} iter=${iterationLabel} phase=${phase} ` +
+      `slot=${slot} ` +
       `prompt_eval=${timings.prompt_n}/${reported ?? "?"} ` +
       `prompt_ms=${timings.prompt_ms?.toFixed?.(0) ?? timings.prompt_ms} ` +
       `hit=${hitRatio} digest=${digest} ` +
@@ -1093,6 +1097,14 @@ async function handleChatStream(
       // the full detected context window (e.g. 128k) and may overflow VRAM.
       piModel.contextWindow = getEffectiveContextWindow(chat, ollamaModel, settings);
       activeAssistantIdentity = replayIdentityFromPiModel(piModel);
+      if (ollamaModel.provider === "llamacpp" && piModel.baseUrl) {
+        llamaSlotLease = await acquireLlamaSlotLease({
+          baseUrl: piModel.baseUrl,
+          chatId: chat.id,
+          modelId: piModel.id,
+          contextWindow: piModel.contextWindow,
+        });
+      }
     } catch (modelError: any) {
       console.error("[chat] model discovery failed:", modelError.message);
       // Send error event and end response cleanly
@@ -1113,7 +1125,7 @@ async function handleChatStream(
     };
 
     // Pass per-chat Ollama runtime options to the stream function
-    const safeStreamFn = createSafeStreamFn(chat.ollamaOptions);
+    const safeStreamFn = createSafeStreamFn(chat.ollamaOptions, llamaSlotLease);
 
     // Build config
     const config = createAgentLoopConfig({
@@ -2650,6 +2662,11 @@ async function handleChatStream(
       }
     }
   } finally {
+    try {
+      await releaseLlamaSlotLease(llamaSlotLease);
+    } catch (err) {
+      console.warn("[llama-slot] release failed:", err instanceof Error ? err.message : err);
+    }
     markChatInactive(chat.id);
     stopSSEKeepalive();
     endLiveStream(chat.id);

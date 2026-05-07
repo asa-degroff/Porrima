@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { beginStream as beginLLMStream, endStream as endLLMStream } from "./llm-activity.js";
+import type { LlamaSlotLease } from "./llama-slot-leases.js";
 
 /**
  * Inactivity timeouts for LLM streaming.
@@ -25,6 +26,7 @@ function isCloudModel(modelId: string): boolean {
  */
 export function createSafeStreamFn(
   chatOllamaOptions?: { keepAlive?: string | number; numGpu?: number; numPredict?: number },
+  llamaSlotLease?: LlamaSlotLease | null,
 ): StreamFn {
   return (model, ctx, options) => {
     if (options?.signal?.aborted) {
@@ -51,16 +53,17 @@ export function createSafeStreamFn(
       return stream;
     }
 
-    const mergedOptions = chatOllamaOptions
-      ? {
-          ...options,
-          keepAlive: chatOllamaOptions.keepAlive,
-          numGpu: chatOllamaOptions.numGpu,
-          numPredict: chatOllamaOptions.numPredict,
-        }
-      : options;
+    const mergedOptions: Record<string, unknown> = { ...(options ?? {}) };
+    if (chatOllamaOptions) {
+      mergedOptions.keepAlive = chatOllamaOptions.keepAlive;
+      mergedOptions.numGpu = chatOllamaOptions.numGpu;
+      mergedOptions.numPredict = chatOllamaOptions.numPredict;
+    }
+    if (llamaSlotLease) {
+      mergedOptions.llamaSlotLease = llamaSlotLease;
+    }
 
-    const rawStream = streamSimple(model, ctx, mergedOptions);
+    const rawStream = streamSimple(model, ctx, mergedOptions as any);
     const wrappedStream = createAssistantMessageEventStream();
 
     const cloud = isCloudModel(model.id);
