@@ -109,6 +109,12 @@ body::before {
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
 
+.chat-scroll-container {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+}
+
 /* Custom scrollbar for tool call containers */
 .custom-scrollbar {
   scrollbar-width: thin;

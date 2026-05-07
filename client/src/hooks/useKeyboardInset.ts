@@ -1,5 +1,16 @@
 import { useState, useEffect } from "react";
 
+function isKeyboardTarget(element: Element | null): boolean {
+  if (!(element instanceof HTMLElement)) return false;
+  const tag = element.tagName;
+  return (
+    element.isContentEditable ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    (tag === "INPUT" && (element as HTMLInputElement).type !== "file")
+  );
+}
+
 /**
  * Returns the current keyboard height in pixels.
  *
@@ -14,19 +25,41 @@ export function useKeyboardInset(): number {
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
+    let frame = 0;
+    let lastInset = 0;
 
     const update = () => {
       // The keyboard height is the gap between the layout viewport (window.innerHeight)
       // and the visual viewport (which shrinks when the keyboard is shown).
-      const keyboardHeight = window.innerHeight - vv.height;
-      setInset(keyboardHeight > 0 ? keyboardHeight : 0);
+      const keyboardHeight = isKeyboardTarget(document.activeElement)
+        ? window.innerHeight - vv.height - vv.offsetTop
+        : 0;
+      const nextInset = Math.max(0, Math.round(keyboardHeight));
+      if (nextInset !== lastInset) {
+        lastInset = nextInset;
+        setInset(nextInset);
+      }
     };
 
-    vv.addEventListener("resize", update);
-    vv.addEventListener("scroll", update);
+    const scheduleUpdate = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        update();
+      });
+    };
+
+    vv.addEventListener("resize", scheduleUpdate, { passive: true });
+    vv.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("focusin", scheduleUpdate);
+    window.addEventListener("focusout", scheduleUpdate);
+    scheduleUpdate();
     return () => {
-      vv.removeEventListener("resize", update);
-      vv.removeEventListener("scroll", update);
+      if (frame) cancelAnimationFrame(frame);
+      vv.removeEventListener("resize", scheduleUpdate);
+      vv.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("focusin", scheduleUpdate);
+      window.removeEventListener("focusout", scheduleUpdate);
     };
   }, []);
 

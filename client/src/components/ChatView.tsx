@@ -263,6 +263,10 @@ export function ChatView({
   const [scrollPaused, setScrollPaused] = useState(false);
   const [dismissedError, setDismissedError] = useState<string | null>(null);
   const displayMessages = useMemo(() => buildDisplayMessages(messages), [messages]);
+  const availableSkillNames = useMemo(
+    () => skills.length > 0 ? skills.map((skill) => skill.name) : emptySkills,
+    [skills]
+  );
 
   // Auto-dismiss network-related errors after a delay, since the
   // OfflineIndicator in the header already communicates connection state.
@@ -601,7 +605,7 @@ export function ChatView({
 
       {/* Messages */}
       <div className="flex-1 relative min-h-0 min-w-0">
-        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto overflow-x-hidden px-3 md:px-6 py-3 md:py-4" style={{ paddingBottom: ttsBarVisible ? "180px" : "140px", scrollbarGutter: "stable" }}>
+        <div ref={scrollRef} onScroll={handleScroll} className="chat-scroll-container h-full overflow-y-auto overflow-x-hidden px-3 md:px-6 py-3 md:py-4" style={{ paddingBottom: ttsBarVisible ? "180px" : "140px", scrollbarGutter: "stable" }}>
           <div ref={contentRef}>
             {messages.length === 0 && (
               <div className="flex items-center justify-center h-full">
@@ -693,7 +697,7 @@ export function ChatView({
                         onEditMessage={msg.role === "user" ? onEditMessage : undefined}
                         onRetryMessage={msg.role === "user" ? onRetryMessage : undefined}
                         messageIndex={i}
-                        availableSkills={skills.length > 0 ? skills.map(s => s.name) : emptySkills}
+                        availableSkills={availableSkillNames}
                         streamingSegmentIndex={adjustedStreamingSegmentIndex}
                         showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
                         onReadAloud={ttsEnabled ? onReadAloud : undefined}
@@ -772,7 +776,7 @@ export function ChatView({
           onSlashTyping={handleSlashTyping}
           onSlashDeleted={closeSkillSelector}
           inputRef={inputRef}
-          availableSkills={skills.map(s => s.name)}
+          availableSkills={availableSkillNames}
         />
       </div>
 

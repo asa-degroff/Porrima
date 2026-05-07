@@ -334,7 +334,6 @@ export const MessageBubble = memo(function MessageBubble({
     };
 
     scheduleMeasure();
-    window.addEventListener("resize", scheduleMeasure);
 
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined") {
@@ -345,7 +344,6 @@ export const MessageBubble = memo(function MessageBubble({
 
     return () => {
       cancelAnimationFrame(frame);
-      window.removeEventListener("resize", scheduleMeasure);
       resizeObserver?.disconnect();
     };
   }, [hasUserActions, message.content, message.images?.length, userActionCount]);

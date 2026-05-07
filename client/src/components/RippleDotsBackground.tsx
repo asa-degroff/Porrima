@@ -60,9 +60,41 @@ export function RippleDotsBackground() {
     let gridNoiseYIdx: Int32Array;
     let numPoints = 0;
 
+    let cssWidth = 0;
+    let cssHeight = 0;
+    let viewportOffsetFrame = 0;
+    let lastViewportOffsetLeft = NaN;
+    let lastViewportOffsetTop = NaN;
+
+    function syncViewportOffset() {
+      const vv = window.visualViewport;
+      const left = vv?.offsetLeft ?? 0;
+      const top = vv?.offsetTop ?? 0;
+      if (left === lastViewportOffsetLeft && top === lastViewportOffsetTop) return;
+      lastViewportOffsetLeft = left;
+      lastViewportOffsetTop = top;
+      canvas!.style.transform = left || top
+        ? `translate3d(${left}px, ${top}px, 0)`
+        : "translateZ(0)";
+    }
+
+    function scheduleViewportOffsetSync() {
+      if (viewportOffsetFrame) return;
+      viewportOffsetFrame = requestAnimationFrame(() => {
+        viewportOffsetFrame = 0;
+        syncViewportOffset();
+      });
+    }
+
     function resize() {
       const w = Math.min(window.innerWidth, maxDimension);
       const h = Math.min(window.innerHeight, maxDimension);
+      if (w === cssWidth && h === cssHeight) {
+        syncViewportOffset();
+        return;
+      }
+      cssWidth = w;
+      cssHeight = h;
 
       canvasW = Math.round(w * RESOLUTION_SCALE);
       canvasH = Math.round(h * RESOLUTION_SCALE);
@@ -71,14 +103,7 @@ export function RippleDotsBackground() {
       canvas!.style.width = w + "px";
       canvas!.style.height = h + "px";
 
-      const vv = window.visualViewport;
-      if (vv) {
-        canvas!.style.top = vv.offsetTop + "px";
-        canvas!.style.left = vv.offsetLeft + "px";
-      } else {
-        canvas!.style.top = "0";
-        canvas!.style.left = "0";
-      }
+      syncViewportOffset();
 
       const xStart = -margin;
       const xEnd = canvasW + margin;
@@ -138,10 +163,10 @@ export function RippleDotsBackground() {
     resize();
     window.addEventListener("resize", resize, { passive: true });
     if (window.visualViewport) {
-      window.visualViewport.addEventListener("resize", resize, {
+      window.visualViewport.addEventListener("resize", scheduleViewportOffsetSync, {
         passive: true,
       });
-      window.visualViewport.addEventListener("scroll", resize, {
+      window.visualViewport.addEventListener("scroll", scheduleViewportOffsetSync, {
         passive: true,
       });
     }
@@ -416,14 +441,15 @@ export function RippleDotsBackground() {
     return () => {
       running = false;
       if (animId) cancelAnimationFrame(animId);
+      if (viewportOffsetFrame) cancelAnimationFrame(viewportOffsetFrame);
       window.removeEventListener("resize", resize);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("blur", onMouseLeave);
       document.removeEventListener("mouseleave", onMouseLeave);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (window.visualViewport) {
-        window.visualViewport.removeEventListener("resize", resize);
-        window.visualViewport.removeEventListener("scroll", resize);
+        window.visualViewport.removeEventListener("resize", scheduleViewportOffsetSync);
+        window.visualViewport.removeEventListener("scroll", scheduleViewportOffsetSync);
       }
     };
   }, []);
