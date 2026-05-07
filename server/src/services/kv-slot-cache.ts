@@ -1,33 +1,45 @@
 /**
  * KV Slot Cache — persist and restore llama.cpp slot state to disk between turns.
  *
- * Uses the llama.cpp server's /slots/{id}/save and /slots/{id}/restore REST
- * endpoints (enabled by --slot-save-path) to skip full prefill on returning
- * conversations. Each chat gets its own slot file named after its chat ID.
+ * Uses the llama.cpp server's /slots/{id}?action=save|restore REST endpoint
+ * (enabled by --slot-save-path) to skip full prefill on returning
+ * conversations. Each chat/model/context shape gets its own slot file.
  *
  * For single-slot servers (-np 1), slot ID is always 0.
- * For multi-slot servers, slot ID is derived from chat ID for stability.
+ * For multi-slot servers, the slot registry manages assignments with LRU eviction.
  */
 
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
+import { slotRegistry, type SlotLeaseRecord } from "./kv-slot-registry.js";
 
-// Default slot ID for single-slot servers
-const DEFAULT_SLOT_ID = 0;
-
-/**
- * Generate a deterministic slot ID from a chat ID.
- * For single-slot servers, always returns 0.
- * For multi-slot servers, hashes the chat ID to a stable slot index.
- */
-export function slotIdForChat(chatId: string, numSlots: number = 1): number {
-  if (numSlots <= 1) return DEFAULT_SLOT_ID;
-
-  // Hash the chat ID to a stable slot index.
-  // Using a simple hash that distributes evenly across slots.
-  const hash = createHash("md5").update(chatId).digest();
-  const num = hash.readUInt32BE(0);
-  return num % numSlots;
+export interface KvSlotLease extends SlotLeaseRecord {
+  restoreAttempted: boolean;
+  restored: boolean;
+  saveAttempted: boolean;
+  saved: boolean;
 }
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, "");
+}
+
+function slotEndpoint(
+  baseUrl: string,
+  slotId: number,
+  action: "save" | "restore",
+): string {
+  const url = new URL(`${normalizeBaseUrl(baseUrl)}/slots/${slotId}`);
+  url.searchParams.set("action", action);
+  return url.toString();
+}
+
+async function responseErrorDetail(response: Response): Promise<string> {
+  const text = await response.text().catch(() => "");
+  if (!text) return "";
+  return ` - ${text.slice(0, 500)}`;
+}
+
+
 
 /**
  * Generate a slot file name from a chat ID.
@@ -39,24 +51,88 @@ export function slotFileName(chatId: string): string {
 }
 
 /**
+ * Generate a model/context-aware slot file name. A llama.cpp slot file is not
+ * portable across model families or materially different context settings.
+ */
+export function slotFileNameForChat(
+  chatId: string,
+  modelId: string,
+  contextWindow?: number,
+): string {
+  const cacheKey = `${chatId}\0${modelId}\0${contextWindow ?? "default"}`;
+  const hash = createHash("sha256").update(cacheKey).digest("hex").slice(0, 20);
+  return `slot_${hash}.bin`;
+}
+
+export async function acquireSlotLease(opts: {
+  chatId: string;
+  baseUrl: string;
+  modelId: string;
+  contextWindow?: number;
+}): Promise<KvSlotLease> {
+  const fileName = slotFileNameForChat(opts.chatId, opts.modelId, opts.contextWindow);
+  const record = await slotRegistry.acquireSlotLease({
+    ...opts,
+    fileName,
+    leaseId: randomUUID(),
+  });
+  const lease: KvSlotLease = {
+    ...record,
+    restoreAttempted: false,
+    restored: false,
+    saveAttempted: false,
+    saved: false,
+  };
+
+  if (lease.slotId == null) {
+    console.warn(
+      `[kv-slot] slot cache disabled for chat ${opts.chatId.slice(0, 8)}... ` +
+      `model=${opts.modelId} reason=${lease.disabledReason ?? "unknown"}`,
+    );
+  } else if (lease.evictedChatId) {
+    console.log(
+      `[kv-slot] assigned chat ${opts.chatId.slice(0, 8)}... to slot ${lease.slotId} ` +
+      `(evicted ${lease.evictedChatId.slice(0, 8)}..., model=${opts.modelId})`,
+    );
+  } else {
+    console.log(
+      `[kv-slot] assigned chat ${opts.chatId.slice(0, 8)}... to slot ${lease.slotId} ` +
+      `(model=${opts.modelId})`,
+    );
+  }
+
+  return lease;
+}
+
+export async function releaseSlotLease(lease: KvSlotLease): Promise<void> {
+  await slotRegistry.releaseLease(lease);
+}
+
+export async function releaseSlotAssignmentsForChat(chatId: string): Promise<void> {
+  await slotRegistry.releaseChat(chatId);
+}
+
+/**
  * Restore a slot's KV cache from disk before inference.
  *
  * @param baseUrl - llama.cpp server base URL (e.g. "http://localhost:8080")
  * @param slotId - slot index to restore
  * @param fileName - name of the slot file to restore
+ * @param modelId - router-mode model ID to proxy the slot request to
  * @returns true if a slot file was found and restored, false if no file existed
  */
 export async function restoreSlot(
   baseUrl: string,
   slotId: number,
   fileName: string,
+  modelId?: string,
 ): Promise<boolean> {
   try {
-    const url = `${baseUrl}/slots/${slotId}/restore`;
+    const url = slotEndpoint(baseUrl, slotId, "restore");
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: fileName }),
+      body: JSON.stringify(modelId ? { filename: fileName, model: modelId } : { filename: fileName }),
       signal: AbortSignal.timeout(30000), // 30s timeout for large slot restores
     });
 
@@ -71,8 +147,9 @@ export async function restoreSlot(
       // No slot file exists yet — this is normal for first turns
       return false;
     } else {
+      const detail = await responseErrorDetail(response);
       console.warn(
-        `[kv-slot] restore failed for slot ${slotId}: ${response.status} ${response.statusText}`,
+        `[kv-slot] restore failed for slot ${slotId}: ${response.status} ${response.statusText}${detail}`,
       );
       return false;
     }
@@ -84,6 +161,28 @@ export async function restoreSlot(
     );
     return false;
   }
+}
+
+export async function restoreSlotForLease(lease: KvSlotLease): Promise<boolean> {
+  if (lease.restoreAttempted) return lease.restored;
+  lease.restoreAttempted = true;
+  if (lease.slotId == null) return false;
+
+  const restored = await restoreSlot(
+    lease.baseUrl,
+    lease.slotId,
+    lease.fileName,
+    lease.modelId,
+  );
+  lease.restored = restored;
+  await slotRegistry.markRestore(lease, restored).catch(() => {});
+  if (!restored) {
+    console.log(
+      `[kv-slot] no cached slot for chat ${lease.chatId.slice(0, 8)}... ` +
+      `(slot ${lease.slotId}, model=${lease.modelId})`,
+    );
+  }
+  return restored;
 }
 
 /**
@@ -98,13 +197,14 @@ export async function saveSlot(
   baseUrl: string,
   slotId: number,
   fileName: string,
+  modelId?: string,
 ): Promise<boolean> {
   try {
-    const url = `${baseUrl}/slots/${slotId}/save`;
+    const url = slotEndpoint(baseUrl, slotId, "save");
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: fileName }),
+      body: JSON.stringify(modelId ? { filename: fileName, model: modelId } : { filename: fileName }),
       signal: AbortSignal.timeout(60000), // 60s timeout for large slot saves
     });
 
@@ -116,8 +216,9 @@ export async function saveSlot(
       );
       return true;
     } else {
+      const detail = await responseErrorDetail(response);
       console.warn(
-        `[kv-slot] save failed for slot ${slotId}: ${response.status} ${response.statusText}`,
+        `[kv-slot] save failed for slot ${slotId}: ${response.status} ${response.statusText}${detail}`,
       );
       return false;
     }
@@ -131,49 +232,20 @@ export async function saveSlot(
   }
 }
 
-/**
- * Wrapper that restores before and saves after a turn's inference.
- *
- * Usage in chat.ts:
- *   await withSlotCache(model.baseUrl, chat.id, numSlots, async () => {
- *     await runAgentLoop({ ... });
- *   });
- *
- * The save happens after the callback completes, regardless of whether
- * the turn produced content or hit an error. This ensures the slot state
- * reflects the latest context even on partial turns.
- */
-export async function withSlotCache<T>(
-  baseUrl: string,
-  chatId: string,
-  numSlots: number,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const slotId = slotIdForChat(chatId, numSlots);
-  const fileName = slotFileName(chatId);
+export async function saveSlotForLease(lease: KvSlotLease): Promise<boolean> {
+  if (lease.saveAttempted) return lease.saved;
+  lease.saveAttempted = true;
+  if (lease.slotId == null) return false;
 
-  // Restore before inference
-  const restored = await restoreSlot(baseUrl, slotId, fileName);
-  if (restored) {
-    console.log(`[kv-slot] using cached slot for chat ${chatId.slice(0, 8)}...`);
-  }
-
-  let result: T;
-  let errored = false;
-  try {
-    result = await fn();
-  } catch (err) {
-    errored = true;
-    throw err;
-  } finally {
-    // Save after inference (success or error)
-    // On error, the slot may contain partial state, but that's acceptable —
-    // it's better to have a stale cache than no cache at all.
-    await saveSlot(baseUrl, slotId, fileName);
-    if (errored) {
-      console.log(`[kv-slot] saved slot for chat ${chatId.slice(0, 8)}... after error`);
-    }
-  }
-
-  return result;
+  const saved = await saveSlot(
+    lease.baseUrl,
+    lease.slotId,
+    lease.fileName,
+    lease.modelId,
+  );
+  lease.saved = saved;
+  await slotRegistry.markSave(lease, saved).catch(() => {});
+  return saved;
 }
+
+

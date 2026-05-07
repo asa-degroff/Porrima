@@ -19,6 +19,7 @@ import { sanitizeSurrogates } from "@mariozechner/pi-ai/dist/utils/sanitize-unic
 import { createHash, randomUUID } from "crypto";
 import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
 import sharp from "sharp";
+import { restoreSlotForLease, type KvSlotLease } from "./kv-slot-cache.js";
 
 // llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
 // The client encodes uploads as WebP for size, so we re-encode unsupported formats
@@ -160,6 +161,13 @@ function buildCacheMetadata(
     requestMessageCount: messages.length,
     requestCharCount: estimateRequestChars(messages, tools),
   };
+}
+
+function getKvSlotLease(options?: SimpleStreamOptions): KvSlotLease | null {
+  const lease = (options as any)?.llamaSlotLease;
+  if (!lease || typeof lease !== "object") return null;
+  if (typeof lease.chatId !== "string" || typeof lease.modelId !== "string") return null;
+  return lease as KvSlotLease;
 }
 
 // ---------------------------------------------------------------------------
@@ -859,6 +867,21 @@ export const streamOpenAICompat = (
       // this endpoint doesn't exist, so we catch and ignore errors.
       await ensureModelLoaded(model.baseUrl, model.id, model.contextWindow);
 
+      const kvSlotLease = getKvSlotLease(options);
+      const useKvSlotLease = kvSlotLease &&
+        kvSlotLease.slotId != null &&
+        kvSlotLease.baseUrl.replace(/\/+$/, "") === model.baseUrl.replace(/\/+$/, "") &&
+        kvSlotLease.modelId === model.id;
+      if (kvSlotLease && !useKvSlotLease) {
+        console.warn(
+          `[kv-slot] ignoring mismatched lease for model=${model.id}: ` +
+          `lease model=${kvSlotLease.modelId} slot=${kvSlotLease.slotId ?? "none"}`,
+        );
+      }
+      if (useKvSlotLease) {
+        await restoreSlotForLease(kvSlotLease);
+      }
+
       const messages = await convertMessages(model, context);
       const body: any = {
         model: model.id,
@@ -877,6 +900,10 @@ export const streamOpenAICompat = (
 
       if (context.tools && context.tools.length > 0) {
         body.tools = convertTools(context.tools);
+      }
+
+      if (useKvSlotLease) {
+        body.id_slot = kvSlotLease.slotId;
       }
 
       // llama.cpp exposes prompt KV reuse through its `cache_prompt` request

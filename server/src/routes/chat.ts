@@ -29,7 +29,12 @@ import type { TTSSettings } from "../types/tts.js";
 import { log } from "../services/logger.js";
 import { createSafeStreamFn } from "../services/llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop, stopAgentLoop } from "../services/agent-loop-runner.js";
-import { restoreSlot, saveSlot, slotFileName } from "../services/kv-slot-cache.js";
+import {
+  acquireSlotLease,
+  releaseSlotLease,
+  saveSlotForLease,
+  type KvSlotLease,
+} from "../services/kv-slot-cache.js";
 
 // Live stream registry lives in services/live-streams.ts so server-internal
 // background tasks (synthesis, wake cycle) can also emit through it without
@@ -1035,6 +1040,9 @@ async function handleChatStream(
   // (needed for KV slot cache save on turn completion)
   let ollamaModel: OllamaModel | undefined;
   let piModel: Model<string> | undefined;
+  // Turn-level llama.cpp KV slot lease. The provider restores it after model
+  // load and sends id_slot on every completion request for this turn.
+  let kvSlotLease: KvSlotLease | null = null;
 
   let iterations = 0;
   let waitingForInput = false;
@@ -1097,6 +1105,15 @@ async function handleChatStream(
       // the full detected context window (e.g. 128k) and may overflow VRAM.
       piModel.contextWindow = getEffectiveContextWindow(chat, ollamaModel, settings);
       activeAssistantIdentity = replayIdentityFromPiModel(piModel);
+
+      if (ollamaModel.provider === "llamacpp" && piModel.baseUrl) {
+        kvSlotLease = await acquireSlotLease({
+          baseUrl: piModel.baseUrl,
+          chatId: chat.id,
+          modelId: piModel.id,
+          contextWindow: piModel.contextWindow,
+        });
+      }
     } catch (modelError: any) {
       console.error("[chat] model discovery failed:", modelError.message);
       // Send error event and end response cleanly
@@ -1117,7 +1134,7 @@ async function handleChatStream(
     };
 
     // Pass per-chat Ollama runtime options to the stream function
-    const safeStreamFn = createSafeStreamFn(chat.ollamaOptions);
+    const safeStreamFn = createSafeStreamFn(chat.ollamaOptions, kvSlotLease ?? undefined);
 
     // Build config
     const config = createAgentLoopConfig({
@@ -1238,14 +1255,6 @@ async function handleChatStream(
       chunkSize: ttsSettings.streamingChunkSize ?? 50,
       boundaryTier: ttsSettings.streamingBoundaryTier ?? 'clause',
     }) : null;
-
-    // Restore KV cache slot from disk (if available) before first LLM call.
-    // This skips full prefill on returning conversations. Only applies to
-    // llama.cpp models that have --slot-save-path configured.
-    if (ollamaModel?.provider === "llamacpp" && piModel.baseUrl) {
-      const fileName = slotFileName(chat.id);
-      await restoreSlot(piModel.baseUrl, 0, fileName);
-    }
 
     // Process LLM events -> SSE (main loop)
     await runAgentLoop({
@@ -2086,7 +2095,7 @@ async function handleChatStream(
 
       // Build progress summary (content + tools) — memory section added after flush below
       const progressParts: string[] = [];
-      progressParts.push("[System: Context was compacted mid-turn. Here is a summary of your work so far — continue from where you left off.]");
+      progressParts.push("[System: Context was compacted mid-turn. Here is a summary of your messages so far — continue from where you left off.]");
       if (partialAssistant.content) {
         progressParts.push(`Your progress so far:\n${partialAssistant.content.slice(0, 5000)}`);
       }
@@ -2178,7 +2187,7 @@ async function handleChatStream(
           handoffParts.push(`Key context from this conversation (${chatMemories.length} memories):\n${memoryLines}`);
         }
       } catch { /* non-critical */ }
-      handoffParts.push("Continue the task from where you left off. Do not repeat work already done.");
+      handoffParts.push("You're now ready to pick up where you left off.");
       const handoffText = handoffParts.join("\n\n");
 
       // Strip trailing assistant messages (in-progress + compaction summaries).
@@ -2659,13 +2668,21 @@ async function handleChatStream(
       }
     }
   } finally {
-    // Save KV cache slot to disk after the turn completes (success or error).
-    // This persists the full context so the next turn can restore it and skip prefill.
-    if (ollamaModel?.provider === "llamacpp" && piModel?.baseUrl) {
-      const fileName = slotFileName(chat.id);
-      saveSlot(piModel.baseUrl, 0, fileName).catch((err) => {
-        console.warn("[kv-slot] post-turn save failed:", err);
-      });
+    // Save the leased KV slot after the turn completes. Keep the lease active
+    // until save finishes so another chat cannot evict/reuse that slot while
+    // the server is still writing it.
+    if (kvSlotLease) {
+      const lease = kvSlotLease;
+      saveSlotForLease(lease)
+        .catch((err) => {
+          console.warn("[kv-slot] post-turn save failed:", err);
+          return false;
+        })
+        .finally(() => {
+          releaseSlotLease(lease).catch((err) => {
+            console.warn("[kv-slot] release failed:", err);
+          });
+        });
     }
 
     markChatInactive(chat.id);
