@@ -9,6 +9,7 @@ import {
   updateSshConnection,
 } from "../services/chat-storage.js";
 import { getLlamaPathInfo, updateLlamaPath, validateLlamaPath, getLlamaServicesStatus, listLlamaBinaries } from "../services/llama-path.js";
+import { getSlotAssignments } from "../services/llama-slot-leases.js";
 import { testSshConnection } from "../services/workspace.js";
 import type { SshConnection } from "../types.js";
 
@@ -154,6 +155,12 @@ router.get("/llama-binaries", async (_req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// GET /api/settings/slot-assignments — Current KV cache slot assignments
+router.get("/slot-assignments", (_req, res) => {
+  const assignments = getSlotAssignments();
+  res.json(assignments);
 });
 
 export default router;

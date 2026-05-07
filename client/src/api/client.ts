@@ -1580,6 +1580,23 @@ export async function listLlamaBinaries(): Promise<LlamaBinaryInfo[]> {
   return res.json();
 }
 
+// --- KV Cache Slot Assignments ---
+
+export interface SlotAssignment {
+  chatId: string;
+  slotId: number;
+  modelId: string;
+  baseUrl: string;
+  active: boolean;
+  lastUsedAt: number;
+}
+
+export async function getSlotAssignments(): Promise<SlotAssignment[]> {
+  const res = await apiFetch(`${BASE}/settings/slot-assignments`);
+  if (!res.ok) throw new Error("Failed to fetch slot assignments");
+  return res.json();
+}
+
 // --- Llama.cpp Server Supervisor ---
 
 export type LlamaServerId = "inference" | "extraction" | "reranker" | "embedding" | "title-generation";

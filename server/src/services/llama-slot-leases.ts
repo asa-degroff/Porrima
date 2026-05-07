@@ -67,6 +67,15 @@ function slotBindingEnabled(): boolean {
   return process.env.LLAMACPP_ID_SLOT !== "0";
 }
 
+export interface SlotAssignmentSummary {
+  chatId: string;
+  slotId: number;
+  modelId: string;
+  baseUrl: string;
+  active: boolean;
+  lastUsedAt: number;
+}
+
 class LlamaSlotLeaseStore {
   private state: SlotLeaseState = { bases: {}, pools: {} };
   private loaded = false;
@@ -376,9 +385,31 @@ class LlamaSlotLeaseStore {
       evictedChatId,
     };
   }
+
+  getAssignments(): SlotAssignmentSummary[] {
+    const result: SlotAssignmentSummary[] = [];
+    for (const pool of Object.values(this.state.pools)) {
+      for (const assignment of Object.values(pool.assignments)) {
+        result.push({
+          chatId: assignment.chatId,
+          slotId: assignment.slotId,
+          modelId: pool.modelId,
+          baseUrl: pool.baseUrl,
+          active: !!assignment.activeLeaseId,
+          lastUsedAt: assignment.lastUsedAt,
+        });
+      }
+    }
+    return result;
+  }
 }
 
 const store = new LlamaSlotLeaseStore();
+
+export function getSlotAssignments(): SlotAssignmentSummary[] {
+  if (!slotBindingEnabled()) return [];
+  return store.getAssignments();
+}
 
 export function acquireLlamaSlotLease(options: AcquireLlamaSlotLeaseOptions): Promise<LlamaSlotLease | null> {
   return store.acquire(options);

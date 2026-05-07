@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import type { ChatListItem as ChatListItemType, ChatType, Project } from "../types";
+import type { SlotAssignment } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { useActivityShape } from "../hooks/useActivityStyle";
@@ -46,6 +47,7 @@ interface Props {
   onSynthesisRun?: () => void;
   onWakeRun?: () => void;
   isImageSandboxOpen?: boolean;
+  slotAssignments?: Map<string, SlotAssignment>;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -128,6 +130,7 @@ function ProjectSection({
   editMode,
   onSendToNotebook,
   lastActiveChatId,
+  slotAssignments,
 }: {
   project: Project;
   chats: ChatListItemType[];
@@ -142,6 +145,7 @@ function ProjectSection({
   editMode: boolean;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   lastActiveChatId?: string | null;
+  slotAssignments?: Map<string, SlotAssignment>;
 }) {
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -386,6 +390,7 @@ function ProjectSection({
                   chat={chat}
                   active={chat.id === activeChatId}
                   lastActive={chat.id === lastActiveChatId}
+                  slotAssignment={slotAssignments?.get(chat.id) ?? null}
                   onSelect={() => onSelectChat(chat.id)}
                   onDelete={() => onDeleteChat(chat.id)}
                   onSendToNotebook={onSendToNotebook}
@@ -439,6 +444,7 @@ export function Sidebar({
   onSynthesisRun,
   onWakeRun,
   isImageSandboxOpen = false,
+  slotAssignments = new Map(),
 }: Props) {
   const {
     projectsExpanded,
@@ -891,6 +897,7 @@ export function Sidebar({
                       editMode={projectsEditMode}
                       onSendToNotebook={onSendToNotebook}
                       lastActiveChatId={lastActiveChatId}
+                      slotAssignments={slotAssignments}
                     />
                   ))}
                 </div>
@@ -978,6 +985,7 @@ export function Sidebar({
                     chat={chat}
                     active={chat.id === activeChatId}
                     lastActive={chat.id === lastActiveChatId}
+                    slotAssignment={slotAssignments.get(chat.id) ?? null}
                     onSelect={() => { onSelectChat(chat.id); onClose(); }}
                     onDelete={() => onDeleteChat(chat.id)}
                     onSendToNotebook={onSendToNotebook}
@@ -1056,6 +1064,7 @@ export function Sidebar({
                     chat={chat}
                     active={chat.id === activeChatId}
                     lastActive={chat.id === lastActiveChatId}
+                    slotAssignment={slotAssignments.get(chat.id) ?? null}
                     onSelect={() => { onSelectChat(chat.id); onClose(); }}
                     onDelete={() => onDeleteChat(chat.id)}
                     onSendToNotebook={onSendToNotebook}

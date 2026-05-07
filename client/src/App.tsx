@@ -34,6 +34,7 @@ import { ActivityStyleProvider } from "./hooks/useActivityStyle";
 import { useTTS } from "./hooks/useTTS";
 import { TTSControlBar } from "./components/TTSControlBar";
 import { useNotebooks } from "./hooks/useNotebooks";
+import { useSlotAssignments } from "./hooks/useSlotAssignments";
 import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis, triggerWakeCycle } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
 import type { Chat, ChatType, CornerShape, CornerRadius } from "./types";
@@ -89,6 +90,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     hasUnreadAgentEntries,
     markAgentEntriesSeen,
   } = useNotebooks();
+  const { assignments: slotAssignments } = useSlotAssignments();
   const [activeView, setActiveView] = useState<'chats' | 'notebooks'>('chats');
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
@@ -774,6 +776,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         blueskyChatId={settings.bluesky?.blueskyChatId}
         hasBackgroundActivity={hasBackgroundActivity}
         lastActiveChatId={lastActiveChatId}
+        slotAssignments={slotAssignments}
         isSynthesizing={isSynthesizing}
         isAutomationRunning={isAutomationRunning}
         synthesisComplete={synthesisComplete}

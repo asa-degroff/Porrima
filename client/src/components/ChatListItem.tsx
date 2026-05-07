@@ -1,17 +1,19 @@
 import { useState, useCallback, useEffect } from "react";
 import type { ChatListItem as ChatListItemType } from "../types";
+import type { SlotAssignment } from "../api/client";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 
 interface Props {
   chat: ChatListItemType;
   active: boolean;
   lastActive?: boolean;
+  slotAssignment?: SlotAssignment | null;
   onSelect: () => void;
   onDelete: () => void;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
 }
 
-export function ChatListItem({ chat, active, lastActive = false, onSelect, onDelete, onSendToNotebook }: Props) {
+export function ChatListItem({ chat, active, lastActive = false, slotAssignment, onSelect, onDelete, onSendToNotebook }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -60,18 +62,28 @@ export function ChatListItem({ chat, active, lastActive = false, onSelect, onDel
       className={`w-full text-left px-2.5 py-2 rounded-xl transition-all group relative border ${
         active ? "bg-white/15" : "hover:bg-white/8"
       } ${
-        lastActive
-          ? "border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
-          : active
-            ? "border-white/20"
-            : "border-transparent"
+        active
+          ? "border-white/20"
+          : "border-transparent"
       }`}
     >
       {/* Always-rendered content to maintain consistent height */}
       <div className={`min-w-0 ${confirmDelete ? "invisible" : ""}`}>
-        <p className="text-sm font-medium text-white/90 leading-snug pr-5">
-          {chat.title}
-        </p>
+        <div className="flex items-center gap-1.5">
+          {slotAssignment && (
+            <span
+              className={`shrink-0 w-1.5 h-1.5 rounded-full ${
+                slotAssignment.active
+                  ? "bg-amber-400/90"
+                  : "bg-amber-400/50"
+              }`}
+              title={`Cache warm — slot ${slotAssignment.slotId}`}
+            />
+          )}
+          <p className="text-sm font-medium text-white/90 leading-snug pr-5">
+            {chat.title}
+          </p>
+        </div>
         {chat.preview && (
           <p className="text-xs text-white/40 truncate mt-0.25 pr-5">
             {chat.preview}
