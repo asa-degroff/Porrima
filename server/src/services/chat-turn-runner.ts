@@ -309,8 +309,9 @@ export async function runHeadlessChatTurn(
   const assistantMessageIndex = chat.messages.length - 1;
   emitter.emitDone(assistantMessage, iterations);
 
+  const stopReasonText = String(stopReason);
   const producedNothing =
-    stopReason === "error" &&
+    (stopReasonText === "error" || stopReasonText === "aborted") &&
     state.textSummary.length === 0 &&
     state.thinking.length === 0 &&
     allToolCalls.length === 0;
@@ -322,7 +323,7 @@ export async function runHeadlessChatTurn(
     assistantMessageIndex,
     success: !producedNothing,
     ...(producedNothing
-      ? { error: "Model returned error before producing any output" }
+      ? { error: `Model returned ${stopReasonText} before producing any output` }
       : {}),
   };
 }

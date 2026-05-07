@@ -78,6 +78,12 @@ process.once("SIGINT", () => forceExitTimer("SIGINT"));
 
 const isProd = process.env.NODE_ENV === "production";
 const PORT = parseInt(process.env.PORT || "3001");
+const backgroundJobsSetting = process.env.ENABLE_BACKGROUND_JOBS?.toLowerCase();
+const backgroundJobsEnabled = backgroundJobsSetting === "true"
+  ? true
+  : backgroundJobsSetting === "false"
+    ? false
+    : PORT === 3001;
 const sessionSecret = await getSessionSecret();
 
 // Initialize persona system on startup
@@ -200,5 +206,12 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 
 httpServer = app.listen(PORT, () => {
   console.log(`qu.je agent server running on http://localhost:${PORT}`);
-  startScheduler();
+  if (backgroundJobsEnabled) {
+    startScheduler();
+  } else {
+    console.log(
+      `[scheduler] Background jobs disabled on port ${PORT} ` +
+      `(set ENABLE_BACKGROUND_JOBS=true to override)`,
+    );
+  }
 });

@@ -1260,6 +1260,27 @@ export async function runWakeCycle(options?: {
       `[system-chat] Wake cycle done: iters=${iterations}, tools=${allToolCalls.length}, text=${textSummary.length}ch, stopReason=${stopReason}`,
     );
 
+    if (!turn.success) {
+      const errorMessage = turn.error || `wake cycle produced no visible output (stopReason=${stopReason})`;
+      console.warn(
+        `[system-chat] Wake cycle failed at iter ${iterations} (${errorMessage}) - NOT updating lastWakeCycleAt so the next scheduler tick can retry.`,
+      );
+      emitter.emitError(`Wake cycle failed: ${errorMessage}`);
+      emitter.end();
+      releaseWakeCycleLock();
+      return {
+        summary: `# Wake Cycle\n\n*Wake cycle failed: ${errorMessage}*`,
+        thinking,
+        toolCalls: allToolCalls,
+        artifacts,
+        visuals,
+        generatedImages,
+        memoryUpdates,
+        success: false,
+        error: errorMessage,
+      };
+    }
+
     await refreshSystemChatTitle(
       chat,
       "wake",
