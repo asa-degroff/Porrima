@@ -3,6 +3,7 @@ import type { Artifact, ChatMessage, GeneratedImage, MessageUsage, OllamaModel, 
 import type { ArtifactRuntimeErrorReport, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
 import { fetchRenderedPrompt, fetchSkills } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
+import { MidTurnCompactionIndicator } from "./CompactionIndicator";
 import { MessageInput } from "./MessageInput";
 import { ModelSelector } from "./ModelSelector";
 import { TokenIndicator } from "./TokenIndicator";
@@ -627,6 +628,7 @@ export function ChatView({
                 const isLast = localEndIdx === messages.length - 1;
                 const isOutOfContext = !!msg._outOfContext;
                 const isSystemMessage = !!msg._isSystemMessage;
+                const isMidTurnCompaction = !!msg._isMidTurnCompaction;
                 const stableKey = localStartIdx === localEndIdx
                   ? `msg-${i}-${msg.timestamp}-${msg.role}`
                   : `msg-${i}-${messageOffset + localEndIdx}-${msg._toolLoopId || msg.timestamp}`;
@@ -662,11 +664,20 @@ export function ChatView({
                       </div>
                     )}
                     <div className={isOutOfContext ? "opacity-40" : undefined}>
-                      {isSystemMessage ? (
+                      {isMidTurnCompaction ? (
+                        <MidTurnCompactionIndicator
+                          midTurn={{
+                            removedCount: msg._compactionRemovedCount,
+                            cycle: msg._compactionCycle,
+                            timestamp: msg.timestamp,
+                          }}
+                        />
+                      ) : isSystemMessage ? (
                         <div className="mx-2 my-1 rounded-lg bg-amber-500/5 border border-amber-400/10 px-3 py-2 text-[10px] text-amber-200/40 font-medium uppercase tracking-wider">
                           System Message
                         </div>
                       ) : undefined}
+                      {!isMidTurnCompaction && (
                       <MessageBubble
                         message={msg}
                         isStreaming={streaming}
@@ -690,6 +701,7 @@ export function ChatView({
                         chatId={chatId || undefined}
                         onArtifactRuntimeError={onArtifactRuntimeError}
                       />
+                      )}
                     </div>
                   </div>
                 );

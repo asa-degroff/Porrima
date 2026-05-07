@@ -2097,9 +2097,10 @@ async function handleChatStream(
       // Wrap all compaction work in a keepalive ping loop so the client's
       // 95s inactivity timeout doesn't fire during slow LLM/embed steps.
       let compactionAborted = false;
+      let compaction: Awaited<ReturnType<typeof truncateChatHistory>> | undefined;
       await withSSEKeepalive(res, async () => {
         try {
-          const compaction = await truncateChatHistory(chat, effectiveCW, true, emitCompacting, emitKeepalive, undefined, systemPrompt, agentTools);
+          compaction = await truncateChatHistory(chat, effectiveCW, true, emitCompacting, emitKeepalive, undefined, systemPrompt, agentTools);
           if (compaction?.truncated) {
             await saveChat(chat, { allowTruncation: true });
             console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: removed ${compaction.removedCount} messages, estimated ${compaction.estimatedTokenCount} tokens remaining`);
@@ -2203,6 +2204,9 @@ async function handleChatStream(
         content: handoffText,
         timestamp: Date.now(),
         _isSystemMessage: true,
+        _isMidTurnCompaction: true,
+        _compactionRemovedCount: compaction?.removedCount,
+        _compactionCycle: compactionCycle,
       });
       await saveChat(chat);
 

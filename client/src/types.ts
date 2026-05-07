@@ -69,6 +69,9 @@ export interface ChatMessage {
   _inProgress?: boolean;
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
+  _isMidTurnCompaction?: boolean;
+  _compactionRemovedCount?: number;
+  _compactionCycle?: number;
   /** Marks this message as a synthesis trigger — excluded from delayed extraction */
   _isSynthesisMessage?: boolean;
   /** Automation metadata for scheduled system-chat turns. */
