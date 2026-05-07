@@ -1419,8 +1419,9 @@ function estimateBlockTokens(content: string): number {
 }
 
 // Shared row → MemoryBlock mapper. Handles blockType defaulting (for rows
-// written before the migration landed), attachments JSON parsing, and the
-// nullable column cleanups that every call site repeats.
+// written before the migration landed), attachments JSON parsing, and nullable
+// lineage columns. projectId intentionally remains an empty string for global
+// blocks because the SQLite column is NOT NULL DEFAULT ''.
 function mapBlockRow(row: any): MemoryBlock {
   let attachments: BlockAttachments | undefined;
   if (row.attachments) {
@@ -1432,7 +1433,7 @@ function mapBlockRow(row: any): MemoryBlock {
   }
   return {
     ...row,
-    projectId: row.projectId || undefined,
+    projectId: row.projectId || "",
     supersededBy: row.supersededBy || undefined,
     supersedes: row.supersedes || undefined,
     blockType: (row.blockType as BlockType) || "note",
@@ -1493,10 +1494,11 @@ export function updateMemoryBlock(id: string, updates: {
       : existing.attachments
         ? JSON.stringify(existing.attachments)
         : null;
-  // `projectId: null` explicitly clears; `undefined` keeps the existing.
+  // `projectId: null` explicitly clears to the schema's blank global value;
+  // `undefined` keeps the existing value.
   const newProjectId = updates.projectId !== undefined
-    ? updates.projectId
-    : existing.projectId;
+    ? (updates.projectId ?? "")
+    : (existing.projectId || "");
 
   db.prepare(`
     UPDATE memory_blocks SET
