@@ -2074,7 +2074,7 @@ async function handleChatStream(
 
       // Build progress summary (content + tools) — memory section added after flush below
       const progressParts: string[] = [];
-      progressParts.push("[System: Context was compacted mid-turn. Here is a summary of your work so far — continue from where you left off.]");
+      progressParts.push("[System: Context was compacted mid-turn. Here is a summary of your messages so far — continue from where you left off.]");
       if (partialAssistant.content) {
         progressParts.push(`Your progress so far:\n${partialAssistant.content.slice(0, 5000)}`);
       }
@@ -2166,7 +2166,7 @@ async function handleChatStream(
           handoffParts.push(`Key context from this conversation (${chatMemories.length} memories):\n${memoryLines}`);
         }
       } catch { /* non-critical */ }
-      handoffParts.push("Continue the task from where you left off. Do not repeat work already done.");
+      handoffParts.push("You're now ready to pick up where you left off.");
       const handoffText = handoffParts.join("\n\n");
 
       // Strip trailing assistant messages (in-progress + compaction summaries).
