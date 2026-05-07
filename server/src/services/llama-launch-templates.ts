@@ -105,6 +105,8 @@ function buildRerankerExecStart(input: TemplateInput): string {
     "--host", "127.0.0.1",
     ...commonGpuOff(),
     "--ctx-size", "4096",
+    "--batch-size", "4096",
+    "--ubatch-size", "4096",
   ];
   return joinArgs(args);
 }
