@@ -2128,7 +2128,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                               <div>
                                 <label className="block text-xs text-white/50 mb-1">Binary</label>
                                 {(() => {
-                                  const selected = server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : "";
+                                  // resolvedBinary is a full path (/home/asa/bin/ik-llama/llama-server) but dropdown options are directories. Strip the binary name.
+                                  const selected = server.resolvedBinary !== server.defaultBinary
+                                    ? server.resolvedBinary.substring(0, server.resolvedBinary.lastIndexOf('/'))
+                                    : "";
                                   const label = selected
                                     ? llamaBinaries.find(b => b.path === selected)?.path.split("/").pop() || selected.split("/").pop() || selected
                                     : "default (llama-current)";
@@ -2213,7 +2216,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                               <div>
                                 <label className="block text-xs text-white/50 mb-1">Binary</label>
                                 {(() => {
-                                  const selected = server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : "";
+                                  // resolvedBinary is a full path (/home/asa/bin/ik-llama/llama-server) but dropdown options are directories. Strip the binary name.
+                                  const selected = server.resolvedBinary !== server.defaultBinary
+                                    ? server.resolvedBinary.substring(0, server.resolvedBinary.lastIndexOf('/'))
+                                    : "";
                                   const label = selected
                                     ? llamaBinaries.find(b => b.path === selected)?.path.split("/").pop() || selected.split("/").pop() || selected
                                     : "default (llama-current)";
@@ -2313,7 +2319,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 							  <div>
 							    <label className="block text-xs text-white/50 mb-1">Binary</label>
 							    {(() => {
-							      const selected = server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : "";
+							      // resolvedBinary is a full path but dropdown options are directories. Strip the binary name.
+							      const selected = server.resolvedBinary !== server.defaultBinary
+							        ? server.resolvedBinary.substring(0, server.resolvedBinary.lastIndexOf('/'))
+							        : "";
 							      const label = selected
 							        ? llamaBinaries.find(b => b.path === selected)?.path.split("/").pop() || selected.split("/").pop() || selected
 							        : "default (llama-current)";
@@ -2398,7 +2407,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                               <div>
                                 <label className="block text-xs text-white/50 mb-1">Binary</label>
                                 {(() => {
-                                  const selected = server.resolvedBinary !== server.defaultBinary ? server.resolvedBinary : "";
+                                  // resolvedBinary is a full path but dropdown options are directories. Strip the binary name.
+                                  const selected = server.resolvedBinary !== server.defaultBinary
+                                    ? server.resolvedBinary.substring(0, server.resolvedBinary.lastIndexOf('/'))
+                                    : "";
                                   const label = selected
                                     ? llamaBinaries.find(b => b.path === selected)?.path.split("/").pop() || selected.split("/").pop() || selected
                                     : "default (llama-current)";
