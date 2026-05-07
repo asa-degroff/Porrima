@@ -350,7 +350,7 @@ export const MessageBubble = memo(function MessageBubble({
 
   return (
     <div className={`group ${isUser ? "flex justify-end" : "flex justify-start"} mb-4`}>
-      <div ref={rowRef} className={`flex flex-row items-start max-w-[95%] md:max-w-[80%] min-w-0`}>
+      <div ref={rowRef} className={`flex flex-row items-start max-w-[97%] md:max-w-[86%] min-w-0`}>
         {hasUserActions && (
           <div className={`mt-2.5 mr-1.5 flex shrink-0 gap-1 ${useHorizontalUserActions ? "flex-row items-center" : "flex-col"}`}>
             {canEditMessage && (
