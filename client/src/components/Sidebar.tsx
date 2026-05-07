@@ -782,9 +782,8 @@ export function Sidebar({
                   <button
                     key={chat.id}
                     onClick={() => { onSelectChat(chat.id); onClose(); }}
-                    className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-all relative border ${
-                      chat.id === activeChatId
-                        ? 'bg-[rgba(var(--theme-accent-muted))] text-[rgba(var(--theme-accent-text))] border-[rgba(var(--theme-accent-border))]'
+                    className={`w-full text-left px-2.5 py-1.75 rounded-xl text-xs transition-all relative border ${
+                      chat.id === activeChatId                        ? 'bg-[rgba(var(--theme-accent-muted))] text-[rgba(var(--theme-accent-text))] border-[rgba(var(--theme-accent-border))]'
                         : isLastActive
                           ? 'text-white/50 hover:text-white/70 hover:bg-white/5 border-[rgba(var(--theme-accent),0.25)] shadow-[0_0_8px_rgba(var(--theme-accent),0.12)]'
                           : 'text-white/50 hover:text-white/70 hover:bg-white/5 border-[rgba(var(--theme-accent),0.1)]'
