@@ -1623,73 +1623,6 @@ export interface LlamaServerStatus {
   defaultBinary: string;
 }
 
-export interface KvCacheFileStatus {
-  fileName: string;
-  exists: boolean;
-  sizeBytes?: number;
-  mtimeMs?: number;
-}
-
-export interface KvCacheLiveSlot {
-  id: number;
-  nCtx?: number;
-  nTokens?: number;
-  isProcessing?: boolean;
-  prompt?: string;
-  raw: Record<string, unknown>;
-}
-
-export interface KvCacheAssignmentStatus {
-  chatId: string;
-  slotId: number;
-  fileName: string;
-  lastUsedAt: number;
-  active: boolean;
-  leaseId?: string;
-  lastRestoredAt?: number;
-  lastRestoreOk?: boolean;
-  lastRestoreStatus?: number;
-  lastRestoreError?: string;
-  lastRestoreTokens?: number;
-  lastSavedAt?: number;
-  lastSaveOk?: boolean;
-  lastSaveStatus?: number;
-  lastSaveError?: string;
-  lastSaveTokens?: number;
-  chatTitle?: string;
-  chatType?: string;
-  file: KvCacheFileStatus;
-}
-
-export interface KvCachePoolStatus {
-  poolKey: string;
-  baseUrl: string;
-  modelId: string;
-  contextWindow?: number;
-  isCurrent: boolean;
-  assignments: KvCacheAssignmentStatus[];
-}
-
-export interface KvCacheStatus {
-  baseUrl: string;
-  role?: string;
-  routerMode: boolean;
-  loadedModelId?: string;
-  maxInstances?: number;
-  slotSavePathConfigured: boolean | null;
-  slotSavePath?: string;
-  liveSlots: KvCacheLiveSlot[];
-  pools: KvCachePoolStatus[];
-  summary: {
-    assignedSlots: number;
-    activeAssignments: number;
-    currentPoolAssignments: number;
-    savedFiles: number;
-    orphanFiles: number;
-  };
-  errors: string[];
-}
-
 export type OverridableSlotId = Exclude<LlamaServerId, "inference">;
 
 export interface AvailableLlamaModel {
@@ -1747,15 +1680,6 @@ export async function convertSlotToRouterMode(slot: RouterCapableSlotId): Promis
 export async function getLlamaServers(): Promise<{ servers: LlamaServerStatus[] }> {
   const res = await apiFetch(`${BASE}/llama-servers`);
   if (!res.ok) throw new Error("Failed to fetch llama.cpp server status");
-  return res.json();
-}
-
-export async function getLlamaKvCacheStatus(id: LlamaServerId = "inference"): Promise<{ serverId: LlamaServerId; kvCache: KvCacheStatus }> {
-  const res = await apiFetch(`${BASE}/llama-servers/${id}/kv-cache`);
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || "Failed to fetch KV cache status");
-  }
   return res.json();
 }
 

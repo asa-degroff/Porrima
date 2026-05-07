@@ -3,7 +3,6 @@ import { v4 as uuid } from "uuid";
 import { listChats, getChat, saveChat, deleteChat, getSettings, createChat, getProject, getChatMessageWindow } from "../services/chat-storage.js";
 import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
-import { releaseSlotAssignmentsForChat } from "../services/kv-slot-cache.js";
 import type { Chat } from "../types.js";
 
 const router = Router();
@@ -91,7 +90,6 @@ router.patch("/:id", async (req, res) => {
   const chat = await getChat(req.params.id);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
-  const previousModelId = chat.modelId;
   if (req.body.title !== undefined) chat.title = req.body.title;
   if (req.body.modelId !== undefined) {
     chat.modelId = req.body.modelId;
@@ -118,11 +116,6 @@ router.patch("/:id", async (req, res) => {
   }
 
   await saveChat(chat);
-  if (req.body.modelId !== undefined && chat.modelId !== previousModelId) {
-    releaseSlotAssignmentsForChat(chat.id).catch((err) => {
-      console.warn("[kv-slot] failed to release assignments after model change:", err);
-    });
-  }
   res.json(chat);
 });
 
@@ -187,9 +180,6 @@ router.get("/:id/rendered-prompt", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   const deleted = await deleteChat(req.params.id);
   if (!deleted) return res.status(404).json({ error: "Chat not found" });
-  releaseSlotAssignmentsForChat(req.params.id).catch((err) => {
-    console.warn("[kv-slot] failed to release assignments after chat delete:", err);
-  });
   res.status(204).end();
 });
 

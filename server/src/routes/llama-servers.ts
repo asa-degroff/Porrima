@@ -12,7 +12,6 @@ import { findLocalModel, listLocalModels, type LlamaModelKind } from "../service
 import { isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart, resolveSlotEnvironment } from "../services/llama-launch-templates.js";
 import { applyModelOverride, clearModelOverride } from "../services/llama-overrides.js";
 import { ensureRouterModelLoaded, invalidateRouterCache, normalizeRouterModelId } from "../services/llama-router-client.js";
-import { getKvCacheStatus } from "../services/kv-slot-status.js";
 
 const router = Router();
 
@@ -81,22 +80,6 @@ router.get("/:id/logs", async (req, res) => {
     res.json(result);
   } catch (e: any) {
     res.status(400).json({ error: e?.message || "Failed to load llama.cpp server logs" });
-  }
-});
-
-router.get("/:id/kv-cache", async (req, res) => {
-  if (req.params.id !== "inference") {
-    res.status(400).json({ error: "KV cache status is only available for the inference server" });
-    return;
-  }
-
-  try {
-    const settings = await getSettings();
-    const server = await getLlamaServerStatus(req.params.id, settings);
-    const kvCache = await getKvCacheStatus(server.url);
-    res.json({ serverId: server.id, kvCache });
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message || "Failed to load KV cache status" });
   }
 });
 
