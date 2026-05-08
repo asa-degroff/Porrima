@@ -1,19 +1,33 @@
 import { useState, useCallback, useEffect } from "react";
 import type { ChatListItem as ChatListItemType } from "../types";
-import type { SlotAssignment } from "../api/client";
+import type { CacheResidency } from "../api/client";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 
 interface Props {
   chat: ChatListItemType;
   active: boolean;
   lastActive?: boolean;
-  slotAssignment?: SlotAssignment | null;
+  cacheResidency?: CacheResidency | null;
   onSelect: () => void;
   onDelete: () => void;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
 }
 
-export function ChatListItem({ chat, active, lastActive = false, slotAssignment, onSelect, onDelete, onSendToNotebook }: Props) {
+function formatCacheResidencyTitle(residency?: CacheResidency | null): string | undefined {
+  if (!residency) return undefined;
+  const parts = [residency.active ? "Cache active" : "Cache warm"];
+  if (typeof residency.inferredCacheHitRatio === "number") {
+    parts.push(`last hit ${(residency.inferredCacheHitRatio * 100).toFixed(1)}%`);
+  }
+  if (typeof residency.slotId === "number") {
+    parts.push(`slot ${residency.slotId}`);
+  } else {
+    parts.push(`${residency.bindingMode} slot selection`);
+  }
+  return parts.join(" - ");
+}
+
+export function ChatListItem({ chat, active, lastActive = false, cacheResidency, onSelect, onDelete, onSendToNotebook }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -53,6 +67,7 @@ export function ChatListItem({ chat, active, lastActive = false, slotAssignment,
     e.stopPropagation();
     setConfirmDelete(false);
   }, []);
+  const cacheTitle = formatCacheResidencyTitle(cacheResidency);
 
   return (
     <button
@@ -64,13 +79,13 @@ export function ChatListItem({ chat, active, lastActive = false, slotAssignment,
       } ${
         active
           ? "border-white/20"
-          : slotAssignment && lastActive
+          : cacheResidency && lastActive
             ? "border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
-            : slotAssignment
+            : cacheResidency
               ? "border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
               : "border-transparent"
       }`}
-      title={slotAssignment ? `Cache warm — slot ${slotAssignment.slotId}` : undefined}
+      title={cacheTitle}
     >
       {/* Always-rendered content to maintain consistent height */}
       <div className={`min-w-0 ${confirmDelete ? "invisible" : ""}`}>

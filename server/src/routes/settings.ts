@@ -10,6 +10,7 @@ import {
 } from "../services/chat-storage.js";
 import { getLlamaPathInfo, updateLlamaPath, validateLlamaPath, getLlamaServicesStatus, listLlamaBinaries } from "../services/llama-path.js";
 import { getSlotAssignments } from "../services/llama-slot-leases.js";
+import { listLlamaCacheResidency } from "../services/llama-cache-residency.js";
 import { testSshConnection } from "../services/workspace.js";
 import type { SshConnection } from "../types.js";
 
@@ -157,10 +158,15 @@ router.get("/llama-binaries", async (_req, res) => {
   }
 });
 
-// GET /api/settings/slot-assignments — Current KV cache slot assignments
-router.get("/slot-assignments", (_req, res) => {
-  const assignments = getSlotAssignments();
+// GET /api/settings/slot-assignments - Legacy enforced-slot lease view.
+router.get("/slot-assignments", async (_req, res) => {
+  const assignments = await getSlotAssignments();
   res.json(assignments);
+});
+
+// GET /api/settings/cache-residency - Observed llama.cpp prompt-cache residency.
+router.get("/cache-residency", (_req, res) => {
+  res.json(listLlamaCacheResidency());
 });
 
 export default router;

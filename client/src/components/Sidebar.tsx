@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import type { ChatListItem as ChatListItemType, ChatType, Project } from "../types";
-import type { SlotAssignment } from "../api/client";
+import type { CacheResidency } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { useActivityShape } from "../hooks/useActivityStyle";
@@ -47,7 +47,7 @@ interface Props {
   onSynthesisRun?: () => void;
   onWakeRun?: () => void;
   isImageSandboxOpen?: boolean;
-  slotAssignments?: Map<string, SlotAssignment>;
+  cacheResidency?: Map<string, CacheResidency>;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -69,18 +69,32 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
   );
 }
 
+function formatCacheResidencyTitle(residency?: CacheResidency | null): string | undefined {
+  if (!residency) return undefined;
+  const parts = [residency.active ? "Cache active" : "Cache warm"];
+  if (typeof residency.inferredCacheHitRatio === "number") {
+    parts.push(`last hit ${(residency.inferredCacheHitRatio * 100).toFixed(1)}%`);
+  }
+  if (typeof residency.slotId === "number") {
+    parts.push(`slot ${residency.slotId}`);
+  } else {
+    parts.push(`${residency.bindingMode} slot selection`);
+  }
+  return parts.join(" - ");
+}
+
 function RecentChatItem({
   chat,
   active,
   lastActive,
-  slotAssignment,
+  cacheResidency,
   onSelect,
   color = "purple",
 }: {
   chat: ChatListItemType;
   active: boolean;
   lastActive?: boolean;
-  slotAssignment?: SlotAssignment | null;
+  cacheResidency?: CacheResidency | null;
   onSelect: () => void;
   color?: "purple" | "blue" | "emerald" | "amber" | "rose" | "cyan" | "violet" | "orange" | "pink" | "teal";
 }) {
@@ -98,6 +112,7 @@ function RecentChatItem({
   };
   
   const colorClass = colorClasses[color] || colorClasses.purple;
+  const cacheTitle = formatCacheResidencyTitle(cacheResidency);
   
   return (
     <button
@@ -105,13 +120,13 @@ function RecentChatItem({
       className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative ${
         active
           ? "bg-white/15 border border-white/20"
-          : slotAssignment && lastActive
+          : cacheResidency && lastActive
             ? "hover:bg-white/8 border border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
-            : slotAssignment
+            : cacheResidency
               ? "hover:bg-white/8 border border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
               : `hover:bg-white/8 border ${colorClass.split(" ")[1]}`
       }`}
-      title={slotAssignment ? `Cache warm — slot ${slotAssignment.slotId}` : undefined}
+      title={cacheTitle}
     >
       <div className="flex items-start gap-2 min-w-0">
         <span className={`text-[10px] shrink-0 mt-0.5 ${colorClass.split(" ")[0]}`}>●</span>
@@ -139,7 +154,7 @@ function ProjectSection({
   editMode,
   onSendToNotebook,
   lastActiveChatId,
-  slotAssignments,
+  cacheResidency,
 }: {
   project: Project;
   chats: ChatListItemType[];
@@ -154,7 +169,7 @@ function ProjectSection({
   editMode: boolean;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   lastActiveChatId?: string | null;
-  slotAssignments?: Map<string, SlotAssignment>;
+  cacheResidency?: Map<string, CacheResidency>;
 }) {
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -374,7 +389,7 @@ function ProjectSection({
             chat={chats[0]}
             active={chats[0].id === activeChatId}
             lastActive={chats[0].id === lastActiveChatId}
-            slotAssignment={slotAssignments?.get(chats[0].id) ?? null}
+            cacheResidency={cacheResidency?.get(chats[0].id) ?? null}
             onSelect={() => onSelectChat(chats[0].id)}
             color={project.color as any}
           />
@@ -401,7 +416,7 @@ function ProjectSection({
                   chat={chat}
                   active={chat.id === activeChatId}
                   lastActive={chat.id === lastActiveChatId}
-                  slotAssignment={slotAssignments?.get(chat.id) ?? null}
+                  cacheResidency={cacheResidency?.get(chat.id) ?? null}
                   onSelect={() => onSelectChat(chat.id)}
                   onDelete={() => onDeleteChat(chat.id)}
                   onSendToNotebook={onSendToNotebook}
@@ -455,7 +470,7 @@ export function Sidebar({
   onSynthesisRun,
   onWakeRun,
   isImageSandboxOpen = false,
-  slotAssignments = new Map(),
+  cacheResidency = new Map(),
 }: Props) {
   const {
     projectsExpanded,
@@ -908,7 +923,7 @@ export function Sidebar({
                       editMode={projectsEditMode}
                       onSendToNotebook={onSendToNotebook}
                       lastActiveChatId={lastActiveChatId}
-                      slotAssignments={slotAssignments}
+                      cacheResidency={cacheResidency}
                     />
                   ))}
                 </div>
@@ -972,7 +987,7 @@ export function Sidebar({
                 chat={agentChats[0]}
                 active={agentChats[0].id === activeChatId}
                 lastActive={agentChats[0].id === lastActiveChatId}
-                slotAssignment={slotAssignments.get(agentChats[0].id) ?? null}
+                cacheResidency={cacheResidency.get(agentChats[0].id) ?? null}
                 onSelect={() => { onSelectChat(agentChats[0].id); onClose(); }}
                 color="purple"
               />
@@ -998,7 +1013,7 @@ export function Sidebar({
                     chat={chat}
                     active={chat.id === activeChatId}
                     lastActive={chat.id === lastActiveChatId}
-                    slotAssignment={slotAssignments.get(chat.id) ?? null}
+                    cacheResidency={cacheResidency.get(chat.id) ?? null}
                     onSelect={() => { onSelectChat(chat.id); onClose(); }}
                     onDelete={() => onDeleteChat(chat.id)}
                     onSendToNotebook={onSendToNotebook}
@@ -1053,7 +1068,7 @@ export function Sidebar({
                 chat={quickChats[0]}
                 active={quickChats[0].id === activeChatId}
                 lastActive={quickChats[0].id === lastActiveChatId}
-                slotAssignment={slotAssignments.get(quickChats[0].id) ?? null}
+                cacheResidency={cacheResidency.get(quickChats[0].id) ?? null}
                 onSelect={() => { onSelectChat(quickChats[0].id); onClose(); }}
                 color="blue"
               />
@@ -1079,7 +1094,7 @@ export function Sidebar({
                     chat={chat}
                     active={chat.id === activeChatId}
                     lastActive={chat.id === lastActiveChatId}
-                    slotAssignment={slotAssignments.get(chat.id) ?? null}
+                    cacheResidency={cacheResidency.get(chat.id) ?? null}
                     onSelect={() => { onSelectChat(chat.id); onClose(); }}
                     onDelete={() => onDeleteChat(chat.id)}
                     onSendToNotebook={onSendToNotebook}

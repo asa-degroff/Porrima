@@ -1018,6 +1018,7 @@ const DEFAULT_SETTINGS: Settings = {
   defaultWebSearchProvider: "brave",
   readFileDefaultLines: 1000,
   readFileMaxBytes: 256 * 1024,
+  llamacppSlotBindingMode: "auto",
 };
 
 export async function getSettings(): Promise<Settings> {

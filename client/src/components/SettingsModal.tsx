@@ -222,6 +222,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [llamacppEnabled, setLlamacppEnabled] = useState(settings.llamacppEnabled ?? false);
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || "http://localhost:8080");
   const [llamacppSharesGpu, setLlamacppSharesGpu] = useState(settings.llamacppSharesGpu ?? true);
+  const [llamacppSlotBindingMode, setLlamacppSlotBindingMode] = useState<"auto" | "enforced">(settings.llamacppSlotBindingMode ?? "auto");
   const [llamacppStatus, setLlamacppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   // Extraction server settings
   const [extractionCtxSize, setExtractionCtxSize] = useState(settings.extractionCtxSize ?? 16384);
@@ -917,6 +918,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
       llamacppSharesGpu,
+      llamacppSlotBindingMode,
       extractionCtxSize,
       rerankerEnabled,
       rerankerUrl: rerankerUrl.trim() || undefined,
@@ -2054,6 +2056,18 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                      <span className="text-xs text-white/70">Shares GPU</span>
 	                                    </label>
 	                                    <span className="text-xs text-white/30">Coordinate VRAM with image generation</span>
+	                                  </div>
+	                                  <div className="flex items-center gap-2">
+	                                    <label className="block text-xs text-white/50 w-16">Slots</label>
+	                                    <select
+	                                      value={llamacppSlotBindingMode}
+	                                      onChange={(e) => setLlamacppSlotBindingMode(e.target.value as "auto" | "enforced")}
+	                                      className="bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                    >
+	                                      <option value="auto">Auto (recommended)</option>
+	                                      <option value="enforced">Enforced id_slot</option>
+	                                    </select>
+	                                    <span className="text-xs text-white/30">Auto lets llama.cpp restore prompt cache.</span>
 	                                  </div>
 	                                </div>
 	                              )}

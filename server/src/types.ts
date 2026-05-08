@@ -314,6 +314,10 @@ export interface Settings {
   llamacppEnabled?: boolean;
   llamacppUrl?: string;         // default "http://localhost:8080"
   llamacppSharesGpu?: boolean;  // default true — unload Ollama before llama.cpp and vice versa
+  // App-level behavior for llama.cpp physical slot routing. "auto" lets
+  // llama.cpp choose slots and use its RAM prompt cache; "enforced" sends
+  // id_slot based on app-managed leases.
+  llamacppSlotBindingMode?: "auto" | "enforced";
   // Extraction server (CPU-only llama.cpp instance)
   extractionCtxSize?: number;   // default 16384 — context window for extraction server
   // Reranker server (CPU-only llama.cpp instance)

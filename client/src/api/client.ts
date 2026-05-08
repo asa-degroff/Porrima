@@ -1580,7 +1580,7 @@ export async function listLlamaBinaries(): Promise<LlamaBinaryInfo[]> {
   return res.json();
 }
 
-// --- KV Cache Slot Assignments ---
+// --- Legacy Enforced KV Cache Slot Assignments ---
 
 export interface SlotAssignment {
   chatId: string;
@@ -1594,6 +1594,41 @@ export interface SlotAssignment {
 export async function getSlotAssignments(): Promise<SlotAssignment[]> {
   const res = await apiFetch(`${BASE}/settings/slot-assignments`);
   if (!res.ok) throw new Error("Failed to fetch slot assignments");
+  return res.json();
+}
+
+// --- Observed llama.cpp Prompt Cache Residency ---
+
+export type CacheResidencyStatus = "warming" | "warm" | "stale";
+export type CacheResidencyConfidence = "confirmed-hit" | "partial-hit" | "filled-after-miss" | "unknown";
+
+export interface CacheResidency {
+  chatId: string;
+  baseUrl: string;
+  modelId: string;
+  contextWindow?: number;
+  bindingMode: "auto" | "enforced";
+  status: CacheResidencyStatus;
+  warm: boolean;
+  active: boolean;
+  confidence: CacheResidencyConfidence;
+  slotId?: number;
+  lastStartedAt?: number;
+  lastUsedAt: number;
+  lastCompletedAt?: number;
+  lastRequestDigest?: string;
+  reportedPromptTokens?: number;
+  promptEvalTokens?: number;
+  inferredCachedTokens?: number;
+  inferredCacheHitRatio?: number;
+  promptMs?: number;
+  phase?: string;
+  iteration?: number;
+}
+
+export async function getCacheResidency(): Promise<CacheResidency[]> {
+  const res = await apiFetch(`${BASE}/settings/cache-residency`);
+  if (!res.ok) throw new Error("Failed to fetch cache residency");
   return res.json();
 }
 

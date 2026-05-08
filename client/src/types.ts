@@ -320,6 +320,9 @@ export interface Settings {
   llamacppEnabled?: boolean;
   llamacppUrl?: string;         // default "http://localhost:8080"
   llamacppSharesGpu?: boolean;  // default true
+  // "auto" lets llama.cpp select physical slots and restore prompt cache;
+  // "enforced" sends app-managed id_slot leases.
+  llamacppSlotBindingMode?: "auto" | "enforced";
   // Extraction server (CPU-only llama.cpp instance)
   extractionCtxSize?: number;   // default 16384 — context window for extraction server
   // Reranker server (CPU-only llama.cpp instance)

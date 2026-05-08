@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { getSlotAssignments, type SlotAssignment } from "../api/client";
+import { getCacheResidency, type CacheResidency } from "../api/client";
 
 // --- Types (aligned with server model-stats.ts) ---
 
@@ -397,12 +397,12 @@ function ModelDetail({
 export function ModelStatsModal({ isOpen, onClose }: Props) {
   const [records, setRecords] = useState<ModelStatsRecord[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"chat" | "extraction" | "slots">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "extraction" | "cache">("chat");
   const [detailModelId, setDetailModelId] = useState<string | null>(null);
   const [detailData, setDetailData] = useState<ModelStatsDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [slotAssignments, setSlotAssignments] = useState<SlotAssignment[]>([]);
-  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [cacheResidency, setCacheResidency] = useState<CacheResidency[]>([]);
+  const [cacheLoading, setCacheLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -435,26 +435,26 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
     }
   }, []);
 
-  const fetchSlots = useCallback(async () => {
-    setSlotsLoading(true);
+  const fetchCacheResidency = useCallback(async () => {
+    setCacheLoading(true);
     try {
-      const data = await getSlotAssignments();
-      setSlotAssignments(data);
+      const data = await getCacheResidency();
+      setCacheResidency(data);
     } catch {
-      setSlotAssignments([]);
+      setCacheResidency([]);
     } finally {
-      setSlotsLoading(false);
+      setCacheLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (isOpen) {
       fetchData();
-      fetchSlots();
+      fetchCacheResidency();
       setDetailModelId(null);
       setActiveTab("chat");
     }
-  }, [isOpen, fetchData, fetchSlots]);
+  }, [isOpen, fetchData, fetchCacheResidency]);
 
   // Filter records by tab: extraction models have provider containing "extraction"
   const filteredRecords = records.filter((r) => {
@@ -490,13 +490,13 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
                 Extraction
               </button>
               <button
-                onClick={() => { setActiveTab("slots"); setDetailModelId(null); fetchSlots(); }}
-                className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "slots" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+                onClick={() => { setActiveTab("cache"); setDetailModelId(null); fetchCacheResidency(); }}
+                className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "cache" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
               >
-                Slots
+                Cache
               </button>
             </div>
-            <span className="text-[10px] text-white/30">{activeTab === "slots" ? `${slotAssignments.length} assigned` : `${filteredRecords.length} model${filteredRecords.length !== 1 ? "s" : ""}`}</span>
+            <span className="text-[10px] text-white/30">{activeTab === "cache" ? `${cacheResidency.length} tracked` : `${filteredRecords.length} model${filteredRecords.length !== 1 ? "s" : ""}`}</span>
           </div>
           <div className="flex items-center gap-2">
             {loading && <span className="text-[10px] text-amber-300/60">loading…</span>}
@@ -513,37 +513,39 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
         </header>
 
         <div className="flex-1 overflow-y-auto p-4">
-          {activeTab === "slots" ? (
-            slotsLoading ? (
+          {activeTab === "cache" ? (
+            cacheLoading ? (
               <div className="text-white/30 text-sm text-center py-8">Loading…</div>
-            ) : slotAssignments.length === 0 ? (
+            ) : cacheResidency.length === 0 ? (
               <div className="p-8 text-center text-white/30 text-sm">
-                No cache slots assigned. Slot binding requires <code className="text-white/50 bg-white/5 px-1 py-0.5 rounded text-[10px]">LLAMACPP_ID_SLOT</code> to be set (not "0").
+                No observed warm prompt-cache entries yet. Warmth is recorded after a llama.cpp turn completes.
               </div>
             ) : (
               <div className="space-y-2">
                 <p className="text-[10px] text-white/30 mb-2">
-                  Current KV cache slot assignments. Warm slots keep chat context in RAM for fast switching.
+                  Observed llama.cpp prompt-cache residency. Auto mode does not enforce physical slot ownership.
                 </p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-[11px]">
                     <thead>
                       <tr className="text-white/30 text-left">
                         <th className="pb-2 pr-4 font-normal">Chat</th>
-                        <th className="pb-2 pr-4 font-normal">Slot</th>
+                        <th className="pb-2 pr-4 font-normal">Mode</th>
                         <th className="pb-2 pr-4 font-normal">Model</th>
-                        <th className="pb-2 pr-4 font-normal">State</th>
+                        <th className="pb-2 pr-4 font-normal">Hit</th>
                         <th className="pb-2 font-normal">Last Used</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {slotAssignments.map((a) => (
+                      {cacheResidency.map((a) => (
                         <tr key={a.chatId} className="border-t border-white/5">
                           <td className="py-1.5 pr-4">
                             <span className="text-white/70 font-mono">{a.chatId.slice(0, 8)}…</span>
                           </td>
                           <td className="py-1.5 pr-4">
-                            <span className="text-amber-300/90 font-mono">{a.slotId}</span>
+                            <span className="text-amber-300/90 font-mono">
+                              {typeof a.slotId === "number" ? `slot ${a.slotId}` : a.bindingMode}
+                            </span>
                           </td>
                           <td className="py-1.5 pr-4">
                             <span className="text-white/50">{truncateModelId(a.modelId)}</span>
@@ -551,7 +553,9 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
                           <td className="py-1.5 pr-4">
                             <span className={`inline-flex items-center gap-1 ${a.active ? "text-amber-300/80" : "text-white/40"}`}>
                               <span className={`w-1.5 h-1.5 rounded-full ${a.active ? "bg-amber-400/90" : "bg-amber-400/50"}`} />
-                              {a.active ? "active" : "idle"}
+                              {typeof a.inferredCacheHitRatio === "number"
+                                ? `${(a.inferredCacheHitRatio * 100).toFixed(1)}%`
+                                : a.confidence}
                             </span>
                           </td>
                           <td className="py-1.5">

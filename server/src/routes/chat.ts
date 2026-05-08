@@ -30,6 +30,12 @@ import { log } from "../services/logger.js";
 import { createSafeStreamFn } from "../services/llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop, stopAgentLoop } from "../services/agent-loop-runner.js";
 import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } from "../services/llama-slot-leases.js";
+import {
+  markLlamaCacheResidencyFinished,
+  markLlamaCacheResidencyStarted,
+  recordLlamaCacheResidencyRun,
+  type LlamaCacheBindingMode,
+} from "../services/llama-cache-residency.js";
 
 // Live stream registry lives in services/live-streams.ts so server-internal
 // background tasks (synthesis, wake cycle) can also emit through it without
@@ -1035,6 +1041,13 @@ async function handleChatStream(
   let waitingForInput = false;
   let hitContextLimit = false;
   let llamaSlotLease: LlamaSlotLease | null = null;
+  let llamaCacheContext: {
+    baseUrl: string;
+    modelId: string;
+    contextWindow?: number;
+    bindingMode: LlamaCacheBindingMode;
+    slotId?: number;
+  } | null = null;
   // Defer memory extractions until the agent loop finishes to avoid concurrent
   // LLM calls that can interfere with the active tool loop (e.g., model unload/reload)
   const deferredExtractions: Array<{ userMsg: string; assistantMsg: string }> = [];
@@ -1077,6 +1090,17 @@ async function handleChatStream(
       `hit=${hitRatio} digest=${digest} ` +
       `messages=${cache?.requestMessageCount ?? "?"} chars=${cache?.requestCharCount ?? "?"}`,
     );
+
+    if (llamaCacheContext) {
+      recordLlamaCacheResidencyRun({
+        chatId: chat.id,
+        ...llamaCacheContext,
+        timings,
+        cache,
+        phase,
+        iteration: iterationLabel,
+      });
+    }
   }
 
   console.log(`[chat] type=${chat.type} isAgent=${isAgent} tts=${ttsEnabled}`);
@@ -1103,6 +1127,17 @@ async function handleChatStream(
           chatId: chat.id,
           modelId: piModel.id,
           contextWindow: piModel.contextWindow,
+        });
+        llamaCacheContext = {
+          baseUrl: piModel.baseUrl,
+          modelId: piModel.id,
+          contextWindow: piModel.contextWindow,
+          bindingMode: llamaSlotLease ? "enforced" : "auto",
+          slotId: llamaSlotLease?.slotId,
+        };
+        markLlamaCacheResidencyStarted({
+          chatId: chat.id,
+          ...llamaCacheContext,
         });
       }
     } catch (modelError: any) {
@@ -2667,6 +2702,7 @@ async function handleChatStream(
     } catch (err) {
       console.warn("[llama-slot] release failed:", err instanceof Error ? err.message : err);
     }
+    markLlamaCacheResidencyFinished(chat.id);
     markChatInactive(chat.id);
     stopSSEKeepalive();
     endLiveStream(chat.id);

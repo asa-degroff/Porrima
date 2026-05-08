@@ -63,8 +63,23 @@ function shortId(id: string): string {
   return id.length > 8 ? `${id.slice(0, 8)}...` : id;
 }
 
-function slotBindingEnabled(): boolean {
+function slotBindingEnvOverride(): boolean | null {
+  if (process.env.LLAMACPP_ID_SLOT === undefined) return null;
   return process.env.LLAMACPP_ID_SLOT !== "0";
+}
+
+async function slotBindingEnabled(): Promise<boolean> {
+  const envOverride = slotBindingEnvOverride();
+  if (envOverride !== null) return envOverride;
+
+  try {
+    const { getSettings } = await import("./chat-storage.js");
+    const settings = await getSettings();
+    return settings.llamacppSlotBindingMode === "enforced";
+  } catch (err) {
+    console.warn("[llama-slot] settings lookup failed:", err instanceof Error ? err.message : err);
+    return false;
+  }
 }
 
 export interface SlotAssignmentSummary {
@@ -166,7 +181,7 @@ class LlamaSlotLeaseStore {
   }
 
   async acquire(options: AcquireLlamaSlotLeaseOptions): Promise<LlamaSlotLease | null> {
-    if (!slotBindingEnabled()) return null;
+    if (!(await slotBindingEnabled())) return null;
 
     return this.withLock(async () => {
       await this.load();
@@ -386,7 +401,8 @@ class LlamaSlotLeaseStore {
     };
   }
 
-  getAssignments(): SlotAssignmentSummary[] {
+  async getAssignments(): Promise<SlotAssignmentSummary[]> {
+    await this.load();
     const result: SlotAssignmentSummary[] = [];
     for (const pool of Object.values(this.state.pools)) {
       for (const assignment of Object.values(pool.assignments)) {
@@ -406,8 +422,8 @@ class LlamaSlotLeaseStore {
 
 const store = new LlamaSlotLeaseStore();
 
-export function getSlotAssignments(): SlotAssignmentSummary[] {
-  if (!slotBindingEnabled()) return [];
+export async function getSlotAssignments(): Promise<SlotAssignmentSummary[]> {
+  if (!(await slotBindingEnabled())) return [];
   return store.getAssignments();
 }
 
