@@ -5,10 +5,64 @@ import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
 import { parseHTML } from "linkedom";
 import { existsSync } from "fs";
+import { createHash } from "crypto";
+import { writeFile, mkdir, readFile, rm } from "fs/promises";
+import { join } from "path";
+import { homedir } from "os";
 import { getSettings } from "./chat-storage.js";
 
-const MAX_CONTENT_LENGTH = 50_000;
+const MAX_CONTENT_LENGTH = 250_000;
 const WEB_SEARCH_PROVIDERS = ["brave", "exa", "tavily"] as const;
+
+// --- Web fetch cache ---
+
+const WEB_CACHE_DIR = join(homedir(), ".quje-agent", "cache", "web-pages");
+const MANIFEST_PATH = join(WEB_CACHE_DIR, "manifest.json");
+const PREVIEW_LENGTH = 10_000;
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+type CacheEntry = { url: string; hash: string; fetchedAt: number; charCount: number };
+type CacheManifest = Record<string, CacheEntry>;
+
+function urlToHash(url: string): string {
+  return createHash("sha256").update(url).digest("hex").slice(0, 16);
+}
+
+async function loadManifest(): Promise<CacheManifest> {
+  try {
+    const raw = await readFile(MANIFEST_PATH, "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function saveManifest(manifest: CacheManifest): Promise<void> {
+  await mkdir(WEB_CACHE_DIR, { recursive: true });
+  await writeFile(MANIFEST_PATH, JSON.stringify(manifest, null, 2), "utf-8");
+}
+
+async function cleanupOldCache(): Promise<void> {
+  try {
+    const manifest = await loadManifest();
+    const now = Date.now();
+    const stale = Object.entries(manifest).filter(([, entry]) => now - entry.fetchedAt > CACHE_TTL_MS);
+
+    for (const [hash] of stale) {
+      const filePath = join(WEB_CACHE_DIR, `${hash}.md`);
+      try { await rm(filePath, { force: true }); } catch { /* already gone */ }
+      delete manifest[hash];
+    }
+
+    if (stale.length > 0) {
+      await saveManifest(manifest);
+    }
+  } catch (e) {
+    // Non-fatal — cleanup failures don't affect the fetch
+    console.warn("[web_fetch] Cache cleanup failed:", e);
+  }
+}
+
 type WebSearchProvider = (typeof WEB_SEARCH_PROVIDERS)[number];
 
 const TAVILY_SEARCH_DEPTHS = ["basic", "advanced", "fast", "ultra-fast"] as const;
@@ -157,7 +211,7 @@ const WEB_SEARCH_TOOL: Tool = {
 const WEB_FETCH_TOOL: Tool = {
   name: "web_fetch",
   description:
-    "Fetch a web page and return its content as markdown. Uses a headless browser to render JavaScript. By default, extracts the main article content; set raw=true to get the full page.",
+    "Fetch a web page, save its full content to a cached file, and return a preview (first ~10K chars) with the file path and total size. For large pages, use read_file(path, offset, limit) to read the rest progressively, or grep to search the cached content. Uses a headless browser to render JavaScript. By default, extracts the main article content; set raw=true to get the full page.",
   parameters: Type.Object({
     url: Type.String({ description: "URL to fetch (http or https)" }),
     timeout: Type.Optional(
@@ -624,13 +678,43 @@ async function executeWebFetch(
       markdown = `# ${title}\n\n${markdown}`;
     }
 
-    // Truncate if needed
+    // Truncate at hard cap (safety limit)
     if (markdown.length > MAX_CONTENT_LENGTH) {
-      markdown =
-        markdown.slice(0, MAX_CONTENT_LENGTH) +
-        "\n\n...(content truncated at 50,000 characters)";
+      markdown = markdown.slice(0, MAX_CONTENT_LENGTH);
     }
 
+    // Cache + progressive disclosure for large pages
+    if (markdown.length > PREVIEW_LENGTH) {
+      const hash = urlToHash(urlStr);
+      const filePath = join(WEB_CACHE_DIR, `${hash}.md`);
+
+      // Save full content to cache
+      await mkdir(WEB_CACHE_DIR, { recursive: true });
+      await writeFile(filePath, markdown, "utf-8");
+
+      // Update manifest
+      const manifest = await loadManifest();
+      manifest[hash] = { url: urlStr, hash, fetchedAt: Date.now(), charCount: markdown.length };
+      await saveManifest(manifest);
+
+      // Run cleanup asynchronously (non-blocking)
+      cleanupOldCache().catch(() => {});
+
+      const preview = markdown.slice(0, PREVIEW_LENGTH);
+      return {
+        content:
+          `[web_fetch] Saved to: ${filePath}\n` +
+          `  URL: ${urlStr}\n` +
+          `  Total: ${markdown.length.toLocaleString()} characters\n\n` +
+          preview +
+          `\n\n---\n` +
+          `Use read_file(path="${filePath}", offset=N) to read more.\n` +
+          `The cached file contains all ${markdown.length.toLocaleString()} characters.`,
+        isError: false,
+      };
+    }
+
+    // Small content — return inline, no cache needed
     return { content: markdown, isError: false };
   } catch (e: any) {
     return { content: `Web fetch failed: ${e.message}`, isError: true };
