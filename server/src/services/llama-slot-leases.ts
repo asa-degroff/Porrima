@@ -6,6 +6,7 @@ import { join } from "path";
 const BASE_DIR = join(homedir(), ".quje-agent");
 const STATE_PATH = join(BASE_DIR, "llama-slot-bindings.json");
 const DISCOVERY_TTL_MS = 5 * 60 * 1000;
+const FOSSIL_CUTOFF_MS = 24 * 60 * 60 * 1000; // remove inactive entries older than 24h
 
 export interface LlamaSlotLease {
   chatId: string;
@@ -185,6 +186,7 @@ class LlamaSlotLeaseStore {
 
     return this.withLock(async () => {
       await this.load();
+      this.cleanupFossils();
       const baseUrl = normalizeBaseUrl(options.baseUrl);
       const maxInstances = await this.discoverMaxInstancesUnlocked(baseUrl);
       if (maxInstances <= 0) return null;
@@ -319,6 +321,34 @@ class LlamaSlotLeaseStore {
     for (const [chatId, assignment] of Object.entries(pool.assignments)) {
       if (assignment.slotId >= maxInstances) delete pool.assignments[chatId];
     }
+  }
+
+  private cleanupFossils(now = Date.now()): number {
+    let removed = 0;
+    for (const pool of Object.values(this.state.pools)) {
+      for (const [chatId, assignment] of Object.entries(pool.assignments)) {
+        if (assignment.activeLeaseId) continue;
+        if (now - assignment.lastUsedAt > FOSSIL_CUTOFF_MS) {
+          delete pool.assignments[chatId];
+          removed++;
+        }
+      }
+      // Remove empty pools
+      if (Object.keys(pool.assignments).length === 0) {
+        const pk = pool.poolKey;
+        delete this.state.pools[pk];
+      }
+    }
+    // Clean stale base discoveries
+    for (const [key, base] of Object.entries(this.state.bases)) {
+      if (base.discoveredAt != null && now - base.discoveredAt > DISCOVERY_TTL_MS * 2) {
+        delete this.state.bases[key];
+      }
+    }
+    if (removed > 0) {
+      console.log(`[llama-slot] cleaned ${removed} fossil entry${removed > 1 ? "ies" : "y"}`);
+    }
+    return removed;
   }
 
   private hasActiveChatLeaseInOtherPool(chatId: string, currentPoolKey: string): boolean {

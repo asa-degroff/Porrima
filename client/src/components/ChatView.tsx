@@ -68,7 +68,6 @@ function ModelProgressIndicator({ progress }: { progress: ModelProgress }) {
     tokenText,
     eta,
     progress.slotId !== undefined ? `slot ${progress.slotId}` : null,
-    "Safe to switch chats; the server stream keeps running.",
   ].filter(Boolean).join(" - ");
 
   return (
@@ -83,7 +82,6 @@ function ModelProgressIndicator({ progress }: { progress: ModelProgress }) {
       </span>
       {tokenText && <span className="text-amber-100/45 whitespace-nowrap">{tokenText}</span>}
       {eta && <span className="hidden lg:inline text-amber-100/45 whitespace-nowrap">{eta}</span>}
-      <span className="hidden xl:inline text-amber-100/35 whitespace-nowrap">safe to switch</span>
       {percent !== undefined && (
         <div className="hidden lg:block w-14 h-1 rounded-full bg-amber-100/10 overflow-hidden">
           <div

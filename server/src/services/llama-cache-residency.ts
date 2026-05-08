@@ -48,8 +48,10 @@ interface CacheContext {
 
 const DEFAULT_MAX_WARM_PER_POOL = 4;
 const DEFAULT_STALE_AFTER_MS = 12 * 60 * 60 * 1000;
+const DEFAULT_REMOVAL_GRACE_MS = 24 * 60 * 60 * 1000; // remove stale entries after 24h
 const CONFIRMED_HIT_THRESHOLD = 0.9;
 const PARTIAL_HIT_THRESHOLD = 0.5;
+const MAX_RECORDS = 256; // global cap to prevent unbounded growth
 
 const records = new Map<string, LlamaCacheResidencyRecord>();
 
@@ -75,6 +77,12 @@ function staleAfterMs(): number {
   const parsed = Number(process.env.LLAMACPP_CACHE_RESIDENCY_TTL_MS);
   if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
   return DEFAULT_STALE_AFTER_MS;
+}
+
+function removalGraceMs(): number {
+  const parsed = Number(process.env.LLAMACPP_CACHE_RESIDENCY_REMOVAL_GRACE_MS);
+  if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+  return DEFAULT_REMOVAL_GRACE_MS;
 }
 
 function clampRatio(value: number): number {
@@ -104,15 +112,32 @@ function confidenceForHit(hitRatio: number | undefined): LlamaCacheResidencyConf
 
 function pruneStale(now = Date.now()): void {
   const ttl = staleAfterMs();
+  const removalGrace = removalGraceMs();
   for (const [key, record] of records) {
     if (record.active) continue;
-    if (now - record.lastUsedAt <= ttl) continue;
-    records.set(key, {
-      ...record,
-      status: "stale",
-      warm: false,
-      confidence: "unknown",
-    });
+    const age = now - record.lastUsedAt;
+    if (age > ttl + removalGrace) {
+      // Remove entirely after grace period
+      records.delete(key);
+    } else if (age > ttl) {
+      // Mark stale after TTL
+      records.set(key, {
+        ...record,
+        status: "stale",
+        warm: false,
+        confidence: "unknown",
+      });
+    }
+  }
+  // Global cap: remove oldest stale entries if over limit
+  if (records.size > MAX_RECORDS) {
+    const sorted = Array.from(records.entries())
+      .filter(([, r]) => !r.active)
+      .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
+    while (records.size > MAX_RECORDS && sorted.length > 0) {
+      const [key] = sorted.shift()!;
+      records.delete(key);
+    }
   }
 }
 
