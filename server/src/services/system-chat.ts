@@ -151,6 +151,8 @@ const SYNTHESIS_PHASE3_INSTRUCTIONS = `## Phase 3: Zeitgeist Update
 
 Block maintenance complete. Your current continuity narrative (zeitgeist) is in your context. Review it — update it via \`update_memory_block(block_id="blk-zeitgeist-continuity", content=...)\` if there are new patterns, threads, or shifts since the last cycle.
 
+The zeitgeist is best used for high-level continuity — if there are a lot of specific details, create a new memory block for a focused topic. 
+
 After updating the zeitgeist, wait for the next phase trigger.`;
 
 // Appended to the Phase 3 trigger when the current zeitgeist is already over
