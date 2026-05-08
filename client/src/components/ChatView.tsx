@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import type { Artifact, ChatMessage, GeneratedImage, MessageUsage, OllamaModel, SystemPromptPreset } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, MessageUsage, ModelProgress, OllamaModel, SystemPromptPreset } from "../types";
 import type { ArtifactRuntimeErrorReport, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
 import { fetchRenderedPrompt, fetchSkills } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
@@ -35,6 +35,65 @@ function formatCtxWindow(n: number): string {
   if (n >= 1000000) return (n / 1000000).toFixed(n % 1000000 === 0 ? 0 : 1) + "M";
   if (n >= 1000) return (n / 1000).toFixed(n % 1000 === 0 ? 0 : 1) + "K";
   return n.toString();
+}
+
+function formatProgressNumber(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return String(Math.round(n));
+}
+
+function formatDuration(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  return remMinutes ? `${hours}h ${remMinutes}m` : `${hours}h`;
+}
+
+function ModelProgressIndicator({ progress }: { progress: ModelProgress }) {
+  const percent = typeof progress.progress === "number"
+    ? Math.round(progress.progress * 100)
+    : undefined;
+  const tokenText = progress.processedTokens !== undefined && progress.promptTokens !== undefined
+    ? `${formatProgressNumber(progress.processedTokens)} / ${formatProgressNumber(progress.promptTokens)}`
+    : progress.promptTokens !== undefined
+      ? `~${formatProgressNumber(progress.promptTokens)} tokens`
+      : null;
+  const label = progress.phase === "loading" ? "Loading model" : "Prefilling context";
+  const eta = progress.estimatedRemainingMs !== undefined ? `~${formatDuration(progress.estimatedRemainingMs)} left` : null;
+  const title = [
+    label,
+    tokenText,
+    eta,
+    progress.slotId !== undefined ? `slot ${progress.slotId}` : null,
+    "Safe to switch chats; the server stream keeps running.",
+  ].filter(Boolean).join(" - ");
+
+  return (
+    <div
+      className="hidden md:flex items-center gap-2 px-2 py-1 rounded-full border border-amber-300/20 bg-amber-400/8 text-[10px] text-amber-100/80"
+      title={title}
+    >
+      <div className="w-3 h-3 rounded-full border-2 border-amber-200/25 border-t-amber-200/80 animate-spin" />
+      <span className="whitespace-nowrap">
+        {label}
+        {percent !== undefined ? ` ${percent}%` : ""}
+      </span>
+      {tokenText && <span className="text-amber-100/45 whitespace-nowrap">{tokenText}</span>}
+      {eta && <span className="hidden lg:inline text-amber-100/45 whitespace-nowrap">{eta}</span>}
+      <span className="hidden xl:inline text-amber-100/35 whitespace-nowrap">safe to switch</span>
+      {percent !== undefined && (
+        <div className="hidden lg:block w-14 h-1 rounded-full bg-amber-100/10 overflow-hidden">
+          <div
+            className="h-full rounded-full bg-amber-200/60 transition-all duration-500"
+            style={{ width: `${percent}%` }}
+          />
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Stable empty array reference for skills - avoids new [] on every render
@@ -146,6 +205,7 @@ interface Props {
   isUsageEstimated?: boolean;
   compacting?: boolean;
   compaction?: { removedCount: number; remainingCount: number } | null;
+  modelProgress?: ModelProgress | null;
   hasCompactionSummary?: boolean;
   contextWindow: number;
   error: string | null;
@@ -203,6 +263,7 @@ export function ChatView({
   isUsageEstimated,
   compacting,
   compaction,
+  modelProgress,
   hasCompactionSummary,
   contextWindow,
   error,
@@ -574,6 +635,9 @@ export function ChatView({
                 setEditingCtx(true);
               } : undefined}
             />
+          )}
+          {streaming && modelProgress && (
+            <ModelProgressIndicator progress={modelProgress} />
           )}
           <button
             className="hidden md:inline-block text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors text-white/30 hover:text-white/50"

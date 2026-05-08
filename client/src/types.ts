@@ -4,6 +4,27 @@ export interface MessageUsage {
   totalTokens: number;
 }
 
+export type ModelProgressPhase = "loading" | "prefill" | "generating";
+export type ModelProgressCacheState = "hot" | "partial" | "cold" | "unknown";
+export type ModelProgressConfidence = "matched-slot" | "inferred-active-slot" | "unknown";
+
+export interface ModelProgress {
+  phase: ModelProgressPhase;
+  modelId: string;
+  chatId?: string;
+  baseUrl?: string;
+  slotId?: number;
+  processedTokens?: number;
+  promptTokens?: number;
+  progress?: number;
+  elapsedMs: number;
+  estimatedRemainingMs?: number;
+  cacheState?: ModelProgressCacheState;
+  confidence: ModelProgressConfidence;
+  updatedAt: number;
+  receivedAt?: number;
+}
+
 export interface ChatToolCall {
   id: string;
   name: string;

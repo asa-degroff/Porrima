@@ -20,6 +20,7 @@ import { createHash, randomUUID } from "crypto";
 import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
 import sharp from "sharp";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
+import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress.js";
 
 // llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
 // The client encodes uploads as WebP for size, so we re-encode unsupported formats
@@ -64,8 +65,17 @@ export async function normalizeImageForLlamaCpp(
 // is too short and causes "fetch failed" errors.
 // IMPORTANT: Must use undici.fetch (not global fetch) — Node 22's global fetch
 // does NOT honor the dispatcher option, silently falling back to defaults.
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+const LLAMACPP_STREAM_HEADERS_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_STREAM_HEADERS_TIMEOUT_MS", 7_200_000);
+const LLAMACPP_PREFILL_POLL_INTERVAL_MS = readPositiveIntEnv("LLAMACPP_PREFILL_POLL_INTERVAL_MS", 10_000);
+const LLAMACPP_PREFILL_POLL_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_PREFILL_POLL_TIMEOUT_MS", 120_000);
+
 const llamaStreamAgent = new UndiciAgent({
-  headersTimeout: 1_800_000,  // 30 minutes — matches LOCAL_INACTIVITY_TIMEOUT_MS
+  headersTimeout: LLAMACPP_STREAM_HEADERS_TIMEOUT_MS,
   bodyTimeout: 0,             // No body timeout (SSE streams indefinitely)
   keepAliveTimeout: 60_000,
 });
@@ -178,6 +188,261 @@ function getLlamaSlotLease(options?: SimpleStreamOptions): LlamaSlotLease | null
   if (typeof lease.leaseId !== "string") return null;
   if (!Number.isInteger(lease.slotId) || lease.slotId < 0) return null;
   return lease as LlamaSlotLease;
+}
+
+function getModelProgressCallback(options?: SimpleStreamOptions): ModelProgressCallback | undefined {
+  const callback = (options as any)?.onModelProgress;
+  return typeof callback === "function" ? callback as ModelProgressCallback : undefined;
+}
+
+function clampRatio(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function estimatePromptTokensFromChars(charCount: number): number | undefined {
+  if (!Number.isFinite(charCount) || charCount <= 0) return undefined;
+  return Math.max(1, Math.ceil(charCount / 3.3));
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return value;
+}
+
+function readNumberByKeys(obj: any, keys: string[]): number | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  for (const key of keys) {
+    const value = finiteNumber(obj[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function getSlotArray(payload: any): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.slots)) return payload.slots;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
+function getSlotId(slot: any): number | undefined {
+  return readNumberByKeys(slot, ["id", "id_slot", "slot_id"]);
+}
+
+function isSlotProcessing(slot: any): boolean {
+  if (!slot || typeof slot !== "object") return false;
+  if (slot.is_processing === true || slot.processing === true) return true;
+  const taskId = readNumberByKeys(slot, ["id_task", "task_id"]);
+  if (taskId !== undefined && taskId >= 0) return true;
+  const state = String(slot.state ?? slot.status ?? "").toLowerCase();
+  return state.includes("process") || state.includes("busy") || state === "1";
+}
+
+function readProcessedTokens(slot: any): number | undefined {
+  return readNumberByKeys(slot, [
+    "n_tokens",
+    "n_past",
+    "n_prompt_tokens_processed",
+    "prompt_tokens_processed",
+    "processed_tokens",
+    "n_prompt_processed",
+    "n_cache_tokens",
+  ]) ?? readNumberByKeys(slot?.progress, [
+    "n_tokens",
+    "processed_tokens",
+    "prompt_tokens_processed",
+  ]);
+}
+
+function readPromptTokens(slot: any, fallback?: number): number | undefined {
+  return readNumberByKeys(slot, [
+    "task_n_tokens",
+    "n_prompt_tokens_total",
+    "prompt_tokens_total",
+    "total_prompt_tokens",
+    "n_tokens_prompt",
+  ]) ?? readNumberByKeys(slot?.task, [
+    "n_tokens",
+    "prompt_tokens",
+  ]) ?? fallback;
+}
+
+interface SlotProgressSnapshot {
+  slotId?: number;
+  processedTokens?: number;
+  promptTokens?: number;
+  confidence: ModelProgressEvent["confidence"];
+}
+
+function extractSlotProgress(
+  payload: any,
+  preferredSlotId: number | undefined,
+  fallbackPromptTokens: number | undefined,
+): SlotProgressSnapshot | null {
+  const slots = getSlotArray(payload);
+  if (!slots.length) return null;
+
+  const candidates = slots
+    .map((slot) => ({
+      slotId: getSlotId(slot),
+      processing: isSlotProcessing(slot),
+      processedTokens: readProcessedTokens(slot),
+      promptTokens: readPromptTokens(slot, fallbackPromptTokens),
+    }))
+    .filter((candidate) => candidate.processing);
+
+  if (!candidates.length) return null;
+
+  const selected = preferredSlotId !== undefined
+    ? candidates.find((candidate) => candidate.slotId === preferredSlotId) ?? candidates[0]
+    : candidates
+        .filter((candidate) => candidate.processing)
+        .sort((a, b) => (b.processedTokens ?? -1) - (a.processedTokens ?? -1))[0] ?? candidates[0];
+
+  if (!selected) return null;
+  return {
+    slotId: selected.slotId,
+    processedTokens: selected.processedTokens,
+    promptTokens: selected.promptTokens,
+    confidence: preferredSlotId !== undefined && selected.slotId === preferredSlotId ? "matched-slot" : "inferred-active-slot",
+  };
+}
+
+function estimateRemainingMs(input: {
+  processedTokens?: number;
+  promptTokens?: number;
+  firstProcessedTokens?: number;
+  firstProgressAt?: number;
+  now: number;
+}): number | undefined {
+  const { processedTokens, promptTokens, firstProcessedTokens, firstProgressAt, now } = input;
+  if (
+    processedTokens === undefined ||
+    promptTokens === undefined ||
+    firstProcessedTokens === undefined ||
+    firstProgressAt === undefined ||
+    processedTokens >= promptTokens
+  ) {
+    return undefined;
+  }
+  const elapsedSeconds = (now - firstProgressAt) / 1000;
+  const processedSinceFirst = processedTokens - firstProcessedTokens;
+  if (elapsedSeconds <= 0 || processedSinceFirst <= 0) return undefined;
+  const tokensPerSecond = processedSinceFirst / elapsedSeconds;
+  if (tokensPerSecond <= 0) return undefined;
+  return Math.max(0, Math.round(((promptTokens - processedTokens) / tokensPerSecond) * 1000));
+}
+
+function cacheStateFromProgress(processedTokens?: number, promptTokens?: number): ModelProgressEvent["cacheState"] {
+  if (processedTokens === undefined || promptTokens === undefined || promptTokens <= 0) return "unknown";
+  const ratio = processedTokens / promptTokens;
+  if (ratio >= 0.9) return "hot";
+  if (ratio >= 0.5) return "partial";
+  return "cold";
+}
+
+function startLlamaPrefillMonitor(input: {
+  baseUrl: string;
+  modelId: string;
+  slotId?: number;
+  estimatedPromptTokens?: number;
+  onProgress?: ModelProgressCallback;
+  signal?: AbortSignal;
+}): () => void {
+  const { baseUrl, modelId, slotId, estimatedPromptTokens, onProgress, signal } = input;
+  if (!onProgress) return () => {};
+
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const startedAt = Date.now();
+  let lastProcessedTokens: number | undefined;
+  let firstProcessedTokens: number | undefined;
+  let firstProgressAt: number | undefined;
+
+  const emit = (progress: Omit<ModelProgressEvent, "updatedAt">) => {
+    onProgress({ ...progress, updatedAt: Date.now() });
+  };
+
+  const schedule = () => {
+    if (stopped || signal?.aborted) return;
+    timer = setTimeout(() => {
+      void poll();
+    }, LLAMACPP_PREFILL_POLL_INTERVAL_MS);
+  };
+
+  const poll = async () => {
+    if (stopped || signal?.aborted) return;
+    try {
+      const url = `${normalizeBaseUrl(baseUrl)}/slots?model=${encodeURIComponent(modelId)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(LLAMACPP_PREFILL_POLL_TIMEOUT_MS) });
+      if (stopped || signal?.aborted) return;
+      if (res.ok) {
+        const payload = await res.json().catch(() => null);
+        const snapshot = extractSlotProgress(payload, slotId, estimatedPromptTokens);
+        if (snapshot) {
+          const now = Date.now();
+          const processedTokens = snapshot.processedTokens;
+          const promptTokens = snapshot.promptTokens;
+          const progressed = processedTokens !== undefined &&
+            (lastProcessedTokens === undefined || processedTokens > lastProcessedTokens);
+
+          if (progressed || lastProcessedTokens === undefined) {
+            if (processedTokens !== undefined) {
+              lastProcessedTokens = processedTokens;
+              if (firstProcessedTokens === undefined) {
+                firstProcessedTokens = processedTokens;
+                firstProgressAt = now;
+              }
+            }
+            const progress = processedTokens !== undefined && promptTokens !== undefined && promptTokens > 0
+              ? clampRatio(processedTokens / promptTokens)
+              : undefined;
+            emit({
+              phase: "prefill",
+              modelId,
+              baseUrl: normalizeBaseUrl(baseUrl),
+              slotId: snapshot.slotId,
+              processedTokens,
+              promptTokens,
+              progress,
+              elapsedMs: now - startedAt,
+              estimatedRemainingMs: estimateRemainingMs({
+                processedTokens,
+                promptTokens,
+                firstProcessedTokens,
+                firstProgressAt,
+                now,
+              }),
+              cacheState: cacheStateFromProgress(processedTokens, promptTokens),
+              confidence: snapshot.confidence,
+            });
+          }
+        }
+      }
+    } catch {
+      // Slot probes can time out while llama.cpp is inside a large prompt batch.
+      // The stream wrapper keeps the old first-event timeout until real progress arrives.
+    } finally {
+      schedule();
+    }
+  };
+
+  emit({
+    phase: "loading",
+    modelId,
+    baseUrl: normalizeBaseUrl(baseUrl),
+    slotId,
+    promptTokens: estimatedPromptTokens,
+    elapsedMs: 0,
+    cacheState: "unknown",
+    confidence: slotId !== undefined ? "matched-slot" : "unknown",
+  });
+  void poll();
+
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -853,6 +1118,7 @@ export const streamOpenAICompat = (
   const stream = createAssistantMessageEventStream();
 
   (async () => {
+    let stopPrefillMonitor: (() => void) | null = null;
     const output: AssistantMessage = {
       role: "assistant",
       content: [],
@@ -942,6 +1208,15 @@ export const streamOpenAICompat = (
 
       const url = `${model.baseUrl}/v1/chat/completions`;
       const cacheMetadata = buildCacheMetadata(cachePrompt, body);
+      const onModelProgress = getModelProgressCallback(options);
+      stopPrefillMonitor = startLlamaPrefillMonitor({
+        baseUrl: model.baseUrl,
+        modelId: model.id,
+        slotId: cacheMetadata.slotId,
+        estimatedPromptTokens: estimatePromptTokensFromChars(cacheMetadata.requestCharCount),
+        onProgress: onModelProgress,
+        signal: options?.signal,
+      });
 
       // Retry on transient connection failures (fetch failed / ECONNRESET).
       // llama.cpp's router can briefly refuse connections between rapid iterations.
@@ -992,6 +1267,19 @@ export const streamOpenAICompat = (
       if (!response.body) {
         throw new Error("No response body from llama.cpp");
       }
+
+      stopPrefillMonitor?.();
+      stopPrefillMonitor = null;
+      onModelProgress?.({
+        phase: "generating",
+        modelId: model.id,
+        baseUrl: normalizeBaseUrl(model.baseUrl),
+        slotId: cacheMetadata.slotId,
+        elapsedMs: 0,
+        cacheState: "unknown",
+        confidence: cacheMetadata.slotId !== undefined ? "matched-slot" : "unknown",
+        updatedAt: Date.now(),
+      });
 
       stream.push({ type: "start", partial: output } as AssistantMessageEvent);
 
@@ -1308,6 +1596,8 @@ export const streamOpenAICompat = (
       stream.push({ type: "done", reason: output.stopReason, message: output } as AssistantMessageEvent);
       stream.end();
     } catch (error) {
+      stopPrefillMonitor?.();
+      stopPrefillMonitor = null;
       for (const block of output.content) delete (block as any).index;
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);

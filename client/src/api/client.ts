@@ -1,4 +1,4 @@
-import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
+import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -177,6 +177,7 @@ export interface StreamCallbacks {
   onMessageComplete?: (message: any, meta?: { continues?: boolean; queuedMessageId?: string }) => void;
   onFollowUpStart?: (data: any) => void;
   onBackgroundActivity?: (info: { type: string; chatId?: string }) => void;
+  onModelProgress?: (progress: ModelProgress) => void;
 }
 
 /** Inactivity timeout for SSE streams — server sends keepalive pings every 30s,
@@ -549,6 +550,9 @@ function processSSEEvent(
       break;
     case "background_activity":
       callbacks.onBackgroundActivity?.(data);
+      break;
+    case "model_progress":
+      callbacks.onModelProgress?.(data);
       break;
     case "error":
       callbacks.onError(data.error || "Unknown error");

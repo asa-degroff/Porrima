@@ -3,6 +3,7 @@ import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/p
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { beginStream as beginLLMStream, endStream as endLLMStream } from "./llm-activity.js";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
+import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress.js";
 
 /**
  * Inactivity timeouts for LLM streaming.
@@ -12,11 +13,22 @@ import type { LlamaSlotLease } from "./llama-slot-leases.js";
  * arguments before the first event.
  */
 const LOCAL_INACTIVITY_TIMEOUT_MS = 1_800_000;
+const LOCAL_PREFILL_NO_PROGRESS_TIMEOUT_MS = 600_000;
+const LOCAL_FIRST_EVENT_ABSOLUTE_TIMEOUT_MS = 7_200_000;
 const CLOUD_INACTIVITY_TIMEOUT_MS = 300_000;
 const CLOUD_FIRST_EVENT_TIMEOUT_MS = 300_000;
 
 function isCloudModel(modelId: string): boolean {
   return modelId.includes(":cloud");
+}
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+export interface SafeStreamHooks {
+  onModelProgress?: ModelProgressCallback;
 }
 
 /**
@@ -27,6 +39,7 @@ function isCloudModel(modelId: string): boolean {
 export function createSafeStreamFn(
   chatOllamaOptions?: { keepAlive?: string | number; numGpu?: number; numPredict?: number },
   llamaSlotLease?: LlamaSlotLease | null,
+  hooks?: SafeStreamHooks,
 ): StreamFn {
   return (model, ctx, options) => {
     if (options?.signal?.aborted) {
@@ -53,7 +66,23 @@ export function createSafeStreamFn(
       return stream;
     }
 
+    const streamAbortController = new AbortController();
+    const externalSignal = options?.signal;
+    const onExternalAbort = () => {
+      if (!streamAbortController.signal.aborted) {
+        streamAbortController.abort(externalSignal?.reason);
+      }
+    };
+    externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
+
+    const pendingProgress: ModelProgressEvent[] = [];
+    let handleProviderProgress: ModelProgressCallback = (progress) => {
+      pendingProgress.push(progress);
+    };
+
     const mergedOptions: Record<string, unknown> = { ...(options ?? {}) };
+    mergedOptions.signal = streamAbortController.signal;
+    mergedOptions.onModelProgress = (progress: ModelProgressEvent) => handleProviderProgress(progress);
     if (chatOllamaOptions) {
       mergedOptions.keepAlive = chatOllamaOptions.keepAlive;
       mergedOptions.numGpu = chatOllamaOptions.numGpu;
@@ -69,11 +98,15 @@ export function createSafeStreamFn(
     const cloud = isCloudModel(model.id);
     const ongoingTimeout = cloud ? CLOUD_INACTIVITY_TIMEOUT_MS : LOCAL_INACTIVITY_TIMEOUT_MS;
     const firstEventTimeout = cloud ? CLOUD_FIRST_EVENT_TIMEOUT_MS : LOCAL_INACTIVITY_TIMEOUT_MS;
+    const localNoProgressTimeout = readPositiveIntEnv("LLM_LOCAL_PREFILL_NO_PROGRESS_TIMEOUT_MS", LOCAL_PREFILL_NO_PROGRESS_TIMEOUT_MS);
+    const localAbsoluteTimeout = readPositiveIntEnv("LLM_LOCAL_FIRST_EVENT_ABSOLUTE_TIMEOUT_MS", LOCAL_FIRST_EVENT_ABSOLUTE_TIMEOUT_MS);
 
     (async () => {
       let timer: ReturnType<typeof setTimeout> | null = null;
+      let absoluteTimer: ReturnType<typeof setTimeout> | null = null;
       let ended = false;
       let receivedFirstEvent = false;
+      let receivedProviderProgress = false;
 
       const endStream = () => {
         if (!ended) {
@@ -82,51 +115,90 @@ export function createSafeStreamFn(
         }
       };
 
+      const failStream = (message: string) => {
+        if (ended) return;
+        console.error(message);
+        if (!streamAbortController.signal.aborted) {
+          streamAbortController.abort(new Error(message));
+        }
+        const errorMsg: AssistantMessage = {
+          role: "assistant",
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "error",
+          errorMessage: message,
+          timestamp: Date.now(),
+        };
+        wrappedStream.push({
+          type: "error",
+          reason: "error",
+          error: errorMsg,
+        } as any);
+        endStream();
+      };
+
       const resetTimer = () => {
         if (timer) clearTimeout(timer);
-        const timeout = receivedFirstEvent ? ongoingTimeout : firstEventTimeout;
+        const timeout = receivedFirstEvent
+          ? ongoingTimeout
+          : (!cloud && receivedProviderProgress ? localNoProgressTimeout : firstEventTimeout);
         timer = setTimeout(() => {
-          console.error(
-            `[stream] inactivity timeout (${timeout}ms, cloud=${cloud}, firstEvent=${receivedFirstEvent}) - model may be stuck: ${model.id}`,
+          const progressText = receivedProviderProgress ? "no prefill progress" : "no first event";
+          failStream(
+            `Model unresponsive for ${timeout / 1000}s (${progressText}) - it may be stuck loading. Try again or use a different model.`,
           );
-          const errorMsg: AssistantMessage = {
-            role: "assistant",
-            content: [],
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "error",
-            errorMessage: `Model unresponsive for ${timeout / 1000}s - it may be stuck loading. Try again or use a different model.`,
-            timestamp: Date.now(),
-          };
-          wrappedStream.push({
-            type: "error",
-            reason: "error",
-            error: errorMsg,
-          } as any);
-          endStream();
         }, timeout);
       };
 
+      handleProviderProgress = (progress) => {
+        if (ended || streamAbortController.signal.aborted) return;
+        if (progress.phase === "prefill" && typeof progress.processedTokens === "number" && progress.processedTokens > 0) {
+          receivedProviderProgress = true;
+        }
+        resetTimer();
+        hooks?.onModelProgress?.(progress);
+      };
+      for (const progress of pendingProgress.splice(0)) {
+        handleProviderProgress(progress);
+      }
+
       resetTimer();
+      if (!cloud) {
+        absoluteTimer = setTimeout(() => {
+          if (!receivedFirstEvent) {
+            failStream(
+              `Model unresponsive for ${localAbsoluteTimeout / 1000}s before first output - long prefill exceeded the hard timeout.`,
+            );
+          }
+        }, localAbsoluteTimeout);
+      }
       beginLLMStream();
 
       try {
         for await (const event of rawStream) {
           if (ended) break;
-          receivedFirstEvent = true;
+          if (!receivedFirstEvent) {
+            receivedFirstEvent = true;
+            if (absoluteTimer) {
+              clearTimeout(absoluteTimer);
+              absoluteTimer = null;
+            }
+          }
           resetTimer();
           wrappedStream.push(event);
         }
       } catch (err) {
+        if (ended) return;
         console.error("[stream] error from LLM stream:", err);
         const errorMsg: AssistantMessage = {
           role: "assistant",
@@ -153,6 +225,8 @@ export function createSafeStreamFn(
         } as any);
       } finally {
         if (timer) clearTimeout(timer);
+        if (absoluteTimer) clearTimeout(absoluteTimer);
+        externalSignal?.removeEventListener("abort", onExternalAbort);
         endLLMStream();
         endStream();
       }

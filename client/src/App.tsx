@@ -212,6 +212,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     isUsageEstimated,
     compacting,
     compaction,
+    modelProgress,
     error,
     warning,
     streamingSegmentIndex,
@@ -836,6 +837,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         isUsageEstimated={isUsageEstimated}
         compacting={compacting}
         compaction={compaction}
+        modelProgress={modelProgress}
         hasCompactionSummary={hasCompactionSummary}
         contextWindow={contextWindow}
         error={error}

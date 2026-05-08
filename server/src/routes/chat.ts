@@ -30,6 +30,7 @@ import { log } from "../services/logger.js";
 import { createSafeStreamFn } from "../services/llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop, stopAgentLoop } from "../services/agent-loop-runner.js";
 import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } from "../services/llama-slot-leases.js";
+import type { ModelProgressEvent } from "../services/model-progress.js";
 import {
   markLlamaCacheResidencyFinished,
   markLlamaCacheResidencyStarted,
@@ -1159,8 +1160,18 @@ async function handleChatStream(
       tools: agentTools,
     };
 
+    const emitModelProgress = (progress: ModelProgressEvent) => {
+      if (connectionClosed) return;
+      res.write(`event: model_progress\ndata: ${JSON.stringify({
+        chatId: chat.id,
+        ...progress,
+      })}\n\n`);
+    };
+
     // Pass per-chat Ollama runtime options to the stream function
-    const safeStreamFn = createSafeStreamFn(chat.ollamaOptions, llamaSlotLease);
+    const safeStreamFn = createSafeStreamFn(chat.ollamaOptions, llamaSlotLease, {
+      onModelProgress: emitModelProgress,
+    });
 
     // Build config
     const config = createAgentLoopConfig({

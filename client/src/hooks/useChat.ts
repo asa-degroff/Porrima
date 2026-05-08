@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { sendMessage, editMessage as apiEditMessage, enqueueMessage as apiEnqueueMessage, stopChat as apiStopChat, fetchChat as apiFetchChat, fetchChatMessages, getChatStatus, reconnectChat, queueArtifactErrorRepair, streamArtifactErrorRepair } from "../api/client";
 import type { ArtifactRuntimeErrorReport, StreamCallbacks, ToolStatus, StreamWarning } from "../api/client";
-import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InlineVisual, MessageSegment, MessageUsage } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InlineVisual, MessageSegment, MessageUsage, ModelProgress } from "../types";
 import { useStreamingTTS } from "./useStreamingTTS";
 import {
   enqueueMessage,
@@ -26,6 +26,7 @@ interface BackgroundStream {
   warning: StreamWarning | null;
   compacting: boolean;
   compaction: CompactionInfo | null;
+  modelProgress: ModelProgress | null;
   doneCalled: boolean;
   abortController: AbortController | null;
   chatRef: Chat | null;
@@ -107,6 +108,7 @@ function createBgStream(chatRef: Chat | null, messageOffset = chatRef?.messageOf
     warning: null,
     compacting: false,
     compaction: null,
+    modelProgress: null,
     doneCalled: false,
     abortController: null,
     chatRef,
@@ -185,6 +187,7 @@ export function useChat(chatId: string | null) {
   const [warning, setWarning] = useState<StreamWarning | null>(null);
   const [compacting, setCompacting] = useState(false);
   const [compaction, setCompaction] = useState<CompactionInfo | null>(null);
+  const [modelProgress, setModelProgress] = useState<ModelProgress | null>(null);
   // Provisional token count from the most recent compaction event — used to
   // show an accurate (if approximate) context size between compaction and the
   // next assistant's real usage, so the indicator never reverts to
@@ -257,6 +260,7 @@ export function useChat(chatId: string | null) {
       setWarning(bg.warning);
       setCompacting(bg.compacting);
       setCompaction(bg.compaction);
+      setModelProgress(bg.modelProgress);
       doneCalledRef.current = bg.doneCalled;
       abortRef.current = bg.abortController;
 
@@ -284,6 +288,7 @@ export function useChat(chatId: string | null) {
       setWarning(null);
       setCompacting(false);
       setCompaction(null);
+      setModelProgress(null);
       setPostCompactionEstimate(null);
       setStreamingSegmentIndex(null);
       setStreamingUsage(null);
@@ -366,6 +371,10 @@ export function useChat(chatId: string | null) {
       onDelta: (delta) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        if (bg.modelProgress) {
+          bg.modelProgress = null;
+          if (activeChatIdRef.current === streamChatId) setModelProgress(null);
+        }
         if (bg.compacting) {
           bg.compacting = false;
           if (activeChatIdRef.current === streamChatId) setCompacting(false);
@@ -410,6 +419,10 @@ export function useChat(chatId: string | null) {
       onThinkingDelta: (delta) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg) return;
+        if (bg.modelProgress) {
+          bg.modelProgress = null;
+          if (activeChatIdRef.current === streamChatId) setModelProgress(null);
+        }
         if (bg.compacting) {
           bg.compacting = false;
           if (activeChatIdRef.current === streamChatId) setCompacting(false);
@@ -472,6 +485,7 @@ export function useChat(chatId: string | null) {
         if (!bg || bg.doneCalled) return;
         bg.doneCalled = true;
         bg.streaming = false;
+        bg.modelProgress = null;
 
         // If the server finalized with longer content than we streamed (e.g.
         // reasoning model emitted thinking only and the server promoted it to
@@ -531,6 +545,7 @@ export function useChat(chatId: string | null) {
           setStreamingSegmentIndex(null);
           setStreamingUsage(null);
           setStreamingEstimate(null);
+          setModelProgress(null);
           setMessageTotal((prev) => Math.max(prev, messageOffsetRef.current + finalMsgs.length));
           if (wfi) setWaitingForInput(true);
           bgStreams.delete(streamChatId);
@@ -659,6 +674,15 @@ export function useChat(chatId: string | null) {
           if (typeof info.estimatedTokens === "number") setStreamingEstimate(info.estimatedTokens);
         }
       },
+      onModelProgress: (progress) => {
+        const bg = bgStreams.get(streamChatId);
+        if (!bg) return;
+        const next = { ...progress, receivedAt: Date.now() };
+        bg.modelProgress = progress.phase === "generating" ? null : next;
+        if (activeChatIdRef.current === streamChatId) {
+          setModelProgress(bg.modelProgress);
+        }
+      },
       onWarning: (w) => {
         console.warn(`[chat] warning: ${w.type} — ${w.message}`);
         const bg = bgStreams.get(streamChatId);
@@ -682,9 +706,12 @@ export function useChat(chatId: string | null) {
         // still be compacting, saving, or generating metadata. Keep the stream
         // active until `done` so reconnect, input locking, and background state
         // reflect the server-side lifecycle.
+        const bg = bgStreams.get(streamChatId);
+        if (bg) bg.modelProgress = null;
         if (activeChatIdRef.current === streamChatId) {
           setStreamingThinkingActive(false);
           setStreamingSegmentIndex(null);
+          setModelProgress(null);
         }
       },
       onCompaction: (info) => {
@@ -874,7 +901,13 @@ export function useChat(chatId: string | null) {
         // Determine whether the server received the message before the
         // connection dropped. If any streaming data was received, the server
         // already processed the request.
-        const receivedData = bg ? (bg.content.length > 0 || bg.thinking.length > 0 || bg.tools.length > 0 || bg.segments.length > 0) : false;
+        const receivedData = bg ? (
+          bg.content.length > 0 ||
+          bg.thinking.length > 0 ||
+          bg.tools.length > 0 ||
+          bg.segments.length > 0 ||
+          bg.modelProgress !== null
+        ) : false;
 
         // When the connection drops after receiving data and the browser
         // reports we're online, this is a background connection kill (especially
@@ -899,9 +932,11 @@ export function useChat(chatId: string | null) {
               if (!status.active) {
                 // Server stream ended naturally — clean up quietly
                 bg.streaming = false;
+                bg.modelProgress = null;
                 if (activeChatIdRef.current === streamChatId) {
                   setStreaming(false);
                   setReconnecting(false);
+                  setModelProgress(null);
                 }
                 bgStreams.delete(streamChatId);
                 return;
@@ -920,11 +955,13 @@ export function useChat(chatId: string | null) {
               // The message is already persisted on the server.
               if (bgStreams.get(streamChatId) === bg) {
                 bg.streaming = false;
+                bg.modelProgress = null;
                 bgStreams.delete(streamChatId);
               }
               if (activeChatIdRef.current === streamChatId) {
                 setReconnecting(false);
                 setError("Connection lost — your message was saved on the server");
+                setModelProgress(null);
               }
             }
           })();
@@ -941,6 +978,7 @@ export function useChat(chatId: string | null) {
           if (bg) {
             bg.streaming = false;
             bg.error = errorMsg;
+            bg.modelProgress = null;
 
             // Only enqueue for retry if the server never received the request.
             // If we received any streaming data (text, thinking, tool calls, etc.),
@@ -976,6 +1014,7 @@ export function useChat(chatId: string | null) {
 
           if (activeChatIdRef.current === streamChatId) {
             setError(errorMsg);
+            setModelProgress(null);
             if (bg) setMessages([...bg.messages]);
             setStreaming(false);
             bgStreams.delete(streamChatId);
@@ -985,6 +1024,7 @@ export function useChat(chatId: string | null) {
           if (bg) {
             bg.streaming = false;
             bg.error = err;
+            bg.modelProgress = null;
           }
 
           // For transient connection errors when we're online but the fetch was
@@ -996,6 +1036,7 @@ export function useChat(chatId: string | null) {
 
           if (activeChatIdRef.current === streamChatId) {
             setError(displayErr);
+            setModelProgress(null);
             setStreaming(false);
             bgStreams.delete(streamChatId);
           }
@@ -1016,6 +1057,7 @@ export function useChat(chatId: string | null) {
     setError(null);
     setWarning(null);
     setCompaction(null);
+    setModelProgress(null);
     setPostCompactionEstimate(null);
     doneCalledRef.current = false;
     streamingContentRef.current = "";
@@ -1453,6 +1495,7 @@ export function useChat(chatId: string | null) {
     isUsageEstimated,
     compacting,
     compaction,
+    modelProgress,
     error,
     warning,
     streamingSegmentIndex,
