@@ -8,14 +8,13 @@ import { homedir } from "os";
 import { glob } from "fs/promises";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
-import { IMAGE_TOOLS, executeImageTool } from "./image-tools.js";
 import { BLUESKY_TOOLS, executeBlueskyTool } from "./bluesky-tools.js";
 import { executePython, createArtifact, createVisual, updateArtifact, updateVisual } from "./sandbox.js";
 import { P5_INSTANCE_MODE_GUIDANCE, formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
 import { getSettings } from "./chat-storage.js";
 import { getWorkspaceForProject } from "./workspace.js";
 import { v4 as uuid } from "uuid";
-import type { Artifact, GeneratedImage, InlineVisual, Project } from "../types.js";
+import type { Artifact, InlineVisual, Project } from "../types.js";
 
 const HOME = homedir();
 const VISUALS_DIR = join(homedir(), ".quje-agent", "visuals");
@@ -129,12 +128,6 @@ const ASK_USER_TOOL: Tool = {
 export interface ToolSideEffects {
   onArtifact: (artifact: Artifact) => void;
   onVisual: (visual: InlineVisual) => void;
-  onGeneratedImage: (image: GeneratedImage) => void;
-  /** Called when generate_and_review produces an image for agent evaluation.
-   *  Sets the pending image synchronously so getSteeringMessages can inject it
-   *  before the event stream delivers the tool_execution_end event. */
-  onPendingReviewImage: (image: { data: string; mimeType: string; imageUrl: string }) => void;
-  /** Called when the ask_user tool fires. The route owns the abort/suspend logic. */
   onAskUser: (question: string, toolCallId: string) => void;
 }
 
@@ -192,7 +185,7 @@ const FILESYSTEM_TOOLS: Tool[] = [
 
 /** Get tool definitions (name + description) for display/metadata only */
 export function getAgentToolDefinitions(chatType?: string): { name: string; description: string }[] {
-  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS, ...IMAGE_TOOLS, ...(chatType === "bluesky" ? BLUESKY_TOOLS : [])];
+  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS, ...(chatType === "bluesky" ? BLUESKY_TOOLS : [])];
   return allTools.map(t => ({ name: t.name, description: t.description }));
 }
 
@@ -223,22 +216,6 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       execute: async (toolCallId, params) => {
         const args = params as Record<string, any>;
         return wrapResult(await executeWebTool(makeToolCall(toolCallId, tool.name, args)));
-      },
-    });
-  }
-
-  // Image tools
-  for (const tool of IMAGE_TOOLS) {
-    tools.push({
-      ...tool,
-      label: tool.name,
-      execute: async (toolCallId, params) => {
-        const args = params as Record<string, any>;
-        return wrapResult(await executeImageTool(
-          makeToolCall(toolCallId, tool.name, args),
-          chatId,
-          (event) => { if (event.type === "generated_image") effects.onGeneratedImage(event.data); }
-        ));
       },
     });
   }
@@ -497,154 +474,6 @@ URL: ${result.url}${warningText}` }], details: {} };
         return { 
           content: [{ type: "text", text: `Failed to list skills: ${e.message}` }], 
           details: {},
-          isError: true,
-        };
-      }
-    },
-  });
-
-  // Corpus exploration tools
-  tools.push({
-    name: "explore_corpus",
-    description: "Browse image clusters to discover patterns, gaps, and creative opportunities. Returns cluster summary and theme distribution.",
-    parameters: Type.Object({
-      theme: Type.Optional(Type.String({ description: "Filter by theme (e.g., 'sci-fi', 'cyberpunk')" })),
-      minClusterSize: Type.Optional(Type.Number({ description: "Minimum cluster size to include (default 1)" })),
-    }),
-    label: "explore_corpus",
-    execute: async (_id, params) => {
-      const args = params as Record<string, any>;
-      try {
-        const { getClusters } = await import("./cluster-storage.js");
-        const { getClusterStats } = await import("./cluster-engine.js");
-        const clusterMap = await getClusters();
-        
-        if (!clusterMap) {
-          return { content: [{ type: "text", text: "No clusters available. Run cluster rebuild first." }], details: {} };
-        }
-        
-        let clusters = clusterMap.clusters;
-        if (args.theme) {
-          clusters = clusters.filter(c => 
-            c.dominantElements.themes.some(t => t.toLowerCase().includes(args.theme.toLowerCase()))
-          );
-        }
-        if (args.minClusterSize) {
-          clusters = clusters.filter(c => c.size >= args.minClusterSize);
-        }
-        
-        const stats = getClusterStats(clusters);
-        const summary = `
-**Corpus Exploration**
-- ${stats.totalClusters} clusters (${stats.totalImages} images)
-- Average size: ${stats.avgSize.toFixed(1)} images
-- Largest: ${stats.largestSize} images
-- Singletons: ${stats.singletonCount}
-
-**Top Clusters:**
-${clusters.slice(0, 5).map((c, i) => `${i + 1}. ${c.name} (${c.size} images) - ${c.dominantElements.themes.slice(0, 3).join(", ")}`).join("\n")}
-`;
-        return { content: [{ type: "text", text: summary }], details: {} };
-      } catch (e: any) {
-        return { content: [{ type: "text", text: `Error exploring corpus: ${e.message}` }], details: {} };
-      }
-    },
-  });
-
-  // generate_and_review — iterative image generation with agent review
-  tools.push({
-    name: "generate_and_review",
-    description: "Generate an image and review it against your creative intent. You can iterate up to 3 times, refining the prompt each time based on what you see. The generated image will be shown for you to evaluate.",
-    parameters: Type.Object({
-      initialPrompt: Type.String({ description: "The initial image generation prompt" }),
-      creativeIntent: Type.String({ description: "What you're trying to achieve - the vision this image should match" }),
-      maxIterations: Type.Optional(Type.Number({ description: "Maximum iterations (default 3, range 1-5)" })),
-      iteration: Type.Optional(Type.Number({ description: "Current iteration number (internal use for retries)" })),
-      imageHistory: Type.Optional(Type.Array(Type.Object({
-        imageUrl: Type.String(),
-        prompt: Type.String(),
-        iteration: Type.Number(),
-      }), { description: "Previous generation attempts (internal use)" })),
-    }),
-    label: "generate_and_review",
-    execute: async (toolCallId, params) => {
-      const args = params as Record<string, any>;
-      const iteration = args.iteration ?? 1;
-      const maxIterations = Math.min(Math.max(args.maxIterations ?? 3, 1), 5);
-      
-      console.log(`[generate_and_review] Starting iteration ${iteration}/${maxIterations}`);
-      
-      try {
-        const { generateForReview, formatReviewResult } = await import("./generate-review.js");
-        
-        console.log(`[generate_and_review] Generating image with prompt: ${args.initialPrompt.slice(0, 100)}...`);
-        
-        // Generate the image
-        const result = await generateForReview(args.initialPrompt, chatId);
-        
-        if (!result.success) {
-          console.log(`[generate_and_review] Generation failed: ${result.error}`);
-          return {
-            content: [{ type: "text", text: `**Generation Failed (Iteration ${iteration}/${maxIterations})**\n\nError: ${result.error}\n\nYou can retry with a modified prompt or accept this outcome.` }],
-            details: { 
-              iteration, 
-              maxIterations, 
-              creativeIntent: args.creativeIntent, 
-              imageHistory: args.imageHistory || [],
-              lastPrompt: args.initialPrompt,
-            },
-            isError: true,
-          };
-        }
-        
-        console.log(`[generate_and_review] Image generated successfully, formatting review result`);
-
-        // Emit generated_image event so the image appears in the chat UI
-        effects.onGeneratedImage({
-          id: result.imageId!,
-          url: result.imageUrl!,
-          params: result.params!,
-          resolvedSeed: result.resolvedSeed!,
-          createdAt: new Date().toISOString(),
-          chatId,
-          generatedBy: "agent",
-        });
-
-        // Format result (text-only; image goes to details.pendingImage for injection as user message)
-        const reviewResult = formatReviewResult(
-          result,
-          iteration,
-          maxIterations,
-          args.creativeIntent,
-          args.initialPrompt
-        );
-
-        // Merge image history and track last prompt
-        if (args.imageHistory) {
-          reviewResult.details.imageHistory = [...args.imageHistory, ...reviewResult.details.imageHistory];
-        }
-        reviewResult.details.lastPrompt = args.initialPrompt;
-
-        // Notify route to set pendingImageInjection SYNCHRONOUSLY, before
-        // getSteeringMessages is called by pi-agent-core after tool execution.
-        // This avoids the race condition where the event stream hasn't delivered
-        // tool_execution_end to chat.ts yet when getSteeringMessages runs.
-        if (reviewResult.details.pendingImage) {
-          effects.onPendingReviewImage(reviewResult.details.pendingImage);
-        }
-
-        return reviewResult;
-      } catch (e: any) {
-        console.error(`[generate_and_review] Error: ${e.message}`);
-        return {
-          content: [{ type: "text", text: `**Generation Error (Iteration ${iteration}/${maxIterations})**\n\n${e.message}\n\nYou can retry or accept this outcome.` }],
-          details: { 
-            iteration, 
-            maxIterations, 
-            creativeIntent: args.creativeIntent, 
-            imageHistory: args.imageHistory || [],
-            lastPrompt: args.initialPrompt,
-          },
           isError: true,
         };
       }

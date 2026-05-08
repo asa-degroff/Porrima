@@ -22,7 +22,7 @@ import { parseSkillInvocations, buildSkillAugmentedPrompt, discoverSkills } from
 import type { Skill } from "../services/skills.js";
 import * as messageQueue from "../services/message-queue.js";
 import type { QueuedUserMessage } from "../services/message-queue.js";
-import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, GeneratedImage, ImageAttachment, InlineVisual, Project } from "../types.js";
+import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, ImageAttachment, InlineVisual, Project } from "../types.js";
 import { saveUserImage } from "../services/user-image-storage.js";
 import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
@@ -466,8 +466,6 @@ const SSE_KEEPALIVE_INTERVAL_MS = 30_000; // 30s keepalive pings to prevent clie
 const NOOP_TOOL_EFFECTS: ToolSideEffects = {
   onArtifact: () => {},
   onVisual: () => {},
-  onGeneratedImage: () => {},
-  onPendingReviewImage: () => {},
   onAskUser: () => {},
 };
 
@@ -603,12 +601,11 @@ async function handleChatStream(
   // Track ordering for interleaved display
   interface OutputSegment {
     seq: number;
-    type: "text" | "tool_call" | "tool_result" | "artifact" | "generated_image" | "visual" | "compaction_marker";
+    type: "text" | "tool_call" | "tool_result" | "artifact" | "visual" | "compaction_marker";
     content?: string;
     toolCall?: ChatToolCall;
     toolResult?: ChatToolResult;
     artifact?: Artifact;
-    generatedImage?: GeneratedImage;
     visual?: InlineVisual;
   }
 
@@ -620,7 +617,6 @@ async function handleChatStream(
     allToolResults: [] as ChatToolResult[],
     allArtifacts: [] as Artifact[],
     allVisuals: [] as InlineVisual[],
-    allGeneratedImages: [] as GeneratedImage[],
     segments: [] as OutputSegment[],
     seqCounter: 0,
     pendingText: "",
@@ -649,7 +645,6 @@ async function handleChatStream(
     committedToolResultCount: 0,
     committedArtifactCount: 0,
     committedVisualCount: 0,
-    committedGeneratedImageCount: 0,
     committedSegmentCount: 0,
     committedThinkingDurationMs: 0,
     hasCommittedToolLoopRows: false,
@@ -669,7 +664,6 @@ async function handleChatStream(
     state.allToolResults = [];
     state.allArtifacts = [];
     state.allVisuals = [];
-    state.allGeneratedImages = [];
     state.segments = [];
     state.seqCounter = 0;
     state.pendingText = "";
@@ -689,7 +683,6 @@ async function handleChatStream(
     state.committedToolResultCount = 0;
     state.committedArtifactCount = 0;
     state.committedVisualCount = 0;
-    state.committedGeneratedImageCount = 0;
     state.committedSegmentCount = 0;
     state.committedThinkingDurationMs = 0;
     state.hasCommittedToolLoopRows = false;
@@ -734,7 +727,6 @@ async function handleChatStream(
       toolResults: state.allToolResults.length > 0 ? state.allToolResults : undefined,
       artifacts: state.allArtifacts.length > 0 ? state.allArtifacts : undefined,
       visuals: state.allVisuals.length > 0 ? state.allVisuals : undefined,
-      generatedImages: state.allGeneratedImages.length > 0 ? state.allGeneratedImages : undefined,
       segments: cleanSegments.length > 0 ? cleanSegments : undefined,
       timestamp: Date.now(),
       _thinkingPromoted: state.thinkingPromoted || undefined,
@@ -803,7 +795,6 @@ async function handleChatStream(
       .filter((tr) => toolCallIds.size === 0 || toolCallIds.has(tr.toolCallId));
     const artifacts = state.allArtifacts.slice(state.committedArtifactCount);
     const visuals = state.allVisuals.slice(state.committedVisualCount);
-    const generatedImages = state.allGeneratedImages.slice(state.committedGeneratedImageCount);
     const segments = cleanOutputSegments(state.segments.slice(state.committedSegmentCount));
 
     return applyToolLoopMetadata({
@@ -818,7 +809,6 @@ async function handleChatStream(
       toolResults: toolResults.length > 0 ? toolResults : undefined,
       artifacts: artifacts.length > 0 ? artifacts : undefined,
       visuals: visuals.length > 0 ? visuals : undefined,
-      generatedImages: generatedImages.length > 0 ? generatedImages : undefined,
       segments: segments.length > 0 ? segments : undefined,
       timestamp: Date.now(),
       _thinkingPromoted: state.thinkingPromoted || undefined,
@@ -835,7 +825,6 @@ async function handleChatStream(
       .filter((tr) => toolCallIds.has(tr.toolCallId));
     const artifacts = state.allArtifacts.slice(state.committedArtifactCount);
     const visuals = state.allVisuals.slice(state.committedVisualCount);
-    const generatedImages = state.allGeneratedImages.slice(state.committedGeneratedImageCount);
     const segments = cleanOutputSegments(state.segments.slice(state.committedSegmentCount));
     const textFromMessage = extractTextFromAssistantMessage(msg);
     const uncommittedText = stripPlaceholderEllipsisBlocks(state.fullText.slice(state.committedTextLength));
@@ -854,7 +843,6 @@ async function handleChatStream(
       toolResults: toolResults.length > 0 ? toolResults : undefined,
       artifacts: artifacts.length > 0 ? artifacts : undefined,
       visuals: visuals.length > 0 ? visuals : undefined,
-      generatedImages: generatedImages.length > 0 ? generatedImages : undefined,
       segments: segments.length > 0 ? segments : undefined,
       timestamp: msg.timestamp || Date.now(),
       _thinkingPromoted: state.thinkingPromoted || undefined,
@@ -888,7 +876,6 @@ async function handleChatStream(
     state.committedToolResultCount = state.allToolResults.length;
     state.committedArtifactCount = state.allArtifacts.length;
     state.committedVisualCount = state.allVisuals.length;
-    state.committedGeneratedImageCount = state.allGeneratedImages.length;
     state.committedSegmentCount = state.segments.length;
     state.committedThinkingDurationMs = state.thinkingDurationMs;
     if (message._toolLoopId) state.hasCommittedToolLoopRows = true;
@@ -1014,14 +1001,7 @@ async function handleChatStream(
       state.segments.push({ seq: ++state.seqCounter, type: "visual", visual });
       res.write(`event: visual\ndata: ${JSON.stringify(visual)}\n\n`);
     },
-    onGeneratedImage: (image) => {
-      state.allGeneratedImages.push(image);
-      state.segments.push({ seq: ++state.seqCounter, type: "generated_image", generatedImage: image });
-      res.write(`event: generated_image\ndata: ${JSON.stringify(image)}\n\n`);
-    },
-    onPendingReviewImage: () => {
-      // No-op: native Ollama API handles images in tool results directly
-    },
+
     onAskUser: (question, toolCallId) => {
       askUserRef.current = { question, toolCallId };
       turnAbortController.abort(); // Only abort the current turn, not the SSE connection
