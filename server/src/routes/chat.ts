@@ -3437,16 +3437,9 @@ router.post("/artifact-error", async (req, res) => {
 
   const currentVersion = await getArtifactCurrentVersion(report.artifactId);
   if (!currentVersion) return res.status(404).json({ error: "Artifact not found" });
-  if (report.version !== currentVersion) {
-    return res.status(409).json({ error: "Only the latest artifact version can be auto-repaired" });
-  }
 
-  const stream = liveStreams.get(report.chatId);
-  const active = !!stream && !stream.ended && !stream.abort.signal.aborted;
-  if (!active && !chatReferencesArtifact(chat, report.artifactId, report.version)) {
-    return res.status(400).json({ error: "Artifact is not associated with this chat" });
-  }
-
+  // Check dedup guards before version check — prevents spurious errors when a
+  // previously-repaired artifact fires the same error on page reload.
   const dedupKey = makeArtifactRepairDedupKey(report);
   if (hasRecentArtifactRepairAttempt(dedupKey)) {
     if (report.stream) {
@@ -3475,6 +3468,29 @@ router.post("/artifact-error", async (req, res) => {
       return;
     }
     return res.json({ accepted: false, repairLimit: true });
+  }
+
+  // If the reported version is older than current, a repair already produced
+  // a newer version — silently skip rather than surfacing a spurious error.
+  if (report.version < currentVersion) {
+    if (report.stream) {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      res.write(`event: error\ndata: ${JSON.stringify({ error: "A newer artifact version already exists" })}\n\n`);
+      res.end();
+      return;
+    }
+    return res.json({ accepted: false, superseded: true });
+  }
+
+  const stream = liveStreams.get(report.chatId);
+  const active = !!stream && !stream.ended && !stream.abort.signal.aborted;
+  if (!active && !chatReferencesArtifact(chat, report.artifactId, report.version)) {
+    return res.status(400).json({ error: "Artifact is not associated with this chat" });
   }
 
   report.sourceExcerpt = await getArtifactSourceExcerpt(report);
