@@ -580,35 +580,6 @@ export async function executeMemoryTool(
       return { content: `Found ${blocks.length} memory block(s):\n${lines.join("\n")}`, isError: false };
     }
 
-    case "get_block_history": {
-      const { block_id } = toolCall.arguments;
-      if (!block_id) return { content: "Missing block_id", isError: true };
-
-      const currentBlock = getMemoryBlock(block_id);
-      if (!currentBlock) return { content: `Block not found: ${block_id}`, isError: false };
-
-      const history = getBlockHistory(block_id);
-      if (history.length === 0) {
-        return { content: "No history found for this block.", isError: false };
-      }
-
-      const lines = [
-        `Revision history for "${currentBlock.name}":`,
-        `Total revisions: ${history.length}`,
-        "---",
-      ];
-
-      for (let i = 0; i < history.length; i++) {
-        const b = history[i];
-        const version = i + 1;
-        const isCurrent = b.id === block_id;
-        lines.push(`\n[${version}] ${b.id} (${b.updatedAt.slice(0, 10)}) by ${b.updatedBy}${isCurrent ? " (current)" : ""}`);
-        lines.push(`Content: ${b.content.slice(0, 200)}${b.content.length > 200 ? "..." : ""}`);
-      }
-
-      return { content: lines.join("\n"), isError: false };
-    }
-
     case "create_notebook_entry": {
       const { content, date } = toolCall.arguments;
       if (!content || typeof content !== "string" || content.trim().length === 0) {
