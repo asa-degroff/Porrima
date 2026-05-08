@@ -527,6 +527,13 @@ export function useChat(chatId: string | null) {
 
         if (wfi) bg.waitingForInput = true;
 
+        // If the server skipped the repair (e.g. superseded/duplicate), the
+        // assistant placeholder will be empty — remove it silently.
+        const skippedLast = bg.messages[bg.messages.length - 1];
+        if (skippedLast?.role === "assistant" && !finalContent && !thinking && !doneArtifacts && !doneImages && !doneVisuals && !toolCalls) {
+          bg.messages.pop();
+        }
+
         const isActive = activeChatIdRef.current === streamChatId;
         const finalMsgs = [...bg.messages];
 

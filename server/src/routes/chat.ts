@@ -3449,7 +3449,7 @@ router.post("/artifact-error", async (req, res) => {
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",
       });
-      res.write(`event: error\ndata: ${JSON.stringify({ error: "Artifact repair already requested for this error" })}\n\n`);
+      res.write(`event: done\ndata: ${JSON.stringify({ skipped: "duplicate" })}\n\n`);
       res.end();
       return;
     }
@@ -3463,7 +3463,7 @@ router.post("/artifact-error", async (req, res) => {
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",
       });
-      res.write(`event: error\ndata: ${JSON.stringify({ error: "Automatic artifact repair was already attempted for this artifact" })}\n\n`);
+      res.write(`event: done\ndata: ${JSON.stringify({ skipped: "repairLimit" })}\n\n`);
       res.end();
       return;
     }
@@ -3480,7 +3480,7 @@ router.post("/artifact-error", async (req, res) => {
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",
       });
-      res.write(`event: error\ndata: ${JSON.stringify({ error: "A newer artifact version already exists" })}\n\n`);
+      res.write(`event: done\ndata: ${JSON.stringify({ skipped: "superseded" })}\n\n`);
       res.end();
       return;
     }
