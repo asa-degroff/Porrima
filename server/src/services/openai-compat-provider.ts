@@ -21,7 +21,6 @@ import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
 import sharp from "sharp";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
 import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress.js";
-import { listLlamaCacheResidency, hasLlamaCacheRecord, hasLlamaModelWarmRecord } from "./llama-cache-residency.js";
 
 // llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
 // The client encodes uploads as WebP for size, so we re-encode unsupported formats
@@ -74,6 +73,7 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 const LLAMACPP_STREAM_HEADERS_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_STREAM_HEADERS_TIMEOUT_MS", 7_200_000);
 const LLAMACPP_PREFILL_POLL_INTERVAL_MS = readPositiveIntEnv("LLAMACPP_PREFILL_POLL_INTERVAL_MS", 10_000);
 const LLAMACPP_PREFILL_POLL_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_PREFILL_POLL_TIMEOUT_MS", 120_000);
+const LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS = readPositiveIntEnv("LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS", 8_192);
 
 const llamaStreamAgent = new UndiciAgent({
   headersTimeout: LLAMACPP_STREAM_HEADERS_TIMEOUT_MS,
@@ -201,13 +201,6 @@ function getShowIndicatorFromOptions(options?: SimpleStreamOptions): boolean | u
   if (value === true) return true;
   if (value === false) return false;
   return undefined;
-}
-
-/** Check if any warm cache record exists for this model.
- *  Returns true if a warm record exists for this model across all chats — cache is NOT cold.
- *  Returns false if no warm record exists — cold start (indicator should show). */
-function isLlamaCacheWarm(baseUrl: string, modelId: string, contextWindow?: number): boolean {
-  return hasLlamaModelWarmRecord(baseUrl, modelId, contextWindow);
 }
 
 function clampRatio(value: number): number {
@@ -356,6 +349,14 @@ function cacheStateFromProgress(processedTokens?: number, promptTokens?: number)
   return "cold";
 }
 
+function shouldAutoShowPrefillIndicator(progress: Omit<ModelProgressEvent, "updatedAt" | "showIndicator">): boolean {
+  if (progress.phase !== "prefill") return false;
+  if (progress.cacheState !== "cold") return false;
+  if (progress.confidence === "unknown") return false;
+  const promptTokens = progress.promptTokens ?? 0;
+  return promptTokens >= LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS;
+}
+
 function startLlamaPrefillMonitor(input: {
   baseUrl: string;
   modelId: string;
@@ -365,7 +366,7 @@ function startLlamaPrefillMonitor(input: {
   signal?: AbortSignal;
   showIndicator?: boolean;
 }): () => void {
-  const { baseUrl, modelId, slotId, estimatedPromptTokens, onProgress, signal, showIndicator = false } = input;
+  const { baseUrl, modelId, slotId, estimatedPromptTokens, onProgress, signal, showIndicator } = input;
   if (!onProgress) return () => {};
 
   let stopped = false;
@@ -375,8 +376,12 @@ function startLlamaPrefillMonitor(input: {
   let firstProcessedTokens: number | undefined;
   let firstProgressAt: number | undefined;
 
-  const emit = (progress: Omit<ModelProgressEvent, "updatedAt">) => {
-    onProgress({ ...progress, updatedAt: Date.now() });
+  const emit = (progress: Omit<ModelProgressEvent, "updatedAt" | "showIndicator">) => {
+    onProgress({
+      ...progress,
+      showIndicator: showIndicator ?? shouldAutoShowPrefillIndicator(progress),
+      updatedAt: Date.now(),
+    });
   };
 
   const schedule = () => {
@@ -431,7 +436,6 @@ function startLlamaPrefillMonitor(input: {
               }),
               cacheState: cacheStateFromProgress(processedTokens, promptTokens),
               confidence: snapshot.confidence,
-              showIndicator,
             });
           }
         }
@@ -453,7 +457,6 @@ function startLlamaPrefillMonitor(input: {
     elapsedMs: 0,
     cacheState: "unknown",
     confidence: slotId !== undefined ? "matched-slot" : "unknown",
-    showIndicator,
   });
   void poll();
 
@@ -1229,17 +1232,10 @@ export const streamOpenAICompat = (
       const onModelProgress = getModelProgressCallback(options);
       const showIndicator = getShowIndicatorFromOptions(options);
 
-      // Three-state gating for prefill progress indicator:
+      // Three-state gating for the user-facing prefill progress indicator:
       //   true  — always show (first turns)
-      //   false — always hide (tool iterations, mid-conversation)
-      //   undefined — defer to cache residency check (non-first turns)
-      let effectiveShowIndicator = showIndicator ?? false;
-      if (showIndicator === undefined) {
-        const contextWindow = (model as any)?.contextWindow;
-        if (!isLlamaCacheWarm(model.baseUrl, model.id, contextWindow)) {
-          effectiveShowIndicator = true;
-        }
-      }
+      //   false — always hide (tool iterations, non-UI callers)
+      //   undefined — auto-show only when the live slot probe sees a cold prefill
 
       stopPrefillMonitor = startLlamaPrefillMonitor({
         baseUrl: model.baseUrl,
@@ -1248,7 +1244,7 @@ export const streamOpenAICompat = (
         estimatedPromptTokens: estimatePromptTokensFromChars(cacheMetadata.requestCharCount),
         onProgress: onModelProgress,
         signal: options?.signal,
-        showIndicator: effectiveShowIndicator,
+        showIndicator,
       });
 
       // Retry on transient connection failures (fetch failed / ECONNRESET).

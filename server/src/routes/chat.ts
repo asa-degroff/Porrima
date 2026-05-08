@@ -1169,8 +1169,8 @@ async function handleChatStream(
     };
 
     // Gate the prefill indicator:
-    //   - First turns: always show (expected slow)
-    //   - Non-first turns, first iteration: defer to cache-warm check (show only if cold)
+    //   - First turns, first iteration: always show (expected slow)
+    //   - Non-first turns, first iteration: auto-show only if the slot probe sees a cold prefill
     //   - Tool iterations (iteration > 1): always hide
     const isFirstTurn = chat.messages.length === 1;
 
@@ -1178,9 +1178,9 @@ async function handleChatStream(
     const safeStreamFn = createSafeStreamFn(chat.ollamaOptions, llamaSlotLease, {
       onModelProgress: emitModelProgress,
       modelProgressShowIndicator: (iteration) => {
-        if (isFirstTurn) return true;
         if (iteration > 1) return false;
-        return undefined; // defer to cache warm check
+        if (isFirstTurn) return true;
+        return undefined;
       },
     });
 

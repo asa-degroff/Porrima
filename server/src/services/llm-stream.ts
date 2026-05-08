@@ -32,7 +32,7 @@ export interface SafeStreamHooks {
   /** Controls whether the prefill progress indicator should be shown.
    *  - `true`: always show (first turns)
    *  - `false`: always hide
-   *  - `undefined`: defer to server-side cache-warm check
+   *  - `undefined`: defer to provider cold-prefill detection
    *  - function: evaluated per-LLM-call with iteration count for dynamic control */
   modelProgressShowIndicator?: boolean | ((iteration: number) => boolean | undefined);
 }
