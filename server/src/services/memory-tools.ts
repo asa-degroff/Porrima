@@ -138,14 +138,6 @@ export const MEMORY_TOOLS: Tool[] = [
     }),
   },
   {
-    name: "get_block_history",
-    description:
-      "Get the revision history of a memory block by following the supersession chain. Shows how the block evolved over time.",
-    parameters: Type.Object({
-      block_id: Type.String({ description: "Block ID to get history for" }),
-    }),
-  },
-  {
     name: "create_notebook_entry",
     description:
       "Write a notebook entry — a narrative reflection, daily synthesis, or longer-form note in your own voice. " +
