@@ -72,11 +72,15 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
 function RecentChatItem({
   chat,
   active,
+  lastActive,
+  slotAssignment,
   onSelect,
   color = "purple",
 }: {
   chat: ChatListItemType;
   active: boolean;
+  lastActive?: boolean;
+  slotAssignment?: SlotAssignment | null;
   onSelect: () => void;
   color?: "purple" | "blue" | "emerald" | "amber" | "rose" | "cyan" | "violet" | "orange" | "pink" | "teal";
 }) {
@@ -101,8 +105,13 @@ function RecentChatItem({
       className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative ${
         active
           ? "bg-white/15 border border-white/20"
-          : `hover:bg-white/8 border ${colorClass.split(" ")[1]}`
+          : slotAssignment && lastActive
+            ? "hover:bg-white/8 border border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
+            : slotAssignment
+              ? "hover:bg-white/8 border border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
+              : `hover:bg-white/8 border ${colorClass.split(" ")[1]}`
       }`}
+      title={slotAssignment ? `Cache warm — slot ${slotAssignment.slotId}` : undefined}
     >
       <div className="flex items-start gap-2 min-w-0">
         <span className={`text-[10px] shrink-0 mt-0.5 ${colorClass.split(" ")[0]}`}>●</span>
@@ -364,6 +373,8 @@ function ProjectSection({
           <RecentChatItem
             chat={chats[0]}
             active={chats[0].id === activeChatId}
+            lastActive={chats[0].id === lastActiveChatId}
+            slotAssignment={slotAssignments?.get(chats[0].id) ?? null}
             onSelect={() => onSelectChat(chats[0].id)}
             color={project.color as any}
           />
@@ -960,6 +971,8 @@ export function Sidebar({
               <RecentChatItem
                 chat={agentChats[0]}
                 active={agentChats[0].id === activeChatId}
+                lastActive={agentChats[0].id === lastActiveChatId}
+                slotAssignment={slotAssignments.get(agentChats[0].id) ?? null}
                 onSelect={() => { onSelectChat(agentChats[0].id); onClose(); }}
                 color="purple"
               />
@@ -1039,6 +1052,8 @@ export function Sidebar({
               <RecentChatItem
                 chat={quickChats[0]}
                 active={quickChats[0].id === activeChatId}
+                lastActive={quickChats[0].id === lastActiveChatId}
+                slotAssignment={slotAssignments.get(quickChats[0].id) ?? null}
                 onSelect={() => { onSelectChat(quickChats[0].id); onClose(); }}
                 color="blue"
               />

@@ -64,26 +64,19 @@ export function ChatListItem({ chat, active, lastActive = false, slotAssignment,
       } ${
         active
           ? "border-white/20"
-          : "border-transparent"
+          : slotAssignment && lastActive
+            ? "border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
+            : slotAssignment
+              ? "border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
+              : "border-transparent"
       }`}
+      title={slotAssignment ? `Cache warm — slot ${slotAssignment.slotId}` : undefined}
     >
       {/* Always-rendered content to maintain consistent height */}
       <div className={`min-w-0 ${confirmDelete ? "invisible" : ""}`}>
-        <div className="flex items-center gap-1.5">
-          {slotAssignment && (
-            <span
-              className={`shrink-0 w-1.5 h-1.5 rounded-full ${
-                slotAssignment.active
-                  ? "bg-amber-400/90"
-                  : "bg-amber-400/50"
-              }`}
-              title={`Cache warm — slot ${slotAssignment.slotId}`}
-            />
-          )}
-          <p className="text-sm font-medium text-white/90 leading-snug pr-5">
-            {chat.title}
-          </p>
-        </div>
+        <p className="text-sm font-medium text-white/90 leading-snug pr-5">
+          {chat.title}
+        </p>
         {chat.preview && (
           <p className="text-xs text-white/40 truncate mt-0.25 pr-5">
             {chat.preview}
