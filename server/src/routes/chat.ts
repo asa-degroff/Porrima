@@ -1168,9 +1168,20 @@ async function handleChatStream(
       })}\n\n`);
     };
 
+    // Gate the prefill indicator:
+    //   - First turns: always show (expected slow)
+    //   - Non-first turns, first iteration: defer to cache-warm check (show only if cold)
+    //   - Tool iterations (iteration > 1): always hide
+    const isFirstTurn = chat.messages.length === 1;
+
     // Pass per-chat Ollama runtime options to the stream function
     const safeStreamFn = createSafeStreamFn(chat.ollamaOptions, llamaSlotLease, {
       onModelProgress: emitModelProgress,
+      modelProgressShowIndicator: (iteration) => {
+        if (isFirstTurn) return true;
+        if (iteration > 1) return false;
+        return undefined; // defer to cache warm check
+      },
     });
 
     // Build config

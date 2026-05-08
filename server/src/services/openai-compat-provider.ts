@@ -21,6 +21,7 @@ import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
 import sharp from "sharp";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
 import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress.js";
+import { listLlamaCacheResidency, hasLlamaCacheRecord, hasLlamaModelWarmRecord } from "./llama-cache-residency.js";
 
 // llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
 // The client encodes uploads as WebP for size, so we re-encode unsupported formats
@@ -195,6 +196,20 @@ function getModelProgressCallback(options?: SimpleStreamOptions): ModelProgressC
   return typeof callback === "function" ? callback as ModelProgressCallback : undefined;
 }
 
+function getShowIndicatorFromOptions(options?: SimpleStreamOptions): boolean | undefined {
+  const value = (options as any)?.modelProgressShowIndicator;
+  if (value === true) return true;
+  if (value === false) return false;
+  return undefined;
+}
+
+/** Check if any warm cache record exists for this model.
+ *  Returns true if a warm record exists for this model across all chats — cache is NOT cold.
+ *  Returns false if no warm record exists — cold start (indicator should show). */
+function isLlamaCacheWarm(baseUrl: string, modelId: string, contextWindow?: number): boolean {
+  return hasLlamaModelWarmRecord(baseUrl, modelId, contextWindow);
+}
+
 function clampRatio(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -348,8 +363,9 @@ function startLlamaPrefillMonitor(input: {
   estimatedPromptTokens?: number;
   onProgress?: ModelProgressCallback;
   signal?: AbortSignal;
+  showIndicator?: boolean;
 }): () => void {
-  const { baseUrl, modelId, slotId, estimatedPromptTokens, onProgress, signal } = input;
+  const { baseUrl, modelId, slotId, estimatedPromptTokens, onProgress, signal, showIndicator = false } = input;
   if (!onProgress) return () => {};
 
   let stopped = false;
@@ -415,6 +431,7 @@ function startLlamaPrefillMonitor(input: {
               }),
               cacheState: cacheStateFromProgress(processedTokens, promptTokens),
               confidence: snapshot.confidence,
+              showIndicator,
             });
           }
         }
@@ -436,6 +453,7 @@ function startLlamaPrefillMonitor(input: {
     elapsedMs: 0,
     cacheState: "unknown",
     confidence: slotId !== undefined ? "matched-slot" : "unknown",
+    showIndicator,
   });
   void poll();
 
@@ -1209,6 +1227,20 @@ export const streamOpenAICompat = (
       const url = `${model.baseUrl}/v1/chat/completions`;
       const cacheMetadata = buildCacheMetadata(cachePrompt, body);
       const onModelProgress = getModelProgressCallback(options);
+      const showIndicator = getShowIndicatorFromOptions(options);
+
+      // Three-state gating for prefill progress indicator:
+      //   true  — always show (first turns)
+      //   false — always hide (tool iterations, mid-conversation)
+      //   undefined — defer to cache residency check (non-first turns)
+      let effectiveShowIndicator = showIndicator ?? false;
+      if (showIndicator === undefined) {
+        const contextWindow = (model as any)?.contextWindow;
+        if (!isLlamaCacheWarm(model.baseUrl, model.id, contextWindow)) {
+          effectiveShowIndicator = true;
+        }
+      }
+
       stopPrefillMonitor = startLlamaPrefillMonitor({
         baseUrl: model.baseUrl,
         modelId: model.id,
@@ -1216,6 +1248,7 @@ export const streamOpenAICompat = (
         estimatedPromptTokens: estimatePromptTokensFromChars(cacheMetadata.requestCharCount),
         onProgress: onModelProgress,
         signal: options?.signal,
+        showIndicator: effectiveShowIndicator,
       });
 
       // Retry on transient connection failures (fetch failed / ECONNRESET).

@@ -14,6 +14,9 @@ export interface ModelProgressEvent {
   estimatedRemainingMs?: number;
   cacheState?: ModelProgressCacheState;
   confidence: ModelProgressConfidence;
+  /** When true, the progress event should be displayed to the user.
+   *  Gated to first turns and cold-start resumptions only. */
+  showIndicator?: boolean;
   updatedAt: number;
 }
 

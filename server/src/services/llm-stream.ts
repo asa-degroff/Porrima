@@ -29,6 +29,12 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 
 export interface SafeStreamHooks {
   onModelProgress?: ModelProgressCallback;
+  /** Controls whether the prefill progress indicator should be shown.
+   *  - `true`: always show (first turns)
+   *  - `false`: always hide
+   *  - `undefined`: defer to server-side cache-warm check
+   *  - function: evaluated per-LLM-call with iteration count for dynamic control */
+  modelProgressShowIndicator?: boolean | ((iteration: number) => boolean | undefined);
 }
 
 /**
@@ -41,6 +47,9 @@ export function createSafeStreamFn(
   llamaSlotLease?: LlamaSlotLease | null,
   hooks?: SafeStreamHooks,
 ): StreamFn {
+  const showIndicatorConfig = hooks?.modelProgressShowIndicator;
+  // Track LLM call count within this agent loop (1 = first call, 2+ = tool iterations)
+  let iterationCount = 0;
   return (model, ctx, options) => {
     if (options?.signal?.aborted) {
       console.log("[stream] signal already aborted, returning empty abort stream");
@@ -83,6 +92,14 @@ export function createSafeStreamFn(
     const mergedOptions: Record<string, unknown> = { ...(options ?? {}) };
     mergedOptions.signal = streamAbortController.signal;
     mergedOptions.onModelProgress = (progress: ModelProgressEvent) => handleProviderProgress(progress);
+
+    // Resolve showIndicator per-LLM-call: supports static boolean, undefined, or function(iteration)
+    iterationCount++;
+    if (typeof showIndicatorConfig === "function") {
+      mergedOptions.modelProgressShowIndicator = showIndicatorConfig(iterationCount);
+    } else {
+      mergedOptions.modelProgressShowIndicator = showIndicatorConfig ?? false;
+    }
     if (chatOllamaOptions) {
       mergedOptions.keepAlive = chatOllamaOptions.keepAlive;
       mergedOptions.numGpu = chatOllamaOptions.numGpu;

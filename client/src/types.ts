@@ -18,6 +18,8 @@ export interface ModelProgress {
   promptTokens?: number;
   progress?: number;
   elapsedMs: number;
+  /** When true, the progress event should be displayed to the user. */
+  showIndicator?: boolean;
   estimatedRemainingMs?: number;
   cacheState?: ModelProgressCacheState;
   confidence: ModelProgressConfidence;

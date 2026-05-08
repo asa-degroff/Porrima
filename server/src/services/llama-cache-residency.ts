@@ -250,3 +250,28 @@ export function listLlamaCacheResidency(): LlamaCacheResidencyRecord[] {
     .filter((record) => record.active || record.warm)
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
 }
+
+/** Check if a cache record (any status) exists for this chat+model combination. */
+export function hasLlamaCacheRecord(chatId: string, baseUrl: string, modelId: string, contextWindow?: number): boolean {
+  const key = `${JSON.stringify([baseUrl.replace(/\/+$/, ""), modelId, contextWindow ?? null])}:${chatId}`;
+  return records.has(key);
+}
+
+/** Check if any warm cache record exists for this model+contextWindow across all chats.
+ *  Used to detect cold starts: if no warm record exists, prefill will be slow and the
+ *  progress indicator should be shown. */
+export function hasLlamaModelWarmRecord(baseUrl: string, modelId: string, contextWindow?: number): boolean {
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+  for (const record of records.values()) {
+    if (
+      record.active &&
+      record.warm &&
+      record.baseUrl === normalizedBaseUrl &&
+      record.modelId === modelId &&
+      (contextWindow === undefined || record.contextWindow === contextWindow)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}

@@ -71,11 +71,53 @@ function ModelProgressIndicator({ progress }: { progress: ModelProgress }) {
   ].filter(Boolean).join(" - ");
 
   return (
-    <div
-      className="hidden md:flex items-center gap-2 px-2 py-1 rounded-full border border-amber-300/20 bg-amber-400/8 text-[10px] text-amber-100/80"
-      title={title}
-    >
-      <div className="w-3 h-3 rounded-full border-2 border-amber-200/25 border-t-amber-200/80 animate-spin" />
+    <>
+      <style>{`
+        @keyframes prefill-line1 {
+          0%, 85% { transform: translateY(0); width: 100%; }
+          91% { transform: translateY(-7.5px); width: 100%; }
+          92%, 100% { transform: translateY(0); width: 0%; }
+        }
+        @keyframes prefill-line2 {
+          0%, 85% { transform: translateY(0); width: 100%; }
+          91% { transform: translateY(-7.5px); width: 100%; }
+          92%, 100% { transform: translateY(0); width: 100%; }
+        }
+        @keyframes prefill-line3 {
+          0% { transform: translateY(0); width: 0%; }
+          85% { transform: translateY(0); width: 100%; }
+          91% { transform: translateY(-7.5px); width: 100%; }
+          92%, 100% { transform: translateY(0); width: 0%; }
+        }
+      `}</style>
+      <div
+        className="hidden md:flex items-center gap-2 px-2 py-1 rounded-full border border-amber-300/20 bg-amber-400/8 text-[10px] text-amber-100/80"
+        title={title}
+      >
+        {/* Line-fill animation: three bars, bottom fills → shift up → cycle */}
+        <div className="relative w-3 h-[30px] overflow-hidden">
+          <div
+            className="absolute left-0 top-[3px] h-[2px] rounded-full bg-amber-200/80"
+            style={{
+              width: "100%",
+              animation: "prefill-line1 1.4s ease-out infinite",
+            }}
+          />
+          <div
+            className="absolute left-0 top-[10.5px] h-[2px] rounded-full bg-amber-200/80"
+            style={{
+              width: "100%",
+              animation: "prefill-line2 1.4s ease-out infinite",
+            }}
+          />
+          <div
+            className="absolute left-0 top-[18px] h-[2px] rounded-full bg-amber-200/80"
+            style={{
+              width: "0%",
+              animation: "prefill-line3 1.4s ease-out infinite",
+            }}
+          />
+        </div>
       <span className="whitespace-nowrap">
         {label}
         {percent !== undefined ? ` ${percent}%` : ""}
@@ -91,6 +133,7 @@ function ModelProgressIndicator({ progress }: { progress: ModelProgress }) {
         </div>
       )}
     </div>
+  </>
   );
 }
 
@@ -634,7 +677,7 @@ export function ChatView({
               } : undefined}
             />
           )}
-          {streaming && modelProgress && (
+          {streaming && modelProgress && modelProgress.showIndicator && (
             <ModelProgressIndicator progress={modelProgress} />
           )}
           <button
