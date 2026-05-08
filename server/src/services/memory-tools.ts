@@ -239,7 +239,7 @@ export async function executeMemoryTool(
       let blockSection = "";
       if (blockResults.length > 0) {
         const blockFormatted = blockResults
-          .map((r) => `- [${r.block.id}] ${r.block.name}: ...${r.excerpt.slice(0, 200)}... (use read_memory_block to see full content)`)
+          .map((r) => `- [${r.block.id}] ${r.block.name}: ...${r.excerpt.slice(0, 1000)}... (use read_memory_block to see full content)`)
           .join("\n");
         blockSection = `\n\nMemory blocks:\n${blockFormatted}`;
       }
