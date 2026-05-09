@@ -70,53 +70,90 @@ function ModelProgressIndicator({ progress }: { progress: ModelProgress }) {
     progress.slotId !== undefined ? `slot ${progress.slotId}` : null,
   ].filter(Boolean).join(" - ");
 
+  // Animation state: each slot is 'empty', 'filling', or 'full'
+  const [lineStates, setLineStates] = useState<Array<'empty' | 'filling' | 'full'>>(['empty', 'empty', 'empty']);
+  const [shifting, setShifting] = useState(false);
+  const fillRef = useRef<NodeJS.Timeout | null>(null);
+  const shiftRef = useRef<NodeJS.Timeout | null>(null);
+  const phaseRef = useRef<'fill' | 'shift' | 'reset'>('fill');
+
+  const GAP = 5;
+  const FILL_MS = 1200;
+  const SHIFT_MS = 220;
+
+  useEffect(() => {
+    function runCycle() {
+      // Phase 1: fill the bottom line
+      phaseRef.current = 'fill';
+      setLineStates(['full', 'full', 'filling']);
+
+      fillRef.current = setTimeout(() => {
+        // Phase 2: bottom line done, start shift
+        phaseRef.current = 'shift';
+        setLineStates(['full', 'full', 'full']);
+        setShifting(true);
+
+        shiftRef.current = setTimeout(() => {
+          // Phase 3: shift complete, rotate states and reset container
+          setShifting(false);
+          phaseRef.current = 'reset';
+          setLineStates(prev => [prev[1], prev[2], 'empty']);
+
+          // Brief pause then next cycle
+          setTimeout(runCycle, 60);
+        }, SHIFT_MS);
+      }, FILL_MS);
+    }
+
+    runCycle();
+
+    return () => {
+      if (fillRef.current) clearTimeout(fillRef.current);
+      if (shiftRef.current) clearTimeout(shiftRef.current);
+    };
+  }, []);
+
   return (
     <>
       <style>{`
-        @keyframes prefill-line1 {
-          0%, 85% { transform: translateY(0); width: 100%; }
-          91% { transform: translateY(-7.5px); width: 100%; }
-          92%, 100% { transform: translateY(0); width: 0%; }
+        @keyframes prefill-shift {
+          to { transform: translateY(-${GAP}px); }
         }
-        @keyframes prefill-line2 {
-          0%, 85% { transform: translateY(0); width: 100%; }
-          91% { transform: translateY(-7.5px); width: 100%; }
-          92%, 100% { transform: translateY(0); width: 100%; }
-        }
-        @keyframes prefill-line3 {
-          0% { transform: translateY(0); width: 0%; }
-          85% { transform: translateY(0); width: 100%; }
-          91% { transform: translateY(-7.5px); width: 100%; }
-          92%, 100% { transform: translateY(0); width: 0%; }
+        @keyframes prefill-fill {
+          to { width: 100%; }
         }
       `}</style>
       <div
-        className="hidden md:flex items-center gap-2 px-2 py-1 rounded-full border border-amber-300/20 bg-amber-400/8 text-[10px] text-amber-100/80"
+        className="hidden md:flex items-center gap-2 px-2 py-1 rounded-full border border-amber-300/20 text-[10px] text-amber-100/80"
         title={title}
       >
-        {/* Line-fill animation: three bars, bottom fills → shift up → cycle */}
-        <div className="relative w-3 h-[30px] overflow-hidden">
+        <div className="relative w-3 overflow-hidden" style={{ height: GAP * 4 }}>
           <div
-            className="absolute left-0 top-[3px] h-[2px] rounded-full bg-amber-200/80"
+            className="absolute top-0 left-0 right-0"
             style={{
-              width: "100%",
-              animation: "prefill-line1 1.4s ease-out infinite",
+              animation: shifting ? `prefill-shift ${SHIFT_MS}ms cubic-bezier(0.4, 0, 0.2, 1) forwards` : 'none',
             }}
-          />
-          <div
-            className="absolute left-0 top-[10.5px] h-[2px] rounded-full bg-amber-200/80"
-            style={{
-              width: "100%",
-              animation: "prefill-line2 1.4s ease-out infinite",
-            }}
-          />
-          <div
-            className="absolute left-0 top-[18px] h-[2px] rounded-full bg-amber-200/80"
-            style={{
-              width: "0%",
-              animation: "prefill-line3 1.4s ease-out infinite",
-            }}
-          />
+          >
+            {lineStates.map((state, i) => {
+              const top = GAP * (i + 1);
+              const isFilling = state === 'filling';
+              const isFull = state === 'full';
+              const width = isFull ? '100%' : isFilling ? '0%' : '0%';
+              return (
+                <div
+                  key={i}
+                  className="absolute left-0 h-[1.5px] rounded-full bg-amber-200/80"
+                  style={{
+                    top,
+                    width,
+                    animation: isFilling
+                      ? `prefill-fill ${FILL_MS}ms cubic-bezier(0.4, 0, 0.2, 1) forwards`
+                      : 'none',
+                  }}
+                />
+              );
+            })}
+          </div>
         </div>
       <span className="whitespace-nowrap">
         {label}
@@ -664,21 +701,22 @@ export function ChatView({
               )}
             </form>
           ) : (
-            <TokenIndicator
-              usage={totalUsage}
-              isEstimated={isUsageEstimated}
-              contextWindow={contextWindow}
-              compacting={compacting}
-              compaction={compaction}
-              hasCompactionSummary={hasCompactionSummary}
-              onClick={messages.length === 0 ? () => {
-                setCtxInput(String(contextWindow));
-                setEditingCtx(true);
-              } : undefined}
-            />
-          )}
-          {streaming && modelProgress && modelProgress.showIndicator && (
-            <ModelProgressIndicator progress={modelProgress} />
+            streaming && modelProgress && modelProgress.showIndicator ? (
+              <ModelProgressIndicator progress={modelProgress} />
+            ) : (
+              <TokenIndicator
+                usage={totalUsage}
+                isEstimated={isUsageEstimated}
+                contextWindow={contextWindow}
+                compacting={compacting}
+                compaction={compaction}
+                hasCompactionSummary={hasCompactionSummary}
+                onClick={messages.length === 0 ? () => {
+                  setCtxInput(String(contextWindow));
+                  setEditingCtx(true);
+                } : undefined}
+              />
+            )
           )}
           <button
             className="hidden md:inline-block text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors text-white/30 hover:text-white/50"
