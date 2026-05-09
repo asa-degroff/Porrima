@@ -114,5 +114,13 @@ export function useChats() {
     [refresh]
   );
 
-  return { chats, loading, createChat, removeChat, refresh, refreshImmediate, isFromCache };
+  // Optimistic title update — mutates the local list immediately so the sidebar
+  // reflects the new title without waiting for a full API re-fetch.
+  const updateChatTitle = useCallback((chatId: string, title: string) => {
+    setChats((prev) =>
+      prev.map((c) => (c.id === chatId ? { ...c, title } : c))
+    );
+  }, []);
+
+  return { chats, loading, createChat, removeChat, updateChatTitle, refresh, refreshImmediate, isFromCache };
 }

@@ -69,7 +69,7 @@ if (typeof document !== "undefined") {
 
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { models } = useModels();
-  const { chats, createChat, removeChat, refresh, refreshImmediate } = useChats();
+  const { chats, createChat, removeChat, updateChatTitle, refresh, refreshImmediate } = useChats();
   const { projects, createProject, removeProject } = useProjects();
   const { settings, updateSettings, loading: settingsLoading } = useSettings();
   const { isOnline } = useOnlineStatus();
@@ -382,11 +382,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   // Update chat title when LLM-generated title arrives
   useEffect(() => {
     if (!titleUpdate) return;
+    // Update the active chat header immediately
     if (titleUpdate.chatId === activeChatId) {
       setActiveChat((prev) => prev ? { ...prev, title: titleUpdate.title } : prev);
     }
-    // Debounced refresh to update sidebar title (collapses with other pending refreshes)
-    refresh();
+    // Optimistic sidebar update — no need to wait for debounced API re-fetch
+    updateChatTitle(titleUpdate.chatId, titleUpdate.title);
   }, [titleUpdate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Filter models for the chat header selector (favorites mode)
