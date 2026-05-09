@@ -349,6 +349,68 @@ function cacheStateFromProgress(processedTokens?: number, promptTokens?: number)
   return "cold";
 }
 
+/**
+ * Probe a specific slot to check if it has existing context.
+ * Returns the number of cached tokens, or null if the probe fails.
+ * Uses the /slots?model= endpoint (same as the progress poller) and filters by slotId.
+ */
+async function probeSlotContextTokens(baseUrl: string, modelId: string, slotId: number): Promise<number | null> {
+  try {
+    const url = `${normalizeBaseUrl(baseUrl)}/slots?model=${encodeURIComponent(modelId)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return null;
+    const payload = await res.json().catch(() => null);
+    const slots = getSlotArray(payload);
+    if (!slots.length) return null;
+    // Find the matching slot
+    const slot = slots.find((s: any) => {
+      const id = getSlotId(s);
+      return id !== undefined && id === slotId;
+    });
+    if (!slot) return null;
+    // Check common field names for current context length
+    const ctxTokens = readNumberByKeys(slot, [
+      "n_context_tokens",
+      "n_tokens",
+      "n_past",
+      "context_used",
+      "tokens_used",
+    ]);
+    return ctxTokens ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Determine cache state before the request starts, using explicit signals
+ * rather than inferring from prefill progress (which conflates progress with hits).
+ *
+ * Signals checked in order:
+ *  1. Lease eviction — if evictedChatId is set, we just evicted another chat → cold
+ *  2. Slot probe — check n_context_tokens on the assigned slot → 0 means cold
+ *  3. Unknown — fall back to progress-based detection during polling
+ */
+async function determineCacheState(
+  baseUrl: string,
+  modelId: string,
+  lease: LlamaSlotLease | null,
+): Promise<ModelProgressEvent["cacheState"]> {
+  // Signal 1: eviction is definitive
+  if (lease?.evictedChatId) return "cold";
+
+  // Signal 2: probe the assigned slot
+  if (lease) {
+    const ctxTokens = await probeSlotContextTokens(baseUrl, modelId, lease.slotId);
+    if (ctxTokens !== null) {
+      return ctxTokens > 0 ? "hot" : "cold";
+    }
+  }
+
+  // No definitive signal — progress-based fallback will be used
+  return "unknown";
+}
+
 function shouldAutoShowPrefillIndicator(progress: Omit<ModelProgressEvent, "updatedAt" | "showIndicator">): boolean {
   if (progress.phase !== "prefill") return false;
   if (progress.cacheState !== "cold") return false;
@@ -365,8 +427,12 @@ function startLlamaPrefillMonitor(input: {
   onProgress?: ModelProgressCallback;
   signal?: AbortSignal;
   showIndicator?: boolean;
+  /** Cache state determined before the request (eviction/slot probe).
+   *  When "cold" or "hot", overrides the progress-based detection.
+   *  When "unknown", falls back to progress ratio on first snapshot. */
+  initialCacheState?: ModelProgressEvent["cacheState"];
 }): () => void {
-  const { baseUrl, modelId, slotId, estimatedPromptTokens, onProgress, signal, showIndicator } = input;
+  const { baseUrl, modelId, slotId, estimatedPromptTokens, onProgress, signal, showIndicator, initialCacheState } = input;
   if (!onProgress) return () => {};
 
   let stopped = false;
@@ -375,6 +441,10 @@ function startLlamaPrefillMonitor(input: {
   let lastProcessedTokens: number | undefined;
   let firstProcessedTokens: number | undefined;
   let firstProgressAt: number | undefined;
+  // Lock cache state once determined: use the pre-request signal if available,
+  // otherwise fall back to the progress ratio on the first snapshot only.
+  let lockedCacheState: ModelProgressEvent["cacheState"] =
+    initialCacheState !== undefined ? initialCacheState : "unknown";
 
   const emit = (progress: Omit<ModelProgressEvent, "updatedAt" | "showIndicator">) => {
     onProgress({
@@ -415,6 +485,12 @@ function startLlamaPrefillMonitor(input: {
                 firstProgressAt = now;
               }
             }
+            // Lock cache state on first snapshot if not pre-determined.
+            // After the first snapshot, the progress ratio is no longer a
+            // reliable indicator (it just measures how far into prefill we are).
+            if (lockedCacheState === "unknown") {
+              lockedCacheState = cacheStateFromProgress(processedTokens, promptTokens);
+            }
             const progress = processedTokens !== undefined && promptTokens !== undefined && promptTokens > 0
               ? clampRatio(processedTokens / promptTokens)
               : undefined;
@@ -434,7 +510,7 @@ function startLlamaPrefillMonitor(input: {
                 firstProgressAt,
                 now,
               }),
-              cacheState: cacheStateFromProgress(processedTokens, promptTokens),
+              cacheState: lockedCacheState,
               confidence: snapshot.confidence,
             });
           }
@@ -455,7 +531,7 @@ function startLlamaPrefillMonitor(input: {
     slotId,
     promptTokens: estimatedPromptTokens,
     elapsedMs: 0,
-    cacheState: "unknown",
+    cacheState: lockedCacheState,
     confidence: slotId !== undefined ? "matched-slot" : "unknown",
   });
   void poll();
@@ -1235,7 +1311,15 @@ export const streamOpenAICompat = (
       // Three-state gating for the user-facing prefill progress indicator:
       //   true  — always show (first turns)
       //   false — always hide (tool iterations, non-UI callers)
-      //   undefined — auto-show only when the live slot probe sees a cold prefill
+      //   undefined — auto-show only when cache state signals a cold prefill
+
+      // Determine cache state upfront from explicit signals rather than
+      // inferring from prefill progress (which conflates progress with hits).
+      const initialCacheState = await determineCacheState(
+        model.baseUrl,
+        model.id,
+        useLlamaSlotLease ? llamaSlotLease : null,
+      );
 
       stopPrefillMonitor = startLlamaPrefillMonitor({
         baseUrl: model.baseUrl,
@@ -1245,6 +1329,7 @@ export const streamOpenAICompat = (
         onProgress: onModelProgress,
         signal: options?.signal,
         showIndicator,
+        initialCacheState,
       });
 
       // Retry on transient connection failures (fetch failed / ECONNRESET).
