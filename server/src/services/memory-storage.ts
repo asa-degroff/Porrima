@@ -1643,6 +1643,9 @@ export function listMemoryBlocks(opts: { scope?: "global" | "project" | "archive
   if (opts.scope) {
     querySQL += " AND scope = ?";
     params.push(opts.scope);
+  } else {
+    // When no scope specified, exclude archived blocks by default
+    querySQL += " AND scope != 'archived'";
   }
 
   if (opts.projectId) {

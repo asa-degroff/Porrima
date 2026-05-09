@@ -130,11 +130,13 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "list_memory_blocks",
     description:
-      "List available memory blocks by scope or search. Use this to discover what knowledge blocks exist before reading or creating new ones.",
+      "List available memory blocks by scope or search. Use this to discover what knowledge blocks exist before reading or creating new ones. Defaults to showing the 15 most recently updated non-archived blocks. Use scope='archived' to see archived-only blocks.",
     parameters: Type.Object({
-      scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Filter by scope" })),
+      scope: Type.Optional(StringEnum(["global", "project", "archived"], { description: "Filter by scope. Default excludes 'archived' blocks — use scope='archived' to see archived-only, or scope='global'/'project' to restrict." })),
       project_id: Type.Optional(Type.String({ description: "Project ID for project-scoped blocks" })),
       query: Type.Optional(Type.String({ description: "Optional search query to filter blocks by name/description" })),
+      recent_days: Type.Optional(Type.Number({ description: "Only return blocks updated within the last N days. Omit for no recency filter." })),
+      limit: Type.Optional(Type.Number({ description: "Maximum number of blocks to return (default 15). Set higher to see more results." })),
     }),
   },
   {
@@ -559,17 +561,36 @@ export async function executeMemoryTool(
     }
 
     case "list_memory_blocks": {
-      const { scope, project_id, query } = toolCall.arguments;
+      const { scope, project_id, query, recent_days, limit: maxResults } = toolCall.arguments;
+      
+      // Default: exclude archived (handled by backend), cap at 15
+      const effectiveLimit = maxResults ?? 15;
+      
+      // Fetch all matching blocks (no limit at DB level — we cap in output)
       const blocks = listMemoryBlocks({ scope, projectId: project_id, query, includeInternal: true });
       
-      if (blocks.length === 0) {
+      // Apply recency filter if requested
+      let filteredBlocks = blocks;
+      if (recent_days !== undefined && recent_days !== null) {
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - recent_days);
+        filteredBlocks = blocks.filter((b) => new Date(b.updatedAt) >= cutoff);
+      }
+      
+      if (filteredBlocks.length === 0) {
         return { content: "No memory blocks found matching criteria.", isError: false };
       }
       
-      const lines = blocks.map((b) => 
+      const lines = filteredBlocks.map((b) => 
         `- [${b.id}] ${b.name} (${b.scope}) — ${b.description} [${b.tokenEstimate} tokens, updated ${b.updatedAt.slice(0,10)}]`
       );
-      return { content: `Found ${blocks.length} memory block(s):\n${lines.join("\n")}`, isError: false };
+      
+      const shown = Math.min(effectiveLimit, filteredBlocks.length);
+      const truncated = filteredBlocks.length > effectiveLimit;
+      const output = lines.slice(0, effectiveLimit).join("\n");
+      const suffix = truncated ? `\n\n... and ${filteredBlocks.length - effectiveLimit} more block(s). Use limit=<N> or scope='archived' to see additional results.` : "";
+      
+      return { content: `Found ${filteredBlocks.length} memory block(s) (showing ${shown}):\n${output}${suffix}`, isError: false };
     }
 
     case "create_notebook_entry": {
