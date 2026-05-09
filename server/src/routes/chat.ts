@@ -1033,6 +1033,9 @@ async function handleChatStream(
   // LLM calls that can interfere with the active tool loop (e.g., model unload/reload)
   const deferredExtractions: Array<{ userMsg: string; assistantMsg: string }> = [];
   let lastUserMessage = userMessage; // tracks the current user message text for title gen / memory
+  /** Pending title generation — awaited before closing the live stream so the
+   *  title_update SSE event is never dropped by a race with endLiveStream. */
+  let titleGenerationPromise: Promise<void> | null = null;
   let currentTurnIsHidden = options.hiddenUserMessage === true;
   let activeAssistantIdentity: ReplayModelIdentity | undefined;
 
@@ -1226,7 +1229,7 @@ async function handleChatStream(
 
         // Title generation for first exchange
         if (assistantMsg && !currentTurnIsHidden && shouldGenerateInitialTitle(chat)) {
-          generateTitle(lastUserMessage, assistantMsg.content)
+          titleGenerationPromise = generateTitle(lastUserMessage, assistantMsg.content)
             .then(title => {
               if (title) {
                 chat.title = title;
@@ -2421,7 +2424,7 @@ async function handleChatStream(
 
       // Title generation for first exchange
       if (currentAssistantMsg && !currentTurnIsHidden && shouldGenerateInitialTitle(chat)) {
-        generateTitle(lastUserMessage, currentAssistantMsg.content)
+        titleGenerationPromise = generateTitle(lastUserMessage, currentAssistantMsg.content)
           .then(title => {
             if (title) {
               chat.title = title;
@@ -2584,10 +2587,11 @@ async function handleChatStream(
       );
 
       // Generate LLM title after the first exchange (2 messages = 1 user + 1 assistant).
-      // Fire-and-forget so slow title generation doesn't delay the done event reaching
-      // the client (which would cause a spurious "Connection lost" error).
+      // Kick off title generation immediately so it can run in parallel with
+      // model-stats recording and memory extraction below, but capture the promise
+      // so we can await it before endLiveStream closes the SSE connection.
       if (!currentTurnIsHidden && shouldGenerateInitialTitle(chat) && hasContent) {
-        generateTitle(lastUserMessage, logicalAssistantContent)
+        titleGenerationPromise = generateTitle(lastUserMessage, logicalAssistantContent)
           .then(async (title) => {
             if (title) {
               chat.title = title;
@@ -2707,6 +2711,13 @@ async function handleChatStream(
     markLlamaCacheResidencyFinished(chat.id);
     markChatInactive(chat.id);
     stopSSEKeepalive();
+
+    // Wait for any in-flight title generation so the title_update SSE event
+    // reaches the client before we close the live stream.
+    if (titleGenerationPromise) {
+      try { await titleGenerationPromise; } catch { /* logged upstream */ }
+    }
+
     endLiveStream(chat.id);
     res.end();
   }
