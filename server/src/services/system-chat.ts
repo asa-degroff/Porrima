@@ -964,71 +964,110 @@ export async function runSystemSynthesis(options?: {
       await saveChat(chat);
     }
 
-    const MAX_ITERATIONS = 30;
-    let phaseIndex = 0; // 0=synthesis (already injected), 1=maintenance, 2=zeitgeist, 3=reflections
-    const turn = await runHeadlessChatTurn({
-      chat,
-      modelId,
-      model: runtimeModel,
-      systemPrompt: synthesisPrompt,
-      tools,
-      emitter,
-      maxIterations: MAX_ITERATIONS,
-      timeoutMs: 90 * 60 * 1000,
-      keepAlive: "90m",
-      logPrefix: "system-chat:synthesis",
-      saveChat,
-      getFollowUp: async (state) => {
-        if (
-          state.iterations === 1 &&
-          phaseIndex === 0 &&
-          state.textSummary.length === 0 &&
-          state.toolCalls.length === 0
-        ) {
-          return null;
-        }
-        if (phaseIndex >= PHASE_ORDER.length - 1) return null;
-        const nextTrigger = await buildPhaseTrigger(phaseIndex + 1, SYSTEM_CHAT_ID, phasePrompts);
-        const nextPhaseIndex = phaseIndex + 1;
-        phaseIndex = nextPhaseIndex;
-        return {
-          message: {
-            role: "user",
-            content: nextTrigger,
-            timestamp: Date.now(),
-            _isSystemMessage: true,
-            _isSynthesisMessage: true,
-            _isAutomationMessage: true,
-            ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
-            ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
-          },
-          label: `phase ${nextPhaseIndex + 1}/${PHASE_ORDER.length} ${PHASE_ORDER[nextPhaseIndex]}`,
-        };
-      },
-      summarize: (state) =>
-        state.textSummary ||
-        `# Daily Synthesis\n\n*The model produced no visible output this cycle (stopReason=${state.stopReason}, thinking=${state.thinking.length}ch, tools=${state.toolCalls.length}). The thinking trace is preserved on the system chat's last assistant message.*`,
-      decorateAssistantMessage: (message) => ({
-        ...message,
-        timestamp: Date.now(),
-        _isSynthesisMessage: true,
-        _isAutomationMessage: true,
-        ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
-        ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
-      }),
-    });
+    // -------------------------------------------------------------------
+    // Per-phase execution — each phase runs as its own headless turn so
+    // chat history shows triggers and responses interleaved instead of a
+    // single monolithic assistant message after all four triggers.
+    // -------------------------------------------------------------------
+    const MAX_ITERATIONS_PER_PHASE = 12;
+    const allToolCalls: ToolCall[] = [];
+    let allThinking = '';
+    let allText = '';
+    const allMemoryUpdates: string[] = [];
+    let finalAssistantMsg: ChatMessage | null = null;
+    let finalStopReason = 'stop';
+    let totalIterations = 0;
+    let phaseFailed = false;
+    let phaseError = '';
 
-    const iterations = turn.iterations;
-    const stopReason = turn.stopReason;
-    const textSummary = turn.textSummary;
-    const thinking = turn.thinking;
-    const allToolCalls = turn.toolCalls;
-    const memoryUpdates = turn.memoryUpdates;
+    for (let phase = 0; phase < PHASE_ORDER.length; phase++) {
+      // Phase 0 trigger is already in chat.messages (appended above).
+      // For phases 1-3, append the trigger before starting the turn.
+      if (phase > 0) {
+        const triggerContent = await buildPhaseTrigger(phase, SYSTEM_CHAT_ID, phasePrompts);
+        const triggerMsg: ChatMessage = {
+          role: 'user',
+          content: triggerContent,
+          timestamp: Date.now(),
+          _isSystemMessage: true,
+          _isSynthesisMessage: true,
+          _isAutomationMessage: true,
+          ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
+          ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
+        };
+        chat.messages.push(triggerMsg);
+        await saveChat(chat);
+      }
+
+      // Re-compact before each phase so context stays bounded.
+      const preCompact = await truncateBeforeSend(
+        chat, contextWindow, synthesisPrompt, undefined, undefined, tools,
+      );
+      if (preCompact?.truncated) {
+        console.log(
+          `[system-chat] Phase ${PHASE_ORDER[phase]} pre-compaction removed ${preCompact.removedCount} messages`,
+        );
+        await saveChat(chat);
+      }
+
+      const turn = await runHeadlessChatTurn({
+        chat,
+        modelId,
+        model: runtimeModel,
+        systemPrompt: synthesisPrompt,
+        tools,
+        emitter,
+        maxIterations: MAX_ITERATIONS_PER_PHASE,
+        timeoutMs: 30 * 60 * 1000,
+        keepAlive: '90m',
+        logPrefix: `system-chat:synthesis:${PHASE_ORDER[phase]}`,
+        saveChat,
+        summarize: (state) =>
+          state.textSummary ||
+          `*Phase ${PHASE_ORDER[phase]} produced no visible output.*`,
+        decorateAssistantMessage: (message) => ({
+          ...message,
+          timestamp: Date.now(),
+          _isSynthesisMessage: true,
+          _isAutomationMessage: true,
+          ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
+          ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
+        }),
+      });
+
+      totalIterations += turn.iterations;
+      finalStopReason = turn.stopReason;
+      allToolCalls.push(...turn.toolCalls);
+      if (turn.thinking) allThinking += (allThinking ? '\n' : '') + turn.thinking;
+      if (turn.textSummary) allText += (allText ? '\n\n' : '') + turn.textSummary;
+      allMemoryUpdates.push(...turn.memoryUpdates);
+      finalAssistantMsg = turn.assistantMessage;
+
+      // Guard: Phase 0 produced nothing on its first iteration — bail early
+      // instead of advancing to maintenance. Mirrors the old getFollowUp guard.
+      if (phase === 0 && turn.iterations === 1 && !turn.textSummary && turn.toolCalls.length === 0) {
+        console.log(`[system-chat] Phase 0 produced nothing on first iteration, stopping early`);
+        break;
+      }
+
+      if (!turn.success) {
+        phaseFailed = true;
+        phaseError = turn.error || `Phase ${PHASE_ORDER[phase]} returned no output`;
+        console.warn(`[system-chat] Phase ${PHASE_ORDER[phase]} failed: ${phaseError}`);
+        break;
+      }
+    }
+
+    const iterations = totalIterations;
+    const stopReason = finalStopReason;
+    const textSummary = allText;
+    const thinking = allThinking;
+    const memoryUpdates = allMemoryUpdates;
     const textLen = textSummary.length;
     const thinkLen = thinking.length;
 
     console.log(
-      `[system-chat] Tool loop done: iters=${iterations}, tools=${allToolCalls.length}, text=${textLen}ch, thinking=${thinkLen}ch, stopReason=${stopReason}`,
+      `[system-chat] Synthesis done: iters=${iterations}, tools=${allToolCalls.length}, text=${textLen}ch, thinking=${thinkLen}ch, stopReason=${stopReason}`,
     );
 
     // No-text outcomes used to fall back to promoting thinking into the
@@ -1043,8 +1082,14 @@ export async function runSystemSynthesis(options?: {
       );
     }
 
-    const summary = turn.summary;
-    const assistantChatMsg = turn.assistantMessage;
+    const summary = allText || `# Daily Synthesis\n\n*The model produced no visible output this cycle (stopReason=${stopReason}, thinking=${thinkLen}ch, tools=${allToolCalls.length}).*`;
+    const assistantChatMsg = finalAssistantMsg || {
+      role: 'assistant' as const,
+      content: summary,
+      timestamp: Date.now(),
+      _isSystemMessage: true,
+      _isSynthesisMessage: true,
+    };
 
     await refreshSystemChatTitle(
       chat,
@@ -1074,15 +1119,14 @@ export async function runSystemSynthesis(options?: {
     // The headless runner is the authoritative source for this classification.
     // If it failed before producing text, thinking, or tools, do not burn the
     // 24h synthesis slot; let the scheduler retry on a later tick.
-    if (!turn.success) {
-      const errorMessage = turn.error || "model returned error before producing any output";
+    if (phaseFailed) {
       console.warn(
-        `[system-chat] Synthesis failed at iter ${iterations} (${errorMessage}) - NOT updating lastSynthesis so the next scheduler tick can retry.`,
+        `[system-chat] Synthesis failed (${phaseError}) - NOT updating lastSynthesis so the next scheduler tick can retry.`,
       );
-      emitter.emitError(`Synthesis failed: ${errorMessage}`);
+      emitter.emitError(`Synthesis failed: ${phaseError}`);
       emitter.end();
       releaseSynthesisLock();
-      return makeErrorResult(errorMessage);
+      return makeErrorResult(phaseError);
     }
 
     // --- Invalidate stable prefix caches so next chats pick up block changes ---
@@ -1096,7 +1140,7 @@ export async function runSystemSynthesis(options?: {
     await setLastSynthesis(new Date().toISOString());
 
     console.log(
-      `[system-chat] Synthesis complete: ${iterations} iterations, ${allToolCalls.length} tool calls, final phase=${PHASE_ORDER[phaseIndex]}, stopReason=${stopReason}`,
+      `[system-chat] Synthesis complete: ${iterations} iterations, ${allToolCalls.length} tool calls, stopReason=${stopReason}`,
     );
 
     emitter.end();
