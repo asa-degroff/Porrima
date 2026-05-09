@@ -21,6 +21,7 @@ import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
 import sharp from "sharp";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
 import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress.js";
+import { compareWithWarmPrompt, digestPromptText } from "./llama-prompt-debug.js";
 
 // llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
 // The client encodes uploads as WebP for size, so we re-encode unsupported formats
@@ -74,6 +75,7 @@ const LLAMACPP_STREAM_HEADERS_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_STREAM_H
 const LLAMACPP_PREFILL_POLL_INTERVAL_MS = readPositiveIntEnv("LLAMACPP_PREFILL_POLL_INTERVAL_MS", 10_000);
 const LLAMACPP_PREFILL_POLL_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_PREFILL_POLL_TIMEOUT_MS", 120_000);
 const LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS = readPositiveIntEnv("LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS", 8_192);
+const LLAMACPP_PROMPT_DEBUG = process.env.LLAMACPP_PROMPT_DEBUG !== "0";
 
 const llamaStreamAgent = new UndiciAgent({
   headersTimeout: LLAMACPP_STREAM_HEADERS_TIMEOUT_MS,
@@ -147,7 +149,7 @@ function estimateRequestChars(messages: any[], tools: any[] | undefined): number
   }
 }
 
-function digestPromptPayload(body: any): string {
+export function digestPromptPayload(body: any): string {
   const promptPayload = {
     model: body.model,
     messages: body.messages,
@@ -158,6 +160,76 @@ function digestPromptPayload(body: any): string {
     .update(JSON.stringify(promptPayload))
     .digest("hex")
     .slice(0, 12);
+}
+
+export async function buildOpenAICompatChatBody(
+  model: Model<Api>,
+  context: Context,
+  options?: SimpleStreamOptions,
+): Promise<{ body: any; cachePrompt: boolean }> {
+  const messages = await convertMessages(model, context);
+  const body: any = {
+    model: model.id,
+    messages,
+    stream: true,
+    stream_options: { include_usage: true },
+  };
+
+  if (options?.maxTokens) {
+    body.max_tokens = options.maxTokens;
+  }
+
+  if (options?.temperature !== undefined) {
+    body.temperature = options.temperature;
+  }
+
+  if (context.tools && context.tools.length > 0) {
+    body.tools = convertTools(context.tools);
+  }
+
+  const llamaSlotLease = getLlamaSlotLease(options);
+  const useLlamaSlotLease = !!llamaSlotLease &&
+    normalizeBaseUrl(llamaSlotLease.baseUrl) === normalizeBaseUrl(model.baseUrl) &&
+    llamaSlotLease.modelId === model.id;
+  if (llamaSlotLease && !useLlamaSlotLease) {
+    console.warn(
+      `[openai-compat] ignoring mismatched llama slot lease for model=${model.id}: ` +
+      `lease model=${llamaSlotLease.modelId} slot=${llamaSlotLease.slotId}`,
+    );
+  }
+  if (useLlamaSlotLease) {
+    body.id_slot = llamaSlotLease.slotId;
+  }
+
+  // llama.cpp exposes prompt KV reuse through its `cache_prompt` request
+  // parameter. The OpenAI-compatible endpoint accepts server-specific
+  // generation parameters, so set it explicitly instead of relying on
+  // defaults that vary across llama.cpp builds.
+  const cachePrompt = process.env.LLAMACPP_CACHE_PROMPT !== "0";
+  if (cachePrompt) {
+    body.cache_prompt = true;
+  }
+
+  if (model.reasoning) {
+    body.chat_template_kwargs = { enable_thinking: true };
+  }
+
+  // Per-model preserve_thinking (Qwen3.6+ feature). Retains reasoning
+  // traces from historical messages so the model can see its own prior
+  // thinking. Read from settings at request time — UI toggle lives in
+  // SettingsModal's per-model context window section.
+  try {
+    const { getSettings } = await import("./chat-storage.js");
+    const settings = await getSettings();
+    if (settings.modelPreserveThinking?.[model.id]) {
+      body.chat_template_kwargs = {
+        ...(body.chat_template_kwargs ?? {}),
+        preserve_thinking: true,
+      };
+    }
+  } catch { /* non-critical */ }
+
+  return { body, cachePrompt };
 }
 
 function buildCacheMetadata(
@@ -201,6 +273,46 @@ function getShowIndicatorFromOptions(options?: SimpleStreamOptions): boolean | u
   if (value === true) return true;
   if (value === false) return false;
   return undefined;
+}
+
+function getPromptDebugChatId(options?: SimpleStreamOptions): string | undefined {
+  const explicit = (options as any)?.llamaPromptDebugChatId;
+  if (typeof explicit === "string" && explicit.length > 0) return explicit;
+  return getLlamaSlotLease(options)?.chatId;
+}
+
+async function renderPromptForDebug(
+  baseUrl: string,
+  body: any,
+  signal?: AbortSignal,
+): Promise<string> {
+  const templateBody: any = {
+    model: body.model,
+    messages: body.messages,
+  };
+  if (body.tools?.length) {
+    templateBody.tools = body.tools;
+  }
+  if (body.chat_template_kwargs) {
+    templateBody.chat_template_kwargs = body.chat_template_kwargs;
+  }
+
+  const res = await undiciFetch(`${normalizeBaseUrl(baseUrl)}/apply-template`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(templateBody),
+    signal,
+    dispatcher: llamaStreamAgent,
+  }) as unknown as Response;
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`/apply-template failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+  const json = await res.json();
+  if (typeof json?.prompt !== "string") {
+    throw new Error("/apply-template returned invalid response (missing 'prompt')");
+  }
+  return json.prompt;
 }
 
 function clampRatio(value: number): number {
@@ -1251,60 +1363,31 @@ export const streamOpenAICompat = (
         );
       }
 
-      const messages = await convertMessages(model, context);
-      const body: any = {
-        model: model.id,
-        messages,
-        stream: true,
-        stream_options: { include_usage: true },
-      };
-
-      if (options?.maxTokens) {
-        body.max_tokens = options.maxTokens;
-      }
-
-      if (options?.temperature !== undefined) {
-        body.temperature = options.temperature;
-      }
-
-      if (context.tools && context.tools.length > 0) {
-        body.tools = convertTools(context.tools);
-      }
-
-      if (useLlamaSlotLease) {
-        body.id_slot = llamaSlotLease.slotId;
-      }
-
-      // llama.cpp exposes prompt KV reuse through its `cache_prompt` request
-      // parameter. The OpenAI-compatible endpoint accepts server-specific
-      // generation parameters, so set it explicitly instead of relying on
-      // defaults that vary across llama.cpp builds.
-      const cachePrompt = process.env.LLAMACPP_CACHE_PROMPT !== "0";
-      if (cachePrompt) {
-        body.cache_prompt = true;
-      }
-
-      if (model.reasoning) {
-        body.chat_template_kwargs = { enable_thinking: true };
-      }
-
-      // Per-model preserve_thinking (Qwen3.6+ feature). Retains reasoning
-      // traces from historical messages so the model can see its own prior
-      // thinking. Read from settings at request time — UI toggle lives in
-      // SettingsModal's per-model context window section.
-      try {
-        const { getSettings } = await import("./chat-storage.js");
-        const settings = await getSettings();
-        if (settings.modelPreserveThinking?.[model.id]) {
-          body.chat_template_kwargs = {
-            ...(body.chat_template_kwargs ?? {}),
-            preserve_thinking: true,
-          };
-        }
-      } catch { /* non-critical */ }
+      const { body, cachePrompt } = await buildOpenAICompatChatBody(model, context, options);
 
       const url = `${model.baseUrl}/v1/chat/completions`;
       const cacheMetadata = buildCacheMetadata(cachePrompt, body);
+      const promptDebugChatId = getPromptDebugChatId(options);
+      if (LLAMACPP_PROMPT_DEBUG && promptDebugChatId) {
+        try {
+          const renderedPrompt = await renderPromptForDebug(model.baseUrl, body, options?.signal);
+          compareWithWarmPrompt({
+            chatId: promptDebugChatId,
+            modelId: model.id,
+            payloadDigest: cacheMetadata.requestDigest,
+            promptDigest: digestPromptText(renderedPrompt),
+            promptChars: renderedPrompt.length,
+            prompt: renderedPrompt,
+            messageCount: cacheMetadata.requestMessageCount,
+            requestChars: cacheMetadata.requestCharCount,
+          });
+        } catch (err) {
+          console.warn(
+            `[prompt-debug] chat=${promptDebugChatId} failed to render chat prompt:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
       const onModelProgress = getModelProgressCallback(options);
       const showIndicator = getShowIndicatorFromOptions(options);
 

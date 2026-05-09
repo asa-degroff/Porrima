@@ -1159,6 +1159,7 @@ async function handleChatStream(
 
     // Pass per-chat Ollama runtime options to the stream function
     const safeStreamFn = createSafeStreamFn(chat.ollamaOptions, llamaSlotLease, {
+      promptDebugChatId: chat.id,
       onModelProgress: emitModelProgress,
       modelProgressShowIndicator: (iteration) => {
         if (iteration > 1) return false;

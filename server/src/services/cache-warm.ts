@@ -11,18 +11,34 @@
  *  2. Sleep pre-warm: system chat warms before entering sleep mode
  */
 
-import { getChat, getSettings } from "./chat-storage.js";
+import { getChat, getProject, getSettings } from "./chat-storage.js";
 import { chatMessagesToPiMessages } from "./agent.js";
+import type { ReplayModelIdentity } from "./agent.js";
+import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
 import {
   ensureRouterModelLoaded,
   normalizeRouterModelId,
 } from "./llama-router-client.js";
 import {
+  buildOpenAICompatChatBody,
+  digestPromptPayload,
+} from "./openai-compat-provider.js";
+import {
+  markLlamaCacheResidencyFinished,
   markLlamaCacheResidencyStarted,
   recordLlamaCacheResidencyRun,
+  type LlamaCacheBindingMode,
 } from "./llama-cache-residency.js";
-import { discoverAllModels } from "./models.js";
+import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "./models.js";
 import { getOllamaUrl } from "./ollama-url.js";
+import {
+  buildSplitAugmentedPrompt,
+  resetMemoryContext,
+  setCachedAugmentedPrompt,
+} from "./memory-context.js";
+import { getAgentTools, type ToolSideEffects } from "./agent-tools.js";
+import { digestPromptText, recordWarmPromptSnapshot } from "./llama-prompt-debug.js";
+import { buildSkillAugmentedPrompt, discoverSkills, type Skill } from "./skills.js";
 import type { OllamaModel } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -65,10 +81,29 @@ export interface CacheWarmOptions {
 // ---------------------------------------------------------------------------
 
 const LLAMACPP_WARM_TIMEOUT_MS = Number(process.env.LLAMACPP_WARM_TIMEOUT_MS) || 30 * 60_000;
+const llamaWarmAgent = new UndiciAgent({
+  headersTimeout: LLAMACPP_WARM_TIMEOUT_MS,
+  bodyTimeout: 0,
+  keepAliveTimeout: 60_000,
+});
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
+
+interface CacheResidencyContext {
+  chatId: string;
+  baseUrl: string;
+  modelId: string;
+  contextWindow?: number;
+  bindingMode: LlamaCacheBindingMode;
+}
+
+const NOOP_TOOL_EFFECTS: ToolSideEffects = {
+  onArtifact: () => {},
+  onVisual: () => {},
+  onAskUser: () => {},
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -103,21 +138,27 @@ async function findModelInfo(modelId: string): Promise<{ model: OllamaModel; bas
  */
 async function applyChatTemplate(
   baseUrl: string,
-  modelId: string,
-  messages: any[],
-  options?: { signal?: AbortSignal; chatTemplateKwargs?: Record<string, any> }
+  body: any,
+  options?: { signal?: AbortSignal }
 ): Promise<string> {
-  const body: any = { model: modelId, messages };
-  if (options?.chatTemplateKwargs && Object.keys(options.chatTemplateKwargs).length > 0) {
-    body.chat_template_kwargs = options.chatTemplateKwargs;
+  const templateBody: any = {
+    model: body.model,
+    messages: body.messages,
+  };
+  if (body.chat_template_kwargs) {
+    templateBody.chat_template_kwargs = body.chat_template_kwargs;
+  }
+  if (body.tools?.length) {
+    templateBody.tools = body.tools;
   }
 
-  const res = await fetch(`${normalizeBaseUrl(baseUrl)}/apply-template`, {
+  const res = await undiciFetch(`${normalizeBaseUrl(baseUrl)}/apply-template`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(templateBody),
     signal: options?.signal || AbortSignal.timeout(LLAMACPP_WARM_TIMEOUT_MS),
-  });
+    dispatcher: llamaWarmAgent,
+  }) as unknown as Response;
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -153,12 +194,13 @@ async function prefillOnly(
     return_tokens: false,
   };
 
-  const res = await fetch(`${normalizeBaseUrl(baseUrl)}/completion`, {
+  const res = await undiciFetch(`${normalizeBaseUrl(baseUrl)}/completion`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal: options?.signal || AbortSignal.timeout(LLAMACPP_WARM_TIMEOUT_MS),
-  });
+    dispatcher: llamaWarmAgent,
+  }) as unknown as Response;
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -174,60 +216,124 @@ async function prefillOnly(
   return { promptMs, tokensCached, tokensEvaluated };
 }
 
-/**
- * Convert our Chat messages to OpenAI-compatible format for the template.
- */
-function buildOaiMessages(
+async function postJson(baseUrl: string, path: string, body: any, signal?: AbortSignal): Promise<any> {
+  const res = await undiciFetch(`${normalizeBaseUrl(baseUrl)}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: signal || AbortSignal.timeout(LLAMACPP_WARM_TIMEOUT_MS),
+    dispatcher: llamaWarmAgent,
+  }) as unknown as Response;
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${path} failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+  return res.json();
+}
+
+async function makeOneTokenShortPrompt(
+  baseUrl: string,
+  modelId: string,
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<{ prompt: string; fullTokenCount?: number; warmTokenCount?: number; removedToken?: number }> {
+  const tokenized = await postJson(baseUrl, "/tokenize", {
+    model: modelId,
+    content: prompt,
+    add_special: false,
+  }, signal);
+  const tokens = Array.isArray(tokenized?.tokens) ? tokenized.tokens : [];
+  if (tokens.length <= 1) {
+    return { prompt, fullTokenCount: tokens.length, warmTokenCount: tokens.length };
+  }
+
+  const warmTokens = tokens.slice(0, -1);
+  const detokenized = await postJson(baseUrl, "/detokenize", {
+    model: modelId,
+    tokens: warmTokens,
+  }, signal);
+  if (typeof detokenized?.content !== "string") {
+    throw new Error("/detokenize returned invalid response (missing 'content')");
+  }
+
+  return {
+    prompt: detokenized.content,
+    fullTokenCount: tokens.length,
+    warmTokenCount: warmTokens.length,
+    removedToken: tokens[tokens.length - 1],
+  };
+}
+
+function buildReplayMessages(
   chatMessages: any[],
-  systemPrompt: string,
-  modelId: string
-): any[] {
-  const piMessages = chatMessagesToPiMessages(chatMessages, modelId, undefined);
+  modelId: string,
+  model: OllamaModel,
+): ReturnType<typeof chatMessagesToPiMessages> {
+  const replayIdentity = model?.provider === "llamacpp"
+    ? { api: "openai-compat", provider: "llamacpp", model: modelId }
+    : { api: "ollama-native", provider: "ollama", model: modelId };
+  return chatMessagesToPiMessages(chatMessages, modelId, replayIdentity as ReplayModelIdentity);
+}
 
-  const oaiMessages: any[] = [];
+async function buildWarmSystemPrompt(chat: Awaited<ReturnType<typeof getChat>>, messages: any[]): Promise<string> {
+  if (!chat) return "You are a helpful assistant.";
 
-  if (systemPrompt) {
-    oaiMessages.push({ role: "system", content: systemPrompt });
+  let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+
+  if (chat.type === "agent" || chat.type === "bluesky") {
+    // Cache warming is meant to prepare the next turn's stable prefix. Freeze
+    // the current memory context into the system prompt now, so the later send
+    // path reuses the same prompt instead of doing a fresh retrieval that shifts
+    // the entire prefix and misses the warmed slot.
+    resetMemoryContext(chat.id);
+    const project = chat.projectId ? await getProject(chat.projectId) : null;
+    const split = await buildSplitAugmentedPrompt(
+      systemPrompt,
+      messages,
+      chat.id,
+      chat.projectId,
+      chat.type,
+      project?.path,
+    );
+    systemPrompt = split.systemPrompt;
   }
 
-  for (const msg of piMessages) {
-    if (msg.role === "user") {
-      oaiMessages.push({ role: "user", content: msg.content });
-    } else if (msg.role === "assistant") {
-      const content = msg.content;
-      if (Array.isArray(content)) {
-        const textParts: string[] = [];
-        const thinkingParts: string[] = [];
-        for (const part of content) {
-          if (part.type === "text") textParts.push(part.text);
-          else if (part.type === "thinking") thinkingParts.push(part.thinking);
-        }
-        const oaiMsg: any = { role: "assistant" };
-        if (thinkingParts.length) {
-          oaiMsg.reasoning_content = thinkingParts.join("");
-        }
-        if (textParts.length) {
-          oaiMsg.content = textParts.join("");
-        } else {
-          oaiMsg.content = "";
-        }
-        oaiMessages.push(oaiMsg);
-      } else {
-        oaiMessages.push({ role: "assistant", content: String(content) });
-      }
-    } else if (msg.role === "toolResult") {
-      const textContent = Array.isArray(msg.content)
-        ? msg.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("")
-        : String(msg.content);
-      oaiMessages.push({
-        role: "tool",
-        tool_call_id: msg.toolCallId,
-        content: textContent,
-      });
+  if (chat.activeSkills?.length) {
+    const skillsCache = new Map<string, Skill>();
+    const allSkills = await discoverSkills(chat.projectId);
+    for (const skill of allSkills) {
+      skillsCache.set(skill.name, skill);
     }
+    systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
   }
 
-  return oaiMessages;
+  setCachedAugmentedPrompt(chat.id, systemPrompt);
+  return systemPrompt;
+}
+
+async function buildWarmTools(
+  chat: Awaited<ReturnType<typeof getChat>>,
+  contextWindow: number,
+): Promise<ReturnType<typeof getAgentTools> | undefined> {
+  if (!chat || chat.type === "quick") return undefined;
+  const project = chat.projectId ? await getProject(chat.projectId) : null;
+  const tools = getAgentTools(
+    chat.id,
+    NOOP_TOOL_EFFECTS,
+    contextWindow,
+    project || undefined,
+    chat.type,
+  );
+  return tools.length > 0 ? tools : undefined;
+}
+
+function estimateRequestChars(body: any): number {
+  try {
+    return JSON.stringify({ messages: body.messages, tools: body.tools ?? [] }).length;
+  } catch {
+    return 0;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +355,7 @@ export async function warmChatCache(
     reason: options.reason ?? "user-requested",
     warmedAt: Date.now(),
   };
+  let residencyContext: CacheResidencyContext | null = null;
 
   try {
     // 1. Load the chat
@@ -275,70 +382,97 @@ export async function warmChatCache(
 
     const { model, baseUrl } = modelInfo;
     const normalizedModelId = normalizeRouterModelId(chat.modelId);
+    const settings = await getSettings();
+    const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
 
     // 3. Ensure model is loaded on the router
     const loadResult = await ensureRouterModelLoaded(baseUrl, normalizedModelId, {
-      contextWindow: chat.contextWindow,
+      contextWindow: effectiveContextWindow,
     });
     if (loadResult === "error") {
       result.error = `Failed to load model: ${normalizedModelId}`;
       return result;
     }
 
-    // 4. Build OpenAI-compatible messages
-    const oaiMessages = buildOaiMessages(allMessages, chat.systemPrompt, chat.modelId);
+    // 4. Build the same stable prompt prefix that the normal send path will use.
+    const systemPrompt = await buildWarmSystemPrompt(chat, allMessages);
+    const piModel = await createPiModelFromProvider(model);
+    piModel.contextWindow = effectiveContextWindow;
+    piModel.id = normalizedModelId;
+    piModel.reasoning = modelSupportsReasoning(model);
+    const piMessages = buildReplayMessages(allMessages, chat.modelId, model);
+    const tools = await buildWarmTools(chat, effectiveContextWindow);
+    const context = {
+      systemPrompt,
+      messages: piMessages,
+      tools,
+    };
+    const { body } = await buildOpenAICompatChatBody(piModel as any, context as any);
+    const promptPayloadDigest = digestPromptPayload(body);
+    const requestCharCount = estimateRequestChars(body);
 
-    // 5. Determine chat template kwargs
-    // For cache warming, we disable enable_thinking on reasoning models.
-    // The model's GGUF metadata has enable_thinking=true by default, which
-    // conflicts with /apply-template when the conversation ends with a
-    // completed assistant turn (prefill mode). We just need the raw template
-    // output for KV cache — thinking tags are a generation concern.
-    const chatTemplateKwargs: Record<string, any> = {};
-    if (modelSupportsReasoning(model)) {
-      chatTemplateKwargs.enable_thinking = false;
-    }
-
-   // 6. Apply chat template
-    console.log(`[cache-warm] applying template for ${normalizedModelId}, kwargs:`, chatTemplateKwargs);
-    console.log(`[cache-warm] last message role: ${oaiMessages[oaiMessages.length - 1]?.role}, content length: ${String(oaiMessages[oaiMessages.length - 1]?.content).length}`);
-    const formattedPrompt = await applyChatTemplate(baseUrl, normalizedModelId, oaiMessages, {
+    // 5. Apply chat template with the exact same provider-converted body that
+    // the real llama.cpp OpenAI-compatible request uses.
+    console.log(`[cache-warm] applying template for ${normalizedModelId}, kwargs:`, body.chat_template_kwargs ?? {});
+    console.log(
+      `[cache-warm] last message role: ${body.messages?.[body.messages.length - 1]?.role}, ` +
+      `content length: ${String(body.messages?.[body.messages.length - 1]?.content).length}, ` +
+      `tools=${body.tools?.length ?? 0} payload=${promptPayloadDigest}`,
+    );
+    const formattedPrompt = await applyChatTemplate(baseUrl, body, {
       signal: options.signal,
-      chatTemplateKwargs: Object.keys(chatTemplateKwargs).length > 0 ? chatTemplateKwargs : undefined,
     });
+    const promptDigest = digestPromptText(formattedPrompt);
+    recordWarmPromptSnapshot({
+      chatId,
+      modelId: normalizedModelId,
+      payloadDigest: promptPayloadDigest,
+      promptDigest,
+      promptChars: formattedPrompt.length,
+      prompt: formattedPrompt,
+      messageCount: Array.isArray(body.messages) ? body.messages.length : 0,
+      requestChars: requestCharCount,
+    });
+    const shortPrompt = await makeOneTokenShortPrompt(baseUrl, normalizedModelId, formattedPrompt, options.signal);
+    console.log(
+      `[cache-warm] one-token-short prefill: full_tokens=${shortPrompt.fullTokenCount ?? "?"} ` +
+      `warm_tokens=${shortPrompt.warmTokenCount ?? "?"} removed_token=${shortPrompt.removedToken ?? "?"} ` +
+      `full_chars=${formattedPrompt.length} warm_chars=${shortPrompt.prompt.length}`,
+    );
 
-    // 7. Mark residency as warming
-    markLlamaCacheResidencyStarted({
+    // 6. Mark residency as warming
+    residencyContext = {
       chatId,
       baseUrl,
       modelId: normalizedModelId,
-      contextWindow: chat.contextWindow,
+      contextWindow: effectiveContextWindow,
       bindingMode: "auto",
-    });
+    };
+    markLlamaCacheResidencyStarted(residencyContext);
 
-    // 8. Prefill only — populates KV cache without generating
-    const stats = await prefillOnly(baseUrl, normalizedModelId, formattedPrompt, {
+    // 7. Prefill only — populates KV cache without generating
+    const stats = await prefillOnly(baseUrl, normalizedModelId, shortPrompt.prompt, {
       signal: options.signal,
     });
 
-    // 9. Calculate hit ratio
+    // 8. Calculate hit ratio
     const totalTokens = stats.tokensCached + stats.tokensEvaluated;
     const hitRatio = totalTokens > 0 ? stats.tokensCached / totalTokens : 0;
 
-    // 10. Record residency
+    // 9. Record residency
     recordLlamaCacheResidencyRun({
       chatId,
       baseUrl,
       modelId: normalizedModelId,
-      contextWindow: chat.contextWindow,
+      contextWindow: effectiveContextWindow,
       bindingMode: "auto",
       timings: { prompt_n: totalTokens, prompt_ms: stats.promptMs },
       cache: {
         cachePrompt: true,
         cacheMode: "cache_prompt",
-        requestDigest: "",
-        requestMessageCount: allMessages.length,
-        requestCharCount: formattedPrompt.length,
+        requestDigest: promptPayloadDigest,
+        requestMessageCount: Array.isArray(body.messages) ? body.messages.length : 0,
+        requestCharCount,
         reportedPromptTokens: totalTokens,
         promptEvalTokens: stats.tokensEvaluated,
         inferredCachedTokens: stats.tokensCached,
@@ -346,7 +480,7 @@ export async function warmChatCache(
       },
     });
 
-    // 11. Return success
+    // 10. Return success
     return {
       ...result,
       warmed: true,
@@ -358,6 +492,9 @@ export async function warmChatCache(
     };
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
+    if (residencyContext) {
+      markLlamaCacheResidencyFinished(chatId);
+    }
     console.warn(`[cache-warm] Failed to warm cache for chat ${chatId}:`, err);
     return result;
   }

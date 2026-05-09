@@ -29,6 +29,7 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 
 export interface SafeStreamHooks {
   onModelProgress?: ModelProgressCallback;
+  promptDebugChatId?: string;
   /** Controls whether the prefill progress indicator should be shown.
    *  - `true`: always show (first turns)
    *  - `false`: always hide
@@ -107,6 +108,9 @@ export function createSafeStreamFn(
     }
     if (llamaSlotLease) {
       mergedOptions.llamaSlotLease = llamaSlotLease;
+    }
+    if (hooks?.promptDebugChatId) {
+      mergedOptions.llamaPromptDebugChatId = hooks.promptDebugChatId;
     }
 
     const rawStream = streamSimple(model, ctx, mergedOptions as any);
