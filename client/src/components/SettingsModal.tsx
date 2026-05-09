@@ -1636,7 +1636,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             >
           {/* Default Model */}
           <div id="models" className="space-y-2">
-            <label className="block text-sm font-medium text-white/60">Default Model</label>
+            <label className="block text-sm font-medium text-white/60">Default Chat Model</label>
+            <p className="text-xs text-white/30 -mt-1">
+              Used for agent, project, and system chats. Quick chats let you pick a model per-chat.
+            </p>
             <Dropdown
               state={modelDd}
               trigger={

@@ -725,12 +725,19 @@ export function ChatView({
           >
             Prompt
           </button>
-          <ModelSelector
-            models={models}
-            selectedId={selectedModelId}
-            onChange={onModelChange}
-            disabled={streaming}
-          />
+          {/* Model switcher — only for quick chats. Agent/project/system chats use the configured default model to preserve KV cache warmth. */}
+          {chatType === "quick" ? (
+            <ModelSelector
+              models={models}
+              selectedId={selectedModelId}
+              onChange={onModelChange}
+              disabled={streaming}
+            />
+          ) : (
+            <span className="hidden md:inline text-[11px] text-white/25 select-none" title="Uses your default model">
+              {models.find((m) => m.id === selectedModelId)?.name || selectedModelId}
+            </span>
+          )}
         </div>
       </div>
 
