@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import type { ChatListItem as ChatListItemType } from "../types";
 import type { CacheResidency } from "../api/client";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
+import { PrefillActivityIcon } from "./PrefillActivityIcon";
 
 interface Props {
   chat: ChatListItemType;
@@ -11,6 +12,8 @@ interface Props {
   onSelect: () => void;
   onDelete: () => void;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
+  onWarmCache?: (chatId: string) => void;
+  cacheWarming?: boolean;
 }
 
 function formatCacheResidencyTitle(residency?: CacheResidency | null): string | undefined {
@@ -27,7 +30,7 @@ function formatCacheResidencyTitle(residency?: CacheResidency | null): string | 
   return parts.join(" - ");
 }
 
-export function ChatListItem({ chat, active, lastActive = false, cacheResidency, onSelect, onDelete, onSendToNotebook }: Props) {
+export function ChatListItem({ chat, active, lastActive = false, cacheResidency, onSelect, onDelete, onSendToNotebook, onWarmCache, cacheWarming = false }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -68,6 +71,13 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
     setConfirmDelete(false);
   }, []);
   const cacheTitle = formatCacheResidencyTitle(cacheResidency);
+  const effectiveCacheWarming = cacheWarming || cacheResidency?.status === "warming";
+
+  const handleWarm = useCallback(() => {
+    setContextMenu(null);
+    if (effectiveCacheWarming) return;
+    onWarmCache?.(chat.id);
+  }, [effectiveCacheWarming, onWarmCache, chat.id]);
 
   return (
     <button
@@ -122,8 +132,17 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
         </div>
       )}
 
+      {effectiveCacheWarming && !confirmDelete && (
+        <div
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+          title="Warming cache"
+        >
+          <PrefillActivityIcon />
+        </div>
+      )}
+
       {/* Overlapping delete button — desktop only (hidden on mobile, use long-press context menu instead) */}
-      {!confirmDelete && (
+      {!confirmDelete && !effectiveCacheWarming && (
         <div
           onClick={handleDeleteClick}
           className={`absolute right-0 top-0 bottom-0 flex items-center pr-2.5 pl-6 rounded-r-xl opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hidden md:flex "bg-gradient-to-l from-[rgba(255,255,255,0.15)] via-[rgba(255,255,255,0.15)] to-transparent"
@@ -162,6 +181,19 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
                 <path d="m8 15 4 4 4-4" />
               </svg>
               Send to notebook
+            </ContextMenuItem>
+          )}
+          {onWarmCache && chat.type === "agent" && (
+            <ContextMenuItem onClick={handleWarm} disabled={effectiveCacheWarming}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={effectiveCacheWarming ? "text-amber-400 animate-pulse" : "text-amber-400/70"}>
+                <path d="M12 2c.132 0 .263.001.393.003"/>
+                <path d="M7 5h10"/>
+                <path d="M11 4v2"/>
+                <path d="M13 4v2"/>
+                <path d="M12 8a4 4 0 0 0-4 4c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2 4 4 0 0 0-4-4Z"/>
+                <path d="M12 14v3"/>
+              </svg>
+              {effectiveCacheWarming ? "Warming..." : "Warm Cache"}
             </ContextMenuItem>
           )}
           <ContextMenuItem destructive onClick={() => { setContextMenu(null); setConfirmDelete(true); }}>

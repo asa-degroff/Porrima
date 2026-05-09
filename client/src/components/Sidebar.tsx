@@ -10,6 +10,7 @@ import { useGestureDrawer } from "../hooks/useGestureDrawer";
 import { SidebarSearch, SearchResults } from "./SidebarSearch";
 import { searchConversations } from "../api/client";
 import type { ConversationSearchResult } from "../types";
+import { PrefillActivityIcon } from "./PrefillActivityIcon";
 
 interface Props {
   chats: ChatListItemType[];
@@ -23,6 +24,8 @@ interface Props {
   onDeleteChat: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
+  onWarmCache?: (chatId: string) => void;
+  cacheWarmingChatIds?: Set<string>;
   onOpenSettings: () => void;
   onOpenMemoryDebug?: () => void;
   onOpenModelStats?: () => void;
@@ -90,6 +93,7 @@ function RecentChatItem({
   cacheResidency,
   onSelect,
   color = "purple",
+  cacheWarming = false,
 }: {
   chat: ChatListItemType;
   active: boolean;
@@ -97,6 +101,7 @@ function RecentChatItem({
   cacheResidency?: CacheResidency | null;
   onSelect: () => void;
   color?: "purple" | "blue" | "emerald" | "amber" | "rose" | "cyan" | "violet" | "orange" | "pink" | "teal";
+  cacheWarming?: boolean;
 }) {
   const colorClasses: Record<string, string> = {
     purple: "text-purple-300/60 border-purple-400/20",
@@ -113,6 +118,7 @@ function RecentChatItem({
   
   const colorClass = colorClasses[color] || colorClasses.purple;
   const cacheTitle = formatCacheResidencyTitle(cacheResidency);
+  const effectiveCacheWarming = cacheWarming || cacheResidency?.status === "warming";
   
   return (
     <button
@@ -130,12 +136,17 @@ function RecentChatItem({
     >
       <div className="flex items-start gap-2 min-w-0">
         <span className={`text-[10px] shrink-0 mt-0.5 ${colorClass.split(" ")[0]}`}>●</span>
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 pr-5">
           <p className="text-xs font-medium text-white/80 leading-snug line-clamp-2">
             {chat.title}
           </p>
         </div>
       </div>
+      {effectiveCacheWarming && (
+        <div className="absolute right-2 top-1/2 -translate-y-1/2" title="Warming cache">
+          <PrefillActivityIcon />
+        </div>
+      )}
     </button>
   );
 }
@@ -153,6 +164,8 @@ function ProjectSection({
   onEditProject,
   editMode,
   onSendToNotebook,
+  onWarmCache,
+  cacheWarmingChatIds,
   lastActiveChatId,
   cacheResidency,
 }: {
@@ -168,6 +181,8 @@ function ProjectSection({
   onEditProject: (project: Project) => void;
   editMode: boolean;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
+  onWarmCache?: (chatId: string) => void;
+  cacheWarmingChatIds?: Set<string>;
   lastActiveChatId?: string | null;
   cacheResidency?: Map<string, CacheResidency>;
 }) {
@@ -390,6 +405,7 @@ function ProjectSection({
             active={chats[0].id === activeChatId}
             lastActive={chats[0].id === lastActiveChatId}
             cacheResidency={cacheResidency?.get(chats[0].id) ?? null}
+            cacheWarming={cacheWarmingChatIds?.has(chats[0].id) ?? false}
             onSelect={() => onSelectChat(chats[0].id)}
             color={project.color as any}
           />
@@ -420,7 +436,9 @@ function ProjectSection({
                   onSelect={() => onSelectChat(chat.id)}
                   onDelete={() => onDeleteChat(chat.id)}
                   onSendToNotebook={onSendToNotebook}
-                />
+                  onWarmCache={onWarmCache}
+                  cacheWarming={cacheWarmingChatIds?.has(chat.id) ?? false}
+                  />
               ))}
             </div>
           ) : (
@@ -446,6 +464,8 @@ export function Sidebar({
   onDeleteChat,
   onDeleteProject,
   onSendToNotebook,
+  onWarmCache,
+  cacheWarmingChatIds = new Set(),
   onOpenSettings,
   onOpenMemoryDebug,
   onOpenModelStats,
@@ -922,6 +942,8 @@ export function Sidebar({
                       }}
                       editMode={projectsEditMode}
                       onSendToNotebook={onSendToNotebook}
+                      onWarmCache={onWarmCache}
+                      cacheWarmingChatIds={cacheWarmingChatIds}
                       lastActiveChatId={lastActiveChatId}
                       cacheResidency={cacheResidency}
                     />
@@ -988,6 +1010,7 @@ export function Sidebar({
                 active={agentChats[0].id === activeChatId}
                 lastActive={agentChats[0].id === lastActiveChatId}
                 cacheResidency={cacheResidency.get(agentChats[0].id) ?? null}
+                cacheWarming={cacheWarmingChatIds.has(agentChats[0].id)}
                 onSelect={() => { onSelectChat(agentChats[0].id); onClose(); }}
                 color="purple"
               />
@@ -1017,6 +1040,8 @@ export function Sidebar({
                     onSelect={() => { onSelectChat(chat.id); onClose(); }}
                     onDelete={() => onDeleteChat(chat.id)}
                     onSendToNotebook={onSendToNotebook}
+                    onWarmCache={onWarmCache}
+                    cacheWarming={cacheWarmingChatIds.has(chat.id)}
                   />
                 ))}
                 {agentChats.length === 0 && (
@@ -1069,6 +1094,7 @@ export function Sidebar({
                 active={quickChats[0].id === activeChatId}
                 lastActive={quickChats[0].id === lastActiveChatId}
                 cacheResidency={cacheResidency.get(quickChats[0].id) ?? null}
+                cacheWarming={cacheWarmingChatIds.has(quickChats[0].id)}
                 onSelect={() => { onSelectChat(quickChats[0].id); onClose(); }}
                 color="blue"
               />
@@ -1098,6 +1124,8 @@ export function Sidebar({
                     onSelect={() => { onSelectChat(chat.id); onClose(); }}
                     onDelete={() => onDeleteChat(chat.id)}
                     onSendToNotebook={onSendToNotebook}
+                    onWarmCache={onWarmCache}
+                    cacheWarming={cacheWarmingChatIds.has(chat.id)}
                   />
                 ))}
                 {quickChats.length === 0 && (

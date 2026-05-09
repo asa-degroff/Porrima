@@ -90,7 +90,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     hasUnreadAgentEntries,
     markAgentEntriesSeen,
   } = useNotebooks();
-  const { residency: cacheResidency } = useCacheResidency();
+  const { residency: cacheResidency, refresh: refreshCacheResidency } = useCacheResidency();
   const [activeView, setActiveView] = useState<'chats' | 'notebooks'>('chats');
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
@@ -109,6 +109,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [sleepCycleActive, setSleepCycleActive] = useState(false);
   const [isWakeCycleRunning, setIsWakeCycleRunning] = useState(false);
   const [isAutomationRunning, setIsAutomationRunning] = useState(false);
+  const [cacheWarmingChatIds, setCacheWarmingChatIds] = useState<Set<string>>(() => new Set());
 
   // Load UI state from server on mount
   // Priority: URL ?chat= param > server state > localStorage
@@ -727,6 +728,37 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, [createUserEntry, updateEntry]);
 
+  const handleWarmCache = useCallback(async (chatId: string) => {
+    setCacheWarmingChatIds((prev) => {
+      if (prev.has(chatId)) return prev;
+      const next = new Set(prev);
+      next.add(chatId);
+      return next;
+    });
+    try {
+      const { warmCache } = await import("./api/client");
+      const result = await warmCache(chatId, "user-requested");
+      if (result.warmed) {
+        const tokens = result.tokensEvaluated || 0;
+        const ms = result.promptMs || 0;
+        const speed = ms > 0 ? (tokens / (ms / 1000)).toFixed(0) : "—";
+        console.log(`[cache-warm] ${chatId}: warmed ${tokens} tokens in ${ms}ms (~${speed} t/s)`);
+      } else {
+        console.warn(`[cache-warm] ${chatId}: ${result.error || "warm failed"}`);
+      }
+    } catch (e: any) {
+      console.error("[cache-warm] failed:", e);
+    } finally {
+      setCacheWarmingChatIds((prev) => {
+        if (!prev.has(chatId)) return prev;
+        const next = new Set(prev);
+        next.delete(chatId);
+        return next;
+      });
+      await refreshCacheResidency?.();
+    }
+  }, [refreshCacheResidency]);
+
   // Keyboard inset only - TTS bar is handled within ChatView
   const totalBottomInset = keyboardInset || 0;
 
@@ -765,6 +797,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onDeleteChat={handleDeleteChat}
         onDeleteProject={handleDeleteProject}
         onSendToNotebook={handleSendToNotebook}
+        onWarmCache={handleWarmCache}
+        cacheWarmingChatIds={cacheWarmingChatIds}
         onOpenSettings={handleOpenSettings}
         onOpenMemoryDebug={() => setMemoryDebugOpen(true)}
         onOpenModelStats={() => setModelStatsOpen(true)}

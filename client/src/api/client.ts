@@ -1893,3 +1893,51 @@ export function runEmbeddingMigration(cb: EmbeddingMigrationCallbacks): () => vo
   })();
   return () => controller.abort();
 }
+
+// --- Cache Warm API ---
+
+export interface CacheWarmResult {
+  warmed: boolean;
+  chatId: string;
+  modelId: string;
+  promptMs?: number;
+  tokensCached?: number;
+  tokensEvaluated?: number;
+  cacheHitRatio?: number;
+  totalPromptTokens?: number;
+  reason: "user-requested" | "sleep-prewarm";
+  warmedAt: number;
+  error?: string;
+}
+
+export async function warmCache(chatId: string, reason: "user-requested" | "sleep-prewarm" = "user-requested"): Promise<CacheWarmResult> {
+  const res = await apiFetch(`${BASE}/memory/cache-warm/${encodeURIComponent(chatId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Cache warm failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export interface CacheResidencyRecord {
+  chatId: string;
+  modelId: string;
+  baseUrl: string;
+  status: "warming" | "warm" | "stale";
+  confidence: number;
+  lastUsedAt: number;
+  warmedAt?: number;
+  inferredCacheHitRatio?: number;
+  reportedPromptTokens?: number;
+}
+
+export async function fetchCacheResidency(): Promise<CacheResidencyRecord[]> {
+  const res = await apiFetch(`${BASE}/memory/cache-residency`);
+  if (!res.ok) throw new Error("Failed to fetch cache residency");
+  const data = await res.json();
+  return data.records || [];
+}

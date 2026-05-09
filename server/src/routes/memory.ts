@@ -193,6 +193,52 @@ router.post("/synthesis/sleep", async (_req, res) => {
   }
 });
 
+// Warm the KV cache for a chat without generating output.
+// Uses /apply-template + /completion with n_predict=0 to prefill the cache.
+router.post("/cache-warm/:chatId", async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { reason } = req.body || {};
+    const validReasons = ["user-requested", "sleep-prewarm"];
+    const warmReason = validReasons.includes(reason) ? reason : "user-requested";
+
+    const { warmChatCache } = await import("../services/cache-warm.js");
+    const result = await warmChatCache(chatId, { reason: warmReason });
+
+    if (result.warmed) {
+      console.log(
+        `[cache-warm] ${chatId}: warmed in ${result.promptMs}ms, ` +
+        `${result.tokensCached} cached / ${result.totalPromptTokens} total ` +
+        `(${(result.cacheHitRatio! * 100).toFixed(0)}% hit) — ${warmReason}`
+      );
+    } else {
+      console.warn(`[cache-warm] ${chatId}: failed — ${result.error}`);
+    }
+
+    res.json(result);
+  } catch (e: any) {
+    console.error(`[cache-warm] unexpected error:`, e);
+    res.status(500).json({
+      warmed: false,
+      chatId: req.params.chatId,
+      reason: "user-requested",
+      warmedAt: Date.now(),
+      error: e.message,
+    });
+  }
+});
+
+// Get cache residency status for all chats.
+router.get("/cache-residency", async (_req, res) => {
+  try {
+    const { listLlamaCacheResidency } = await import("../services/llama-cache-residency.js");
+    const records = listLlamaCacheResidency();
+    res.json({ records });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Manually trigger a wake cycle. Returns 202 Accepted immediately.
 router.post("/wake/run", async (_req, res) => {
   try {
