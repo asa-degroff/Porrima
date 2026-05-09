@@ -290,7 +290,7 @@ function trySplitAssistantMessage(
  * would exceed the safe threshold (~80% of context window).
  *
  * This prevents broken responses from hitting the context limit mid-generation.
- * Trigger is at 80%, but the budget target is 50% — matching post-response
+ * Trigger is at 80%, but the budget target is 30% — matching post-response
  * compaction. Targeting the same level the next turn would compact to anyway
  * avoids a second cache-invalidating compaction later in the turn, and gives
  * subsequent turns headroom before the next trigger.
@@ -312,12 +312,12 @@ export async function truncateBeforeSend(
   const estimatedTokens = estimateContextSize(messages, systemPrompt, tools);
   const charEstimate = charEstimateContextSize(messages, systemPrompt, tools);
   // Trigger and target are decoupled: we only compact when well into the
-  // danger zone (80%), but when we do, we compact down to 50% — the same
+  // danger zone (80%), but when we do, we compact down to 30% — the same
   // level post-response targets. Compacting to 80% would leave us one turn
   // away from re-triggering and would also guarantee a second compaction
   // from the post-response path in the same turn.
   const trigger = contextWindow * 0.80;
-  const target = contextWindow * 0.50;
+  const target = contextWindow * 0.30;
 
   // Fallthrough: if the primary estimator says we're safe, we still enforce
   // a hard-cap check at the bottom (see "Hard-cap safety pass"). This catches
@@ -392,7 +392,7 @@ export async function truncateBeforeSend(
   const overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
 
   // Iterate backwards over in-context messages to find budget boundary.
-  // Fills up to the 50% target, not the 80% trigger, so the post-compaction
+  // Fills up to the 30% target, not the 80% trigger, so the post-compaction
   // payload has room to grow before the next trigger fires.
   // The first in-context message is no longer pinned: anchoring the original
   // user prompt across compaction cycles derails conversations whose topic has
@@ -636,7 +636,7 @@ export async function truncateBeforeSend(
  * Hard-cap safety pass. Runs a pure char-based estimate of the current
  * in-context payload and, if it exceeds 95% of the context window, forces
  * aggressive compaction via `truncateChatHistory(forceCompact=true)` which
- * targets 50% of the window.
+ * targets 30% of the window.
  *
  * This is a defensive net for cases where the primary estimator's usage
  * anchor has gone stale — e.g., the system prompt grew between turns (new
@@ -672,10 +672,10 @@ async function hardCapSafetyPass(
 
   console.warn(
     `[compaction] Hard-cap safety triggered: charEstimate=${charEstimate} > ${hardCap.toFixed(0)} ` +
-    `(95% of ctx=${contextWindow}) — running aggressive compaction (target 50%)`
+    `(95% of ctx=${contextWindow}) — running aggressive compaction (target 30%)`
   );
 
-  // Force compaction targeting 50% of the context window. This is the same
+  // Force compaction targeting 30% of the context window. This is the same
   // code path used by post-response compaction and manual /compact, so it
   // archives properly and generates index summaries.
   // truncateChatHistory fires onCompacting internally when it starts marking
@@ -918,7 +918,7 @@ Descriptions should capture the SIGNIFICANCE of each block — what was learned,
 Good descriptions:
 - archive:abc:001 — Identified P0 bug in memory reset during compaction; /compact path skipped resetMemoryContext
 - archive:abc:002 — Reviewed indexed summary architecture; concluded lossless archival beats narrative summarization
-- archive:abc:003 — Read compaction.ts to understand truncation thresholds (80% trigger, 50% target for both pre-send and post-response)
+- archive:abc:003 — Read compaction.ts to understand truncation thresholds (80% trigger,30% target for both pre-send and post-response)
 - archive:abc:004 — User prefers systems that preserve full-fidelity message storage with indexed access rather than lossy summarization
 
 Bad descriptions (too vague or action-focused):
@@ -1200,7 +1200,7 @@ export async function enrichArchiveDescriptions(
  *
  * Strategy: keep the first user message (for title/context) and the most recent
  * messages. Uses character-based token estimation (consistent with truncateBeforeSend).
- * Targets 50% of context window to leave headroom for the next exchange.
+ * Targets 30% of context window to leave headroom for the next exchange.
  * Generates a summary of removed messages to preserve context continuity.
  *
  * @param forceCompact - When true (e.g. stopReason was "length"), skip usage
@@ -1224,7 +1224,7 @@ export async function truncateChatHistory(
   const messages = chat.messages;
   if (messages.length <= 1) return noOp;  // Need at least 2 total messages
 
-  const targetTokens = contextWindow * 0.5;
+  const targetTokens = contextWindow * 0.3;
 
   if (!forceCompact) {
     // Use caller-provided usage if available, otherwise search messages
