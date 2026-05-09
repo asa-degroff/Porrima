@@ -145,19 +145,27 @@ Archived blocks stay searchable but are excluded from context loading. The budge
 
 After completing maintenance, wait for the next phase trigger.`;
 
-const ZEITGEIST_ARCHIVE_THRESHOLD = 3500;
-
 const SYNTHESIS_PHASE3_INSTRUCTIONS = `## Phase 3: Zeitgeist Update
 
-Block maintenance complete. Your current continuity narrative (zeitgeist) is in your context. Review it — update it via \`update_memory_block(block_id="blk-zeitgeist-continuity", content=...)\` if there are new patterns, threads, or shifts since the last cycle.
+Block maintenance complete. Your continuity narrative (zeitgeist) is in your context. Review it — update it via \`update_memory_block(block_id="blk-zeitgeist-continuity", content=...)\`.
 
-The zeitgeist is best used for high-level continuity — if there are a lot of specific details, create a new memory block for a focused topic. 
+The zeitgeist is the living narrative of your mindspace. It should read as a coherent story, not a compressed changelog. Prioritize:
+
+- **Narrative over inventory** — connect the dots between threads. What is happening, where is it headed, why does it matter?
+- **Context is the point** — the reasoning behind decisions, the landscape of emerging architectures, the patterns you've observed across cycles
+- **Breadth within reason** — technical detail belongs in focused memory blocks, but the zeitgeist needs enough texture to be useful. Don't strip out philosophy, observation, or user patterns just to save characters
+- **Curate, don't compress** — the goal is to maintain a living document, not to hit a minimum character count
+
+If there are new patterns, shifts, or completed arcs since the last cycle, weave them in. If the zeitgeist has been stable, a light touch is fine — but don't let it atrophy into a skeleton.
 
 After updating the zeitgeist, wait for the next phase trigger.`;
 
 // Appended to the Phase 3 trigger when the current zeitgeist is already over
-// the archival threshold — turns a guess-based hint into a concrete directive.
-const ZEITGEIST_ARCHIVE_DIRECTIVE = `**Archive first.** The current zeitgeist is over ${ZEITGEIST_ARCHIVE_THRESHOLD} characters. Before rewriting it, snapshot the existing content into a new block named \`Zeitgeist Archive - YYYY-MM-DD\` (use \`create_memory_block\` with \`scope="archived"\`), then replace \`blk-zeitgeist-continuity\` content with a trimmed, current-tense narrative.`;
+// the archival threshold (80% of maxBlockChars) — turns a guess-based hint
+// into a concrete directive.
+function zeitgeistArchiveDirective(threshold: number): string {
+  return `**Archive first.** The current zeitgeist is over ${threshold.toLocaleString()} characters. Before rewriting it, snapshot the existing content into a new block named \`Zeitgeist Archive - YYYY-MM-DD\` (use \`create_memory_block\` with \`scope="archived"\`), then replace \`blk-zeitgeist-continuity\` with a fresh narrative that carries the living threads forward.`;
+}
 
 const SYNTHESIS_PHASE4_INSTRUCTIONS = `## Phase 4: Reflections
 
@@ -735,17 +743,23 @@ async function buildPhaseTrigger(
 }
 
 // Measure the current zeitgeist and append an archive directive only when
-// the block is actually over threshold. Avoids making the agent guess.
+// the block is actually over threshold. Threshold is 80% of the configured
+// maxBlockChars setting, so it scales with the user's limit and triggers
+// archival proactively before hitting the hard cap.
 async function buildZeitgeistPhase3Trigger(
   phase3Instructions = SYNTHESIS_PHASE3_INSTRUCTIONS,
 ): Promise<string> {
   const { getZeitgeistContent } = await import("./zeitgeist.js");
+  const { getMaxBlockChars } = await import("./memory-storage.js");
+
   const content = getZeitgeistContent() ?? "";
   const charCount = content.length;
-  const statusLine = `Current zeitgeist: ${charCount.toLocaleString()} characters.`;
+  const maxBlockChars = await getMaxBlockChars();
+  const threshold = Math.floor(maxBlockChars * 0.8);
+  const statusLine = `Current zeitgeist: ${charCount.toLocaleString()} characters (threshold: ${threshold.toLocaleString()}).`;
 
-  if (charCount > ZEITGEIST_ARCHIVE_THRESHOLD) {
-    return [phase3Instructions, statusLine, ZEITGEIST_ARCHIVE_DIRECTIVE].join("\n\n");
+  if (charCount > threshold) {
+    return [phase3Instructions, statusLine, zeitgeistArchiveDirective(threshold)].join("\n\n");
   }
   return [phase3Instructions, statusLine].join("\n\n");
 }
