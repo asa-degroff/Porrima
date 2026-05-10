@@ -1816,6 +1816,7 @@ async function handleChatStream(
                     console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after end-of-turn compaction`);
                   }
                 }
+                setCachedAugmentedPrompt(chat.id, systemPrompt);
 
                 // Find the summary message that was inserted. Emit AFTER the
                 // systemPrompt rebuild so the estimate reflects the prompt the
@@ -2203,7 +2204,15 @@ async function handleChatStream(
             chat.messages, chat.id, chat.projectId, chat.type, projectPath
           );
           systemPrompt = split.systemPrompt;
+          if (chat.activeSkills?.length) {
+            const skillsCache = new Map<string, Skill>();
+            const allSkills = await discoverSkills(chat.projectId);
+            for (const s of allSkills) skillsCache.set(s.name, s);
+            systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+            console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after mid-turn compaction`);
+          }
         }
+        setCachedAugmentedPrompt(chat.id, systemPrompt);
       });
       if (compactionAborted) break;
 
@@ -2233,6 +2242,18 @@ async function handleChatStream(
       if (resumeEndIndex === 0 && chat.messages.length > 0) {
         resumeEndIndex = 1; // Keep at least the first user message
       }
+
+      // Mark compaction summaries out-of-context BEFORE reconstructing the
+      // live resume prompt. Otherwise the active llama.cpp slot is filled with
+      // a prompt containing the summary, while persisted replay skips it on the
+      // next user turn. That post-compaction replay drift causes a large LCP
+      // miss even though the slot was never evicted.
+      for (const m of chat.messages) {
+        if (m._isCompactionSummary && !m._outOfContext) {
+          m._outOfContext = true;
+        }
+      }
+
       const messagesForResume = chat.messages.slice(0, resumeEndIndex);
       const resumeMessages = chatMessagesToPiMessages(messagesForResume, chat.modelId, activeAssistantIdentity);
 
@@ -2244,14 +2265,6 @@ async function handleChatStream(
       // Without this, reconstruction places compaction summaries at a position
       // where the cache has the transient handoff, breaking KV cache prefix
       // matching and forcing a 66K+ token reprocess on the next turn.
-      //
-      // Also mark any compaction summaries as out-of-context — the handoff
-      // plus rebuilt frozen memories already capture the pre-compaction state.
-      for (const m of chat.messages) {
-        if (m._isCompactionSummary && !m._outOfContext) {
-          m._outOfContext = true;
-        }
-      }
       chat.messages.splice(resumeEndIndex, 0, {
         role: "user",
         content: handoffText,
