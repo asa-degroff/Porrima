@@ -14,6 +14,7 @@ interface Props {
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   onWarmCache?: (chatId: string) => void;
   cacheWarming?: boolean;
+  cacheWarmError?: string;
 }
 
 function formatCacheResidencyTitle(residency?: CacheResidency | null): string | undefined {
@@ -30,7 +31,7 @@ function formatCacheResidencyTitle(residency?: CacheResidency | null): string | 
   return parts.join(" - ");
 }
 
-export function ChatListItem({ chat, active, lastActive = false, cacheResidency, onSelect, onDelete, onSendToNotebook, onWarmCache, cacheWarming = false }: Props) {
+export function ChatListItem({ chat, active, lastActive = false, cacheResidency, onSelect, onDelete, onSendToNotebook, onWarmCache, cacheWarming = false, cacheWarmError }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -72,6 +73,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
   }, []);
   const cacheTitle = formatCacheResidencyTitle(cacheResidency);
   const effectiveCacheWarming = cacheWarming || cacheResidency?.status === "warming";
+  const effectiveTitle = cacheWarmError ? `Cache warm failed: ${cacheWarmError}` : cacheTitle;
 
   const handleWarm = useCallback(() => {
     setContextMenu(null);
@@ -95,7 +97,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
               ? "border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
               : "border-transparent"
       }`}
-      title={cacheTitle}
+      title={effectiveTitle}
     >
       {/* Always-rendered content to maintain consistent height */}
       <div className={`min-w-0 ${confirmDelete ? "invisible" : ""}`}>
@@ -141,8 +143,21 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
         </div>
       )}
 
+      {cacheWarmError && !effectiveCacheWarming && !confirmDelete && (
+        <div
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-red-300/80"
+          title={`Cache warm failed: ${cacheWarmError}`}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 8v5" />
+            <path d="M12 17h.01" />
+          </svg>
+        </div>
+      )}
+
       {/* Hover action — warm cache for agent chats, delete for others — desktop only */}
-      {!confirmDelete && !effectiveCacheWarming && (
+      {!confirmDelete && !effectiveCacheWarming && !cacheWarmError && (
         <div
           onClick={(e) => {
             e.stopPropagation();
@@ -152,7 +167,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
               handleDeleteClick(e);
             }
           }}
-          className={`absolute right-0 top-0 bottom-0 flex items-center pr-2.5 pl-6 rounded-r-xl opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hidden md:flex bg-gradient-to-l from-[rgba(255,255,255,0.15)] via-[rgba(255,255,255,0.15)] to-transparent`}
+          className={`absolute right-0 top-0 bottom-0 flex items-center pr-2.5 pl-6 rounded-r-xl opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hidden md:flex`}
           title={chat.type === "agent" ? "Warm cache" : "Delete chat"}
         >
           <div className={`transition-colors p-0.5 ${chat.type === "agent" ? "text-white/30 hover:text-[rgba(var(--theme-accent),0.8)]" : "text-white/30 hover:text-red-400"}`}>

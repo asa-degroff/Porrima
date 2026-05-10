@@ -110,6 +110,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [isWakeCycleRunning, setIsWakeCycleRunning] = useState(false);
   const [isAutomationRunning, setIsAutomationRunning] = useState(false);
   const [cacheWarmingChatIds, setCacheWarmingChatIds] = useState<Set<string>>(() => new Set());
+  const [cacheWarmErrors, setCacheWarmErrors] = useState<Map<string, string>>(() => new Map());
 
   // Load UI state from server on mount
   // Priority: URL ?chat= param > server state > localStorage
@@ -729,6 +730,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   }, [createUserEntry, updateEntry]);
 
   const handleWarmCache = useCallback(async (chatId: string) => {
+    setCacheWarmErrors((prev) => {
+      if (!prev.has(chatId)) return prev;
+      const next = new Map(prev);
+      next.delete(chatId);
+      return next;
+    });
     setCacheWarmingChatIds((prev) => {
       if (prev.has(chatId)) return prev;
       const next = new Set(prev);
@@ -744,10 +751,24 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         const speed = ms > 0 ? (tokens / (ms / 1000)).toFixed(0) : "—";
         console.log(`[cache-warm] ${chatId}: warmed ${tokens} tokens in ${ms}ms (~${speed} t/s)`);
       } else {
-        console.warn(`[cache-warm] ${chatId}: ${result.error || "warm failed"}`);
+        throw new Error(result.error || "Cache warm failed");
       }
     } catch (e: any) {
+      const message = e?.message || "Cache warm failed";
       console.error("[cache-warm] failed:", e);
+      setCacheWarmErrors((prev) => {
+        const next = new Map(prev);
+        next.set(chatId, message);
+        return next;
+      });
+      window.setTimeout(() => {
+        setCacheWarmErrors((prev) => {
+          if (prev.get(chatId) !== message) return prev;
+          const next = new Map(prev);
+          next.delete(chatId);
+          return next;
+        });
+      }, 15_000);
     } finally {
       setCacheWarmingChatIds((prev) => {
         if (!prev.has(chatId)) return prev;
@@ -799,6 +820,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onSendToNotebook={handleSendToNotebook}
         onWarmCache={handleWarmCache}
         cacheWarmingChatIds={cacheWarmingChatIds}
+        cacheWarmErrors={cacheWarmErrors}
         onOpenSettings={handleOpenSettings}
         onOpenMemoryDebug={() => setMemoryDebugOpen(true)}
         onOpenModelStats={() => setModelStatsOpen(true)}

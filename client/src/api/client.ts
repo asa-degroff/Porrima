@@ -1920,7 +1920,11 @@ export async function warmCache(chatId: string, reason: "user-requested" | "slee
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Cache warm failed (${res.status})`);
   }
-  return res.json();
+  const result = await res.json();
+  if (!result.warmed) {
+    throw new Error(result.error || "Cache warm failed");
+  }
+  return result;
 }
 
 export interface CacheResidencyRecord {

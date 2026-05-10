@@ -80,6 +80,14 @@ export function compareWithWarmPrompt(input: Omit<PromptSnapshot, "kind" | "crea
     return;
   }
 
+  if (current.prompt.startsWith(warm.prompt)) {
+    console.log(
+      `[prompt-debug] chat=${input.chatId} chat ${snapshotSummary(current)} ` +
+      `warm_prompt=${warm.promptDigest} prefix_match=true extra_chars=${current.prompt.length - warm.prompt.length}`,
+    );
+    return;
+  }
+
   const diff = firstDiffIndex(warm.prompt, current.prompt);
   const warmChar = diff >= 0 && diff < warm.prompt.length ? JSON.stringify(warm.prompt[diff]) : "<eof>";
   const chatChar = diff >= 0 && diff < current.prompt.length ? JSON.stringify(current.prompt[diff]) : "<eof>";

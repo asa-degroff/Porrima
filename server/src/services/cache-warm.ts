@@ -11,6 +11,7 @@
  *  2. Sleep pre-warm: system chat warms before entering sleep mode
  */
 
+import { randomUUID } from "crypto";
 import { getChat, getProject, getSettings } from "./chat-storage.js";
 import { chatMessagesToPiMessages } from "./agent.js";
 import type { ReplayModelIdentity } from "./agent.js";
@@ -104,6 +105,8 @@ const NOOP_TOOL_EFFECTS: ToolSideEffects = {
   onVisual: () => {},
   onAskUser: () => {},
 };
+
+const CACHE_WARM_SENTINEL_PREFIX = "__quje_cache_warm_next_user_";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -336,6 +339,47 @@ function estimateRequestChars(body: any): number {
   }
 }
 
+interface TemplateRenderPlan {
+  body: any;
+  mode: "exact" | "next-user-prefix";
+  sentinel?: string;
+}
+
+function buildTemplateRenderPlan(body: any): TemplateRenderPlan {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const lastRole = messages[messages.length - 1]?.role;
+  if (lastRole !== "assistant") {
+    return { body, mode: "exact" };
+  }
+
+  const sentinel = `${CACHE_WARM_SENTINEL_PREFIX}${randomUUID().replace(/-/g, "")}__`;
+  return {
+    body: {
+      ...body,
+      messages: [
+        ...messages,
+        {
+          role: "user",
+          content: sentinel,
+        },
+      ],
+    },
+    mode: "next-user-prefix",
+    sentinel,
+  };
+}
+
+function extractWarmPromptFromRenderedTemplate(renderedPrompt: string, plan: TemplateRenderPlan): string {
+  if (plan.mode === "exact") return renderedPrompt;
+
+  const sentinelIndex = renderedPrompt.indexOf(plan.sentinel!);
+  if (sentinelIndex < 0) {
+    throw new Error("/apply-template rendered next-user sentinel was not found");
+  }
+
+  return renderedPrompt.slice(0, sentinelIndex);
+}
+
 // ---------------------------------------------------------------------------
 // Main warm function
 // ---------------------------------------------------------------------------
@@ -413,16 +457,27 @@ export async function warmChatCache(
 
     // 5. Apply chat template with the exact same provider-converted body that
     // the real llama.cpp OpenAI-compatible request uses.
-    console.log(`[cache-warm] applying template for ${normalizedModelId}, kwargs:`, body.chat_template_kwargs ?? {});
+    const renderPlan = buildTemplateRenderPlan(body);
+    console.log(
+      `[cache-warm] applying template for ${normalizedModelId}, mode=${renderPlan.mode}, kwargs:`,
+      body.chat_template_kwargs ?? {},
+    );
     console.log(
       `[cache-warm] last message role: ${body.messages?.[body.messages.length - 1]?.role}, ` +
       `content length: ${String(body.messages?.[body.messages.length - 1]?.content).length}, ` +
       `tools=${body.tools?.length ?? 0} payload=${promptPayloadDigest}`,
     );
-    const formattedPrompt = await applyChatTemplate(baseUrl, body, {
+    const renderedPrompt = await applyChatTemplate(baseUrl, renderPlan.body, {
       signal: options.signal,
     });
+    const formattedPrompt = extractWarmPromptFromRenderedTemplate(renderedPrompt, renderPlan);
     const promptDigest = digestPromptText(formattedPrompt);
+    if (renderPlan.mode === "next-user-prefix") {
+      console.log(
+        `[cache-warm] rendered next-user prefix: rendered_chars=${renderedPrompt.length} ` +
+        `warm_chars=${formattedPrompt.length}`,
+      );
+    }
     recordWarmPromptSnapshot({
       chatId,
       modelId: normalizedModelId,
