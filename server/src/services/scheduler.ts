@@ -345,6 +345,41 @@ async function checkAndRunDelayedExtractions() {
 }
 
 // ---------------------------------------------------------------------------
+// Llama.cpp PID Monitoring (detect server restarts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Periodically checks the PID of each configured llama.cpp server.
+ * When a PID changes, the server has restarted and the KV cache is gone.
+ * We clear all stale cache residency records so the UI stops showing
+ * false "warm cache" indicators for dead entries.
+ */
+async function checkLlamaServerPids(): Promise<void> {
+  try {
+    const { getSettings } = await import("./chat-storage.js");
+    const { getLlamaServerStatuses } = await import("./llama-supervisor.js");
+    const settings = await getSettings();
+    const statuses = await getLlamaServerStatuses(settings);
+
+    for (const status of statuses) {
+      if (status.systemd.mainPid != null && status.http.status === "ok") {
+        // getLlamaServerStatuses already calls checkLlamaServerRestart
+        // via the integration point in llama-supervisor.ts, but we also
+        // check here as a belt-and-suspenders measure
+        try {
+          const { checkLlamaServerRestart } = await import("./llama-cache-residency.js");
+          checkLlamaServerRestart(status.url, status.systemd.mainPid);
+        } catch {
+          // Non-fatal
+        }
+      }
+    }
+  } catch (e) {
+    // Non-fatal — PID tracking is best-effort
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Scheduler Startup
 // ---------------------------------------------------------------------------
 
@@ -371,7 +406,11 @@ export function startScheduler(): void {
   // Check every 30 minutes for corpus enrichment
   setInterval(checkAndRunEnrichment, ENRICHMENT_CHECK_INTERVAL_MS);
   
-  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, enrichment every 30min)");
+  // Check llama.cpp server PIDs every 30 seconds to detect restarts and clear
+  // stale cache residency records. The KV cache is process-local — when the
+  // process dies and restarts, the old residency data is no longer valid.
+  setInterval(checkLlamaServerPids, 30_000);
+  console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, enrichment every 30min, llama PID check every 30s)");
 
   // Start Bluesky poller if enabled
   startBlueskyPoller();

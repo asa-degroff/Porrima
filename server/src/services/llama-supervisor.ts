@@ -303,6 +303,16 @@ export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaS
         resolveSystemdUnit(def),
         getHttpStatus(url),
       ]);
+      // Detect llama.cpp server restarts — when the PID changes, the KV cache
+      // is wiped and any in-memory residency tracking becomes stale.
+      if (unit.systemd.mainPid != null && http.status === "ok") {
+        try {
+          const { checkLlamaServerRestart } = await import("./llama-cache-residency.js");
+          checkLlamaServerRestart(url, unit.systemd.mainPid);
+        } catch {
+          // Non-fatal — residency tracking will self-correct over time
+        }
+      }
       const override = await getOverrideInfo(unit.unitName);
       return {
         id: def.id,

@@ -54,6 +54,69 @@ const PARTIAL_HIT_THRESHOLD = 0.5;
 const MAX_RECORDS = 256; // global cap to prevent unbounded growth
 
 const records = new Map<string, LlamaCacheResidencyRecord>();
+// Track the llama.cpp server PID per baseUrl. When the PID changes,
+// the KV cache is gone and all residency records become stale.
+const serverPids = new Map<string, number>();
+
+/**
+ * Check if a llama.cpp server has restarted (PID changed) compared to the
+ * last known PID. If so, clears all residency records for that server and
+ * returns true. Call this whenever you have the current PID for a server.
+ */
+export function checkLlamaServerRestart(baseUrl: string, currentPid: number): boolean {
+  const normalized = normalizeBaseUrl(baseUrl);
+  const knownPid = serverPids.get(normalized);
+
+  if (knownPid !== undefined && knownPid !== currentPid) {
+    // PID changed — server restarted, KV cache wiped
+    let cleared = 0;
+    for (const [key, record] of records) {
+      if (normalizeBaseUrl(record.baseUrl) === normalized) {
+        records.delete(key);
+        cleared++;
+      }
+    }
+    serverPids.set(normalized, currentPid);
+    console.log(`[llama-cache-residency] server ${normalized} restarted (pid ${knownPid} → ${currentPid}), cleared ${cleared} stale records`);
+    return true;
+  }
+
+  if (knownPid === undefined) {
+    serverPids.set(normalized, currentPid);
+  }
+
+  return false;
+}
+
+/**
+ * Called when the app detects that a llama.cpp server has restarted
+ * (PID changed). Clears all residency records for that server's baseUrl,
+ * since the KV cache has been wiped.
+ */
+export function onLlamaServerRestart(baseUrl: string): void {
+  const normalized = normalizeBaseUrl(baseUrl);
+  let cleared = 0;
+  for (const [key, record] of records) {
+    if (normalizeBaseUrl(record.baseUrl) === normalized) {
+      records.delete(key);
+      cleared++;
+    }
+  }
+  serverPids.delete(normalized);
+  if (cleared > 0) {
+    console.log(`[llama-cache-residency] cleared ${cleared} stale records for ${normalized} (explicit restart)`);
+  }
+}
+
+/** Clear ALL residency records. Called at app startup in case the whole system rebooted. */
+export function clearAllLlamaCacheResidency(): void {
+  const count = records.size;
+  records.clear();
+  serverPids.clear();
+  if (count > 0) {
+    console.log(`[llama-cache-residency] cleared ${count} records on startup`);
+  }
+}
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");

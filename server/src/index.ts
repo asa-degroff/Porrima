@@ -198,6 +198,15 @@ if (isProd) {
   });
 }
 
+// Clear stale cache residency records on startup — if the system rebooted,
+// llama.cpp's KV cache is gone and any in-memory residency state is invalid.
+try {
+  const { clearAllLlamaCacheResidency } = await import("./services/llama-cache-residency.js");
+  clearAllLlamaCacheResidency();
+} catch {
+  // Non-fatal — residency tracking will work fine without startup cleanup
+}
+
 // Global error handler - must be after all routes
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error("Unhandled error:", err);
