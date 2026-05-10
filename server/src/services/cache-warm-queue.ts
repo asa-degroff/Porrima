@@ -11,6 +11,8 @@
  */
 
 import { isActive, waitForIdle } from "./llm-activity.js";
+import { isSynthesisActive, isWakeCycleActive } from "./system-chat.js";
+import { isAutomationActive } from "./automation-lock.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,10 +74,12 @@ export function enqueueWarm(
 }
 
 /**
- * Get the current queue depth (excluding the item currently running).
+ * Get the number of warm operations that are either running or queued.
+ * Used by the automation and wake cycle schedulers to avoid dispatching
+ * GPU-heavy work while a cache-warm prefill is in progress.
  */
 export function getQueueLength(): number {
-  return queue.length;
+  return queue.length + (mutex !== "idle" ? 1 : 0);
 }
 
 /**
@@ -137,6 +141,20 @@ async function drainQueue(): Promise<void> {
         drainQueue();
         return;
       }
+    }
+
+    // Don't start a warm while a synthesis, wake cycle, or automation is
+    // running — they use the same GPU slot and the warm would compete with
+    // (and be invalidated by) the automation's own inference.
+    if (isSynthesisActive() || isWakeCycleActive() || isAutomationActive()) {
+      console.log(
+        `[cache-warm-queue] deferring warm for ${job.chatId} — automation/synthesis/wake in progress`,
+      );
+      // Re-enqueue at the front and back off for a bit
+      queue.unshift(job);
+      mutex = "idle";
+      setTimeout(drainQueue, 30_000); // retry in 30s
+      return;
     }
 
     // Check if the job was aborted while we were waiting

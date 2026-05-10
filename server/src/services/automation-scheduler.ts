@@ -1,5 +1,6 @@
 import type { AutomationTask, Settings } from "../types.js";
 import { hasActiveChats } from "./memory-extraction.js";
+import { getQueueLength } from "./cache-warm-queue.js";
 import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js";
 import { getSettings } from "./chat-storage.js";
 import { getMemoryCount } from "./memory-storage.js";
@@ -75,6 +76,15 @@ export async function checkAndRunDueAutomations(): Promise<void> {
     }
     if (hasActiveChats()) {
       console.log("[automation] Skipping check — active chat(s) in progress");
+      return;
+    }
+
+    // Don't dispatch new automations while a cache-warm is in progress —
+    // both need the GPU and a cache-warm prefilling the same context the
+    // automation is about to use is pure waste (the cache can't be used anyway
+    // because the automation will invalidate it with new messages).
+    if (getQueueLength() > 0) {
+      console.log("[automation] Skipping check — cache-warm queue busy");
       return;
     }
 

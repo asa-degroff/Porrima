@@ -10,6 +10,7 @@ import { getDb, getSettings, saveSettings, createChat, findBlueskyChatId } from 
 import { getLastWakeCycleAt } from "./memory-storage.js";
 import { v4 as uuidv4 } from "uuid";
 import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
+import { getQueueLength } from "./cache-warm-queue.js";
 import { getBlueskyPoller } from "./bluesky-poller.js";
 import { BLUESKY_SYSTEM_PROMPT } from "../routes/bluesky.js";
 import { enrichCorpusBatch } from "./image-corpus.js";
@@ -194,6 +195,14 @@ async function checkAndRunWakeCycle() {
     // Don't overlap with a running wake cycle
     if (isWakeCycleActive()) {
       console.log("[scheduler] Skipping wake cycle — wake cycle already running");
+      return;
+    }
+
+    // Don't start a wake cycle while a cache-warm is in progress — the
+    // wake would compete for the same GPU slot and prefill the same context
+    // the cache-warm is already filling.
+    if (getQueueLength() > 0) {
+      console.log("[scheduler] Skipping wake cycle — cache-warm queue busy");
       return;
     }
     
