@@ -979,9 +979,10 @@ export async function runSystemSynthesis(options?: {
     }
 
     // -------------------------------------------------------------------
-    // Per-phase execution — each phase runs as its own headless turn so
-    // chat history shows triggers and responses interleaved instead of a
-    // single monolithic assistant message after all four triggers.
+    // Per-phase execution — each phase runs as its own headless turn with
+    // skipMessagePersistence so the same emitter accumulates all phases.
+    // A single combined assistant message is built and persisted after all
+    // phases complete, avoiding duplicated segments in chat history.
     // -------------------------------------------------------------------
     const MAX_ITERATIONS_PER_PHASE = 12;
     const allToolCalls: ToolCall[] = [];
@@ -1036,6 +1037,7 @@ export async function runSystemSynthesis(options?: {
         keepAlive: '90m',
         logPrefix: `system-chat:synthesis:${PHASE_ORDER[phase]}`,
         saveChat,
+        skipMessagePersistence: true,
         summarize: (state) =>
           state.textSummary ||
           `*Phase ${PHASE_ORDER[phase]} produced no visible output.*`,
@@ -1097,13 +1099,32 @@ export async function runSystemSynthesis(options?: {
     }
 
     const summary = allText || `# Daily Synthesis\n\n*The model produced no visible output this cycle (stopReason=${stopReason}, thinking=${thinkLen}ch, tools=${allToolCalls.length}).*`;
-    const assistantChatMsg = finalAssistantMsg || {
-      role: 'assistant' as const,
-      content: summary,
-      timestamp: Date.now(),
-      _isSystemMessage: true,
-      _isSynthesisMessage: true,
-    };
+
+    // Build a single combined assistant message from the emitter's accumulated
+    // state. All phases streamed into the same emitter, so segments, toolCalls,
+    // etc. reflect the complete synthesis run — no duplication.
+    const combinedMsg = emitter.buildAssistantMessage(thinking, textSummary);
+    if (finalAssistantMsg) {
+      combinedMsg._api = finalAssistantMsg._api;
+      combinedMsg._provider = finalAssistantMsg._provider;
+      combinedMsg._model = finalAssistantMsg._model;
+    }
+    combinedMsg.timestamp = Date.now();
+    combinedMsg._isSynthesisMessage = true;
+    combinedMsg._isAutomationMessage = true;
+    if (options?.automationTaskId) {
+      combinedMsg._automationTaskId = options.automationTaskId;
+    }
+    if (options?.automationRunId) {
+      combinedMsg._automationRunId = options.automationRunId;
+    }
+    chat.messages.push(combinedMsg);
+    await saveChat(chat);
+    const assistantMessageIdx = chat.messages.length - 1;
+
+    // Emit done once for the combined message so clients can close their streams.
+    emitter.emitDone(combinedMsg, iterations);
+    const assistantChatMsg = combinedMsg;
 
     await refreshSystemChatTitle(
       chat,

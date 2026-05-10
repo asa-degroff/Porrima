@@ -37,6 +37,11 @@ export interface HeadlessChatTurnOptions {
   getFollowUp?: (state: HeadlessTurnState) => Promise<HeadlessFollowUp | null>;
   summarize?: (state: HeadlessTurnState) => string;
   decorateAssistantMessage?: (message: ChatMessage, state: HeadlessTurnState) => ChatMessage;
+  /** When true, the caller is responsible for building and persisting the final
+   * assistant message. The turn still returns the message in the result but
+   * does NOT push it to chat.messages, save, or emit `done`. Used by multi-phase
+   * synthesis to combine all phases into a single chat message. */
+  skipMessagePersistence?: boolean;
 }
 
 export interface HeadlessChatTurnResult extends HeadlessTurnState {
@@ -304,10 +309,17 @@ export async function runHeadlessChatTurn(
   assistantMessage._provider = replayIdentity.provider;
   assistantMessage._model = replayIdentity.model;
 
-  chat.messages.push(assistantMessage);
-  await saveChat(chat);
-  const assistantMessageIndex = chat.messages.length - 1;
-  emitter.emitDone(assistantMessage, iterations);
+  let assistantMessageIndex = -1;
+  if (options.skipMessagePersistence) {
+    // Caller owns persistence — don't push/save/emit-done here.
+    // The emitter's state (segments, toolCalls, etc.) continues accumulating
+    // across phases and will be captured by the caller's single final message.
+  } else {
+    chat.messages.push(assistantMessage);
+    await saveChat(chat);
+    assistantMessageIndex = chat.messages.length - 1;
+    emitter.emitDone(assistantMessage, iterations);
+  }
 
   const stopReasonText = String(stopReason);
   const producedNothing =
