@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 
 interface PrefillActivityIconProps {
   className?: string;
+  colorClass?: string;
 }
 
-export function PrefillActivityIcon({ className = "" }: PrefillActivityIconProps) {
+export function PrefillActivityIcon({ className = "", colorClass = "bg-accent-text" }: PrefillActivityIconProps) {
   const [lineStates, setLineStates] = useState<Array<"empty" | "filling" | "full">>(["empty", "empty", "empty"]);
   const [shifting, setShifting] = useState(false);
   const fillRef = useRef<number | null>(null);
@@ -65,10 +66,11 @@ export function PrefillActivityIcon({ className = "" }: PrefillActivityIconProps
             return (
               <div
                 key={i}
-                className="absolute left-0 h-[1.5px] rounded-full bg-amber-200/80"
+                className="absolute left-0 h-[1.5px] rounded-full"
                 style={{
                   top,
                   width,
+                  backgroundColor: `rgba(var(--theme-accent), 0.7)`,
                   animation: isFilling
                     ? `prefill-fill ${fillMs}ms cubic-bezier(0.4, 0, 0.2, 1) forwards`
                     : "none",
