@@ -179,6 +179,9 @@ router.post("/synthesis/run", async (_req, res) => {
 // the scheduler runs synthesis and wake cycles on their normal schedule.
 // The 2h cooldown prevents the periodic synthesis from double-firing right after release.
 //
+// Also enqueues a sleep-prewarm for the system chat so the next synthesis/wake
+// cycle starts fast. Fire-and-forget — doesn't block the 202 response.
+//
 // Returns 202 immediately to survive proxy idle timeouts.
 router.post("/synthesis/sleep", async (_req, res) => {
   try {
@@ -186,6 +189,16 @@ router.post("/synthesis/sleep", async (_req, res) => {
     const settings = await getSettings();
     settings.sleepModeTriggeredAt = new Date().toISOString();
     await saveSettings(settings);
+
+    // Fire-and-forget sleep prewarm for system chat
+    try {
+      const { enqueueWarm } = await import("../services/cache-warm-queue.js");
+      enqueueWarm("system", "sleep-prewarm").catch((e: any) => {
+        console.warn("[sleep] Sleep prewarm failed:", e.message);
+      });
+    } catch (e: any) {
+      console.warn("[sleep] Failed to enqueue sleep prewarm:", e.message);
+    }
 
     res.status(202).json({ started: true, sleepModeTriggeredAt: settings.sleepModeTriggeredAt });
   } catch (e: any) {
