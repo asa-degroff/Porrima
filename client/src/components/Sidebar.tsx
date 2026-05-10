@@ -122,8 +122,9 @@ function RecentChatItem({
   const colorClass = colorClasses[color] || colorClasses.purple;
   const cacheTitle = formatCacheResidencyTitle(cacheResidency);
   const effectiveCacheWarming = cacheWarming || cacheResidency?.status === "warming";
+  const isQueued = cacheResidency?.queuePosition !== undefined && cacheResidency.queuePosition > 0;
   const effectiveTitle = cacheWarmError ? `Cache warm failed: ${cacheWarmError}` : cacheTitle;
-  
+
   return (
     <button
       onClick={onSelect}
@@ -146,12 +147,12 @@ function RecentChatItem({
           </p>
         </div>
       </div>
-      {effectiveCacheWarming && (
-        <div className="absolute right-2 top-1/2 -translate-y-1/2" title="Warming cache">
-          <PrefillActivityIcon />
+      {(effectiveCacheWarming || isQueued) && (
+        <div className="absolute right-2 top-1/2 -translate-y-1/2" title={isQueued ? "Cache warming queued" : "Warming cache"}>
+          <PrefillActivityIcon paused={isQueued} />
         </div>
       )}
-      {cacheWarmError && !effectiveCacheWarming && (
+      {cacheWarmError && !effectiveCacheWarming && !isQueued && (
         <div className="absolute right-2 top-1/2 -translate-y-1/2 text-red-300/80" title={`Cache warm failed: ${cacheWarmError}`}>
           <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10" />
