@@ -862,7 +862,7 @@ export function Sidebar({
                     }`}
                     title={warmError ? `Cache warm failed: ${warmError}` : undefined}
                   >
-                    <span className={`flex-1 truncate ${isWarming ? 'invisible' : ''}`}>{chat.title}</span>
+                    <span className="flex-1 truncate">{chat.title}</span>
 
                     {/* Warming animation */}
                     {isWarming && (
