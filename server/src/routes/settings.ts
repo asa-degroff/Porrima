@@ -165,8 +165,19 @@ router.get("/slot-assignments", async (_req, res) => {
 });
 
 // GET /api/settings/cache-residency - Observed llama.cpp prompt-cache residency.
-router.get("/cache-residency", (_req, res) => {
-  res.json(listLlamaCacheResidency());
+// Enriched with queue position for visual distinction between queued and actively warming.
+router.get("/cache-residency", async (_req, res) => {
+  try {
+    const { getQueuePosition } = await import("../services/cache-warm-queue.js");
+    const records = listLlamaCacheResidency();
+    const enriched = records.map((r) => ({
+      ...r,
+      queuePosition: getQueuePosition(r.chatId),
+    }));
+    res.json(enriched);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 export default router;

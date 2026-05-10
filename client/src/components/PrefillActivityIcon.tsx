@@ -3,9 +3,13 @@ import { useEffect, useRef, useState } from "react";
 interface PrefillActivityIconProps {
   className?: string;
   colorClass?: string;
+  /** When true, the animation is paused and shown semi-transparent.
+   *  Use for queued state — the icon is visible but frozen to indicate
+   *  "waiting your turn" rather than "actively warming". */
+  paused?: boolean;
 }
 
-export function PrefillActivityIcon({ className = "", colorClass = "bg-accent-text" }: PrefillActivityIconProps) {
+export function PrefillActivityIcon({ className = "", colorClass = "bg-accent-text", paused = false }: PrefillActivityIconProps) {
   const [lineStates, setLineStates] = useState<Array<"empty" | "filling" | "full">>(["empty", "empty", "empty"]);
   const [shifting, setShifting] = useState(false);
   const fillRef = useRef<number | null>(null);
@@ -17,6 +21,9 @@ export function PrefillActivityIcon({ className = "", colorClass = "bg-accent-te
   const shiftMs = 220;
 
   useEffect(() => {
+    // When paused, don't start the animation — show frozen state
+    if (paused) return;
+
     function runCycle() {
       setLineStates(["full", "full", "filling"]);
 
@@ -39,7 +46,10 @@ export function PrefillActivityIcon({ className = "", colorClass = "bg-accent-te
       if (shiftRef.current !== null) window.clearTimeout(shiftRef.current);
       if (cycleRef.current !== null) window.clearTimeout(cycleRef.current);
     };
-  }, []);
+  }, [paused]);
+
+  // For paused state, show a static mid-cycle appearance
+  const displayStates = paused ? ["full", "full", "full"] as const : lineStates;
 
   return (
     <>
@@ -51,16 +61,23 @@ export function PrefillActivityIcon({ className = "", colorClass = "bg-accent-te
           to { width: 100%; }
         }
       `}</style>
-      <div className={`relative w-3 overflow-hidden ${className}`} style={{ height: gap * 4 }}>
+      <div
+        className={`relative w-3 overflow-hidden ${className}`}
+        style={{
+          height: gap * 4,
+          opacity: paused ? 0.35 : 1,
+          transition: "opacity 0.2s ease",
+        }}
+      >
         <div
           className="absolute top-0 left-0 right-0"
           style={{
-            animation: shifting ? `prefill-shift ${shiftMs}ms cubic-bezier(0.4, 0, 0.2, 1) forwards` : "none",
+            animation: paused ? "none" : (shifting ? `prefill-shift ${shiftMs}ms cubic-bezier(0.4, 0, 0.2, 1) forwards` : "none"),
           }}
         >
-          {lineStates.map((state, i) => {
+          {displayStates.map((state, i) => {
             const top = gap * (i + 1);
-            const isFilling = state === "filling";
+            const isFilling = state === "filling" && !paused;
             const isFull = state === "full";
             const width = isFull ? "100%" : "0%";
             return (
@@ -70,7 +87,7 @@ export function PrefillActivityIcon({ className = "", colorClass = "bg-accent-te
                 style={{
                   top,
                   width,
-                  backgroundColor: `rgba(var(--theme-accent), 0.7)`,
+                  backgroundColor: `rgba(var(--theme-accent), ${paused ? 0.5 : 0.7})`,
                   animation: isFilling
                     ? `prefill-fill ${fillMs}ms cubic-bezier(0.4, 0, 0.2, 1) forwards`
                     : "none",

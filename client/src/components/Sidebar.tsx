@@ -848,7 +848,9 @@ export function Sidebar({
             <div className="px-1 pb-1">
               {systemChats.map((chat) => {
                 const isLastActive = chat.id === lastActiveChatId;
-                const isWarming = cacheWarmingChatIds.has(chat.id) || cacheResidency.get(chat.id)?.status === "warming";
+                const cr = cacheResidency.get(chat.id);
+                const isWarming = cacheWarmingChatIds.has(chat.id) || cr?.status === "warming";
+                const isQueued = cr?.queuePosition !== undefined && cr.queuePosition > 0;
                 const warmError = cacheWarmErrors?.get(chat.id);
                 return (
                   <button
@@ -864,15 +866,15 @@ export function Sidebar({
                   >
                     <span className="flex-1 truncate">{chat.title}</span>
 
-                    {/* Warming animation */}
-                    {isWarming && (
-                      <div className="shrink-0 pointer-events-none" title="Warming cache">
-                        <PrefillActivityIcon />
+                    {/* Warming animation (active or queued) */}
+                    {(isWarming || isQueued) && (
+                      <div className="shrink-0 pointer-events-none" title={isQueued ? "Cache warming queued" : "Warming cache"}>
+                        <PrefillActivityIcon paused={isQueued} />
                       </div>
                     )}
 
                     {/* Error indicator */}
-                    {warmError && !isWarming && (
+                    {warmError && !isWarming && !isQueued && (
                       <div className="shrink-0 text-red-300/80" title={`Cache warm failed: ${warmError}`}>
                         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
                           <circle cx="12" cy="12" r="10" />
@@ -883,11 +885,11 @@ export function Sidebar({
                     )}
 
                     {/* Hover warm action — desktop only */}
-                    {!isWarming && (
+                    {!isWarming && !isQueued && (
                       <div
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (!isWarming) onWarmCache?.(chat.id);
+                          onWarmCache?.(chat.id);
                         }}
                         title="Warm cache"
                         className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"

@@ -73,6 +73,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
   }, []);
   const cacheTitle = formatCacheResidencyTitle(cacheResidency);
   const effectiveCacheWarming = cacheWarming || cacheResidency?.status === "warming";
+  const isQueued = cacheResidency?.queuePosition !== undefined && cacheResidency.queuePosition > 0;
   const effectiveTitle = cacheWarmError ? `Cache warm failed: ${cacheWarmError}` : cacheTitle;
 
   const handleWarm = useCallback(() => {
@@ -134,16 +135,16 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
         </div>
       )}
 
-      {effectiveCacheWarming && !confirmDelete && (
+      {(effectiveCacheWarming || isQueued) && !confirmDelete && (
         <div
           className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-          title="Warming cache"
+          title={isQueued ? "Cache warming queued" : "Warming cache"}
         >
-          <PrefillActivityIcon />
+          <PrefillActivityIcon paused={isQueued} />
         </div>
       )}
 
-      {cacheWarmError && !effectiveCacheWarming && !confirmDelete && (
+      {cacheWarmError && !effectiveCacheWarming && !isQueued && !confirmDelete && (
         <div
           className="absolute right-2.5 top-1/2 -translate-y-1/2 text-red-300/80"
           title={`Cache warm failed: ${cacheWarmError}`}
@@ -157,12 +158,12 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
       )}
 
       {/* Hover action — warm cache for agent chats, delete for others — desktop only */}
-      {!confirmDelete && !effectiveCacheWarming && !cacheWarmError && (
+      {!confirmDelete && !effectiveCacheWarming && !isQueued && !cacheWarmError && (
         <div
           onClick={(e) => {
             e.stopPropagation();
             if (chat.type === "agent" && onWarmCache) {
-              if (!effectiveCacheWarming) onWarmCache(chat.id);
+              onWarmCache(chat.id);
             } else {
               handleDeleteClick(e);
             }

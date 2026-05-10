@@ -79,11 +79,20 @@ export function getQueueLength(): number {
 }
 
 /**
+ * Get the queue position for a specific chat.
+ * Returns 0 if actively warming, 1+ if queued, -1 if not in queue.
+ */
+export function getQueuePosition(chatId: string): number {
+  if (mutex !== "idle" && mutex.chatId === chatId) return 0;
+  const idx = queue.findIndex((job) => job.chatId === chatId);
+  return idx >= 0 ? idx + 1 : -1;
+}
+
+/**
  * Check if a specific chat is currently being warmed or queued.
  */
 export function isChatWarming(chatId: string): boolean {
-  if (mutex !== "idle" && mutex.chatId === chatId) return true;
-  return queue.some((job) => job.chatId === chatId);
+  return getQueuePosition(chatId) >= 0;
 }
 
 /**

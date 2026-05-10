@@ -1628,6 +1628,8 @@ export interface CacheResidency {
   promptMs?: number;
   phase?: string;
   iteration?: number;
+  /** Queue position: 0 = actively warming, 1+ = queued, -1 = not in queue */
+  queuePosition?: number;
 }
 
 export async function getCacheResidency(): Promise<CacheResidency[]> {
