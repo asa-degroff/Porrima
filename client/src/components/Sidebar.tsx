@@ -26,6 +26,7 @@ interface Props {
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   onWarmCache?: (chatId: string) => void;
   cacheWarmingChatIds?: Set<string>;
+  cacheWarmErrors?: Map<string, string>;
   onOpenSettings: () => void;
   onOpenMemoryDebug?: () => void;
   onOpenModelStats?: () => void;
@@ -94,6 +95,7 @@ function RecentChatItem({
   onSelect,
   color = "purple",
   cacheWarming = false,
+  cacheWarmError,
 }: {
   chat: ChatListItemType;
   active: boolean;
@@ -102,6 +104,7 @@ function RecentChatItem({
   onSelect: () => void;
   color?: "purple" | "blue" | "emerald" | "amber" | "rose" | "cyan" | "violet" | "orange" | "pink" | "teal";
   cacheWarming?: boolean;
+  cacheWarmError?: string;
 }) {
   const colorClasses: Record<string, string> = {
     purple: "text-purple-300/60 border-purple-400/20",
@@ -119,6 +122,7 @@ function RecentChatItem({
   const colorClass = colorClasses[color] || colorClasses.purple;
   const cacheTitle = formatCacheResidencyTitle(cacheResidency);
   const effectiveCacheWarming = cacheWarming || cacheResidency?.status === "warming";
+  const effectiveTitle = cacheWarmError ? `Cache warm failed: ${cacheWarmError}` : cacheTitle;
   
   return (
     <button
@@ -132,7 +136,7 @@ function RecentChatItem({
               ? "hover:bg-white/8 border border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
               : `hover:bg-white/8 border ${colorClass.split(" ")[1]}`
       }`}
-      title={cacheTitle}
+      title={effectiveTitle}
     >
       <div className="flex items-start gap-2 min-w-0">
         <span className={`text-[10px] shrink-0 mt-0.5 ${colorClass.split(" ")[0]}`}>●</span>
@@ -145,6 +149,15 @@ function RecentChatItem({
       {effectiveCacheWarming && (
         <div className="absolute right-2 top-1/2 -translate-y-1/2" title="Warming cache">
           <PrefillActivityIcon />
+        </div>
+      )}
+      {cacheWarmError && !effectiveCacheWarming && (
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 text-red-300/80" title={`Cache warm failed: ${cacheWarmError}`}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 8v5" />
+            <path d="M12 17h.01" />
+          </svg>
         </div>
       )}
     </button>
@@ -166,6 +179,7 @@ function ProjectSection({
   onSendToNotebook,
   onWarmCache,
   cacheWarmingChatIds,
+  cacheWarmErrors,
   lastActiveChatId,
   cacheResidency,
 }: {
@@ -183,6 +197,7 @@ function ProjectSection({
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   onWarmCache?: (chatId: string) => void;
   cacheWarmingChatIds?: Set<string>;
+  cacheWarmErrors?: Map<string, string>;
   lastActiveChatId?: string | null;
   cacheResidency?: Map<string, CacheResidency>;
 }) {
@@ -406,6 +421,7 @@ function ProjectSection({
             lastActive={chats[0].id === lastActiveChatId}
             cacheResidency={cacheResidency?.get(chats[0].id) ?? null}
             cacheWarming={cacheWarmingChatIds?.has(chats[0].id) ?? false}
+            cacheWarmError={cacheWarmErrors?.get(chats[0].id)}
             onSelect={() => onSelectChat(chats[0].id)}
             color={project.color as any}
           />
@@ -438,7 +454,8 @@ function ProjectSection({
                   onSendToNotebook={onSendToNotebook}
                   onWarmCache={onWarmCache}
                   cacheWarming={cacheWarmingChatIds?.has(chat.id) ?? false}
-                  />
+                  cacheWarmError={cacheWarmErrors?.get(chat.id)}
+                />
               ))}
             </div>
           ) : (
@@ -466,6 +483,7 @@ export function Sidebar({
   onSendToNotebook,
   onWarmCache,
   cacheWarmingChatIds = new Set(),
+  cacheWarmErrors = new Map(),
   onOpenSettings,
   onOpenMemoryDebug,
   onOpenModelStats,
@@ -830,18 +848,71 @@ export function Sidebar({
             <div className="px-1 pb-1">
               {systemChats.map((chat) => {
                 const isLastActive = chat.id === lastActiveChatId;
+                const isWarming = cacheWarmingChatIds.has(chat.id) || cacheResidency.get(chat.id)?.status === "warming";
+                const warmError = cacheWarmErrors?.get(chat.id);
                 return (
                   <button
                     key={chat.id}
                     onClick={() => { onSelectChat(chat.id); onClose(); }}
-                    className={`w-full text-left px-2.5 py-1.75 rounded-xl text-xs transition-all relative border ${
+                    className={`w-full text-left px-2.5 py-1.75 rounded-xl text-xs transition-all relative border group ${
                       chat.id === activeChatId                        ? 'bg-[rgba(var(--theme-accent-muted))] text-[rgba(var(--theme-accent-text))] border-[rgba(var(--theme-accent-border))]'
                         : isLastActive
                           ? 'text-white/50 hover:text-white/70 hover:bg-white/5 border-[rgba(var(--theme-accent),0.25)] shadow-[0_0_8px_rgba(var(--theme-accent),0.12)]'
                           : 'text-white/50 hover:text-white/70 hover:bg-white/5 border-[rgba(var(--theme-accent),0.1)]'
                     }`}
+                    title={warmError ? `Cache warm failed: ${warmError}` : undefined}
                   >
-                    <span className="truncate block">{chat.title}</span>
+                    <span className={`truncate block pr-5 ${isWarming ? 'invisible' : ''}`}>{chat.title}</span>
+
+                    {/* Warming animation */}
+                    {isWarming && (
+                      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" title="Warming cache">
+                        <PrefillActivityIcon />
+                      </div>
+                    )}
+
+                    {/* Error indicator */}
+                    {warmError && !isWarming && (
+                      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 text-red-300/80" title={`Cache warm failed: ${warmError}`}>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10" />
+                          <path d="M12 8v5" />
+                          <path d="M12 17h.01" />
+                        </svg>
+                      </div>
+                    )}
+
+                    {/* Hover warm action — desktop only */}
+                    {!isWarming && (
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!isWarming) onWarmCache?.(chat.id);
+                        }}
+                        title="Warm cache"
+                      >
+                        <div className="transition-colors p-0.5 text-white/30 hover:text-[rgba(var(--theme-accent),0.8)]">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M8 18c-2.2 0-4 1.8-4 4" />
+                            <path d="M16 18c2.2 0 4 1.8 4 4" />
+                            <path d="M7 4c0 0 1 1.3 1 3s-1 3-1 3" />
+                            <path d="M12 4c0 0 1 1.3 1 3s-1 3-1 3" />
+                            <path d="M17 4c0 0 1 1.3 1 3s-1 3-1 3" />
+                            <path d="M5 18h14" />
+                          </svg>
+                        </div>
+                      </div>
+                    )}
                   </button>
                 );
               })}
@@ -944,6 +1015,7 @@ export function Sidebar({
                       onSendToNotebook={onSendToNotebook}
                       onWarmCache={onWarmCache}
                       cacheWarmingChatIds={cacheWarmingChatIds}
+                      cacheWarmErrors={cacheWarmErrors}
                       lastActiveChatId={lastActiveChatId}
                       cacheResidency={cacheResidency}
                     />
@@ -1011,6 +1083,7 @@ export function Sidebar({
                 lastActive={agentChats[0].id === lastActiveChatId}
                 cacheResidency={cacheResidency.get(agentChats[0].id) ?? null}
                 cacheWarming={cacheWarmingChatIds.has(agentChats[0].id)}
+                cacheWarmError={cacheWarmErrors.get(agentChats[0].id)}
                 onSelect={() => { onSelectChat(agentChats[0].id); onClose(); }}
                 color="purple"
               />
@@ -1042,6 +1115,7 @@ export function Sidebar({
                     onSendToNotebook={onSendToNotebook}
                     onWarmCache={onWarmCache}
                     cacheWarming={cacheWarmingChatIds.has(chat.id)}
+                    cacheWarmError={cacheWarmErrors.get(chat.id)}
                   />
                 ))}
                 {agentChats.length === 0 && (
@@ -1095,6 +1169,7 @@ export function Sidebar({
                 lastActive={quickChats[0].id === lastActiveChatId}
                 cacheResidency={cacheResidency.get(quickChats[0].id) ?? null}
                 cacheWarming={cacheWarmingChatIds.has(quickChats[0].id)}
+                cacheWarmError={cacheWarmErrors.get(quickChats[0].id)}
                 onSelect={() => { onSelectChat(quickChats[0].id); onClose(); }}
                 color="blue"
               />
@@ -1126,6 +1201,7 @@ export function Sidebar({
                     onSendToNotebook={onSendToNotebook}
                     onWarmCache={onWarmCache}
                     cacheWarming={cacheWarmingChatIds.has(chat.id)}
+                    cacheWarmError={cacheWarmErrors.get(chat.id)}
                   />
                 ))}
                 {quickChats.length === 0 && (
