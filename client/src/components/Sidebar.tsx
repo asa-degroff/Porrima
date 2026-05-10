@@ -854,7 +854,7 @@ export function Sidebar({
                   <button
                     key={chat.id}
                     onClick={() => { onSelectChat(chat.id); onClose(); }}
-                    className={`w-full text-left px-2.5 py-1.75 rounded-xl text-xs transition-all relative border group ${
+                    className={`w-full text-left px-2.5 py-1.75 rounded-xl text-xs transition-all relative border group flex items-center gap-1.5 ${
                       chat.id === activeChatId                        ? 'bg-[rgba(var(--theme-accent-muted))] text-[rgba(var(--theme-accent-text))] border-[rgba(var(--theme-accent-border))]'
                         : isLastActive
                           ? 'text-white/50 hover:text-white/70 hover:bg-white/5 border-[rgba(var(--theme-accent),0.25)] shadow-[0_0_8px_rgba(var(--theme-accent),0.12)]'
@@ -862,18 +862,18 @@ export function Sidebar({
                     }`}
                     title={warmError ? `Cache warm failed: ${warmError}` : undefined}
                   >
-                    <span className={`truncate block pr-5 ${isWarming ? 'invisible' : ''}`}>{chat.title}</span>
+                    <span className={`flex-1 truncate ${isWarming ? 'invisible' : ''}`}>{chat.title}</span>
 
                     {/* Warming animation */}
                     {isWarming && (
-                      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" title="Warming cache">
+                      <div className="shrink-0 pointer-events-none" title="Warming cache">
                         <PrefillActivityIcon />
                       </div>
                     )}
 
                     {/* Error indicator */}
                     {warmError && !isWarming && (
-                      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 text-red-300/80" title={`Cache warm failed: ${warmError}`}>
+                      <div className="shrink-0 text-red-300/80" title={`Cache warm failed: ${warmError}`}>
                         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
                           <circle cx="12" cy="12" r="10" />
                           <path d="M12 8v5" />
@@ -890,6 +890,7 @@ export function Sidebar({
                           if (!isWarming) onWarmCache?.(chat.id);
                         }}
                         title="Warm cache"
+                        className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
                       >
                         <div className="transition-colors p-0.5 text-white/30 hover:text-[rgba(var(--theme-accent),0.8)]">
                           <svg
