@@ -325,11 +325,14 @@ async function executeAutomation(task: AutomationTask, run: AutomationRun): Prom
         const { listChats, getSettings } = await import("./chat-storage.js");
         const [chats, settings] = await Promise.all([listChats(), getSettings()]);
         const warmCount = Math.max(0, settings.postSynthesisWarmCount ?? 3);
-        // Get recent agent chats (exclude system and project chats)
+        // Get recent agent chats (all types, ordered by lastModified DESC from listChats)
         const recentAgentChats = chats
-          .filter((c) => c.type === "agent" && !c.projectId)
+          .filter((c) => c.type === "agent")
           .slice(0, warmCount)
           .map((c) => c.id);
+        console.log(
+          `[automation-runner] post-synthesis warm: ${recentAgentChats.length} agent chats scheduled: ${recentAgentChats.join(", ")}`,
+        );
         // Fire-and-forget post-synthesis warms
         schedulePostSynthesisWarms(SYSTEM_CHAT_ID, recentAgentChats).catch((e: any) => {
           console.warn("[automation-runner] Post-synthesis warm failed:", e.message);

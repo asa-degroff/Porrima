@@ -166,6 +166,7 @@ async function drainQueue(): Promise<void> {
     }
 
     // Execute the warm — import lazily to avoid circular deps
+    console.log(`[cache-warm-queue] warming ${job.chatId} (reason: ${job.reason})`);
     const { warmChatCache } = await import("./cache-warm.js");
     const result = await warmChatCache(job.chatId, {
       reason: job.reason,
@@ -232,6 +233,9 @@ export async function schedulePostSynthesisWarms(
 
   // Warm recent agent chats (limit to avoid overwhelming the queue)
   const limit = Math.min(recentChatIds.length, 5);
+  if (limit > 0) {
+    console.log(`[cache-warm-queue] post-synthesis: scheduling ${limit} agent chats: ${recentChatIds.slice(0, limit).join(", ")}`);
+  }
   for (let i = 0; i < limit; i++) {
     const chatId = recentChatIds[i];
     try {
