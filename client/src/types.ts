@@ -382,6 +382,7 @@ export interface Settings {
   // Wake cycle — periodic autonomous exploration during sleep cycle
   wakeCycleEnabled?: boolean;
   wakeCycleIntervalHours?: number;
+  postSynthesisWarmCount?: number;
   // Tool options
   // read_file default line limit when no `limit` arg is provided (default 1000).
   readFileDefaultLines?: number;

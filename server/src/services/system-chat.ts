@@ -94,7 +94,7 @@ export function releaseWakeCycleLock(): void {
 // System chat creation
 // ---------------------------------------------------------------------------
 
-const SYSTEM_CHAT_ID = "system";
+export const SYSTEM_CHAT_ID = "system";
 const SYSTEM_CHAT_TITLE = "System - Synthesis & Reflection";
 
 // ---------------------------------------------------------------------------

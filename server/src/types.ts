@@ -359,6 +359,9 @@ export interface Settings {
   // Wake cycle — periodic autonomous exploration during sleep cycle.
   wakeCycleEnabled?: boolean;
   wakeCycleIntervalHours?: number;
+  // Post-synthesis cache warm — number of recent agent chats to warm after
+  // each synthesis cycle. Default 3. Set to 0 to disable.
+  postSynthesisWarmCount?: number;
   // Tool options
   // read_file default line limit when no `limit` arg is provided (default 1000).
   readFileDefaultLines?: number;

@@ -347,6 +347,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [sleepCycleThreshold, setSleepCycleThreshold] = useState(settings.sleepCycleThresholdMinutes ?? 60);
   const [wakeCycleEnabled, setWakeCycleEnabled] = useState(settings.wakeCycleEnabled ?? false);
   const [wakeCycleInterval, setWakeCycleInterval] = useState(settings.wakeCycleIntervalHours ?? 6);
+  const [postSynthesisWarmCount, setPostSynthesisWarmCount] = useState(settings.postSynthesisWarmCount ?? 3);
   const [automations, setAutomations] = useState<AutomationTask[]>([]);
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [automationsRunningTaskId, setAutomationsRunningTaskId] = useState<string | null>(null);
@@ -951,6 +952,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       sleepCycleThresholdMinutes: sleepCycleThreshold,
       wakeCycleEnabled,
       wakeCycleIntervalHours: wakeCycleInterval,
+      postSynthesisWarmCount,
       extractionModelId,
       extractionModelUrl: extractionModelUrl.trim() || undefined,
       extractionFallbackEnabled,
@@ -4103,6 +4105,23 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <span className="text-xs text-white/40 w-16 text-right">{sleepCycleThreshold} min</span>
                   </div>
                   <p className="text-xs text-white/30">After this period of inactivity, the sleep cycle begins and autonomous modes activate</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-white/60">Post-synthesis cache warm</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={0}
+                      max={10}
+                      step={1}
+                      value={postSynthesisWarmCount}
+                      onChange={(e) => setPostSynthesisWarmCount(Number(e.target.value))}
+                      className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                    />
+                    <span className="text-xs text-white/40 w-16 text-right">{postSynthesisWarmCount === 0 ? 'off' : `${postSynthesisWarmCount} chats`}</span>
+                  </div>
+                  <p className="text-xs text-white/30">Warm caches for recent chats after synthesis. 0 disables. System chat is always warmed.</p>
                 </div>
 
 	              </div>

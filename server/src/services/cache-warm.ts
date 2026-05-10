@@ -64,7 +64,7 @@ export interface CacheWarmResult {
   /** Total tokens in the prompt */
   totalPromptTokens?: number;
   /** Why this warm was triggered */
-  reason: "user-requested" | "sleep-prewarm";
+  reason: "user-requested" | "sleep-prewarm" | "post-synthesis";
   /** Timestamp of the warm operation */
   warmedAt: number;
   /** Error message if warming failed */
@@ -72,7 +72,7 @@ export interface CacheWarmResult {
 }
 
 export interface CacheWarmOptions {
-  reason?: "user-requested" | "sleep-prewarm";
+  reason?: "user-requested" | "sleep-prewarm" | "post-synthesis";
   /** Abort signal for timeout control */
   signal?: AbortSignal;
 }

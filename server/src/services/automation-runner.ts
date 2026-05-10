@@ -10,6 +10,7 @@ import {
 } from "./automation-storage.js";
 import { runSystemSynthesis, runWakeCycle, type SynthesisResult } from "./system-chat.js";
 import { runHeadlessChatTurn } from "./chat-turn-runner.js";
+import { SYSTEM_CHAT_ID } from "./system-chat.js";
 
 interface AutomationExecutionResult extends SynthesisResult {
   chatId?: string;
@@ -314,6 +315,30 @@ async function executeAutomation(task: AutomationTask, run: AutomationRun): Prom
       automationTaskId: task.id,
       automationRunId: run.id,
     });
+
+    // Post-synthesis: warm caches for system chat + recent agent chats.
+    // After synthesis, memory blocks have changed, invalidating most caches.
+    // Fire-and-forget — doesn't block the return.
+    if (result.success) {
+      try {
+        const { schedulePostSynthesisWarms } = await import("./cache-warm-queue.js");
+        const { listChats, getSettings } = await import("./chat-storage.js");
+        const [chats, settings] = await Promise.all([listChats(), getSettings()]);
+        const warmCount = Math.max(0, settings.postSynthesisWarmCount ?? 3);
+        // Get recent agent chats (exclude system and project chats)
+        const recentAgentChats = chats
+          .filter((c) => c.type === "agent" && !c.projectId)
+          .slice(0, warmCount)
+          .map((c) => c.id);
+        // Fire-and-forget post-synthesis warms
+        schedulePostSynthesisWarms(SYSTEM_CHAT_ID, recentAgentChats).catch((e: any) => {
+          console.warn("[automation-runner] Post-synthesis warm failed:", e.message);
+        });
+      } catch (e: any) {
+        console.warn("[automation-runner] Failed to schedule post-synthesis warms:", e.message);
+      }
+    }
+
     return { ...result, chatId: "system" };
   }
 

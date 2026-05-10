@@ -195,15 +195,23 @@ router.post("/synthesis/sleep", async (_req, res) => {
 
 // Warm the KV cache for a chat without generating output.
 // Uses /apply-template + /completion with n_predict=0 to prefill the cache.
+// Queued — only one warm runs at a time; others wait behind it.
 router.post("/cache-warm/:chatId", async (req, res) => {
   try {
     const { chatId } = req.params;
     const { reason } = req.body || {};
-    const validReasons = ["user-requested", "sleep-prewarm"];
+    const validReasons = ["user-requested", "sleep-prewarm", "post-synthesis"];
     const warmReason = validReasons.includes(reason) ? reason : "user-requested";
 
-    const { warmChatCache } = await import("../services/cache-warm.js");
-    const result = await warmChatCache(chatId, { reason: warmReason });
+    const { enqueueWarm, isChatWarming, cancelQueuedWarms } = await import("../services/cache-warm-queue.js");
+
+    // If already warming or queued, cancel the old request and enqueue a new one
+    // (newer request supersedes older one)
+    if (isChatWarming(chatId)) {
+      cancelQueuedWarms(chatId);
+    }
+
+    const result = await enqueueWarm(chatId, warmReason);
 
     if (result.warmed) {
       console.log(
