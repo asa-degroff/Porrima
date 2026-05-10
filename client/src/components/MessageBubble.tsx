@@ -849,24 +849,30 @@ function ScrollableToolContainer({
     }
   }, [isStreaming]);
 
-  // Auto-scroll when new children are added during streaming
+  // Auto-scroll when new children are added.
+  // Runs regardless of streaming state — tool results can be added after
+  // isActivelyStreaming becomes false (e.g. when the agent starts its response text).
   useEffect(() => {
-    if (!isStreaming || !scrollRef.current) return;
+    if (!scrollRef.current) return;
     if (manualScrollOverrideRef.current) return;
 
     const scroll = scrollRef.current;
-    requestAnimationFrame(() => {
-      if (scroll) {
-        scroll.scrollTop = scroll.scrollHeight;
-      }
-    });
-  }, [childCount, isStreaming]);
+    scroll.scrollTop = scroll.scrollHeight;
+  }, [childCount]);
 
-  // Reset scroll pause state when streaming stops
+  // Reset scroll pause state when streaming stops AND user is at the bottom.
+  // If the user scrolled up (manual override active), preserve that intention
+  // even after streaming ends — don't yank them back.
   useEffect(() => {
     if (!isStreaming && scrollPaused) {
-      setScrollPaused(false);
-      manualScrollOverrideRef.current = false;
+      const scroll = scrollRef.current;
+      const atBottom = scroll
+        ? scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40
+        : false;
+      if (atBottom) {
+        setScrollPaused(false);
+        manualScrollOverrideRef.current = false;
+      }
     }
   }, [isStreaming, scrollPaused]);
   
