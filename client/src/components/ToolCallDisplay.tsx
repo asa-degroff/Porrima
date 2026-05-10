@@ -39,8 +39,12 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   const name = toolCall?.name || liveStatus?.name || "unknown";
-  const status = liveStatus?.status || (toolResult ? (toolResult.isError ? "error" : "done") : "running");
-  const result = liveStatus?.result || toolResult?.content;
+  // toolResult (persisted) takes priority over liveStatus (streaming-only) —
+  // once the result is available the tool is definitively done/error.
+  const status = toolResult
+    ? (toolResult.isError ? "error" : "done")
+    : (liveStatus?.status || "running");
+  const result = toolResult?.content || liveStatus?.result;
 
   // Format arguments for display
   const argsDisplay = toolCall?.arguments

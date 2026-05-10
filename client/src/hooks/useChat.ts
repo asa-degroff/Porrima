@@ -601,6 +601,14 @@ export function useChat(chatId: string | null) {
           bg.tools.push(status);
         }
 
+        // Also update liveStatus on the matching tool_call segment so
+        // SegmentRenderer can pass it to ToolCallDisplay for live display.
+        for (const seg of bg.segments) {
+          if (seg.type === "tool_call" && seg.toolCall?.name === status.name) {
+            seg.liveStatus = status;
+          }
+        }
+
         if (activeChatIdRef.current === streamChatId) {
           setActiveTools([...bg.tools]);
         }

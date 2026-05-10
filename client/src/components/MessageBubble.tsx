@@ -1036,6 +1036,7 @@ function SegmentRenderer({
           key={`tool-${segment.toolCall.id}`}
           toolCall={segment.toolCall}
           toolResult={hasResult ? nextSegment.toolResult : undefined}
+          liveStatus={segment.liveStatus}
         />
       ) : null;
     }
