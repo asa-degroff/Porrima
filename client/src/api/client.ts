@@ -1947,3 +1947,22 @@ export async function fetchCacheResidency(): Promise<CacheResidencyRecord[]> {
   const data = await res.json();
   return data.records || [];
 }
+
+// System stats
+import type { SystemStatsResponse } from "../types";
+
+export async function fetchSystemStats(): Promise<SystemStatsResponse> {
+  const res = await apiFetch(`${BASE}/system-stats`);
+  if (!res.ok) throw new Error("Failed to fetch system stats");
+  return res.json();
+}
+
+export async function updateSystemStatsSettings(settings: { bufferSeconds?: number }): Promise<{ bufferSeconds: number }> {
+  const res = await apiFetch(`${BASE}/system-stats`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error("Failed to update system stats settings");
+  return res.json();
+}

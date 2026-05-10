@@ -383,6 +383,8 @@ export interface Settings {
   wakeCycleEnabled?: boolean;
   wakeCycleIntervalHours?: number;
   postSynthesisWarmCount?: number;
+  systemStatsEnabled?: boolean;
+  systemStatsBufferSeconds?: number;
   // Tool options
   // read_file default line limit when no `limit` arg is provided (default 1000).
   readFileDefaultLines?: number;
@@ -607,4 +609,29 @@ export interface NotebookEntry {
 export interface NotebookIndex {
   entries: { id: string; createdAt: string; author: 'user' | 'agent'; preview: string }[];
   lastActivityDate: string | null;
+}
+
+// System stats
+export interface GpuInfo {
+  id: string;
+  name: string;
+  driver: "amdgpu" | "nvidia" | "i915" | "unknown";
+  usage: number;
+  vramTotal: number;
+  vramUsed: number;
+  temperature: number;
+}
+
+export interface SystemStatsSample {
+  timestamp: number;
+  cpu: { usage: number };
+  ram: { total: number; available: number; used: number };
+  swap: { total: number; free: number; used: number };
+  gpus: GpuInfo[];
+}
+
+export interface SystemStatsResponse {
+  current: SystemStatsSample | null;
+  history: SystemStatsSample[];
+  bufferSeconds: number;
 }

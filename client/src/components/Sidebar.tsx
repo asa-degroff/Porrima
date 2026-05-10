@@ -11,6 +11,8 @@ import { SidebarSearch, SearchResults } from "./SidebarSearch";
 import { searchConversations } from "../api/client";
 import type { ConversationSearchResult } from "../types";
 import { PrefillActivityIcon } from "./PrefillActivityIcon";
+import { SystemStatsBar } from "./SystemStatsBar";
+import type { SystemStatsSample } from "../types";
 
 interface Props {
   chats: ChatListItemType[];
@@ -52,6 +54,9 @@ interface Props {
   onWakeRun?: () => void;
   isImageSandboxOpen?: boolean;
   cacheResidency?: Map<string, CacheResidency>;
+  systemStatsHistory?: SystemStatsSample[];
+  systemStatsCurrent?: SystemStatsSample | null;
+  showSystemStats?: boolean;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -514,6 +519,9 @@ export function Sidebar({
   onWakeRun,
   isImageSandboxOpen = false,
   cacheResidency = new Map(),
+  systemStatsHistory = [],
+  systemStatsCurrent,
+  showSystemStats = false,
 }: Props) {
   const {
     projectsExpanded,
@@ -847,6 +855,14 @@ export function Sidebar({
             </div>
           </div>
         </div>
+
+        {/* System Stats */}
+        {showSystemStats && systemStatsHistory.length > 0 && (
+          <div className="border-b border-white/5">
+            <SystemStatsBar history={systemStatsHistory} current={systemStatsCurrent} />
+          </div>
+        )}
+
         {/* System Chat Section */}
         {systemChats.length > 0 && (
           <div className="px-3 pb-1 shrink-0 border-b border-white/5">

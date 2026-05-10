@@ -30,9 +30,11 @@ import modelStatsRouter from "./routes/model-stats.js";
 import llamaServersRouter from "./routes/llama-servers.js";
 import pushRouter from "./routes/push.js";
 import automationsRouter from "./routes/automations.js";
+import systemStatsRouter from "./routes/system-stats.js";
 import { requireAuth } from "./middleware/auth.js";
 import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
+import { startSystemStatsPolling } from "./services/system-stats.js";
 import { initializePersona } from "./services/persona-store.js";
 import { createSystemChat } from "./services/system-chat.js";
 import { ensureAutomationDefaults } from "./services/automation-storage.js";
@@ -168,6 +170,7 @@ app.use("/api/model-stats", modelStatsRouter);
 app.use("/api/llama-servers", llamaServersRouter);
 app.use("/api/push", pushRouter);
 app.use("/api/automations", automationsRouter);
+app.use("/api/system-stats", systemStatsRouter);
 
 // Optional: Run corpus cleanup on startup to fix orphans from before the deletion fix
 // Set CORPUS_CLEANUP=true to enable
@@ -217,6 +220,7 @@ httpServer = app.listen(PORT, () => {
   console.log(`qu.je agent server running on http://localhost:${PORT}`);
   if (backgroundJobsEnabled) {
     startScheduler();
+    startSystemStatsPolling();
   } else {
     console.log(
       `[scheduler] Background jobs disabled on port ${PORT} ` +

@@ -362,6 +362,10 @@ export interface Settings {
   // Post-synthesis cache warm — number of recent agent chats to warm after
   // each synthesis cycle. Default 3. Set to 0 to disable.
   postSynthesisWarmCount?: number;
+  // System stats bar — show/hide resource usage in sidebar
+  systemStatsEnabled?: boolean;
+  // System stats history buffer duration in seconds (default 60)
+  systemStatsBufferSeconds?: number;
   // Tool options
   // read_file default line limit when no `limit` arg is provided (default 1000).
   readFileDefaultLines?: number;

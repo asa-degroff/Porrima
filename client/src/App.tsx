@@ -35,6 +35,8 @@ import { useTTS } from "./hooks/useTTS";
 import { TTSControlBar } from "./components/TTSControlBar";
 import { useNotebooks } from "./hooks/useNotebooks";
 import { useCacheResidency } from "./hooks/useCacheResidency";
+import { fetchSystemStats } from "./api/client";
+import type { SystemStatsSample } from "./types";
 import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis, triggerWakeCycle } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
 import type { Chat, ChatType, CornerShape, CornerRadius } from "./types";
@@ -111,6 +113,31 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [isAutomationRunning, setIsAutomationRunning] = useState(false);
   const [cacheWarmingChatIds, setCacheWarmingChatIds] = useState<Set<string>>(() => new Set());
   const [cacheWarmErrors, setCacheWarmErrors] = useState<Map<string, string>>(() => new Map());
+
+  // System stats polling
+  const [systemStatsHistory, setSystemStatsHistory] = useState<SystemStatsSample[]>([]);
+  const [systemStatsCurrent, setSystemStatsCurrent] = useState<SystemStatsSample | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      try {
+        const data = await fetchSystemStats();
+        if (!cancelled) {
+          setSystemStatsCurrent(data.current);
+          setSystemStatsHistory(data.history);
+        }
+      } catch (e: any) {
+        if (!cancelled) console.warn("[system-stats] Poll failed:", e.message);
+      }
+    }
+    poll();
+    const timer = setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
   // Load UI state from server on mount
   // Priority: URL ?chat= param > server state > localStorage
@@ -846,6 +873,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onSynthesisRun={handleSynthesisRun}
         onWakeRun={handleWakeRun}
         isImageSandboxOpen={imageSandboxOpen}
+        systemStatsHistory={systemStatsHistory}
+        systemStatsCurrent={systemStatsCurrent}
+        showSystemStats={settings.systemStatsEnabled ?? false}
       />
       {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}
       {imageSandboxOpen ? (

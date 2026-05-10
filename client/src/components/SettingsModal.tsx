@@ -348,6 +348,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [wakeCycleEnabled, setWakeCycleEnabled] = useState(settings.wakeCycleEnabled ?? false);
   const [wakeCycleInterval, setWakeCycleInterval] = useState(settings.wakeCycleIntervalHours ?? 6);
   const [postSynthesisWarmCount, setPostSynthesisWarmCount] = useState(settings.postSynthesisWarmCount ?? 3);
+  const [systemStatsEnabled, setSystemStatsEnabled] = useState(settings.systemStatsEnabled ?? false);
+  const [systemStatsBufferSeconds, setSystemStatsBufferSeconds] = useState(settings.systemStatsBufferSeconds ?? 60);
   const [automations, setAutomations] = useState<AutomationTask[]>([]);
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [automationsRunningTaskId, setAutomationsRunningTaskId] = useState<string | null>(null);
@@ -953,6 +955,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       wakeCycleEnabled,
       wakeCycleIntervalHours: wakeCycleInterval,
       postSynthesisWarmCount,
+      systemStatsEnabled,
+      systemStatsBufferSeconds,
       extractionModelId,
       extractionModelUrl: extractionModelUrl.trim() || undefined,
       extractionFallbackEnabled,
@@ -4123,6 +4127,41 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   </div>
                   <p className="text-xs text-white/30">Warm caches for recent chats after synthesis. 0 disables. System chat is always warmed.</p>
                 </div>
+
+                {/* System Stats */}
+                <div>
+                  <label className="block text-sm font-medium text-white/60">System resource monitor</label>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setSystemStatsEnabled(!systemStatsEnabled)}
+                      className={`relative w-10 h-5 rounded-full transition-colors ${systemStatsEnabled ? "bg-purple-500/60" : "bg-white/15"}`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white/90 transition-transform ${systemStatsEnabled ? "translate-x-5" : ""}`} />
+                    </button>
+                    <span className="text-xs text-white/40">{systemStatsEnabled ? "Enabled" : "Disabled"}</span>
+                  </div>
+                  <p className="text-xs text-white/30">Show CPU, RAM, swap, and GPU usage in the sidebar</p>
+                </div>
+
+                {systemStatsEnabled && (
+                  <div className="mt-2">
+                    <label className="block text-sm font-medium text-white/60">History window</label>
+                    <div className="flex items-center gap-3">
+                      <select
+                        value={systemStatsBufferSeconds}
+                        onChange={(e) => setSystemStatsBufferSeconds(Number(e.target.value))}
+                        className="flex-1 bg-white/10 border border-white/15 rounded-lg text-xs text-white/70 px-2 py-1.5 outline-none focus:border-white/30"
+                      >
+                        <option value={30}>30 seconds</option>
+                        <option value={60}>1 minute</option>
+                        <option value={120}>2 minutes</option>
+                        <option value={300}>5 minutes</option>
+                        <option value={600}>10 minutes</option>
+                      </select>
+                    </div>
+                    <p className="text-xs text-white/30">How long to keep historical stats</p>
+                  </div>
+                )}
 
 	              </div>
 	            </div>
