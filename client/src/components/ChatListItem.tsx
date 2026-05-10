@@ -91,7 +91,11 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
         active ? "bg-white/15" : "hover:bg-white/8"
       } ${
         active
-          ? "border-white/20"
+          ? "border-white/20" + (cacheResidency && lastActive
+              ? " shadow-[0_0_8px_rgba(168,85,247,0.15)]"
+              : cacheResidency
+                ? " shadow-[0_0_8px_rgba(251,191,36,0.10)]"
+                : "")
           : cacheResidency && lastActive
             ? "border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
             : cacheResidency

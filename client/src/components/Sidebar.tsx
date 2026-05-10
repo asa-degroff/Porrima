@@ -128,14 +128,18 @@ function RecentChatItem({
   return (
     <button
       onClick={onSelect}
-      className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative ${
+      className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative border ${
         active
-          ? "bg-white/15 border border-white/20"
+          ? "bg-white/15 border-white/20" + (cacheResidency && lastActive
+              ? " shadow-[0_0_8px_rgba(168,85,247,0.15)]"
+              : cacheResidency
+                ? " shadow-[0_0_8px_rgba(251,191,36,0.10)]"
+                : "")
           : cacheResidency && lastActive
-            ? "hover:bg-white/8 border border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
+            ? "hover:bg-white/8 border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
             : cacheResidency
-              ? "hover:bg-white/8 border border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
-              : `hover:bg-white/8 border ${colorClass.split(" ")[1]}`
+              ? "hover:bg-white/8 border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
+              : `hover:bg-white/8 ${colorClass.split(" ")[1]}`
       }`}
       title={effectiveTitle}
     >
