@@ -25,7 +25,14 @@ export function InlineVisual({ visual, isPinnedView }: Props) {
     try {
       const doc = iframeRef.current?.contentDocument;
       if (doc) {
+        // Temporarily force body to auto-height for accurate content measurement.
+        // Visuals may use body { height: 100vh } which in an iframe context can
+        // report the parent window height rather than the actual content height.
+        const body = doc.body;
+        const prevHeight = body.style.height;
+        body.style.height = 'auto';
         const contentHeight = doc.documentElement.scrollHeight;
+        body.style.height = prevHeight;
         setHeight(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, contentHeight)));
       }
     } catch {
