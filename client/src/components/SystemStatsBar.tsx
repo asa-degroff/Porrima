@@ -241,7 +241,7 @@ function StatBox({ label, value, sparkData, color }: {
 }) {
   return (
     <div className="flex flex-col items-center gap-1">
-      <div className="bg-white/[0.04] rounded-lg p-1.5 flex items-center justify-center">
+      <div className="rounded-lg bg-black/20 border border-white/[0.05] p-1.5 flex items-center justify-center shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]">
         <Sparkline data={sparkData} color={color} emptyColor="rgba(148, 163, 184, 0.2)" />
       </div>
       <span className="text-[10px] text-white/50 font-mono">{value}</span>
@@ -257,7 +257,7 @@ function MultiStatBox({ label, value, series }: {
 }) {
   return (
     <div className="flex flex-col items-center gap-1">
-      <div className="bg-white/[0.04] rounded-lg p-1.5 flex items-center justify-center">
+      <div className="rounded-lg bg-black/20 border border-white/[0.05] p-1.5 flex items-center justify-center shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]">
         <MultiSparkline series={series} emptyColor="rgba(148, 163, 184, 0.2)" />
       </div>
       <span className="text-[10px] text-white/50 font-mono">{value}</span>
