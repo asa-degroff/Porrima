@@ -102,7 +102,7 @@ export const UserImage = memo(function UserImage({
       decoding="async"
       onClick={handleClick}
       className="rounded-lg max-h-64 cursor-pointer hover:opacity-90 transition-opacity"
-      style={{ maxWidth: "100%", width: "auto", height: "auto" }}
+      style={{ maxWidth: "100%", height: "auto" }}
     />
   );
 });
