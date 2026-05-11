@@ -48,6 +48,7 @@ const SECTIONS = [
   { id: 'images', label: 'Images' },
   { id: 'skills', label: 'Skills' },
   { id: 'extraction', label: 'Extraction' },
+  { id: 'system-stats', label: 'System Stats' },
   { id: 'memory-blocks', label: 'Memory Blocks' },
   { id: 'automations', label: 'Automations' },
   { id: 'tools', label: 'Tool Options' },
@@ -350,6 +351,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [postSynthesisWarmCount, setPostSynthesisWarmCount] = useState(settings.postSynthesisWarmCount ?? 3);
   const [systemStatsEnabled, setSystemStatsEnabled] = useState(settings.systemStatsEnabled ?? false);
   const [systemStatsBufferSeconds, setSystemStatsBufferSeconds] = useState(settings.systemStatsBufferSeconds ?? 60);
+  const systemStatsBufferDd = useDropdown();
   const [automations, setAutomations] = useState<AutomationTask[]>([]);
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [automationsRunningTaskId, setAutomationsRunningTaskId] = useState<string | null>(null);
@@ -4128,42 +4130,60 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <p className="text-xs text-white/30">Warm caches for recent chats after synthesis. 0 disables. System chat is always warmed.</p>
                 </div>
 
-                {/* System Stats */}
-                <div>
-                  <label className="block text-sm font-medium text-white/60">System resource monitor</label>
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setSystemStatsEnabled(!systemStatsEnabled)}
-                      className={`relative w-10 h-5 rounded-full transition-colors ${systemStatsEnabled ? "bg-purple-500/60" : "bg-white/15"}`}
-                    >
-                      <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white/90 transition-transform ${systemStatsEnabled ? "translate-x-5" : ""}`} />
-                    </button>
-                    <span className="text-xs text-white/40">{systemStatsEnabled ? "Enabled" : "Disabled"}</span>
-                  </div>
-                  <p className="text-xs text-white/30">Show CPU, RAM, swap, and GPU usage in the sidebar</p>
-                </div>
-
-                {systemStatsEnabled && (
-                  <div className="mt-2">
-                    <label className="block text-sm font-medium text-white/60">History window</label>
-                    <div className="flex items-center gap-3">
-                      <select
-                        value={systemStatsBufferSeconds}
-                        onChange={(e) => setSystemStatsBufferSeconds(Number(e.target.value))}
-                        className="flex-1 bg-white/10 border border-white/15 rounded-lg text-xs text-white/70 px-2 py-1.5 outline-none focus:border-white/30"
-                      >
-                        <option value={30}>30 seconds</option>
-                        <option value={60}>1 minute</option>
-                        <option value={120}>2 minutes</option>
-                        <option value={300}>5 minutes</option>
-                        <option value={600}>10 minutes</option>
-                      </select>
-                    </div>
-                    <p className="text-xs text-white/30">How long to keep historical stats</p>
-                  </div>
-                )}
-
 	              </div>
+	            </div>
+	          </div>
+
+	          {/* System Stats */}
+	          <div id="system-stats" className="border-t border-white/10 pt-6">
+	            <h3 className="text-sm font-semibold text-white/80 mb-4">System Stats</h3>
+	            <div className="space-y-4">
+	              <div className="flex items-center justify-between">
+	                <div>
+	                  <label className="block text-sm font-medium text-white/60">Resource monitor</label>
+	                  <p className="text-xs text-white/30 mt-0.5">Show CPU, RAM, swap, and GPU usage sparklines in the sidebar</p>
+	                </div>
+	                <ToggleSwitch checked={systemStatsEnabled} onChange={() => setSystemStatsEnabled(!systemStatsEnabled)} accentColor="purple" />
+	              </div>
+
+	              {systemStatsEnabled && (
+	                <div>
+	                  <label className="block text-sm font-medium text-white/60">History window</label>
+	                  <p className="text-xs text-white/30 mb-2">How long to keep historical stats</p>
+	                  <Dropdown
+	                    state={systemStatsBufferDd}
+	                    trigger={
+	                      <span className="text-xs text-white/70">
+	                        {[30, 60, 120, 300, 600].find((v) => v === systemStatsBufferSeconds)
+	                          ? { 30: "30 seconds", 60: "1 minute", 120: "2 minutes", 300: "5 minutes", 600: "10 minutes" }[systemStatsBufferSeconds]
+	                          : "1 minute"}
+	                      </span>
+	                    }
+	                  >
+	                    {[
+	                      { value: 30, label: "30 seconds" },
+	                      { value: 60, label: "1 minute" },
+	                      { value: 120, label: "2 minutes" },
+	                      { value: 300, label: "5 minutes" },
+	                      { value: 600, label: "10 minutes" },
+	                    ].map((opt) => (
+	                      <button
+	                        key={opt.value}
+	                        onClick={() => { setSystemStatsBufferSeconds(opt.value); systemStatsBufferDd.close(); }}
+	                        className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center justify-between ${
+	                          opt.value === systemStatsBufferSeconds ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+	                        }`}
+	                        style={{
+	                          backgroundColor: opt.value === systemStatsBufferSeconds ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+	                          color: opt.value === systemStatsBufferSeconds ? `rgba(var(--theme-secondary-text))` : '',
+	                        }}
+	                      >
+	                        <span>{opt.label}</span>
+	                      </button>
+	                    ))}
+	                  </Dropdown>
+	                </div>
+	              )}
 	            </div>
 	          </div>
 
