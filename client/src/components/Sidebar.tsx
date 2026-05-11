@@ -858,7 +858,7 @@ export function Sidebar({
 
         {/* System Stats */}
         {showSystemStats && systemStatsHistory.length > 0 && (
-          <div className="border-b border-white/5">
+          <div className="pt-1 border-b border-white/5">
             <SystemStatsBar history={systemStatsHistory} current={systemStatsCurrent} />
           </div>
         )}
