@@ -865,7 +865,7 @@ export function Sidebar({
 
         {/* System Chat Section */}
         {systemChats.length > 0 && (
-          <div className="px-3 pb-1 shrink-0 border-b border-white/5">
+          <div className="px-3 py-1 shrink-0 border-b border-white/5">
             <div className="px-1 pb-1">
               {systemChats.map((chat) => {
                 const isLastActive = chat.id === lastActiveChatId;

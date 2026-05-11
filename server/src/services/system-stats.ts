@@ -127,24 +127,36 @@ const VENDOR_AMD = "0x1002";
 const VENDOR_NVIDIA = "0x10de";
 const VENDOR_INTEL = "0x8086";
 
-// Known AMD GPU device names (common RDNA / GCN)
-const AMD_DEVICE_NAMES: Record<string, string> = {
-  "0x747e": "AMD Radeon RX 7900 XTX",
-  "0x747c": "AMD Radeon RX 7900 XT",
-  "0x744c": "AMD Radeon RX 7800 XT",
-  "0x7448": "AMD Radeon RX 7700 XT",
-  "0x73ff": "AMD Radeon RX 7600 XT",
-  "0x73ef": "AMD Radeon RX 7600",
-  "0x73a0": "AMD Radeon RX 7900 GRE",
-  "0x687f": "AMD Radeon RX 6950 XT",
-  "0x687e": "AMD Radeon RX 6900 XT",
-  "0x687d": "AMD Radeon RX 6800 XT",
-  "0x687c": "AMD Radeon RX 6800",
-  "0x67df": "AMD Radeon RX 6700 XT",
-  "0x67c0": "AMD Radeon RX 6600 XT",
-  "0x67c1": "AMD Radeon RX 6600",
-  "0x73a1": "AMD Radeon RX 7900 XT",
-  "0x7460": "AMD Radeon RX 7900 MUSE",
+// AMD GPU codenames (RDNA / GCN chip families)
+const AMD_CHIP_NAMES: Record<string, string> = {
+  // RDNA 3
+  "0x747e": "gfx1100",
+  "0x747c": "gfx1100",
+  "0x744c": "gfx1101",
+  "0x7448": "gfx1101",
+  "0x744b": "gfx1101",
+  "0x73ff": "gfx1150",
+  "0x73ef": "gfx1150",
+  "0x73a0": "gfx1100",
+  "0x73a1": "gfx1100",
+  "0x7460": "gfx1100",
+  // RDNA 2
+  "0x73a3": "gfx1031",
+  "0x73a4": "gfx1031",
+  "0x73a5": "gfx1031",
+  "0x73b0": "gfx1032",
+  "0x73b1": "gfx1032",
+  "0x73b3": "gfx1032",
+  "0x73b5": "gfx1032",
+  "0x73bf": "gfx1035",
+  // RDNA (Navi 10/12/14)
+  "0x687f": "gfx906",
+  "0x687e": "gfx906",
+  "0x687d": "gfx906",
+  "0x687c": "gfx906",
+  "0x67df": "gfx906",
+  "0x67c0": "gfx1010",
+  "0x67c1": "gfx1010",
 };
 
 async function discoverGpus(): Promise<GpuInfo[]> {
@@ -169,7 +181,7 @@ async function discoverGpus(): Promise<GpuInfo[]> {
 
         if (vendor === VENDOR_AMD) {
           gpuDriver = "amdgpu";
-          name = AMD_DEVICE_NAMES[deviceId] || `AMD GPU (${deviceId})`;
+          name = AMD_CHIP_NAMES[deviceId] || `AMD ${deviceId}`;
           const info = await readAmdGpuStats(card, devicePath);
           gpus.push({ id: card, name, driver: gpuDriver, ...info });
         } else if (vendor === VENDOR_NVIDIA) {

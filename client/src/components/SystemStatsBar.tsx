@@ -7,7 +7,7 @@ interface Props {
 }
 
 const SVG_W = 36;
-const SVG_H = 36;
+const SVG_H = 24;
 const PAD = 2;
 
 // Sparkline colors for multi-GPU overlapping lines
