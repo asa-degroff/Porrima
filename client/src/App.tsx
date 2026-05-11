@@ -139,12 +139,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     };
   }, []);
 
-  // Sync hidden GPU settings from server
+  // Sync hidden GPU settings to server whenever they change
   useEffect(() => {
-    if (!settings.systemStatsHiddenGpus || settings.systemStatsHiddenGpus.length === 0) return;
-    // Initial sync: apply saved hidden GPUs to server
-    updateSystemStatsSettings({ hiddenGpus: settings.systemStatsHiddenGpus }).catch(() => {});
-  }, []);
+    const hiddenGpus = settings.systemStatsHiddenGpus ?? [];
+    updateSystemStatsSettings({ hiddenGpus }).catch(() => {});
+  }, [settings.systemStatsHiddenGpus]);
 
   // Load UI state from server on mount
   // Priority: URL ?chat= param > server state > localStorage
@@ -882,6 +881,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         isImageSandboxOpen={imageSandboxOpen}
         systemStatsHistory={systemStatsHistory}
         systemStatsCurrent={systemStatsCurrent}
+        systemStatsHiddenGpus={settings.systemStatsHiddenGpus}
         showSystemStats={settings.systemStatsEnabled ?? false}
       />
       {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}

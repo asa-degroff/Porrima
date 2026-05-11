@@ -57,11 +57,18 @@ export function getHiddenGpus(): string[] {
 
 export function getHistory(): SystemStatsSample[] {
   pruneHistory();
-  return history;
+  return history.map((s) => ({
+    ...s,
+    gpus: s.gpus.filter((g) => !hiddenGpuIds.has(g.id)),
+  }));
 }
 
 export function getCurrent(): SystemStatsSample | null {
-  return lastSample;
+  if (!lastSample) return null;
+  return {
+    ...lastSample,
+    gpus: lastSample.gpus.filter((g) => !hiddenGpuIds.has(g.id)),
+  };
 }
 
 function pruneHistory() {
@@ -359,7 +366,7 @@ async function pollOnce() {
       cpu: { usage: cpuUsage },
       ram: meminfo.ram,
       swap: meminfo.swap,
-      gpus: gpus.filter((g) => !hiddenGpuIds.has(g.id)),
+      gpus, // store all GPUs; filter at retrieval time
     };
 
     lastSample = sample;

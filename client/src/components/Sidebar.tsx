@@ -56,6 +56,7 @@ interface Props {
   cacheResidency?: Map<string, CacheResidency>;
   systemStatsHistory?: SystemStatsSample[];
   systemStatsCurrent?: SystemStatsSample | null;
+  systemStatsHiddenGpus?: string[];
   showSystemStats?: boolean;
 }
 
@@ -521,6 +522,7 @@ export function Sidebar({
   cacheResidency = new Map(),
   systemStatsHistory = [],
   systemStatsCurrent,
+  systemStatsHiddenGpus,
   showSystemStats = false,
 }: Props) {
   const {
@@ -859,7 +861,7 @@ export function Sidebar({
         {/* System Stats */}
         {showSystemStats && systemStatsHistory.length > 0 && (
           <div className="border-b border-white/5">
-            <SystemStatsBar history={systemStatsHistory} current={systemStatsCurrent} />
+            <SystemStatsBar history={systemStatsHistory} current={systemStatsCurrent} hiddenGpus={systemStatsHiddenGpus} />
           </div>
         )}
 

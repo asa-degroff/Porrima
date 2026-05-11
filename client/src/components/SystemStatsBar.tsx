@@ -4,6 +4,7 @@ import type { SystemStatsSample, GpuInfo } from "../types";
 interface Props {
   history: SystemStatsSample[];
   current?: SystemStatsSample | null;
+  hiddenGpus?: string[];
 }
 
 const SVG_W = 36;
@@ -139,46 +140,57 @@ function getGpuAvgVramPct(gpus: GpuInfo[]): number {
   return valid.reduce((a, b) => a + (b.vramUsed / b.vramTotal) * 100, 0) / valid.length;
 }
 
-export function SystemStatsBar({ history, current }: Props) {
+export function SystemStatsBar({ history, current, hiddenGpus }: Props) {
+  const hiddenSet = useMemo(() => new Set(hiddenGpus ?? []), [hiddenGpus]);
+
+  // Filter out hidden GPUs from all data
+  const filteredHistory = useMemo(
+    () => history.map((s) => ({ ...s, gpus: s.gpus.filter((g) => !hiddenSet.has(g.id)) })),
+    [history, hiddenSet],
+  );
+  const filteredCurrent = useMemo(
+    () => current ? { ...current, gpus: current.gpus.filter((g) => !hiddenSet.has(g.id)) } : null,
+    [current, hiddenSet],
+  );
   // Build time-series data for each metric (most recent last)
   const cpuData = useMemo(
-    () => history.map((s) => s.cpu.usage).slice(-30),
-    [history],
+    () => filteredHistory.map((s) => s.cpu.usage).slice(-30),
+    [filteredHistory],
   );
 
   const ramUsedData = useMemo(
-    () => history.map((s) => {
+    () => filteredHistory.map((s) => {
       if (s.ram.total <= 0) return -1;
       return (s.ram.used / s.ram.total) * 100;
     }).slice(-30),
-    [history],
+    [filteredHistory],
   );
 
   // GPU utilization — multi-series for overlapping lines
   const gpuIndices = useMemo(() => {
     const indices = new Set<string>();
-    for (const s of history) {
+    for (const s of filteredHistory) {
       for (const g of s.gpus) indices.add(g.id);
     }
     return Array.from(indices);
-  }, [history]);
+  }, [filteredHistory]);
 
   const gpuUsageSeries = useMemo(() => {
     return gpuIndices.map((id, idx) => ({
-      data: history.map((s) => {
+      data: filteredHistory.map((s) => {
         const gpu = s.gpus.find((g) => g.id === id);
         return gpu?.usage ?? -1;
       }).slice(-30),
       color: GPU_COLORS[idx % GPU_COLORS.length],
     }));
-  }, [history, gpuIndices]);
+  }, [filteredHistory, gpuIndices]);
 
   // VRAM usage — also multi-series
   const gpuVramSeries = useMemo(() => {
     return gpuIndices.map((id, idx) => {
-      const total = history[history.length - 1]?.gpus.find((g) => g.id === id)?.vramTotal ?? 0;
+      const total = filteredHistory[filteredHistory.length - 1]?.gpus.find((g) => g.id === id)?.vramTotal ?? 0;
       return {
-        data: history.map((s) => {
+        data: filteredHistory.map((s) => {
           const gpu = s.gpus.find((g) => g.id === id);
           if (!gpu || gpu.vramTotal <= 0) return -1;
           return (gpu.vramUsed / gpu.vramTotal) * 100;
@@ -186,15 +198,15 @@ export function SystemStatsBar({ history, current }: Props) {
         color: GPU_COLORS[idx % GPU_COLORS.length],
       };
     });
-  }, [history, gpuIndices]);
+  }, [filteredHistory, gpuIndices]);
 
   // Current values
-  const cpu = current?.cpu.usage ?? -1;
-  const ramPct = current && current.ram.total > 0
-    ? (current.ram.used / current.ram.total) * 100
+  const cpu = filteredCurrent?.cpu.usage ?? -1;
+  const ramPct = filteredCurrent && filteredCurrent.ram.total > 0
+    ? (filteredCurrent.ram.used / filteredCurrent.ram.total) * 100
     : -1;
-  const gpuUsage = getGpuAvgUsage(current?.gpus ?? []);
-  const gpuVramPct = getGpuAvgVramPct(current?.gpus ?? []);
+  const gpuUsage = getGpuAvgUsage(filteredCurrent?.gpus ?? []);
+  const gpuVramPct = getGpuAvgVramPct(filteredCurrent?.gpus ?? []);
 
   return (
     <div className="px-3 pb-2">
