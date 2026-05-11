@@ -253,7 +253,18 @@ function StatBox({ label, value, sparkData, color }: {
 }) {
   return (
     <div className="flex flex-col items-center py-0.5 gap-0.5">
-      <div className="rounded-lg bg-black/20 border border-white/[0.05] p-1.5 flex items-center justify-center shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]">
+      <div className="relative rounded-lg border border-white/[0.05] p-1.5 flex items-center justify-center overflow-hidden">
+        <div className="absolute inset-0 rounded-lg" style={{
+          background: 'rgba(0, 0, 0, 0.2)',
+          backgroundImage: `repeating-linear-gradient(
+            to bottom,
+            rgba(255, 255, 255, 0.04) 0px,
+            rgba(255, 255, 255, 0.04) 1px,
+            transparent 1px,
+            transparent 3px
+          )`,
+        }} />
+        <div className="absolute inset-0 rounded-lg shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]" />
         <Sparkline data={sparkData} color={color} emptyColor="rgba(148, 163, 184, 0.2)" />
       </div>
       <span className="text-[9px] text-white/40 font-mono">{label} <span className="text-white/50">{value}</span></span>
@@ -268,7 +279,18 @@ function MultiStatBox({ label, value, series }: {
 }) {
   return (
     <div className="flex flex-col items-center py-0.5 gap-0.5">
-      <div className="rounded-lg bg-black/20 border border-white/[0.05] p-1.5 flex items-center justify-center shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]">
+      <div className="relative rounded-lg border border-white/[0.05] p-1.5 flex items-center justify-center overflow-hidden">
+        <div className="absolute inset-0 rounded-lg" style={{
+          background: 'rgba(0, 0, 0, 0.2)',
+          backgroundImage: `repeating-linear-gradient(
+            to bottom,
+            rgba(255, 255, 255, 0.04) 0px,
+            rgba(255, 255, 255, 0.04) 1px,
+            transparent 1px,
+            transparent 3px
+          )`,
+        }} />
+        <div className="absolute inset-0 rounded-lg shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]" />
         <MultiSparkline series={series} emptyColor="rgba(148, 163, 184, 0.2)" />
       </div>
       <span className="text-[9px] text-white/40 font-mono">{label} <span className="text-white/50">{value}</span></span>
