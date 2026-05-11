@@ -129,34 +129,72 @@ const VENDOR_INTEL = "0x8086";
 
 // AMD GPU codenames (RDNA / GCN chip families)
 const AMD_CHIP_NAMES: Record<string, string> = {
+  // RDNA 4
+  "0x7590": "gfx1200", // RX 9060 / 9060 XT (Navi 44)
+  "0x7550": "gfx1201", // RX 9070 / 9070 XT / 9070 GRE (Navi 48)
+  "0x7551": "gfx1201", // AI PRO R9700 / R9700S / R9600D
   // RDNA 3
-  "0x747e": "gfx1100",
-  "0x747c": "gfx1100",
-  "0x744c": "gfx1101",
-  "0x7448": "gfx1101",
-  "0x744b": "gfx1101",
-  "0x73ff": "gfx1150",
-  "0x73ef": "gfx1150",
-  "0x73a0": "gfx1100",
-  "0x73a1": "gfx1100",
-  "0x7460": "gfx1100",
+  "0x7448": "gfx1100", // Pro W7900
+  "0x7449": "gfx1100", // Pro W7800 48GB
+  "0x744a": "gfx1100", // Pro W7900 Dual Slot
+  "0x744b": "gfx1100", // Pro W7900D
+  "0x744c": "gfx1100", // RX 7900 XT/XTX/GRE, 7900M
+  "0x745e": "gfx1100", // Pro W7800
+  "0x7460": "gfx1103", // Pro V710
+  "0x7461": "gfx1103", // Pro V710
+  "0x7470": "gfx1103", // Pro W7700
+  "0x747e": "gfx1103", // RX 7700 / 7700 XT / 7800 XT / 7800M
+  "0x7480": "gfx1150", // RX 7600 / 7600 XT / 7650 GRE / 7600S / 7700S
+  "0x7483": "gfx1150", // RX 7600M
+  "0x7489": "gfx1150", // Pro W7500
+  "0x7499": "gfx1150", // RX 7300 / 7400 / Pro W7400
   // RDNA 2
-  "0x73a3": "gfx1031",
+  "0x73a0": "gfx1030", // RX 6950 XT
+  "0x73a1": "gfx1030", // RX 6900 XT
+  "0x73a2": "gfx1030",
+  "0x73a3": "gfx1031", // RX 6800 XT
   "0x73a4": "gfx1031",
   "0x73a5": "gfx1031",
-  "0x73b0": "gfx1032",
-  "0x73b1": "gfx1032",
-  "0x73b3": "gfx1032",
-  "0x73b5": "gfx1032",
-  "0x73bf": "gfx1035",
-  // RDNA (Navi 10/12/14)
-  "0x687f": "gfx906",
+  "0x73a8": "gfx1031",
+  "0x73a9": "gfx1031",
+  "0x73ab": "gfx1031",
+  "0x73ac": "gfx1031",
+  "0x73ad": "gfx1031",
+  "0x73ae": "gfx1031",
+  "0x73af": "gfx1031",
+  "0x73bf": "gfx1035", // RX 6600M / 6600M XT
+  "0x73c0": "gfx1032", // RX 6700 XT / 6800M
+  "0x73c1": "gfx1032",
+  "0x73c3": "gfx1032",
+  "0x73da": "gfx1032",
+  "0x73db": "gfx1032",
+  "0x73dc": "gfx1032",
+  "0x73dd": "gfx1032",
+  "0x73de": "gfx1032",
+  "0x73df": "gfx1032",
+  "0x73e0": "gfx1031", // RX 6600 XT
+  "0x73e1": "gfx1031",
+  "0x73e2": "gfx1031",
+  "0x73e3": "gfx1031",
+  "0x73e8": "gfx1031",
+  "0x73e9": "gfx1031",
+  "0x73ea": "gfx1031",
+  "0x73eb": "gfx1031",
+  "0x73ec": "gfx1031",
+  "0x73ed": "gfx1031",
+  "0x73ef": "gfx1031", // RX 6600
+  "0x73ff": "gfx1031", // RX 6600M
+  // RDNA (Vega / Navi)
+  "0x687f": "gfx906",  // RX Vega 56/64
   "0x687e": "gfx906",
   "0x687d": "gfx906",
   "0x687c": "gfx906",
-  "0x67df": "gfx906",
-  "0x67c0": "gfx1010",
+  "0x67df": "gfx906",  // RX 580/570
+  "0x67c0": "gfx1010", // RX 5600 XT / 5700 XT
   "0x67c1": "gfx1010",
+  // MI300
+  "0x74a0": "gfx942",  // MI300A
+  "0x74a1": "gfx942",  // MI300X
 };
 
 async function discoverGpus(): Promise<GpuInfo[]> {
