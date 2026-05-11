@@ -134,74 +134,153 @@ const VENDOR_AMD = "0x1002";
 const VENDOR_NVIDIA = "0x10de";
 const VENDOR_INTEL = "0x8086";
 
-// AMD GPU codenames (RDNA / GCN chip families)
+// AMD GPU codenames — PCI device ID → LLVM gfx target name
+// Sources: ROCm GPU hardware specs, Coelacanth's Dream AMDGPU database,
+// LLVM AMDGPUUsage.rst, Gentoo amdgpu_targets USE flags, linux kernel amdgpu.ids
 const AMD_CHIP_NAMES: Record<string, string> = {
-  // RDNA 4
-  "0x7590": "gfx1200", // RX 9060 / 9060 XT (Navi 44)
-  "0x7550": "gfx1201", // RX 9070 / 9070 XT / 9070 GRE (Navi 48)
-  "0x7551": "gfx1201", // AI PRO R9700 / R9700S / R9600D
-  // RDNA 3
+  // ── RDNA 4 (GFX12) ────────────────────────────────────────────────────────
+  "0x7590": "gfx1200", // Navi44 — RX 9060 / 9060 XT / 9060 XT LP
+  "0x7550": "gfx1201", // Navi48 — RX 9070 / 9070 XT / 9070 GRE
+  "0x7551": "gfx1201", // Navi48 — AI PRO R9700 / R9700S / R9600D
+
+  // ── RDNA 3 — Navi31 / GC 11.0.0 (gfx1100) ───────────────────────────────
+  "0x73a8": "gfx1100", // Navi31 early/dev
   "0x7448": "gfx1100", // Pro W7900
   "0x7449": "gfx1100", // Pro W7800 48GB
   "0x744a": "gfx1100", // Pro W7900 Dual Slot
   "0x744b": "gfx1100", // Pro W7900D
-  "0x744c": "gfx1100", // RX 7900 XT/XTX/GRE, 7900M
+  "0x744c": "gfx1100", // RX 7900 XTX / XT / GRE, 7900M
   "0x745e": "gfx1100", // Pro W7800
-  "0x7460": "gfx1103", // Pro V710
-  "0x7461": "gfx1103", // Pro V710
-  "0x7470": "gfx1103", // Pro W7700
-  "0x747e": "gfx1103", // RX 7700 / 7700 XT / 7800 XT / 7800M
-  "0x7480": "gfx1150", // RX 7600 / 7600 XT / 7650 GRE / 7600S / 7700S
-  "0x7483": "gfx1150", // RX 7600M
-  "0x7489": "gfx1150", // Pro W7500
-  "0x7499": "gfx1150", // RX 7300 / 7400 / Pro W7400
-  // RDNA 2
-  "0x73a0": "gfx1030", // RX 6950 XT
-  "0x73a1": "gfx1030", // RX 6900 XT
+
+  // ── RDNA 3 — Navi32 / GC 11.0.3 (gfx1101) ───────────────────────────────
+  "0x7460": "gfx1101", // Pro V710
+  "0x7461": "gfx1101", // Pro V710
+  "0x7470": "gfx1101", // Pro W7700
+  "0x747e": "gfx1101", // RX 7800 XT / 7700 XT / 7700 / 7800M
+
+  // ── RDNA 3 — Navi33 / GC 11.0.2 (gfx1102) ───────────────────────────────
+  "0x7480": "gfx1102", // RX 7600 / 7600 XT / 7650 GRE / 7600S / 7700S
+  "0x7483": "gfx1102", // RX 7600M / 7600M XT
+  "0x7489": "gfx1102", // Pro W7500
+  "0x7499": "gfx1102", // RX 7300 / 7400 / Pro W7400
+
+  // ── RDNA 3 APU — Phoenix / GC 11.0.1 (gfx1103) ──────────────────────────
+  // No discrete PCI IDs map to gfx1103 — it's an iGPU (Radeon 780M / 700M)
+  // detected via iGPU path rather than this PCI ID table
+
+  // ── RDNA 3.5 APUs — Strix Point / etc (gfx1150 / gfx1151 / gfx1152) ────
+  // These are iGPUs (Radeon 890M / 8060S / 860M), not discrete PCI devices
+
+  // ── RDNA 2 — Navi21 / Sienna Cichlid (gfx1030) ──────────────────────────
+  "0x73a0": "gfx1030", // Pro V620 / RX 6950 XT
+  "0x73a1": "gfx1030", // Pro V620
   "0x73a2": "gfx1030",
-  "0x73a3": "gfx1031", // RX 6800 XT
-  "0x73a4": "gfx1031",
-  "0x73a5": "gfx1031",
-  "0x73a8": "gfx1031",
-  "0x73a9": "gfx1031",
-  "0x73ab": "gfx1031",
-  "0x73ac": "gfx1031",
-  "0x73ad": "gfx1031",
-  "0x73ae": "gfx1031",
-  "0x73af": "gfx1031",
-  "0x73bf": "gfx1035", // RX 6600M / 6600M XT
-  "0x73c0": "gfx1032", // RX 6700 XT / 6800M
-  "0x73c1": "gfx1032",
-  "0x73c3": "gfx1032",
-  "0x73da": "gfx1032",
-  "0x73db": "gfx1032",
-  "0x73dc": "gfx1032",
-  "0x73dd": "gfx1032",
-  "0x73de": "gfx1032",
-  "0x73df": "gfx1032",
-  "0x73e0": "gfx1031", // RX 6600 XT
-  "0x73e1": "gfx1031",
-  "0x73e2": "gfx1031",
-  "0x73e3": "gfx1031",
-  "0x73e8": "gfx1031",
-  "0x73e9": "gfx1031",
-  "0x73ea": "gfx1031",
-  "0x73eb": "gfx1031",
-  "0x73ec": "gfx1031",
-  "0x73ed": "gfx1031",
-  "0x73ef": "gfx1031", // RX 6600
-  "0x73ff": "gfx1031", // RX 6600M
-  // RDNA (Vega / Navi)
-  "0x687f": "gfx906",  // RX Vega 56/64
-  "0x687e": "gfx906",
-  "0x687d": "gfx906",
-  "0x687c": "gfx906",
-  "0x67df": "gfx906",  // RX 580/570
-  "0x67c0": "gfx1010", // RX 5600 XT / 5700 XT
-  "0x67c1": "gfx1010",
-  // MI300
+  "0x73a3": "gfx1030", // Pro W6800
+  "0x73a4": "gfx1030",
+  "0x73a5": "gfx1030", // RX 6950 XT
+  "0x73ab": "gfx1030",
+  "0x73ac": "gfx1030",
+  "0x73ad": "gfx1030",
+  "0x73ae": "gfx1030", // Pro V620
+  "0x73af": "gfx1030", // RX 6900 XT
+  "0x73bd": "gfx1030",
+  "0x73bf": "gfx1030", // RX 6900 XT / 6800 XT / 6800
+
+  // ── RDNA 2 — Navi22 / Navy Flounder (gfx1031) ──────────────────────────
+  "0x73c0": "gfx1031",
+  "0x73c1": "gfx1031",
+  "0x73c3": "gfx1031",
+  "0x73da": "gfx1031",
+  "0x73db": "gfx1031",
+  "0x73dc": "gfx1031",
+  "0x73dd": "gfx1031",
+  "0x73de": "gfx1031",
+  "0x73df": "gfx1031", // RX 6750 XT / 6700 XT / 6700 / 6700M
+
+  // ── RDNA 2 — Navi23 / Dimgrey Cavefish (gfx1032) ───────────────────────
+  "0x73e0": "gfx1032",
+  "0x73e1": "gfx1032", // Pro W6600M
+  "0x73e2": "gfx1032",
+  "0x73e3": "gfx1032", // Pro W6600
+  "0x73e8": "gfx1032",
+  "0x73e9": "gfx1032",
+  "0x73ea": "gfx1032",
+  "0x73eb": "gfx1032",
+  "0x73ec": "gfx1032",
+  "0x73ed": "gfx1032",
+  "0x73ef": "gfx1032", // RX 6800S / 6650 XT / 6700S
+  "0x73ff": "gfx1032", // RX 6600 XT / 6600 / 6600M
+
+  // ── RDNA 2 — Navi24 / Beige Goby (gfx1034) ─────────────────────────────
+  "0x7420": "gfx1034",
+  "0x7421": "gfx1034", // Pro W6500M
+  "0x7422": "gfx1034", // Pro W6400
+  "0x7423": "gfx1034", // Pro W6300M / W6300
+  "0x7424": "gfx1034", // RX 6300
+  "0x743f": "gfx1034", // RX 6500 XT / 6500M / 6400
+
+  // ── RDNA 1 — Navi10 (gfx1010) ─────────────────────────────────────────
+  "0x7310": "gfx1010", // Pro W5700X
+  "0x7312": "gfx1010", // Pro W5700
+  "0x7318": "gfx1010",
+  "0x7319": "gfx1010", // Pro 5700 XT
+  "0x731a": "gfx1010",
+  "0x731b": "gfx1010", // Pro 5700
+  "0x731e": "gfx1010",
+  "0x731f": "gfx1010", // RX 5700 XT / 5700 / 5600 XT / 5600M
+
+  // ── RDNA 1 — Navi14 (gfx1012) ─────────────────────────────────────────
+  "0x7340": "gfx1012", // Pro W5500X
+  "0x7341": "gfx1012", // Pro W5500
+  "0x7343": "gfx1012",
+  "0x7347": "gfx1012", // Pro W5500M
+  "0x734f": "gfx1012", // Pro W5300M
+
+  // ── Vega — Vega20 (gfx906) ─────────────────────────────────────────────
+  "0x66a0": "gfx906",
+  "0x66a1": "gfx906",  // MI50
+  "0x66a2": "gfx906",
+  "0x66a3": "gfx906",  // Pro Vega II
+  "0x66a4": "gfx906",
+  "0x66a7": "gfx906",
+  "0x66af": "gfx906",  // Radeon VII / Pro VII
+
+  // ── Vega — Vega10 (gfx900) ─────────────────────────────────────────────
+  "0x6860": "gfx900",  // Instinct MI25
+  "0x6861": "gfx900",  // Pro WX 9100
+  "0x6862": "gfx900",  // Pro SSG
+  "0x6863": "gfx900",  // Vega Frontier Edition
+  "0x6867": "gfx900",  // Pro Vega 56
+  "0x6868": "gfx900",  // Pro WX 8200
+  "0x687f": "gfx900",  // RX Vega 56 / 64
+
+  // ── GCN — Polaris (gfx803) ─────────────────────────────────────────────
+  "0x67c0": "gfx803",  // Pro WX 7100
+  "0x67c2": "gfx803",  // Pro V7350x2 / V7300X
+  "0x67c4": "gfx803",  // Pro WX 7100
+  "0x67c7": "gfx803",  // Pro WX 5100
+  "0x67df": "gfx803",  // RX 580 / 570 / 590
+  "0x67e0": "gfx803",  // Pro WX Series
+  "0x67e3": "gfx803",  // Pro WX 4100
+  "0x67e8": "gfx803",  // Pro WX Series
+  "0x67ef": "gfx803",  // RX 560 / 460
+  "0x67ff": "gfx803",  // RX 550 / 560
+
+  // ── CDNA3 — gfx942 (MI300) ─────────────────────────────────────────────
   "0x74a0": "gfx942",  // MI300A
   "0x74a1": "gfx942",  // MI300X
+
+  // ── CDNA2 — Aldebaran (gfx90a) ────────────────────────────────────────
+  "0x7408": "gfx90a",
+  "0x740c": "gfx90a",
+  "0x740f": "gfx90a",
+  "0x7410": "gfx90a",
+
+  // ── CDNA — Arcturus (gfx908) ──────────────────────────────────────────
+  "0x7388": "gfx908",
+  "0x738c": "gfx908",  // MI100
+  "0x738e": "gfx908",
+  "0x7390": "gfx908",
 };
 
 async function discoverGpus(): Promise<GpuInfo[]> {
