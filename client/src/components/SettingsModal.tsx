@@ -352,6 +352,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [systemStatsEnabled, setSystemStatsEnabled] = useState(settings.systemStatsEnabled ?? false);
   const [systemStatsBufferSeconds, setSystemStatsBufferSeconds] = useState(settings.systemStatsBufferSeconds ?? 60);
   const systemStatsBufferDd = useDropdown();
+  // GPU visibility: list of discovered GPUs with visibility toggles
+  const [availableGpus, setAvailableGpus] = useState<Array<{ id: string; name: string; driver: string }>>([]);
+  const [hiddenGpus, setHiddenGpus] = useState<Set<string>>(() => new Set(settings.systemStatsHiddenGpus ?? []));
   const [automations, setAutomations] = useState<AutomationTask[]>([]);
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [automationsRunningTaskId, setAutomationsRunningTaskId] = useState<string | null>(null);
@@ -433,6 +436,26 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  // Discover available GPUs for visibility toggles
+  useEffect(() => {
+    let cancelled = false;
+    async function discover() {
+      try {
+        const { fetchSystemStats: fetchStats } = await import("../api/client");
+        const data = await fetchStats();
+        if (cancelled) return;
+        if (data.current && data.current.gpus.length > 0) {
+          const gpus = data.current.gpus.map((g) => ({ id: g.id, name: g.name, driver: g.driver }));
+          setAvailableGpus(gpus);
+        }
+      } catch {
+        // GPU discovery failed — non-critical
+      }
+    }
+    discover();
+    return () => { cancelled = true; };
   }, []);
 
    const refreshLlamaServers = useCallback(async (showSpinner = false) => {
@@ -959,6 +982,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       postSynthesisWarmCount,
       systemStatsEnabled,
       systemStatsBufferSeconds,
+      systemStatsHiddenGpus: Array.from(hiddenGpus),
       extractionModelId,
       extractionModelUrl: extractionModelUrl.trim() || undefined,
       extractionFallbackEnabled,
@@ -4184,8 +4208,43 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                  </Dropdown>
 	                </div>
 	              )}
+
+	                {/* GPU Visibility */}
+	                {systemStatsEnabled && availableGpus.length > 0 && (
+	                  <div>
+	                    <label className="block text-sm font-medium text-white/60">GPU visibility</label>
+	                    <p className="text-xs text-white/30 mb-2">Select which GPUs to show in the sidebar</p>
+	                    <div className="space-y-1.5">
+	                      {availableGpus.map((gpu) => {
+	                        const isHidden = hiddenGpus.has(gpu.id);
+	                        return (
+	                          <div key={gpu.id} className="flex items-center justify-between">
+	                            <div className="flex items-center gap-2">
+	                              <button
+	                                onClick={() => {
+	                                  const next = new Set(hiddenGpus);
+	                                  if (isHidden) next.delete(gpu.id);
+	                                  else next.add(gpu.id);
+	                                  setHiddenGpus(next);
+	                                }}
+	                                className={`relative w-10 h-5 rounded-full transition-colors ${!isHidden ? "bg-purple-500/60" : "bg-white/15"}`}
+	                              >
+	                                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white/90 transition-transform ${!isHidden ? "translate-x-5" : ""}`} />
+	                              </button>
+	                              <div>
+	                                <span className="text-xs text-white/60">{gpu.name}</span>
+	                                <span className="text-[10px] text-white/30 ml-1.5">({gpu.id})</span>
+	                              </div>
+	                            </div>
+	                            <span className="text-[10px] text-white/30">{gpu.driver}</span>
+	                          </div>
+	                        );
+	                      })}
+	                    </div>
+	                  </div>
+	                )}
+	              </div>
 	            </div>
-	          </div>
 
 	          {/* Memory Blocks */}
 	          <div id="memory-blocks" className="border-t border-white/10 pt-6">

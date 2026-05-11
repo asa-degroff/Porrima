@@ -36,6 +36,7 @@ let pollIntervalMs = 2000; // 2 seconds
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let lastSample: SystemStatsSample | null = null;
 let lastCpuStats: { total: number; idle: number; timestamp: number } | null = null;
+let hiddenGpuIds = new Set<string>();
 
 export function setHistoryDuration(seconds: number) {
   bufferSeconds = seconds;
@@ -44,6 +45,14 @@ export function setHistoryDuration(seconds: number) {
 
 export function getHistoryDuration(): number {
   return bufferSeconds;
+}
+
+export function setHiddenGpus(ids: string[]) {
+  hiddenGpuIds = new Set(ids);
+}
+
+export function getHiddenGpus(): string[] {
+  return Array.from(hiddenGpuIds);
 }
 
 export function getHistory(): SystemStatsSample[] {
@@ -300,7 +309,7 @@ async function pollOnce() {
       cpu: { usage: cpuUsage },
       ram: meminfo.ram,
       swap: meminfo.swap,
-      gpus,
+      gpus: gpus.filter((g) => !hiddenGpuIds.has(g.id)),
     };
 
     lastSample = sample;

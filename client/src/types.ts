@@ -385,6 +385,7 @@ export interface Settings {
   postSynthesisWarmCount?: number;
   systemStatsEnabled?: boolean;
   systemStatsBufferSeconds?: number;
+  systemStatsHiddenGpus?: string[];
   // Tool options
   // read_file default line limit when no `limit` arg is provided (default 1000).
   readFileDefaultLines?: number;
@@ -634,4 +635,5 @@ export interface SystemStatsResponse {
   current: SystemStatsSample | null;
   history: SystemStatsSample[];
   bufferSeconds: number;
+  hiddenGpus: string[];
 }

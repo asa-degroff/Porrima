@@ -366,6 +366,8 @@ export interface Settings {
   systemStatsEnabled?: boolean;
   // System stats history buffer duration in seconds (default 60)
   systemStatsBufferSeconds?: number;
+  // GPU IDs to hide from system stats (e.g. ["card2"] for iGPU)
+  systemStatsHiddenGpus?: string[];
   // Tool options
   // read_file default line limit when no `limit` arg is provided (default 1000).
   readFileDefaultLines?: number;

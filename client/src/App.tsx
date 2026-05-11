@@ -35,7 +35,7 @@ import { useTTS } from "./hooks/useTTS";
 import { TTSControlBar } from "./components/TTSControlBar";
 import { useNotebooks } from "./hooks/useNotebooks";
 import { useCacheResidency } from "./hooks/useCacheResidency";
-import { fetchSystemStats } from "./api/client";
+import { fetchSystemStats, updateSystemStatsSettings } from "./api/client";
 import type { SystemStatsSample } from "./types";
 import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis, triggerWakeCycle } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
@@ -137,6 +137,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       cancelled = true;
       clearInterval(timer);
     };
+  }, []);
+
+  // Sync hidden GPU settings from server
+  useEffect(() => {
+    if (!settings.systemStatsHiddenGpus || settings.systemStatsHiddenGpus.length === 0) return;
+    // Initial sync: apply saved hidden GPUs to server
+    updateSystemStatsSettings({ hiddenGpus: settings.systemStatsHiddenGpus }).catch(() => {});
   }, []);
 
   // Load UI state from server on mount

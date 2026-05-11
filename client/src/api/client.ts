@@ -1957,7 +1957,7 @@ export async function fetchSystemStats(): Promise<SystemStatsResponse> {
   return res.json();
 }
 
-export async function updateSystemStatsSettings(settings: { bufferSeconds?: number }): Promise<{ bufferSeconds: number }> {
+export async function updateSystemStatsSettings(settings: { bufferSeconds?: number; hiddenGpus?: string[] }): Promise<{ bufferSeconds: number; hiddenGpus: string[] }> {
   const res = await apiFetch(`${BASE}/system-stats`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },

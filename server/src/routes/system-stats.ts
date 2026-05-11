@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getHistory, getCurrent, setHistoryDuration, getHistoryDuration } from "../services/system-stats.js";
+import { getHistory, getCurrent, setHistoryDuration, getHistoryDuration, setHiddenGpus, getHiddenGpus } from "../services/system-stats.js";
 
 const router = Router();
 
@@ -10,20 +10,27 @@ router.get("/", (_req, res) => {
       current: getCurrent(),
       history: getHistory(),
       bufferSeconds: getHistoryDuration(),
+      hiddenGpus: getHiddenGpus(),
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// PATCH /api/system-stats — update settings (buffer duration)
+// PATCH /api/system-stats — update settings (buffer duration, hidden GPUs)
 router.patch("/", async (req, res) => {
   try {
-    const { bufferSeconds } = req.body || {};
+    const { bufferSeconds, hiddenGpus } = req.body || {};
     if (typeof bufferSeconds === "number") {
       setHistoryDuration(bufferSeconds);
     }
-    res.json({ bufferSeconds: getHistoryDuration() });
+    if (Array.isArray(hiddenGpus)) {
+      setHiddenGpus(hiddenGpus);
+    }
+    res.json({
+      bufferSeconds: getHistoryDuration(),
+      hiddenGpus: getHiddenGpus(),
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
