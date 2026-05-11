@@ -858,7 +858,7 @@ export function Sidebar({
 
         {/* System Stats */}
         {showSystemStats && systemStatsHistory.length > 0 && (
-          <div className="pt-1 border-b border-white/5">
+          <div className="border-b border-white/5">
             <SystemStatsBar history={systemStatsHistory} current={systemStatsCurrent} />
           </div>
         )}
@@ -947,64 +947,62 @@ export function Sidebar({
         {/* Projects Section */}
         {projects.length > 0 && (
           <div className={`flex flex-col min-h-0 border-b border-white/5 ${projectsExpanded ? "flex-1" : "shrink-0"}`}>
-            <div className="px-3 pt-3 pb-1 shrink-0">
-              <div className="flex items-center justify-between mb-1.5">
-                <button
-                  onClick={() => setProjectsExpanded(!projectsExpanded)}
-                  className="flex items-center gap-1.5 px-1 group cursor-pointer"
-                >
-                  <span className="text-white/30 group-hover:text-white/50 transition-colors">
-                    <ChevronIcon expanded={projectsExpanded} />
-                  </span>
-                  <span className="text-[10px] font-semibold tracking-wider uppercase text-white/30 group-hover:text-white/50 transition-colors">
-                    Projects
-                  </span>
-                  {!projectsExpanded && projects.length > 0 && (
-                    <span className="text-[10px] text-white/20 ml-1">{projects.length}</span>
-                  )}
-                </button>
-                {projectsExpanded && (
-                  <div className="flex items-center gap-1">
-                    {/* Edit mode toggle */}
-                    <button
-                      onClick={() => {
-                        if (!projectsEditMode) {
-                          // Save current expanded states before entering edit mode
-                          const states: Record<string, boolean> = {};
-                          projects.forEach(p => {
-                            states[p.id] = getProjectExpanded(p.id);
-                          });
-                          setPreviousExpandedStates(states);
-                          // Collapse all projects when entering edit mode
-                          projects.forEach(p => setProjectExpanded(p.id, false));
-                        } else {
-                          // Restore previous expanded states when exiting edit mode
-                          Object.entries(previousExpandedStates).forEach(([id, expanded]) => {
-                            setProjectExpanded(id, expanded);
-                          });
-                        }
-                        setProjectsEditMode(!projectsEditMode);
-                      }}
-                      className={`text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5 ${projectsEditMode ? 'text-white/60 bg-white/10' : ''}`}
-                      title={projectsEditMode ? "Done editing" : "Edit projects"}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-                      </svg>
-                    </button>
-                    <button
-                      onClick={onNewProject}
-                      className="text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5"
-                      title="New project"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 5v14" />
-                        <path d="M5 12h14" />
-                      </svg>
-                    </button>
-                  </div>
+            <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center justify-between">
+              <button
+                onClick={() => setProjectsExpanded(!projectsExpanded)}
+                className="flex items-center gap-1.5 px-1 mb-1 group cursor-pointer flex-1 min-w-0"
+              >
+                <span className="text-white/30 group-hover:text-white/50 transition-colors">
+                  <ChevronIcon expanded={projectsExpanded} />
+                </span>
+                <span className="text-[10px] font-semibold tracking-wider uppercase text-white/30 group-hover:text-white/50 transition-colors">
+                  Projects
+                </span>
+                {!projectsExpanded && projects.length > 0 && (
+                  <span className="text-[10px] text-white/20 ml-auto">{projects.length}</span>
                 )}
-              </div>
+              </button>
+              {projectsExpanded && (
+                <div className="flex items-center gap-1 mb-1">
+                  {/* Edit mode toggle */}
+                  <button
+                    onClick={() => {
+                      if (!projectsEditMode) {
+                        // Save current expanded states before entering edit mode
+                        const states: Record<string, boolean> = {};
+                        projects.forEach(p => {
+                          states[p.id] = getProjectExpanded(p.id);
+                        });
+                        setPreviousExpandedStates(states);
+                        // Collapse all projects when entering edit mode
+                        projects.forEach(p => setProjectExpanded(p.id, false));
+                      } else {
+                        // Restore previous expanded states when exiting edit mode
+                        Object.entries(previousExpandedStates).forEach(([id, expanded]) => {
+                          setProjectExpanded(id, expanded);
+                        });
+                      }
+                      setProjectsEditMode(!projectsEditMode);
+                    }}
+                    className={`text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5 ${projectsEditMode ? 'text-white/60 bg-white/10' : ''}`}
+                    title={projectsEditMode ? "Done editing" : "Edit projects"}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={onNewProject}
+                    className="text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5"
+                    title="New project"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 5v14" />
+                      <path d="M5 12h14" />
+                    </svg>
+                  </button>
+                </div>
+              )}
             </div>
             {projectsExpanded && (
               <div className="flex-1 overflow-y-auto pb-1">
