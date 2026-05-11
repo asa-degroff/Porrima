@@ -646,6 +646,64 @@ export function getChatMessageWindow(
   };
 }
 
+/**
+ * Optimized chat fetch: loads metadata + windowed messages directly from the
+ * message row table without parsing the full JSON column. Saves significant
+ * time for large chats (thousands of messages) since getChat() would otherwise
+ * parse ALL messages from both storage formats before discarding most of them.
+ */
+export async function getChatWithWindow(
+  id: string,
+  opts: { before?: number; limit?: number } = {}
+): Promise<Chat | null> {
+  const db = getDb();
+  const row = db.prepare(
+    `SELECT id, title, type, modelId, systemPrompt, contextWindow, projectId,
+            activeSkills, createdAt, lastModified,
+            lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastZeitgeistSynthesisAt
+     FROM chats WHERE id = ?`
+  ).get(id) as
+    | {
+        id: string; title: string; type: string; modelId: string;
+        systemPrompt: string | null; contextWindow: number | null;
+        projectId: string | null; activeSkills: string | null;
+        createdAt: string; lastModified: string;
+        lastDelayedExtractionAt: string | null;
+        lastDelayedExtractionMessageIndex: number | null;
+        lastZeitgeistSynthesisAt: string | null;
+      }
+    | undefined;
+
+  if (!row) return null;
+
+  const window = getChatMessageWindow(id, {
+    before: opts.before,
+    limit: opts.limit ?? 200,
+  });
+
+  const chat: Chat = {
+    id: row.id,
+    title: row.title,
+    type: (row.type as "agent" | "quick" | "system" | "bluesky") || "quick",
+    modelId: row.modelId,
+    systemPrompt: row.systemPrompt || "You are a helpful assistant.",
+    ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
+    messages: window.messages,
+    messageOffset: window.offset,
+    messageTotal: window.total,
+    hasMoreMessages: window.hasMoreBefore,
+    createdAt: row.createdAt,
+    lastModified: row.lastModified,
+    ...(row.projectId ? { projectId: row.projectId } : {}),
+    ...(row.activeSkills ? { activeSkills: JSON.parse(row.activeSkills) } : {}),
+    ...(row.lastDelayedExtractionAt ? { lastDelayedExtractionAt: row.lastDelayedExtractionAt } : {}),
+    ...(row.lastDelayedExtractionMessageIndex !== null && row.lastDelayedExtractionMessageIndex !== undefined ? { lastDelayedExtractionMessageIndex: row.lastDelayedExtractionMessageIndex } : {}),
+    ...(row.lastZeitgeistSynthesisAt ? { lastZeitgeistSynthesisAt: row.lastZeitgeistSynthesisAt } : {}),
+  };
+
+  return chat;
+}
+
 export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean }): Promise<void> {
   await withChatWriteLock(chat.id, async () => {
     const db = getDb();

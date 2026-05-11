@@ -1556,6 +1556,15 @@ export async function fetchChat(id: string, opts: { messageLimit?: number } = {}
   return res.json();
 }
 
+/** Fetch only chat metadata (no messages) for freshness comparison.
+ *  Returns { id, title, type, modelId, lastModified, projectId, contextWindow, messageCount }
+ *  This is much faster than fetchChat() for checking if cached data is stale. */
+export async function fetchChatHeader(id: string): Promise<{ id: string; title: string; type: string; modelId: string; lastModified: string; projectId: string | null; contextWindow: number | null; messageCount: number }> {
+  const res = await apiFetch(`${BASE}/chats/${id}/header`);
+  if (!res.ok) throw new Error("Failed to fetch chat header");
+  return res.json();
+}
+
 export async function fetchChatMessages(
   id: string,
   opts: { before?: number; limit?: number } = {}

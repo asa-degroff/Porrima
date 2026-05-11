@@ -1123,13 +1123,28 @@ export function useChat(chatId: string | null) {
     return () => { cancelled = true; };
   }, [prepareStream, makeStreamCallbacks, setActiveChatData]);
 
-  // Reconnect to a server-side in-flight stream. Runs after the chat-switch
-  // effect resets state. If the server reports an active stream for this chat
-  // and nothing is tracked locally, attach via the reconnect endpoint — the
-  // server replays buffered SSE events then continues live.
+  // ---------- Stale-content detection ----------
+  // Track which chats have recently been streaming so we can skip the
+  // getChatStatus round-trip for non-streaming switches.
+  const recentlyStreamingRef = useRef<Set<string>>(new Set());
+
+  // Mark a chat as recently streaming when the user sends a message,
+  // and auto-expire the marker after a few minutes.
+  const markRecentlyStreaming = useCallback((id: string) => {
+    recentlyStreamingRef.current.add(id);
+    setTimeout(() => recentlyStreamingRef.current.delete(id), 5 * 60_000);
+  }, []);
+
+  // Reconnect to a server-side in-flight stream. Only called when we have
+  // reason to believe a stream is active (recently streaming, or visibility
+  // change while streaming).
   useEffect(() => {
     if (!chatId) return;
     if (bgStreams.has(chatId)) return;
+    // Only attempt reconnect if this chat was recently streaming.
+    // This avoids a network round-trip on every chat switch for the
+    // common case where no stream is in progress.
+    if (!recentlyStreamingRef.current.has(chatId)) return;
 
     let cancelled = false;
     (async () => {
@@ -1146,12 +1161,16 @@ export function useChat(chatId: string | null) {
   // When the tab returns from the background, the browser may have killed the
   // SSE connection during backgrounding (common with fetch-based streams).
   // Detect this and reconnect automatically instead of requiring a page refresh.
+  // Only attempts reconnection if the chat was recently streaming.
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
 
       const activeChatId = activeChatIdRef.current;
       if (!activeChatId) return;
+
+      // Only attempt reconnection if the chat was recently streaming.
+      if (!recentlyStreamingRef.current.has(activeChatId)) return;
 
       (async () => {
         const status = await getChatStatus(activeChatId);
@@ -1176,6 +1195,7 @@ export function useChat(chatId: string | null) {
     (text: string, images?: ImageAttachment[]) => {
       if (!chatId) return;
       const targetChatId = chatId;
+      markRecentlyStreaming(targetChatId);
 
       const userMsg: ChatMessage = {
         role: "user",
@@ -1290,6 +1310,7 @@ export function useChat(chatId: string | null) {
     (index: number, newText: string, images?: ImageAttachment[]) => {
       if (!chatId || streaming || !navigator.onLine) return;
       const targetChatId = chatId;
+      markRecentlyStreaming(targetChatId);
       const currentOffset = messageOffsetRef.current;
       const localIndex = index - messageOffsetRef.current;
       if (localIndex < 0 || localIndex >= messages.length) return;
@@ -1528,5 +1549,6 @@ export function useChat(chatId: string | null) {
     queueProcessing,
     titleUpdate,
     hasCompactionSummary,
+    markRecentlyStreaming,
   };
 }

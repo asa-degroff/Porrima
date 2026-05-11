@@ -13,11 +13,17 @@ import {
 } from "../lib/db";
 import type { Chat, ChatListItem, ChatType } from "../types";
 
+/** How often to poll the server for chat list changes (ms). Keeps the sidebar
+ *  in sync across devices and picks up titles/preview changes from background
+ *  automations, server-side message sends, etc. */
+const CHAT_LIST_POLL_INTERVAL_MS = 30_000;
+
 export function useChats() {
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [isFromCache, setIsFromCache] = useState(false);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refreshNow = useCallback(async (forceFresh: boolean = false) => {
     if (forceFresh) {
@@ -57,6 +63,35 @@ export function useChats() {
 
   useEffect(() => {
     refreshNow(true);
+  }, [refreshNow]);
+
+  // Periodic sidebar refresh: keeps the chat list in sync with server changes
+  // (titles, previews, lastModified, new/deleted chats from other devices).
+  // Skips when the tab is hidden to avoid wasting network/battery.
+  useEffect(() => {
+    let cancelled = false;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      // Refresh immediately when returning from background — stale data is
+      // likely if the user was active on another device.
+      refreshNow(false).catch(() => {});
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    pollTimerRef.current = setInterval(() => {
+      if (cancelled || document.visibilityState !== "visible") return;
+      refreshNow(false).catch(() => {});
+    }, CHAT_LIST_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
   }, [refreshNow]);
 
   const createChat = useCallback(
@@ -122,5 +157,5 @@ export function useChats() {
     );
   }, []);
 
-  return { chats, loading, createChat, removeChat, updateChatTitle, refresh, refreshImmediate, isFromCache };
+  return { chats, loading, createChat, removeChat, updateChatTitle, refresh, refreshImmediate, isFromCache, refreshNow };
 }

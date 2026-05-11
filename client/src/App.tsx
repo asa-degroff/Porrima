@@ -27,7 +27,7 @@ import { useSettings } from "./hooks/useSettings";
 import { useAuth } from "./hooks/useAuth";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
 import { useKeyboardInset } from "./hooks/useKeyboardInset";
-import { fetchChat, updateChat as apiUpdateChat } from "./api/client";
+import { fetchChat, fetchChatHeader, updateChat as apiUpdateChat } from "./api/client";
 import { setCachedChat, getCachedChat, clearCachedChat } from "./lib/db";
 import { HapticsProvider } from "./hooks/useHaptics";
 import { ActivityStyleProvider } from "./hooks/useActivityStyle";
@@ -414,6 +414,48 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     prevOnlineRef.current = isOnline;
   }, [isOnline, refreshImmediate, processQueue]);
 
+  // Refresh active chat data when the tab becomes visible (e.g. after using
+  // another device). Keeps the view in sync with server without a full reload.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!activeChatId) return;
+
+      // Refresh the chat list sidebar (titles, previews, ordering)
+      refresh();
+
+      // Only refresh the active chat if no stream is in progress
+      if (streaming || hasBackgroundStream(activeChatId)) return;
+
+      // First check if the header indicates the chat has changed.
+      // This avoids the ~100ms-1s full chat download when nothing changed.
+      fetchChatHeader(activeChatId)
+        .then((header) => {
+          setActiveChat((prev) => {
+            // Only re-fetch full messages if the server data is newer
+            if (!prev || header.lastModified <= prev.lastModified) return prev;
+            // Header is newer — fetch full chat data
+            fetchChat(activeChatId, { messageLimit: INITIAL_MESSAGE_LIMIT })
+              .then((chat) => {
+                setActiveChat(chat);
+                setActiveChatData(chat);
+                loadMessages(chat.messages, {
+                  offset: chat.messageOffset ?? 0,
+                  total: chat.messageTotal ?? chat.messages.length,
+                });
+                setCachedChat(chat).catch(() => {});
+              })
+              .catch(() => {});
+            return prev;
+          });
+        })
+        .catch(() => {}); // Network error — cached data is fine
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [activeChatId, streaming, refresh, loadMessages, setActiveChatData]);
+
   // Update chat title when LLM-generated title arrives
   useEffect(() => {
     if (!titleUpdate) return;
@@ -480,10 +522,18 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           });
         }
 
-        // Background refresh: update cache from server without blocking the UI
-        fetchChat(id, { messageLimit: INITIAL_MESSAGE_LIMIT })
-          .then((chat: Chat | null) => {
-            if (chat) {
+        // Background refresh: update cache from server without blocking the UI.
+        // Skip the full refetch if the cached data is less than a few seconds
+        // old — avoids redundant work when rapidly switching between chats.
+        const cacheAge = Date.now() - new Date(cached.lastModified).getTime();
+        const FRESHNESS_THRESHOLD_MS = 10_000; // 10 seconds
+
+        if (cacheAge > FRESHNESS_THRESHOLD_MS) {
+          fetchChat(id, { messageLimit: INITIAL_MESSAGE_LIMIT })
+            .then((chat: Chat | null) => {
+              if (!chat) return;
+              // Skip re-render if server data is no newer than cached
+              if (chat.lastModified <= cached.lastModified) return;
               setCachedChat(chat).catch(() => {});
               // Only update if this is still the active chat
               setActiveChatId((currentId) => {
@@ -499,9 +549,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
                 }
                 return currentId;
               });
-            }
-          })
-          .catch(() => {}); // Network error — cached data is fine
+            })
+            .catch(() => {}); // Network error — cached data is fine
+        }
         return;
       }
 

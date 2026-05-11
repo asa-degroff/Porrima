@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
-import { listChats, getChat, saveChat, deleteChat, getSettings, createChat, getProject, getChatMessageWindow } from "../services/chat-storage.js";
+import { listChats, getChat, saveChat, deleteChat, getSettings, createChat, getProject, getChatMessageWindow, getChatWithWindow, getDb } from "../services/chat-storage.js";
 import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import type { Chat } from "../types.js";
@@ -36,20 +36,52 @@ router.get("/:id/messages", async (req, res) => {
   res.json(window);
 });
 
-// Get a single chat (with messages)
-router.get("/:id", async (req, res) => {
-  const chat = await getChat(req.params.id);
-  if (!chat) return res.status(404).json({ error: "Chat not found" });
+// Lightweight header endpoint for cache freshness checks.
+// Returns only metadata — no messages — so the client can compare lastModified
+// and message count without downloading the full chat.
+router.get("/:id/header", async (req, res) => {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT id, title, type, modelId, lastModified, projectId, contextWindow FROM chats WHERE id = ?"
+  ).get(req.params.id) as
+    | { id: string; title: string; type: string; modelId: string; lastModified: string; projectId: string | null; contextWindow: number | null }
+    | undefined;
+  if (!row) return res.status(404).json({ error: "Chat not found" });
 
+  // Get message count for freshness comparison
+  const countRow = db.prepare(
+    "SELECT COUNT(*) as total FROM chat_message_rows WHERE chat_id = ?"
+  ).get(req.params.id) as { total: number };
+
+  res.json({
+    id: row.id,
+    title: row.title,
+    type: row.type,
+    modelId: row.modelId,
+    lastModified: row.lastModified,
+    projectId: row.projectId,
+    contextWindow: row.contextWindow,
+    messageCount: countRow.total,
+  });
+});
+
+// Get a single chat (with messages)
+// When messageLimit is specified, uses getChatWithWindow to fetch only the
+// windowed messages directly from the row table instead of loading and
+// parsing ALL messages from both JSON column and row table.
+router.get("/:id", async (req, res) => {
   const messageLimit = parseMessageLimit(req.query.messageLimit);
+
   if (messageLimit) {
-    const window = getChatMessageWindow(chat.id, { limit: messageLimit });
-    chat.messages = window.messages;
-    chat.messageOffset = window.offset;
-    chat.messageTotal = window.total;
-    chat.hasMoreMessages = window.hasMoreBefore;
+    // Optimized path: skip parsing the full message list
+    const chat = await getChatWithWindow(req.params.id, { limit: messageLimit });
+    if (!chat) return res.status(404).json({ error: "Chat not found" });
+    res.json(chat);
+    return;
   }
 
+  const chat = await getChat(req.params.id);
+  if (!chat) return res.status(404).json({ error: "Chat not found" });
   res.json(chat);
 });
 
