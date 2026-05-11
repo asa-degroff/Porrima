@@ -49,6 +49,7 @@ const SECTIONS = [
   { id: 'skills', label: 'Skills' },
   { id: 'extraction', label: 'Extraction' },
   { id: 'system-stats', label: 'System Stats' },
+  { id: 'header-image', label: 'Header Image' },
   { id: 'memory-blocks', label: 'Memory Blocks' },
   { id: 'automations', label: 'Automations' },
   { id: 'tools', label: 'Tool Options' },
@@ -355,6 +356,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   // GPU visibility: list of discovered GPUs with visibility toggles
   const [availableGpus, setAvailableGpus] = useState<Array<{ id: string; name: string; driver: string }>>([]);
   const [hiddenGpus, setHiddenGpus] = useState<Set<string>>(() => new Set(settings.systemStatsHiddenGpus ?? []));
+  // Header image
+  const [headerImageEnabled, setHeaderImageEnabled] = useState(settings.headerImageEnabled ?? false);
+  const [headerImageUrl, setHeaderImageUrl] = useState<string | null>(null);
+  const [headerImageExists, setHeaderImageExists] = useState(false);
+  const [headerImageUploading, setHeaderImageUploading] = useState(false);
   const [automations, setAutomations] = useState<AutomationTask[]>([]);
   const [automationsLoading, setAutomationsLoading] = useState(false);
   const [automationsRunningTaskId, setAutomationsRunningTaskId] = useState<string | null>(null);
@@ -456,6 +462,59 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     }
     discover();
     return () => { cancelled = true; };
+  }, []);
+
+  // Check header image existence on mount
+  useEffect(() => {
+    let cancelled = false;
+    async function check() {
+      try {
+        const { getHeaderImageInfo } = await import("../api/client");
+        const info = await getHeaderImageInfo();
+        if (cancelled) return;
+        if (info.exists) {
+          setHeaderImageExists(true);
+          setHeaderImageUrl(info.thumbUrl || info.url || null);
+        }
+      } catch {
+        // non-critical
+      }
+    }
+    check();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Header image handlers
+  const handleHeaderImageUpload = useCallback(async (file: File) => {
+    setHeaderImageUploading(true);
+    try {
+      const { uploadHeaderImage } = await import("../api/client");
+      const arrayBuf = await file.arrayBuffer();
+      await uploadHeaderImage(arrayBuf, file.type);
+      // Re-fetch info
+      const { getHeaderImageInfo } = await import("../api/client");
+      const info = await getHeaderImageInfo();
+      setHeaderImageExists(true);
+      setHeaderImageUrl(info.thumbUrl || info.url || null);
+      // Auto-enable on upload
+      setHeaderImageEnabled(true);
+    } catch (e: any) {
+      console.error("Failed to upload header image:", e);
+    } finally {
+      setHeaderImageUploading(false);
+    }
+  }, []);
+
+  const handleHeaderImageRemove = useCallback(async () => {
+    try {
+      const { deleteHeaderImageApi } = await import("../api/client");
+      await deleteHeaderImageApi();
+      setHeaderImageExists(false);
+      setHeaderImageUrl(null);
+      setHeaderImageEnabled(false);
+    } catch (e: any) {
+      console.error("Failed to remove header image:", e);
+    }
   }, []);
 
    const refreshLlamaServers = useCallback(async (showSpinner = false) => {
@@ -983,6 +1042,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       systemStatsEnabled,
       systemStatsBufferSeconds,
       systemStatsHiddenGpus: Array.from(hiddenGpus),
+      headerImageEnabled,
       extractionModelId,
       extractionModelUrl: extractionModelUrl.trim() || undefined,
       extractionFallbackEnabled,
@@ -4245,6 +4305,94 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                )}
 	              </div>
 	            </div>
+
+	          {/* Header Image */}
+	          <div id="header-image" className="border-t border-white/10 pt-6">
+	            <h3 className="text-sm font-semibold text-white/80 mb-4">Header Image</h3>
+	            <div className="space-y-4">
+	              <div className="flex items-center justify-between">
+	                <div>
+	                  <label className="block text-sm font-medium text-white/60">Show in chat header</label>
+	                  <p className="text-xs text-white/30 mt-0.5">Display a custom image in the header instead of the model name</p>
+	                </div>
+	                <ToggleSwitch checked={headerImageEnabled} onChange={() => setHeaderImageEnabled(!headerImageEnabled)} accentColor="purple" />
+	              </div>
+
+	              {/* Image preview and upload */}
+	              <div className="flex items-center gap-4">
+	                {/* Preview box — matches the SystemStatsBar square window style */}
+	                <div className="rounded-lg bg-black/20 border border-white/[0.05] p-1.5 flex items-center justify-center shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]"
+	                  style={{ width: 56, height: 56 }}>
+	                  {headerImageUrl ? (
+	                    <img
+	                      src={headerImageUrl}
+	                      alt="Header preview"
+	                      className="w-8 h-8 rounded-md object-cover"
+	                    />
+	                  ) : (
+	                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-white/20">
+	                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+	                      <circle cx="8.5" cy="8.5" r="1.5"/>
+	                      <polyline points="21 15 16 10 5 21"/>
+	                    </svg>
+	                  )}
+	                </div>
+
+	                <div className="flex-1 space-y-2">
+	                  {!headerImageExists ? (
+	                    <label className="inline-flex items-center gap-2 px-3 py-2 text-xs text-white/70 bg-white/5 hover:bg-white/10 rounded-lg cursor-pointer transition-colors border border-white/10">
+	                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+	                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+	                        <polyline points="17 8 12 3 7 8"/>
+	                        <line x1="12" y1="3" x2="12" y2="15"/>
+	                      </svg>
+	                      {headerImageUploading ? 'Uploading...' : 'Upload image'}
+	                      <input
+	                        type="file"
+	                        accept="image/*"
+	                        className="hidden"
+	                        onChange={(e) => {
+	                          const file = e.target.files?.[0];
+	                          if (file) handleHeaderImageUpload(file);
+	                          e.target.value = '';
+	                        }}
+	                        disabled={headerImageUploading}
+	                      />
+	                    </label>
+	                  ) : (
+	                    <div className="flex items-center gap-2">
+	                      <label className="inline-flex items-center gap-2 px-3 py-2 text-xs text-white/70 bg-white/5 hover:bg-white/10 rounded-lg cursor-pointer transition-colors border border-white/10">
+	                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+	                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+	                          <polyline points="17 8 12 3 7 8"/>
+	                          <line x1="12" y1="3" x2="12" y2="15"/>
+	                        </svg>
+	                        {headerImageUploading ? 'Replacing...' : 'Replace'}
+	                        <input
+	                          type="file"
+	                          accept="image/*"
+	                          className="hidden"
+	                          onChange={(e) => {
+	                            const file = e.target.files?.[0];
+	                            if (file) handleHeaderImageUpload(file);
+	                            e.target.value = '';
+	                          }}
+	                          disabled={headerImageUploading}
+	                        />
+	                      </label>
+	                      <button
+	                        onClick={handleHeaderImageRemove}
+	                        className="px-3 py-2 text-xs text-red-300/70 hover:text-red-300 bg-red-500/5 hover:bg-red-500/10 rounded-lg transition-colors border border-red-500/10"
+	                      >
+	                        Remove
+	                      </button>
+	                    </div>
+	                  )}
+	                  <p className="text-[10px] text-white/25">Square images work best. Cropped to center on upload.</p>
+	                </div>
+	              </div>
+	            </div>
+	          </div>
 
 	          {/* Memory Blocks */}
 	          <div id="memory-blocks" className="border-t border-white/10 pt-6">

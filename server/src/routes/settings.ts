@@ -1,4 +1,8 @@
 import { Router } from "express";
+import { json } from "express";
+import type { IncomingHttpHeaders } from "http";
+// @ts-ignore — busboy lacks types
+import Busboy from "busboy";
 import {
   createSshConnection,
   deleteSshConnection,
@@ -12,6 +16,15 @@ import { getLlamaPathInfo, updateLlamaPath, validateLlamaPath, getLlamaServicesS
 import { getSlotAssignments } from "../services/llama-slot-leases.js";
 import { listLlamaCacheResidency } from "../services/llama-cache-residency.js";
 import { testSshConnection } from "../services/workspace.js";
+import {
+  saveHeaderImage,
+  getHeaderImageInfo,
+  deleteHeaderImage,
+  getHeaderImagePath,
+  headerImageExists,
+} from "../services/header-image-storage.js";
+import { access } from "fs/promises";
+import { createReadStream } from "fs";
 import type { SshConnection } from "../types.js";
 
 const router = Router();
@@ -177,6 +190,99 @@ router.get("/cache-residency", async (_req, res) => {
     res.json(enriched);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Header Image ---
+
+// POST /api/settings/header-image — Upload/replace the header image (multipart/form-data)
+router.post("/header-image", (req, res) => {
+  const bb = Busboy({ headers: req.headers });
+  let fileReceived = false;
+  let responded = false;
+  bb.on("file", (_fieldname: string, file: NodeJS.ReadableStream, fileInfo: { filename: string; mimeType: string }) => {
+    fileReceived = true;
+    const chunks: Buffer[] = [];
+    file.on("data", (chunk: Buffer) => chunks.push(chunk));
+    file.on("end", async () => {
+      const buffer = Buffer.concat(chunks);
+      try {
+        console.log(`[header-image] saving ${buffer.length} bytes, mime=${fileInfo.mimeType}`);
+        const savedInfo = await saveHeaderImage(buffer, fileInfo.mimeType);
+        console.log(`[header-image] saved OK: ${savedInfo.url}`);
+        if (!responded) { responded = true; res.json(savedInfo); }
+      } catch (e: any) {
+        console.error(`[header-image] save failed:`, e.message);
+        if (!responded) { responded = true; res.status(500).json({ error: e.message }); }
+      }
+    });
+  });
+  bb.on("error", (err: Error) => {
+    console.error(`[header-image] busboy error:`, err);
+    if (!responded) { responded = true; res.status(500).json({ error: "Failed to parse upload" }); }
+  });
+  bb.on("finish", () => {
+    // Only send 400 if no file event was ever emitted.
+    // The file handler is async so it may still be processing when
+    // finish fires — we must not preempt it with an error response.
+    if (!fileReceived && !responded) {
+      responded = true;
+      res.status(400).json({ error: "No image file received" });
+    }
+  });
+  // @ts-ignore — busboy is a writable stream
+  req.pipe(bb);
+});
+
+// GET /api/settings/header-image — Check existence and get info
+router.get("/header-image", async (_req, res) => {
+  try {
+    const info = await getHeaderImageInfo();
+    res.json(info);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/settings/header-image — Remove the header image
+router.delete("/header-image", async (_req, res) => {
+  try {
+    await deleteHeaderImage();
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/settings/header-image/thumb — Serve the thumbnail
+router.get("/header-image/thumb", async (_req, res) => {
+  const thumbPath = getHeaderImagePath("thumb.webp");
+  try {
+    await access(thumbPath);
+    res.setHeader("Content-Type", "image/webp");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    createReadStream(thumbPath).pipe(res);
+  } catch {
+    res.status(404).json({ error: "Header image not found" });
+  }
+});
+
+// GET /api/settings/header-image/image.:ext — Serve the original
+router.get("/header-image/image.:ext", async (req, res) => {
+  const ext = req.params.ext;
+  const validExts = ["jpg", "jpeg", "png", "webp", "gif"];
+  if (!validExts.includes(ext)) {
+    return res.status(400).json({ error: "Invalid extension" });
+  }
+  const imagePath = getHeaderImagePath(`image.${ext}`);
+  try {
+    await access(imagePath);
+    const contentType = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : `image/${ext}`;
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    createReadStream(imagePath).pipe(res);
+  } catch {
+    res.status(404).json({ error: "Header image not found" });
   }
 });
 

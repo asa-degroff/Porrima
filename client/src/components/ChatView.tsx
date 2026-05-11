@@ -240,6 +240,7 @@ interface Props {
   projectId?: string;
   streamingSegmentIndex: number | null;
   onArtifactRuntimeError?: (report: ArtifactRuntimeErrorReport) => void;
+  headerImageEnabled?: boolean;
 }
 
 export function ChatView({
@@ -298,6 +299,7 @@ export function ChatView({
   projectId,
   streamingSegmentIndex,
   onArtifactRuntimeError,
+  headerImageEnabled = false,
 }: Props) {
   const { unpin, pinnedItem } = usePinnedItem();
   useEffect(() => {
@@ -654,6 +656,17 @@ export function ChatView({
               onChange={onModelChange}
               disabled={streaming}
             />
+          ) : headerImageEnabled ? (
+            <div
+              className="hidden md:flex items-center justify-center rounded-lg overflow-hidden border border-white/[0.05] relative after:absolute after:inset-0 after:shadow-[inset_0_1px_6px_rgba(0,0,0,0.8)] after:pointer-events-none"
+              title="Header image"
+            >
+              <img
+                src="/api/settings/header-image/thumb"
+                alt=""
+                className="w-[36px] h-[36px] object-cover"
+              />
+            </div>
           ) : (
             <span className="hidden md:inline-flex items-center h-7 text-[11px] text-white/25 select-none" title="Uses your default model">
               {models.find((m) => m.id === selectedModelId)?.name || selectedModelId}

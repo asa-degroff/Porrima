@@ -16,6 +16,7 @@
     "@simplewebauthn/server": "^13.2.3",
     "@sinclair/typebox": "^0.34.48",
     "better-sqlite3": "^12.6.2",
+    "busboy": "^1.6.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "express-session": "^1.19.0",

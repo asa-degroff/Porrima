@@ -111,6 +111,47 @@ export async function updateSettings(settings: Settings): Promise<Settings> {
   return res.json();
 }
 
+// --- Header Image ---
+
+export interface HeaderImageInfo {
+  url: string;
+  thumbUrl: string;
+  mimeType: string;
+  exists: boolean;
+}
+
+/** Upload or replace the header image */
+export async function uploadHeaderImage(buffer: Buffer | ArrayBuffer, mimeType: string): Promise<HeaderImageInfo> {
+  // Use multipart/form-data to avoid base64 corruption issues
+  const uint8 = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : new Uint8Array(buffer);
+  const blob = new Blob([uint8], { type: mimeType });
+  const formData = new FormData();
+  formData.append("image", blob, "header-image");
+  const res = await apiFetch(`${BASE}/settings/header-image`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(`Failed to upload header image (${res.status}): ${errBody}`);
+  }
+  return res.json();
+}
+
+/** Check if a header image exists and get its info */
+export async function getHeaderImageInfo(): Promise<HeaderImageInfo> {
+  const res = await apiFetch(`${BASE}/settings/header-image`);
+  if (!res.ok) throw new Error("Failed to fetch header image info");
+  return res.json();
+}
+
+/** Delete the header image */
+export async function deleteHeaderImageApi(): Promise<{ success: boolean }> {
+  const res = await apiFetch(`${BASE}/settings/header-image`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete header image");
+  return res.json();
+}
+
 export interface ToolStatus {
   name: string;
   status: "running" | "done" | "error";

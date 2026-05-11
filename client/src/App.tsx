@@ -974,6 +974,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         projectId={activeChat?.projectId}
         streamingSegmentIndex={streamingSegmentIndex}
         onArtifactRuntimeError={reportArtifactRuntimeError}
+        headerImageEnabled={settings.headerImageEnabled}
       />
       )}
       {settingsOpen && !settingsLoading && (

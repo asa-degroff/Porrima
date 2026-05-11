@@ -368,6 +368,9 @@ export interface Settings {
   systemStatsBufferSeconds?: number;
   // GPU IDs to hide from system stats (e.g. ["card2"] for iGPU)
   systemStatsHiddenGpus?: string[];
+  // Header image — user-uploaded image displayed in the chat header instead of model name
+  headerImageEnabled?: boolean;
+  headerImageId?: string;  // filename stem (e.g. "header")
   // Tool options
   // read_file default line limit when no `limit` arg is provided (default 1000).
   readFileDefaultLines?: number;

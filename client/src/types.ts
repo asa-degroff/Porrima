@@ -386,6 +386,9 @@ export interface Settings {
   systemStatsEnabled?: boolean;
   systemStatsBufferSeconds?: number;
   systemStatsHiddenGpus?: string[];
+  // Header image — user-uploaded image displayed in the chat header instead of model name
+  headerImageEnabled?: boolean;
+  headerImageId?: string;  // filename stem
   // Tool options
   // read_file default line limit when no `limit` arg is provided (default 1000).
   readFileDefaultLines?: number;
