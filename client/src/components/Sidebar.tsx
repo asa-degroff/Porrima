@@ -1,7 +1,8 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import type { ChatListItem as ChatListItemType, ChatType, Project } from "../types";
 import type { CacheResidency } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
+import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { useActivityShape } from "../hooks/useActivityStyle";
 import { BlueskySection } from "./BlueskySection";
@@ -99,6 +100,9 @@ function RecentChatItem({
   lastActive,
   cacheResidency,
   onSelect,
+  onDelete,
+  onSendToNotebook,
+  onWarmCache,
   color = "purple",
   cacheWarming = false,
   cacheWarmError,
@@ -108,10 +112,26 @@ function RecentChatItem({
   lastActive?: boolean;
   cacheResidency?: CacheResidency | null;
   onSelect: () => void;
+  onDelete?: () => void;
+  onSendToNotebook?: (chatId: string, chatTitle: string) => void;
+  onWarmCache?: (chatId: string) => void;
   color?: "purple" | "blue" | "emerald" | "amber" | "rose" | "cyan" | "violet" | "orange" | "pink" | "teal";
   cacheWarming?: boolean;
   cacheWarmError?: string;
 }) {
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  const openContextMenu = useCallback((pos: { x: number; y: number }) => {
+    setContextMenu(pos);
+  }, []);
+  const longPressProps = useLongPress(openContextMenu);
+
   const colorClasses: Record<string, string> = {
     purple: "text-purple-300/60 border-purple-400/20",
     blue: "text-blue-300/60 border-blue-400/20",
@@ -131,47 +151,91 @@ function RecentChatItem({
   const isQueued = cacheResidency?.queuePosition !== undefined && cacheResidency.queuePosition > 0;
   const effectiveTitle = cacheWarmError ? `Cache warm failed: ${cacheWarmError}` : cacheTitle;
 
+  const hasMenu = onDelete || onSendToNotebook || (onWarmCache && chat.type === "agent");
+
   return (
-    <button
-      onClick={onSelect}
-      className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative border ${
-        active
-          ? "bg-white/15 border-white/20" + (cacheResidency && lastActive
-              ? " shadow-[0_0_8px_rgba(168,85,247,0.15)]"
+    <>
+      <button
+        onClick={onSelect}
+        onContextMenu={hasMenu ? handleContextMenu : undefined}
+        {...(hasMenu ? longPressProps : {})}
+        className={`w-full text-left px-2.5 py-1.5 rounded-xl transition-all group relative border ${
+          active
+            ? "bg-white/15 border-white/20" + (cacheResidency && lastActive
+                ? " shadow-[0_0_8px_rgba(168,85,247,0.15)]"
+                : cacheResidency
+                  ? " shadow-[0_0_8px_rgba(251,191,36,0.10)]"
+                  : "")
+            : cacheResidency && lastActive
+              ? "hover:bg-white/8 border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
               : cacheResidency
-                ? " shadow-[0_0_8px_rgba(251,191,36,0.10)]"
-                : "")
-          : cacheResidency && lastActive
-            ? "hover:bg-white/8 border-purple-400/30 shadow-[0_0_8px_rgba(168,85,247,0.15)]"
-            : cacheResidency
-              ? "hover:bg-white/8 border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
-              : `hover:bg-white/8 ${colorClass.split(" ")[1]}`
-      }`}
-      title={effectiveTitle}
-    >
-      <div className="flex items-start gap-2 min-w-0">
-        <span className={`text-[10px] shrink-0 mt-0.5 ${colorClass.split(" ")[0]}`}>●</span>
-        <div className="flex-1 min-w-0 pr-5">
-          <p className="text-xs font-medium text-white/80 leading-snug line-clamp-2">
-            {chat.title}
-          </p>
+                ? "hover:bg-white/8 border-amber-400/25 shadow-[0_0_8px_rgba(251,191,36,0.10)]"
+                : `hover:bg-white/8 ${colorClass.split(" ")[1]}`
+        }`}
+        title={effectiveTitle}
+      >
+        <div className="flex items-start gap-2 min-w-0">
+          <span className={`text-[10px] shrink-0 mt-0.5 ${colorClass.split(" ")[0]}`}>●</span>
+          <div className="flex-1 min-w-0 pr-5">
+            <p className="text-xs font-medium text-white/80 leading-snug line-clamp-2">
+              {chat.title}
+            </p>
+          </div>
         </div>
-      </div>
-      {(effectiveCacheWarming || isQueued) && (
-        <div className="absolute right-2 top-1/2 -translate-y-1/2" title={isQueued ? "Cache warming queued" : "Warming cache"}>
-          <PrefillActivityIcon paused={isQueued} />
-        </div>
+        {(effectiveCacheWarming || isQueued) && (
+          <div className="absolute right-2 top-1/2 -translate-y-1/2" title={isQueued ? "Cache warming queued" : "Warming cache"}>
+            <PrefillActivityIcon paused={isQueued} />
+          </div>
+        )}
+        {cacheWarmError && !effectiveCacheWarming && !isQueued && (
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 text-red-300/80" title={`Cache warm failed: ${cacheWarmError}`}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 8v5" />
+              <path d="M12 17h.01" />
+            </svg>
+          </div>
+        )}
+      </button>
+      {contextMenu && (
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
+          {onSendToNotebook && (
+            <ContextMenuItem onClick={() => { setContextMenu(null); onSendToNotebook(chat.id, chat.title); }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-purple-400">
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                <polyline points="14 2 14 8 20 8" />
+                <path d="M12 18v-6" />
+                <path d="m8 15 4 4 4-4" />
+              </svg>
+              Send to notebook
+            </ContextMenuItem>
+          )}
+          {onWarmCache && chat.type === "agent" && (
+            <ContextMenuItem onClick={() => { setContextMenu(null); onWarmCache(chat.id); }} disabled={effectiveCacheWarming}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={effectiveCacheWarming ? "animate-pulse" : "opacity-70"} style={{ color: `rgba(var(--theme-accent), ${effectiveCacheWarming ? 0.9 : 0.7})` }}>
+                <path d="M8 18c-2.2 0-4 1.8-4 4" />
+                <path d="M16 18c2.2 0 4 1.8 4 4" />
+                <path d="M7 4c0 0 1 1.3 1 3s-1 3-1 3" />
+                <path d="M12 4c0 0 1 1.3 1 3s-1 3-1 3" />
+                <path d="M17 4c0 0 1 1.3 1 3s-1 3-1 3" />
+                <path d="M5 18h14" />
+              </svg>
+              {effectiveCacheWarming ? "Warming..." : "Warm Cache"}
+            </ContextMenuItem>
+          )}
+          {onDelete && (
+            <ContextMenuItem destructive onClick={() => { setContextMenu(null); onDelete(); }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18" />
+                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+              </svg>
+              Delete
+            </ContextMenuItem>
+          )}
+        </ContextMenu>
       )}
-      {cacheWarmError && !effectiveCacheWarming && !isQueued && (
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 text-red-300/80" title={`Cache warm failed: ${cacheWarmError}`}>
-          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 8v5" />
-            <path d="M12 17h.01" />
-          </svg>
-        </div>
-      )}
-    </button>
+    </>
   );
 }
 
@@ -186,7 +250,6 @@ function ProjectSection({
   onDeleteChat,
   onDeleteProject,
   onEditProject,
-  editMode,
   onSendToNotebook,
   onWarmCache,
   cacheWarmingChatIds,
@@ -204,7 +267,6 @@ function ProjectSection({
   onDeleteChat: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onEditProject: (project: Project) => void;
-  editMode: boolean;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   onWarmCache?: (chatId: string) => void;
   cacheWarmingChatIds?: Set<string>;
@@ -212,11 +274,22 @@ function ProjectSection({
   lastActiveChatId?: string | null;
   cacheResidency?: Map<string, CacheResidency>;
 }) {
-  const [showColorPicker, setShowColorPicker] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(project.name);
   const nameInputRef = useRef<HTMLInputElement>(null);
+
+  const handleHeaderContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  const openHeaderContextMenu = useCallback((pos: { x: number; y: number }) => {
+    setContextMenu(pos);
+  }, []);
+  const longPressProps = useLongPress(openHeaderContextMenu);
 
   // Focus name input when editing starts
   useEffect(() => {
@@ -245,16 +318,18 @@ function ProjectSection({
 
   const handlePinToggle = async () => {
     await onEditProject({ ...project, pinned: !project.pinned });
+    setContextMenu(null);
   };
 
   const handleColorChange = async (newColor: string) => {
     await onEditProject({ ...project, color: newColor });
-    setShowColorPicker(false);
+    setContextMenu(null);
   };
 
   const handleDelete = async () => {
     await onDeleteProject(project.id);
     setConfirmDelete(false);
+    setContextMenu(null);
   };
 
   const handleNameSubmit = async () => {
@@ -282,11 +357,14 @@ function ProjectSection({
 
   return (
     <div className="rounded-lg bg-white/[0.03] border border-white/[0.06]">
-      <div className="flex items-center gap-1.5 px-2 py-1.5 group">
+      <div
+        className="flex items-center gap-1.5 px-2 py-1.5 group"
+        onContextMenu={handleHeaderContextMenu}
+        {...longPressProps}
+      >
         <button
           onClick={onToggleExpanded}
-          disabled={editMode}
-          className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer disabled:cursor-default"
+          className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
         >
           <span className={colors.icon}>
             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -320,106 +398,71 @@ function ProjectSection({
           </span>
         </button>
       </div>
-      
-      {editMode && (
-        <div className="px-2 pb-2 pt-1 border-t border-white/5 mt-1">
-          <div className="flex items-center gap-1">
-            {/* Pin button */}
-            <button
-              onClick={handlePinToggle}
-              className={`p-2 rounded-lg transition-colors ${
-                project.pinned 
-                  ? 'text-amber-400 hover:text-amber-300' 
-                  : 'text-white/40 hover:text-white/60'
-              }`}
-              title={project.pinned ? "Unpin project" : "Pin project"}
-            >
-              {project.pinned ? (
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="12" y1="17" x2="12" y2="22"></line>
-                  <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path>
-                  <line x1="3" y1="3" x2="21" y2="21"></line>
-                </svg>
-              ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="12" y1="17" x2="12" y2="22"></line>
-                  <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path>
-                </svg>
-              )}
-            </button>
-            {/* Color picker button */}
-            <button
-              onClick={() => setShowColorPicker(!showColorPicker)}
-              className="p-2 text-white/40 hover:text-white/60 transition-colors rounded-lg"
-              title="Change color"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={colors.text}>
-                <circle cx="12" cy="12" r="10"/>
-                <circle cx="12" cy="12" r="4"/>
-              </svg>
-            </button>
-            {/* Rename button */}
-            <button
-              onClick={() => setEditingName(true)}
-              className="p-2 text-white/40 hover:text-white/60 transition-colors rounded-lg"
-              title="Rename project"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-            </button>
-            {/* Delete button */}
-            {confirmDelete ? (
-              <div className="flex items-center gap-1 ml-auto">
+      {/* Project context menu */}
+      {contextMenu && (
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
+          <ContextMenuItem onClick={handlePinToggle}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="17" x2="12" y2="22" />
+              <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+            </svg>
+            {project.pinned ? "Unpin" : "Pin"}
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => { setContextMenu(null); setEditingName(true); }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-[14px] h-[14px]">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+            Rename
+          </ContextMenuItem>
+          {/* Color sub-section */}
+          <div className="px-4 py-1.5 border-t border-white/5">
+            <div className="flex gap-1.5 flex-wrap">
+              {Object.keys(colorClasses).map((color) => (
                 <button
-                  onClick={handleDelete}
-                  className="px-3 py-1.5 rounded-lg bg-red-500/15 border border-red-400/25 text-red-300 hover:bg-red-500/25 text-xs font-medium"
-                >
-                  Confirm
-                </button>
-                <button
-                  onClick={() => setConfirmDelete(false)}
-                  className="px-3 py-1.5 rounded-lg bg-white/10 border border-white/15 text-white/50 hover:text-white/80 text-xs font-medium"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setConfirmDelete(true)}
-                className="p-2 text-white/40 hover:text-red-400 transition-colors rounded-lg ml-auto"
-                title="Delete project"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 6h18" />
-                  <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                  <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                </svg>
-              </button>
-            )}
+                  key={color}
+                  onClick={() => handleColorChange(color)}
+                  className={`w-4 h-4 rounded-full border transition-all ${
+                    colorClasses[color as keyof typeof colorClasses].bg
+                  } ${
+                    colorClasses[color as keyof typeof colorClasses].border
+                  } ${
+                    project.color === color ? 'ring-1 ring-white/50 scale-110' : 'hover:scale-105'
+                  }`}
+                  title={color}
+                />
+              ))}
+            </div>
           </div>
-        </div>
+          <ContextMenuItem destructive onClick={() => { setContextMenu(null); setConfirmDelete(true); }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 6h18" />
+              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+            </svg>
+            Delete
+          </ContextMenuItem>
+        </ContextMenu>
       )}
-      
-      {/* Color picker dropdown */}
-      {showColorPicker && (
+      {/* Delete confirmation overlay */}
+      {confirmDelete && (
         <div className="px-2 pb-2">
-          <div className="flex gap-1 flex-wrap">
-            {Object.keys(colorClasses).map((color) => (
+          <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-red-500/10 border border-red-400/20">
+            <p className="text-xs text-white/70">Delete project?</p>
+            <div className="flex gap-1.5 shrink-0">
               <button
-                key={color}
-                onClick={() => handleColorChange(color)}
-                className={`w-5 h-5 rounded-full border-2 transition-all ${
-                  colorClasses[color as keyof typeof colorClasses].bg
-                } ${
-                  colorClasses[color as keyof typeof colorClasses].border
-                } ${
-                  project.color === color ? 'scale-110' : 'hover:scale-105'
-                }`}
-                title={color}
-              />
-            ))}
+                onClick={handleDelete}
+                className="px-2 py-1 rounded-md text-xs font-medium bg-red-500/20 border border-red-400/30 text-red-300 hover:bg-red-500/30 transition-all"
+              >
+                Delete
+              </button>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="px-2 py-1 rounded-md text-xs font-medium bg-white/10 border border-white/15 text-white/50 hover:text-white/80 transition-all"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -434,6 +477,9 @@ function ProjectSection({
             cacheWarming={cacheWarmingChatIds?.has(chats[0].id) ?? false}
             cacheWarmError={cacheWarmErrors?.get(chats[0].id)}
             onSelect={() => onSelectChat(chats[0].id)}
+            onDelete={() => onDeleteChat(chats[0].id)}
+            onSendToNotebook={onSendToNotebook}
+            onWarmCache={onWarmCache}
             color={project.color as any}
           />
         </div>
@@ -538,8 +584,6 @@ export function Sidebar({
   const activityShape = useActivityShape();
   const effectiveSleepCycleActive = sleepCycleActive && !isStreaming;
 
-  const [projectsEditMode, setProjectsEditMode] = useState(false);
-  const [previousExpandedStates, setPreviousExpandedStates] = useState<Record<string, boolean>>({});
   const [searchActive, setSearchActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<ConversationSearchResult[]>([]);
@@ -868,7 +912,7 @@ export function Sidebar({
         {/* System Chat Section */}
         {systemChats.length > 0 && (
           <div className="px-3 py-1 shrink-0 border-b border-white/5">
-            <div className="px-1 pb-1">
+            <div className="px-1">
               {systemChats.map((chat) => {
                 const isLastActive = chat.id === lastActiveChatId;
                 const cr = cacheResidency.get(chat.id);
@@ -964,46 +1008,18 @@ export function Sidebar({
                   <span className="text-[10px] text-white/20 ml-auto">{projects.length}</span>
                 )}
               </button>
+            {/* New project button always shown when expanded */}
               {projectsExpanded && (
-                <div className="flex items-center gap-1 mb-1">
-                  {/* Edit mode toggle */}
-                  <button
-                    onClick={() => {
-                      if (!projectsEditMode) {
-                        // Save current expanded states before entering edit mode
-                        const states: Record<string, boolean> = {};
-                        projects.forEach(p => {
-                          states[p.id] = getProjectExpanded(p.id);
-                        });
-                        setPreviousExpandedStates(states);
-                        // Collapse all projects when entering edit mode
-                        projects.forEach(p => setProjectExpanded(p.id, false));
-                      } else {
-                        // Restore previous expanded states when exiting edit mode
-                        Object.entries(previousExpandedStates).forEach(([id, expanded]) => {
-                          setProjectExpanded(id, expanded);
-                        });
-                      }
-                      setProjectsEditMode(!projectsEditMode);
-                    }}
-                    className={`text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5 ${projectsEditMode ? 'text-white/60 bg-white/10' : ''}`}
-                    title={projectsEditMode ? "Done editing" : "Edit projects"}
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={onNewProject}
-                    className="text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5"
-                    title="New project"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 5v14" />
-                      <path d="M5 12h14" />
-                    </svg>
-                  </button>
-                </div>
+                <button
+                  onClick={onNewProject}
+                  className="mb-1 text-white/30 hover:text-white/60 transition-colors p-1 rounded-lg hover:bg-white/5"
+                  title="New project"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                  </svg>
+                </button>
               )}
             </div>
             {projectsExpanded && (
@@ -1035,7 +1051,6 @@ export function Sidebar({
                         // Trigger a refresh of projects
                         window.dispatchEvent(new CustomEvent("projects:updated"));
                       }}
-                      editMode={projectsEditMode}
                       onSendToNotebook={onSendToNotebook}
                       onWarmCache={onWarmCache}
                       cacheWarmingChatIds={cacheWarmingChatIds}
@@ -1109,6 +1124,9 @@ export function Sidebar({
                 cacheWarming={cacheWarmingChatIds.has(agentChats[0].id)}
                 cacheWarmError={cacheWarmErrors.get(agentChats[0].id)}
                 onSelect={() => { onSelectChat(agentChats[0].id); onClose(); }}
+                onDelete={() => onDeleteChat(agentChats[0].id)}
+                onSendToNotebook={onSendToNotebook}
+                onWarmCache={onWarmCache}
                 color="purple"
               />
             </div>
@@ -1195,6 +1213,7 @@ export function Sidebar({
                 cacheWarming={cacheWarmingChatIds.has(quickChats[0].id)}
                 cacheWarmError={cacheWarmErrors.get(quickChats[0].id)}
                 onSelect={() => { onSelectChat(quickChats[0].id); onClose(); }}
+                onDelete={() => onDeleteChat(quickChats[0].id)}
                 color="blue"
               />
             </div>
