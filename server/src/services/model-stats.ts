@@ -373,9 +373,10 @@ export function getModelStatsSummary(modelId: string): ModelStatsSummary {
 export function getAllModelSummaries(): { modelId: string; provider: string; summary: ModelStatsSummary }[] {
   const database = getDb();
   const models = database.prepare(`
-    SELECT DISTINCT modelId, provider
+    SELECT modelId, provider, MAX(timestamp) AS lastUsed
     FROM model_stats
-    ORDER BY modelId
+    GROUP BY modelId, provider
+    ORDER BY lastUsed DESC
   `).all() as Row[];
 
   return models.map(m => ({
