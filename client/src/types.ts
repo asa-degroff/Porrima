@@ -7,6 +7,7 @@ export interface MessageUsage {
 export type ModelProgressPhase = "loading" | "prefill" | "generating";
 export type ModelProgressCacheState = "hot" | "partial" | "cold" | "unknown";
 export type ModelProgressConfidence = "matched-slot" | "inferred-active-slot" | "unknown";
+export type InferenceActivityPhase = "prefill" | "decode";
 
 export interface ModelProgress {
   phase: ModelProgressPhase;

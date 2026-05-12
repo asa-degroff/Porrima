@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, lazy, Suspense, memo } from "react";
 import { createPortal } from "react-dom";
-import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, ImageAttachment, InferenceActivityPhase } from "../types";
 import type { ArtifactRuntimeErrorReport, ToolStatus } from "../api/client";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -119,6 +119,7 @@ interface Props {
   availableSkills?: string[];
   streamingSegmentIndex?: number | null;
   showStreamingIndicator?: boolean;
+  inferenceActivityPhase?: InferenceActivityPhase | null;
   chatId?: string;
   onArtifactRuntimeError?: (report: ArtifactRuntimeErrorReport) => void;
 }
@@ -181,6 +182,7 @@ export const MessageBubble = memo(function MessageBubble({
   availableSkills = emptySkillsList,
   streamingSegmentIndex,
   showStreamingIndicator,
+  inferenceActivityPhase,
   chatId,
   onArtifactRuntimeError,
 }: Props) {
@@ -619,7 +621,7 @@ export const MessageBubble = memo(function MessageBubble({
           {!isUser && showStreamingIndicator && (
             <div className="mt-2 ml-1 self-start">
               <div className="w-4 h-4">
-                <PolyhedronLogo isActive={true} shape={activityShape} />
+                <PolyhedronLogo isActive={true} animation={inferenceActivityPhase ?? "decode"} shape={activityShape} />
               </div>
             </div>
           )}

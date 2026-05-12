@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import type { Artifact, ChatMessage, GeneratedImage, MessageUsage, ModelProgress, OllamaModel, SystemPromptPreset } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, InferenceActivityPhase, MessageUsage, ModelProgress, OllamaModel, SystemPromptPreset } from "../types";
 import type { ArtifactRuntimeErrorReport, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
 import { fetchRenderedPrompt, fetchSkills } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
@@ -217,6 +217,7 @@ interface Props {
   compacting?: boolean;
   compaction?: { removedCount: number; remainingCount: number } | null;
   modelProgress?: ModelProgress | null;
+  inferenceActivityPhase?: InferenceActivityPhase | null;
   hasCompactionSummary?: boolean;
   contextWindow: number;
   error: string | null;
@@ -276,6 +277,7 @@ export function ChatView({
   compacting,
   compaction,
   modelProgress,
+  inferenceActivityPhase,
   hasCompactionSummary,
   contextWindow,
   error,
@@ -796,6 +798,7 @@ export function ChatView({
                         availableSkills={availableSkillNames}
                         streamingSegmentIndex={adjustedStreamingSegmentIndex}
                         showStreamingIndicator={streaming && isLast && msg.role === "assistant"}
+                        inferenceActivityPhase={isLast ? inferenceActivityPhase : null}
                         onReadAloud={ttsEnabled ? onReadAloud : undefined}
                         isPlayingTts={ttsEnabled ? (playbackState?.isPlaying || false) : false}
                         chatId={chatId || undefined}

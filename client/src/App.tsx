@@ -248,6 +248,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     compacting,
     compaction,
     modelProgress,
+    inferenceActivityPhase,
     error,
     warning,
     streamingSegmentIndex,
@@ -983,6 +984,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         compacting={compacting}
         compaction={compaction}
         modelProgress={modelProgress}
+        inferenceActivityPhase={inferenceActivityPhase}
         hasCompactionSummary={hasCompactionSummary}
         contextWindow={contextWindow}
         error={error}

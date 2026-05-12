@@ -1,5 +1,6 @@
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityStyleContext } from '../hooks/useActivityStyle'
+import type { InferenceActivityPhase } from '../types'
 
 // ---- Shape type ----
 export type ActivityShape = 'octahedron' | 'cube' | 'tetrahedron'
@@ -8,6 +9,7 @@ export type ActivityShape = 'octahedron' | 'cube' | 'tetrahedron'
 interface Props {
   isActive: boolean
   shape?: ActivityShape
+  animation?: InferenceActivityPhase
   hue?: number           // base hue 0–360; if omitted, reads from ActivityStyle context
   saturation?: number   // 0–100; if omitted, reads from ActivityStyle context
   className?: string
@@ -247,6 +249,7 @@ const TetrahedronShape = memo(function TetrahedronShape({ half, colorIndex, base
 export const PolyhedronLogo = memo(function PolyhedronLogo({
   isActive,
   shape = 'octahedron',
+  animation = 'decode',
   hue: hueProp,
   saturation: saturationProp,
   className = '',
@@ -269,6 +272,7 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
   const activeRef = useRef(isActive)
 
   const base = BASE_ROTATION[shape]
+  const isDecodeAnimation = animation === 'decode'
 
   const resting = useMemo(
     () => {
@@ -283,11 +287,12 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
 
   // Start animation when becoming active
   useEffect(() => {
+    if (!isDecodeAnimation) return
     if (isActive && phase === 'idle') {
       setPhase('spinning')
       setRotations(randomTargets(count).map(t => ({ x: base.x + t.x, y: base.y + t.y })))
     }
-  }, [isActive, phase, count, base.x, base.y])
+  }, [isActive, phase, count, base.x, base.y, isDecodeAnimation])
 
   // Cleanup timers on unmount
   useEffect(() => () => {
@@ -297,6 +302,7 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
 
   // Fallback timer in case transitionend doesn't fire
   useEffect(() => {
+    if (!isDecodeAnimation) return
     if (phase === 'idle') return
     const ms = (phase === 'returning' ? 1000 : 950) / speed
     fallbackRef.current = setTimeout(() => {
@@ -319,9 +325,10 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
       }
     }, ms)
     return () => { if (fallbackRef.current) clearTimeout(fallbackRef.current) }
-  }, [phase, count, speed, base.x, base.y])
+  }, [phase, count, speed, base.x, base.y, isDecodeAnimation])
 
   const handleTransitionEnd = useCallback((e: React.TransitionEvent) => {
+    if (!isDecodeAnimation) return
     if (e.propertyName !== 'transform') return
     if (fallbackRef.current) { clearTimeout(fallbackRef.current); fallbackRef.current = null }
     if (phase === 'spinning') {
@@ -341,7 +348,7 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
         setQuadrantIndex(0)
       }
     }
-  }, [phase, count, speed, base.x, base.y])
+  }, [phase, count, speed, base.x, base.y, isDecodeAnimation])
 
   const containerStyle: React.CSSProperties = cols
     ? {
@@ -366,10 +373,67 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
       className={`select-none ${className}`}
       style={containerStyle}
     >
+      {animation === 'prefill' && (
+        <style>{`
+          @keyframes polyhedron-prefill-spin {
+            from { transform: rotateY(0deg); }
+            to { transform: rotateY(360deg); }
+          }
+          @keyframes polyhedron-prefill-wobble {
+            0%, 100% { transform: rotateX(var(--wobble-x-start)) rotateZ(var(--wobble-z-start)); }
+            50% { transform: rotateX(var(--wobble-x-end)) rotateZ(var(--wobble-z-end)); }
+          }
+        `}</style>
+      )}
       {Array.from({ length: count }, (_, i) => {
         const r = rotations?.[i] ?? resting[i]
         const dur = (phase === 'spinning' ? 0.6 : phase === 'returning' ? 0.7 : 0.5) / speed
         const del = (phase === 'spinning' ? i * 50 : phase === 'returning' ? i * 35 : 0) / speed
+        if (animation === 'prefill') {
+          const wobbleX = 2.5 + (i % 3) * 0.75
+          const wobbleZ = 1.4 + (i % 2) * 0.7
+          const spinDuration = (3.6 + (i % 4) * 0.35) / speed
+          const wobbleDuration = (2.2 + (i % 5) * 0.28) / speed
+          const prefillStyle = {
+            width: size,
+            height: size,
+            position: 'relative',
+            transformStyle: 'preserve-3d',
+            transform: `rotateX(${base.x}deg) rotateY(${base.y}deg)`,
+          } satisfies React.CSSProperties
+          const wobbleStyle = {
+            width: size,
+            height: size,
+            position: 'relative',
+            transformStyle: 'preserve-3d',
+            animation: isActive ? `polyhedron-prefill-wobble ${wobbleDuration}s ease-in-out infinite` : 'none',
+            animationDelay: `${-i * 0.22}s`,
+            ['--wobble-x-start' as string]: `${-wobbleX}deg`,
+            ['--wobble-x-end' as string]: `${wobbleX}deg`,
+            ['--wobble-z-start' as string]: `${wobbleZ}deg`,
+            ['--wobble-z-end' as string]: `${-wobbleZ}deg`,
+          } as React.CSSProperties
+          return (
+            <div key={i} style={{ width: size, height: size, perspective: size * 5 }}>
+              <div
+                style={{
+                  width: size,
+                  height: size,
+                  position: 'relative',
+                  transformStyle: 'preserve-3d',
+                  animation: isActive ? `polyhedron-prefill-spin ${spinDuration}s linear infinite` : 'none',
+                  animationDelay: `${-i * 0.18}s`,
+                }}
+              >
+                <div style={wobbleStyle}>
+                  <div style={prefillStyle}>
+                    <ShapeComponent half={half} colorIndex={i} baseHue={baseHue} baseSaturation={baseSaturation} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        }
         return (
           <div key={i} style={{ width: size, height: size, perspective: size * 5 }}>
             <div
