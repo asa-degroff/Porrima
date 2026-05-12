@@ -37,11 +37,12 @@ export interface HeadlessChatTurnOptions {
   getFollowUp?: (state: HeadlessTurnState) => Promise<HeadlessFollowUp | null>;
   summarize?: (state: HeadlessTurnState) => string;
   decorateAssistantMessage?: (message: ChatMessage, state: HeadlessTurnState) => ChatMessage;
-  /** When true, the caller is responsible for building and persisting the final
-   * assistant message. The turn still returns the message in the result but
-   * does NOT push it to chat.messages, save, or emit `done`. Used by multi-phase
-   * synthesis to combine all phases into a single chat message. */
-  skipMessagePersistence?: boolean;
+  /** Persist the assistant output accumulated since the previous follow-up
+   * before injecting the next follow-up message. This preserves multi-step
+   * headless transcripts as user -> assistant -> user -> assistant rows while
+   * still running in one live pi-agent loop. */
+  persistIntermediateAssistantMessages?: boolean;
+  maxIterationsPerAssistantSegment?: number;
 }
 
 export interface HeadlessChatTurnResult extends HeadlessTurnState {
@@ -124,6 +125,10 @@ function defaultSummary(state: HeadlessTurnState): string {
     `*The run ended without visible output (stopReason=${state.stopReason}).*`;
 }
 
+function joinChunks(chunks: string[]): string {
+  return chunks.join("\n\n").trim();
+}
+
 export async function runHeadlessChatTurn(
   options: HeadlessChatTurnOptions,
 ): Promise<HeadlessChatTurnResult> {
@@ -161,20 +166,135 @@ export async function runHeadlessChatTurn(
   const textChunks: string[] = [];
   const thinkingChunks: string[] = [];
   const allToolCalls: ToolCall[] = [];
+  const allToolResults: ChatToolResult[] = [];
   const memoryUpdates: string[] = [];
   let stopReason: StopReason = "stop";
   let iterations = 0;
   let duplicateToolCallStreak = 0;
   let lastToolCallSignature: string | null = null;
+  let lastPersistedAssistantBoundary = {
+    textChunks: 0,
+    thinkingChunks: 0,
+    toolCalls: 0,
+    toolResults: 0,
+    memoryUpdates: 0,
+    iterations: 0,
+    artifacts: 0,
+    visuals: 0,
+    generatedImages: 0,
+    segments: 0,
+  };
+  let assistantMessageIndex = -1;
+  let finalAssistantMessage: ChatMessage | null = null;
 
   const currentState = (): HeadlessTurnState => ({
     iterations,
     stopReason,
-    textSummary: textChunks.join("\n\n").trim(),
+    textSummary: joinChunks(textChunks),
     thinking: thinkingChunks.join("\n\n"),
     toolCalls: allToolCalls,
     memoryUpdates,
   });
+
+  const stateSinceLastPersistedBoundary = (): HeadlessTurnState => ({
+    iterations: iterations - lastPersistedAssistantBoundary.iterations,
+    stopReason,
+    textSummary: joinChunks(textChunks.slice(lastPersistedAssistantBoundary.textChunks)),
+    thinking: thinkingChunks.slice(lastPersistedAssistantBoundary.thinkingChunks).join("\n\n"),
+    toolCalls: allToolCalls.slice(lastPersistedAssistantBoundary.toolCalls),
+    memoryUpdates: memoryUpdates.slice(lastPersistedAssistantBoundary.memoryUpdates),
+  });
+
+  const advancePersistedAssistantBoundary = () => {
+    lastPersistedAssistantBoundary = {
+      textChunks: textChunks.length,
+      thinkingChunks: thinkingChunks.length,
+      toolCalls: allToolCalls.length,
+      toolResults: allToolResults.length,
+      memoryUpdates: memoryUpdates.length,
+      iterations,
+      artifacts: emitter.state.artifacts.length,
+      visuals: emitter.state.visuals.length,
+      generatedImages: emitter.state.generatedImages.length,
+      segments: emitter.state.segments.length,
+    };
+  };
+
+  const buildAssistantMessageForState = (
+    state: HeadlessTurnState,
+    toolResults: ChatToolResult[],
+    output: {
+      artifacts: ChatMessage["artifacts"];
+      visuals: ChatMessage["visuals"];
+      generatedImages: ChatMessage["generatedImages"];
+      segments: ChatMessage["segments"];
+    },
+  ): ChatMessage => {
+    const summary = (options.summarize || defaultSummary)(state);
+    const message: ChatMessage = {
+      role: "assistant",
+      content: summary,
+      thinking: state.thinking || undefined,
+      usage: emitter.state.finalUsage,
+      toolCalls: state.toolCalls.length > 0
+        ? state.toolCalls.map((toolCall) => ({
+          id: toolCall.id,
+          name: toolCall.name,
+          arguments: toolCall.arguments,
+        }))
+        : undefined,
+      toolResults: toolResults.length > 0 ? toolResults : undefined,
+      artifacts: output.artifacts && output.artifacts.length > 0 ? output.artifacts : undefined,
+      visuals: output.visuals && output.visuals.length > 0 ? output.visuals : undefined,
+      generatedImages: output.generatedImages && output.generatedImages.length > 0
+        ? output.generatedImages
+        : undefined,
+      segments: output.segments && output.segments.length > 0 ? output.segments : undefined,
+      timestamp: Date.now(),
+      _isSystemMessage: true,
+    };
+    const decorated = options.decorateAssistantMessage
+      ? options.decorateAssistantMessage(message, state)
+      : message;
+    decorated._api = replayIdentity.api;
+    decorated._provider = replayIdentity.provider;
+    decorated._model = replayIdentity.model;
+    return decorated;
+  };
+
+  const persistAssistantSinceLastBoundary = async (): Promise<ChatMessage | null> => {
+    emitter.flushPendingText();
+    const state = stateSinceLastPersistedBoundary();
+    const toolResults = allToolResults.slice(lastPersistedAssistantBoundary.toolResults);
+    const output = {
+      artifacts: emitter.state.artifacts.slice(lastPersistedAssistantBoundary.artifacts),
+      visuals: emitter.state.visuals.slice(lastPersistedAssistantBoundary.visuals),
+      generatedImages: emitter.state.generatedImages.slice(lastPersistedAssistantBoundary.generatedImages),
+      segments: emitter.state.segments.slice(lastPersistedAssistantBoundary.segments),
+    };
+    if (
+      state.iterations === 0 &&
+      state.textSummary.length === 0 &&
+      state.thinking.length === 0 &&
+      state.toolCalls.length === 0 &&
+      toolResults.length === 0 &&
+      output.artifacts.length === 0 &&
+      output.visuals.length === 0 &&
+      output.generatedImages.length === 0 &&
+      output.segments.length === 0
+    ) {
+      advancePersistedAssistantBoundary();
+      return null;
+    }
+
+    const message = buildAssistantMessageForState(state, toolResults, output);
+    chat.messages.push(message);
+    await saveChat(chat);
+    assistantMessageIndex = chat.messages.length - 1;
+    finalAssistantMessage = message;
+    advancePersistedAssistantBoundary();
+    return message;
+  };
 
   const config = createAgentLoopConfig({
     model,
@@ -183,6 +303,9 @@ export async function runHeadlessChatTurn(
       if (controller.signal.aborted || iterations >= maxIterations) return [];
       const followUp = await options.getFollowUp?.(currentState());
       if (!followUp) return [];
+      if (options.persistIntermediateAssistantMessages) {
+        await persistAssistantSinceLastBoundary();
+      }
       chat.messages.push(followUp.message);
       await saveChat(chat);
       if (followUp.label) {
@@ -239,6 +362,7 @@ export async function runHeadlessChatTurn(
             isError: event.isError,
             images: resultImages(event.result, event.toolCallId),
           };
+          allToolResults.push(toolResult);
           emitter.emitToolResult(toolResult);
         } else if (event.type === "turn_end") {
           const msg = event.message as AssistantMessage;
@@ -289,6 +413,18 @@ export async function runHeadlessChatTurn(
               message: `Stopped - reached ${maxIterations} iteration limit`,
             });
             controller.abort();
+          } else if (
+            options.maxIterationsPerAssistantSegment &&
+            iterations - lastPersistedAssistantBoundary.iterations >= options.maxIterationsPerAssistantSegment
+          ) {
+            console.warn(
+              `[${logPrefix}] hit segment iteration cap (${options.maxIterationsPerAssistantSegment}), aborting`,
+            );
+            emitter.emitWarning({
+              type: "iteration_limit",
+              message: `Stopped - reached ${options.maxIterationsPerAssistantSegment} iteration limit for this phase`,
+            });
+            controller.abort();
           }
         }
       },
@@ -301,20 +437,32 @@ export async function runHeadlessChatTurn(
   }
 
   const state = currentState();
+  const finalBoundaryState = stateSinceLastPersistedBoundary();
+  const finalBoundaryToolResults = allToolResults.slice(lastPersistedAssistantBoundary.toolResults);
   const summary = (options.summarize || defaultSummary)(state);
-  const assistantMessage = options.decorateAssistantMessage
-    ? options.decorateAssistantMessage(emitter.buildAssistantMessage(state.thinking, summary), state)
-    : emitter.buildAssistantMessage(state.thinking, summary);
-  assistantMessage._api = replayIdentity.api;
-  assistantMessage._provider = replayIdentity.provider;
-  assistantMessage._model = replayIdentity.model;
-
-  let assistantMessageIndex = -1;
-  if (options.skipMessagePersistence) {
-    // Caller owns persistence — don't push/save/emit-done here.
-    // The emitter's state (segments, toolCalls, etc.) continues accumulating
-    // across phases and will be captured by the caller's single final message.
+  let assistantMessage: ChatMessage;
+  if (options.persistIntermediateAssistantMessages) {
+    assistantMessage = await persistAssistantSinceLastBoundary() ?? finalAssistantMessage ??
+      buildAssistantMessageForState(stateSinceLastPersistedBoundary(), [], {
+        artifacts: [],
+        visuals: [],
+        generatedImages: [],
+        segments: [],
+      });
+    const doneMessage = options.decorateAssistantMessage
+      ? options.decorateAssistantMessage(emitter.buildAssistantMessage(state.thinking, summary), state)
+      : emitter.buildAssistantMessage(state.thinking, summary);
+    doneMessage._api = replayIdentity.api;
+    doneMessage._provider = replayIdentity.provider;
+    doneMessage._model = replayIdentity.model;
+    emitter.emitDone(doneMessage, iterations);
   } else {
+    assistantMessage = options.decorateAssistantMessage
+      ? options.decorateAssistantMessage(emitter.buildAssistantMessage(state.thinking, summary), state)
+      : emitter.buildAssistantMessage(state.thinking, summary);
+    assistantMessage._api = replayIdentity.api;
+    assistantMessage._provider = replayIdentity.provider;
+    assistantMessage._model = replayIdentity.model;
     chat.messages.push(assistantMessage);
     await saveChat(chat);
     assistantMessageIndex = chat.messages.length - 1;
@@ -322,11 +470,13 @@ export async function runHeadlessChatTurn(
   }
 
   const stopReasonText = String(stopReason);
+  const failureState = options.persistIntermediateAssistantMessages ? finalBoundaryState : state;
   const producedNothing =
     (stopReasonText === "error" || stopReasonText === "aborted") &&
-    state.textSummary.length === 0 &&
-    state.thinking.length === 0 &&
-    allToolCalls.length === 0;
+    failureState.textSummary.length === 0 &&
+    failureState.thinking.length === 0 &&
+    failureState.toolCalls.length === 0 &&
+    (!options.persistIntermediateAssistantMessages || finalBoundaryToolResults.length === 0);
 
   return {
     ...state,
