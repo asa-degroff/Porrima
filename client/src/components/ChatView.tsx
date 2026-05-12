@@ -73,21 +73,33 @@ function ModelProgressIndicator({ progress }: { progress: ModelProgress }) {
 
   return (
     <div
-      className="hidden md:flex items-center gap-2 px-2 py-1 rounded-full border border-amber-300/20 text-[10px] text-amber-100/80"
+      className="hidden md:flex items-center gap-2 px-2 py-1 text-[10px]"
       title={title}
+      style={{ color: "rgba(var(--theme-accent), 0.75)" }}
     >
       <PrefillActivityIcon />
-      <span className="whitespace-nowrap">
+      <span className="whitespace-nowrap animate-pulse">
         {label}
         {percent !== undefined ? ` ${percent}%` : ""}
       </span>
-      {tokenText && <span className="text-amber-100/45 whitespace-nowrap">{tokenText}</span>}
-      {eta && <span className="hidden lg:inline text-amber-100/45 whitespace-nowrap">{eta}</span>}
+      {tokenText && (
+        <span className="whitespace-nowrap" style={{ color: "rgba(var(--theme-accent), 0.35)" }}>
+          {tokenText}
+        </span>
+      )}
+      {eta && (
+        <span className="hidden lg:inline whitespace-nowrap" style={{ color: "rgba(var(--theme-accent), 0.35)" }}>
+          {eta}
+        </span>
+      )}
       {percent !== undefined && (
-        <div className="hidden lg:block w-14 h-1 rounded-full bg-amber-100/10 overflow-hidden">
+        <div
+          className="hidden lg:block w-14 h-1 rounded-full overflow-hidden"
+          style={{ backgroundColor: "rgba(var(--theme-accent), 0.1)" }}
+        >
           <div
-            className="h-full rounded-full bg-amber-200/60 transition-all duration-500"
-            style={{ width: `${percent}%` }}
+            className="h-full rounded-full transition-all duration-500"
+            style={{ width: `${percent}%`, backgroundColor: "rgba(var(--theme-accent), 0.55)" }}
           />
         </div>
       )}
