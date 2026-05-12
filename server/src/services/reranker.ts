@@ -8,7 +8,7 @@ import { getSettings } from "./chat-storage.js";
 
 const DEFAULT_RERANKER_URL = "http://localhost:8082";
 const DEFAULT_RERANKER_MODEL = "qwen3-reranker";
-const RERANKER_TIMEOUT_MS = 15_000;
+const RERANKER_TIMEOUT_MS = 25_000;
 
 /**
  * Chat-type-specific reranking instructions.
@@ -29,8 +29,15 @@ interface RerankResult {
   relevance_score: number;
 }
 
+interface RerankUsage {
+  prompt_tokens: number;
+  total_tokens: number;
+}
+
 interface RerankResponse {
   results: RerankResult[];
+  usage?: RerankUsage;
+  model?: string;
 }
 
 /**
@@ -47,6 +54,35 @@ export interface RerankOutput {
   results: Array<{ index: number; score: number }>;
   usedModel: boolean;
   latencyMs: number;
+  totalTokens: number;
+  scoreMin: number;
+  scoreMax: number;
+  scoreMedian: number;
+  documentCount: number;
+}
+
+const EMPTY_OUTPUT: RerankOutput = {
+  results: [],
+  usedModel: false,
+  latencyMs: 0,
+  totalTokens: 0,
+  scoreMin: 0,
+  scoreMax: 0,
+  scoreMedian: 0,
+  documentCount: 0,
+};
+
+function fallbackOutput(documentCount: number, latencyMs: number): RerankOutput {
+  return {
+    results: fallbackOrder(documentCount),
+    usedModel: false,
+    latencyMs,
+    totalTokens: 0,
+    scoreMin: 0,
+    scoreMax: 0,
+    scoreMedian: 0,
+    documentCount,
+  };
 }
 
 export async function rerank(
@@ -55,14 +91,14 @@ export async function rerank(
   instruction?: string,
   topN?: number
 ): Promise<RerankOutput> {
-  if (documents.length === 0) return { results: [], usedModel: false, latencyMs: 0 };
+  if (documents.length === 0) return EMPTY_OUTPUT;
 
   const start = Date.now();
 
   // Read settings for reranker configuration
   const settings = await getSettings();
   if (settings.rerankerEnabled === false) {
-    return { results: fallbackOrder(documents.length, topN), usedModel: false, latencyMs: Date.now() - start };
+    return fallbackOutput(documents.length, Date.now() - start);
   }
 
   const rerankerUrl = settings.rerankerUrl || DEFAULT_RERANKER_URL;
@@ -88,34 +124,41 @@ export async function rerank(
 
     if (!res.ok) {
       console.warn(`[reranker] /v1/rerank returned ${res.status}`);
-      return { results: fallbackOrder(documents.length, topN), usedModel: false, latencyMs: Date.now() - start };
+      return fallbackOutput(documents.length, Date.now() - start);
     }
 
     const data = (await res.json()) as RerankResponse;
+    const scores = data.results.map((r) => r.relevance_score).sort((a, b) => a - b);
+    const totalTokens = data.usage?.total_tokens ?? 0;
+    const scoreMin = scores.length > 0 ? scores[0] : 0;
+    const scoreMax = scores.length > 0 ? scores[scores.length - 1] : 0;
+    const scoreMedian = scores.length > 0 ? scores[Math.floor(scores.length / 2)] : 0;
+
     return {
       results: data.results.map((r) => ({ index: r.index, score: r.relevance_score })),
       usedModel: true,
       latencyMs: Date.now() - start,
+      totalTokens,
+      scoreMin,
+      scoreMax,
+      scoreMedian,
+      documentCount: documents.length,
     };
   } catch (err) {
     console.warn(
       `[reranker] unavailable, using fallback:`,
       err instanceof Error ? err.message : err
     );
-    return { results: fallbackOrder(documents.length, topN), usedModel: false, latencyMs: Date.now() - start };
+    return fallbackOutput(documents.length, Date.now() - start);
   }
 }
 
-/** Fallback: return indices in original order with uniform scores. */
-function fallbackOrder(
-  count: number,
-  topN?: number
-): Array<{ index: number; score: number }> {
-  const result = Array.from({ length: count }, (_, i) => ({
+/** Fallback: return indices in original order with decaying scores. */
+function fallbackOrder(count: number): Array<{ index: number; score: number }> {
+  return Array.from({ length: count }, (_, i) => ({
     index: i,
-    score: 1 / (i + 1), // Decaying score to preserve original ranking
+    score: 1 / (i + 1),
   }));
-  return topN ? result.slice(0, topN) : result;
 }
 
 /**

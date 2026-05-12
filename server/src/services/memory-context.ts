@@ -1,6 +1,7 @@
 import { embed, cosineSimilarity } from "./embeddings.js";
 import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, getAllMemoryBlocks, type MemoryBlock } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
+import { recordRerankerStats } from "./reranker-stats.js";
 import { loadPersona } from "./persona-store.js";
 import { loadUserDocument } from "./user-store.js";
 import { readAgentsMd } from "./project-storage.js";
@@ -160,6 +161,24 @@ async function retrieveMemories(
     ...results[index],
     score,
   }));
+
+  // Record reranker stats for the UI
+  try {
+    recordRerankerStats({
+      usedModel: rerankOutput.usedModel,
+      latencyMs: rerankOutput.latencyMs,
+      documentCount: rerankOutput.documentCount,
+      topN: rerankOutput.results.length,
+      totalTokens: rerankOutput.totalTokens,
+      scoreMin: rerankOutput.scoreMin,
+      scoreMax: rerankOutput.scoreMax,
+      scoreMedian: rerankOutput.scoreMedian,
+      chatType: chatType || "agent",
+      timestamp: Date.now(),
+    });
+  } catch (e) {
+    console.warn("[memory-retrieval] Failed to record reranker stats:", e);
+  }
 
   // --- Topic-aware memory culling ---
   // After compaction cycles, the memory store accumulates memories from every

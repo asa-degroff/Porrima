@@ -50,6 +50,42 @@ interface ModelStatsDetail {
   runs: LlamaTimingsEntry[];
 }
 
+// --- Reranker Stats Types (aligned with server reranker-stats.ts) ---
+
+interface RerankerStatsRun {
+  id: string;
+  timestamp: number;
+  usedModel: boolean;
+  latencyMs: number;
+  documentCount: number;
+  topN: number;
+  totalTokens: number;
+  scoreMin: number;
+  scoreMax: number;
+  scoreMedian: number;
+  chatType: string;
+}
+
+interface RerankerStatsSummary {
+  lastRun: RerankerStatsRun | null;
+  runCount: number;
+  modelRunCount: number;
+  fallbackRunCount: number;
+  modelSuccessRate: number | null;
+  avgLatencyMs: number | null;
+  avgModelLatencyMs: number | null;
+  avgFallbackLatencyMs: number | null;
+  avgDocumentCount: number | null;
+  avgTotalTokens: number | null;
+  avgScoreSpread: number | null;
+  timeoutCount: number;
+}
+
+interface RerankerStatsData {
+  summary: RerankerStatsSummary;
+  runs: RerankerStatsRun[];
+}
+
 interface Props {
   isOpen: boolean;
   onClose: () => void;
@@ -392,17 +428,194 @@ function ModelDetail({
   );
 }
 
+// --- Reranker Stats Panel ---
+
+const RERANKER_TIMEOUT_S = 25; // must match server RERANKER_TIMEOUT_MS / 1000
+
+function rerankerSuccessColor(rate: number | null): string {
+  if (rate === null) return "text-white/30";
+  if (rate >= 0.95) return "text-emerald-300";
+  if (rate >= 0.8) return "text-emerald-400/80";
+  if (rate >= 0.6) return "text-amber-300";
+  return "text-red-300";
+}
+
+function latencyColor(ms: number, timeoutMs: number): string {
+  const ratio = ms / timeoutMs;
+  if (ratio < 0.5) return "text-emerald-300";
+  if (ratio < 0.7) return "text-emerald-400/80";
+  if (ratio < 0.85) return "text-amber-300";
+  if (ratio < 0.95) return "text-red-300/80";
+  return "text-red-400";
+}
+
+function scoreSpreadLabel(spread: number | null): { text: string; color: string } {
+  // scoreSpread = scoreMax - scoreMedian. Model runs produce wide spreads (0.5+).
+  // Fallback runs produce near-zero spreads (flat scores like 0.04–1.0 / 0.077).
+  if (spread === null) return { text: "—", color: "text-white/30" };
+  if (spread >= 0.5) return { text: "high", color: "text-emerald-300" };
+  if (spread >= 0.2) return { text: "medium", color: "text-amber-300" };
+  return { text: "low", color: "text-red-300/80" };
+}
+
+function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
+  const { summary, runs } = data;
+  const last = summary.lastRun;
+  const timeoutMs = RERANKER_TIMEOUT_S * 1000;
+
+  return (
+    <div className="space-y-3">
+      {/* Health overview */}
+      <div className="bg-white/5 rounded-lg p-3 border border-white/5 space-y-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-2">
+          <div>
+            <div className="text-[10px] text-white/30">model success</div>
+            <div className={`text-lg font-mono ${rerankerSuccessColor(summary.modelSuccessRate)}`}>
+              {summary.modelSuccessRate !== null ? `${(summary.modelSuccessRate * 100).toFixed(0)}%` : "—"}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] text-white/30">avg latency</div>
+            <div className={`text-lg font-mono ${latencyColor(summary.avgLatencyMs ?? 0, timeoutMs)}`}>
+              {summary.avgLatencyMs !== null ? formatDuration(summary.avgLatencyMs) : "—"}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] text-white/30">timeouts</div>
+            <div className={`text-lg font-mono ${summary.timeoutCount > 0 ? "text-red-300" : "text-white/30"}`}>
+              {summary.timeoutCount}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] text-white/30">score quality</div>
+            <div className={`text-lg font-mono ${scoreSpreadLabel(summary.avgScoreSpread).color}`}>
+              {scoreSpreadLabel(summary.avgScoreSpread).text}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] pt-1 border-t border-white/5">
+          <span className="text-white/30">
+            {summary.modelRunCount} model / {summary.fallbackRunCount} fallback
+          </span>
+          <span className="text-white/30">
+            avg model: {formatDuration(summary.avgModelLatencyMs ?? 0)}
+          </span>
+          <span className="text-white/30">
+            avg fallback: {formatDuration(summary.avgFallbackLatencyMs ?? 0)}
+          </span>
+        </div>
+      </div>
+
+      {/* Latency bar */}
+      <Section title="Latency" defaultOpen>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-white/40 w-14 shrink-0">model</span>
+            <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-300 ${latencyColor(summary.avgModelLatencyMs ?? 0, timeoutMs)}`}
+                style={{ width: summary.avgModelLatencyMs != null ? `${Math.min(summary.avgModelLatencyMs / timeoutMs * 100, 100)}%` : "0%" }}
+              />
+            </div>
+            <span className={`text-[10px] w-20 text-right shrink-0 font-mono ${latencyColor(summary.avgModelLatencyMs ?? 0, timeoutMs)}`}>
+              {formatDuration(summary.avgModelLatencyMs ?? 0)}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-white/40 w-14 shrink-0">fallback</span>
+            <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-300 ${latencyColor(summary.avgFallbackLatencyMs ?? 0, timeoutMs)}`}
+                style={{ width: summary.avgFallbackLatencyMs != null ? `${Math.min(summary.avgFallbackLatencyMs / timeoutMs * 100, 100)}%` : "0%" }}
+              />
+            </div>
+            <span className={`text-[10px] w-20 text-right shrink-0 font-mono ${latencyColor(summary.avgFallbackLatencyMs ?? 0, timeoutMs)}`}>
+              {formatDuration(summary.avgFallbackLatencyMs ?? 0)}
+            </span>
+          </div>
+          {/* Timeout threshold marker */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-white/40 w-14 shrink-0">timeout</span>
+            <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
+              <div className="h-full rounded-full bg-red-400/40" style={{ width: "100%" }} />
+            </div>
+            <span className="text-[10px] w-20 text-right shrink-0 font-mono text-red-300/60">
+              {RERANKER_TIMEOUT_S}s
+            </span>
+          </div>
+        </div>
+      </Section>
+
+      {/* Throughput & scores */}
+      <Section title="Per-Run Metrics" defaultOpen>
+        <div className="space-y-1.5">
+          {(Object.entries({
+            "Avg documents": `${summary.avgDocumentCount !== null ? summary.avgDocumentCount.toFixed(0) : "—"} per call`,
+            "Avg tokens": `${summary.avgTotalTokens !== null ? Math.round(summary.avgTotalTokens).toLocaleString() : "—"} prompt`,
+            "Avg score spread": scoreSpreadLabel(summary.avgScoreSpread).text,
+            "Last run": last ? (last.usedModel ? "model" : "fallback") : "—",
+            "Last latency": last ? formatDuration(last.latencyMs) : "—",
+            "Last docs/tokens": last ? `${last.documentCount} / ${last.totalTokens.toLocaleString()}` : "—",
+            "Last scores": last ? `${last.scoreMin.toFixed(4)} – ${last.scoreMax.toFixed(4)} (med: ${last.scoreMedian.toFixed(4)})` : "—",
+            "Last chat type": last ? last.chatType : "—",
+          }) as [string, string][]).map(([k, v]) => (
+            <div key={k} className="flex justify-between text-[11px]">
+              <span className="text-white/40">{k}</span>
+              <span className="text-white/70 font-mono">{v}</span>
+            </div>
+          ))}
+          {last && (
+            <div className="text-white/30 pt-1 text-[10px]">Run: {formatTimeAgo(last.timestamp)}</div>
+          )}
+        </div>
+      </Section>
+
+      {/* Run history */}
+      <Section title={`Run History (${runs.length})`}>
+        {runs.length === 0 ? (
+          <div className="text-white/30 text-xs">No runs recorded</div>
+        ) : (
+          <div className="space-y-1">
+            {runs.map((run) => (
+              <div
+                key={run.id}
+                className="flex items-center gap-2 text-[10px] py-1 px-2 rounded hover:bg-white/5"
+              >
+                <span className="text-white/30 w-14 shrink-0">{formatTimeAgo(run.timestamp)}</span>
+                <span className={`w-10 shrink-0 font-mono ${run.usedModel ? "text-emerald-300" : "text-red-300/70"}`}>
+                  {run.usedModel ? "model" : "fall"}
+                </span>
+                <span className={`w-14 shrink-0 font-mono ${latencyColor(run.latencyMs, timeoutMs)}`}>
+                  {formatDuration(run.latencyMs)}
+                </span>
+                <span className="text-white/30 w-10 shrink-0">{run.documentCount}doc</span>
+                <span className="text-white/30 w-16 shrink-0">{run.totalTokens.toLocaleString()}tok</span>
+                <span className="text-white/40 shrink-0">
+                  {run.scoreMin.toFixed(3)}–{run.scoreMax.toFixed(3)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
 // --- Main Modal ---
 
 export function ModelStatsModal({ isOpen, onClose }: Props) {
   const [records, setRecords] = useState<ModelStatsRecord[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"chat" | "extraction" | "cache">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "extraction" | "reranker" | "cache">("chat");
   const [detailModelId, setDetailModelId] = useState<string | null>(null);
   const [detailData, setDetailData] = useState<ModelStatsDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [cacheResidency, setCacheResidency] = useState<CacheResidency[]>([]);
   const [cacheLoading, setCacheLoading] = useState(false);
+  const [rerankerData, setRerankerData] = useState<RerankerStatsData | null>(null);
+  const [rerankerLoading, setRerankerLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -447,14 +660,30 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
     }
   }, []);
 
+  const fetchRerankerStats = useCallback(async () => {
+    setRerankerLoading(true);
+    try {
+      const res = await fetch("/api/reranker-stats", { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setRerankerData(data);
+      }
+    } catch (err) {
+      console.error("[reranker-stats] fetch failed:", err);
+    } finally {
+      setRerankerLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (isOpen) {
       fetchData();
       fetchCacheResidency();
+      fetchRerankerStats();
       setDetailModelId(null);
       setActiveTab("chat");
     }
-  }, [isOpen, fetchData, fetchCacheResidency]);
+  }, [isOpen, fetchData, fetchCacheResidency, fetchRerankerStats]);
 
   // Filter records by tab: extraction models have provider containing "extraction"
   const filteredRecords = records.filter((r) => {
@@ -490,13 +719,19 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
                 Extraction
               </button>
               <button
+                onClick={() => { setActiveTab("reranker"); setDetailModelId(null); fetchRerankerStats(); }}
+                className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "reranker" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+              >
+                Reranker
+              </button>
+              <button
                 onClick={() => { setActiveTab("cache"); setDetailModelId(null); fetchCacheResidency(); }}
                 className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "cache" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
               >
                 Cache
               </button>
             </div>
-            <span className="text-[10px] text-white/30">{activeTab === "cache" ? `${cacheResidency.length} tracked` : `${filteredRecords.length} model${filteredRecords.length !== 1 ? "s" : ""}`}</span>
+            <span className="text-[10px] text-white/30">{activeTab === "cache" ? `${cacheResidency.length} tracked` : activeTab === "reranker" ? `${rerankerData?.summary.runCount ?? 0} runs` : `${filteredRecords.length} model${filteredRecords.length !== 1 ? "s" : ""}`}</span>
           </div>
           <div className="flex items-center gap-2">
             {loading && <span className="text-[10px] text-amber-300/60">loading…</span>}
@@ -513,7 +748,17 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
         </header>
 
         <div className="flex-1 overflow-y-auto p-4">
-          {activeTab === "cache" ? (
+          {activeTab === "reranker" ? (
+            rerankerLoading ? (
+              <div className="text-white/30 text-sm text-center py-8">Loading…</div>
+            ) : !rerankerData || rerankerData.summary.runCount === 0 ? (
+              <div className="p-8 text-center text-white/30 text-sm">
+                No reranker stats recorded yet. Reranker stats are captured during memory retrieval.
+              </div>
+            ) : (
+              <RerankerStatsPanel data={rerankerData} />
+            )
+          ) : activeTab === "cache" ? (
             cacheLoading ? (
               <div className="text-white/30 text-sm text-center py-8">Loading…</div>
             ) : cacheResidency.length === 0 ? (
