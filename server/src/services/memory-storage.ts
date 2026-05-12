@@ -221,6 +221,7 @@ export function getDb(): Database.Database {
       description TEXT NOT NULL,
       content TEXT NOT NULL,
       scope TEXT NOT NULL,
+      projectId TEXT NOT NULL DEFAULT '',
       createdAt TEXT NOT NULL,
       updatedAt TEXT NOT NULL,
       updatedBy TEXT NOT NULL DEFAULT 'agent',
@@ -230,8 +231,9 @@ export function getDb(): Database.Database {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_blocks_history_blockId ON memory_blocks_history(blockId)`);
 
-  // Trigger: snapshot old state before any update.
-  // Fires whenever content, name, or description changes.
+  // Trigger: snapshot old state on every content/name/description change.
+  // NOTE: If you alter the trigger body, you must DROP it first —
+  // CREATE TRIGGER IF NOT EXISTS won't update an existing trigger.
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS memory_blocks_history_trigger
     AFTER UPDATE ON memory_blocks
@@ -240,10 +242,12 @@ export function getDb(): Database.Database {
        OR old.description != new.description
     BEGIN
       INSERT INTO memory_blocks_history (
-        blockId, name, description, content, scope, createdAt, updatedAt, updatedBy, tokenEstimate, blockType
+        blockId, name, description, content, scope, projectId,
+        createdAt, updatedAt, updatedBy, tokenEstimate, blockType
       ) VALUES (
         old.id, old.name, old.description, old.content,
-        old.scope, old.updatedAt, old.updatedAt, old.updatedBy, old.tokenEstimate,
+        old.scope, old.projectId,
+        old.createdAt, old.updatedAt, old.updatedBy, old.tokenEstimate,
         COALESCE(old.blockType, 'note')
       );
     END;
@@ -252,6 +256,13 @@ export function getDb(): Database.Database {
   // Auto-migrate from JSON if needed
   if (needsMigration) {
     migrateFromJson(db);
+  }
+
+  // Migration: add projectId to history table if it was created without it.
+  const histCols = db.prepare("PRAGMA table_info(memory_blocks_history)").all() as Array<{ name: string }>;
+  if (!histCols.some((c) => c.name === "projectId")) {
+    db.exec(`ALTER TABLE memory_blocks_history ADD COLUMN projectId TEXT NOT NULL DEFAULT ''`);
+    console.log("[memory] Added projectId column to memory_blocks_history");
   }
 
   _db = db;
@@ -1597,6 +1608,8 @@ export function getAllMemoryBlocks(): MemoryBlock[] {
 
 export function deleteMemoryBlock(id: string): boolean {
   const db = getDb();
+  // Clean up revision history before deleting the block itself.
+  db.prepare("DELETE FROM memory_blocks_history WHERE blockId = ?").run(id);
   const result = db.prepare("DELETE FROM memory_blocks WHERE id = ?").run(id);
   return result.changes > 0;
 }
@@ -1719,12 +1732,14 @@ export function getBlockHistory(blockId: string): MemoryBlock[] {
   // Get historical snapshots, oldest first.
   // rowid is unique per snapshot — use it as a synthetic id so each
   // history entry has a distinct identity for the client's React keys.
+  // ORDER BY updatedAt, rowid guarantees stable ordering when multiple
+  // edits land in the same millisecond.
   const rows = db.prepare(`
-    SELECT rowid AS id, blockId, name, description, content, scope,
+    SELECT rowid AS id, blockId, name, description, content, scope, projectId,
            createdAt, updatedAt, updatedBy, tokenEstimate, blockType
     FROM memory_blocks_history
     WHERE blockId = ?
-    ORDER BY updatedAt ASC
+    ORDER BY updatedAt ASC, rowid ASC
   `).all(blockId) as any[];
 
   for (const row of rows) {
