@@ -1,10 +1,13 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type { NotebookEntry, NotebookIndex, NotebookLink, ChatListItem, ImageAttachment } from "../types";
 import { fetchNotebookEntry, fetchNotebookEntriesBulk } from "../api/client";
 import { NotebookEntryComposer } from "./NotebookEntryComposer";
 import { NotebookEntryDisplay } from "./NotebookEntryDisplay";
 import { ChatLinkPicker } from "./ChatLinkPicker";
 import { NotebookLinkPicker } from "./NotebookLinkPicker";
+
+/** How many of the most recent entries per author are auto-expanded on mount. */
+const AUTO_EXPAND_COUNT = 3;
 
 const COMPOSER_TARGET = '__composer__';
 
@@ -40,9 +43,9 @@ export function NotebookView({
   onOpenSidebar,
 }: Props) {
   const [fullEntries, setFullEntries] = useState<Record<string, NotebookEntry>>({});
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [editingEntry, setEditingEntry] = useState<{ author: 'user' | 'agent'; id: string; content: string } | null>(null);
   const [composerLinks, setComposerLinks] = useState<NotebookLink>({});
-  const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
   const [mobileNotebookTab, setMobileNotebookTab] = useState<'user' | 'agent'>('user');
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && !window.matchMedia('(min-width: 768px)').matches);
 
@@ -60,21 +63,30 @@ export function NotebookView({
   const [pendingLink, setPendingLink] = useState<{ entryId: string; author: 'user' | 'agent' } | null>(null);
   const [filterText, setFilterText] = useState('');
 
-  // Track entry refs for IntersectionObserver
-  const entryRefs = useRef<Record<string, HTMLDivElement | null>>({});
-
   // Mark as seen when view becomes visible
   useEffect(() => {
     onVisible?.();
   }, [onVisible]);
 
-  // Lazy load entries when they become visible
+  // Auto-expand the most recent entries and eagerly fetch their full content
   useEffect(() => {
-    const allIndexEntries = [...userNotebooks.entries, ...agentNotebooks.entries];
-    const missing = allIndexEntries.filter(e => !fullEntries[e.id] && visibleIds.has(e.id));
+    const toExpand = [
+      ...userNotebooks.entries.slice(0, AUTO_EXPAND_COUNT),
+      ...agentNotebooks.entries.slice(0, AUTO_EXPAND_COUNT),
+    ];
+    const newIds = toExpand.map(e => e.id);
+    if (newIds.length === 0) return;
+
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      newIds.forEach(id => next.add(id));
+      return next;
+    });
+
+    // Eagerly fetch full content for the auto-expanded entries
+    const missing = toExpand.filter(e => !fullEntries[e.id]);
     if (missing.length === 0) return;
 
-    // Batch fetch missing visible entries
     fetchNotebookEntriesBulk(missing.map(e => ({ author: e.author, id: e.id })))
       .then((results) => {
         setFullEntries(prev => {
@@ -86,52 +98,38 @@ export function NotebookView({
         });
       })
       .catch(() => {
-        // Fallback to individual fetches if bulk fails
+        // Fallback to individual fetches
         missing.forEach(async (e) => {
           try {
             const entry = await fetchNotebookEntry(e.author, e.id);
             if (entry) {
               setFullEntries(prev => ({ ...prev, [e.id]: entry }));
             }
-          } catch {
-            // ignore
-          }
+          } catch { /* ignore */ }
         });
       });
-  }, [visibleIds, userNotebooks.entries, agentNotebooks.entries]);
-
-  // IntersectionObserver to track which entries are visible
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const newlyVisible = new Set<string>();
-        entries.forEach((entry) => {
-          if (entry.isIntersecting && entry.target.id) {
-            const id = entry.target.id.replace('entry-', '');
-            newlyVisible.add(id);
-          }
-        });
-        setVisibleIds(prev => {
-          const next = new Set(prev);
-          newlyVisible.forEach(id => next.add(id));
-          return next;
-        });
-      },
-      { rootMargin: '100px', threshold: 0 }
-    );
-
-    // Observe all entry elements
-    Object.values(entryRefs.current).forEach((el) => {
-      if (el) observer.observe(el);
-    });
-
-    return () => observer.disconnect();
   }, [userNotebooks.entries, agentNotebooks.entries]);
 
-  // Register entry ref callback
-  const registerEntryRef = useCallback((id: string, el: HTMLDivElement | null) => {
-    entryRefs.current[id] = el;
-  }, []);
+  // Toggle entry expansion — fetch full content on first expand
+  const toggleExpand = useCallback((author: 'user' | 'agent', id: string) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+        // Fetch full content if not yet cached
+        if (!fullEntries[id]) {
+          fetchNotebookEntry(author, id)
+            .then(entry => {
+              if (entry) setFullEntries(prev => ({ ...prev, [id]: entry }));
+            })
+            .catch(() => { /* ignore */ });
+        }
+      }
+      return next;
+    });
+  }, [fullEntries]);
 
   // --- Composer handlers ---
 
@@ -306,6 +304,7 @@ export function NotebookView({
 
   const renderEntries = useCallback((entries: NotebookIndex['entries'], author: 'user' | 'agent') => {
     return entries.map((entryInfo) => {
+      const expanded = expandedIds.has(entryInfo.id);
       const entry = fullEntries[entryInfo.id] || {
         id: entryInfo.id,
         createdAt: entryInfo.createdAt,
@@ -317,7 +316,6 @@ export function NotebookView({
         <div
           key={entry.id}
           id={`entry-${entry.id}`}
-          ref={(el) => registerEntryRef(entry.id, el)}
           className="mb-4"
         >
           {editingEntry?.id === entry.id ? (
@@ -330,18 +328,21 @@ export function NotebookView({
           ) : (
             <NotebookEntryDisplay
               entry={entry}
-              onEdit={author === 'user' ? () => handleEdit(author, entry.id, entry.content) : undefined}
+              expanded={expanded}
+              preview={expanded ? undefined : entryInfo.preview}
+              onToggleExpand={() => toggleExpand(author, entry.id)}
+              onEdit={author === 'user' && expanded ? () => handleEdit(author, entry.id, fullEntries[entry.id]?.content || entry.content) : undefined}
               onDelete={() => handleDelete(author, entry.id)}
               onLinkClick={handleEntryLinkClick}
               onChatLinkClick={handleChatLinkClick}
-              onAddLink={author === 'user' ? (type: 'chat' | 'notebook', anchorRect) => openLinkPicker(type, anchorRect, entry.id, author) : undefined}
-              onRemoveLink={author === 'user' ? (linkType, index) => handleRemoveLink(entry.id, author, linkType, index) : undefined}
+              onAddLink={author === 'user' && expanded ? (type: 'chat' | 'notebook', anchorRect) => openLinkPicker(type, anchorRect, entry.id, author) : undefined}
+              onRemoveLink={author === 'user' && expanded ? (linkType, index) => handleRemoveLink(entry.id, author, linkType, index) : undefined}
             />
           )}
         </div>
       );
     });
-  }, [fullEntries, editingEntry, handleEdit, handleSaveEdit, handleDelete, handleEntryLinkClick, handleChatLinkClick, openLinkPicker, handleRemoveLink, registerEntryRef]);
+  }, [fullEntries, expandedIds, editingEntry, handleEdit, handleSaveEdit, handleDelete, handleEntryLinkClick, handleChatLinkClick, openLinkPicker, handleRemoveLink, toggleExpand]);
 
   if (loading) {
     return (

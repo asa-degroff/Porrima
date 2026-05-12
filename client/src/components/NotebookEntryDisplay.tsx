@@ -19,6 +19,9 @@ const InlineVisualComponent = lazy(() =>
 
 interface Props {
   entry: NotebookEntry;
+  expanded: boolean;
+  preview?: string;
+  onToggleExpand?: () => void;
   onEdit?: (id: string, content: string) => void;
   onDelete?: (id: string) => void;
   onLinkClick?: (author: 'user' | 'agent', entryId: string) => void;
@@ -29,6 +32,9 @@ interface Props {
 
 export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
   entry,
+  expanded,
+  preview,
+  onToggleExpand,
   onEdit,
   onDelete,
   onLinkClick,
@@ -142,8 +148,14 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
       </div>
 
       {/* Content */}
-      <div className="p-4">
-        {entry.images && entry.images.length > 0 && (
+      <div
+        className={expanded ? 'p-4' : 'px-4 py-3 cursor-pointer'}
+        onClick={expanded ? undefined : onToggleExpand}
+        role={expanded ? undefined : 'button'}
+        tabIndex={expanded ? undefined : 0}
+        onKeyDown={expanded ? undefined : (e) => { if (e.key === 'Enter' || e.key === ' ') onToggleExpand?.(); }}
+      >
+        {expanded && entry.images && entry.images.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-3">
             {entry.images.map((img, i) => (
               <img
@@ -156,15 +168,36 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
             ))}
           </div>
         )}
-        {entry.content && (
-          <div className="text-sm leading-relaxed text-white/80">
-            <Suspense fallback={<span className="whitespace-pre-wrap">{entry.content}</span>}>
-              <MarkdownRenderer content={entry.content} />
-            </Suspense>
+        {expanded ? (
+          // Full expanded view
+          entry.content && (
+            <div className="text-sm leading-relaxed text-white/80">
+              <Suspense fallback={<span className="whitespace-pre-wrap">{entry.content}</span>}>
+                <MarkdownRenderer content={entry.content} />
+              </Suspense>
+            </div>
+          )
+        ) : (
+          // Collapsed preview
+          <div className="flex items-start gap-2">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-white/60 leading-relaxed line-clamp-3">
+                {(preview || entry.content).slice(0, 200)}
+              </p>
+            </div>
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
+              className="shrink-0 mt-0.5 text-white/30 hover:text-white/60 transition-colors p-1 rounded hover:bg-white/5"
+              title="Expand entry"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="transition-transform">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
           </div>
         )}
 
-            {entry.links && (
+        {expanded && entry.links && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {entry.links.notebooks?.map((link, i) => (
                   <div
@@ -249,8 +282,8 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
               </div>
             )}
 
-        {/* Tool calls — shown when the agent used tools while writing this entry */}
-        {entry.toolCalls && entry.toolCalls.length > 0 && (
+        {/* Tool calls — shown when expanded and the agent used tools while writing this entry */}
+        {expanded && entry.toolCalls && entry.toolCalls.length > 0 && (
           <div className="mt-2">
             {entry.toolCalls.map((tc) => {
               const tr = entry.toolResults?.find((r) => r.toolCallId === tc.id);
@@ -259,15 +292,28 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
           </div>
         )}
 
-        {/* Artifacts */}
-        {entry.artifacts?.map((artifact) => (
+        {/* Artifacts — only when expanded */}
+        {expanded && entry.artifacts?.map((artifact) => (
           <ArtifactPanel key={artifact.id} artifact={artifact} />
         ))}
 
-        {/* Inline Visualizations */}
-        {entry.visuals?.map((visual) => (
+        {/* Inline Visualizations — only when expanded */}
+        {expanded && entry.visuals?.map((visual) => (
           <InlineVisualComponent key={visual.id} visual={visual} />
         ))}
+
+        {/* Collapse button — only when expanded */}
+        {expanded && onToggleExpand && (
+          <button
+            onClick={onToggleExpand}
+            className="mt-3 text-xs text-white/30 hover:text-white/50 transition-colors flex items-center gap-1"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="18 15 12 9 6 15" />
+            </svg>
+            Collapse
+          </button>
+        )}
       </div>
 
       {/* Delete confirmation overlay */}

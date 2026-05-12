@@ -87,7 +87,7 @@ async function createUserNotebookEntry(content: string): Promise<NotebookEntry> 
     id: entry.id,
     createdAt: entry.createdAt,
     author: 'user',
-    preview: content.slice(0, 100),
+    preview: content.slice(0, 300),
   });
   index.lastActivityDate = new Date().toISOString();
   await saveUserIndex(index);
@@ -110,7 +110,7 @@ async function updateUserNotebookEntry(id: string, updates: Partial<NotebookEntr
   if (safe.content !== undefined) {
     const index = await loadUserIndex();
     const idxEntry = index.entries.find(e => e.id === id);
-    if (idxEntry) idxEntry.preview = safe.content.slice(0, 100);
+    if (idxEntry) idxEntry.preview = safe.content.slice(0, 300);
     await saveUserIndex(index);
   }
   return entry;
@@ -184,7 +184,7 @@ function listAgentNotebookEntries(): NotebookIndex {
     id: b.id,
     createdAt: b.createdAt,
     author: 'agent' as const,
-    preview: b.description || b.content.slice(0, 100),
+    preview: b.description || b.content.slice(0, 300),
   }));
   return {
     entries,
