@@ -291,6 +291,7 @@ export interface Settings {
   theme?: Theme;
   activityShape?: ActivityShape;
   activityHue?: number;
+  activitySaturation?: number;
   systemPromptPresets?: SystemPromptPreset[];
   defaultVisionPreset?: string;
   // Delayed memory extraction settings

@@ -311,6 +311,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [cornerRadius, setCornerRadius] = useState<CornerRadius>(settings.cornerRadius || "default");
   const [activityShape, setActivityShape] = useState<ActivityShape>(settings.activityShape || "octahedron");
   const [activityHue, setActivityHue] = useState<number>(settings.activityHue ?? 38);
+  const [activitySaturation, setActivitySaturation] = useState<number>(settings.activitySaturation ?? 85);
   const [presets, setPresets] = useState<SystemPromptPreset[]>(settings.systemPromptPresets || []);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editingPresetContent, setEditingPresetContent] = useState<string>("");
@@ -1027,6 +1028,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       cornerRadius,
       activityShape,
       activityHue,
+      activitySaturation,
       systemPromptPresets: presets.length > 0 ? presets : undefined,
       hapticsEnabled,
       modelContextWindows: Object.keys(modelContextWindows).length > 0 ? modelContextWindows : undefined,
@@ -3179,6 +3181,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     isActive={true}
                     shape={opt.value}
                     hue={activityHue}
+                    saturation={activitySaturation}
                     count={1}
                     size={20}
                     speed={0.6}
@@ -3210,21 +3213,40 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               />
               <div
                 className="w-6 h-6 rounded-full border border-white/20 shrink-0"
-                style={{ backgroundColor: `hsl(${activityHue}, 85%, 55%)` }}
+                style={{ backgroundColor: `hsl(${activityHue}, ${activitySaturation}%, 55%)` }}
               />
             </div>
-            <div className="flex items-center gap-2 mt-1">
+
+            {/* Saturation slider */}
+            <div className="flex items-center gap-3 mt-2">
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={activitySaturation}
+                onChange={(e) => setActivitySaturation(Number(e.target.value))}
+                className="flex-1 h-2 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white/80 [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white/30 [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white/80 [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white/30 [&::-moz-range-thumb]:shadow-md [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-track]:transparent"
+                style={{
+                  background: `linear-gradient(to right, hsl(${activityHue}, 0%, 55%), hsl(${activityHue}, 100%, 55%))`,
+                }}
+              />
+              <span className="text-white/30 text-xs w-8 text-right tabular-nums">{activitySaturation}%</span>
+            </div>
+
+            <div className="flex items-center gap-2 mt-2">
               <PolyhedronLogo
                 isActive={true}
                 shape={activityShape}
                 hue={activityHue}
+                saturation={activitySaturation}
                 count={3}
                 size={16}
                 gap={2}
                 speed={0.6}
               />
               <span className="text-white/30 text-xs">
-                Hue {activityHue}°{activityHue === 38 ? ' (default)' : ''}
+                Hue {activityHue}°{activityHue === 38 && activitySaturation === 85 ? ' (default)' : ''}
               </span>
             </div>
           </div>

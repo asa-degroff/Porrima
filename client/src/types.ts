@@ -322,6 +322,7 @@ export interface Settings {
   cornerRadius?: CornerRadius;
   activityShape?: ActivityShape;
   activityHue?: number;
+  activitySaturation?: number;
   systemPromptPresets?: SystemPromptPreset[];
   hapticsEnabled?: boolean;
   defaultVisionPreset?: string;

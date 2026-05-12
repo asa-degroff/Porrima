@@ -9,6 +9,7 @@ interface Props {
   isActive: boolean
   shape?: ActivityShape
   hue?: number           // base hue 0–360; if omitted, reads from ActivityStyle context
+  saturation?: number   // 0–100; if omitted, reads from ActivityStyle context
   className?: string
   count?: number
   size?: number
@@ -62,6 +63,11 @@ function usePolyhedronHue(): number {
   return useContext(ActivityStyleContext).hue
 }
 
+/** Read the default saturation from ActivityStyle context. Used when no saturation prop is provided. */
+function usePolyhedronSaturation(): number {
+  return useContext(ActivityStyleContext).saturation
+}
+
 function randomTargets(count: number): Rotation[] {
   return Array.from({ length: count }, () => {
     const o = SNAP_ORIENTATIONS[Math.floor(Math.random() * SNAP_ORIENTATIONS.length)]
@@ -90,7 +96,7 @@ const OCT_FACE_CONFIGS = [
   { ry: 315, rx: -OCT_FACE_TILT, up: false, lightness: 42 },
 ]
 
-const OctahedronShape = memo(function OctahedronShape({ half, colorIndex, baseHue }: { half: number; colorIndex: number; baseHue: number }) {
+const OctahedronShape = memo(function OctahedronShape({ half, colorIndex, baseHue, baseSaturation }: { half: number; colorIndex: number; baseHue: number; baseSaturation: number }) {
   const faceDist = half / Math.sqrt(3)
   const faceW = half * Math.SQRT2
   const faceH = half * Math.sqrt(6) / 2
@@ -116,7 +122,7 @@ const OctahedronShape = memo(function OctahedronShape({ half, colorIndex, baseHu
             clipPath: f.up
               ? 'polygon(50% 0%, 0% 100%, 100% 100%)'
               : 'polygon(0% 0%, 100% 0%, 50% 100%)',
-            backgroundColor: `hsl(${hue}, 85%, ${f.lightness}%)`,
+            backgroundColor: `hsl(${hue}, ${baseSaturation}%, ${f.lightness}%)`,
           }}
         />
       ))}
@@ -143,7 +149,7 @@ const CUBE_FACE_CONFIGS = [
   { ry: 0, rx: 90, lightness: 35 },
 ]
 
-const CubeShape = memo(function CubeShape({ half, colorIndex, baseHue }: { half: number; colorIndex: number; baseHue: number }) {
+const CubeShape = memo(function CubeShape({ half, colorIndex, baseHue, baseSaturation }: { half: number; colorIndex: number; baseHue: number; baseSaturation: number }) {
   // Scale cube down to ~70% so the 3D projection fits within the container.
   // A cube at 3/4 view projects wider than its edge length.
   const scale = 0.7
@@ -166,7 +172,7 @@ const CubeShape = memo(function CubeShape({ half, colorIndex, baseHue }: { half:
             marginTop: -faceSize / 2,
             backfaceVisibility: 'hidden',
             transform: `rotateY(${f.ry}deg) rotateX(${f.rx}deg) translateZ(${faceDist}px)`,
-            backgroundColor: `hsl(${hue}, 85%, ${f.lightness}%)`,
+            backgroundColor: `hsl(${hue}, ${baseSaturation}%, ${f.lightness}%)`,
           }}
         />
       ))}
@@ -196,7 +202,7 @@ const TET_FACE_CONFIGS = [
   { ry: -90, rx: -90, lightness: 35 },
 ]
 
-const TetrahedronShape = memo(function TetrahedronShape({ half, colorIndex, baseHue }: { half: number; colorIndex: number; baseHue: number }) {
+const TetrahedronShape = memo(function TetrahedronShape({ half, colorIndex, baseHue, baseSaturation }: { half: number; colorIndex: number; baseHue: number; baseSaturation: number }) {
   // Scale tetrahedron to ~75% so the projected vertex-view fits within the container.
   const scale = 0.75
   // Edge length: sized to fit within container when viewed vertex-first
@@ -227,7 +233,7 @@ const TetrahedronShape = memo(function TetrahedronShape({ half, colorIndex, base
             backfaceVisibility: 'hidden',
             transform: `rotateY(${f.ry}deg) rotateX(${f.rx}deg) translateZ(${faceDist}px)`,
             clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)',
-            backgroundColor: `hsl(${hue}, 85%, ${f.lightness}%)`,
+            backgroundColor: `hsl(${hue}, ${baseSaturation}%, ${f.lightness}%)`,
           }}
         />
       ))}
@@ -242,6 +248,7 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
   isActive,
   shape = 'octahedron',
   hue: hueProp,
+  saturation: saturationProp,
   className = '',
   count = 5,
   size = 20,
@@ -251,7 +258,9 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
 }: Props) {
   const half = size / 2
   const ctxHue = usePolyhedronHue()
+  const ctxSaturation = usePolyhedronSaturation()
   const baseHue = hueProp ?? ctxHue
+  const baseSaturation = saturationProp ?? ctxSaturation
   const [rotations, setRotations] = useState<Rotation[] | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
   const [quadrantIndex, setQuadrantIndex] = useState(0)
@@ -375,7 +384,7 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
               }}
               onTransitionEnd={i === count - 1 ? handleTransitionEnd : undefined}
             >
-              <ShapeComponent half={half} colorIndex={i} baseHue={baseHue} />
+              <ShapeComponent half={half} colorIndex={i} baseHue={baseHue} baseSaturation={baseSaturation} />
             </div>
           </div>
         )
@@ -385,6 +394,6 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
 })
 
 // Backward-compatible re-export (always octahedron, default hue)
-export const OctahedronLogo = memo(function OctahedronLogo(props: Omit<Props, 'shape' | 'hue'>) {
+export const OctahedronLogo = memo(function OctahedronLogo(props: Omit<Props, 'shape' | 'hue' | 'saturation'>) {
   return <PolyhedronLogo {...props} shape="octahedron" />
 })

@@ -869,6 +869,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const activityStyle = {
     shape: settings.activityShape || 'octahedron',
     hue: settings.activityHue ?? 38,
+    saturation: settings.activitySaturation ?? 85,
   }
 
   return (
