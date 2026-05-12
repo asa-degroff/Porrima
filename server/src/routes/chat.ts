@@ -2640,12 +2640,12 @@ async function handleChatStream(
 
       // Memory extraction — runs after agent loop is fully complete (no concurrent LLM interference)
       if (!currentTurnIsHidden && (chat.type === "agent" || chat.type === "bluesky") && hasContent) {
-        extractMemories(chat.modelId, chat.id, lastUserMessage, logicalAssistantContent)
+        extractMemories(chat.modelId, chat.id, lastUserMessage, logicalAssistantContent, chat.projectId)
           .catch((err) => console.error("[memory] extraction failed:", err));
       }
       // Run any deferred extractions from mid-loop follow-ups
       for (const deferred of deferredExtractions) {
-        extractMemories(chat.modelId, chat.id, deferred.userMsg, deferred.assistantMsg)
+        extractMemories(chat.modelId, chat.id, deferred.userMsg, deferred.assistantMsg, chat.projectId)
           .catch((err) => console.error("[memory] deferred extraction failed:", err));
       }
       deferredExtractions.length = 0;

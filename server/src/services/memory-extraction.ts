@@ -361,15 +361,13 @@ async function buildExtractionSystemPrompt(projectId?: string): Promise<string> 
   const ctxSize = settings.extractionCtxSize ?? 16384;
 
   // Include loaded block summaries so extraction avoids redundant facts.
-  // Filter out system-managed blocks (synthesis, notebook, zeitgeist archives) —
-  // they are off-topic for the extraction task and bloat the context window.
   let blockContext = "";
   try {
     const { getMemoryBlocksByScope } = await import("./memory-storage.js");
     const isSystemBlock = (b: { id: string; scope: string; blockType?: string }) =>
       b.id === "blk-zeitgeist-continuity" ||
       b.scope === "archived" ||
-      (b.blockType !== undefined && b.blockType !== "note") ||
+      (b.blockType !== undefined && ["synthesis", "zeitgeist-archive", "notebook"].includes(b.blockType)) ||
       b.id.startsWith("blk-archive-") ||
       b.id.startsWith("blk-synth-") ||
       b.id.startsWith("blk-notebook-");

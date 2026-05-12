@@ -351,7 +351,7 @@ export async function buildStablePrefix(
     const isSystemBlock = (b: MemoryBlock) =>
       b.id === "blk-zeitgeist-continuity" ||
       b.scope === "archived" ||
-      (b.blockType !== undefined && b.blockType !== "note") ||
+      (b.blockType !== undefined && ["synthesis", "zeitgeist-archive", "notebook"].includes(b.blockType)) ||
       b.id.startsWith("blk-archive-") ||
       b.id.startsWith("blk-synth-") ||
       b.id.startsWith("blk-notebook-");
