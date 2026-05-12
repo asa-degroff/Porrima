@@ -210,6 +210,45 @@ export function getDb(): Database.Database {
     END;
   `);
 
+  // Block revision history — captures old state on every update.
+  // No explicit primary key: SQLite rowid is unique per snapshot,
+  // avoiding timestamp collision on rapid successive edits.
+  // Used by getBlockHistory() to show the full edit timeline.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_blocks_history (
+      blockId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      content TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      updatedBy TEXT NOT NULL DEFAULT 'agent',
+      tokenEstimate INTEGER NOT NULL DEFAULT 0,
+      blockType TEXT NOT NULL DEFAULT 'note'
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_blocks_history_blockId ON memory_blocks_history(blockId)`);
+
+  // Trigger: snapshot old state before any update.
+  // Fires whenever content, name, or description changes.
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS memory_blocks_history_trigger
+    AFTER UPDATE ON memory_blocks
+    WHEN old.content != new.content
+       OR old.name != new.name
+       OR old.description != new.description
+    BEGIN
+      INSERT INTO memory_blocks_history (
+        blockId, name, description, content, scope, createdAt, updatedAt, updatedBy, tokenEstimate, blockType
+      ) VALUES (
+        old.id, old.name, old.description, old.content,
+        old.scope, old.updatedAt, old.updatedAt, old.updatedBy, old.tokenEstimate,
+        COALESCE(old.blockType, 'note')
+      );
+    END;
+  `);
+
   // Auto-migrate from JSON if needed
   if (needsMigration) {
     migrateFromJson(db);
@@ -1672,23 +1711,36 @@ export function listMemoryBlocks(opts: { scope?: "global" | "project" | "archive
   return rows.map(mapBlockRow);
 }
 
-/** Get revision history by following supersedes/supersededBy chain. */
+/** Get revision history: old snapshots from history table + current block. */
 export function getBlockHistory(blockId: string): MemoryBlock[] {
   const db = getDb();
   const history: MemoryBlock[] = [];
-  let currentId: string | null = blockId;
 
-  // Walk backwards through superseded versions
-  while (currentId) {
-    const row = db.prepare("SELECT * FROM memory_blocks WHERE id = ?").get(currentId) as any;
-    if (!row) break;
+  // Get historical snapshots, oldest first.
+  // rowid is unique per snapshot — use it as a synthetic id so each
+  // history entry has a distinct identity for the client's React keys.
+  const rows = db.prepare(`
+    SELECT rowid AS id, blockId, name, description, content, scope,
+           createdAt, updatedAt, updatedBy, tokenEstimate, blockType
+    FROM memory_blocks_history
+    WHERE blockId = ?
+    ORDER BY updatedAt ASC
+  `).all(blockId) as any[];
 
-    history.push(mapBlockRow(row));
-    currentId = row.supersedes || null;
+  for (const row of rows) {
+    // Ensure id is a string for MemoryBlock interface compatibility.
+    // History ids use SQLite rowid; the current block uses its real id,
+    // so `h.id === block.id` in the client correctly marks the latest version.
+    history.push(mapBlockRow({ ...row, id: String(row.id) }));
   }
-  
-  // Reverse so oldest is first
-  return history.reverse();
+
+  // Append current block
+  const current = db.prepare("SELECT * FROM memory_blocks WHERE id = ?").get(blockId) as any;
+  if (current) {
+    history.push(mapBlockRow(current));
+  }
+
+  return history;
 }
 
 export { DEFAULT_MAX_BLOCK_CHARS };
