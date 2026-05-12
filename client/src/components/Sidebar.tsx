@@ -714,7 +714,7 @@ export function Sidebar({
       {/* Backdrop for mobile — opacity tracks drag progress */}
       {(isOpen || isDragging || isAnimating) && (
         <div
-          className={`md:hidden fixed inset-0 bg-black/60 backdrop-blur-xs z-20 ${isDragging || isAnimating ? "" : "transition-opacity"}`}
+          className={`md:hidden fixed inset-0 bg-black/60 z-20 ${isDragging || isAnimating ? "" : "transition-opacity"}`}
           style={{ opacity: openProgress * 0.6 }}
           onClick={onClose}
         />
