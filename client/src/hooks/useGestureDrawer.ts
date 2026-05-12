@@ -55,26 +55,57 @@ export function useGestureDrawer({
   const rafRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLElement | null>(null);
 
+  // Refs that mirror the latest values so that touch handlers and the RAF
+  // animation can read them synchronously without waiting for a React render.
+  // This avoids the stale-closure bug where multiple touchmove events fire
+  // between renders and an onTouchEnd callback captures an outdated offset
+  // from the last render — causing the snap decision and animation start
+  // position to be wrong (sidebar "snaps to the other side").
+  const currentOffsetRef = useRef(0);
+  const containerSizeRef = useRef(0);
+  const isOpenRef = useRef(isOpen);
+  const isAnimatingRef = useRef(false);
+
+  // Keep refs in sync. currentOffsetRef and containerSizeRef are also
+  // updated synchronously in their setters (see setOffsetSync / setSizeSync).
+  currentOffsetRef.current = currentOffset;
+  containerSizeRef.current = containerSize;
+  isOpenRef.current = isOpen;
+  isAnimatingRef.current = isAnimating;
+
+  // Synchronous state+ref setters — update the ref immediately so that
+  // subsequent handler calls in the same event batch read the fresh value.
+  const setOffsetSync = useCallback((value: number) => {
+    currentOffsetRef.current = value;
+    setCurrentOffset(value);
+  }, []);
+
+  const setSizeSync = useCallback((value: number) => {
+    containerSizeRef.current = value;
+    setContainerSize(value);
+  }, []);
+
   // Measure container on mount and resize
   useEffect(() => {
     const measure = () => {
       const el = containerRef.current;
       if (!el) return;
       const size = direction === "up" ? el.offsetHeight : el.offsetWidth;
-      setContainerSize(size || (maxOffset ?? 0));
+      setSizeSync(size || (maxOffset ?? 0));
     };
 
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [direction, maxOffset]);
+  }, [direction, maxOffset, setSizeSync]);
 
   // Initialize offset based on open state
   useEffect(() => {
-    if (!isDragging && !isAnimating && containerSize > 0) {
-      setCurrentOffset(isOpen ? containerSize : 0);
+    if (!isDraggingRef.current && isAnimatingRef.current === false && containerSizeRef.current > 0) {
+      const newOffset = isOpen ? containerSizeRef.current : 0;
+      setOffsetSync(newOffset);
     }
-  }, [isOpen, containerSize, isDragging, isAnimating]);
+  }, [isOpen, isAnimating, containerSize, setOffsetSync]);
 
   // Notify progress changes
   useEffect(() => {
@@ -102,11 +133,14 @@ export function useGestureDrawer({
       cancelAnimationFrame(rafRef.current);
     }
 
-    const target = targetOpen ? containerSize : 0;
-    const start = currentOffset;
+    // Read from refs to get the latest values — avoids stale closures
+    const cs = containerSizeRef.current;
+    const target = targetOpen ? cs : 0;
+    const start = currentOffsetRef.current;
     const startTime = performance.now();
     const duration = 250; // ms
 
+    isAnimatingRef.current = true;
     setIsAnimating(true);
 
     const animate = (time: number) => {
@@ -116,22 +150,26 @@ export function useGestureDrawer({
       const eased = 1 - Math.pow(1 - progress, 3);
       const newOffset = start + (target - start) * eased;
 
-      setCurrentOffset(newOffset);
+      setOffsetSync(newOffset);
 
       if (progress < 1) {
         rafRef.current = requestAnimationFrame(animate);
       } else {
+        isAnimatingRef.current = false;
         setIsAnimating(false);
+        // Read isOpen from the ref — it may have changed during the animation
+        // (e.g. the user tapped the backdrop) so we must not use the stale
+        // closure value.
         if (!targetOpen) {
           onClose();
-        } else if (onOpen && !isOpen) {
+        } else if (onOpen && !isOpenRef.current) {
           onOpen();
         }
       }
     };
 
     rafRef.current = requestAnimationFrame(animate);
-  }, [containerSize, currentOffset, onClose, onOpen, isOpen]);
+  }, [onClose, onOpen]);
 
   const startDrag = useCallback((pos: number) => {
     touchStartRef.current = pos;
@@ -144,6 +182,16 @@ export function useGestureDrawer({
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length !== 1) return;
     if (window.innerWidth >= MD_BREAKPOINT) return;
+
+    // Cancel any running snap animation so the new drag doesn't fight the
+    // RAF loop for control of currentOffset.
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    isAnimatingRef.current = false;
+    setIsAnimating(false);
+
     startDrag(getTouchPos(e));
     e.preventDefault();
   }, [getTouchPos, startDrag]);
@@ -152,11 +200,20 @@ export function useGestureDrawer({
   const onEdgeTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length !== 1) return;
     if (window.innerWidth >= MD_BREAKPOINT) return;
-    if (isOpen || isDraggingRef.current) return;
-    setCurrentOffset(0);
+    if (isOpenRef.current || isDraggingRef.current) return;
+
+    // Cancel any running snap animation
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    isAnimatingRef.current = false;
+    setIsAnimating(false);
+
+    setOffsetSync(0);
     startDrag(getTouchPos(e));
     e.preventDefault();
-  }, [getTouchPos, startDrag, isOpen]);
+  }, [getTouchPos, startDrag, setOffsetSync]);
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
     if (!isDraggingRef.current) return;
@@ -182,22 +239,24 @@ export function useGestureDrawer({
     // Invert the touch delta so dragging "toward open" increases offset
     // For "up" direction: dragging up (pos decreases) should increase offset
     // For "right" direction: dragging right (pos increases) should increase offset
+    // Read isOpen and containerSize from refs to avoid stale closures.
     const touchDelta = direction === "up" ? touchStartRef.current - pos : pos - touchStartRef.current;
-    let rawOffset = touchDelta + (isOpen ? containerSize : 0);
+    const cs = containerSizeRef.current;
+    let rawOffset = touchDelta + (isOpenRef.current ? cs : 0);
 
     // Apply resistance at boundaries
     if (rawOffset < 0) {
       rawOffset = rawOffset * EDGE_RESISTANCE;
-    } else if (rawOffset > containerSize) {
-      rawOffset = containerSize + (rawOffset - containerSize) * EDGE_RESISTANCE;
+    } else if (rawOffset > cs) {
+      rawOffset = cs + (rawOffset - cs) * EDGE_RESISTANCE;
     }
 
     // Clamp to valid range
-    const clampedOffset = Math.max(0, Math.min(containerSize, rawOffset));
-    setCurrentOffset(clampedOffset);
+    const clampedOffset = Math.max(0, Math.min(cs, rawOffset));
+    setOffsetSync(clampedOffset);
 
     e.preventDefault();
-  }, [isDragging, getTouchPos, isOpen, containerSize, direction]);
+  }, [getTouchPos, direction, setOffsetSync]);
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!isDraggingRef.current) return;
@@ -206,9 +265,13 @@ export function useGestureDrawer({
     setIsDragging(false);
     lastTouchRef.current = null;
 
+    // Read from refs so we always use the latest values, even if
+    // multiple touchmove events fired between renders and the
+    // closure-captured state is stale.
     const velocity = velocityRef.current;
-    const distance = currentOffset;
-    const snapThreshold = containerSize * threshold;
+    const distance = currentOffsetRef.current;
+    const cs = containerSizeRef.current;
+    const snapThreshold = cs * threshold;
 
     // Determine snap target based on distance and velocity
     let shouldOpen: boolean;
@@ -222,7 +285,7 @@ export function useGestureDrawer({
     }
 
     snapToState(shouldOpen);
-  }, [isDragging, currentOffset, containerSize, threshold, snapToState]);
+  }, [threshold, snapToState]);
 
   // Clean up RAF on unmount
   useEffect(() => {
@@ -238,9 +301,9 @@ export function useGestureDrawer({
     containerRef.current = el;
     if (el) {
       const size = direction === "up" ? el.offsetHeight : el.offsetWidth;
-      setContainerSize(size || (maxOffset ?? 0));
+      setSizeSync(size || (maxOffset ?? 0));
     }
-  }, [direction, maxOffset]);
+  }, [direction, maxOffset, setSizeSync]);
 
   // Apply transform style only when actively dragging or animating the snap.
   // When idle, return empty style so CSS classes control position (important for
