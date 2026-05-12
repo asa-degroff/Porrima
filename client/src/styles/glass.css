@@ -16,6 +16,14 @@
 html[data-corner="squircle"] *:not([class*="rounded-full"]):not([class*="corner-"]) {
   corner-shape: squircle;
 }
+/* Pseudo-elements are not matched by the * selector above, so apply
+   corner-shape to them explicitly so that borders and box-shadows on
+   ::before / ::after overlays follow the same squircle curve as their
+   originating element. */
+html[data-corner="squircle"] *:not([class*="rounded-full"]):not([class*="corner-"])::before,
+html[data-corner="squircle"] *:not([class*="rounded-full"]):not([class*="corner-"])::after {
+  corner-shape: squircle;
+}
 
 /*
  * Global corner radius scale. Scales Tailwind v4's --radius-* tokens by a
