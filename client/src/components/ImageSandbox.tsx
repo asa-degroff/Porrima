@@ -451,9 +451,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
 
           <button
             onClick={onClose}
-            className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+            className="text-white hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-40 hover:opacity-70 transition-opacity">
               <path d="M18 6L6 18" />
               <path d="M6 6l12 12" />
             </svg>
@@ -814,9 +814,9 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
               >
                 <button
                   onClick={closeLightbox}
-                  className="absolute top-4 right-4 p-2 rounded-lg text-white/50 hover:text-white/90 hover:bg-white/10 transition-colors z-10"
+                  className="absolute top-4 right-4 p-2 rounded-lg text-white hover:text-white hover:bg-white/10 transition-colors z-10"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-50 hover:opacity-90 transition-opacity">
                     <path d="M18 6L6 18" />
                     <path d="M6 6l12 12" />
                   </svg>

@@ -1644,9 +1644,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           <h2 className="text-lg font-semibold text-white/90">Settings</h2>
           <button
             onClick={onClose}
-            className="text-white/40 hover:text-white/70 transition-colors"
+            className="text-white hover:text-white transition-colors"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-40 hover:opacity-70 transition-opacity">
               <path d="M18 6L6 18" />
               <path d="M6 6l12 12" />
             </svg>
