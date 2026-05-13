@@ -307,6 +307,21 @@ export function markLlamaCacheResidencyFinished(chatId: string): void {
   }
 }
 
+/** Mark prefill as complete for a chat. Called when the model transitions from
+ *  prefill to generation phase, so the cache residency status can transition
+ *  from "warming" to "warm" without waiting for the full LLM call to finish.
+ *  This prevents the sidebar indicator from lingering during generation. */
+export function markLlamaCachePrefillComplete(chatId: string): void {
+  for (const [key, record] of records) {
+    if (record.chatId !== chatId || !record.active || record.status !== "warming") continue;
+    records.set(key, {
+      ...record,
+      status: "warm",
+      warm: true,
+    });
+  }
+}
+
 export function listLlamaCacheResidency(): LlamaCacheResidencyRecord[] {
   pruneStale();
   return Array.from(records.values())

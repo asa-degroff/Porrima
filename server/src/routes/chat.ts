@@ -32,6 +32,7 @@ import { createAgentLoopConfig, runAgentLoop, stopAgentLoop } from "../services/
 import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } from "../services/llama-slot-leases.js";
 import type { ModelProgressEvent } from "../services/model-progress.js";
 import {
+  markLlamaCachePrefillComplete,
   markLlamaCacheResidencyFinished,
   markLlamaCacheResidencyStarted,
   recordLlamaCacheResidencyRun,
@@ -1143,8 +1144,16 @@ async function handleChatStream(
       tools: agentTools,
     };
 
+    // Track phase transitions so we can mark prefill complete immediately
+    // rather than waiting for the full LLM call to finish. This prevents the
+    // sidebar cache indicator from lingering during generation.
+    let prevProgressPhase: string | undefined;
     const emitModelProgress = (progress: ModelProgressEvent) => {
       if (connectionClosed) return;
+      if (prevProgressPhase === "prefill" && progress.phase === "generating" && llamaCacheContext) {
+        markLlamaCachePrefillComplete(chat.id);
+      }
+      prevProgressPhase = progress.phase;
       res.write(`event: model_progress\ndata: ${JSON.stringify({
         chatId: chat.id,
         ...progress,
