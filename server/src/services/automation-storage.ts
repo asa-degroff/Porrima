@@ -354,7 +354,7 @@ export async function ensureAutomationDefaults(): Promise<void> {
       activationPolicy: "sleep_only",
       promptSteps: getDefaultWakePromptSteps(),
       maxIterations: 20,
-      timeoutMs: 30 * 60 * 1000,
+      timeoutMs: 60 * 60 * 1000,
       lastRunAt: lastWake,
     }),
   ];
@@ -381,7 +381,10 @@ export async function ensureAutomationDefaults(): Promise<void> {
         ? "sleep_only"
         : (existing.activationPolicy ?? fallback.activationPolicy),
       maxIterations: existing.maxIterations || fallback.maxIterations,
-      timeoutMs: existing.timeoutMs || fallback.timeoutMs,
+      // Migrate: wake cycle timeout bumped from 30m → 60m for deep research
+      timeoutMs: fallback.id === WAKE_AUTOMATION_ID && existing.timeoutMs <= 30 * 60 * 1000
+        ? fallback.timeoutMs
+        : (existing.timeoutMs || fallback.timeoutMs),
       updatedAt: new Date().toISOString(),
     };
     insertTask(patched);
