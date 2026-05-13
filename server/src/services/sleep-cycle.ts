@@ -14,6 +14,11 @@ interface SleepCycleOptions {
   defaultThresholdMinutes?: number;
 }
 
+// Grace period after agent completion before the inactivity window starts ticking.
+// Gives the SSE connection time to properly close and client state to settle,
+// preventing premature sleep activation immediately after a response finishes.
+const SLEEP_GRACE_PERIOD_MINUTES = 2;
+
 function parseTimestamp(value: string | undefined | null): number | null {
   if (!value) return null;
   const ms = new Date(value).getTime();
@@ -54,9 +59,12 @@ export function isSleepCycleActive(settings: SleepCycleSettings, options: SleepC
   const anchorMs = parseTimestamp(anchor);
   if (anchorMs === null) return false;
 
-  const thresholdMinutes =
+  const configuredThreshold =
     settings.sleepCycleThresholdMinutes ?? options.defaultThresholdMinutes ?? 60;
+  // Grace period adds a buffer after agent completion before sleep can activate,
+  // so the SSE connection has time to close and client state settles.
+  const effectiveThreshold = configuredThreshold + SLEEP_GRACE_PERIOD_MINUTES;
   const elapsedMinutes = ((options.nowMs ?? Date.now()) - anchorMs) / (1000 * 60);
 
-  return elapsedMinutes >= thresholdMinutes;
+  return elapsedMinutes >= effectiveThreshold;
 }
