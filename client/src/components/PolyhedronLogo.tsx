@@ -102,8 +102,6 @@ const OctahedronShape = memo(function OctahedronShape({ half, colorIndex, baseHu
   const faceDist = half / Math.sqrt(3)
   const faceW = half * Math.SQRT2
   const faceH = half * Math.sqrt(6) / 2
-  const overlap = 0.5
-  const adjustedFaceH = faceH + overlap
   const hue = baseHue + (colorIndex - 2) * 3
   return (
     <>
@@ -113,11 +111,11 @@ const OctahedronShape = memo(function OctahedronShape({ half, colorIndex, baseHu
           style={{
             position: 'absolute',
             width: faceW,
-            height: adjustedFaceH,
+            height: faceH,
             left: '50%',
             top: '50%',
             marginLeft: -faceW / 2,
-            marginTop: f.up ? -adjustedFaceH * 2 / 3 + overlap / 2 : -adjustedFaceH / 3 - overlap / 2,
+            marginTop: f.up ? -faceH * 2 / 3 : -faceH / 3,
             transformOrigin: f.up ? '50% 66.67%' : '50% 33.33%',
             backfaceVisibility: 'hidden',
             transform: `rotateY(${f.ry}deg) rotateX(${f.rx}deg) translateZ(${faceDist}px)`,
@@ -156,8 +154,7 @@ const CubeShape = memo(function CubeShape({ half, colorIndex, baseHue, baseSatur
   // A cube at 3/4 view projects wider than its edge length.
   const scale = 0.7
   const faceDist = half * scale
-  // Slightly oversize faces to prevent sub-pixel seams
-  const faceSize = half * 2 * scale + 1
+  const faceSize = half * 2 * scale
   const hue = baseHue + (colorIndex - 2) * 3
   return (
     <>
