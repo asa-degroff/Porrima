@@ -672,7 +672,7 @@ export function ChatView({
             />
           ) : headerImageEnabled ? (
             <div
-              className="hidden md:flex relative isolate w-[38px] h-[38px] shrink-0 rounded-lg overflow-hidden before:absolute before:inset-0 before:z-20 before:rounded-lg before:border before:border-white/[0.05] before:pointer-events-none after:absolute after:inset-px after:z-10 after:rounded-[calc(var(--radius-lg)-1px)] after:border-1 after:border-black/60 after:shadow-[inset_0_1px_6px_rgba(0,0,0,0.8)] after:pointer-events-none"
+              className="hidden md:flex relative isolate w-[38px] h-[38px] shrink-0 rounded-lg overflow-hidden before:absolute before:inset-0 before:z-20 before:rounded-lg before:border before:border-black/[0.1] before:pointer-events-none after:absolute after:inset-px after:z-10 after:rounded-[calc(var(--radius-lg)-1px)] after:shadow-[inset_0_1px_5px_rgba(0,0,0,1.0)] after:pointer-events-none"
               title="Header image"
             >
               <img
