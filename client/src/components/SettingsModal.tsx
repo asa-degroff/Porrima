@@ -4661,6 +4661,49 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                            <span className="text-[11px] text-white/45">Push on response</span>
 	                          </label>
 	                        </div>
+
+	                        <label className="space-y-1">
+	                          <span className="block text-[11px] text-white/45">Timeout</span>
+	                          <div className="flex items-center gap-2">
+	                            <input
+	                              type="number"
+	                              min={1}
+	                              max={240}
+	                              step={5}
+	                              value={Math.round(task.timeoutMs / 60_000)}
+	                              onChange={(e) => {
+	                                const minutes = Math.max(1, Math.min(240, Number(e.target.value) || 1));
+	                                updateAutomationDraft(task.id, { timeoutMs: minutes * 60_000 });
+	                              }}
+	                              onBlur={() => {
+	                                const minutes = Math.max(1, Math.min(240, Math.round(task.timeoutMs / 60_000)));
+	                                updateAutomationDraft(task.id, { timeoutMs: minutes * 60_000 });
+	                                saveAutomationPatch(task.id, { timeoutMs: task.timeoutMs });
+	                              }}
+	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                            />
+	                            <span className="text-[11px] text-white/35">min</span>
+	                          </div>
+	                        </label>
+
+	                        <label className="space-y-1">
+	                          <span className="block text-[11px] text-white/45">Max Turns</span>
+	                          <input
+	                            type="number"
+	                            min={1}
+	                            max={100}
+	                            step={1}
+	                            value={task.maxIterations}
+	                            onChange={(e) => {
+	                              const val = Math.max(1, Math.min(100, Number(e.target.value) || 1));
+	                              updateAutomationDraft(task.id, { maxIterations: val });
+	                            }}
+	                            onBlur={() => {
+	                              saveAutomationPatch(task.id, { maxIterations: task.maxIterations });
+	                            }}
+	                            className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
+	                          />
+	                        </label>
 	                      </div>
 
 	                      <div>
