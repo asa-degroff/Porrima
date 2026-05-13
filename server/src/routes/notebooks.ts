@@ -7,6 +7,7 @@ import {
   deleteNotebookEntry,
   hasUserActivityToday,
   getUserEntriesToday,
+  searchNotebookEntries,
 } from "../services/notebook-storage.js";
 import { streamChat, chatMessagesToPiMessages } from "../services/agent.js";
 import { getAgentTools, executeTool } from "../services/agent-tools.js";
@@ -16,6 +17,18 @@ import { saveUserImage } from "../services/user-image-storage.js";
 import type { Artifact, ChatToolCall, ChatToolResult, ImageAttachment, NotebookEntry, InlineVisual } from "../types.js";
 
 const router = Router();
+
+// Search notebook entries (both user and agent)
+router.get("/search", (req, res) => {
+  const { q, author, limit } = req.query;
+  if (!q || typeof q !== 'string') {
+    return res.status(400).json({ error: "Query parameter 'q' is required" });
+  }
+  const authorFilter = author === 'user' || author === 'agent' ? author : undefined;
+  const numLimit = typeof limit === 'string' ? parseInt(limit, 10) : undefined;
+  const results = searchNotebookEntries(q, { author: authorFilter, limit: numLimit });
+  res.json({ results, query: q });
+});
 
 // Get user notebook entries
 router.get("/user", async (_req, res) => {

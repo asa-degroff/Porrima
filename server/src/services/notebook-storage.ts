@@ -1,4 +1,4 @@
-import { readFile, writeFile, readdir, unlink, mkdir, rename } from "fs/promises";
+import { readFile, readdir, mkdir, rename, unlink, writeFile } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import type { NotebookEntry, NotebookIndex, NotebookLink } from "../types.js";
@@ -11,12 +11,16 @@ import {
   type MemoryBlock,
   type BlockAttachments,
 } from "./memory-storage.js";
+import { getDb } from "./memory-storage.js";
+
+// --- Paths (kept for migration only; all active operations use SQLite) ---
 
 const BASE_DIR = join(homedir(), ".quje-agent");
 const NOTEBOOKS_DIR = join(BASE_DIR, "notebooks");
 const USER_ENTRIES_DIR = join(NOTEBOOKS_DIR, "user", "entries");
 const AGENT_ENTRIES_DIR = join(NOTEBOOKS_DIR, "agent", "entries");
 const AGENT_BACKUP_DIR = join(AGENT_ENTRIES_DIR, ".backup");
+const USER_BACKUP_DIR = join(USER_ENTRIES_DIR, ".backup");
 
 // Synthetic chatId used by the synthesis follow-up tool loop. Also used by
 // memory-tools.ts to route create_memory_block calls through the notebook
@@ -31,122 +35,177 @@ export function generateNotebookBlockId(type: 'synthesis' | 'notebook' = 'notebo
   return `${prefix}-${blockDate}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-async function ensureDirs() {
-  await mkdir(USER_ENTRIES_DIR, { recursive: true });
-  await mkdir(AGENT_ENTRIES_DIR, { recursive: true });
-}
-
-function userEntryPath(id: string): string {
-  return join(USER_ENTRIES_DIR, `${id}.json`);
-}
-
-function userIndexPath(): string {
-  return join(USER_ENTRIES_DIR, "index.json");
-}
-
 // ---------------------------------------------------------------------------
-// User notebook entries — filesystem-backed. User-generated content is kept
-// separate from agent memory (memory_blocks); see step-plan in commit history
-// for the rationale. May get its own SQLite store later; for now, JSON files.
+// SQLite-backed user notebook entries
+//
+// User entries were originally stored as individual JSON files on disk. They
+// have been migrated to a dedicated SQLite table (`user_notebook_entries`)
+// with an FTS5 full-text index (`user_notebook_entries_fts`) for search.
 // ---------------------------------------------------------------------------
 
-async function loadUserIndex(): Promise<NotebookIndex> {
-  try {
-    const data = await readFile(userIndexPath(), "utf-8");
-    return JSON.parse(data) as NotebookIndex;
-  } catch {
-    return { entries: [], lastActivityDate: null };
+/** Ensure the user_notebook_entries table, FTS5 index, and triggers exist.
+ *  Idempotent — safe to call on every startup. */
+function ensureUserEntryTables(): void {
+  const db = getDb();
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_notebook_entries (
+      id TEXT PRIMARY KEY,
+      createdAt TEXT NOT NULL,
+      content TEXT NOT NULL,
+      links TEXT,
+      images TEXT
+    );
+  `);
+
+  // FTS5 virtual table (content-sync'd with the main table)
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS user_notebook_entries_fts
+      USING fts5(id UNINDEXED, content, content='user_notebook_entries', content_rowid=rowid);
+  `);
+
+  // Triggers to keep FTS in sync
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS user_notebook_entries_ai AFTER INSERT ON user_notebook_entries BEGIN
+      INSERT INTO user_notebook_entries_fts(rowid, id, content) VALUES (new.rowid, new.id, new.content);
+    END;
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS user_notebook_entries_ad AFTER DELETE ON user_notebook_entries BEGIN
+      INSERT INTO user_notebook_entries_fts(user_notebook_entries_fts, rowid, id, content) VALUES('delete', old.rowid, old.id, old.content);
+    END;
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS user_notebook_entries_au AFTER UPDATE ON user_notebook_entries BEGIN
+      INSERT INTO user_notebook_entries_fts(user_notebook_entries_fts, rowid, id, content) VALUES('delete', old.rowid, old.id, old.content);
+      INSERT INTO user_notebook_entries_fts(rowid, id, content) VALUES (new.rowid, new.id, new.content);
+    END;
+  `);
+
+  // One-time FTS rebuild for existing data (handles data inserted before triggers
+  // were created, e.g. during migration)
+  const ftsInit = db
+    .prepare("SELECT value FROM metadata WHERE key = 'user_notebook_entries_fts_initialized'")
+    .get() as { value: string } | undefined;
+  if (!ftsInit) {
+    db.exec(`INSERT INTO user_notebook_entries_fts(user_notebook_entries_fts) VALUES('rebuild')`);
+    db.prepare(
+      "INSERT OR REPLACE INTO metadata (key, value) VALUES ('user_notebook_entries_fts_initialized', '1')"
+    ).run();
+    console.log("[notebook] Built FTS5 index for existing user notebook entries");
   }
 }
 
-async function saveUserIndex(index: NotebookIndex): Promise<void> {
-  await ensureDirs();
-  await writeFile(userIndexPath(), JSON.stringify(index, null, 2));
-}
+// ---------------------------------------------------------------------------
+// User notebook entries — SQLite-backed (formerly filesystem JSON)
+// ---------------------------------------------------------------------------
 
-async function getUserNotebookEntry(id: string): Promise<NotebookEntry | null> {
-  try {
-    const data = await readFile(userEntryPath(id), "utf-8");
-    return JSON.parse(data) as NotebookEntry;
-  } catch {
-    return null;
+function rowToUserEntry(row: any): NotebookEntry {
+  let links: NotebookLink | undefined;
+  if (row.links) {
+    try { links = JSON.parse(row.links); } catch { links = undefined; }
   }
+  let images: any[] | undefined;
+  if (row.images) {
+    try { images = JSON.parse(row.images); } catch { images = undefined; }
+  }
+  return {
+    id: row.id,
+    createdAt: row.createdAt,
+    author: 'user',
+    content: row.content,
+    links,
+    images,
+  };
 }
 
-async function createUserNotebookEntry(content: string): Promise<NotebookEntry> {
-  await ensureDirs();
+async function listUserNotebookEntries(): Promise<NotebookIndex> {
+  ensureUserEntryTables();
+  const db = getDb();
+  const rows = db.prepare(
+    "SELECT id, createdAt, content FROM user_notebook_entries ORDER BY createdAt DESC"
+  ).all() as Array<{ id: string; createdAt: string; content: string }>;
+
+  const entries = rows.map((r) => ({
+    id: r.id,
+    createdAt: r.createdAt,
+    author: 'user' as const,
+    preview: r.content.slice(0, 300),
+  }));
+
+  const lastActivityDate = entries.length > 0 ? entries[0].createdAt : null;
+  return { entries, lastActivityDate };
+}
+
+function getUserNotebookEntry(id: string): NotebookEntry | null {
+  ensureUserEntryTables();
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM user_notebook_entries WHERE id = ?").get(id) as any;
+  if (!row) return null;
+  return rowToUserEntry(row);
+}
+
+function createUserNotebookEntry(content: string): NotebookEntry {
+  ensureUserEntryTables();
+  const db = getDb();
+  const id = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
   const entry: NotebookEntry = {
-    id: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
+    id,
+    createdAt,
     author: 'user',
     content,
   };
-  await writeFile(userEntryPath(entry.id), JSON.stringify(entry, null, 2));
-  const index = await loadUserIndex();
-  index.entries.unshift({
-    id: entry.id,
-    createdAt: entry.createdAt,
-    author: 'user',
-    preview: content.slice(0, 300),
-  });
-  index.lastActivityDate = new Date().toISOString();
-  await saveUserIndex(index);
+  db.prepare(
+    "INSERT INTO user_notebook_entries (id, createdAt, content) VALUES (?, ?, ?)"
+  ).run(id, createdAt, content);
   return entry;
 }
 
-async function updateUserNotebookEntry(id: string, updates: Partial<NotebookEntry>): Promise<NotebookEntry | null> {
-  const entry = await getUserNotebookEntry(id);
-  if (!entry) return null;
-  const safe: Partial<NotebookEntry> = {};
-  if (updates.content !== undefined) safe.content = updates.content;
-  if (updates.links !== undefined) safe.links = updates.links;
-  if (updates.images !== undefined) safe.images = updates.images;
-  if (updates.toolCalls !== undefined) safe.toolCalls = updates.toolCalls;
-  if (updates.toolResults !== undefined) safe.toolResults = updates.toolResults;
-  if (updates.artifacts !== undefined) safe.artifacts = updates.artifacts;
-  if (updates.visuals !== undefined) safe.visuals = updates.visuals;
-  Object.assign(entry, safe);
-  await writeFile(userEntryPath(entry.id), JSON.stringify(entry, null, 2));
-  if (safe.content !== undefined) {
-    const index = await loadUserIndex();
-    const idxEntry = index.entries.find(e => e.id === id);
-    if (idxEntry) idxEntry.preview = safe.content.slice(0, 300);
-    await saveUserIndex(index);
+function updateUserNotebookEntry(id: string, updates: Partial<NotebookEntry>): NotebookEntry | null {
+  ensureUserEntryTables();
+  const db = getDb();
+  const existing = db.prepare("SELECT * FROM user_notebook_entries WHERE id = ?").get(id) as any;
+  if (!existing) return null;
+
+  const setClauses: string[] = [];
+  const values: any[] = [];
+
+  if (updates.content !== undefined) {
+    setClauses.push("content = ?");
+    values.push(updates.content);
   }
-  return entry;
+  if (updates.links !== undefined) {
+    setClauses.push("links = ?");
+    values.push(updates.links ? JSON.stringify(updates.links) : null);
+  }
+  if (updates.images !== undefined) {
+    setClauses.push("images = ?");
+    values.push(updates.images ? JSON.stringify(updates.images) : null);
+  }
+
+  if (setClauses.length === 0) return rowToUserEntry(existing);
+
+  values.push(id);
+  db.prepare(`UPDATE user_notebook_entries SET ${setClauses.join(", ")} WHERE id = ?`).run(...values);
+
+  const updated = db.prepare("SELECT * FROM user_notebook_entries WHERE id = ?").get(id) as any;
+  return rowToUserEntry(updated);
 }
 
-async function deleteUserNotebookEntry(id: string): Promise<boolean> {
-  try {
-    await unlink(userEntryPath(id));
-    const index = await loadUserIndex();
-    index.entries = index.entries.filter(e => e.id !== id);
-    if (index.entries.length > 0) {
-      const sorted = [...index.entries].sort((a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      );
-      index.lastActivityDate = sorted[0].createdAt;
-    } else {
-      index.lastActivityDate = null;
-    }
-    await saveUserIndex(index);
-    return true;
-  } catch {
-    return false;
-  }
+function deleteUserNotebookEntry(id: string): boolean {
+  ensureUserEntryTables();
+  const db = getDb();
+  const result = db.prepare("DELETE FROM user_notebook_entries WHERE id = ?").run(id);
+  return result.changes > 0;
 }
 
 // ---------------------------------------------------------------------------
-// Agent notebook entries — memory-block-backed. Each entry is a
-// MemoryBlock row with blockType in ('notebook', 'synthesis'), attachments
-// captured in the block's attachments column. The block id IS the entry id.
+// Agent notebook entries — memory-block-backed (unchanged)
 // ---------------------------------------------------------------------------
 
 function blockToNotebookEntry(block: MemoryBlock): NotebookEntry {
   const att = block.attachments ?? {};
-  // `links` is stored as an array in BlockAttachments for extensibility, but
-  // NotebookEntry.links is a single NotebookLink shape. We pick the first if
-  // multiple are stored.
   const link = Array.isArray(att.links) && att.links.length > 0 ? (att.links[0] as NotebookLink) : undefined;
   return {
     id: block.id,
@@ -175,8 +234,6 @@ function notebookEntryAttachments(entry: Partial<NotebookEntry>): BlockAttachmen
 }
 
 function listAgentNotebookEntries(): NotebookIndex {
-  // notebook + synthesis blocks, newest first. listMemoryBlocks already orders
-  // by updatedAt DESC and excludes superseded rows.
   const blocks = listMemoryBlocks({ includeInternal: true }).filter(
     (b) => b.blockType === "notebook" || b.blockType === "synthesis"
   );
@@ -259,7 +316,6 @@ function updateAgentNotebookEntry(id: string, updates: Partial<NotebookEntry>): 
   if (!existing) return null;
   if (existing.blockType !== "notebook" && existing.blockType !== "synthesis") return null;
 
-  // Merge attachments: start from existing, overlay any fields present in updates.
   const mergedAtt: BlockAttachments = { ...(existing.attachments ?? {}) };
   const incoming = notebookEntryAttachments(updates);
   if (incoming) Object.assign(mergedAtt, incoming);
@@ -281,21 +337,168 @@ function deleteAgentNotebookEntry(id: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Public API — dispatches by author. User = filesystem, agent = memory blocks.
-// Callers outside this module should never need to know which backend is in
-// use; shape comes back as NotebookEntry / NotebookIndex either way.
+// Full-text search
+// ---------------------------------------------------------------------------
+
+export interface NotebookSearchResult {
+  id: string;
+  author: 'user' | 'agent';
+  createdAt: string;
+  preview: string;
+  excerpt: string;
+  rank: number;
+}
+
+/**
+ * Search notebook entries by full-text query.
+ * Searches both user entries (user_notebook_entries_fts) and agent entries
+ * (memory_blocks_fts filtered by blockType). Returns ranked results with
+ * excerpts.
+ */
+export function searchNotebookEntries(
+  query: string,
+  opts: { author?: 'user' | 'agent'; limit?: number } = {}
+): NotebookSearchResult[] {
+  ensureUserEntryTables();
+  const db = getDb();
+  const limit = opts.limit ?? 20;
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  // Tokenize into FTS5-safe terms
+  const terms = trimmed
+    .split(/\s+/)
+    .filter((t) => t.length > 0)
+    .map((t) => `"${t.replace(/"/g, '""')}"`);
+  const ftsQuery = terms.join(" OR ");
+  const phraseQuery = `"${trimmed.replace(/"/g, '""')}"`;
+
+  const results: NotebookSearchResult[] = [];
+
+  // --- Search user entries ---
+  if (!opts.author || opts.author === 'user') {
+    try {
+      // Try phrase match first
+      let rows = db.prepare(`
+        SELECT e.id, e.createdAt, e.content, f.rank
+        FROM user_notebook_entries_fts f
+        JOIN user_notebook_entries e ON e.rowid = f.rowid
+        WHERE f.user_notebook_entries_fts MATCH ?
+        ORDER BY f.rank
+        LIMIT ?
+      `).all(phraseQuery, limit) as any[];
+
+      // Fall back to OR terms if phrase match yields nothing
+      if (rows.length === 0) {
+        rows = db.prepare(`
+          SELECT e.id, e.createdAt, e.content, f.rank
+          FROM user_notebook_entries_fts f
+          JOIN user_notebook_entries e ON e.rowid = f.rowid
+          WHERE f.user_notebook_entries_fts MATCH ?
+          ORDER BY f.rank
+          LIMIT ?
+        `).all(ftsQuery, limit) as any[];
+      }
+
+      for (const row of rows) {
+        results.push({
+          id: row.id,
+          author: 'user',
+          createdAt: row.createdAt,
+          preview: row.content.slice(0, 300),
+          excerpt: extractSearchExcerpt(row.content, trimmed, 200),
+          rank: row.rank,
+        });
+      }
+    } catch {
+      // FTS5 may throw on malformed query; fall through gracefully
+    }
+  }
+
+  // --- Search agent entries ---
+  if (!opts.author || opts.author === 'agent') {
+    try {
+      // Try phrase match first
+      let rows = db.prepare(`
+        SELECT mb.id, mb.createdAt, mb.content, mb.blockType, f.rank
+        FROM memory_blocks_fts f
+        JOIN memory_blocks mb ON mb.rowid = f.rowid
+        WHERE f.memory_blocks_fts MATCH ?
+          AND mb.blockType IN ('notebook', 'synthesis')
+          AND mb.supersededBy IS NULL
+        ORDER BY f.rank
+        LIMIT ?
+      `).all(phraseQuery, limit) as any[];
+
+      if (rows.length === 0) {
+        rows = db.prepare(`
+          SELECT mb.id, mb.createdAt, mb.content, mb.blockType, f.rank
+          FROM memory_blocks_fts f
+          JOIN memory_blocks mb ON mb.rowid = f.rowid
+          WHERE f.memory_blocks_fts MATCH ?
+            AND mb.blockType IN ('notebook', 'synthesis')
+            AND mb.supersededBy IS NULL
+          ORDER BY f.rank
+          LIMIT ?
+        `).all(ftsQuery, limit) as any[];
+      }
+
+      for (const row of rows) {
+        results.push({
+          id: row.id,
+          author: 'agent',
+          createdAt: row.createdAt,
+          preview: (row.content || '').slice(0, 300),
+          excerpt: extractSearchExcerpt(row.content || '', trimmed, 200),
+          rank: row.rank,
+        });
+      }
+    } catch {
+      // FTS5 may throw on malformed query; fall through gracefully
+    }
+  }
+
+  // Sort by rank (lower BM25 rank = better match) and dedupe
+  results.sort((a, b) => a.rank - b.rank);
+  const seen = new Set<string>();
+  return results.filter((r) => {
+    if (seen.has(r.id)) return false;
+    seen.add(r.id);
+    return true;
+  }).slice(0, limit);
+}
+
+/** Extract a text excerpt around the first occurrence of any query term. */
+function extractSearchExcerpt(text: string, query: string, radius = 200): string {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const lower = text.toLowerCase();
+  let bestPos = -1;
+  for (const term of terms) {
+    const pos = lower.indexOf(term);
+    if (pos >= 0 && (bestPos < 0 || pos < bestPos)) bestPos = pos;
+  }
+  if (bestPos < 0) return text.slice(0, radius);
+  const start = Math.max(0, bestPos - radius / 2);
+  const end = Math.min(text.length, bestPos + radius / 2);
+  let excerpt = text.slice(start, end);
+  if (start > 0) excerpt = "..." + excerpt;
+  if (end < text.length) excerpt = excerpt + "...";
+  return excerpt;
+}
+
+// ---------------------------------------------------------------------------
+// Public API — dispatches by author. User = SQLite, agent = memory blocks.
 // ---------------------------------------------------------------------------
 
 export async function listNotebookEntries(author: 'user' | 'agent'): Promise<NotebookIndex> {
   if (author === 'user') {
-    await ensureDirs();
-    return await loadUserIndex();
+    return await listUserNotebookEntries();
   }
   return listAgentNotebookEntries();
 }
 
 export async function getNotebookEntry(author: 'user' | 'agent', id: string): Promise<NotebookEntry | null> {
-  if (author === 'user') return await getUserNotebookEntry(id);
+  if (author === 'user') return getUserNotebookEntry(id);
   return getAgentNotebookEntry(id);
 }
 
@@ -304,7 +507,7 @@ export async function createNotebookEntry(
   content: string,
   opts?: { type?: 'synthesis' | 'notebook'; date?: string; attachments?: BlockAttachments },
 ): Promise<NotebookEntry> {
-  if (author === 'user') return await createUserNotebookEntry(content);
+  if (author === 'user') return createUserNotebookEntry(content);
   return createAgentNotebookEntry(content, opts);
 }
 
@@ -313,17 +516,17 @@ export async function updateNotebookEntry(
   id: string,
   updates: Partial<NotebookEntry>
 ): Promise<NotebookEntry | null> {
-  if (author === 'user') return await updateUserNotebookEntry(id, updates);
+  if (author === 'user') return updateUserNotebookEntry(id, updates);
   return updateAgentNotebookEntry(id, updates);
 }
 
 export async function deleteNotebookEntry(author: 'user' | 'agent', id: string): Promise<boolean> {
-  if (author === 'user') return await deleteUserNotebookEntry(id);
+  if (author === 'user') return deleteUserNotebookEntry(id);
   return deleteAgentNotebookEntry(id);
 }
 
 export async function hasUserActivityToday(): Promise<boolean> {
-  const index = await loadUserIndex();
+  const index = await listUserNotebookEntries();
   if (!index.lastActivityDate) return false;
   const today = new Date().toDateString();
   const lastActivity = new Date(index.lastActivityDate).toDateString();
@@ -331,16 +534,13 @@ export async function hasUserActivityToday(): Promise<boolean> {
 }
 
 export async function getUserEntriesToday(): Promise<NotebookEntry[]> {
-  const index = await loadUserIndex();
-  const today = new Date().toDateString();
-  const entries: NotebookEntry[] = [];
-  for (const entryInfo of index.entries) {
-    if (new Date(entryInfo.createdAt).toDateString() === today) {
-      const entry = await getUserNotebookEntry(entryInfo.id);
-      if (entry) entries.push(entry);
-    }
-  }
-  return entries;
+  const db = getDb();
+  ensureUserEntryTables();
+  const today = new Date().toISOString().split('T')[0];
+  const rows = db.prepare(
+    "SELECT * FROM user_notebook_entries WHERE date(createdAt) = date(?) ORDER BY createdAt DESC"
+  ).all(today) as any[];
+  return rows.map(rowToUserEntry);
 }
 
 /**
@@ -348,9 +548,7 @@ export async function getUserEntriesToday(): Promise<NotebookEntry[]> {
  * Strips leading markdown headers and takes the first ~150 characters.
  */
 export function extractBlockDescription(content: string): string {
-  // Strip leading markdown headers (e.g., "# Daily Synthesis - 2026-04-15")
   const stripped = content.replace(/^#+\s+.*\n?/, '').trim();
-  // Take first ~150 chars, collapse whitespace
   const excerpt = stripped.slice(0, 150).replace(/\n+/g, ' ').trim();
   return excerpt.length < stripped.length ? excerpt + '...' : excerpt;
 }
@@ -372,10 +570,102 @@ export function createNotebookBlock(
 }
 
 // ---------------------------------------------------------------------------
-// One-shot migration: move existing filesystem agent notebook JSON entries
-// into memory_blocks. Idempotent — runs at startup, no-ops if there's
-// nothing left in AGENT_ENTRIES_DIR. Migrated JSON files go to a .backup/
-// subfolder so the migration is reversible if something goes wrong.
+// Migration: move existing filesystem user notebook JSON entries into SQLite.
+// Idempotent — runs at startup, no-ops if there's nothing in the filesystem.
+// Migrated JSON files go to a .backup/ subfolder.
+// ---------------------------------------------------------------------------
+
+export async function migrateUserNotebookToDb(): Promise<{
+  migrated: number;
+  skipped: number;
+  failed: number;
+}> {
+  let migrated = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  // Check if the old filesystem directory exists
+  try {
+    await mkdir(USER_ENTRIES_DIR, { recursive: true });
+  } catch {
+    return { migrated, skipped, failed };
+  }
+
+  let files: string[];
+  try {
+    files = await readdir(USER_ENTRIES_DIR);
+  } catch {
+    return { migrated, skipped, failed };
+  }
+
+  const entryFiles = files.filter((f) => f.endsWith(".json") && f !== "index.json");
+  if (entryFiles.length === 0) {
+    return { migrated, skipped, failed };
+  }
+
+  ensureUserEntryTables();
+  const db = getDb();
+
+  await mkdir(USER_BACKUP_DIR, { recursive: true });
+
+  for (const filename of entryFiles) {
+    const entryId = filename.slice(0, -5); // strip .json
+    try {
+      // Skip if already migrated
+      const existing = db.prepare("SELECT id FROM user_notebook_entries WHERE id = ?").get(entryId);
+      if (existing) {
+        await rename(join(USER_ENTRIES_DIR, filename), join(USER_BACKUP_DIR, filename));
+        skipped++;
+        continue;
+      }
+
+      const raw = await readFile(join(USER_ENTRIES_DIR, filename), "utf-8");
+      const entry = JSON.parse(raw) as NotebookEntry;
+
+      if (!entry?.content) {
+        await rename(join(USER_ENTRIES_DIR, filename), join(USER_BACKUP_DIR, filename));
+        failed++;
+        continue;
+      }
+
+      db.prepare(
+        "INSERT INTO user_notebook_entries (id, createdAt, content, links, images) VALUES (?, ?, ?, ?, ?)"
+      ).run(
+        entry.id,
+        entry.createdAt,
+        entry.content,
+        entry.links ? JSON.stringify(entry.links) : null,
+        entry.images ? JSON.stringify(entry.images) : null,
+      );
+
+      await rename(join(USER_ENTRIES_DIR, filename), join(USER_BACKUP_DIR, filename));
+      migrated++;
+    } catch (e: any) {
+      console.error(`[notebook] User entry migration failed for ${filename}:`, e?.message || e);
+      failed++;
+    }
+  }
+
+  // Move the old index.json aside — it's stale now
+  try {
+    await rename(join(USER_ENTRIES_DIR, "index.json"), join(USER_BACKUP_DIR, "index.json"));
+  } catch {
+    // index didn't exist or already moved; not a problem
+  }
+
+  if (migrated > 0 || failed > 0) {
+    console.log(
+      `[notebook] User notebook migration complete: ${migrated} migrated, ${skipped} already migrated, ${failed} failed. ` +
+      `Originals preserved in ${USER_BACKUP_DIR}`,
+    );
+  }
+
+  return { migrated, skipped, failed };
+}
+
+// ---------------------------------------------------------------------------
+// Migration: move existing filesystem agent notebook JSON entries into
+// memory_blocks.  (Unchanged from before.)
 // ---------------------------------------------------------------------------
 
 export async function migrateAgentNotebookToBlocks(): Promise<{
@@ -390,7 +680,6 @@ export async function migrateAgentNotebookToBlocks(): Promise<{
   try {
     await mkdir(AGENT_ENTRIES_DIR, { recursive: true });
   } catch {
-    // dir doesn't exist, nothing to do
     return { migrated, skipped, failed };
   }
 
@@ -409,34 +698,25 @@ export async function migrateAgentNotebookToBlocks(): Promise<{
   await mkdir(AGENT_BACKUP_DIR, { recursive: true });
 
   for (const filename of entryFiles) {
-    const entryId = filename.slice(0, -5); // strip .json
+    const entryId = filename.slice(0, -5);
     try {
       const raw = await readFile(join(AGENT_ENTRIES_DIR, filename), "utf-8");
       const entry = JSON.parse(raw) as NotebookEntry;
 
       if (!entry?.content) {
-        // Malformed — move to backup anyway, log, and continue
         await rename(join(AGENT_ENTRIES_DIR, filename), join(AGENT_BACKUP_DIR, filename));
         failed++;
         continue;
       }
 
-      // Choose a stable block id that won't collide with future generateNotebookBlockId
-      // outputs. Using a fixed prefix + the original entry UUID guarantees:
-      //   (a) idempotency — re-running finds an existing block and skips
-      //   (b) reversibility — you can locate the originating JSON from the id
       const blockId = `blk-notebook-migrated-${entryId}`;
       const existing = getMemoryBlock(blockId);
       if (existing) {
-        // Already migrated on a prior run; move JSON to backup and continue.
         await rename(join(AGENT_ENTRIES_DIR, filename), join(AGENT_BACKUP_DIR, filename));
         skipped++;
         continue;
       }
 
-      // Heuristic: synthesis entries tend to start with "# Daily Synthesis" or
-      // similar; anything else treat as a plain notebook. Type is mostly
-      // cosmetic since both flavors are excluded from auto-load identically.
       const looksLikeSynthesis = /^#+\s*(daily\s+)?synthesis\b/i.test(entry.content);
       const blockType = looksLikeSynthesis ? 'synthesis' : 'notebook';
 
@@ -463,15 +743,13 @@ export async function migrateAgentNotebookToBlocks(): Promise<{
       await rename(join(AGENT_ENTRIES_DIR, filename), join(AGENT_BACKUP_DIR, filename));
       migrated++;
     } catch (e: any) {
-      console.error(`[notebook] Migration failed for ${filename}:`, e?.message || e);
+      console.error(`[notebook] Agent entry migration failed for ${filename}:`, e?.message || e);
       failed++;
     }
   }
 
-  // Also move the old index.json aside — it's stale once entries are blocks.
   try {
-    const indexSrc = join(AGENT_ENTRIES_DIR, "index.json");
-    await rename(indexSrc, join(AGENT_BACKUP_DIR, "index.json"));
+    await rename(join(AGENT_ENTRIES_DIR, "index.json"), join(AGENT_BACKUP_DIR, "index.json"));
   } catch {
     // index didn't exist or already moved; not a problem
   }
@@ -485,3 +763,12 @@ export async function migrateAgentNotebookToBlocks(): Promise<{
 
   return { migrated, skipped, failed };
 }
+
+// ---------------------------------------------------------------------------
+// Legacy filesystem functions — retained only for the migration read path
+// above. All active operations now go through SQLite.
+// ---------------------------------------------------------------------------
+
+// The following functions have been removed in favor of their SQLite
+// counterparts above. If any external import still references them, it will
+// need to be updated to use the sync function signatures.

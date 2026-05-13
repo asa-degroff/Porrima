@@ -39,7 +39,7 @@ import { startSystemStatsPolling } from "./services/system-stats.js";
 import { initializePersona } from "./services/persona-store.js";
 import { createSystemChat } from "./services/system-chat.js";
 import { ensureAutomationDefaults } from "./services/automation-storage.js";
-import { migrateAgentNotebookToBlocks } from "./services/notebook-storage.js";
+import { migrateAgentNotebookToBlocks, migrateUserNotebookToDb } from "./services/notebook-storage.js";
 import { registerOllamaNativeProvider } from "./services/ollama-native-provider.js";
 import { registerOpenAICompatProvider } from "./services/openai-compat-provider.js";
 import { initSshMux, destroyAllMasters } from "./services/workspace.js";
@@ -100,6 +100,12 @@ await ensureAutomationDefaults();
 // Idempotent — does nothing once the JSON files are in the .backup/ folder.
 await migrateAgentNotebookToBlocks().catch((err) => {
   console.error("[notebook] Agent notebook migration failed:", err);
+});
+
+// One-shot migration: move user notebook JSON files into SQLite.
+// Idempotent — does nothing once the JSON files are in the .backup/ folder.
+await migrateUserNotebookToDb().catch((err) => {
+  console.error("[notebook] User notebook migration failed:", err);
 });
 
 // Initialize SSH infrastructure: create mux directory, clean stale sockets.

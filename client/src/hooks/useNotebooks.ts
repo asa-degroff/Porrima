@@ -8,9 +8,10 @@ import {
   triggerAgentNotebookReview,
   fetchUserUIState,
   saveUserUIState,
+  searchNotebooks,
   OfflineError,
 } from "../api/client";
-import type { NotebookEntry, NotebookIndex, NotebookLink, ImageAttachment } from "../types";
+import type { NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, ImageAttachment } from "../types";
 
 export function useNotebooks() {
   const [userNotebooks, setUserNotebooks] = useState<NotebookIndex>({ entries: [], lastActivityDate: null });
@@ -19,6 +20,9 @@ export function useNotebooks() {
   const [error, setError] = useState<string | null>(null);
   const [notebookLastSeen, setNotebookLastSeen] = useState<string | null>(null);
   const [synced, setSynced] = useState(false);
+  const [searchResults, setSearchResults] = useState<NotebookSearchResult[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
 
   // Load last-seen from server on mount
   useEffect(() => {
@@ -121,6 +125,30 @@ export function useNotebooks() {
     localStorage.setItem("quje-notebook-agent-last-seen", now);
   }, []);
 
+  const searchNotebookEntries = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      setSearchQuery('');
+      return;
+    }
+    setSearchQuery(query);
+    setIsSearching(true);
+    try {
+      const { results } = await searchNotebooks(query);
+      setSearchResults(results);
+    } catch (e) {
+      console.error('[notebook] Search failed:', e);
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }, []);
+
+  const clearSearch = useCallback(() => {
+    setSearchResults([]);
+    setSearchQuery('');
+  }, []);
+
   return {
     userNotebooks,
     agentNotebooks,
@@ -134,5 +162,10 @@ export function useNotebooks() {
     hasUnreadAgentEntries,
     markAgentEntriesSeen,
     refresh,
+    searchResults,
+    searchQuery,
+    isSearching,
+    searchNotebookEntries,
+    clearSearch,
   };
 }

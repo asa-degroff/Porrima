@@ -617,6 +617,15 @@ export interface NotebookIndex {
   lastActivityDate: string | null;
 }
 
+export interface NotebookSearchResult {
+  id: string;
+  author: 'user' | 'agent';
+  createdAt: string;
+  preview: string;
+  excerpt: string;
+  rank: number;
+}
+
 // System stats
 export interface GpuInfo {
   id: string;

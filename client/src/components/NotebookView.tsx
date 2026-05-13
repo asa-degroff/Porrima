@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
-import type { NotebookEntry, NotebookIndex, NotebookLink, ChatListItem, ImageAttachment } from "../types";
+import { useState, useCallback, useEffect, useRef } from "react";
+import type { NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, ChatListItem, ImageAttachment } from "../types";
 import { fetchNotebookEntry, fetchNotebookEntriesBulk } from "../api/client";
 import { NotebookEntryComposer } from "./NotebookEntryComposer";
 import { NotebookEntryDisplay } from "./NotebookEntryDisplay";
@@ -25,6 +25,11 @@ interface Props {
   onChatSelect: (chatId: string) => void;
   onVisible?: () => void;
   onOpenSidebar?: () => void;
+  searchResults?: NotebookSearchResult[];
+  searchQuery?: string;
+  isSearching?: boolean;
+  onSearch?: (query: string) => void;
+  onClearSearch?: () => void;
 }
 
 export function NotebookView({
@@ -41,6 +46,11 @@ export function NotebookView({
   onChatSelect,
   onVisible,
   onOpenSidebar,
+  searchResults = [],
+  searchQuery = '',
+  isSearching = false,
+  onSearch,
+  onClearSearch,
 }: Props) {
   const [fullEntries, setFullEntries] = useState<Record<string, NotebookEntry>>({});
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -48,6 +58,10 @@ export function NotebookView({
   const [composerLinks, setComposerLinks] = useState<NotebookLink>({});
   const [mobileNotebookTab, setMobileNotebookTab] = useState<'user' | 'agent'>('user');
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && !window.matchMedia('(min-width: 768px)').matches);
+  const [searchInput, setSearchInput] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const mql = window.matchMedia('(min-width: 768px)');
@@ -55,6 +69,63 @@ export function NotebookView({
     mql.addEventListener('change', handler);
     return () => mql.removeEventListener('change', handler);
   }, []);
+
+  // Search debounce
+  const handleSearchInput = useCallback((value: string) => {
+    setSearchInput(value);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    if (!value.trim()) {
+      onClearSearch?.();
+      return;
+    }
+    searchDebounceRef.current = setTimeout(() => {
+      onSearch?.(value.trim());
+    }, 300);
+  }, [onSearch, onClearSearch]);
+
+  const toggleSearch = useCallback(() => {
+    setShowSearch(prev => {
+      if (prev) {
+        // Closing search
+        setSearchInput('');
+        onClearSearch?.();
+      } else {
+        // Opening search - focus input after render
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+      }
+      return !prev;
+    });
+  }, [onClearSearch]);
+
+  const handleSearchResultClick = useCallback((result: NotebookSearchResult) => {
+    // Scroll to and expand the entry
+    const element = document.getElementById(`entry-${result.id}`);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
+      element.classList.add('ring-2', 'ring-purple-400');
+      setTimeout(() => element.classList.remove('ring-2', 'ring-purple-400'), 2000);
+    }
+    // Expand the entry if not already expanded
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      next.add(result.id);
+      return next;
+    });
+    // Fetch full content if not cached
+    if (!fullEntries[result.id]) {
+      fetchNotebookEntry(result.author, result.id)
+        .then(entry => {
+          if (entry) setFullEntries(prev => ({ ...prev, [result.id]: entry }));
+        })
+        .catch(() => { /* ignore */ });
+    }
+    // Close search on mobile after selecting a result
+    if (isMobile) {
+      setShowSearch(false);
+      setSearchInput('');
+      onClearSearch?.();
+    }
+  }, [fullEntries, isMobile, onClearSearch]);
 
   // Link picker state
   const [linkPickerOpen, setLinkPickerOpen] = useState(false);
@@ -378,17 +449,90 @@ export function NotebookView({
           </button>
           <h2 className="text-sm font-medium text-white/80 truncate">Notebooks</h2>
         </div>
-        <button
-          onClick={handleTriggerAgent}
-          className="px-3 py-1.5 text-xs rounded-lg transition-colors bg-purple-500/15 border border-purple-400/25 text-purple-300 font-medium hover:bg-purple-500/25"
-          title="Trigger agent review of today's notes"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="inline mr-1">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          </svg>
-          Review Notes
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Search toggle */}
+          <button
+            onClick={toggleSearch}
+            className={`p-1.5 rounded-lg transition-colors ${showSearch ? 'bg-white/10 text-white' : 'text-white/50 hover:text-white/80 hover:bg-white/5'}`}
+            title={showSearch ? 'Close search' : 'Search notebooks'}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </button>
+          <button
+            onClick={handleTriggerAgent}
+            className="px-3 py-1.5 text-xs rounded-lg transition-colors bg-purple-500/15 border border-purple-400/25 text-purple-300 font-medium hover:bg-purple-500/25"
+            title="Trigger agent review of today's notes"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="inline mr-1">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            Review Notes
+          </button>
+        </div>
       </div>
+
+      {/* Search bar */}
+      {showSearch && (
+        <div className="px-3 md:px-6 py-2 border-b border-white/10 bg-white/[0.02]">
+          <div className="flex items-center gap-2">
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchInput}
+              onChange={(e) => handleSearchInput(e.target.value)}
+              placeholder="Search notebooks..."
+              className="flex-1 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white/90 text-sm focus:outline-none focus:border-purple-400/40 focus:bg-white/10 transition-all placeholder:text-white/30"
+            />
+            {searchInput && (
+              <button
+                onClick={() => { setSearchInput(''); onClearSearch?.(); }}
+                className="p-1 text-white/40 hover:text-white/70 transition-colors"
+                title="Clear search"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            )}
+          </div>
+          {/* Search results */}
+          {isSearching && (
+            <div className="mt-2 text-center text-white/30 text-xs py-2">Searching...</div>
+          )}
+          {!isSearching && searchResults.length > 0 && (
+            <div className="mt-2 max-h-64 overflow-y-auto space-y-1">
+              {searchResults.map((result) => (
+                <button
+                  key={result.id}
+                  onClick={() => handleSearchResultClick(result)}
+                  className="w-full text-left px-3 py-2 hover:bg-white/5 rounded-lg transition-colors border border-transparent hover:border-white/5"
+                >
+                  <div className="flex items-start gap-2">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${result.author === 'agent' ? 'bg-purple-500/15 text-purple-300' : 'bg-blue-500/15 text-blue-300'}`}>
+                      {result.author === 'agent' ? 'Agent' : 'You'}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-white/40">
+                        {new Date(result.createdAt).toLocaleDateString()}
+                      </div>
+                      <div className="text-sm text-white/80 line-clamp-2">
+                        {result.excerpt || result.preview}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+          {!isSearching && searchResults.length === 0 && searchInput.trim().length >= 2 && searchQuery && (
+            <div className="mt-2 text-center text-white/30 text-xs py-2">No matches found</div>
+          )}
+        </div>
+      )}
 
       {/* Content - Tabbed on mobile, side-by-side on desktop */}
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden w-full">

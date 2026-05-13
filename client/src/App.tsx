@@ -91,6 +91,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     triggerAgentReview,
     hasUnreadAgentEntries,
     markAgentEntriesSeen,
+    searchResults: notebookSearchResults,
+    searchQuery: notebookSearchQuery,
+    isSearching: isSearchingNotebooks,
+    searchNotebookEntries,
+    clearSearch: clearNotebookSearch,
   } = useNotebooks();
   const { residency: cacheResidency, refresh: refreshCacheResidency } = useCacheResidency();
   const [activeView, setActiveView] = useState<'chats' | 'notebooks'>('chats');
@@ -959,6 +964,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           onChatSelect={(chatId) => { selectChat(chatId); setActiveView('chats'); setImageSandboxOpen(false); }}
           onVisible={markAgentEntriesSeen}
           onOpenSidebar={() => setSidebarOpen(true)}
+          searchResults={notebookSearchResults}
+          searchQuery={notebookSearchQuery}
+          isSearching={isSearchingNotebooks}
+          onSearch={searchNotebookEntries}
+          onClearSearch={clearNotebookSearch}
         />
       ) : (
       <ChatView

@@ -1,4 +1,4 @@
-import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, OllamaModel, Settings } from "../types";
+import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, OllamaModel, Settings } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -1490,6 +1490,15 @@ export async function updateNotebookEntry(
 export async function deleteNotebookEntry(author: 'user' | 'agent', id: string): Promise<void> {
   const res = await apiFetch(`${BASE}/notebooks/${author}/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Failed to delete notebook entry");
+}
+
+export async function searchNotebooks(query: string, author?: 'user' | 'agent', limit?: number): Promise<{ results: NotebookSearchResult[]; query: string }> {
+  const params = new URLSearchParams({ q: query });
+  if (author) params.set('author', author);
+  if (limit) params.set('limit', String(limit));
+  const res = await apiFetch(`${BASE}/notebooks/search?${params}`);
+  if (!res.ok) throw new Error("Failed to search notebooks");
+  return res.json();
 }
 
 export async function triggerAgentNotebookReview(): Promise<{ skipped?: boolean; reason?: string } | NotebookEntry> {
