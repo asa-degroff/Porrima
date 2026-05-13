@@ -337,7 +337,7 @@ export async function ensureAutomationDefaults(): Promise<void> {
       orderIndex: 0,
       chatId: "system",
       schedule: normalizeSchedule({ type: "interval", everyMinutes: DEFAULT_SYNTHESIS_INTERVAL_MINUTES }, DEFAULT_SYNTHESIS_INTERVAL_MINUTES),
-      activationPolicy: "idle",
+      activationPolicy: "sleep_only",
       promptSteps: getDefaultSynthesisPromptSteps(),
       maxIterations: 30,
       timeoutMs: 90 * 60 * 1000,
@@ -373,7 +373,13 @@ export async function ensureAutomationDefaults(): Promise<void> {
       chatId: existing.chatId || fallback.chatId,
       promptSteps: existing.promptSteps.length > 0 ? existing.promptSteps : fallback.promptSteps,
       schedule: existing.schedule ?? fallback.schedule,
-      activationPolicy: existing.activationPolicy ?? fallback.activationPolicy,
+      // Migrate: built-in synthesis task changed from "idle" to "sleep_only"
+      // so it respects the sleep cycle (requires inactivity before starting).
+      // The ?? operator won't override an existing truthy value, so we
+      // force-migrate the synthesis task specifically.
+      activationPolicy: fallback.id === SYNTHESIS_AUTOMATION_ID && existing.activationPolicy === "idle"
+        ? "sleep_only"
+        : (existing.activationPolicy ?? fallback.activationPolicy),
       maxIterations: existing.maxIterations || fallback.maxIterations,
       timeoutMs: existing.timeoutMs || fallback.timeoutMs,
       updatedAt: new Date().toISOString(),

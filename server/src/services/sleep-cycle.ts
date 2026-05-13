@@ -19,7 +19,7 @@ interface SleepCycleOptions {
 // preventing premature sleep activation immediately after a response finishes.
 const SLEEP_GRACE_PERIOD_MINUTES = 2;
 
-function parseTimestamp(value: string | undefined | null): number | null {
+export function parseTimestamp(value: string | undefined | null): number | null {
   if (!value) return null;
   const ms = new Date(value).getTime();
   return Number.isFinite(ms) ? ms : null;

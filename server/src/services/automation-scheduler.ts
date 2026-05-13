@@ -1,7 +1,7 @@
 import type { AutomationTask, Settings } from "../types.js";
 import { hasActiveChats } from "./memory-extraction.js";
 import { getQueueLength } from "./cache-warm-queue.js";
-import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js";
+import { isSleepCycleActive as computeSleepCycleActive, parseTimestamp } from "./sleep-cycle.js";
 import { getSettings } from "./chat-storage.js";
 import { getMemoryCount } from "./memory-storage.js";
 import {
@@ -14,6 +14,12 @@ import { isSynthesisActive, isWakeCycleActive } from "./system-chat.js";
 
 const AUTOMATION_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES = 60;
+
+// Minimum idle time after last user/agent activity before any automation can
+// start, regardless of activation policy. Prevents synthesis from launching
+// immediately after a chat error-terminates (which marks the chat inactive)
+// or right after the user sends a message and the assistant finishes.
+const AUTOMATION_MIN_IDLE_MS = 2 * 60 * 1000; // 2 minutes
 
 let automationCheckRunning = false;
 
@@ -79,6 +85,25 @@ export async function checkAndRunDueAutomations(): Promise<void> {
       return;
     }
 
+    // Grace period: don't start any automation if the user was recently active,
+    // even if no chat is currently in progress. This catches the case where a
+    // chat just error-terminated (marking it inactive) but the user hasn't had
+    // time to retry — without this, synthesis can start within seconds of an
+    // error-terminated chat.
+    const settings = await getSettings();
+    const lastUserMs = parseTimestamp(settings.lastUserActivityAt);
+    const lastAgentMs = parseTimestamp(settings.lastAgentCompletedAt);
+    const recentActivityMs = Math.max(lastUserMs ?? 0, lastAgentMs ?? 0);
+    if (recentActivityMs > 0) {
+      const elapsedMs = Date.now() - recentActivityMs;
+      if (elapsedMs < AUTOMATION_MIN_IDLE_MS) {
+        const elapsedSec = (elapsedMs / 1000).toFixed(0);
+        const minSec = (AUTOMATION_MIN_IDLE_MS / 1000).toFixed(0);
+        console.log(`[automation] Skipping — recently active (${elapsedSec}s ago, need ${minSec}s idle)`);
+        return;
+      }
+    }
+
     // Don't dispatch new automations while a cache-warm is in progress —
     // both need the GPU and a cache-warm prefilling the same context the
     // automation is about to use is pure waste (the cache can't be used anyway
@@ -88,7 +113,6 @@ export async function checkAndRunDueAutomations(): Promise<void> {
       return;
     }
 
-    const settings = await getSettings();
     const nowMs = Date.now();
     const tasks = listEnabledAutomationTasks();
     for (const task of tasks) {
