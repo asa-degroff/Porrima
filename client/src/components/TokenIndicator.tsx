@@ -61,9 +61,6 @@ export function TokenIndicator({
               >~{formatNumber(usage.totalTokens)} / {formatNumber(contextWindow)}</span>
             ) : (
               <>
-                <span className="hidden md:inline" title="Context tokens (input)">&#8593;{formatNumber(usage.input)}</span>
-                <span className="hidden md:inline" title="Generated tokens (output)">&#8595;{formatNumber(usage.output)}</span>
-                <span className="hidden md:inline text-white/20">&middot;</span>
                 <span>{formatNumber(usage.totalTokens)} / {formatNumber(contextWindow)}</span>
               </>
             )}
