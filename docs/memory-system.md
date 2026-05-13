@@ -45,7 +45,7 @@ Memory retrieval uses a multi-stage pipeline for high-relevance results:
 
 4. **Project scoping**: Project-matching memories boosted to top
 
-5. **Context injection** (`memory-context.ts`): Top 15 current + up to 5 superseded memories injected into system prompt with metadata (category, importance, creation date)
+5. **Context injection** (`memory-context.ts`, `passive-memory-recall.ts`): Top 15 current + up to 5 superseded memories are injected into the stable context on first turn/post-compaction. Later retrievals use delta or passive recall messages so the base system prompt stays byte-identical.
 
 **Retrieval logging**: Each retrieval logs query preview, reranker model/fallback status, latency, score distribution (min/max/median), threshold crossings, and top memory previews for tuning.
 
@@ -79,6 +79,17 @@ To maximize KV cache hit rates with llama.cpp's longest-common-prefix caching, m
 **Key insight:** The tradeoff of adding delta messages to conversation history (~200-500 tokens) is minimal compared to reprocessing the entire context (potentially thousands of tokens) when the system prompt changes.
 
 See `memory-context.ts` for implementation details: `buildSplitAugmentedPrompt()` returns both `systemPrompt` (frozen) and `memoriesMessage` (delta).
+
+## Passive Mid-Turn Memory Recall
+
+Long-running agent turns can retrieve memories without waiting for the next user message. `PassiveMemoryRecallController` runs from the HTTP chat loop after tool-use iterations:
+
+- It builds a query from recent visible user/assistant/tool context, skipping hidden system rows so recalled memories do not search for themselves.
+- It runs fast vector + FTS5 hybrid search first, accumulates diverse candidates with MMR, then sends only a small candidate/query set to the slower reranker.
+- It caps injection frequency and total memories per turn, excludes memories already frozen/delta-injected/injected passively, and marks applied memory IDs through the memory context state.
+- Ready recalls are injected before a later provider call, so the agent can use newly relevant memory while continuing the same autonomous turn.
+
+Passive recalls preserve the same replay constraints as normal memory deltas. The persisted chat row is hidden as `role: "system"` with `_isPassiveMemoryRecall` for storage/UI filtering, but the live agent context receives the replay-equivalent synthetic `user` message. `chatMessagesToPiMessages()` reconstructs that same synthetic user message from the hidden row on follow-up turns. Do not live-inject raw mid-transcript `system` messages; provider templates normalize or reject them, and replay must remain byte-compatible with the prompt shape the model already saw.
 
 ## Agent Tools
 

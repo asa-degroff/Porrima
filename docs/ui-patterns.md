@@ -10,7 +10,7 @@
 - Messages synced from server after compaction to ensure correct chronological ordering
 - Context window editing restricted to fresh chats (no messages yet) to prevent mid-conversation model reloads
 - Long-history loading: initial chat fetch requests the most recent 200 messages, and `ChatView` loads older windows on scroll-to-top via `GET /api/chats/:id/messages`. Absolute indexes are preserved with `messageOffset`.
-- Tool-loop display grouping: raw canonical assistant rows remain split for replay/storage, but consecutive rows sharing `_toolLoopId` render as one visible assistant bubble with merged segments, tool cards, artifacts, generated images, thinking, and final text.
+- Tool-loop display grouping: raw canonical assistant rows remain split for replay/storage, but consecutive rows sharing `_toolLoopId` render as one visible assistant bubble with merged segments, tool cards, artifacts, generated images, thinking, and final text. Hidden system rows, including passive memory recalls, are filtered from the display projection and do not split the bubble.
 
 ## Mobile & Touch
 

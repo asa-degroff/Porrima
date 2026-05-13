@@ -33,6 +33,7 @@ RDNA 3 (gfx11xx): Q8_0 quantization optimal (halves KV cache, <5% throughput pen
 
 ## Memory System
 8 categories + reflection. Retrieval: vector + FTS5 (RRF) → Qwen3 rerank → 0.85 cosine dedup. Extraction: `extractInChunks`, per-chunk retry, 500-char overlap.
+Passive mid-turn recall: after tool-use iterations, `PassiveMemoryRecallController` runs fast hybrid search/MMR in the background, reranks a small accumulated batch, persists selected memories as hidden system rows, and live-injects replay-equivalent synthetic user context before a later provider call.
 Conscious/subconscious model: atomic memories (subconscious) consolidated into blocks (conscious) during synthesis.
 System chat delayed extraction: synthesis messages flagged `_isSynthesisMessage: true` (both triggers and responses), quarantined from extraction context.
 Compaction: archives to `context_archives` w/ FTS. Greedy backfill (50% floor). Skills reinjected post-compaction. Stable prefix excludes skills.

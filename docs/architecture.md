@@ -82,6 +82,8 @@ The chat API returns a recent message window by default when requested with `mes
 
 Tool-loop persistence is canonicalized to match the live pi-ai transcript: each assistant `toolUse` stop is saved as its own assistant row with only that iteration's `toolCalls`/`toolResults`, grouped with `_toolLoopId` and marked `_toolLoopFragment`. The final assistant text is a later row in the same group. This preserves llama.cpp longest-common-prefix KV cache matching on follow-up turns because replay no longer collapses an interleaved live loop into one byte-different assistant row. See [chat-message-architecture.md](chat-message-architecture.md).
 
+Memory augmentation has two cache-preserving paths. Normal turn-start retrieval freezes memories into the stable system prompt or appends new memories as a delta before the next user message. Passive mid-turn recall runs during agent/tool loops: fast hybrid search and MMR accumulate candidates, the slower reranker filters a small batch, and selected memories are persisted as hidden system rows while live-injected as synthetic user-role context at the same transcript boundary replay will reconstruct later. This lets long autonomous turns recall relevant memory without changing the stable system prompt or creating byte-different replay.
+
 **FTS5 search**: `chat_messages_fts` and `context_archives_fts` both support phrase match with fallback to term search. The `search_conversation` tool searches both current messages AND archived context, with archive results showing dereferenceable IDs.
 
 ## Compaction & Indexed Archival

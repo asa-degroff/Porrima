@@ -64,14 +64,18 @@ The server emits `message_complete` with `continues: true` after each persisted 
 - Canonical `_toolLoopFragment` rows reconstruct to one `AssistantMessage(stopReason:"toolUse")`, followed by the row's `ToolResultMessage[]`.
 - The canonical final row reconstructs to `AssistantMessage(stopReason:"stop")`.
 - Legacy collapsed rows still reconstruct through the old compatibility expansion: `AssistantMessage(toolUse)` -> `ToolResultMessage[]` -> `AssistantMessage(stop)`.
+- Hidden system rows are not replayed as mid-transcript system-role messages. They merge into the following real user message when one exists; if they occur before a following assistant fragment, replay flushes them as a synthetic user-role context message at that boundary.
 
 This matters for llama.cpp prompt caching. Follow-up turns need replay to be byte-compatible with the previous live loop. If all 20+ tool iterations are flattened into one assistant row, the prompt diverges at the first assistant token after the user message, causing an avoidable full prompt reprocess.
+
+Passive memory recall relies on this hidden-system replay rule. The stored row remains `role: "system"` with `_isPassiveMemoryRecall` so the UI can hide it, but the live agent loop receives the same synthetic user-role message that replay will later reconstruct. This avoids provider-specific mid-transcript system-role handling while keeping the context byte-compatible across follow-up turns.
 
 ## Client Rendering
 
 The client keeps the raw canonical rows in `messages` and IndexedDB. `ChatView` builds a display projection:
 
 - Consecutive assistant rows with the same `_toolLoopId` are merged into one visible bubble.
+- Hidden `system` rows, including passive memory recalls inserted between assistant fragments, are skipped and do not split the visible tool-loop bubble.
 - Content, thinking, segments, tool calls/results, artifacts, visuals, and generated images are concatenated for display.
 - The raw `localStartIdx` is preserved for message indexes, and `localEndIdx` determines whether the merged bubble is the streaming tail.
 - Streaming segment indexes are offset by the number of segments in earlier rows in the group.
@@ -89,6 +93,7 @@ Keep these invariants when changing chat history code:
 - For legacy rows with `toolCalls` and final `content`, keep the compatibility replay path.
 - When persisting in-progress output, replace `_inProgress` rows rather than appending duplicates.
 - For UI rendering, group split tool-loop rows visually but keep raw rows in state/cache.
+- When adding hidden context rows, make live injection use the same synthetic user-role message that `chatMessagesToPiMessages()` reconstructs from persisted rows.
 
 ## Future Work
 
