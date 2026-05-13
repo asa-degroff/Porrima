@@ -619,6 +619,7 @@ export function Sidebar({
   } = useSidebarState();
   const activityShape = useActivityShape();
   const effectiveSleepCycleActive = sleepCycleActive && !isStreaming;
+  const sidebarActivityActive = hasBackgroundActivity || isExtractionRunning || isSynthesizing || isAutomationRunning;
 
   const [searchActive, setSearchActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -788,15 +789,15 @@ export function Sidebar({
             >
               <div className="relative flex items-center">
                 {/* Static logo + title — hidden during background activity, extraction, or synthesis */}
-                <div className={`flex items-center gap-2 transition-opacity duration-300 ${(hasBackgroundActivity || isExtractionRunning || isSynthesizing || isAutomationRunning) ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+                <div className={`flex items-center gap-2 transition-opacity duration-300 ${sidebarActivityActive ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
                   <SidebarLogo size={24} />
                   <h1 className="text-lg font-semibold text-white/90 tracking-tight">
                     qu.je
                   </h1>
                 </div>
                 {/* Background activity indicator — octahedron for memory extraction, synthesis, creative directions */}
-                <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${(hasBackgroundActivity || isExtractionRunning || isSynthesizing || isAutomationRunning) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-                  <PolyhedronLogo isActive={true} shape={activityShape} />
+                <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${sidebarActivityActive ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                  <PolyhedronLogo isActive={sidebarActivityActive} shape={activityShape} />
                 </div>
               </div>
             </div>

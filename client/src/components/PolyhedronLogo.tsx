@@ -399,6 +399,7 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
       perspective: size * 10,
       gap: `${gap}px`,
     }
+  containerStyle.contain = 'layout paint style'
 
   const ShapeComponent = shape === 'octahedron' ? OctahedronShape
     : shape === 'cube' ? CubeShape
@@ -409,18 +410,6 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
       className={`select-none ${className}`}
       style={containerStyle}
     >
-      {animation === 'prefill' && (
-        <style>{`
-          @keyframes polyhedron-prefill-spin {
-            from { transform: rotateY(0deg); }
-            to { transform: rotateY(360deg); }
-          }
-          @keyframes polyhedron-prefill-wobble {
-            0%, 100% { transform: rotateX(var(--wobble-x-start)) rotateZ(var(--wobble-z-start)); }
-            50% { transform: rotateX(var(--wobble-x-end)) rotateZ(var(--wobble-z-end)); }
-          }
-        `}</style>
-      )}
       {Array.from({ length: count }, (_, i) => {
         const r = rotations?.[i] ?? resting[i]
         const dur = (phase === 'spinning' ? 0.6 : phase === 'returning' ? 0.7 : 0.5) / speed

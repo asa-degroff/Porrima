@@ -285,6 +285,21 @@ body::before {
   color: rgba(var(--theme-secondary-text), 0.8);
 }
 
+/* Polyhedron prefill animation */
+@keyframes polyhedron-prefill-spin {
+  from { transform: rotateY(0deg); }
+  to { transform: rotateY(360deg); }
+}
+
+@keyframes polyhedron-prefill-wobble {
+  0%, 100% {
+    transform: rotateX(var(--wobble-x-start)) rotateZ(var(--wobble-z-start));
+  }
+  50% {
+    transform: rotateX(var(--wobble-x-end)) rotateZ(var(--wobble-z-end));
+  }
+}
+
 /* Slide-up drawer animation */
 @keyframes slideUp {
   from {
