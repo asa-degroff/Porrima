@@ -64,6 +64,7 @@ interface RerankerStatsRun {
   scoreMax: number;
   scoreMedian: number;
   chatType: string;
+  source: string;
 }
 
 interface RerankerStatsSummary {
@@ -458,6 +459,12 @@ function scoreSpreadLabel(spread: number | null): { text: string; color: string 
   return { text: "low", color: "text-red-300/80" };
 }
 
+function formatRerankerSource(source: string | undefined): string {
+  if (source === "passive-memory") return "passive";
+  if (source === "memory-context") return "memory";
+  return source || "memory";
+}
+
 function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
   const { summary, runs } = data;
   const last = summary.lastRun;
@@ -559,6 +566,7 @@ function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
             "Last docs/tokens": last ? `${last.documentCount} / ${last.totalTokens.toLocaleString()}` : "—",
             "Last scores": last ? `${last.scoreMin.toFixed(4)} – ${last.scoreMax.toFixed(4)} (med: ${last.scoreMedian.toFixed(4)})` : "—",
             "Last chat type": last ? last.chatType : "—",
+            "Last source": last ? formatRerankerSource(last.source) : "—",
           }) as [string, string][]).map(([k, v]) => (
             <div key={k} className="flex justify-between text-[11px]">
               <span className="text-white/40">{k}</span>
@@ -591,6 +599,7 @@ function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
                 </span>
                 <span className="text-white/30 w-10 shrink-0">{run.documentCount}doc</span>
                 <span className="text-white/30 w-16 shrink-0">{run.totalTokens.toLocaleString()}tok</span>
+                <span className="text-white/35 w-14 shrink-0">{formatRerankerSource(run.source)}</span>
                 <span className="text-white/40 shrink-0">
                   {run.scoreMin.toFixed(3)}–{run.scoreMax.toFixed(3)}
                 </span>

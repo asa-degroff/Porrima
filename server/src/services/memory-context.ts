@@ -196,6 +196,7 @@ async function retrieveMemories(
       scoreMax: rerankOutput.scoreMax,
       scoreMedian: rerankOutput.scoreMedian,
       chatType: chatType || "agent",
+      source: "memory-context",
       timestamp: Date.now(),
     });
   } catch (e) {

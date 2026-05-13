@@ -14,13 +14,15 @@ import type { ChatMessage } from "../types.js";
 
 const MIN_QUERY_CHARS = 80;
 const MAX_QUERY_CHARS = 6000;
+const MAX_RERANK_QUERY_CHARS = 900;
 const RECENT_MESSAGE_COUNT = 12;
 const SEARCH_EVERY_ITERATIONS = 2;
 const MIN_CANDIDATES_BEFORE_RERANK = 3;
 const FAST_SEARCH_LIMIT = 40;
 const DIVERSE_CANDIDATE_LIMIT = 8;
-const RERANK_DOCUMENT_LIMIT = 8;
+const RERANK_DOCUMENT_LIMIT = 6;
 const RERANK_TOP_N = 4;
+const MAX_RERANK_DOCUMENT_CHARS = 1200;
 const MIN_RERANK_SCORE = 0.12;
 const MAX_MEMORIES_PER_INJECTION = 2;
 const MAX_PASSIVE_MEMORIES_PER_TURN = 6;
@@ -50,6 +52,53 @@ function clampText(text: string | undefined, maxChars: number): string {
 
 function hashText(text: string): string {
   return createHash("sha1").update(text).digest("hex").slice(0, 12);
+}
+
+function pushUnique(items: string[], value: string | undefined, maxItems: number): void {
+  const trimmed = value?.trim();
+  if (!trimmed || items.includes(trimmed) || items.length >= maxItems) return;
+  items.push(trimmed);
+}
+
+function compactToolCall(call: NonNullable<ChatMessage["toolCalls"]>[number]): string {
+  const args = call.arguments ?? {};
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    const argMap = args as Record<string, unknown>;
+    const path = typeof argMap.path === "string" ? argMap.path : undefined;
+    const command = typeof argMap.command === "string" ? argMap.command : undefined;
+    const query = typeof argMap.query === "string" ? argMap.query : undefined;
+    if (path) return `${call.name} path=${path}`;
+    if (command) return `${call.name} command=${clampText(command, 120)}`;
+    if (query) return `${call.name} query=${clampText(query, 120)}`;
+  }
+  return call.name;
+}
+
+function extractAnchors(text: string | undefined, maxAnchors: number): string[] {
+  if (!text) return [];
+  const anchors: string[] = [];
+  const patterns = [
+    /`([^`\n]{2,120})`/g,
+    /\b[\w.-]+\.service\b/g,
+    /\b[\w./-]+\.(?:ts|tsx|js|jsx|md|json|service|db|sqlite|py|rs|go)\b/g,
+    /\/(?:api|v\d)\/[\w./:-]+/g,
+    /\b[a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*)+\b/g,
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      pushUnique(anchors, match[1] || match[0], maxAnchors);
+      if (anchors.length >= maxAnchors) return anchors;
+    }
+  }
+
+  for (const line of text.split(/\n+/)) {
+    if (!/\b(error|failed|fallback|timeout|returned|rerank|batch|input)\b/i.test(line)) continue;
+    pushUnique(anchors, clampText(line.replace(/\s+/g, " "), 160), maxAnchors);
+    if (anchors.length >= maxAnchors) return anchors;
+  }
+
+  return anchors;
 }
 
 function toolSummary(message: ChatMessage): string {
@@ -92,6 +141,45 @@ export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = MAX_
   return query.length > maxChars ? query.slice(query.length - maxChars) : query;
 }
 
+export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = MAX_RERANK_QUERY_CHARS): string {
+  const recent = messages
+    .filter((message) => !message._outOfContext && message.role !== "system")
+    .slice(-RECENT_MESSAGE_COUNT);
+
+  const latestUser = [...recent].reverse().find((message) => message.role === "user")?.content;
+  const assistantFocus = [...recent]
+    .reverse()
+    .filter((message) => message.role === "assistant" && message.content?.trim())
+    .slice(0, 2)
+    .map((message) => clampText(message.content, 220).replace(/\s+/g, " "))
+    .reverse();
+
+  const toolCalls: string[] = [];
+  const anchors: string[] = [];
+  for (const message of recent) {
+    for (const call of message.toolCalls?.slice(-4) ?? []) {
+      pushUnique(toolCalls, compactToolCall(call), 8);
+      const args = call.arguments as Record<string, unknown> | undefined;
+      pushUnique(anchors, typeof args?.path === "string" ? args.path : undefined, 12);
+    }
+    for (const anchor of extractAnchors(message.content, 12)) pushUnique(anchors, anchor, 12);
+    for (const result of message.toolResults?.slice(-4) ?? []) {
+      pushUnique(anchors, result.toolName, 12);
+      for (const anchor of extractAnchors(result.content, 12)) pushUnique(anchors, anchor, 12);
+    }
+  }
+
+  const parts: string[] = [];
+  if (latestUser?.trim()) parts.push(`Current user request: ${clampText(latestUser, 320).replace(/\s+/g, " ")}`);
+  if (assistantFocus.length) parts.push(`Recent assistant focus: ${assistantFocus.join(" / ")}`);
+  if (toolCalls.length) parts.push(`Current tool activity: ${toolCalls.join("; ")}`);
+  if (anchors.length) parts.push(`Concrete anchors: ${anchors.join(", ")}`);
+
+  const query = parts.join("\n").trim();
+  if (!query) return "";
+  return query.length > maxChars ? query.slice(0, maxChars).trimEnd() : query;
+}
+
 function sortCandidates(candidates: ScoredMemory[], projectId?: string): ScoredMemory[] {
   return [...candidates].sort((a, b) => {
     if (projectId) {
@@ -115,6 +203,7 @@ function recordStats(output: RerankOutput, chatType: string | undefined): void {
       scoreMax: output.scoreMax,
       scoreMedian: output.scoreMedian,
       chatType: chatType || "agent",
+      source: "passive-memory",
       timestamp: Date.now(),
     });
   } catch (e) {
@@ -156,13 +245,14 @@ export class PassiveMemoryRecallController {
 
     const query = buildPassiveRecallQuery(options.chatMessages);
     if (query.length < MIN_QUERY_CHARS) return;
+    const rerankQuery = buildPassiveRerankQuery(options.chatMessages) || clampText(query, MAX_RERANK_QUERY_CHARS);
 
     const queryHash = hashText(query);
     if (queryHash === this.lastQueryHash) return;
     this.lastQueryHash = queryHash;
     this.lastScheduledIteration = options.iteration;
 
-    this.inFlight = this.runRecall(query, options)
+    this.inFlight = this.runRecall(query, rerankQuery, options)
       .catch((err) => {
         console.warn("[passive-memory] recall failed:", err instanceof Error ? err.message : err);
       })
@@ -203,7 +293,11 @@ export class PassiveMemoryRecallController {
     } as unknown as AgentMessage;
   }
 
-  private async runRecall(query: string, options: PassiveMemoryRecallScheduleOptions): Promise<void> {
+  private async runRecall(
+    query: string,
+    rerankQuery: string,
+    options: PassiveMemoryRecallScheduleOptions,
+  ): Promise<void> {
     const queryEmbedding = await embed(query);
     const searchResults = await searchMemories(queryEmbedding, FAST_SEARCH_LIMIT, new Date(), query);
     const inContextIds = getMemoryContextIds(this.chatId);
@@ -239,8 +333,8 @@ export class PassiveMemoryRecallController {
 
     const instruction = RERANK_INSTRUCTIONS[options.chatType || "agent"];
     const output = await rerank(
-      query,
-      rerankCandidates.map((candidate) => candidate.memory.text),
+      rerankQuery,
+      rerankCandidates.map((candidate) => clampText(candidate.memory.text, MAX_RERANK_DOCUMENT_CHARS)),
       instruction,
       Math.min(RERANK_TOP_N, rerankCandidates.length),
     );

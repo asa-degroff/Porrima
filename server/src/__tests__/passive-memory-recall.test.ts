@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPassiveRecallQuery } from "../services/passive-memory-recall.js";
+import { buildPassiveRecallQuery, buildPassiveRerankQuery } from "../services/passive-memory-recall.js";
 import type { ChatMessage } from "../types.js";
 
 describe("passive memory recall query building", () => {
@@ -60,5 +60,44 @@ describe("passive memory recall query building", () => {
 
     expect(query).toContain("new topic");
     expect(query).not.toContain("old topic old topic old topic old topic old topic");
+  });
+
+  it("builds a compact rerank query with concrete anchors", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content: "Can you check why the reranker is hitting fallback during passive memory recall?",
+        timestamp: 1000,
+      },
+      {
+        role: "assistant",
+        content: "I found /v1/rerank returning 500 while inspecting `reranker.service` and passive-memory-recall.ts.",
+        toolCalls: [
+          {
+            id: "call-1",
+            name: "read_file",
+            arguments: { path: "server/src/services/passive-memory-recall.ts" },
+          },
+        ],
+        toolResults: [
+          {
+            toolCallId: "call-1",
+            toolName: "read_file",
+            content: "srv send_error: input (1819 tokens) is too large to process. current batch size: 512",
+            isError: false,
+          },
+        ],
+        timestamp: 2000,
+      },
+    ];
+
+    const query = buildPassiveRerankQuery(messages, 900);
+
+    expect(query.length).toBeLessThanOrEqual(900);
+    expect(query).toContain("Current user request:");
+    expect(query).toContain("passive-memory-recall.ts");
+    expect(query).toContain("reranker.service");
+    expect(query).toContain("/v1/rerank");
+    expect(query).toContain("current batch size");
   });
 });

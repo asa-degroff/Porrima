@@ -22,6 +22,7 @@ export interface RerankerStatsEntry {
   scoreMax: number;
   scoreMedian: number;
   chatType: string;
+  source: string;
 }
 
 export interface RerankerStatsSummary {
@@ -66,10 +67,18 @@ function initSchema() {
       scoreMin REAL NOT NULL DEFAULT 0,
       scoreMax REAL NOT NULL DEFAULT 0,
       scoreMedian REAL NOT NULL DEFAULT 0,
-      chatType TEXT NOT NULL DEFAULT 'agent'
+      chatType TEXT NOT NULL DEFAULT 'agent',
+      source TEXT NOT NULL DEFAULT 'memory-context'
     );
     CREATE INDEX IF NOT EXISTS idx_reranker_stats_ts ON reranker_stats(timestamp DESC);
   `);
+  ensureColumn(database, "reranker_stats", "source", "TEXT NOT NULL DEFAULT 'memory-context'");
+}
+
+function ensureColumn(database: Database.Database, table: string, column: string, definition: string): void {
+  const rows = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (rows.some((row) => row.name === column)) return;
+  database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 let runSequence = 0;
@@ -87,10 +96,10 @@ export function recordRerankerStats(entry: Omit<RerankerStatsEntry, "id">): Rera
   database.prepare(`
     INSERT INTO reranker_stats (
       id, timestamp, usedModel, latencyMs, documentCount, topN,
-      totalTokens, scoreMin, scoreMax, scoreMedian, chatType
+      totalTokens, scoreMin, scoreMax, scoreMedian, chatType, source
     ) VALUES (
       @id, @timestamp, @usedModel, @latencyMs, @documentCount, @topN,
-      @totalTokens, @scoreMin, @scoreMax, @scoreMedian, @chatType
+      @totalTokens, @scoreMin, @scoreMax, @scoreMedian, @chatType, @source
     )
   `).run({
     id,
@@ -104,6 +113,7 @@ export function recordRerankerStats(entry: Omit<RerankerStatsEntry, "id">): Rera
     scoreMax: entry.scoreMax,
     scoreMedian: entry.scoreMedian,
     chatType: entry.chatType,
+    source: entry.source,
   });
 
   pruneOldRuns();
@@ -129,7 +139,7 @@ export function getRerankerRuns(limit = 50): RerankerStatsEntry[] {
   const database = getDb();
   const rows = database.prepare(`
     SELECT id, timestamp, usedModel, latencyMs, documentCount, topN,
-      totalTokens, scoreMin, scoreMax, scoreMedian, chatType
+      totalTokens, scoreMin, scoreMax, scoreMedian, chatType, source
     FROM reranker_stats
     ORDER BY timestamp DESC
     LIMIT ?
@@ -151,6 +161,7 @@ function rowToEntry(r: Row): RerankerStatsEntry {
     scoreMax: r.scoreMax as number,
     scoreMedian: r.scoreMedian as number,
     chatType: r.chatType as string,
+    source: (r.source as string | undefined) || "memory-context",
   };
 }
 
@@ -163,7 +174,7 @@ export function getRerankerStatsSummary(timeoutMs = 25_000): RerankerStatsSummar
 
   const lastRow = database.prepare(`
     SELECT id, timestamp, usedModel, latencyMs, documentCount, topN,
-      totalTokens, scoreMin, scoreMax, scoreMedian, chatType
+      totalTokens, scoreMin, scoreMax, scoreMedian, chatType, source
     FROM reranker_stats
     ORDER BY timestamp DESC
     LIMIT 1
