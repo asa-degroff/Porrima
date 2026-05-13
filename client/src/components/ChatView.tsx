@@ -158,16 +158,26 @@ function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
 
   while (i < messages.length) {
     const msg = messages[i];
+    if (msg.role === "system") {
+      i++;
+      continue;
+    }
+
     if (msg.role === "assistant" && msg._toolLoopId) {
       const groupStart = i;
       const group: ChatMessage[] = [msg];
+      let groupEnd = i;
       i++;
       while (
-        i < messages.length &&
-        messages[i].role === "assistant" &&
-        messages[i]._toolLoopId === msg._toolLoopId
+        i < messages.length
       ) {
+        if (messages[i].role === "system") {
+          i++;
+          continue;
+        }
+        if (messages[i].role !== "assistant" || messages[i]._toolLoopId !== msg._toolLoopId) break;
         group.push(messages[i]);
+        groupEnd = i;
         i++;
       }
 
@@ -178,7 +188,7 @@ function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
       display.push({
         message: group.length === 1 ? msg : mergeToolLoopMessages(group),
         localStartIdx: groupStart,
-        localEndIdx: i - 1,
+        localEndIdx: groupEnd,
         streamingSegmentOffset,
       });
       continue;
@@ -722,12 +732,10 @@ export function ChatView({
               </div>
             )}
             {(() => {
+              const lastDisplayEndIdx = displayMessages.at(-1)?.localEndIdx ?? -1;
               return displayMessages.map(({ message: msg, localStartIdx, localEndIdx, streamingSegmentOffset }) => {
                 const i = messageOffset + localStartIdx;
-                // Hide persisted system-role messages (memory delta injections) from the UI —
-                // they exist purely to keep the LLM context's prefix stable for KV cache.
-                if (msg.role === "system") return null;
-                const isLast = localEndIdx === messages.length - 1;
+                const isLast = localEndIdx === lastDisplayEndIdx;
                 const isOutOfContext = !!msg._outOfContext;
                 const isSystemMessage = !!msg._isSystemMessage;
                 const isMidTurnCompaction = !!msg._isMidTurnCompaction;
