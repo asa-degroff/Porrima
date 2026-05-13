@@ -1213,10 +1213,11 @@ async function handleChatStream(
               _isPassiveMemoryRecall: true,
               _recalledMemoryIds: injection.memoryIds,
             };
-            const agentMessage = passiveRecall.toAgentMessage({
+            const agentMessage = passiveRecall.toReplayUserMessage({
               ...injection,
               createdAt: timestamp,
             });
+            if (!agentMessage) return messages;
 
             try {
               chat.messages.push(row);

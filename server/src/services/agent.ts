@@ -64,6 +64,19 @@ export function mergeSystemContextWithUserContent(
   return parts.join("\n\n");
 }
 
+export function hiddenSystemContextToUserMessage(
+  systemContext: string | string[] | undefined,
+  timestamp: number
+): Message | null {
+  const content = mergeSystemContextWithUserContent(systemContext, "");
+  if (!content) return null;
+  return {
+    role: "user" as const,
+    content,
+    timestamp,
+  };
+}
+
 /** Convert our ChatMessage[] to pi-ai Message[] for the initial context */
 export function chatMessagesToPiMessages(
   messages: ChatMessage[],
@@ -95,13 +108,11 @@ export function chatMessagesToPiMessages(
   const flushPendingSystemContext = (fallbackTimestamp?: number) => {
     if (pendingSystemContexts.length === 0) return;
     const pending = takePendingSystemContext();
-    const content = mergeSystemContextWithUserContent(pending.content, "");
-    if (!content) return;
-    result.push({
-      role: "user" as const,
-      content,
-      timestamp: pending.timestamp ?? fallbackTimestamp ?? Date.now(),
-    });
+    const message = hiddenSystemContextToUserMessage(
+      pending.content,
+      pending.timestamp ?? fallbackTimestamp ?? Date.now()
+    );
+    if (message) result.push(message);
   };
 
   for (const m of messages) {

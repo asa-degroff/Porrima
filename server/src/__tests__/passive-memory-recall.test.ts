@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildPassiveRecallQuery, buildPassiveRerankQuery } from "../services/passive-memory-recall.js";
+import { chatMessagesToPiMessages } from "../services/agent.js";
+import {
+  buildPassiveRecallQuery,
+  buildPassiveRerankQuery,
+  PassiveMemoryRecallController,
+} from "../services/passive-memory-recall.js";
 import type { ChatMessage } from "../types.js";
 
 describe("passive memory recall query building", () => {
@@ -99,5 +104,46 @@ describe("passive memory recall query building", () => {
     expect(query).toContain("reranker.service");
     expect(query).toContain("/v1/rerank");
     expect(query).toContain("current batch size");
+  });
+
+  it("builds the same live message shape that persisted passive rows replay into", () => {
+    const controller = new PassiveMemoryRecallController("chat-1");
+    const content = [
+      "[System context - passively recalled memories]",
+      "## Recalled context - memories that may be relevant now:",
+      "- Prefer preserving KV-cache prompt identity.",
+      "",
+      "Use these memories only if they help the current task.",
+    ].join("\n");
+    const timestamp = 3000;
+
+    const liveMessage = controller.toReplayUserMessage({
+      content,
+      memoryIds: ["mem-1"],
+      memories: ["Prefer preserving KV-cache prompt identity."],
+      createdAt: timestamp,
+    });
+    const replayed = chatMessagesToPiMessages(
+      [
+        { role: "user", content: "Check the replay path.", timestamp: 1000 },
+        { role: "assistant", content: "I will inspect it.", timestamp: 2000 },
+        {
+          role: "system",
+          content,
+          timestamp,
+          _isSystemMessage: true,
+          _isPassiveMemoryRecall: true,
+        },
+        { role: "assistant", content: "The replay path injects a synthetic user message.", timestamp: 4000 },
+      ],
+      "test-model:latest",
+    );
+
+    expect(liveMessage).toEqual(replayed[2]);
+    expect(liveMessage).toEqual({
+      role: "user",
+      content,
+      timestamp,
+    });
   });
 });

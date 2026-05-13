@@ -9,6 +9,7 @@ import {
   getMemoryContextIds,
   markMemoryDeltaInjected,
 } from "./memory-context.js";
+import { hiddenSystemContextToUserMessage } from "./agent.js";
 import { log } from "./logger.js";
 import type { ChatMessage } from "../types.js";
 
@@ -285,12 +286,11 @@ export class PassiveMemoryRecallController {
     markMemoryDeltaInjected(this.chatId, injection.memoryIds);
   }
 
-  toAgentMessage(injection: PassiveMemoryRecallInjection): AgentMessage {
-    return {
-      role: "system",
-      content: injection.content,
-      timestamp: injection.createdAt,
-    } as unknown as AgentMessage;
+  toReplayUserMessage(injection: PassiveMemoryRecallInjection): AgentMessage | null {
+    return hiddenSystemContextToUserMessage(
+      injection.content,
+      injection.createdAt,
+    ) as unknown as AgentMessage | null;
   }
 
   private async runRecall(
