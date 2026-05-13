@@ -426,9 +426,6 @@ export function NotebookView({
           <div className="flex flex-1 flex-row min-h-0">
             {/* User Notebook (left) */}
             <div className="flex-1 flex flex-col min-h-0 border-r border-white/5">
-              <div className="px-3 py-2 border-b border-white/5 bg-white/[0.02]">
-                <h3 className="text-xs font-medium text-white/60 uppercase tracking-wider">Your Notebook</h3>
-              </div>
               <div className="flex-1 overflow-y-auto px-4 py-3">
                 <NotebookEntryComposer
                   onSubmit={handleCreateUserEntry}
@@ -445,12 +442,6 @@ export function NotebookView({
 
             {/* Agent Notebook (right) */}
             <div className="flex-1 flex flex-col min-h-0 bg-purple-500/[0.01]">
-              <div className="px-3 py-2 border-b border-white/5 bg-white/[0.02]">
-                <h3 className="text-xs font-medium text-white/60 uppercase tracking-wider flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-purple-400" />
-                  Agent Notebook
-                </h3>
-              </div>
               <div className="flex-1 overflow-y-auto px-4 py-3">
                 {agentNotebooks.entries.length === 0 ? (
                   <div className="text-center text-white/30 text-sm py-8">
