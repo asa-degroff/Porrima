@@ -270,6 +270,9 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
   const fallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pauseRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const activeRef = useRef(isActive)
+  const prefillStartTimeRef = useRef<number | null>(null)
+  const seedPrefillAnglesRef = useRef<Rotation[]>([])
+  const prefillSpinSeedRef = useRef<Rotation[]>([])
 
   const base = BASE_ROTATION[shape]
   const isDecodeAnimation = animation === 'decode'
@@ -285,12 +288,45 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
 
   useEffect(() => { activeRef.current = isActive }, [isActive])
 
+  // Seed prefill angles: compute current CSS rotation angles for each layer
+  useEffect(() => {
+    if (animation !== 'prefill' || !isActive) return
+    if (prefillStartTimeRef.current === null)
+      prefillStartTimeRef.current = Date.now()
+    const start = prefillStartTimeRef.current
+    const angles: Rotation[] = []
+    for (let i = 0; i < count; i++) {
+      const spinDuration = (3.6 + (i % 4) * 0.35) / speed
+      const delay = -i * 0.18
+      const elapsed = ((Date.now() - start) / 1000 + delay) % spinDuration
+      const angleY = (elapsed / spinDuration) * 360
+      angles.push({ x: base.x, y: base.y + angleY })
+    }
+    seedPrefillAnglesRef.current = angles
+  }, [animation, isActive, count, base.x, base.y, speed])
+
+  // Snapshot prefill angles at the moment animation switches
+  useEffect(() => {
+    if (animation === 'prefill') {
+      prefillSpinSeedRef.current = seedPrefillAnglesRef.current
+    }
+  }, [animation])
+
   // Start animation when becoming active
   useEffect(() => {
     if (!isDecodeAnimation) return
     if (isActive && phase === 'idle') {
       setPhase('spinning')
-      setRotations(randomTargets(count).map(t => ({ x: base.x + t.x, y: base.y + t.y })))
+      const seed = prefillSpinSeedRef.current
+      if (seed.length === count) {
+        // Continue from prefill rotation — add a full turn so it keeps spinning
+        const dir = Math.random() > 0.5 ? 360 : -360
+        setRotations(seed.map(s => ({ x: s.x + (Math.random() - 0.5) * 15, y: s.y + dir }))
+        )
+        prefillSpinSeedRef.current = []
+      } else {
+        setRotations(randomTargets(count).map(t => ({ x: base.x + t.x, y: base.y + t.y })))
+      }
     }
   }, [isActive, phase, count, base.x, base.y, isDecodeAnimation])
 
