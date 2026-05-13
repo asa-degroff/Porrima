@@ -78,6 +78,9 @@ export interface ChatMessage {
   _model?: string;
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
+  /** Hidden system row containing passively recalled memories injected mid-turn. */
+  _isPassiveMemoryRecall?: boolean;
+  _recalledMemoryIds?: string[];
   _isMidTurnCompaction?: boolean;
   _compactionRemovedCount?: number;
   _compactionCycle?: number;

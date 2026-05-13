@@ -99,6 +99,28 @@ export function resetMemoryContext(chatId: string): void {
 }
 
 /**
+ * Return memory IDs already present in this chat's active memory context.
+ * Used by passive mid-turn recall to avoid re-injecting frozen or delta
+ * memories through a second hidden system row.
+ */
+export function getMemoryContextIds(chatId: string): Set<string> {
+  const state = contextState.get(chatId);
+  if (!state) return new Set();
+  return new Set([...state.frozenIds, ...state.deltaIds]);
+}
+
+/**
+ * Mark memory IDs as injected through an appended delta row.
+ */
+export function markMemoryDeltaInjected(chatId: string, memoryIds: string[]): void {
+  const state = contextState.get(chatId);
+  if (!state) return;
+  for (const id of memoryIds) {
+    state.deltaIds.add(id);
+  }
+}
+
+/**
  * Invalidate the stable prefix cache for a chat (e.g., after block modifications).
  */
 export function invalidateStablePrefixCache(chatId: string): void {
@@ -128,7 +150,7 @@ export interface AugmentedPromptResult {
 
 // ---- Shared retrieval pipeline ----
 
-interface RetrievalResult {
+export interface RetrievalResult {
   memory: { id: string; text: string; category: string; importance: number; createdAt: string; supersededBy?: string; accessCount: number; projectId?: string; embedding: number[] };
   score: number;
 }
@@ -256,7 +278,7 @@ async function retrieveMemories(
   return finalMemories;
 }
 
-function formatMemory(r: RetrievalResult, projectId?: string): string {
+export function formatRetrievedMemoryForContext(r: RetrievalResult, projectId?: string): string {
   const created = r.memory.createdAt.slice(0, 10);
   const supersededNote = r.memory.supersededBy
     ? "SUPERSEDED — a newer version of this memory exists"
@@ -284,7 +306,7 @@ function updateAccessMetadata(memories: RetrievalResult[], skipIds?: Set<string>
 
 function buildMemoriesSection(memories: RetrievalResult[], projectId?: string, blockHint?: string, zeitgeistHint?: string): string {
   if (memories.length === 0) return "";
-  const memoriesBlock = memories.map((r) => formatMemory(r, projectId)).join("\n");
+  const memoriesBlock = memories.map((r) => formatRetrievedMemoryForContext(r, projectId)).join("\n");
   const hints = [blockHint, zeitgeistHint].filter(Boolean).join("\n\n");
   const hintsSection = hints ? `\n\n${hints}` : "";
   return `\n\n## My relevant memories to this chat:\n${memoriesBlock}\n\nUse these memories as needed — there's no need to list them unless asked.${hintsSection}`;
@@ -581,7 +603,7 @@ export async function buildSplitAugmentedPrompt(
 
     let memoriesMessage = "";
     if (newMemories.length > 0) {
-      const deltaBlock = newMemories.map((r) => formatMemory(r, projectId)).join("\n");
+      const deltaBlock = newMemories.map((r) => formatRetrievedMemoryForContext(r, projectId)).join("\n");
       memoriesMessage = `## Updated context — my newly recalled memories:\n${deltaBlock}`;
     }
 

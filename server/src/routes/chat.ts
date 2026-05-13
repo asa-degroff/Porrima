@@ -29,6 +29,7 @@ import type { TTSSettings } from "../types/tts.js";
 import { log } from "../services/logger.js";
 import { createSafeStreamFn } from "../services/llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop, stopAgentLoop } from "../services/agent-loop-runner.js";
+import { PassiveMemoryRecallController } from "../services/passive-memory-recall.js";
 import { acquireLlamaSlotLease, releaseLlamaSlotLease, type LlamaSlotLease } from "../services/llama-slot-leases.js";
 import type { ModelProgressEvent } from "../services/model-progress.js";
 import {
@@ -1143,6 +1144,24 @@ async function handleChatStream(
       messages: [...contextMessages],
       tools: agentTools,
     };
+    const passiveRecall =
+      chat.type === "agent" || chat.type === "bluesky"
+        ? new PassiveMemoryRecallController(chat.id)
+        : null;
+
+    const persistActivePendingState = async (agentMessages: any[] = context.messages as any[]) => {
+      await savePendingState(chat.id, {
+        agentMessages,
+        systemPrompt,
+        askToolCallId: askUserRef.current?.toolCallId || "",
+        fullText: state.fullText,
+        thinkingText: state.thinkingText,
+        toolCalls: state.allToolCalls,
+        toolResults: state.allToolResults,
+        iterations,
+        lastUserMessage,
+      });
+    };
 
     // Track phase transitions so we can mark prefill complete immediately
     // rather than waiting for the full LLM call to finish. This prevents the
@@ -1180,6 +1199,51 @@ async function handleChatStream(
     // Build config
     const config = createAgentLoopConfig({
       model: piModel,
+      transformContext: passiveRecall
+        ? async (messages) => {
+            const injection = passiveRecall.peekReady(iterations);
+            if (!injection) return messages;
+
+            const timestamp = Date.now();
+            const row: ChatMessage = {
+              role: "system",
+              content: injection.content,
+              timestamp,
+              _isSystemMessage: true,
+              _isPassiveMemoryRecall: true,
+              _recalledMemoryIds: injection.memoryIds,
+            };
+            const agentMessage = passiveRecall.toAgentMessage({
+              ...injection,
+              createdAt: timestamp,
+            });
+
+            try {
+              chat.messages.push(row);
+              await saveChat(chat);
+              messages.push(agentMessage);
+              if (messages !== context.messages) {
+                context.messages.push(agentMessage);
+              }
+              passiveRecall.markApplied(injection, iterations);
+              try {
+                await persistActivePendingState(messages as any[]);
+              } catch (pendingErr) {
+                console.warn("[passive-memory] failed to update pending state after recall injection:", pendingErr);
+              }
+              console.log(
+                `[passive-memory] injected ${injection.memoryIds.length} recalled memor${
+                  injection.memoryIds.length === 1 ? "y" : "ies"
+                } before provider call at iteration ${iterations}`,
+              );
+            } catch (err) {
+              const idx = chat.messages.indexOf(row);
+              if (idx >= 0) chat.messages.splice(idx, 1);
+              console.warn("[passive-memory] failed to persist recalled memories:", err);
+            }
+            return messages;
+          }
+        : undefined,
       getSteeringMessages: async () => {
         if (askUserRef.current) {
           return [{ role: "user" as const, content: "[paused for user input]", timestamp: Date.now() }];
@@ -1710,6 +1774,15 @@ async function handleChatStream(
               res.write(`event: message_complete\ndata: ${JSON.stringify({ message: persistedTurnMsg, continues: true })}\n\n`);
             }
             console.log(`[chat] iteration ${iterations}: saved progress (${persistedTurnMsg?.toolCalls?.length || 0} tools, ${persistedTurnMsg?.content.length || 0}ch, est ${estimatedTokens} tokens)`);
+            if (!turnAbortController.signal.aborted && !state.needsMidTurnCompaction) {
+              passiveRecall?.schedule({
+                iteration: iterations,
+                stopReason,
+                chatMessages: chat.messages,
+                chatType: chat.type,
+                projectId: chat.projectId,
+              });
+            }
           } catch (saveErr) {
             console.error(`[chat] failed to save iteration ${iterations}:`, saveErr);
           }

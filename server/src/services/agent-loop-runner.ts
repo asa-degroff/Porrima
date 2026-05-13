@@ -14,6 +14,7 @@ export interface CreateAgentLoopConfigOptions {
   keepAlive?: string | number;
   getSteeringMessages?: () => Promise<AgentMessage[]>;
   getFollowUpMessages?: () => Promise<AgentMessage[]>;
+  transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
   convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 }
 
@@ -23,6 +24,7 @@ export function createAgentLoopConfig(options: CreateAgentLoopConfigOptions): Ag
     apiKey: options.apiKey || "ollama",
     reasoning: options.model.reasoning ? "medium" : undefined,
     convertToLlm: options.convertToLlm || ((messages) => messages as Message[]),
+    transformContext: options.transformContext,
     getSteeringMessages: options.getSteeringMessages,
     getFollowUpMessages: options.getFollowUpMessages,
   };
