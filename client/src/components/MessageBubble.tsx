@@ -20,7 +20,7 @@ const MarkdownRenderer = lazy(() =>
   import("./ui/MarkdownRenderer").then((m) => ({ default: m.MarkdownRenderer }))
 );
 
-// Hoisted static skill chip style - avoids new object on every render
+// Hoisted static chip styles - avoids new objects on every render
 const skillChipStyle: React.CSSProperties = {
   display: 'inline-block',
   padding: '2px 8px',
@@ -30,6 +30,19 @@ const skillChipStyle: React.CSSProperties = {
   borderRadius: '12px',
   fontSize: '12px',
   color: 'rgba(var(--theme-accent-text))',
+  fontWeight: 500,
+  verticalAlign: 'middle',
+};
+
+const compactChipStyle: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '2px 8px',
+  margin: '0 4px',
+  background: 'rgba(168, 85, 247, 0.12)',
+  border: '1px solid rgba(168, 85, 247, 0.25)',
+  borderRadius: '12px',
+  fontSize: '12px',
+  color: 'rgba(216, 180, 254, 0.9)',
   fontWeight: 500,
   verticalAlign: 'middle',
 };
@@ -125,9 +138,10 @@ interface Props {
 }
 
 /**
- * Render skill chips for /skill-name patterns in message content.
+ * Render skill chips and command chips (/compact) in message content.
  * Only applies to user messages (assistant messages have skills stripped server-side).
  * Only formats recognized skill names from the availableSkills list.
+ * /compact always gets styled as a command chip regardless of availableSkills.
  */
 function renderSkillChips(text: string, availableSkills?: string[]): React.ReactNode {
   const skillPattern = /\/([a-zA-Z0-9\-_]+)/g;
@@ -140,21 +154,35 @@ function renderSkillChips(text: string, availableSkills?: string[]): React.React
       // Text segment
       if (parts[i]) result.push(parts[i]);
     } else {
-      // Skill name (odd indices) - only format if it's a recognized skill
-      const skillName = parts[i];
-      if (skillName && availableSkills?.includes(skillName)) {
+      // Skill/command name (odd indices)
+      const name = parts[i];
+      if (!name) continue;
+      
+      if (name === 'compact') {
+        // /compact command chip - always styled
         result.push(
           <span
-            key={`skill-${skillName}`}
+            key={`compact-${i}`}
+            className="compact-chip"
+            style={compactChipStyle}
+          >
+            /compact
+          </span>
+        );
+      } else if (availableSkills?.includes(name)) {
+        // Recognized skill chip
+        result.push(
+          <span
+            key={`skill-${name}-${i}`}
             className="skill-chip"
             style={skillChipStyle}
           >
-            /{skillName}
+            /{name}
           </span>
         );
-      } else if (skillName) {
-        // Not a recognized skill - render as plain text
-        result.push(`/${skillName}`);
+      } else {
+        // Not a recognized skill or command - render as plain text
+        result.push(`/${name}`);
       }
     }
   }
