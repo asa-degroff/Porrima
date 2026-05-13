@@ -231,12 +231,15 @@ export async function schedulePostSynthesisWarms(
     }
   }
 
-  // Warm recent agent chats (limit to avoid overwhelming the queue)
+  // Warm recent agent chats in REVERSE order of recency (least recent first,
+  // most recent last). Each warm populates the KV cache and evicts the LRU
+  // slot under memory pressure. By warming the most recently used chat last,
+  // its context is the one that remains resident after all warms complete.
   const limit = Math.min(recentChatIds.length, 5);
   if (limit > 0) {
-    console.log(`[cache-warm-queue] post-synthesis: scheduling ${limit} agent chats: ${recentChatIds.slice(0, limit).join(", ")}`);
+    console.log(`[cache-warm-queue] post-synthesis: scheduling ${limit} agent chats (least-recent first): ${recentChatIds.slice(0, limit).join(", ")}`);
   }
-  for (let i = 0; i < limit; i++) {
+  for (let i = limit - 1; i >= 0; i--) {
     const chatId = recentChatIds[i];
     try {
       const result = await enqueueWarm(chatId, "post-synthesis", signal);
