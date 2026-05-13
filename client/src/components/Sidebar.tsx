@@ -80,6 +80,20 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
   );
 }
 
+function SectionDepthShadow({ visible }: { visible: boolean }) {
+  if (!visible) return null;
+  return (
+    <div
+      className="pointer-events-none absolute inset-x-0 bottom-px h-5 z-10 bg-gradient-to-t from-black/10 via-black/3 to-transparent"
+      style={{
+        maskImage: "linear-gradient(to right, transparent, black 8%, black 92%, transparent)",
+        WebkitMaskImage: "linear-gradient(to right, transparent, black 8%, black 92%, transparent)",
+      }}
+      aria-hidden="true"
+    />
+  );
+}
+
 // Dynamic sidebar logo — mirrors the octahedron geometry with user-selected hue/saturation
 function SidebarLogo({ size = 24 }: { size?: number }) {
   const hue = useActivityHue()
@@ -1029,7 +1043,7 @@ export function Sidebar({
 
         {/* Projects Section */}
         {projects.length > 0 && (
-          <div className={`flex flex-col min-h-0 border-b border-white/5 ${projectsExpanded ? "flex-1" : "shrink-0"}`}>
+          <div className={`relative flex flex-col min-h-0 border-b border-white/5 ${projectsExpanded ? "flex-1" : "shrink-0"}`}>
             <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center justify-between">
               <button
                 onClick={() => setProjectsExpanded(!projectsExpanded)}
@@ -1099,6 +1113,7 @@ export function Sidebar({
                 </div>
               </div>
             )}
+            <SectionDepthShadow visible={projectsExpanded} />
           </div>
         )}
 
@@ -1119,7 +1134,7 @@ export function Sidebar({
         )}
 
         {/* Agent Chats Section */}
-        <div className={`flex flex-col min-h-0 border-b border-white/5 ${agentExpanded ? "flex-1" : "shrink-0"}`}>
+        <div className={`relative flex flex-col min-h-0 border-b border-white/5 ${agentExpanded ? "flex-1" : "shrink-0"}`}>
           {/* Section header — always visible */}
           <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center">
             <button
@@ -1205,10 +1220,11 @@ export function Sidebar({
               </div>
             </div>
           )}
+          <SectionDepthShadow visible={agentExpanded} />
         </div>
 
         {/* Quick Chats Section */}
-        <div className={`flex flex-col min-h-0 ${quickExpanded ? "flex-1" : "shrink-0"}`}>
+        <div className={`relative flex flex-col min-h-0 border-b border-white/5 ${quickExpanded ? "flex-1" : "shrink-0"}`}>
           {/* Section header — always visible */}
           <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center">
             <button
@@ -1292,6 +1308,7 @@ export function Sidebar({
               </div>
             </div>
           )}
+          <SectionDepthShadow visible={quickExpanded} />
         </div>
 
         {/* Bluesky Section */}
