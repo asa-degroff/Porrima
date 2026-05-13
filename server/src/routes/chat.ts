@@ -2472,9 +2472,18 @@ async function handleChatStream(
         console.error(`[chat] follow-up context is empty despite ${chat.messages.length} messages - this indicates a conversion bug`);
       }
 
-      const followUpSystemPrompt = (chat.type === "agent" || chat.type === "bluesky")
+      let followUpSystemPrompt = (chat.type === "agent" || chat.type === "bluesky")
         ? (await buildSplitAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type, projectPath)).systemPrompt
         : chat.systemPrompt || "You are a helpful assistant.";
+
+      // Reinjected skills on follow-up turn — buildSplitAugmentedPrompt builds
+      // from the base system prompt which doesn't include active skills.
+      if (chat.activeSkills?.length) {
+        const skillsCache = new Map<string, Skill>();
+        const allSkills = await discoverSkills(chat.projectId);
+        for (const s of allSkills) skillsCache.set(s.name, s);
+        followUpSystemPrompt = buildSkillAugmentedPrompt(followUpSystemPrompt, chat.activeSkills, skillsCache);
+      }
 
       // Recursively handle the follow-up with a fresh turn abort controller
       await handleChatStream(chat, queuedFollowUp.message, followUpContextMessages, followUpSystemPrompt, null, req, res, {
@@ -3105,6 +3114,15 @@ router.post("/", async (req, res) => {
                 resumeProjectPath
               );
               systemPrompt = split.systemPrompt;
+              // Reinjected skills after compaction — they were lost when
+              // buildSplitAugmentedPrompt rebuilt from the base systemPrompt.
+              if (chat.activeSkills?.length) {
+                const skillsCache = new Map<string, Skill>();
+                const allSkills = await discoverSkills(chat.projectId);
+                for (const s of allSkills) skillsCache.set(s.name, s);
+                systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
+                console.log(`[skills] Reinjected ${chat.activeSkills.length} skills after resume pre-send compaction`);
+              }
             }
             // Find the summary message that was inserted
             const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
