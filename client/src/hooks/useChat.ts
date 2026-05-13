@@ -821,6 +821,13 @@ export function useChat(chatId: string | null) {
         if (activeChatIdRef.current === streamChatId) {
           setCompacting(false);
           setCompaction(info);
+          // Clear pre-compaction streaming usage so the server's post-compaction
+          // estimate can take over immediately. Without this, streamingUsage from
+          // the last LLM call (pre-compaction) is still truthy, and the useMemo
+          // short-circuits before reaching postCompactionEstimate. The next
+          // iteration event or onDone will clear/update naturally.
+          setStreamingUsage(null);
+          setStreamingEstimate(null);
           if (typeof info.estimatedTokens === "number" && info.estimatedTokens > 0) {
             setPostCompactionEstimate(info.estimatedTokens);
           }
