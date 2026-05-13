@@ -4,7 +4,7 @@ import type { CacheResidency } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 import { PolyhedronLogo } from "./PolyhedronLogo";
-import { useActivityShape } from "../hooks/useActivityStyle";
+import { useActivityShape, useActivityHue, useActivitySaturation } from "../hooks/useActivityStyle";
 import { BlueskySection } from "./BlueskySection";
 import { useSidebarState } from "../hooks/useSidebarState";
 import { useGestureDrawer } from "../hooks/useGestureDrawer";
@@ -78,6 +78,42 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
       <path d="M9 18l6-6-6-6" />
     </svg>
   );
+}
+
+// Dynamic sidebar logo — mirrors the octahedron geometry with user-selected hue/saturation
+function SidebarLogo({ size = 24 }: { size?: number }) {
+  const hue = useActivityHue()
+  const saturation = useActivitySaturation()
+  const half = size / 2
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+    >
+      {/* Top-left (lightest) */}
+      <polygon
+        points={`${half},${size * 0.168} ${size * 0.168},${half} ${half},${half}`}
+        fill={`hsl(${hue}, ${saturation}%, 74%)`}
+      />
+      {/* Top-right (light) */}
+      <polygon
+        points={`${half},${size * 0.168} ${size * 0.832},${half} ${half},${half}`}
+        fill={`hsl(${hue}, ${saturation}%, 65%)`}
+      />
+      {/* Bottom-left (dark) */}
+      <polygon
+        points={`${size * 0.168},${half} ${half},${size * 0.832} ${half},${half}`}
+        fill={`hsl(${hue}, ${saturation}%, 46%)`}
+      />
+      {/* Bottom-right (darkest) */}
+      <polygon
+        points={`${size * 0.832},${half} ${half},${size * 0.832} ${half},${half}`}
+        fill={`hsl(${hue}, ${saturation}%, 38%)`}
+      />
+    </svg>
+  )
 }
 
 function formatCacheResidencyTitle(residency?: CacheResidency | null): string | undefined {
@@ -753,7 +789,7 @@ export function Sidebar({
               <div className="relative flex items-center">
                 {/* Static logo + title — hidden during background activity, extraction, or synthesis */}
                 <div className={`flex items-center gap-2 transition-opacity duration-300 ${(hasBackgroundActivity || isExtractionRunning || isSynthesizing || isAutomationRunning) ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
-                  <img src="/logo.svg" alt="qu.je" className="w-6 h-6" />
+                  <SidebarLogo size={24} />
                   <h1 className="text-lg font-semibold text-white/90 tracking-tight">
                     qu.je
                   </h1>
