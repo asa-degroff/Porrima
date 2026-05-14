@@ -88,7 +88,7 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
       onContextMenu={handleContextMenu}
       {...longPressProps}
       className={`w-full text-left px-2.5 py-2 rounded-xl transition-all group relative border ${
-        active ? "bg-white/15" : "hover:bg-white/8"
+        active ? "bg-white/10" : "hover:bg-white/6"
       } ${
         active
           ? "border-white/20" + (cacheResidency && lastActive
@@ -104,6 +104,13 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
       }`}
       title={effectiveTitle}
     >
+      {/* Vignette overlay — darkens edges for a brighter-center active highlight effect */}
+      {active && (
+        <div
+          className="absolute inset-0 rounded-xl pointer-events-none shadow-[inset_0_3px_8px_-4px_rgba(0,0,0,0.25),inset_0_-3px_8px_-4px_rgba(0,0,0,0.2)]"
+          aria-hidden="true"
+        />
+      )}
       {/* Always-rendered content to maintain consistent height */}
       <div className={`min-w-0 ${confirmDelete ? "invisible" : ""}`}>
         <p className="text-sm font-medium text-white/90 leading-snug pr-5">

@@ -224,6 +224,13 @@ function RecentChatItem({
         }`}
         title={effectiveTitle}
       >
+        {/* Vignette overlay — darkens edges for a brighter-center active highlight effect */}
+        {active && (
+          <div
+            className="absolute inset-0 rounded-xl pointer-events-none shadow-[inset_0_3px_8px_-4px_rgba(0,0,0,0.25),inset_0_-3px_8px_-4px_rgba(0,0,0,0.2)]"
+            aria-hidden="true"
+          />
+        )}
         <div className="flex items-start gap-2 min-w-0">
           <span className={`text-[10px] shrink-0 mt-0.5 ${colorClass.split(" ")[0]}`}>●</span>
           <div className="flex-1 min-w-0 pr-5">
