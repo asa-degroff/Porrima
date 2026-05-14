@@ -8,6 +8,8 @@ import { createSafeStreamFn } from "./llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
 import { PassiveMemoryRecallController } from "./passive-memory-recall.js";
 
+const PASSIVE_RECALL_TRANSIENT_ASSISTANT_CHARS = 360;
+
 export interface HeadlessFollowUp {
   message: ChatMessage;
   llmMessage?: Message;
@@ -134,6 +136,12 @@ function defaultSummary(state: HeadlessTurnState): string {
 
 function joinChunks(chunks: string[]): string {
   return chunks.join("\n\n").trim();
+}
+
+function clampTransientAssistantText(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= PASSIVE_RECALL_TRANSIENT_ASSISTANT_CHARS) return trimmed;
+  return `${trimmed.slice(0, PASSIVE_RECALL_TRANSIENT_ASSISTANT_CHARS)}\n[truncated]`;
 }
 
 export async function runHeadlessChatTurn(
@@ -287,7 +295,7 @@ export async function runHeadlessChatTurn(
 
     const transientAssistant: ChatMessage = {
       role: "assistant",
-      content: state.textSummary,
+      content: clampTransientAssistantText(state.textSummary),
       thinking: state.thinking || undefined,
       toolCalls: state.toolCalls.length > 0
         ? state.toolCalls.map((toolCall) => ({
@@ -368,9 +376,6 @@ export async function runHeadlessChatTurn(
       chat.messages.push(row);
       await saveChat(chat);
       messages.push(agentMessage);
-      if (messages !== context.messages) {
-        context.messages.push(agentMessage);
-      }
       passiveRecall.markApplied(injection, iterations);
       console.log(
         `[${logPrefix}] passive memory injected ${injection.memoryIds.length} recalled memor${
