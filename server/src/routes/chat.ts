@@ -871,6 +871,23 @@ async function handleChatStream(
     return row;
   }
 
+  function clearPendingAssistantUsageAfterCompaction() {
+    state.finalUsage = undefined;
+    if (state.pendingFinalAssistantMessage) {
+      state.pendingFinalAssistantMessage = {
+        ...state.pendingFinalAssistantMessage,
+        usage: undefined,
+      };
+    }
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const candidate = chat.messages[i];
+      if (candidate.role === "assistant" && candidate._inProgress) {
+        chat.messages[i] = { ...candidate, usage: undefined };
+        break;
+      }
+    }
+  }
+
   function markUncommittedAssistantMessageCommitted(message: ChatMessage) {
     state.committedTextLength = state.fullText.length;
     state.committedThinkingLength = state.thinkingText.length;
@@ -1901,14 +1918,17 @@ async function handleChatStream(
                 }
                 setCachedAugmentedPrompt(chat.id, systemPrompt);
 
+                // The current assistant usage was measured against the
+                // pre-compaction prompt. Once a summary is inserted before the
+                // final assistant row, that usage becomes stale; if persisted,
+                // the next pre-send estimate treats the compacted chat as still
+                // near the old limit and immediately compacts again.
+                clearPendingAssistantUsageAfterCompaction();
+
                 // Find the summary message that was inserted. Emit AFTER the
                 // systemPrompt rebuild so the estimate reflects the prompt the
                 // next turn will actually use. The client uses `estimatedTokens`
-                // to refresh the token indicator to the compacted state — we
-                // keep `state.finalUsage` intact so the final assistant message
-                // (saved below at buildCurrentAssistantMessage) retains its
-                // real pre-compaction usage value, which next turn's PathA uses
-                // as the anchor for estimateContextSize.
+                // to refresh the token indicator to the compacted state.
                 const summaryMsg = chat.messages.find(m => m._isCompactionSummary);
                 const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
                 res.write(`event: compaction\ndata: ${JSON.stringify({
