@@ -248,11 +248,9 @@ export const MessageBubble = memo(function MessageBubble({
   const canReadAloud = Boolean(message.content && onReadAloud && !editing);
   const canEditMessage = Boolean(isUser && editable && !editing);
   const canRetryMessage = Boolean(isUser && onRetryMessage && messageIndex != null && !editing);
-  const canOpenContextMenu = canReadAloud || canEditMessage || canRetryMessage;
-
   const openContextMenu = useCallback((pos: { x: number; y: number }) => {
-    if (canOpenContextMenu) setContextMenu(pos);
-  }, [canOpenContextMenu]);
+    setContextMenu(pos);
+  }, []);
   const longPressProps = useLongPress(openContextMenu);
 
   const handleRetry = () => {
@@ -307,6 +305,19 @@ export const MessageBubble = memo(function MessageBubble({
     onReadAloud(message.content);
     setContextMenu(null);
   }, [isPlayingTts, message.content, onReadAloud]);
+
+  const handleCopy = useCallback(() => {
+    setContextMenu(null);
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && bubbleRef.current?.contains(selection.anchorNode)) {
+      void navigator.clipboard?.writeText(selection.toString()).catch(() => {});
+      return;
+    }
+    const text = message.content || '';
+    if (text) {
+      void navigator.clipboard?.writeText(text).catch(() => {});
+    }
+  }, [message.content]);
 
   const handleCopyTimestamp = useCallback(() => {
     const timestamp = formatTimestamp(message.timestamp);
@@ -436,11 +447,11 @@ export const MessageBubble = memo(function MessageBubble({
           <div className="flex flex-row items-end max-w-full min-w-0">
           <div
             ref={bubbleRef}
-            onContextMenu={canOpenContextMenu ? (e: React.MouseEvent) => {
+            onContextMenu={(e: React.MouseEvent) => {
               e.preventDefault();
               setContextMenu({ x: e.clientX, y: e.clientY });
-            } : undefined}
-            {...(canOpenContextMenu ? longPressProps : {})}
+            }}
+            {...longPressProps}
             className={`rounded-2xl px-3 md:px-4 py-3 max-w-full min-w-0 overflow-x-hidden ${
               isUser
                 ? "text-white/95"
@@ -657,8 +668,15 @@ export const MessageBubble = memo(function MessageBubble({
       </div>
 
       {/* Message context menu */}
-      {contextMenu && canOpenContextMenu && (
+      {contextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
+          <ContextMenuItem onClick={handleCopy}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+            Copy
+          </ContextMenuItem>
           {canReadAloud && (
             <ContextMenuItem onClick={handleReadAloud} disabled={isPlayingTts}>
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
