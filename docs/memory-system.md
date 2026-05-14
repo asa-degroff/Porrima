@@ -82,12 +82,13 @@ See `memory-context.ts` for implementation details: `buildSplitAugmentedPrompt()
 
 ## Passive Mid-Turn Memory Recall
 
-Long-running agent turns can retrieve memories without waiting for the next user message. `PassiveMemoryRecallController` runs from the HTTP chat loop after tool-use iterations:
+Long-running agent turns can retrieve memories without waiting for the next user message. `PassiveMemoryRecallController` runs from the HTTP chat loop and headless automation runner after tool-use iterations:
 
 - It builds a query from recent visible user/assistant/tool context, skipping hidden system rows so recalled memories do not search for themselves.
 - It runs fast vector + FTS5 hybrid search first, accumulates diverse candidates with MMR, then sends only a small candidate/query set to the slower reranker.
 - It caps injection frequency and total memories per turn, excludes memories already frozen/delta-injected/injected passively, and marks applied memory IDs through the memory context state.
 - Ready recalls are injected before a later provider call, so the agent can use newly relevant memory while continuing the same autonomous turn.
+- In headless automation turns, the search context includes the current in-memory assistant/tool activity, and the runner persists an assistant boundary before storing the hidden recall row so replay keeps the same order as the live transcript.
 
 Passive recalls preserve the same replay constraints as normal memory deltas. The persisted chat row is hidden as `role: "system"` with `_isPassiveMemoryRecall` for storage/UI filtering, but the live agent context receives the replay-equivalent synthetic `user` message. `chatMessagesToPiMessages()` reconstructs that same synthetic user message from the hidden row on follow-up turns. Do not live-inject raw mid-transcript `system` messages; provider templates normalize or reject them, and replay must remain byte-compatible with the prompt shape the model already saw.
 

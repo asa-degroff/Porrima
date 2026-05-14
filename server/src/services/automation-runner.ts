@@ -235,6 +235,17 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       keepAlive: `${Math.max(1, Math.ceil(task.timeoutMs / 60_000))}m`,
       logPrefix: `automation:${task.id}`,
       saveChat,
+      passiveMemoryRecall: {
+        enabled: true,
+        chatType: "system",
+        projectId: chat.projectId,
+        decorateMessage: (message) => ({
+          ...message,
+          _isAutomationMessage: true,
+          _automationTaskId: task.id,
+          _automationRunId: run.id,
+        }),
+      },
       getFollowUp: async (state) => {
         if (
           state.iterations === 1 &&

@@ -22,6 +22,8 @@ export const RERANK_INSTRUCTIONS: Record<string, string> = {
     "Given a social media conversation, judge whether this memory is relevant to the TOPIC being discussed. Ignore notification metadata, reply counts, handle mentions, and tool usage instructions — focus only on the substantive conversational content.",
   quick:
     "Given a conversation between the user and the AI, judge whether this memory contains information useful for responding.",
+  system:
+    "Given an autonomous system or automation chat, judge whether this memory is relevant to the current synthesis, wake, maintenance, or automation task.",
 };
 
 interface RerankResult {

@@ -59,6 +59,8 @@ Custom automations preserve the same KV-cache-sensitive prompt shape as system c
 
 Prompt text is kept in user-role trigger/follow-up messages. The system prompt remains the stable prefix so editing automation prompts does not unnecessarily invalidate the system chat KV cache.
 
+Headless automation turns also enable passive mid-turn memory recall. `runHeadlessChatTurn()` schedules recall after tool-use iterations, searches over persisted history plus the current in-memory assistant/tool activity, and injects ready recalls before a later provider call. Before a recall is applied, the runner persists the assistant boundary since the previous saved point, then stores the recall as a hidden system row while live-injecting the replay-equivalent synthetic user context. This keeps automation replay byte-compatible with the live transcript and prevents hidden memory rows from moving ahead of the assistant work that triggered them.
+
 ## Failures
 
 Failures are recorded in `automation_runs` and increment `consecutiveFailures` on the task. Retry delay uses exponential backoff:

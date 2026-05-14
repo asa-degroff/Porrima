@@ -1,4 +1,4 @@
-import type { AgentContext, AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentContext, AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Message, Model, StopReason, ToolCall } from "@mariozechner/pi-ai";
 import type { Chat, ChatMessage, ChatToolResult, ImageAttachment } from "../types.js";
 import { chatMessagesToPiMessages, type ReplayModelIdentity } from "./agent.js";
@@ -6,6 +6,7 @@ import { estimateContextTokens } from "./compaction.js";
 import type { SynthesisEmitter } from "./synthesis-stream.js";
 import { createSafeStreamFn } from "./llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
+import { PassiveMemoryRecallController } from "./passive-memory-recall.js";
 
 export interface HeadlessFollowUp {
   message: ChatMessage;
@@ -43,6 +44,12 @@ export interface HeadlessChatTurnOptions {
    * still running in one live pi-agent loop. */
   persistIntermediateAssistantMessages?: boolean;
   maxIterationsPerAssistantSegment?: number;
+  passiveMemoryRecall?: {
+    enabled?: boolean;
+    chatType?: string;
+    projectId?: string;
+    decorateMessage?: (message: ChatMessage) => ChatMessage;
+  };
 }
 
 export interface HeadlessChatTurnResult extends HeadlessTurnState {
@@ -186,6 +193,9 @@ export async function runHeadlessChatTurn(
   };
   let assistantMessageIndex = -1;
   let finalAssistantMessage: ChatMessage | null = null;
+  const passiveRecall = options.passiveMemoryRecall?.enabled === false || !options.passiveMemoryRecall
+    ? null
+    : new PassiveMemoryRecallController(chat.id);
 
   const currentState = (): HeadlessTurnState => ({
     iterations,
@@ -262,6 +272,36 @@ export async function runHeadlessChatTurn(
     return decorated;
   };
 
+  const buildPassiveRecallSearchMessages = (): ChatMessage[] => {
+    const state = stateSinceLastPersistedBoundary();
+    const toolResults = allToolResults.slice(lastPersistedAssistantBoundary.toolResults);
+    if (
+      state.iterations === 0 &&
+      state.textSummary.length === 0 &&
+      state.thinking.length === 0 &&
+      state.toolCalls.length === 0 &&
+      toolResults.length === 0
+    ) {
+      return chat.messages;
+    }
+
+    const transientAssistant: ChatMessage = {
+      role: "assistant",
+      content: state.textSummary,
+      thinking: state.thinking || undefined,
+      toolCalls: state.toolCalls.length > 0
+        ? state.toolCalls.map((toolCall) => ({
+          id: toolCall.id,
+          name: toolCall.name,
+          arguments: toolCall.arguments,
+        }))
+        : undefined,
+      toolResults: toolResults.length > 0 ? toolResults : undefined,
+      timestamp: Date.now(),
+    };
+    return [...chat.messages, transientAssistant];
+  };
+
   const persistAssistantSinceLastBoundary = async (): Promise<ChatMessage | null> => {
     emitter.flushPendingText();
     const state = stateSinceLastPersistedBoundary();
@@ -296,9 +336,59 @@ export async function runHeadlessChatTurn(
     return message;
   };
 
+  const applyPassiveMemoryRecall = async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
+    if (!passiveRecall) return messages;
+    const injection = passiveRecall.peekReady(iterations);
+    if (!injection) return messages;
+
+    // Persist the assistant/tool work that preceded this recall before adding
+    // the hidden row. Replay will then reconstruct the same boundary the live
+    // model sees: assistant work -> synthetic user memory context -> assistant.
+    await persistAssistantSinceLastBoundary();
+
+    const timestamp = Date.now();
+    const rowBase: ChatMessage = {
+      role: "system",
+      content: injection.content,
+      timestamp,
+      _isSystemMessage: true,
+      _isPassiveMemoryRecall: true,
+      _recalledMemoryIds: injection.memoryIds,
+    };
+    const row = options.passiveMemoryRecall?.decorateMessage
+      ? options.passiveMemoryRecall.decorateMessage(rowBase)
+      : rowBase;
+    const agentMessage = passiveRecall.toReplayUserMessage({
+      ...injection,
+      createdAt: timestamp,
+    });
+    if (!agentMessage) return messages;
+
+    try {
+      chat.messages.push(row);
+      await saveChat(chat);
+      messages.push(agentMessage);
+      if (messages !== context.messages) {
+        context.messages.push(agentMessage);
+      }
+      passiveRecall.markApplied(injection, iterations);
+      console.log(
+        `[${logPrefix}] passive memory injected ${injection.memoryIds.length} recalled memor${
+          injection.memoryIds.length === 1 ? "y" : "ies"
+        } before provider call at iteration ${iterations}`,
+      );
+    } catch (err) {
+      const idx = chat.messages.indexOf(row);
+      if (idx >= 0) chat.messages.splice(idx, 1);
+      console.warn(`[${logPrefix}] failed to persist passive memory recall:`, err);
+    }
+    return messages;
+  };
+
   const config = createAgentLoopConfig({
     model,
     keepAlive,
+    transformContext: passiveRecall ? applyPassiveMemoryRecall : undefined,
     getFollowUpMessages: async () => {
       if (controller.signal.aborted || iterations >= maxIterations) return [];
       const followUp = await options.getFollowUp?.(currentState());
@@ -386,6 +476,14 @@ export async function runHeadlessChatTurn(
             toolCount: event.toolResults?.length || 0,
             usage: emitter.state.finalUsage,
             estimatedTokens,
+          });
+
+          passiveRecall?.schedule({
+            iteration: iterations,
+            stopReason,
+            chatMessages: buildPassiveRecallSearchMessages(),
+            chatType: options.passiveMemoryRecall?.chatType || "system",
+            projectId: options.passiveMemoryRecall?.projectId ?? chat.projectId,
           });
 
           if (turnToolCalls.length > 0) {

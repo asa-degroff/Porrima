@@ -1002,6 +1002,18 @@ export async function runSystemSynthesis(options?: {
       logPrefix: "system-chat:synthesis",
       saveChat,
       persistIntermediateAssistantMessages: true,
+      passiveMemoryRecall: {
+        enabled: true,
+        chatType: "system",
+        projectId: chat.projectId,
+        decorateMessage: (message) => ({
+          ...message,
+          _isSynthesisMessage: true,
+          _isAutomationMessage: true,
+          ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
+          ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
+        }),
+      },
       getFollowUp: async (state) => {
         // Guard: Phase 1 produced nothing on its first model turn — bail early
         // instead of advancing to maintenance. This preserves the previous
@@ -1269,6 +1281,17 @@ export async function runWakeCycle(options?: {
       keepAlive: "30m",
       logPrefix: "system-chat:wake",
       saveChat,
+      passiveMemoryRecall: {
+        enabled: true,
+        chatType: "system",
+        projectId: chat.projectId,
+        decorateMessage: (message) => ({
+          ...message,
+          _isAutomationMessage: true,
+          ...(options?.automationTaskId ? { _automationTaskId: options.automationTaskId } : {}),
+          ...(options?.automationRunId ? { _automationRunId: options.automationRunId } : {}),
+        }),
+      },
       summarize: (state) => state.textSummary || "*The wake cycle ended without visible output.*",
       decorateAssistantMessage: (message) => ({
         ...message,
