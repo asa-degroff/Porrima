@@ -417,7 +417,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className={`backdrop-blur-xs bg-white/5 border rounded-2xl p-2 md:p-2.5 theme-accent-focus transition-colors ${
+        className={`backdrop-blur-xs bg-white/5 border rounded-2xl p-2 md:p-2.5 theme-accent-focus transition-colors relative ${
           dragging
             ? "theme-accent-drag ring-0"
             : waitingForInput
@@ -425,6 +425,11 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
               : "border-white/15"
         }`}
       >
+        {/* Vignette overlay — soft inset shadow for depth */}
+        <div
+          className="absolute inset-0 rounded-2xl pointer-events-none shadow-[inset_0_3px_8px_-4px_rgba(0,0,0,0.25),inset_0_-3px_8px_-4px_rgba(0,0,0,0.2)]"
+          aria-hidden="true"
+        />
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
             {images.map((img, i) => (
