@@ -51,6 +51,8 @@ export interface HeadlessChatTurnOptions {
     chatType?: string;
     projectId?: string;
     decorateMessage?: (message: ChatMessage) => ChatMessage;
+    /** Called when a post-turn recall injection becomes ready. */
+    onRecallReady?: (content: string, memoryIds: string[]) => Promise<void> | void;
   };
 }
 
@@ -201,9 +203,26 @@ export async function runHeadlessChatTurn(
   };
   let assistantMessageIndex = -1;
   let finalAssistantMessage: ChatMessage | null = null;
+  const persistPostTurnPassiveRecall = async (content: string, memoryIds: string[]) => {
+    const rowBase: ChatMessage = {
+      role: "system",
+      content,
+      timestamp: Date.now(),
+      _isSystemMessage: true,
+      _isPassiveMemoryRecall: true,
+      _recalledMemoryIds: memoryIds,
+    };
+    const row = options.passiveMemoryRecall?.decorateMessage
+      ? options.passiveMemoryRecall.decorateMessage(rowBase)
+      : rowBase;
+    chat.messages.push(row);
+    await saveChat(chat);
+  };
   const passiveRecall = options.passiveMemoryRecall?.enabled === false || !options.passiveMemoryRecall
     ? null
-    : new PassiveMemoryRecallController(chat.id);
+    : new PassiveMemoryRecallController(chat.id, {
+        onReady: options.passiveMemoryRecall?.onRecallReady ?? persistPostTurnPassiveRecall,
+      });
 
   const currentState = (): HeadlessTurnState => ({
     iterations,
@@ -559,6 +578,17 @@ export async function runHeadlessChatTurn(
     doneMessage._provider = replayIdentity.provider;
     doneMessage._model = replayIdentity.model;
     emitter.emitDone(doneMessage, iterations);
+
+    // Post-turn passive recall for persist path
+    if (stopReason === "stop") {
+      passiveRecall?.schedule({
+        iteration: iterations,
+        stopReason: "stop",
+        chatMessages: chat.messages,
+        chatType: options.passiveMemoryRecall?.chatType || chat.type,
+        projectId: options.passiveMemoryRecall?.projectId || chat.projectId,
+      });
+    }
   } else {
     assistantMessage = options.decorateAssistantMessage
       ? options.decorateAssistantMessage(emitter.buildAssistantMessage(state.thinking, summary), state)
@@ -569,6 +599,20 @@ export async function runHeadlessChatTurn(
     chat.messages.push(assistantMessage);
     await saveChat(chat);
     assistantMessageIndex = chat.messages.length - 1;
+
+    // Post-turn passive recall: for conversational stops, schedule an async
+    // search now. The onReady callback (if provided) handles persistence after
+    // the turn ends, injecting before the next follow-up.
+    if (stopReason === "stop") {
+      passiveRecall?.schedule({
+        iteration: iterations,
+        stopReason: "stop",
+        chatMessages: chat.messages,
+        chatType: options.passiveMemoryRecall?.chatType || chat.type,
+        projectId: options.passiveMemoryRecall?.projectId || chat.projectId,
+      });
+    }
+
     emitter.emitDone(assistantMessage, iterations);
   }
 

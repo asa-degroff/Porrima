@@ -260,6 +260,16 @@ function formatInjection(memories: ScoredMemory[], projectId?: string): string {
   ].join("\n");
 }
 
+export interface PassiveMemoryRecallPersistOptions {
+  /**
+   * Called when a post-turn recall injection becomes ready.
+   * The caller should push the injection row to chat.messages and persist.
+   * This enables passive recall to work across turn boundaries for conversational
+   * sessions without tool use.
+   */
+  onReady?: (content: string, memoryIds: string[]) => Promise<void> | void;
+}
+
 export class PassiveMemoryRecallController {
   private inFlight: Promise<void> | null = null;
   private candidates = new Map<string, ScoredMemory>();
@@ -271,13 +281,41 @@ export class PassiveMemoryRecallController {
   private lastInjectionIteration = 0;
   private totalInjected = 0;
 
-  constructor(private readonly chatId: string) {}
+  constructor(
+    private readonly chatId: string,
+    private readonly persist?: PassiveMemoryRecallPersistOptions,
+  ) {}
 
   schedule(options: PassiveMemoryRecallScheduleOptions): void {
-    if (options.stopReason !== "toolUse") return;
+    // Trigger on tool-use (mid-turn pause) or conversational stop (post-turn).
+    // For conversational stops, require substantial content so we don't waste
+    // searches on trivial responses. The thinking block is the key signal — it
+    // captures where the agent's reasoning traveled, which is distinct from
+    // the user message that memory-context already handled at turn start.
+    const isToolUse = options.stopReason === "toolUse";
+    const isStop = options.stopReason === "stop";
+    if (!isToolUse && !isStop) return;
+
+    // For conversational stops, check for substantial content.
+    // We look at the last assistant message for thinking + text depth.
+    if (isStop) {
+      const lastAssistant = [...options.chatMessages]
+        .reverse()
+        .find((m) => m.role === "assistant" && !m._isPassiveMemoryRecall);
+      const thinkingLen = lastAssistant?.thinking?.trim().length ?? 0;
+      const contentLen = lastAssistant?.content?.trim().length ?? 0;
+      // Require meaningful depth — either substantial thinking or substantial output.
+      // This avoids triggering on trivial one-line responses.
+      if (thinkingLen < 150 && contentLen < 300) return;
+    }
+
     if (this.inFlight) return;
     if (this.totalInjected >= MAX_PASSIVE_MEMORIES_PER_TURN) return;
-    if (options.iteration - this.lastScheduledIteration < SEARCH_EVERY_ITERATIONS) return;
+    // Spacing guard: avoid redundant searches during tool loops.
+    // For post-turn schedules (conversational stops), skip the spacing guard —
+    // the query hash dedup already prevents redundant searches, and the first
+    // conversational turn (iteration=0) needs to be allowed through.
+    if (isToolUse && options.iteration - this.lastScheduledIteration < SEARCH_EVERY_ITERATIONS) return;
 
     const query = buildPassiveRecallQuery(options.chatMessages);
     if (query.length < MIN_QUERY_CHARS) return;
@@ -413,16 +451,44 @@ export class PassiveMemoryRecallController {
       }).catch(() => {});
     }
 
-    this.readyQueue.push({
-      content: formatInjection(selected, options.projectId),
-      memoryIds,
-      memories: selected.map((candidate) => candidate.memory.text),
-      createdAt: Date.now(),
-    });
-    log(
-      `[passive-memory] chat=${this.chatId} queued ${selected.length} recalled memor${
-        selected.length === 1 ? "y" : "ies"
-      }: ${selected.map((candidate) => candidate.memory.id).join(",")}`,
-    );
+    const injectionContent = formatInjection(selected, options.projectId);
+
+    // If a persist callback is provided for post-turn injection, bypass the
+    // ready queue and persist directly. The caller handles pushing to
+    // chat.messages and saving. For mid-turn injection (tool-use), the
+    // ready queue + peekReady path handles iteration spacing.
+    if (options.stopReason === "stop" && this.persist?.onReady) {
+      try {
+        await this.persist.onReady(injectionContent, memoryIds);
+        // Mark as applied so the IDs are tracked.
+        for (const id of memoryIds) {
+          this.queuedIds.delete(id);
+          this.injectedIds.add(id);
+        }
+        this.totalInjected += memoryIds.length;
+        this.lastInjectionIteration = options.iteration;
+        markMemoryDeltaInjected(this.chatId, memoryIds);
+        log(
+          `[passive-memory] chat=${this.chatId} post-turn injected ${selected.length} memor${
+            selected.length === 1 ? "y" : "ies"
+          }: ${memoryIds.join(",")}`,
+        );
+      } catch (e) {
+        for (const id of memoryIds) this.queuedIds.delete(id);
+        console.warn("[passive-memory] post-turn persist failed:", e);
+      }
+    } else {
+      this.readyQueue.push({
+        content: injectionContent,
+        memoryIds,
+        memories: selected.map((candidate) => candidate.memory.text),
+        createdAt: Date.now(),
+      });
+      log(
+        `[passive-memory] chat=${this.chatId} queued ${selected.length} recalled memor${
+          selected.length === 1 ? "y" : "ies"
+        }: ${memoryIds.join(",")}`,
+      );
+    }
   }
 }

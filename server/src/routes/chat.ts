@@ -1163,7 +1163,24 @@ async function handleChatStream(
     };
     const passiveRecall =
       chat.type === "agent" || chat.type === "bluesky"
-        ? new PassiveMemoryRecallController(chat.id)
+        ? new PassiveMemoryRecallController(chat.id, {
+            // Post-turn injection: when the agent stops without tool use,
+            // the search runs in the background and injects after the turn ends.
+            // The injection row is pushed to chat.messages and persisted so
+            // the next user turn sees it.
+            onReady: async (content: string, memoryIds: string[]) => {
+              const row: ChatMessage = {
+                role: "system",
+                content,
+                timestamp: Date.now(),
+                _isSystemMessage: true,
+                _isPassiveMemoryRecall: true,
+                _recalledMemoryIds: memoryIds,
+              };
+              chat.messages.push(row);
+              await saveChat(chat);
+            },
+          })
         : null;
 
     const persistActivePendingState = async (agentMessages: any[] = context.messages as any[]) => {
@@ -2657,6 +2674,23 @@ async function handleChatStream(
         } catch (err) {
           console.warn("[recap] generation failed:", err);
         }
+      }
+
+      // Post-turn passive recall: for conversational stops (non-toolUse),
+      // the agent's final response may have traveled to territory the initial
+      // explicit retrieval didn't cover. Schedule after assistant-row mutations
+      // like recap so the async hidden-row save cannot become the last-message
+      // target for those updates.
+      // state.pendingFinalAssistantMessage is only set for non-toolUse stops,
+      // so this naturally excludes tool-use iterations (already handled mid-turn).
+      if (state.pendingFinalAssistantMessage && !waitingForInput && !state.needsMidTurnCompaction) {
+        passiveRecall?.schedule({
+          iteration: iterations,
+          stopReason: "stop",
+          chatMessages: chat.messages,
+          chatType: chat.type,
+          projectId: chat.projectId,
+        });
       }
 
       // Fire-and-forget push notification to the user's other devices. The

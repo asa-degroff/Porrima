@@ -99,7 +99,7 @@ describe("passive memory recall query building", () => {
     const query = buildPassiveRerankQuery(messages, 900);
 
     expect(query.length).toBeLessThanOrEqual(900);
-    expect(query).toContain("Current user request:");
+    expect(query).toContain("User request:");
     expect(query).toContain("passive-memory-recall.ts");
     expect(query).toContain("reranker.service");
     expect(query).toContain("/v1/rerank");
