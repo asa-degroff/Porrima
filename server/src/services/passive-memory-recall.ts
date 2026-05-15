@@ -223,6 +223,7 @@ function recordStats(
   chatType: string | undefined,
   formattedQuery: string,
   documents: string[],
+  selectedResults?: Array<{ text: string; score: number }>,
 ): void {
   try {
     recordRerankerStats({
@@ -238,6 +239,7 @@ function recordStats(
       source: "passive-memory",
       query: formattedQuery,
       documents,
+      selectedResults,
       timestamp: Date.now(),
     });
   } catch (e) {
@@ -373,12 +375,12 @@ export class PassiveMemoryRecallController {
       instruction,
       Math.min(RERANK_TOP_N, rerankCandidates.length),
     );
-    recordStats(output, options.chatType, formattedQuery, rerankDocuments);
 
     // Passive recall should be precision-heavy. If the reranker is disabled or
     // unavailable, keep normal explicit memory search as the fallback path.
     if (!output.usedModel) {
       this.candidates.clear();
+      recordStats(output, options.chatType, formattedQuery, rerankDocuments);
       return;
     }
 
@@ -387,6 +389,11 @@ export class PassiveMemoryRecallController {
       .filter((candidate) => candidate.score >= MIN_RERANK_SCORE)
       .filter((candidate) => !excludedIds.has(candidate.memory.id))
       .slice(0, Math.min(MAX_MEMORIES_PER_INJECTION, MAX_PASSIVE_MEMORIES_PER_TURN - this.totalInjected));
+
+    // Record stats after selection so we know which memories were actually injected.
+    recordStats(output, options.chatType, formattedQuery, rerankDocuments,
+      selected.map((c) => ({ text: c.memory.text, score: c.score })),
+    );
 
     this.candidates.clear();
     if (selected.length === 0) {

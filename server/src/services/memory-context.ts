@@ -184,27 +184,6 @@ async function retrieveMemories(
     score,
   }));
 
-  // Record reranker stats for the UI
-  try {
-    recordRerankerStats({
-      usedModel: rerankOutput.usedModel,
-      latencyMs: rerankOutput.latencyMs,
-      documentCount: rerankOutput.documentCount,
-      topN: rerankOutput.results.length,
-      totalTokens: rerankOutput.totalTokens,
-      scoreMin: rerankOutput.scoreMin,
-      scoreMax: rerankOutput.scoreMax,
-      scoreMedian: rerankOutput.scoreMedian,
-      chatType: chatType || "agent",
-      source: "memory-context",
-      query: `Instruct: ${instruction}\nQuery: ${userMessages}`,
-      documents: results.map((r) => r.memory.text),
-      timestamp: Date.now(),
-    });
-  } catch (e) {
-    console.warn("[memory-retrieval] Failed to record reranker stats:", e);
-  }
-
   // --- Topic-aware memory culling ---
   // After compaction cycles, the memory store accumulates memories from every
   // topic the conversation has touched. Compaction summaries capture what the
@@ -265,6 +244,32 @@ async function retrieveMemories(
     .slice(0, 5);
 
   const finalMemories = [...selected, ...topSuperseded.slice(0, 5)];
+
+  // Record reranker stats for the UI — after final selection so we know
+  // which memories were actually injected.
+  try {
+    recordRerankerStats({
+      usedModel: rerankOutput.usedModel,
+      latencyMs: rerankOutput.latencyMs,
+      documentCount: rerankOutput.documentCount,
+      topN: rerankOutput.results.length,
+      totalTokens: rerankOutput.totalTokens,
+      scoreMin: rerankOutput.scoreMin,
+      scoreMax: rerankOutput.scoreMax,
+      scoreMedian: rerankOutput.scoreMedian,
+      chatType: chatType || "agent",
+      source: "memory-context",
+      query: `Instruct: ${instruction}\nQuery: ${userMessages}`,
+      documents: results.map((r) => r.memory.text),
+      selectedResults: finalMemories.map((r) => ({
+        text: r.memory.text,
+        score: r.score,
+      })),
+      timestamp: Date.now(),
+    });
+  } catch (e) {
+    console.warn("[memory-retrieval] Failed to record reranker stats:", e);
+  }
 
   // --- Retrieval pipeline logging ---
   const allScores = rerankOutput.results.map((r) => r.score);

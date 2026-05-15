@@ -67,6 +67,7 @@ interface RerankerStatsRun {
   source: string;
   query?: string;
   documents?: string[];
+  selectedResults?: Array<{ text: string; score: number }>;
 }
 
 interface RerankerStatsSummary {
@@ -472,6 +473,8 @@ function RerankerRunRow({ run }: { run: RerankerStatsRun }) {
   const timeoutMs = RERANKER_TIMEOUT_S * 1000;
   const hasQuery = !!run.query;
   const hasDocs = !!run.documents && run.documents.length > 0;
+  const hasSelected = !!run.selectedResults && run.selectedResults.length > 0;
+  const hasPeek = hasQuery || hasDocs || hasSelected;
 
   return (
     <div className="border-b border-white/5 last:border-b-0">
@@ -492,14 +495,19 @@ function RerankerRunRow({ run }: { run: RerankerStatsRun }) {
         <span className="text-white/40 shrink-0">
           {run.scoreMin.toFixed(3)}–{run.scoreMax.toFixed(3)}
         </span>
-        {(hasQuery || hasDocs) && (
+        {hasSelected && (
+          <span className="text-emerald-300/50 shrink-0">
+            {run.selectedResults?.length} injected
+          </span>
+        )}
+        {hasPeek && (
           <span className="text-purple-300/40 ml-auto shrink-0">
             {expanded ? "▾ hide" : "▸ peek"}
           </span>
         )}
       </button>
 
-      {expanded && (hasQuery || hasDocs) && (
+      {expanded && hasPeek && (
         <div className="px-3 pb-2 space-y-2">
           {run.query && (
             <div>
@@ -520,6 +528,22 @@ function RerankerRunRow({ run }: { run: RerankerStatsRun }) {
                     <span className="text-purple-300/50 select-none">[{i + 1}] </span>
                     {doc.slice(0, 800)}
                     {doc.length > 800 ? "…" : ""}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {run.selectedResults && run.selectedResults.length > 0 && (
+            <div>
+              <div className="text-[9px] uppercase tracking-wider text-emerald-300/40 mb-1">
+                Selected for injection ({run.selectedResults.length})
+              </div>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {run.selectedResults.map((result, i) => (
+                  <div key={i} className="bg-emerald-900/10 border border-emerald-500/10 rounded p-2 text-[10px] text-emerald-200/60 font-mono leading-relaxed">
+                    <span className="text-emerald-400/50 select-none">[{result.score.toFixed(3)}] </span>
+                    {result.text.slice(0, 600)}
+                    {result.text.length > 600 ? "…" : ""}
                   </div>
                 ))}
               </div>
