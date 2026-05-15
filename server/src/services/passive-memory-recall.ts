@@ -192,7 +192,12 @@ function sortCandidates(candidates: ScoredMemory[], projectId?: string): ScoredM
   });
 }
 
-function recordStats(output: RerankOutput, chatType: string | undefined): void {
+function recordStats(
+  output: RerankOutput,
+  chatType: string | undefined,
+  formattedQuery: string,
+  documents: string[],
+): void {
   try {
     recordRerankerStats({
       usedModel: output.usedModel,
@@ -205,6 +210,8 @@ function recordStats(output: RerankOutput, chatType: string | undefined): void {
       scoreMedian: output.scoreMedian,
       chatType: chatType || "agent",
       source: "passive-memory",
+      query: formattedQuery,
+      documents,
       timestamp: Date.now(),
     });
   } catch (e) {
@@ -332,13 +339,15 @@ export class PassiveMemoryRecallController {
     if (rerankCandidates.length === 0) return;
 
     const instruction = RERANK_INSTRUCTIONS[options.chatType || "agent"];
+    const rerankDocuments = rerankCandidates.map((candidate) => clampText(candidate.memory.text, MAX_RERANK_DOCUMENT_CHARS));
+    const formattedQuery = `Instruct: ${instruction}\nQuery: ${rerankQuery}`;
     const output = await rerank(
       rerankQuery,
-      rerankCandidates.map((candidate) => clampText(candidate.memory.text, MAX_RERANK_DOCUMENT_CHARS)),
+      rerankDocuments,
       instruction,
       Math.min(RERANK_TOP_N, rerankCandidates.length),
     );
-    recordStats(output, options.chatType);
+    recordStats(output, options.chatType, formattedQuery, rerankDocuments);
 
     // Passive recall should be precision-heavy. If the reranker is disabled or
     // unavailable, keep normal explicit memory search as the fallback path.

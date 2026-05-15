@@ -23,6 +23,8 @@ export interface RerankerStatsEntry {
   scoreMedian: number;
   chatType: string;
   source: string;
+  query?: string;
+  documents?: string[];
 }
 
 export interface RerankerStatsSummary {
@@ -68,11 +70,15 @@ function initSchema() {
       scoreMax REAL NOT NULL DEFAULT 0,
       scoreMedian REAL NOT NULL DEFAULT 0,
       chatType TEXT NOT NULL DEFAULT 'agent',
-      source TEXT NOT NULL DEFAULT 'memory-context'
+      source TEXT NOT NULL DEFAULT 'memory-context',
+      query TEXT,
+      documents TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_reranker_stats_ts ON reranker_stats(timestamp DESC);
   `);
   ensureColumn(database, "reranker_stats", "source", "TEXT NOT NULL DEFAULT 'memory-context'");
+  ensureColumn(database, "reranker_stats", "query", "TEXT");
+  ensureColumn(database, "reranker_stats", "documents", "TEXT");
 }
 
 function ensureColumn(database: Database.Database, table: string, column: string, definition: string): void {
@@ -96,10 +102,10 @@ export function recordRerankerStats(entry: Omit<RerankerStatsEntry, "id">): Rera
   database.prepare(`
     INSERT INTO reranker_stats (
       id, timestamp, usedModel, latencyMs, documentCount, topN,
-      totalTokens, scoreMin, scoreMax, scoreMedian, chatType, source
+      totalTokens, scoreMin, scoreMax, scoreMedian, chatType, source, query, documents
     ) VALUES (
       @id, @timestamp, @usedModel, @latencyMs, @documentCount, @topN,
-      @totalTokens, @scoreMin, @scoreMax, @scoreMedian, @chatType, @source
+      @totalTokens, @scoreMin, @scoreMax, @scoreMedian, @chatType, @source, @query, @documents
     )
   `).run({
     id,
@@ -114,6 +120,8 @@ export function recordRerankerStats(entry: Omit<RerankerStatsEntry, "id">): Rera
     scoreMedian: entry.scoreMedian,
     chatType: entry.chatType,
     source: entry.source,
+    query: entry.query ?? null,
+    documents: entry.documents ? JSON.stringify(entry.documents) : null,
   });
 
   pruneOldRuns();
@@ -139,7 +147,7 @@ export function getRerankerRuns(limit = 50): RerankerStatsEntry[] {
   const database = getDb();
   const rows = database.prepare(`
     SELECT id, timestamp, usedModel, latencyMs, documentCount, topN,
-      totalTokens, scoreMin, scoreMax, scoreMedian, chatType, source
+      totalTokens, scoreMin, scoreMax, scoreMedian, chatType, source, query, documents
     FROM reranker_stats
     ORDER BY timestamp DESC
     LIMIT ?
@@ -149,6 +157,10 @@ export function getRerankerRuns(limit = 50): RerankerStatsEntry[] {
 }
 
 function rowToEntry(r: Row): RerankerStatsEntry {
+  let documents: string[] | undefined;
+  if (r.documents) {
+    try { documents = JSON.parse(r.documents as string); } catch { /* ignore */ }
+  }
   return {
     id: r.id as string,
     timestamp: r.timestamp as number,
@@ -162,6 +174,8 @@ function rowToEntry(r: Row): RerankerStatsEntry {
     scoreMedian: r.scoreMedian as number,
     chatType: r.chatType as string,
     source: (r.source as string | undefined) || "memory-context",
+    query: (r.query as string | null) || undefined,
+    documents,
   };
 }
 

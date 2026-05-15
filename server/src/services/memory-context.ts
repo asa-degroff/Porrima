@@ -197,6 +197,8 @@ async function retrieveMemories(
       scoreMedian: rerankOutput.scoreMedian,
       chatType: chatType || "agent",
       source: "memory-context",
+      query: `Instruct: ${instruction}\nQuery: ${userMessages}`,
+      documents: results.map((r) => r.memory.text),
       timestamp: Date.now(),
     });
   } catch (e) {

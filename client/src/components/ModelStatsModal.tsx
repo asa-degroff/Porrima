@@ -65,6 +65,8 @@ interface RerankerStatsRun {
   scoreMedian: number;
   chatType: string;
   source: string;
+  query?: string;
+  documents?: string[];
 }
 
 interface RerankerStatsSummary {
@@ -465,6 +467,70 @@ function formatRerankerSource(source: string | undefined): string {
   return source || "memory";
 }
 
+function RerankerRunRow({ run }: { run: RerankerStatsRun }) {
+  const [expanded, setExpanded] = useState(false);
+  const timeoutMs = RERANKER_TIMEOUT_S * 1000;
+  const hasQuery = !!run.query;
+  const hasDocs = !!run.documents && run.documents.length > 0;
+
+  return (
+    <div className="border-b border-white/5 last:border-b-0">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-2 text-[10px] py-1.5 px-2 rounded w-full hover:bg-white/5 text-left"
+      >
+        <span className="text-white/30 w-14 shrink-0">{formatTimeAgo(run.timestamp)}</span>
+        <span className={`w-10 shrink-0 font-mono ${run.usedModel ? "text-emerald-300" : "text-red-300/70"}`}>
+          {run.usedModel ? "model" : "fall"}
+        </span>
+        <span className={`w-14 shrink-0 font-mono ${latencyColor(run.latencyMs, timeoutMs)}`}>
+          {formatDuration(run.latencyMs)}
+        </span>
+        <span className="text-white/30 w-10 shrink-0">{run.documentCount}doc</span>
+        <span className="text-white/30 w-16 shrink-0">{run.totalTokens.toLocaleString()}tok</span>
+        <span className="text-white/35 w-14 shrink-0">{formatRerankerSource(run.source)}</span>
+        <span className="text-white/40 shrink-0">
+          {run.scoreMin.toFixed(3)}–{run.scoreMax.toFixed(3)}
+        </span>
+        {(hasQuery || hasDocs) && (
+          <span className="text-purple-300/40 ml-auto shrink-0">
+            {expanded ? "▾ hide" : "▸ peek"}
+          </span>
+        )}
+      </button>
+
+      {expanded && (hasQuery || hasDocs) && (
+        <div className="px-3 pb-2 space-y-2">
+          {run.query && (
+            <div>
+              <div className="text-[9px] uppercase tracking-wider text-white/30 mb-1">Formatted query sent to model</div>
+              <pre className="bg-black/30 rounded p-2 text-[11px] text-white/70 font-mono whitespace-pre-wrap break-words max-h-48 overflow-y-auto leading-relaxed">
+                {run.query}
+              </pre>
+            </div>
+          )}
+          {run.documents && run.documents.length > 0 && (
+            <div>
+              <div className="text-[9px] uppercase tracking-wider text-white/30 mb-1">
+                Documents ({run.documents.length})
+              </div>
+              <div className="space-y-1 max-h-64 overflow-y-auto">
+                {run.documents.map((doc, i) => (
+                  <div key={i} className="bg-black/20 rounded p-2 text-[10px] text-white/50 font-mono leading-relaxed">
+                    <span className="text-purple-300/50 select-none">[{i + 1}] </span>
+                    {doc.slice(0, 800)}
+                    {doc.length > 800 ? "…" : ""}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
   const { summary, runs } = data;
   const last = summary.lastRun;
@@ -584,26 +650,9 @@ function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
         {runs.length === 0 ? (
           <div className="text-white/30 text-xs">No runs recorded</div>
         ) : (
-          <div className="space-y-1">
+          <div className="space-y-0">
             {runs.map((run) => (
-              <div
-                key={run.id}
-                className="flex items-center gap-2 text-[10px] py-1 px-2 rounded hover:bg-white/5"
-              >
-                <span className="text-white/30 w-14 shrink-0">{formatTimeAgo(run.timestamp)}</span>
-                <span className={`w-10 shrink-0 font-mono ${run.usedModel ? "text-emerald-300" : "text-red-300/70"}`}>
-                  {run.usedModel ? "model" : "fall"}
-                </span>
-                <span className={`w-14 shrink-0 font-mono ${latencyColor(run.latencyMs, timeoutMs)}`}>
-                  {formatDuration(run.latencyMs)}
-                </span>
-                <span className="text-white/30 w-10 shrink-0">{run.documentCount}doc</span>
-                <span className="text-white/30 w-16 shrink-0">{run.totalTokens.toLocaleString()}tok</span>
-                <span className="text-white/35 w-14 shrink-0">{formatRerankerSource(run.source)}</span>
-                <span className="text-white/40 shrink-0">
-                  {run.scoreMin.toFixed(3)}–{run.scoreMax.toFixed(3)}
-                </span>
-              </div>
+              <RerankerRunRow key={run.id} run={run} />
             ))}
           </div>
         )}
