@@ -150,9 +150,10 @@ const CUBE_FACE_CONFIGS = [
 ]
 
 const CubeShape = memo(function CubeShape({ half, colorIndex, baseHue, baseSaturation }: { half: number; colorIndex: number; baseHue: number; baseSaturation: number }) {
-  // Scale cube down to ~70% so the 3D projection fits within the container.
-  // A cube at 3/4 view projects wider than its edge length.
-  const scale = 0.7
+  // Scale cube down so the 3D projection stays within the container during rotation.
+  // At extreme angles a face can point straight at the camera and get perspective-amplified
+  // (perspective / (perspective - translateZ)), so 0.6 keeps the projected diagonal ≤ size.
+  const scale = 0.6
   const faceDist = half * scale
   const faceSize = half * 2 * scale
   const hue = baseHue + (colorIndex - 2) * 3
