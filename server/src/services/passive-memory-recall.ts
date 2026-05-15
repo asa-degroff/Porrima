@@ -132,9 +132,19 @@ export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = MAX_
       continue;
     }
 
+    // Include thinking output — the agent's reasoning trajectory during tool loops.
+    // This is the direction the agent is heading, valuable for finding context in
+    // territory the original user message didn't cover.
+    const thinking = message.thinking
+      ? clampText(message.thinking, 800).replace(/\s+/g, " ")
+      : "";
     const text = clampText(message.content, message._isCompactionSummary ? 1600 : 1000);
     const tools = toolSummary(message);
-    const combined = [text ? `Assistant: ${text}` : "", tools].filter(Boolean).join("\n");
+    const combined = [
+      thinking ? `Thinking: ${thinking}` : "",
+      text ? `Assistant: ${text}` : "",
+      tools,
+    ].filter(Boolean).join("\n");
     if (combined) parts.push(combined);
   }
 
@@ -147,13 +157,28 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = MAX_
     .filter((message) => !message._outOfContext && message.role !== "system")
     .slice(-RECENT_MESSAGE_COUNT);
 
-  const latestUser = [...recent].reverse().find((message) => message.role === "user")?.content;
+  // --- Agent trajectory (primary signal) ---
+  // The thinking block captures where the agent is heading — its reasoning
+  // trajectory during the tool loop. This is the strongest signal for finding
+  // context in territory the agent has excavated but the original user message
+  // didn't cover.
+  const agentThinking = [...recent]
+    .reverse()
+    .find((message) => message.role === "assistant" && message.thinking?.trim())
+    ?.thinking
+    ?.replace(/\s+/g, " ");
+
   const assistantFocus = [...recent]
     .reverse()
     .filter((message) => message.role === "assistant" && message.content?.trim())
     .slice(0, 2)
-    .map((message) => clampText(message.content, 220).replace(/\s+/g, " "))
+    .map((message) => clampText(message.content, 350).replace(/\s+/g, " "))
     .reverse();
+
+  // --- User context (secondary, for grounding) ---
+  // Demoted: memory-context already retrieved memories for this query at turn start.
+  // Kept as a grounding signal when agent trajectory is sparse.
+  const latestUser = [...recent].reverse().find((message) => message.role === "user")?.content;
 
   const toolCalls: string[] = [];
   const anchors: string[] = [];
@@ -171,10 +196,11 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = MAX_
   }
 
   const parts: string[] = [];
-  if (latestUser?.trim()) parts.push(`Current user request: ${clampText(latestUser, 320).replace(/\s+/g, " ")}`);
-  if (assistantFocus.length) parts.push(`Recent assistant focus: ${assistantFocus.join(" / ")}`);
-  if (toolCalls.length) parts.push(`Current tool activity: ${toolCalls.join("; ")}`);
+  if (agentThinking?.trim()) parts.push(`Agent thinking: ${clampText(agentThinking, 300)}`);
+  if (assistantFocus.length) parts.push(`Assistant output: ${assistantFocus.join(" / ")}`);
+  if (toolCalls.length) parts.push(`Tool activity: ${toolCalls.join("; ")}`);
   if (anchors.length) parts.push(`Concrete anchors: ${anchors.join(", ")}`);
+  if (latestUser?.trim()) parts.push(`User request: ${clampText(latestUser, 120).replace(/\s+/g, " ")}`);
 
   const query = parts.join("\n").trim();
   if (!query) return "";
