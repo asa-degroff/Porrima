@@ -23,6 +23,8 @@ function postProcess(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let title = raw.trim().replace(/^["']|["']$/g, "").trim().replace(/\.$/, "").trim();
   if (!title) return null;
+  // Reject prompt artifacts — the small model can echo role prefixes from the prompt.
+  if (/^(User|Assistant)\s*:?\s*$/i.test(title)) return null;
   if (title.length > 60) title = title.slice(0, 57) + "...";
   return title;
 }
