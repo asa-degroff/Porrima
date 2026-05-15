@@ -1781,7 +1781,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           <div id="inference" className="space-y-4">
             <h3 className="text-sm font-semibold text-white/80">Inference Servers</h3>
             <p className="text-xs text-white/40 -mt-2">
-              Five llama.cpp model roles (main chat inference, memory extraction, cross-encoder reranker, embedding, title generation) plus the Ollama server (model discovery, vision). Each URL can point at a separate instance.
+              Main chat, memory extraction, cross-encoder reranker, embedding, title generation. Each URL can point at a separate instance.
             </p>
 
             {/* Server health (HTTP pings against each configured URL) */}
@@ -1824,7 +1824,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   placeholder="http://localhost:11434"
                 />
                 <p className="text-xs text-white/30">
-                  Used for Ollama model discovery, chat-title generation, vision analysis, and GPU coordination. Also the default embedding URL when embedding provider is Ollama.
+                  Optional Ollama server URL. Also the default embedding URL when embedding provider is Ollama.
                 </p>
               </div>
             </div>
@@ -2729,7 +2729,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             </div>
 
             <p className="text-xs text-white/40">
-              Re-embedding rebuilds vector tables for every memory and corpus entry. This can take several minutes on large stores and the chat is unavailable while vectors are being rewritten. A backup is strongly recommended.
+              Re-embedding rebuilds vector tables for every memory. This can take several minutes on large stores and the chat is unavailable while vectors are being rewritten. A backup is strongly recommended.
             </p>
 
             {backupMessage && (
@@ -3675,7 +3675,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           <div id="user-doc" className="space-y-3 pt-2 border-t border-white/10">
             <label className="block text-sm font-medium text-white/60">About You</label>
             <p className="text-white/30 text-xs -mt-2">
-              Optional. Share your name, preferences, and context.
+              Optional. Share your name, preferences, and context about you.
             </p>
 
             <div className="space-y-2">
@@ -3981,7 +3981,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   autoComplete="off"
                 />
                 <p className="text-white/30 text-xs">
-                  Required for Exa-powered web search. Provides richer results with highlights, summaries, and deep reasoning. Get a key at{" "}
+                  Required for Exa-powered web search. Provides rich results with highlights, summaries, and deep reasoning. Get a key at{" "}
                   <a href="https://exa.ai" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
                     exa.ai
                   </a>
@@ -4041,7 +4041,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 ))}
               </Dropdown>
               <p className="text-white/30 text-xs">
-                Used by the Image Sandbox and the generate_image agent tool. sd-server loads one model at startup; configure via its launch command.
+                Used by the Image Sandbox. sd-server loads one model at startup; configure via its launch command.
               </p>
             </div>
             <div className="space-y-2">
