@@ -4259,7 +4259,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                  <Dropdown
 	                    state={systemStatsBufferDd}
 	                    trigger={
-	                      <span className="text-xs text-white/70">
+	                      <span className="truncate flex-1 text-left text-xs text-white/70">
 	                        {[30, 60, 120, 300, 600].find((v) => v === systemStatsBufferSeconds)
 	                          ? { 30: "30 seconds", 60: "1 minute", 120: "2 minutes", 300: "5 minutes", 600: "10 minutes" }[systemStatsBufferSeconds]
 	                          : "1 minute"}
@@ -4302,17 +4302,16 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                        return (
 	                          <div key={gpu.id} className="flex items-center justify-between">
 	                            <div className="flex items-center gap-2">
-	                              <button
-	                                onClick={() => {
-	                                  const next = new Set(hiddenGpus);
-	                                  if (isHidden) next.delete(gpu.id);
-	                                  else next.add(gpu.id);
-	                                  setHiddenGpus(next);
-	                                }}
-	                                className={`relative w-10 h-5 rounded-full transition-colors ${!isHidden ? "bg-purple-500/60" : "bg-white/15"}`}
-	                              >
-	                                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white/90 transition-transform ${!isHidden ? "translate-x-5" : ""}`} />
-	                              </button>
+                              <ToggleSwitch
+                                checked={!isHidden}
+                                onChange={() => {
+                                  const next = new Set(hiddenGpus);
+                                  if (isHidden) next.delete(gpu.id);
+                                  else next.add(gpu.id);
+                                  setHiddenGpus(next);
+                                }}
+                                accentColor="purple"
+                              />
 	                              <div>
 	                                <span className="text-xs text-white/60">{gpu.name}</span>
 	                                <span className="text-[10px] text-white/30 ml-1.5">({gpu.id})</span>
