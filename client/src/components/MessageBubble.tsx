@@ -49,10 +49,10 @@ const compactChipStyle: React.CSSProperties = {
 
 // Stable empty array for availableSkills default prop
 const emptySkillsList: string[] = [];
-const ACTION_BUTTON_SIZE = 28;
-const ACTION_BUTTON_GAP = 4;
-const ACTION_RAIL_GAP_TO_BUBBLE = 6;
-const SHORT_USER_BUBBLE_MAX_HEIGHT = 78;
+const ACTION_BUTTON_SIZE = 24;
+const ACTION_BUTTON_GAP = 2;
+const ACTION_RAIL_GAP_TO_BUBBLE = 4;
+const SHORT_USER_BUBBLE_MAX_HEIGHT = 55;
 
 function ReadAloudButton({
   text,
@@ -73,7 +73,7 @@ function ReadAloudButton({
         onReadAloud(text);
       }}
       disabled={isPlaying}
-      className={`flex h-7 w-7 items-center justify-center rounded-md opacity-0 transition-all duration-150 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30 ${
+      className={`flex h-6 w-6 items-center justify-center rounded-md opacity-0 transition-all duration-150 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30 ${
         isPlaying
           ? "cursor-not-allowed bg-white/[0.04] text-white/35"
           : "text-white/35 hover:bg-white/10 hover:text-white/75"
@@ -82,13 +82,13 @@ function ReadAloudButton({
       aria-label={isPlaying ? "Audio is playing" : "Read aloud"}
     >
       {isPlaying ? (
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="animate-pulse">
           <rect x="6" y="4" width="3" height="16" />
           <rect x="12" y="4" width="3" height="16" />
           <rect x="18" y="4" width="3" height="16" />
         </svg>
       ) : (
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
           <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
           <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
@@ -393,17 +393,17 @@ export const MessageBubble = memo(function MessageBubble({
     <div className={`group ${isUser ? "flex justify-end" : "flex justify-start"} mb-4`}>
       <div ref={rowRef} className={`flex flex-row items-start max-w-[97%] md:max-w-[86%] min-w-0`}>
         {hasUserActions && (
-          <div className={`mt-2.5 mr-1.5 flex shrink-0 gap-1 ${useHorizontalUserActions ? "flex-row items-center" : "flex-col"}`}>
+          <div className={`mt-2 mr-1 flex shrink-0 gap-0.5 ${useHorizontalUserActions ? "flex-row items-center" : "flex-col"}`}>
             {canEditMessage && (
               <>
                 <button
                   type="button"
                   onClick={handleStartEdit}
-                  className="flex h-7 w-7 items-center justify-center rounded-md opacity-0 transition-opacity hover:bg-white/10 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+                  className="flex h-6 w-6 items-center justify-center rounded-md opacity-0 transition-opacity hover:bg-white/10 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
                   title="Edit message"
                   aria-label="Edit message"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
                     <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                     <path d="m15 5 4 4" />
                   </svg>
@@ -411,11 +411,11 @@ export const MessageBubble = memo(function MessageBubble({
                 <div className="relative opacity-0 transition-opacity group-hover:opacity-100 group/info">
                   <button
                     type="button"
-                    className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-white/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+                    className="flex h-6 w-6 items-center justify-center rounded-md hover:bg-white/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
                     title={formatTimestamp(message.timestamp)}
                     aria-label="Message timestamp"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white/40 hover:text-white/70">
                       <circle cx="12" cy="12" r="10" />
                       <line x1="12" y1="16" x2="12" y2="12" />
                       <line x1="12" y1="8" x2="12.01" y2="8" />
