@@ -24,6 +24,8 @@ export const RERANK_INSTRUCTIONS: Record<string, string> = {
     "Given a conversation between the user and the AI, judge whether this memory contains information useful for responding.",
   system:
     "Given an autonomous system or automation chat, judge whether this memory is relevant to the current synthesis, wake, maintenance, or automation task.",
+  "passive-memory":
+    "Given the agent's current reasoning trajectory during a tool loop — including its thinking, output, and tool activity — judge whether this memory is relevant to where the agent is heading, what it is investigating, or the task it is working on.",
 };
 
 interface RerankResult {

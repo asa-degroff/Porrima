@@ -364,7 +364,7 @@ export class PassiveMemoryRecallController {
       .slice(0, RERANK_DOCUMENT_LIMIT);
     if (rerankCandidates.length === 0) return;
 
-    const instruction = RERANK_INSTRUCTIONS[options.chatType || "agent"];
+    const instruction = RERANK_INSTRUCTIONS["passive-memory"];
     const rerankDocuments = rerankCandidates.map((candidate) => clampText(candidate.memory.text, MAX_RERANK_DOCUMENT_CHARS));
     const formattedQuery = `Instruct: ${instruction}\nQuery: ${rerankQuery}`;
     const output = await rerank(
