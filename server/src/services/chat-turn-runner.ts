@@ -203,6 +203,7 @@ export async function runHeadlessChatTurn(
   };
   let assistantMessageIndex = -1;
   let finalAssistantMessage: ChatMessage | null = null;
+  const persistedAssistantBoundaries: ChatMessage[] = [];
   const persistPostTurnPassiveRecall = async (content: string, memoryIds: string[]) => {
     const rowBase: ChatMessage = {
       role: "system",
@@ -356,11 +357,30 @@ export async function runHeadlessChatTurn(
 
     const message = buildAssistantMessageForState(state, toolResults, output);
     chat.messages.push(message);
+    persistedAssistantBoundaries.push(message);
     await saveChat(chat);
     assistantMessageIndex = chat.messages.length - 1;
     finalAssistantMessage = message;
     advancePersistedAssistantBoundary();
     return message;
+  };
+
+  const discardPersistedAssistantBoundaries = () => {
+    if (persistedAssistantBoundaries.length === 0) return;
+    const boundaries = new Set(persistedAssistantBoundaries);
+    const before = chat.messages.length;
+    chat.messages = chat.messages.filter((message) => !boundaries.has(message));
+    const removed = before - chat.messages.length;
+    if (removed > 0) {
+      console.log(
+        `[${logPrefix}] discarded ${removed} temporary assistant boundary row${
+          removed === 1 ? "" : "s"
+        } before final persistence`,
+      );
+    }
+    persistedAssistantBoundaries.length = 0;
+    finalAssistantMessage = null;
+    assistantMessageIndex = -1;
   };
 
   const applyPassiveMemoryRecall = async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
@@ -590,6 +610,11 @@ export async function runHeadlessChatTurn(
       });
     }
   } else {
+    // Passive memory recall may temporarily persist assistant boundaries so the
+    // live replay shape is assistant work -> hidden recall -> next provider
+    // call. Single-phase callers still want one durable final assistant row,
+    // so collapse those temporary rows before saving the complete message.
+    discardPersistedAssistantBoundaries();
     assistantMessage = options.decorateAssistantMessage
       ? options.decorateAssistantMessage(emitter.buildAssistantMessage(state.thinking, summary), state)
       : emitter.buildAssistantMessage(state.thinking, summary);
