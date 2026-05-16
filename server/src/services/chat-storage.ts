@@ -1076,6 +1076,7 @@ const DEFAULT_SETTINGS: Settings = {
   defaultWebSearchProvider: "brave",
   readFileDefaultLines: 1000,
   readFileMaxBytes: 256 * 1024,
+  crossProjectScoreMultiplier: 0.3,
   llamacppSlotBindingMode: "auto",
 };
 

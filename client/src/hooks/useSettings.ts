@@ -15,6 +15,7 @@ const DEFAULT_SETTINGS: Settings = {
   hapticsEnabled: true,
   readFileDefaultLines: 1000,
   readFileMaxBytes: 256 * 1024,
+  crossProjectScoreMultiplier: 0.3,
 };
 
 export function useSettings() {

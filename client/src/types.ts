@@ -399,6 +399,8 @@ export interface Settings {
   readFileMaxBytes?: number;
   // Max characters per memory block (note blocks only; synthesis/notebook/archived exempt)
   maxBlockChars?: number;
+  // Cross-project score multiplier during memory retrieval. Default 0.3.
+  crossProjectScoreMultiplier?: number;
 }
 
 export interface BlueskySettings {

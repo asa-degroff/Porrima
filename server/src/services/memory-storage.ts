@@ -6,6 +6,11 @@ import { join } from "path";
 import { homedir } from "os";
 import { v4 as uuid } from "uuid";
 import type { Memory, MemoryStore } from "../types.js";
+import {
+  applyCrossProjectScoreMultiplier,
+  normalizeCrossProjectScoreMultiplier,
+  sortByAdjustedScore,
+} from "./memory-retrieval-scope.js";
 
 const BASE_DIR = join(homedir(), ".quje-agent");
 const MEMORY_DIR = join(BASE_DIR, "memory");
@@ -594,6 +599,11 @@ export interface ScoredMemory {
   score: number;
 }
 
+export interface MemorySearchRankingOptions {
+  projectId?: string;
+  crossProjectScoreMultiplier?: number;
+}
+
 /**
  * Maximal Marginal Relevance (MMR) re-ranking.
  * Balances relevance against redundancy by iteratively selecting items that
@@ -722,14 +732,16 @@ export async function searchMemories(
   topK: number,
   now: Date = new Date(),
   queryText?: string,
-  dateRange?: { from?: string; to?: string }
+  dateRange?: { from?: string; to?: string },
+  rankingOptions?: MemorySearchRankingOptions,
 ): Promise<ScoredMemory[]> {
   const db = getDb();
   const HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
   const RRF_K = 60; // standard RRF constant
 
   // Oversample from vec_memories to allow recency/importance re-ranking
-  const oversample = Math.max(20, topK * 3);
+  const oversampleMultiplier = rankingOptions?.projectId ? 8 : 3;
+  const oversample = Math.max(20, topK * oversampleMultiplier);
 
   const vecRows = db
     .prepare(
@@ -835,8 +847,15 @@ export async function searchMemories(
     };
   });
 
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, topK);
+  if (rankingOptions?.projectId) {
+    applyCrossProjectScoreMultiplier(
+      scored,
+      rankingOptions.projectId,
+      normalizeCrossProjectScoreMultiplier(rankingOptions.crossProjectScoreMultiplier),
+    );
+  }
+
+  return sortByAdjustedScore(scored).slice(0, topK);
 }
 
 // ---------------------------------------------------------------------------

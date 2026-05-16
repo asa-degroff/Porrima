@@ -383,6 +383,10 @@ export interface Settings {
   readFileMaxBytes?: number;
   // Max characters per memory block (note blocks only; synthesis/notebook/archived exempt)
   maxBlockChars?: number;
+  // Cross-project score multiplier — dampens memories from other projects during retrieval.
+  // 0.3 means cross-project memories get 30% of their original score, preventing them from
+  // dominating results while still allowing highly relevant content to surface. Default 0.3.
+  crossProjectScoreMultiplier?: number;
   // Per-slot llama.cpp binary overrides. Maps slot id → absolute path to llama-server binary.
   // When set for a slot, that slot uses this binary instead of the global llama-current.
   // E.g. { "extraction": "/home/asa/bin/ik-llama/llama-server" }

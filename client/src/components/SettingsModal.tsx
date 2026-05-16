@@ -48,6 +48,7 @@ const SECTIONS = [
   { id: 'images', label: 'Images' },
   { id: 'skills', label: 'Skills' },
   { id: 'extraction', label: 'Extraction' },
+  { id: 'memory-retrieval', label: 'Memory Retrieval' },
   { id: 'system-stats', label: 'System Stats' },
   { id: 'header-image', label: 'Header Image' },
   { id: 'memory-blocks', label: 'Memory Blocks' },
@@ -381,6 +382,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [readFileDefaultLines, setReadFileDefaultLines] = useState(settings.readFileDefaultLines ?? 1000);
   const [readFileMaxBytes, setReadFileMaxBytes] = useState(settings.readFileMaxBytes ?? 256 * 1024);
   const [maxBlockChars, setMaxBlockChars] = useState(settings.maxBlockChars ?? 4000);
+  const [crossProjectScoreMultiplier, setCrossProjectScoreMultiplier] = useState(settings.crossProjectScoreMultiplier ?? 0.3);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
   const [passkeyMessage, setPasskeyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [ttsSettings, setTtsSettings] = useState<TTSSettings | null>(null);
@@ -1051,6 +1053,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       readFileDefaultLines,
       readFileMaxBytes,
       maxBlockChars,
+      crossProjectScoreMultiplier,
       bluesky: {
         ...settings.bluesky,
         enabled: blueskyEnabled,
@@ -4411,6 +4414,33 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                  )}
 	                  <p className="text-[10px] text-white/25">Square images work best. Cropped to center on upload.</p>
 	                </div>
+	              </div>
+	              </div>
+	            </div>
+
+	          {/* Memory Retrieval */}
+	          <div id="memory-retrieval" className="border-t border-white/10 pt-6">
+	            <h3 className="text-sm font-semibold text-white/80 mb-4">Memory Retrieval</h3>
+	            <div className="space-y-2">
+	              <div className="flex items-center justify-between gap-3">
+	                <div>
+	                  <label className="block text-sm font-medium text-white/60">Cross-project memory relevance</label>
+	                  <p className="text-xs text-white/30 mt-0.5">At 0.00x, memories are strictly project-scoped. At 1.00x, memories are shared across projects equally. Default: 0.30x.</p>
+	                </div>
+	                <span className="text-xs text-white/40 font-mono">{crossProjectScoreMultiplier.toFixed(2)}x</span>
+	              </div>
+	              <input
+	                type="range"
+	                min={0}
+	                max={1}
+	                step={0.05}
+	                value={crossProjectScoreMultiplier}
+	                onChange={(e) => setCrossProjectScoreMultiplier(Number(e.target.value))}
+	                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+	              />
+	              <div className="flex items-center justify-between text-[10px] text-white/25">
+	                <span>0.00x</span>
+	                <span>1.00x</span>
 	              </div>
 	            </div>
 	          </div>

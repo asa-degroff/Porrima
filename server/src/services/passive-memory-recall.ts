@@ -10,7 +10,14 @@ import {
   markMemoryDeltaInjected,
 } from "./memory-context.js";
 import { hiddenSystemContextToUserMessage } from "./agent.js";
+import { getSettings } from "./chat-storage.js";
 import { log } from "./logger.js";
+import {
+  applyCrossProjectScoreMultiplier,
+  CROSS_PROJECT_SCORE_MULTIPLIER_DEFAULT,
+  normalizeCrossProjectScoreMultiplier,
+  sortByAdjustedScore,
+} from "./memory-retrieval-scope.js";
 import type { ChatMessage } from "../types.js";
 
 const MIN_QUERY_CHARS = 80;
@@ -207,15 +214,13 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = MAX_
   return query.length > maxChars ? query.slice(0, maxChars).trimEnd() : query;
 }
 
-function sortCandidates(candidates: ScoredMemory[], projectId?: string): ScoredMemory[] {
-  return [...candidates].sort((a, b) => {
-    if (projectId) {
-      const aProject = a.memory.projectId === projectId ? 1 : 0;
-      const bProject = b.memory.projectId === projectId ? 1 : 0;
-      if (aProject !== bProject) return bProject - aProject;
-    }
-    return b.score - a.score;
-  });
+async function getConfiguredCrossProjectScoreMultiplier(): Promise<number> {
+  try {
+    const settings = await getSettings();
+    return normalizeCrossProjectScoreMultiplier(settings.crossProjectScoreMultiplier);
+  } catch {
+    return CROSS_PROJECT_SCORE_MULTIPLIER_DEFAULT;
+  }
 }
 
 function recordStats(
@@ -372,7 +377,17 @@ export class PassiveMemoryRecallController {
     options: PassiveMemoryRecallScheduleOptions,
   ): Promise<void> {
     const queryEmbedding = await embed(query);
-    const searchResults = await searchMemories(queryEmbedding, FAST_SEARCH_LIMIT, new Date(), query);
+    const crossProjectMultiplier = options.projectId
+      ? await getConfiguredCrossProjectScoreMultiplier()
+      : CROSS_PROJECT_SCORE_MULTIPLIER_DEFAULT;
+    const searchResults = await searchMemories(
+      queryEmbedding,
+      FAST_SEARCH_LIMIT,
+      new Date(),
+      query,
+      undefined,
+      options.projectId ? { projectId: options.projectId, crossProjectScoreMultiplier: crossProjectMultiplier } : undefined,
+    );
     const inContextIds = getMemoryContextIds(this.chatId);
     const excludedIds = new Set([...inContextIds, ...this.injectedIds, ...this.queuedIds]);
 
@@ -382,7 +397,7 @@ export class PassiveMemoryRecallController {
     if (freshResults.length === 0) return;
 
     const diverse = mmrRerank(
-      sortCandidates(freshResults, options.projectId).slice(0, 24),
+      sortByAdjustedScore(freshResults).slice(0, 24),
       queryEmbedding,
       DIVERSE_CANDIDATE_LIMIT,
       0.55,
@@ -399,7 +414,7 @@ export class PassiveMemoryRecallController {
       return;
     }
 
-    const rerankCandidates = sortCandidates([...this.candidates.values()], options.projectId)
+    const rerankCandidates = sortByAdjustedScore([...this.candidates.values()])
       .filter((candidate) => !excludedIds.has(candidate.memory.id))
       .slice(0, RERANK_DOCUMENT_LIMIT);
     if (rerankCandidates.length === 0) return;
@@ -422,8 +437,20 @@ export class PassiveMemoryRecallController {
       return;
     }
 
-    const selected = output.results
-      .map(({ index, score }) => ({ ...rerankCandidates[index], score }))
+    // --- Cross-project score dampening ---
+    // Dampen memories from other projects so they don't dominate passive recall.
+    // Applied after mapping reranker results but before MIN_RERANK_SCORE filtering,
+    // so dampened scores are compared against the threshold consistently.
+    let candidates = output.results.map(({ index, score }) => ({ ...rerankCandidates[index], score }));
+
+    if (options.projectId) {
+      const crossProjectCount = applyCrossProjectScoreMultiplier(candidates, options.projectId, crossProjectMultiplier);
+      if (crossProjectCount > 0) {
+        log(`[passive-memory] cross-project: dampened ${crossProjectCount} out-of-scope memories (×${crossProjectMultiplier})`);
+      }
+    }
+
+    const selected = sortByAdjustedScore(candidates)
       .filter((candidate) => candidate.score >= MIN_RERANK_SCORE)
       .filter((candidate) => !excludedIds.has(candidate.memory.id))
       .slice(0, Math.min(MAX_MEMORIES_PER_INJECTION, MAX_PASSIVE_MEMORIES_PER_TURN - this.totalInjected));

@@ -5,9 +5,15 @@ import { recordRerankerStats } from "./reranker-stats.js";
 import { loadPersona } from "./persona-store.js";
 import { loadUserDocument } from "./user-store.js";
 import { readAgentsMd } from "./project-storage.js";
-import { getProject } from "./chat-storage.js";
+import { getProject, getSettings } from "./chat-storage.js";
 import { getWorkspaceForProject } from "./workspace.js";
 import { log } from "./logger.js";
+import {
+  applyCrossProjectScoreMultiplier,
+  CROSS_PROJECT_SCORE_MULTIPLIER_DEFAULT,
+  normalizeCrossProjectScoreMultiplier,
+  sortByAdjustedScore,
+} from "./memory-retrieval-scope.js";
 import type { ChatMessage } from "../types.js";
 
 // Cache the last-built augmented prompt per chat so the prompt viewer
@@ -155,6 +161,15 @@ export interface RetrievalResult {
   score: number;
 }
 
+async function getConfiguredCrossProjectScoreMultiplier(): Promise<number> {
+  try {
+    const settings = await getSettings();
+    return normalizeCrossProjectScoreMultiplier(settings.crossProjectScoreMultiplier);
+  } catch {
+    return CROSS_PROJECT_SCORE_MULTIPLIER_DEFAULT;
+  }
+}
+
 async function retrieveMemories(
   recentMessages: ChatMessage[],
   chatType?: string,
@@ -169,7 +184,17 @@ async function retrieveMemories(
   if (!userMessages) return [];
 
   const queryEmbedding = await embed(userMessages);
-  const results = await searchMemories(queryEmbedding, 30, new Date(), userMessages);
+  const crossProjectMultiplier = projectId
+    ? await getConfiguredCrossProjectScoreMultiplier()
+    : CROSS_PROJECT_SCORE_MULTIPLIER_DEFAULT;
+  const results = await searchMemories(
+    queryEmbedding,
+    30,
+    new Date(),
+    userMessages,
+    undefined,
+    projectId ? { projectId, crossProjectScoreMultiplier: crossProjectMultiplier } : undefined,
+  );
 
   const instruction = RERANK_INSTRUCTIONS[chatType || "agent"];
   const rerankOutput: RerankOutput = await rerank(
@@ -223,8 +248,21 @@ async function retrieveMemories(
     }
   }
 
-  const currentMemories = rerankedResults.filter((r) => !r.memory.supersededBy);
-  const supersededMemories = rerankedResults.filter((r) => r.memory.supersededBy);
+  // --- Cross-project score dampening ---
+  // When operating within a project context, memories from other projects get
+  // dampened so they don't dominate retrieval results. They're not filtered out
+  // entirely — genuinely relevant cross-project content can still surface if its
+  // score is high enough to clear the threshold after dampening.
+  if (projectId) {
+    const crossProjectCount = applyCrossProjectScoreMultiplier(rerankedResults, projectId, crossProjectMultiplier);
+    if (crossProjectCount > 0) {
+      log(`[memory-retrieval] cross-project: dampened ${crossProjectCount} out-of-scope memories (×${crossProjectMultiplier})`);
+    }
+  }
+
+  const adjustedResults = sortByAdjustedScore(rerankedResults);
+  const currentMemories = adjustedResults.filter((r) => !r.memory.supersededBy);
+  const supersededMemories = adjustedResults.filter((r) => r.memory.supersededBy);
 
   const topCurrent = currentMemories.filter((r) => r.score > 0.05);
   const diverseMemories = mmrRerank(topCurrent, queryEmbedding, 15, 0.7);
