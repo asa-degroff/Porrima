@@ -30,6 +30,11 @@ export function isManualSleepReleaseActive(settings: SleepCycleSettings): boolea
   if (sleepTriggeredMs === null) return false;
 
   const lastUserActivityMs = parseTimestamp(settings.lastUserActivityAt);
+  const lastAgentCompletedMs = parseTimestamp(settings.lastAgentCompletedAt);
+  if (lastAgentCompletedMs !== null && lastAgentCompletedMs > sleepTriggeredMs) {
+    return false;
+  }
+
   return lastUserActivityMs === null || lastUserActivityMs <= sleepTriggeredMs;
 }
 

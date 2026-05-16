@@ -507,7 +507,7 @@ async function stampUserActivity(chat: Chat): Promise<void> {
   try {
     const settings = await getSettings();
     settings.lastUserActivityAt = new Date().toISOString();
-    delete settings.sleepModeTriggeredAt;
+    settings.sleepModeTriggeredAt = undefined;
     await saveSettings(settings);
   } catch (e) {
     console.warn("[chat] Failed to stamp user activity:", e);
@@ -2803,6 +2803,7 @@ async function handleChatStream(
       } catch (saveErr) {
         console.error(`[chat] failed to save on ask_user error path:`, saveErr);
       }
+      await stampAssistantCompletion(chat);
 
       // Best-effort save of pending state
       try {
@@ -2833,6 +2834,7 @@ async function handleChatStream(
         } catch (saveErr) {
           console.error(`[chat] abort: failed to save partial response:`, saveErr);
         }
+        await stampAssistantCompletion(chat);
       }
       console.log(`[chat] stream aborted: ${connectionClosed ? "client disconnected" : "signal aborted"}`);
     } else {
@@ -2845,6 +2847,7 @@ async function handleChatStream(
         } catch (saveErr) {
           console.error(`[chat] error: failed to save partial state:`, saveErr);
         }
+        await stampAssistantCompletion(chat);
       }
 
       // Only write error if the connection is still open

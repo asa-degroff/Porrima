@@ -24,7 +24,28 @@ describe("sleep cycle state", () => {
     };
 
     expect(isManualSleepReleaseActive(settings)).toBe(false);
-    expect(isSleepCycleActive(settings, { hasActiveChats: false, nowMs: now })).toBe(false);
+    expect(
+      isSleepCycleActive(settings, {
+        hasActiveChats: false,
+        nowMs: new Date("2026-04-26T10:06:00.000Z").getTime(),
+      }),
+    ).toBe(false);
+  });
+
+  it("treats manual sleep release as stale after newer assistant completion", () => {
+    const settings = {
+      sleepModeTriggeredAt: "2026-04-26T10:00:00.000Z",
+      lastUserActivityAt: "2026-04-26T09:55:00.000Z",
+      lastAgentCompletedAt: "2026-04-26T10:05:00.000Z",
+    };
+
+    expect(isManualSleepReleaseActive(settings)).toBe(false);
+    expect(
+      isSleepCycleActive(settings, {
+        hasActiveChats: false,
+        nowMs: new Date("2026-04-26T10:06:00.000Z").getTime(),
+      }),
+    ).toBe(false);
   });
 
   it("waits for assistant completion after newer user activity", () => {

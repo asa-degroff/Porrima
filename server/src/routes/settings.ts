@@ -25,9 +25,23 @@ import {
 } from "../services/header-image-storage.js";
 import { access } from "fs/promises";
 import { createReadStream } from "fs";
-import type { SshConnection } from "../types.js";
+import type { Settings, SshConnection } from "../types.js";
 
 const router = Router();
+
+const SERVER_OWNED_ACTIVITY_FIELDS = [
+  "sleepModeTriggeredAt",
+  "lastUserActivityAt",
+  "lastAgentCompletedAt",
+] as const satisfies readonly (keyof Settings)[];
+
+function stripServerOwnedActivityFields(settings: Settings): Settings {
+  const sanitized = { ...settings };
+  for (const field of SERVER_OWNED_ACTIVITY_FIELDS) {
+    delete sanitized[field];
+  }
+  return sanitized;
+}
 
 router.get("/", async (_req, res) => {
   const settings = await getSettings();
@@ -35,7 +49,7 @@ router.get("/", async (_req, res) => {
 });
 
 router.put("/", async (req, res) => {
-  const settings = await saveSettings(req.body);
+  const settings = await saveSettings(stripServerOwnedActivityFields(req.body ?? {}));
   res.json(settings);
 });
 
