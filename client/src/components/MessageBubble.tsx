@@ -1122,18 +1122,7 @@ function SegmentRenderer({
         <GeneratedImagePanel key={`image-${segment.generatedImage.id}`} image={segment.generatedImage} />
       ) : null;
     case "compaction_marker":
-      return (
-        <div className="flex items-center gap-2 my-2 py-1.5">
-          <div className="flex-1 border-t border-blue-400/20" />
-          <span className="text-[10px] text-blue-300/50 uppercase tracking-wider font-medium whitespace-nowrap flex items-center gap-1.5">
-            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-            {segment.content || "Context compacted"}
-          </span>
-          <div className="flex-1 border-t border-blue-400/20" />
-        </div>
-      );
+      return null;
     default:
       return null;
   }

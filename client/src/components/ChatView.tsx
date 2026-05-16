@@ -158,7 +158,7 @@ function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
 
   while (i < messages.length) {
     const msg = messages[i];
-    if (msg.role === "system") {
+    if (msg.role === "system" || (msg._isSystemMessage && msg._isMidTurnCompaction)) {
       i++;
       continue;
     }
@@ -171,6 +171,9 @@ function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
       while (
         i < messages.length
       ) {
+        if (messages[i]._isSystemMessage && messages[i]._isMidTurnCompaction) {
+          break;
+        }
         if (messages[i].role === "system") {
           i++;
           continue;
@@ -733,7 +736,7 @@ export function ChatView({
             )}
             {(() => {
               const lastDisplayEndIdx = displayMessages.at(-1)?.localEndIdx ?? -1;
-              return displayMessages.map(({ message: msg, localStartIdx, localEndIdx, streamingSegmentOffset }) => {
+              return displayMessages.map(({ message: msg, localStartIdx, localEndIdx, streamingSegmentOffset }, displayIndex) => {
                 const i = messageOffset + localStartIdx;
                 const isLast = localEndIdx === lastDisplayEndIdx;
                 const isOutOfContext = !!msg._outOfContext;
@@ -744,7 +747,7 @@ export function ChatView({
                   : `msg-${i}-${messageOffset + localEndIdx}-${msg._toolLoopId || msg.timestamp}`;
 
                 // Show "In context" divider at the transition from out-of-context to in-context
-                const prevMsg = localStartIdx > 0 ? messages[localStartIdx - 1] : null;
+                const prevMsg = displayIndex > 0 ? displayMessages[displayIndex - 1].message : null;
                 const showContextResume = !isOutOfContext && !msg._isCompactionSummary
                   && prevMsg && (prevMsg._outOfContext || prevMsg._isCompactionSummary);
                 const adjustedStreamingSegmentIndex =

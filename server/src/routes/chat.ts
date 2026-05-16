@@ -2407,15 +2407,7 @@ async function handleChatStream(
 
       console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: resuming agent loop with ${resumeMessages.length} messages`);
 
-      // Emit a compaction marker segment so the client can display where compaction happened
       flushTextSegment();
-      const compactionSegment: OutputSegment = {
-        seq: ++state.seqCounter,
-        type: "compaction_marker" as any,
-        content: `Context compacted (cycle ${compactionCycle})`,
-      };
-      state.segments.push(compactionSegment);
-      res.write(`event: segment\ndata: ${JSON.stringify(compactionSegment)}\n\n`);
 
       try {
         await runAgentLoop({
