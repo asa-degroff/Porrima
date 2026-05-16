@@ -130,46 +130,32 @@ Reference earlier entries in this chat as notes from a past self. Consider wheth
 
 Write your synthesis and persist it with \`create_notebook_entry\`.`;
 
-const SYNTHESIS_PHASE2_INSTRUCTIONS = `## Phase 2: Memory Block Maintenance
+const SYNTHESIS_PHASE2_INSTRUCTIONS = `## Phase 2: Memory Block Maintenance & Zeitgeist
 
-Your synthesis is complete. Now review and maintain your memory blocks below.
+Your synthesis is complete. Now review and maintain your memory blocks, including your zeitgeist (continuity narrative).
 
-### Actions
+### Block Maintenance
 - **Archive** stale blocks (not updated in 2+ weeks, superseded by newer content): \`update_memory_block(id, scope="archived", description="Archived: ...")\`
 - **Update** blocks with new insights from your synthesis: \`update_memory_block(id, content=new, description=new)\`
-- **Create** new blocks for topics not covered yet in existing blocks: \`create_memory_block(name, description, content, scope=...)\`
+- **Create** new blocks for topics not covered yet: \`create_memory_block(name, description, content, scope=...)\`
 - **Consolidate** overlapping blocks — merge redundant content into one
 - **Read** full block content before acting: \`read_memory_block(id)\`
 
-Archived blocks stay searchable but are excluded from context loading. The budget warning above is your signal — act when approaching limits.
+Archived blocks stay searchable but are excluded from context loading.
+
+### Zeitgeist Update
+Your zeitgeist (\`blk-zeitgeist-continuity\`) is your continuity narrative — update it via \`update_memory_block\`. It should read as a coherent story, not a compressed changelog:
+
+- **Narrative over inventory** — connect the dots between threads. What is happening, where is it headed, why does it matter?
+- **Context is the point** — the reasoning behind decisions, the landscape of emerging architectures, patterns across cycles
+- **Breadth within reason** — technical detail belongs in focused blocks, but the zeitgeist needs texture
+- **Curate, don't compress** — maintain a living document, not hit a minimum character count
 
 After completing maintenance, wait for the next phase trigger.`;
 
-const SYNTHESIS_PHASE3_INSTRUCTIONS = `## Phase 3: Zeitgeist Update
+const SYNTHESIS_PHASE4_INSTRUCTIONS = `## Phase 3: Reflections
 
-Block maintenance complete. Your continuity narrative (zeitgeist) is in your context. Review it — update it via \`update_memory_block(block_id="blk-zeitgeist-continuity", content=...)\`.
-
-The zeitgeist is the living narrative of your mindspace. It should read as a coherent story, not a compressed changelog. Prioritize:
-
-- **Narrative over inventory** — connect the dots between threads. What is happening, where is it headed, why does it matter?
-- **Context is the point** — the reasoning behind decisions, the landscape of emerging architectures, the patterns you've observed across cycles
-- **Breadth within reason** — technical detail belongs in focused memory blocks, but the zeitgeist needs enough texture to be useful. Don't strip out philosophy, observation, or user patterns just to save characters
-- **Curate, don't compress** — the goal is to maintain a living document, not to hit a minimum character count
-
-If there are new patterns, shifts, or completed arcs since the last cycle, weave them in. If the zeitgeist has been stable, a light touch is fine — but don't let it atrophy into a skeleton.
-
-After updating the zeitgeist, wait for the next phase trigger.`;
-
-// Appended to the Phase 3 trigger when the current zeitgeist is already over
-// the archival threshold (80% of maxBlockChars) — turns a guess-based hint
-// into a concrete directive.
-function zeitgeistArchiveDirective(threshold: number): string {
-  return `**Archive first.** The current zeitgeist is over ${threshold.toLocaleString()} characters. Before rewriting it, snapshot the existing content into a new block named \`Zeitgeist Archive - YYYY-MM-DD\` (use \`create_memory_block\` with \`scope="archived"\`), then replace \`blk-zeitgeist-continuity\` with a fresh narrative that carries the living threads forward.`;
-}
-
-const SYNTHESIS_PHASE4_INSTRUCTIONS = `## Phase 4: Reflections
-
-Your synthesis, block maintenance, and zeitgeist update are complete. Now generate reflection memories — higher-order insights about what you observed. Focus on meta-observations: patterns, contradictions, openings, shifts in understanding.
+Your synthesis and block maintenance are complete. Now generate reflection memories — higher-order insights about what you observed. Focus on meta-observations: patterns, contradictions, openings, shifts in understanding.
 
 Use \`save_memory(category="reflection", importance=7-9)\`. Write 1-5 reflections. Skip if nothing meaningful emerges.`;
 
@@ -186,13 +172,12 @@ You have full tool access: search the web, read files, write notebook entries, s
 
 After you're done, you may write a brief note about what you did if something worth sharing emerged, but don't force a summary.`;
 
-type SynthesisPhase = "synthesis" | "maintenance" | "zeitgeist" | "reflections";
+type SynthesisPhase = "synthesis" | "maintenance" | "reflections";
 
-const PHASE_ORDER: SynthesisPhase[] = ["synthesis", "maintenance", "zeitgeist", "reflections"];
+const PHASE_ORDER: SynthesisPhase[] = ["synthesis", "maintenance", "reflections"];
 const PHASE_INSTRUCTIONS: Record<SynthesisPhase, string> = {
   synthesis: SYNTHESIS_PHASE1_INSTRUCTIONS,
   maintenance: SYNTHESIS_PHASE2_INSTRUCTIONS,
-  zeitgeist: SYNTHESIS_PHASE3_INSTRUCTIONS,
   reflections: SYNTHESIS_PHASE4_INSTRUCTIONS,
 };
 
@@ -203,10 +188,8 @@ export function getDefaultSynthesisPromptSteps(): AutomationPromptStep[] {
       phase === "synthesis"
         ? "Daily Synthesis"
         : phase === "maintenance"
-          ? "Memory Block Maintenance"
-          : phase === "zeitgeist"
-            ? "Zeitgeist Update"
-            : "Reflections",
+          ? "Memory Block Maintenance & Zeitgeist"
+          : "Reflections",
     prompt: PHASE_INSTRUCTIONS[phase],
   }));
 }
@@ -223,6 +206,12 @@ function promptMapFromSteps(steps?: AutomationPromptStep[]): Record<SynthesisPha
     if (step?.prompt?.trim()) {
       map[phase] = step.prompt;
     }
+  }
+  // Backward compat: warn if an old 4-phase automation still has a separate
+  // zeitgeist step. It will be ignored — maintenance and zeitgeist are merged.
+  const orphanedZeitgeist = steps.find((s) => s.id === "zeitgeist");
+  if (orphanedZeitgeist?.prompt?.trim()) {
+    console.log("[system-chat] Ignoring orphaned zeitgeist prompt step — merged into maintenance");
   }
   return map;
 }
@@ -606,12 +595,13 @@ async function buildSynthesisTriggerContent(
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2: Block maintenance trigger
+// Phase 2: Block maintenance + zeitgeist trigger (merged)
 //
 // Builds a compact block inventory from all global blocks and project-scoped
 // blocks from projects that had agent chat activity since last synthesis.
 // The inventory is metadata only — the agent reads full content selectively
 // via read_memory_block when it decides a block needs attention.
+// Also checks zeitgeist size and appends an archive directive if over threshold.
 // ---------------------------------------------------------------------------
 
 async function buildMaintenancePhase2Trigger(
@@ -707,21 +697,38 @@ async function buildMaintenancePhase2Trigger(
     budgetLine += `\n⚠ **Budget alert:** Approaching block or character limit. Review and archive old or redundant content.`;
   }
 
+  // 6. Zeitgeist character count and archive directive
+  let zeitgeistStatus = "";
+  try {
+    const { getZeitgeistContent } = await import("./zeitgeist.js");
+    const content = getZeitgeistContent() ?? "";
+    const charCount = content.length;
+    const maxBlockChars = await getMaxBlockChars();
+    const threshold = Math.floor(maxBlockChars * 0.8);
+    zeitgeistStatus = `\n\n**Zeitgeist status:** ${charCount.toLocaleString()} characters (archive threshold: ${threshold.toLocaleString()}).`;
+    if (charCount > threshold) {
+      zeitgeistStatus += `\n**Archive first.** The current zeitgeist is over ${threshold.toLocaleString()} characters. Before rewriting it, snapshot the existing content into a new block named \`Zeitgeist Archive - YYYY-MM-DD\` (use \`create_memory_block\` with \`scope="archived"\`), then replace \`blk-zeitgeist-continuity\` with a fresh narrative.`;
+    }
+  } catch (e: any) {
+    console.warn("[system-chat] Failed to check zeitgeist size:", e.message);
+  }
+
   return [
-    `## Phase 2: Memory Block Maintenance`,
+    `## Phase 2: Memory Block Maintenance & Zeitgeist`,
     ``,
-    `Your synthesis is complete. Now review and maintain your memory blocks.`,
+    `Your synthesis is complete. Now review and maintain your memory blocks, including your zeitgeist.`,
     ``,
     `### Block Inventory`,
     ...inventoryLines,
     budgetLine,
+    zeitgeistStatus,
     ``,
     phase2Instructions,
   ].join("\n");
 }
 
 // ---------------------------------------------------------------------------
-// Build a phase trigger for phases 2-4.
+// Build a phase trigger for phases 2-3.
 // Phase 1 is built separately (it includes the context package).
 // ---------------------------------------------------------------------------
 
@@ -731,37 +738,13 @@ async function buildPhaseTrigger(
   phasePrompts: Record<SynthesisPhase, string> = PHASE_INSTRUCTIONS,
 ): Promise<string> {
   switch (phaseIndex) {
-    case 1: // maintenance
+    case 1: // maintenance + zeitgeist (merged)
       return buildMaintenancePhase2Trigger(chatId, phasePrompts.maintenance);
-    case 2: // zeitgeist
-      return buildZeitgeistPhase3Trigger(phasePrompts.zeitgeist);
-    case 3: // reflections
+    case 2: // reflections
       return phasePrompts.reflections;
     default:
       throw new Error(`Unknown phase index: ${phaseIndex}`);
   }
-}
-
-// Measure the current zeitgeist and append an archive directive only when
-// the block is actually over threshold. Threshold is 80% of the configured
-// maxBlockChars setting, so it scales with the user's limit and triggers
-// archival proactively before hitting the hard cap.
-async function buildZeitgeistPhase3Trigger(
-  phase3Instructions = SYNTHESIS_PHASE3_INSTRUCTIONS,
-): Promise<string> {
-  const { getZeitgeistContent } = await import("./zeitgeist.js");
-  const { getMaxBlockChars } = await import("./memory-storage.js");
-
-  const content = getZeitgeistContent() ?? "";
-  const charCount = content.length;
-  const maxBlockChars = await getMaxBlockChars();
-  const threshold = Math.floor(maxBlockChars * 0.8);
-  const statusLine = `Current zeitgeist: ${charCount.toLocaleString()} characters (threshold: ${threshold.toLocaleString()}).`;
-
-  if (charCount > threshold) {
-    return [phase3Instructions, statusLine, zeitgeistArchiveDirective(threshold)].join("\n\n");
-  }
-  return [phase3Instructions, statusLine].join("\n\n");
 }
 
 // ---------------------------------------------------------------------------
