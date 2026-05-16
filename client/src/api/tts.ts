@@ -1,10 +1,11 @@
-import type { TTSSettings, TTSVoiceCategory } from "../types";
+import type { TTSBackend, TTSSettings, TTSVoiceCategory } from "../types";
 
 export interface TTSGenerateRequest {
   text: string;
   voice?: string;
   speed?: number;
   pitch?: number;
+  backend?: TTSBackend;
 }
 
 export interface TTSGenerateResponse {
@@ -34,9 +35,9 @@ export async function generateTTS(request: TTSGenerateRequest): Promise<TTSGener
 
 /**
  * Get available TTS voices
- * @param backend - TTS backend ("kokoro" or "qwen3-tts")
+ * @param backend - TTS backend
  */
-export async function getTTSVoices(backend?: "kokoro" | "qwen3-tts"): Promise<TTSVoiceCategory[]> {
+export async function getTTSVoices(backend?: TTSBackend): Promise<TTSVoiceCategory[]> {
   const url = backend ? `/api/tts/voices?backend=${backend}` : "/api/tts/voices";
   const res = await fetch(url, {
     credentials: "include",

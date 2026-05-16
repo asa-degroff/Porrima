@@ -9,7 +9,7 @@
 - **Creative Engine**: `ollama pull qwen3.5:9b` (recommended for direction generation with vision context)
 - (Optional) [llama.cpp](https://github.com/ggml-org/llama.cpp) server for direct GGUF inference with router mode
 - (Optional) ComfyUI for image generation
-- (Optional) Kokoro TTS voices or Qwen3-TTS
+- (Optional) Kokoro TTS voices, Qwen3-TTS, or Supertonic 3 (`./scripts/install-supertonic-tts.sh`)
 
 ## Setup
 

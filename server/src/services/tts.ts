@@ -2,10 +2,11 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import type { TTSGenerateRequest, TTSGenerateResponse, TTSSettings } from "../types/tts.js";
+import type { TTSBackend, TTSGenerateRequest, TTSGenerateResponse, TTSSettings } from "../types/tts.js";
 import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
 import { extractTextForTTS } from "./tts-text-preprocessor.js";
-import { generateQwen3TTS, getQwen3AudioFile, getQwen3Voices, checkQwen3Availability } from "./tts-qwen3.js";
+import { generateQwen3TTS, getQwen3Voices, checkQwen3Availability } from "./tts-qwen3.js";
+import { generateSupertonicTTS, getSupertonicVoices, checkSupertonicAvailability } from "./tts-supertonic.js";
 
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache");
 const MAX_CACHE_SIZE_MB = 500; // LRU cleanup threshold
@@ -21,7 +22,7 @@ if (!existsSync(CACHE_DIR)) {
  * Generate a cache key from text and settings
  */
 function generateCacheKey(text: string, settings: TTSSettings): string {
-  const input = `${text}|${settings.voice}|${settings.speed}|${settings.pitch}`;
+  const input = `${settings.backend}|${text}|${settings.voice}|${settings.speed}|${settings.pitch}`;
   return createHash("sha256").update(input).digest("hex");
 }
 
@@ -182,6 +183,9 @@ export async function generateTTS(request: TTSGenerateRequest, settings: TTSSett
   if (settings.backend === "qwen3-tts") {
     const result = await generateQwen3TTS(request, settings);
     return result; // Qwen3 handles its own caching
+  } else if (settings.backend === "supertonic-3") {
+    const result = await generateSupertonicTTS(request, settings);
+    return result; // Supertonic handles its own caching
   } else {
     // Kokoro backend
     const result = await runKokoro(cleanText, settings.voice, settings.speed, settings.pitch);
@@ -217,9 +221,11 @@ export function getAudioFile(cacheKey: string): Buffer | null {
 /**
  * List available voices from both backends
  */
-export function getAvailableVoices(backend: "kokoro" | "qwen3-tts" = "kokoro"): Array<{ id: string; name: string; gender: "female" | "male"; accent?: "american" | "british" | "other"; language?: string; description?: string }> {
+export function getAvailableVoices(backend: TTSBackend = "kokoro"): Array<{ id: string; name: string; gender: "female" | "male"; accent?: "american" | "british" | "other"; language?: string; description?: string }> {
   if (backend === "qwen3-tts") {
     return getQwen3Voices();
+  } else if (backend === "supertonic-3") {
+    return getSupertonicVoices();
   } else {
     // Kokoro voices
     return [
@@ -304,4 +310,11 @@ export function groupVoices(voiceIds: Array<{ id: string; name: string; gender: 
  */
 export async function checkQwen3TTSInstallation(): Promise<{ available: boolean; error?: string }> {
   return await checkQwen3Availability();
+}
+
+/**
+ * Check if Supertonic 3 is available
+ */
+export async function checkSupertonicTTSInstallation(): Promise<{ available: boolean; error?: string }> {
+  return await checkSupertonicAvailability();
 }

@@ -28,6 +28,7 @@ Social media integration with the AT Protocol (Bluesky):
 
 - **Kokoro TTS**: Original integration (ported from GreenGale codebase)
 - **Qwen3-TTS** (`tts-qwen3.ts`): Alternative backend with caching
+- **Supertonic 3** (`tts-supertonic.ts`): Fast local CPU backend via the official Python SDK, with M1-M5/F1-F5 multilingual voice styles
 - **Streaming TTS** (`tts-streaming.ts`, `tts-buffer.ts`): Generator-based streaming with 3-tier boundary detection (word/clause/sentence) for chunking
 - **Text preprocessing** (`tts-text-preprocessor.ts`): Markdown-to-speech text extraction
 - **Client streaming** (`useStreamingTTS.ts`): MediaSource API with WAV/PCM and MP3 codec support, chunk queueing, pause on tool execution, graceful fallback to non-streaming

@@ -2,15 +2,21 @@ import express from "express";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { TTSSettings } from "../types/tts.js";
+import type { TTSBackend, TTSSettings } from "../types/tts.js";
 import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
-import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkQwen3TTSInstallation } from "../services/tts.js";
+import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkQwen3TTSInstallation, checkSupertonicTTSInstallation } from "../services/tts.js";
 import { getQwen3AudioFile } from "../services/tts-qwen3.js";
+import { getSupertonicAudioFile } from "../services/tts-supertonic.js";
 
 const router = express.Router();
 
 const BASE_DIR = join(homedir(), ".quje-agent");
 const TTS_SETTINGS_PATH = join(BASE_DIR, "tts-settings.json");
+const TTS_BACKENDS: TTSBackend[] = ["kokoro", "qwen3-tts", "supertonic-3"];
+
+function isTTSBackend(value: unknown): value is TTSBackend {
+  return typeof value === "string" && TTS_BACKENDS.includes(value as TTSBackend);
+}
 
 // In-memory cache, loaded from disk on startup
 let userSettings: TTSSettings = { ...DEFAULT_TTS_SETTINGS };
@@ -35,11 +41,11 @@ loadTTSSettings();
 /**
  * GET /api/tts/voices
  * List available voices grouped by category
- * Query param: backend=kokoro|qwen3-tts (default: kokoro)
+ * Query param: backend=kokoro|qwen3-tts|supertonic-3 (default: kokoro)
  */
 router.get("/voices", (req, res) => {
   try {
-    const backend = req.query.backend as "kokoro" | "qwen3-tts" || "kokoro";
+    const backend = isTTSBackend(req.query.backend) ? req.query.backend : "kokoro";
     const voices = getAvailableVoices(backend);
     const grouped = groupVoices(voices);
     res.json(grouped);
@@ -101,8 +107,8 @@ router.post("/settings", async (req, res) => {
     }
 
     if (backend !== undefined) {
-      if (!["kokoro", "qwen3-tts"].includes(backend)) {
-        return res.status(400).json({ error: "Backend must be 'kokoro' or 'qwen3-tts'" });
+      if (!isTTSBackend(backend)) {
+        return res.status(400).json({ error: "Backend must be 'kokoro', 'qwen3-tts', or 'supertonic-3'" });
       }
       userSettings.backend = backend;
     }
@@ -185,8 +191,8 @@ router.get("/audio/:cacheKey.wav", (req, res) => {
       return res.status(400).json({ error: "Invalid cache key" });
     }
 
-    // Check both Kokoro and Qwen3 cache directories
-    const audio = getAudioFile(cacheKey) ?? getQwen3AudioFile(cacheKey);
+    // Check all backend cache directories
+    const audio = getAudioFile(cacheKey) ?? getQwen3AudioFile(cacheKey) ?? getSupertonicAudioFile(cacheKey);
     if (!audio) {
       return res.status(404).json({ error: "Audio not found" });
     }
@@ -203,11 +209,11 @@ router.get("/audio/:cacheKey.wav", (req, res) => {
 /**
  * GET /api/tts/status
  * Check if TTS service is available
- * Query param: backend=kokoro|qwen3-tts (default: kokoro)
+ * Query param: backend=kokoro|qwen3-tts|supertonic-3 (default: kokoro)
  */
 router.get("/status", async (req, res) => {
   try {
-    const backend = req.query.backend as "kokoro" | "qwen3-tts" || "kokoro";
+    const backend = isTTSBackend(req.query.backend) ? req.query.backend : "kokoro";
     const { existsSync } = await import("node:fs");
     const { join } = await import("node:path");
     
@@ -218,6 +224,14 @@ router.get("/status", async (req, res) => {
         available: result.available,
         error: result.error,
         pythonPath: process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), ".venv", "bin", "python"),
+      });
+    } else if (backend === "supertonic-3") {
+      const result = await checkSupertonicTTSInstallation();
+      res.json({
+        backend: "supertonic-3",
+        available: result.available,
+        error: result.error,
+        pythonPath: process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), "..", ".venv", "bin", "python"),
       });
     } else {
       const scriptPath = join(process.cwd(), "src", "tts", "kokoro_wrapper.py");

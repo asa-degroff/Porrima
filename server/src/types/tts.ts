@@ -1,11 +1,13 @@
+export type TTSBackend = "kokoro" | "qwen3-tts" | "supertonic-3";
+
 export interface TTSSettings {
   voice: string;
   speed: number;
   pitch: number;
   enabled: boolean; // Master TTS toggle
   autoReadEnabled: boolean; // Global default for new chats
-  // Streaming TTS settings (Qwen3-TTS only)
-  backend: "kokoro" | "qwen3-tts";
+  // Streaming TTS settings (Qwen3-TTS only for now)
+  backend: TTSBackend;
   streamingEnabled: boolean;
   streamingChunkSize: number; // 30-80 tokens per chunk
   streamingBoundaryTier: "clause" | "sentence";
@@ -16,6 +18,7 @@ export interface TTSGenerateRequest {
   voice?: string;
   speed?: number;
   pitch?: number;
+  backend?: TTSBackend;
 }
 
 export interface TTSGenerateResponse {

@@ -413,6 +413,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const rerankerModelDd = useDropdown();
   const titleGenerationModelDd = useDropdown();
   const favoritesDd = useDropdown();
+
+  const applyTtsSettingsUpdate = (updated: TTSSettings | null | undefined) => {
+    if (!updated) return;
+    setTtsSettings(updated);
+    window.dispatchEvent(new CustomEvent('tts-settings-updated', { detail: updated }));
+    console.log("[SettingsModal] Emitted tts-settings-updated:", updated);
+  };
   const imageBackendDd = useDropdown();
   const webSearchProviderDd = useDropdown();
   const sshKnownHostsDd = useDropdown();
@@ -752,9 +759,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useEffect(() => {
     setTtsLoading(true);
     setTtsError(null);
-    Promise.all([getTTSSettings(), getTTSVoices(ttsSettings?.backend || "kokoro")])
-      .then(([settings, voices]) => {
-        setTtsSettings(settings);
+    getTTSSettings()
+      .then(async (settings) => {
+        const voices = await getTTSVoices(settings.backend);
+        applyTtsSettingsUpdate(settings);
         setTtsVoices(voices);
       })
       .catch((err) => {
@@ -768,20 +776,21 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   useEffect(() => {
     if (ttsSettings?.backend) {
       getTTSVoices(ttsSettings.backend)
-        .then(setTtsVoices)
+        .then((voices) => {
+          setTtsVoices(voices);
+
+          // Auto-switch voice if current voice is not valid for the new backend.
+          const validVoices = voices.flatMap(cat => cat.voices.map(v => v.id));
+          if (ttsSettings.voice && !validVoices.includes(ttsSettings.voice)) {
+            const firstVoice = voices[0]?.voices[0]?.id;
+            if (firstVoice) {
+              updateTTSSettings({ voice: firstVoice }).then(applyTtsSettingsUpdate);
+            }
+          }
+        })
         .catch((err) => {
           console.error("[TTS] Failed to load voices:", err);
         });
-      
-      // Auto-switch voice if current voice is not valid for the new backend
-      const validVoices = ttsVoices.flatMap(cat => cat.voices.map(v => v.id));
-      if (ttsSettings.voice && !validVoices.includes(ttsSettings.voice)) {
-        // Switch to first available voice for this backend
-        const firstVoice = ttsVoices[0]?.voices[0]?.id;
-        if (firstVoice) {
-          updateTTSSettings({ voice: firstVoice }).then(setTtsSettings);
-        }
-      }
     }
   }, [ttsSettings?.backend]);
 
@@ -5121,7 +5130,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     checked={ttsSettings.enabled}
                     onChange={async () => {
                       const updated = await updateTTSSettings({ enabled: !ttsSettings.enabled });
-                      if (updated) setTtsSettings(updated);
+                      applyTtsSettingsUpdate(updated);
                     }}
                     accentColor="purple"
                   />
@@ -5134,14 +5143,18 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     state={backendDd}
                     trigger={
                       <span className="truncate flex-1 text-left">
-                        {ttsSettings.backend === "kokoro" ? "Kokoro (Standard)" : "Qwen3-TTS (Streaming)"}
+                        {ttsSettings.backend === "kokoro"
+                          ? "Kokoro (Standard)"
+                          : ttsSettings.backend === "qwen3-tts"
+                            ? "Qwen3-TTS (Streaming)"
+                            : "Supertonic 3 (CPU)"}
                       </span>
                     }
                   >
                     <button
                       onClick={async () => {
                         const updated = await updateTTSSettings({ backend: "kokoro", voice: "af_heart" });
-                        if (updated) setTtsSettings(updated);
+                        applyTtsSettingsUpdate(updated);
                         backendDd.close();
                       }}
                       className={`w-full text-left px-3 py-2 text-xs transition-all ${
@@ -5157,7 +5170,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     <button
                       onClick={async () => {
                         const updated = await updateTTSSettings({ backend: "qwen3-tts", voice: "Ryan" });
-                        if (updated) setTtsSettings(updated);
+                        applyTtsSettingsUpdate(updated);
                         backendDd.close();
                       }}
                       className={`w-full text-left px-3 py-2 text-xs transition-all ${
@@ -5170,11 +5183,29 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     >
                       Qwen3-TTS (Streaming)
                     </button>
+                    <button
+                      onClick={async () => {
+                        const updated = await updateTTSSettings({ backend: "supertonic-3", voice: "M1", streamingEnabled: false });
+                        applyTtsSettingsUpdate(updated);
+                        backendDd.close();
+                      }}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                        ttsSettings.backend === "supertonic-3" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                      style={{
+                        backgroundColor: ttsSettings.backend === "supertonic-3" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: ttsSettings.backend === "supertonic-3" ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
+                    >
+                      Supertonic 3 (CPU)
+                    </button>
                   </Dropdown>
                   <p className="text-white/30 text-xs">
-                    {ttsSettings.backend === "kokoro" 
+                    {ttsSettings.backend === "kokoro"
                       ? "Lightweight (~100MB), mature ecosystem"
-                      : "Advanced model with streaming support (~2GB)"}
+                      : ttsSettings.backend === "qwen3-tts"
+                        ? "Advanced model with streaming support (~2GB)"
+                        : "Fast local CPU inference with multilingual Supertonic voices"}
                   </p>
                 </div>
 
@@ -5190,7 +5221,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         checked={ttsSettings.streamingEnabled}
                         onChange={async () => {
                           const updated = await updateTTSSettings({ streamingEnabled: !ttsSettings.streamingEnabled });
-                          if (updated) setTtsSettings(updated);
+                          applyTtsSettingsUpdate(updated);
                         }}
                         accentColor="purple"
                       />
@@ -5207,7 +5238,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         value={ttsSettings.streamingChunkSize}
                         onChange={async (e) => {
                           const updated = await updateTTSSettings({ streamingChunkSize: parseInt(e.target.value, 10) });
-                          if (updated) setTtsSettings(updated);
+                          applyTtsSettingsUpdate(updated);
                         }}
                         className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-purple-400"
                       />
@@ -5233,7 +5264,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         <button
                           onClick={async () => {
                             const updated = await updateTTSSettings({ streamingBoundaryTier: "clause" });
-                            if (updated) setTtsSettings(updated);
+                            applyTtsSettingsUpdate(updated);
                             boundaryTierDd.close();
                           }}
                           className={`w-full text-left px-3 py-2 text-xs transition-all ${
@@ -5249,7 +5280,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         <button
                           onClick={async () => {
                             const updated = await updateTTSSettings({ streamingBoundaryTier: "sentence" });
-                            if (updated) setTtsSettings(updated);
+                            applyTtsSettingsUpdate(updated);
                             boundaryTierDd.close();
                           }}
                           className={`w-full text-left px-3 py-2 text-xs transition-all ${
@@ -5277,7 +5308,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     checked={ttsSettings.autoReadEnabled}
                     onChange={async () => {
                       const updated = await updateTTSSettings({ autoReadEnabled: !ttsSettings.autoReadEnabled });
-                      if (updated) setTtsSettings(updated);
+                      applyTtsSettingsUpdate(updated);
                     }}
                     accentColor="blue"
                   />
@@ -5296,6 +5327,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                             text: "Hello! This is a test of the text-to-speech system.",
                             voice: ttsSettings.voice,
                             speed: ttsSettings.speed,
+                            backend: ttsSettings.backend,
                           }),
                         });
                         if (res.ok) {
@@ -5340,7 +5372,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                             key={voice.id}
                             onClick={async () => {
                               const updated = await updateTTSSettings({ voice: voice.id });
-                              if (updated) setTtsSettings(updated);
+                              applyTtsSettingsUpdate(updated);
                               voiceDd.close();
                             }}
                             className={`w-full text-left px-3 py-2 text-xs transition-all ${
@@ -5372,7 +5404,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     value={ttsSettings.speed}
                     onChange={async (e) => {
                       const updated = await updateTTSSettings({ speed: parseFloat(e.target.value) });
-                      if (updated) setTtsSettings(updated);
+                      applyTtsSettingsUpdate(updated);
                     }}
                     className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
                   />
@@ -5393,7 +5425,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     value={ttsSettings.pitch}
                     onChange={async (e) => {
                       const updated = await updateTTSSettings({ pitch: parseFloat(e.target.value) });
-                      if (updated) setTtsSettings(updated);
+                      applyTtsSettingsUpdate(updated);
                     }}
                     className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
                   />

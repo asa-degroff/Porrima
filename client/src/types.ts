@@ -545,13 +545,15 @@ export interface GenerationState {
 }
 
 // TTS Types
+export type TTSBackend = "kokoro" | "qwen3-tts" | "supertonic-3";
+
 export interface TTSSettings {
   voice: string;
   speed: number;
   pitch: number;
   enabled: boolean;
   autoReadEnabled: boolean;
-  backend: "kokoro" | "qwen3-tts";
+  backend: TTSBackend;
   streamingEnabled: boolean;
   streamingChunkSize: number;
   streamingBoundaryTier: "clause" | "sentence";

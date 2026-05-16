@@ -7,7 +7,7 @@
 
 import { spawn } from "node:child_process";
 import { StreamingTokenBuffer } from "./tts-buffer.js";
-import type { TTSSettings } from "../types/tts.js";
+import type { TTSBackend, TTSSettings } from "../types/tts.js";
 
 const VENV_PYTHON = process.env.TTS_PYTHON_OVERRIDE || "/home/asa/quje-agent/.venv/bin/python";
 const QWEN3_WRAPPER = "/home/asa/quje-agent/server/src/tts/qwen3_wrapper.py";
@@ -137,6 +137,6 @@ async function generateTTSChunk(
 /**
  * Check if streaming is supported for current backend
  */
-export function isStreamingCapable(backend: "kokoro" | "qwen3-tts"): boolean {
+export function isStreamingCapable(backend: TTSBackend): boolean {
   return backend === "qwen3-tts";
 }
