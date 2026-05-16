@@ -68,59 +68,81 @@ function pushUnique(items: string[], value: string | undefined, maxItems: number
   items.push(trimmed);
 }
 
-function compactToolCall(call: NonNullable<ChatMessage["toolCalls"]>[number]): string {
-  const args = call.arguments ?? {};
-  if (args && typeof args === "object" && !Array.isArray(args)) {
-    const argMap = args as Record<string, unknown>;
-    const path = typeof argMap.path === "string" ? argMap.path : undefined;
-    const command = typeof argMap.command === "string" ? argMap.command : undefined;
-    const query = typeof argMap.query === "string" ? argMap.query : undefined;
-    if (path) return `${call.name} path=${path}`;
-    if (command) return `${call.name} command=${clampText(command, 120)}`;
-    if (query) return `${call.name} query=${clampText(query, 120)}`;
+const OPERATIONAL_FILE_EXTENSIONS =
+  "ts|tsx|js|jsx|mjs|cjs|md|json|service|db|sqlite|py|rs|go|css|html|yml|yaml|toml|sql|sh";
+
+const TOOL_OR_COMMAND_NAMES = new RegExp(
+  "\\b(?:" + [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_files",
+    "bash",
+    "web_search",
+    "web_fetch",
+    "search_memory",
+    "save_memory",
+    "read_memory_block",
+    "create_memory_block",
+    "create_artifact",
+  ].join("|") + ")\\b",
+  "gi",
+);
+
+function anchorToTopicWords(anchor: string): string {
+  const cleaned = anchor
+    .replace(/^[`"'\s]+|[`"',\s]+$/g, "")
+    .replace(/[{}[\]()]/g, " ")
+    .trim();
+  if (!cleaned) return "";
+
+  const segments = cleaned.split(/[\\/]+/).filter(Boolean);
+  let value = segments.length > 0 ? segments[segments.length - 1] : cleaned;
+  if (/^\/?(?:api|v\d)\//i.test(cleaned) && segments.length > 0) {
+    value = segments.slice(-2).join(" ");
   }
-  return call.name;
+
+  return value
+    .replace(new RegExp(`\\.(${OPERATIONAL_FILE_EXTENSIONS})\\b`, "gi"), " ")
+    .replace(/[-_.:]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b(?:api|dist|src|server|client|routes|services|components|hooks|lib|utils|v\d)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function extractAnchors(text: string | undefined, maxAnchors: number): string[] {
-  if (!text) return [];
-  const anchors: string[] = [];
-  const patterns = [
-    /`([^`\n]{2,120})`/g,
-    /\b[\w.-]+\.service\b/g,
-    /\b[\w./-]+\.(?:ts|tsx|js|jsx|md|json|service|db|sqlite|py|rs|go)\b/g,
-    /\/(?:api|v\d)\/[\w./:-]+/g,
-    /\b[a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*)+\b/g,
-  ];
-
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern)) {
-      pushUnique(anchors, match[1] || match[0], maxAnchors);
-      if (anchors.length >= maxAnchors) return anchors;
-    }
-  }
-
-  for (const line of text.split(/\n+/)) {
-    if (!/\b(error|failed|fallback|timeout|returned|rerank|batch|input)\b/i.test(line)) continue;
-    pushUnique(anchors, clampText(line.replace(/\s+/g, " "), 160), maxAnchors);
-    if (anchors.length >= maxAnchors) return anchors;
-  }
-
-  return anchors;
+function replaceOperationalAnchor(anchor: string): string {
+  const topicWords = anchorToTopicWords(anchor);
+  return topicWords.length >= 3 ? ` ${topicWords} ` : " ";
 }
 
-function toolSummary(message: ChatMessage): string {
+function scrubOperationalNoise(text: string | undefined): string {
+  if (!text) return "";
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, " ")
+    .replace(/`([^`\n]{2,160})`/g, (_match, inner: string) => {
+      return /[\\/]|\.|_|-|^\/(?:api|v\d)\//i.test(inner)
+        ? replaceOperationalAnchor(inner)
+        : ` ${inner} `;
+    })
+    .replace(new RegExp(`\\b[\\w./-]+\\.(${OPERATIONAL_FILE_EXTENSIONS})\\b`, "gi"), replaceOperationalAnchor)
+    .replace(/\/(?:api|v\d)\/[\w./:-]+/gi, replaceOperationalAnchor)
+    .replace(/(?:^|\s)(?:\.{0,2}\/|~\/|\/)[\w./-]+/g, replaceOperationalAnchor)
+    .replace(/\b(?:path|command|cmd|file|filename)=\S+/gi, " ")
+    .replace(/"(?:path|command|cmd|file|filename)"\s*:\s*"[^"]*"/gi, " ")
+    .replace(TOOL_OR_COMMAND_NAMES, " ")
+    .replace(/[{}[\]"']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatToolObservations(message: ChatMessage, maxItems = 4): string {
   const parts: string[] = [];
-  if (message.toolCalls?.length) {
-    const calls = message.toolCalls.slice(-4).map((call) => {
-      const args = clampText(JSON.stringify(call.arguments ?? {}), 300);
-      return `${call.name}(${args})`;
-    });
-    parts.push(`tool calls: ${calls.join("; ")}`);
-  }
   if (message.toolResults?.length) {
-    for (const result of message.toolResults.slice(-4)) {
-      parts.push(`tool result from ${result.toolName}: ${clampText(result.content, 900)}`);
+    for (const result of message.toolResults.slice(-maxItems)) {
+      const observation = scrubOperationalNoise(clampText(result.content, 700));
+      if (observation) parts.push(`Observation: ${observation}`);
     }
   }
   return parts.join("\n");
@@ -134,7 +156,7 @@ export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = MAX_
   const parts: string[] = [];
   for (const message of recent) {
     if (message.role === "user") {
-      const content = clampText(message.content, 1200);
+      const content = scrubOperationalNoise(clampText(message.content, 1200));
       if (content) parts.push(`User: ${content}`);
       continue;
     }
@@ -143,14 +165,14 @@ export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = MAX_
     // This is the direction the agent is heading, valuable for finding context in
     // territory the original user message didn't cover.
     const thinking = message.thinking
-      ? clampText(message.thinking, 800).replace(/\s+/g, " ")
+      ? scrubOperationalNoise(clampText(message.thinking, 800)).replace(/\s+/g, " ")
       : "";
-    const text = clampText(message.content, message._isCompactionSummary ? 1600 : 1000);
-    const tools = toolSummary(message);
+    const text = scrubOperationalNoise(clampText(message.content, message._isCompactionSummary ? 1600 : 1000));
+    const observations = formatToolObservations(message);
     const combined = [
       thinking ? `Thinking: ${thinking}` : "",
       text ? `Assistant: ${text}` : "",
-      tools,
+      observations,
     ].filter(Boolean).join("\n");
     if (combined) parts.push(combined);
   }
@@ -169,44 +191,37 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = MAX_
   // trajectory during the tool loop. This is the strongest signal for finding
   // context in territory the agent has excavated but the original user message
   // didn't cover.
-  const agentThinking = [...recent]
+  const latestThinking = [...recent]
     .reverse()
     .find((message) => message.role === "assistant" && message.thinking?.trim())
-    ?.thinking
-    ?.replace(/\s+/g, " ");
+    ?.thinking;
+  const agentThinking = latestThinking
+    ? scrubOperationalNoise(latestThinking).replace(/\s+/g, " ")
+    : "";
 
   const assistantFocus = [...recent]
     .reverse()
     .filter((message) => message.role === "assistant" && message.content?.trim())
     .slice(0, 2)
-    .map((message) => clampText(message.content, 350).replace(/\s+/g, " "))
+    .map((message) => scrubOperationalNoise(clampText(message.content, 350)).replace(/\s+/g, " "))
+    .filter(Boolean)
     .reverse();
+
+  const observations: string[] = [];
+  for (const message of recent) {
+    const observation = formatToolObservations(message, 2).replace(/\s+/g, " ");
+    if (observation) pushUnique(observations, observation, 3);
+  }
 
   // --- User context (secondary, for grounding) ---
   // Demoted: memory-context already retrieved memories for this query at turn start.
   // Kept as a grounding signal when agent trajectory is sparse.
-  const latestUser = [...recent].reverse().find((message) => message.role === "user")?.content;
-
-  const toolCalls: string[] = [];
-  const anchors: string[] = [];
-  for (const message of recent) {
-    for (const call of message.toolCalls?.slice(-4) ?? []) {
-      pushUnique(toolCalls, compactToolCall(call), 8);
-      const args = call.arguments as Record<string, unknown> | undefined;
-      pushUnique(anchors, typeof args?.path === "string" ? args.path : undefined, 12);
-    }
-    for (const anchor of extractAnchors(message.content, 12)) pushUnique(anchors, anchor, 12);
-    for (const result of message.toolResults?.slice(-4) ?? []) {
-      pushUnique(anchors, result.toolName, 12);
-      for (const anchor of extractAnchors(result.content, 12)) pushUnique(anchors, anchor, 12);
-    }
-  }
+  const latestUser = scrubOperationalNoise([...recent].reverse().find((message) => message.role === "user")?.content);
 
   const parts: string[] = [];
   if (agentThinking?.trim()) parts.push(`Agent thinking: ${clampText(agentThinking, 300)}`);
   if (assistantFocus.length) parts.push(`Assistant output: ${assistantFocus.join(" / ")}`);
-  if (toolCalls.length) parts.push(`Tool activity: ${toolCalls.join("; ")}`);
-  if (anchors.length) parts.push(`Concrete anchors: ${anchors.join(", ")}`);
+  if (observations.length) parts.push(`Observed facts: ${observations.join(" / ")}`);
   if (latestUser?.trim()) parts.push(`User request: ${clampText(latestUser, 120).replace(/\s+/g, " ")}`);
 
   const query = parts.join("\n").trim();

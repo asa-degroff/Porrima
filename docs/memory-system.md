@@ -84,7 +84,7 @@ See `memory-context.ts` for implementation details: `buildSplitAugmentedPrompt()
 
 Long-running agent turns can retrieve memories without waiting for the next user message. `PassiveMemoryRecallController` runs from the HTTP chat loop and headless automation runner after tool-use iterations:
 
-- It builds a query from recent visible user/assistant/tool context, skipping hidden system rows so recalled memories do not search for themselves.
+- It builds a topical query from recent visible user/assistant context, preserving agent thinking as the primary directional signal while scrubbing tool names, paths, filenames, endpoints, and command metadata so operational anchors do not dominate retrieval.
 - It runs fast vector + FTS5 hybrid search first, accumulates diverse candidates with MMR, then sends only a small candidate/query set to the slower reranker.
 - It caps injection frequency and total memories per turn, excludes memories already frozen/delta-injected/injected passively, and marks applied memory IDs through the memory context state.
 - Ready recalls are injected before a later provider call, so the agent can use newly relevant memory while continuing the same autonomous turn.

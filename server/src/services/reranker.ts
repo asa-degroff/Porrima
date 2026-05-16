@@ -25,7 +25,7 @@ export const RERANK_INSTRUCTIONS: Record<string, string> = {
   system:
     "Given an autonomous system or automation chat, judge whether this memory is relevant to the current synthesis, wake, maintenance, or automation task.",
   "passive-memory":
-    "Given the agent's current reasoning trajectory during a tool loop — including its thinking, output, and tool activity — judge whether this memory is relevant to where the agent is heading, what it is investigating, or the task it is working on.",
+    "Given the agent's current reasoning trajectory during a tool loop, judge whether this memory is topically relevant to where the agent is heading, what it is investigating, or the task it is working on. Ignore overlap that is only tool names, file paths, filenames, commands, endpoints, or other operational metadata.",
 };
 
 interface RerankResult {

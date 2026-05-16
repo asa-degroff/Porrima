@@ -8,7 +8,7 @@ import {
 import type { ChatMessage } from "../types.js";
 
 describe("passive memory recall query building", () => {
-  it("uses recent user, assistant, and tool-result context", () => {
+  it("uses recent user, assistant, and sanitized tool-result context", () => {
     const messages: ChatMessage[] = [
       { role: "user", content: "Can you inspect the retry behavior?", timestamp: 1000 },
       {
@@ -30,9 +30,10 @@ describe("passive memory recall query building", () => {
     const query = buildPassiveRecallQuery(messages);
 
     expect(query).toContain("User: Can you inspect the retry behavior?");
-    expect(query).toContain("tool calls: read_file");
-    expect(query).toContain("tool result from read_file");
+    expect(query).toContain("Observation:");
     expect(query).toContain("hidden system rows");
+    expect(query).not.toContain("read_file");
+    expect(query).not.toContain("server/src/routes/chat.ts");
   });
 
   it("skips hidden memory rows so recalled memories do not search for themselves", () => {
@@ -67,7 +68,7 @@ describe("passive memory recall query building", () => {
     expect(query).not.toContain("old topic old topic old topic old topic old topic");
   });
 
-  it("builds a compact rerank query with concrete anchors", () => {
+  it("builds a compact topical rerank query while preserving agent thinking", () => {
     const messages: ChatMessage[] = [
       {
         role: "user",
@@ -76,6 +77,7 @@ describe("passive memory recall query building", () => {
       },
       {
         role: "assistant",
+        thinking: "I need to diagnose why passive memory recall is selecting meta memories instead of topical context while checking server/src/services/passive-memory-recall.ts.",
         content: "I found /v1/rerank returning 500 while inspecting `reranker.service` and passive-memory-recall.ts.",
         toolCalls: [
           {
@@ -99,11 +101,19 @@ describe("passive memory recall query building", () => {
     const query = buildPassiveRerankQuery(messages, 900);
 
     expect(query.length).toBeLessThanOrEqual(900);
+    expect(query).toContain("Agent thinking:");
+    expect(query).toContain("selecting meta memories");
+    expect(query).toContain("topical context");
     expect(query).toContain("User request:");
-    expect(query).toContain("passive-memory-recall.ts");
-    expect(query).toContain("reranker.service");
-    expect(query).toContain("/v1/rerank");
+    expect(query).toContain("passive memory recall");
     expect(query).toContain("current batch size");
+    expect(query).not.toContain("Tool activity:");
+    expect(query).not.toContain("Concrete anchors:");
+    expect(query).not.toContain("read_file");
+    expect(query).not.toContain("server/src/services/passive-memory-recall.ts");
+    expect(query).not.toContain("passive-memory-recall.ts");
+    expect(query).not.toContain("reranker.service");
+    expect(query).not.toContain("/v1/rerank");
   });
 
   it("builds the same live message shape that persisted passive rows replay into", () => {
