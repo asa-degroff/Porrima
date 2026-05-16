@@ -371,6 +371,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [automationRunsByTaskId, setAutomationRunsByTaskId] = useState<Record<string, AutomationRun[]>>({});
   const [automationRunsLoadingTaskId, setAutomationRunsLoadingTaskId] = useState<string | null>(null);
   const [automationPromptExpandedTaskId, setAutomationPromptExpandedTaskId] = useState<string | null>(null);
+  const automationTimeoutOriginalRef = useRef<number>(0);
+  const automationMaxItersOriginalRef = useRef<number>(0);
   const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
   const [extractionModelUrl, setExtractionModelUrl] = useState(settings.extractionModelUrl || "");
   const [extractionModelStatus, setExtractionModelStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
@@ -4695,19 +4697,27 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                          <span className="block text-[11px] text-white/45">Timeout</span>
 	                          <div className="flex items-center gap-2">
 	                            <input
-	                              type="number"
-	                              min={1}
-	                              max={240}
-	                              step={5}
-	                              value={Math.round(task.timeoutMs / 60_000)}
+	                              type="text"
+	                              inputMode="numeric"
+	                              pattern="\d*"
+	                              value={task.timeoutMs ? String(Math.round(task.timeoutMs / 60_000)) : ''}
+	                              onFocus={() => {
+	                                automationTimeoutOriginalRef.current = Math.round(task.timeoutMs / 60_000);
+	                              }}
 	                              onChange={(e) => {
-	                                const minutes = Math.max(1, Math.min(240, Number(e.target.value) || 1));
+	                                const raw = e.target.value.replace(/\D/g, '');
+	                                const minutes = raw === '' ? 0 : Number(raw);
 	                                updateAutomationDraft(task.id, { timeoutMs: minutes * 60_000 });
 	                              }}
 	                              onBlur={() => {
-	                                const minutes = Math.max(1, Math.min(240, Math.round(task.timeoutMs / 60_000)));
-	                                updateAutomationDraft(task.id, { timeoutMs: minutes * 60_000 });
-	                                saveAutomationPatch(task.id, { timeoutMs: task.timeoutMs });
+	                                const minutes = task.timeoutMs ? Math.round(task.timeoutMs / 60_000) : 0;
+	                                if (minutes < 1 || minutes > 240) {
+	                                  updateAutomationDraft(task.id, { timeoutMs: automationTimeoutOriginalRef.current * 60_000 });
+	                                } else {
+	                                  const clamped = Math.min(240, minutes);
+	                                  updateAutomationDraft(task.id, { timeoutMs: clamped * 60_000 });
+	                                  saveAutomationPatch(task.id, { timeoutMs: clamped * 60_000 });
+	                                }
 	                              }}
 	                              className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
 	                            />
@@ -4718,17 +4728,27 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                        <label className="space-y-1">
 	                          <span className="block text-[11px] text-white/45">Max Turns</span>
 	                          <input
-	                            type="number"
-	                            min={1}
-	                            max={100}
-	                            step={1}
-	                            value={task.maxIterations}
+	                            type="text"
+	                            inputMode="numeric"
+	                            pattern="\d*"
+	                            value={task.maxIterations ? String(task.maxIterations) : ''}
+	                            onFocus={() => {
+	                              automationMaxItersOriginalRef.current = task.maxIterations;
+	                            }}
 	                            onChange={(e) => {
-	                              const val = Math.max(1, Math.min(100, Number(e.target.value) || 1));
+	                              const raw = e.target.value.replace(/\D/g, '');
+	                              const val = raw === '' ? 0 : Number(raw);
 	                              updateAutomationDraft(task.id, { maxIterations: val });
 	                            }}
 	                            onBlur={() => {
-	                              saveAutomationPatch(task.id, { maxIterations: task.maxIterations });
+	                              const val = task.maxIterations || 0;
+	                              if (val < 1 || val > 100) {
+	                                updateAutomationDraft(task.id, { maxIterations: automationMaxItersOriginalRef.current });
+	                              } else {
+	                                const clamped = Math.min(100, val);
+	                                updateAutomationDraft(task.id, { maxIterations: clamped });
+	                                saveAutomationPatch(task.id, { maxIterations: clamped });
+	                              }
 	                            }}
 	                            className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1 text-xs text-white/75 outline-none focus:border-purple-400/30"
 	                          />
