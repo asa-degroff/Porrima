@@ -243,7 +243,7 @@ export function VisionControls({
       </div>
 
       {/* Conversation list */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto pr-[6px]">
         {analyzedImages.length === 0 ? (
           <div className="p-4 text-center text-xs text-white/30">
             No analyzed images yet
