@@ -7,7 +7,7 @@ import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
 import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkKokoroAvailability, checkQwen3TTSInstallation, checkSupertonicTTSInstallation } from "../services/tts.js";
 import { getQwen3AudioFile } from "../services/tts-qwen3.js";
 import { getSupertonicAudioFile } from "../services/tts-supertonic.js";
-import { generateTTSChunks, planTTSChunks } from "../services/tts-chunking.js";
+import { chunkPlanOptionsForSettings, generateTTSChunks, planTTSChunks } from "../services/tts-chunking.js";
 import { getTtsPythonStatus } from "../services/tts-python.js";
 
 const router = express.Router();
@@ -417,7 +417,7 @@ router.post("/generate-stream", async (req, res) => {
       return res.status(400).json({ error: "Backend must be 'kokoro', 'qwen3-tts', or 'supertonic-3'" });
     }
 
-    const chunkTexts = planTTSChunks(text.trim());
+    const chunkTexts = planTTSChunks(text.trim(), chunkPlanOptionsForSettings(effectiveSettings));
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache, no-transform");

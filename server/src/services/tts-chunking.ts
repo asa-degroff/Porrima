@@ -18,6 +18,18 @@ export interface TTSGeneratedChunk extends TTSGenerateResponse {
 const DEFAULT_FIRST_CHUNK_TARGET = 220;
 const DEFAULT_CHUNK_TARGET = 520;
 const DEFAULT_HARD_MAX = 760;
+const BACKEND_CHUNK_DEFAULTS: Partial<Record<TTSSettings["backend"], Required<Pick<TTSChunkPlanOptions, "firstChunkTargetChars" | "chunkTargetChars" | "hardMaxChars">>>> = {
+  kokoro: {
+    firstChunkTargetChars: 220,
+    chunkTargetChars: 560,
+    hardMaxChars: 820,
+  },
+  "supertonic-3": {
+    firstChunkTargetChars: 220,
+    chunkTargetChars: 520,
+    hardMaxChars: 760,
+  },
+};
 
 function splitLongText(text: string, hardMaxChars: number): string[] {
   const chunks: string[] = [];
@@ -90,7 +102,7 @@ export async function* generateTTSChunks(
   settings: TTSSettings,
   options: TTSChunkPlanOptions = {},
 ): AsyncGenerator<TTSGeneratedChunk> {
-  const textChunks = planTTSChunks(request.text, { textMode: settings.ttsTextMode, ...options });
+  const textChunks = planTTSChunks(request.text, chunkPlanOptionsForSettings(settings, options));
   const totalChunks = textChunks.length;
 
   for (let index = 0; index < totalChunks; index++) {
@@ -103,4 +115,12 @@ export async function* generateTTSChunks(
       totalChunks,
     };
   }
+}
+
+export function chunkPlanOptionsForSettings(settings: TTSSettings, options: TTSChunkPlanOptions = {}): TTSChunkPlanOptions {
+  return {
+    ...BACKEND_CHUNK_DEFAULTS[settings.backend],
+    textMode: settings.ttsTextMode,
+    ...options,
+  };
 }

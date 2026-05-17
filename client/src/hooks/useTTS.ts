@@ -307,7 +307,7 @@ export function useTTS() {
   }, []);
 
   const shouldUseChunkedPlayback = useCallback((text: string) => {
-    return settings.backend === "supertonic-3" && text.trim().length > 220;
+    return (settings.backend === "supertonic-3" || settings.backend === "kokoro") && text.trim().length > 220;
   }, [settings.backend]);
 
   const playChunked = useCallback(async (
