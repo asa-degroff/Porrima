@@ -5395,7 +5395,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         }}
                         onPointerUp={(e) => void saveTtsSliderSetting("streamingChunkSize", parseInt(e.currentTarget.value, 10))}
                         onBlur={(e) => void saveTtsSliderSetting("streamingChunkSize", parseInt(e.currentTarget.value, 10))}
-                        className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-purple-400"
+                        className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                       />
                       <div className="flex justify-between text-xs text-white/30">
                         <span>30 (low latency)</span>
@@ -5639,7 +5639,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     }}
                     onPointerUp={(e) => void saveTtsSliderSetting("speed", parseFloat(e.currentTarget.value))}
                     onBlur={(e) => void saveTtsSliderSetting("speed", parseFloat(e.currentTarget.value))}
-                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                   />
                   <div className="flex justify-between text-xs text-white/30">
                     <span>0.5x</span>
@@ -5699,7 +5699,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         }}
                         onPointerUp={(e) => void saveTtsSliderSetting("supertonicPitchSemitones", parseFloat(e.currentTarget.value))}
                         onBlur={(e) => void saveTtsSliderSetting("supertonicPitchSemitones", parseFloat(e.currentTarget.value))}
-                        className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                        className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                       />
                       <div className="flex justify-between text-xs text-white/30">
                         <span>-2 st</span>
@@ -5721,7 +5721,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         }}
                         onPointerUp={(e) => void saveTtsSliderSetting("supertonicSteps", parseInt(e.currentTarget.value, 10))}
                         onBlur={(e) => void saveTtsSliderSetting("supertonicSteps", parseInt(e.currentTarget.value, 10))}
-                        className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                        className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                       />
                       <div className="flex justify-between text-xs text-white/30">
                         <span>1</span>
@@ -5742,7 +5742,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         }}
                         onPointerUp={(e) => void saveTtsSliderSetting("supertonicMaxChunkLength", parseInt(e.currentTarget.value, 10))}
                         onBlur={(e) => void saveTtsSliderSetting("supertonicMaxChunkLength", parseInt(e.currentTarget.value, 10))}
-                        className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                        className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                       />
                       <div className="flex justify-between text-xs text-white/30">
                         <span>100</span>
@@ -5764,7 +5764,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                           }}
                           onPointerUp={(e) => void saveTtsSliderSetting("supertonicSilenceDuration", parseFloat(e.currentTarget.value))}
                           onBlur={(e) => void saveTtsSliderSetting("supertonicSilenceDuration", parseFloat(e.currentTarget.value))}
-                          className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                          className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                         />
                         <div className="flex justify-between text-xs text-white/30">
                           <span>0.00s</span>
@@ -5785,7 +5785,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                           }}
                           onPointerUp={(e) => void saveTtsSliderSetting("supertonicTrailingSilence", parseFloat(e.currentTarget.value))}
                           onBlur={(e) => void saveTtsSliderSetting("supertonicTrailingSilence", parseFloat(e.currentTarget.value))}
-                          className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                          className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                         />
                         <div className="flex justify-between text-xs text-white/30">
                           <span>0.00s</span>
