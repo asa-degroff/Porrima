@@ -12,6 +12,7 @@ export interface TTSSettings {
   streamingEnabled: boolean;
   streamingChunkSize: number; // 30-80 tokens per chunk
   streamingBoundaryTier: "clause" | "sentence";
+  supertonicPitchSemitones: number;
   supertonicLanguage: string;
   supertonicSteps: number;
   supertonicMaxChunkLength: number;
@@ -25,6 +26,7 @@ export interface TTSGenerateRequest {
   speed?: number;
   pitch?: number;
   backend?: TTSBackend;
+  supertonicPitchSemitones?: number;
   supertonicLanguage?: string;
   supertonicSteps?: number;
   supertonicMaxChunkLength?: number;
@@ -60,6 +62,7 @@ export const DEFAULT_TTS_SETTINGS: TTSSettings = {
   streamingEnabled: false,
   streamingChunkSize: 50,
   streamingBoundaryTier: "clause",
+  supertonicPitchSemitones: 0,
   supertonicLanguage: "en",
   supertonicSteps: 8,
   supertonicMaxChunkLength: 300,

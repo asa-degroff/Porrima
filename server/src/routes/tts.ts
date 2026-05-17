@@ -69,6 +69,13 @@ function sanitizeNumber(value: unknown, fallback: number, min: number, max: numb
   return Math.min(max, Math.max(min, value));
 }
 
+function pitchMultiplierToSemitones(pitch: unknown): number {
+  if (typeof pitch !== "number" || !Number.isFinite(pitch) || pitch <= 0) {
+    return DEFAULT_TTS_SETTINGS.supertonicPitchSemitones;
+  }
+  return 12 * Math.log2(pitch);
+}
+
 function normalizeTTSSettings(settings: Partial<TTSSettings>): TTSSettings {
   const backend = isTTSBackend(settings.backend) ? settings.backend : DEFAULT_TTS_SETTINGS.backend;
   const voicesByBackend = {
@@ -86,6 +93,12 @@ function normalizeTTSSettings(settings: Partial<TTSSettings>): TTSSettings {
     backend,
     voicesByBackend,
     voice: settings.voice || voicesByBackend[backend] || DEFAULT_VOICE_BY_BACKEND[backend],
+    supertonicPitchSemitones: sanitizeNumber(
+      settings.supertonicPitchSemitones ?? pitchMultiplierToSemitones(settings.pitch),
+      DEFAULT_TTS_SETTINGS.supertonicPitchSemitones,
+      -2,
+      2
+    ),
     supertonicLanguage: sanitizeSupertonicLanguage(settings.supertonicLanguage),
     supertonicSteps: Math.round(sanitizeNumber(settings.supertonicSteps, DEFAULT_TTS_SETTINGS.supertonicSteps, 1, 32)),
     supertonicMaxChunkLength: Math.round(sanitizeNumber(settings.supertonicMaxChunkLength, DEFAULT_TTS_SETTINGS.supertonicMaxChunkLength, 100, 600)),
@@ -100,7 +113,7 @@ let userSettings: TTSSettings = normalizeTTSSettings(DEFAULT_TTS_SETTINGS);
 async function loadTTSSettings(): Promise<void> {
   try {
     const data = await readFile(TTS_SETTINGS_PATH, "utf-8");
-    userSettings = normalizeTTSSettings({ ...DEFAULT_TTS_SETTINGS, ...JSON.parse(data) });
+    userSettings = normalizeTTSSettings(JSON.parse(data));
   } catch {
     // File doesn't exist yet, use defaults
   }
@@ -155,6 +168,7 @@ router.post("/settings", async (req, res) => {
       streamingEnabled,
       streamingChunkSize,
       streamingBoundaryTier,
+      supertonicPitchSemitones,
       supertonicLanguage,
       supertonicSteps,
       supertonicMaxChunkLength,
@@ -236,6 +250,13 @@ router.post("/settings", async (req, res) => {
       userSettings.streamingBoundaryTier = streamingBoundaryTier;
     }
 
+    if (supertonicPitchSemitones !== undefined) {
+      if (typeof supertonicPitchSemitones !== "number" || supertonicPitchSemitones < -2 || supertonicPitchSemitones > 2) {
+        return res.status(400).json({ error: "supertonicPitchSemitones must be between -2 and 2" });
+      }
+      userSettings.supertonicPitchSemitones = supertonicPitchSemitones;
+    }
+
     if (supertonicLanguage !== undefined) {
       if (typeof supertonicLanguage !== "string" || sanitizeSupertonicLanguage(supertonicLanguage) !== supertonicLanguage.trim().toLowerCase()) {
         return res.status(400).json({ error: "supertonicLanguage must be a supported Supertonic language code" });
@@ -296,6 +317,7 @@ router.post("/generate", async (req, res) => {
       speed,
       pitch,
       backend,
+      supertonicPitchSemitones,
       supertonicLanguage,
       supertonicSteps,
       supertonicMaxChunkLength,
@@ -314,6 +336,7 @@ router.post("/generate", async (req, res) => {
       ...(speed !== undefined && { speed }),
       ...(pitch !== undefined && { pitch }),
       ...(backend !== undefined && { backend }),
+      ...(supertonicPitchSemitones !== undefined && { supertonicPitchSemitones }),
       ...(supertonicLanguage !== undefined && { supertonicLanguage }),
       ...(supertonicSteps !== undefined && { supertonicSteps }),
       ...(supertonicMaxChunkLength !== undefined && { supertonicMaxChunkLength }),
@@ -348,6 +371,7 @@ router.post("/generate-stream", async (req, res) => {
       speed,
       pitch,
       backend,
+      supertonicPitchSemitones,
       supertonicLanguage,
       supertonicSteps,
       supertonicMaxChunkLength,
@@ -365,6 +389,7 @@ router.post("/generate-stream", async (req, res) => {
       ...(speed !== undefined && { speed }),
       ...(pitch !== undefined && { pitch }),
       ...(backend !== undefined && { backend }),
+      ...(supertonicPitchSemitones !== undefined && { supertonicPitchSemitones }),
       ...(supertonicLanguage !== undefined && { supertonicLanguage }),
       ...(supertonicSteps !== undefined && { supertonicSteps }),
       ...(supertonicMaxChunkLength !== undefined && { supertonicMaxChunkLength }),

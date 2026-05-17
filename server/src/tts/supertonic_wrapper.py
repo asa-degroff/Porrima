@@ -74,9 +74,18 @@ def main():
             raise ValueError("No audio generated")
 
         sample_rate = 44100
-        if abs(args.pitch - 1.0) >= 0.01:
+        if abs(args.pitch - 1.0) >= 0.001:
             native_buffer = io.BytesIO()
             sf.write(native_buffer, audio, sample_rate, format="WAV", subtype="PCM_16")
+            filter_args = ":".join(
+                [
+                    f"pitch={args.pitch}",
+                    "formant=preserved",
+                    "pitchq=quality",
+                    "transients=smooth",
+                    "detector=soft",
+                ]
+            )
 
             process = subprocess.Popen(
                 [
@@ -86,7 +95,7 @@ def main():
                     "-i",
                     "pipe:0",
                     "-filter:a",
-                    f"rubberband=pitch={args.pitch}",
+                    f"rubberband={filter_args}",
                     "-f",
                     "wav",
                     "pipe:1",

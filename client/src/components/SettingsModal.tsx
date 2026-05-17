@@ -426,6 +426,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [ttsVoices, setTtsVoices] = useState<Array<{ label: string; voices: Array<{ id: string; name: string }> }>>([]);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsError, setTtsError] = useState<string | null>(null);
+  const ttsSliderSaveTimersRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
+  const ttsSliderSaveSeqRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
   // Bluesky settings
   const blueskyDefaults = settings.bluesky ?? ({} as Partial<BlueskySettings>);
   const [blueskyEnabled, setBlueskyEnabled] = useState(blueskyDefaults.enabled ?? false);
@@ -456,6 +458,61 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     window.dispatchEvent(new CustomEvent('tts-settings-updated', { detail: updated }));
     console.log("[SettingsModal] Emitted tts-settings-updated:", updated);
   };
+
+  const emitOptimisticTtsSettings = (patch: Partial<TTSSettings>) => {
+    setTtsSettings((prev) => {
+      if (!prev) return prev;
+      return { ...prev, ...patch };
+    });
+  };
+
+  async function saveTtsSliderSetting<K extends keyof TTSSettings>(key: K, value: TTSSettings[K]) {
+    const existingTimer = ttsSliderSaveTimersRef.current[key];
+    if (existingTimer !== undefined) {
+      window.clearTimeout(existingTimer);
+      delete ttsSliderSaveTimersRef.current[key];
+    }
+
+    const sequence = (ttsSliderSaveSeqRef.current[key] ?? 0) + 1;
+    ttsSliderSaveSeqRef.current[key] = sequence;
+
+    try {
+      const updated = await updateTTSSettings({ [key]: value } as Partial<TTSSettings>);
+      if (ttsSliderSaveSeqRef.current[key] !== sequence) return;
+      const normalizedValue = updated[key];
+      setTtsSettings((prev) => {
+        if (!prev) return updated;
+        const next = { ...prev, [key]: normalizedValue };
+        window.dispatchEvent(new CustomEvent('tts-settings-updated', { detail: next }));
+        return next;
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to update TTS setting";
+      setTtsError(message);
+      console.error("[SettingsModal] Failed to update TTS slider setting:", err);
+    }
+  }
+
+  function updateTtsSliderSetting<K extends keyof TTSSettings>(key: K, value: TTSSettings[K]) {
+    emitOptimisticTtsSettings({ [key]: value } as Partial<TTSSettings>);
+
+    const existingTimer = ttsSliderSaveTimersRef.current[key];
+    if (existingTimer !== undefined) {
+      window.clearTimeout(existingTimer);
+    }
+
+    ttsSliderSaveTimersRef.current[key] = window.setTimeout(() => {
+      void saveTtsSliderSetting(key, value);
+    }, 250);
+  }
+
+  useEffect(() => {
+    return () => {
+      Object.values(ttsSliderSaveTimersRef.current).forEach((timer) => {
+        if (timer !== undefined) window.clearTimeout(timer);
+      });
+    };
+  }, []);
   const imageBackendDd = useDropdown();
   const webSearchProviderDd = useDropdown();
   const sshKnownHostsDd = useDropdown();
@@ -5272,10 +5329,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         max="80"
                         step="5"
                         value={ttsSettings.streamingChunkSize}
-                        onChange={async (e) => {
-                          const updated = await updateTTSSettings({ streamingChunkSize: parseInt(e.target.value, 10) });
-                          applyTtsSettingsUpdate(updated);
+                        onChange={(e) => {
+                          updateTtsSliderSetting("streamingChunkSize", parseInt(e.target.value, 10));
                         }}
+                        onPointerUp={(e) => void saveTtsSliderSetting("streamingChunkSize", parseInt(e.currentTarget.value, 10))}
+                        onBlur={(e) => void saveTtsSliderSetting("streamingChunkSize", parseInt(e.currentTarget.value, 10))}
                         className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-purple-400"
                       />
                       <div className="flex justify-between text-xs text-white/30">
@@ -5365,6 +5423,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                             speed: ttsSettings.speed,
                             pitch: ttsSettings.pitch,
                             backend: ttsSettings.backend,
+                            supertonicPitchSemitones: ttsSettings.supertonicPitchSemitones,
                             supertonicLanguage: ttsSettings.supertonicLanguage,
                             supertonicSteps: ttsSettings.supertonicSteps,
                             supertonicMaxChunkLength: ttsSettings.supertonicMaxChunkLength,
@@ -5444,10 +5503,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     max="2"
                     step="0.1"
                     value={ttsSettings.speed}
-                    onChange={async (e) => {
-                      const updated = await updateTTSSettings({ speed: parseFloat(e.target.value) });
-                      applyTtsSettingsUpdate(updated);
+                    onChange={(e) => {
+                      updateTtsSliderSetting("speed", parseFloat(e.target.value));
                     }}
+                    onPointerUp={(e) => void saveTtsSliderSetting("speed", parseFloat(e.currentTarget.value))}
+                    onBlur={(e) => void saveTtsSliderSetting("speed", parseFloat(e.currentTarget.value))}
                     className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
                   />
                   <div className="flex justify-between text-xs text-white/30">
@@ -5494,22 +5554,26 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     </div>
 
                     <div className="space-y-1">
-                      <label className="block text-sm text-white/50">Pitch: {ttsSettings.pitch.toFixed(1)}x</label>
+                      <label className="block text-sm text-white/50">
+                        Pitch Shift: {ttsSettings.supertonicPitchSemitones >= 0 ? "+" : ""}{ttsSettings.supertonicPitchSemitones.toFixed(2)} st
+                      </label>
                       <input
                         type="range"
-                        min="0.5"
+                        min="-2"
                         max="2"
-                        step="0.1"
-                        value={ttsSettings.pitch}
-                        onChange={async (e) => {
-                          const updated = await updateTTSSettings({ pitch: parseFloat(e.target.value) });
-                          applyTtsSettingsUpdate(updated);
+                        step="0.05"
+                        value={ttsSettings.supertonicPitchSemitones}
+                        onChange={(e) => {
+                          updateTtsSliderSetting("supertonicPitchSemitones", parseFloat(e.target.value));
                         }}
+                        onPointerUp={(e) => void saveTtsSliderSetting("supertonicPitchSemitones", parseFloat(e.currentTarget.value))}
+                        onBlur={(e) => void saveTtsSliderSetting("supertonicPitchSemitones", parseFloat(e.currentTarget.value))}
                         className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
                       />
                       <div className="flex justify-between text-xs text-white/30">
-                        <span>0.5x</span>
-                        <span>2.0x</span>
+                        <span>-2 st</span>
+                        <span>0</span>
+                        <span>+2 st</span>
                       </div>
                     </div>
 
@@ -5521,10 +5585,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         max="32"
                         step="1"
                         value={ttsSettings.supertonicSteps}
-                        onChange={async (e) => {
-                          const updated = await updateTTSSettings({ supertonicSteps: parseInt(e.target.value, 10) });
-                          applyTtsSettingsUpdate(updated);
+                        onChange={(e) => {
+                          updateTtsSliderSetting("supertonicSteps", parseInt(e.target.value, 10));
                         }}
+                        onPointerUp={(e) => void saveTtsSliderSetting("supertonicSteps", parseInt(e.currentTarget.value, 10))}
+                        onBlur={(e) => void saveTtsSliderSetting("supertonicSteps", parseInt(e.currentTarget.value, 10))}
                         className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
                       />
                       <div className="flex justify-between text-xs text-white/30">
@@ -5541,10 +5606,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         max="600"
                         step="25"
                         value={ttsSettings.supertonicMaxChunkLength}
-                        onChange={async (e) => {
-                          const updated = await updateTTSSettings({ supertonicMaxChunkLength: parseInt(e.target.value, 10) });
-                          applyTtsSettingsUpdate(updated);
+                        onChange={(e) => {
+                          updateTtsSliderSetting("supertonicMaxChunkLength", parseInt(e.target.value, 10));
                         }}
+                        onPointerUp={(e) => void saveTtsSliderSetting("supertonicMaxChunkLength", parseInt(e.currentTarget.value, 10))}
+                        onBlur={(e) => void saveTtsSliderSetting("supertonicMaxChunkLength", parseInt(e.currentTarget.value, 10))}
                         className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
                       />
                       <div className="flex justify-between text-xs text-white/30">
@@ -5562,10 +5628,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                           max="1"
                           step="0.01"
                           value={ttsSettings.supertonicSilenceDuration}
-                          onChange={async (e) => {
-                            const updated = await updateTTSSettings({ supertonicSilenceDuration: parseFloat(e.target.value) });
-                            applyTtsSettingsUpdate(updated);
+                          onChange={(e) => {
+                            updateTtsSliderSetting("supertonicSilenceDuration", parseFloat(e.target.value));
                           }}
+                          onPointerUp={(e) => void saveTtsSliderSetting("supertonicSilenceDuration", parseFloat(e.currentTarget.value))}
+                          onBlur={(e) => void saveTtsSliderSetting("supertonicSilenceDuration", parseFloat(e.currentTarget.value))}
                           className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
                         />
                         <div className="flex justify-between text-xs text-white/30">
@@ -5582,10 +5649,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                           max="1"
                           step="0.01"
                           value={ttsSettings.supertonicTrailingSilence}
-                          onChange={async (e) => {
-                            const updated = await updateTTSSettings({ supertonicTrailingSilence: parseFloat(e.target.value) });
-                            applyTtsSettingsUpdate(updated);
+                          onChange={(e) => {
+                            updateTtsSliderSetting("supertonicTrailingSilence", parseFloat(e.target.value));
                           }}
+                          onPointerUp={(e) => void saveTtsSliderSetting("supertonicTrailingSilence", parseFloat(e.currentTarget.value))}
+                          onBlur={(e) => void saveTtsSliderSetting("supertonicTrailingSilence", parseFloat(e.currentTarget.value))}
                           className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
                         />
                         <div className="flex justify-between text-xs text-white/30">

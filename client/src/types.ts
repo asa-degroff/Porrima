@@ -558,6 +558,7 @@ export interface TTSSettings {
   streamingEnabled: boolean;
   streamingChunkSize: number;
   streamingBoundaryTier: "clause" | "sentence";
+  supertonicPitchSemitones: number;
   supertonicLanguage: string;
   supertonicSteps: number;
   supertonicMaxChunkLength: number;

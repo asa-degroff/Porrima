@@ -15,13 +15,17 @@ if (!existsSync(CACHE_DIR)) {
   mkdirSync(CACHE_DIR, { recursive: true });
 }
 
+function pitchSemitonesToRatio(semitones: number): number {
+  return Math.pow(2, semitones / 12);
+}
+
 function generateCacheKey(text: string, settings: TTSSettings): string {
   const input = [
-    "supertonic-3-v4",
+    "supertonic-3-v5",
     text,
     settings.voice,
     settings.speed,
-    settings.pitch,
+    settings.supertonicPitchSemitones,
     settings.supertonicLanguage,
     settings.supertonicSteps,
     settings.supertonicMaxChunkLength,
@@ -90,6 +94,7 @@ async function runSupertonicTTS(
   settings: TTSSettings
 ): Promise<{ audio: Buffer; duration: number; sampleRate: number }> {
   return new Promise((resolve, reject) => {
+    const pitchRatio = pitchSemitonesToRatio(settings.supertonicPitchSemitones);
     const args = [
       PYTHON_SCRIPT,
       "--text",
@@ -99,7 +104,7 @@ async function runSupertonicTTS(
       "--speed",
       settings.speed.toString(),
       "--pitch",
-      settings.pitch.toString(),
+      pitchRatio.toFixed(6),
       "--lang",
       settings.supertonicLanguage,
       "--steps",
