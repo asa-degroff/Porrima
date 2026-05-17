@@ -6,3 +6,4 @@ dist
 .env
 /server/.env
 .codex
+.venv*
