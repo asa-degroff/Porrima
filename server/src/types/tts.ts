@@ -1,11 +1,21 @@
 export type TTSBackend = "kokoro" | "qwen3-tts" | "supertonic-3";
 
+/**
+ * Controls what markdown elements are included or excluded during TTS text preprocessing.
+ * - "minimal": Keep almost everything (code blocks, inline code, URLs). Strip only LaTeX.
+ * - "standard": Strip code blocks and URLs, but keep inline code words. (Recommended)
+ * - "stripped": Remove code blocks, inline code, URLs, and LaTeX. (Previous default)
+ */
+export type TTSTextMode = "minimal" | "standard" | "stripped";
+
 export interface TTSSettings {
   voice: string;
   speed: number;
   pitch: number;
   enabled: boolean; // Master TTS toggle
   autoReadEnabled: boolean; // Global default for new chats
+  // Text preprocessing mode — controls what markdown elements are included in TTS
+  ttsTextMode: TTSTextMode;
   // Streaming TTS settings (Qwen3-TTS only for now)
   backend: TTSBackend;
   voicesByBackend?: Partial<Record<TTSBackend, string>>;
@@ -53,6 +63,7 @@ export const DEFAULT_TTS_SETTINGS: TTSSettings = {
   pitch: 1.0,
   enabled: false,
   autoReadEnabled: false,
+  ttsTextMode: "stripped",
   backend: "kokoro",
   voicesByBackend: {
     kokoro: "af_heart",

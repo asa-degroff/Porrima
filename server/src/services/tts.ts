@@ -175,7 +175,7 @@ export async function generateTTS(request: TTSGenerateRequest, settings: TTSSett
   console.log(`[TTS] Cache miss: ${cacheKey}, generating with ${settings.backend}...`);
 
   // Preprocess markdown text for TTS (strip formatting)
-  const cleanText = extractTextForTTS(request.text);
+  const cleanText = extractTextForTTS(request.text, settings.ttsTextMode);
   console.log(`[TTS] Preprocessed text: ${cleanText.substring(0, 100)}${cleanText.length > 100 ? "..." : ""}`);
 
   let audio: Buffer;

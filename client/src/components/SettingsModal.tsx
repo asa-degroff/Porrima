@@ -446,6 +446,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const voiceDd = useDropdown();
   const backendDd = useDropdown();
   const boundaryTierDd = useDropdown();
+  const textModeDd = useDropdown();
   const supertonicLanguageDd = useDropdown();
   const extractionModelDd = useDropdown();
   const embeddingModelDd = useDropdown();
@@ -5415,6 +5416,76 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     </div>
                   </>
                 )}
+
+                {/* Text preprocessing mode */}
+                <div className="space-y-1">
+                  <label className="block text-sm text-white/50">Text Preprocessing</label>
+                  <Dropdown
+                    state={textModeDd}
+                    trigger={
+                      <span className="truncate flex-1 text-left">
+                        {ttsSettings.ttsTextMode === "minimal"
+                          ? "Minimal — keep code, URLs"
+                          : ttsSettings.ttsTextMode === "standard"
+                            ? "Standard — keep inline code"
+                            : "Stripped — remove code and URLs"}
+                      </span>
+                    }
+                  >
+                    <button
+                      onClick={async () => {
+                        const updated = await updateTTSSettings({ ttsTextMode: "minimal" });
+                        applyTtsSettingsUpdate(updated);
+                        textModeDd.close();
+                      }}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                        ttsSettings.ttsTextMode === "minimal" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                      style={{
+                        backgroundColor: ttsSettings.ttsTextMode === "minimal" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: ttsSettings.ttsTextMode === "minimal" ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
+                    >
+                      <div className="font-medium">Minimal</div>
+                      <div className="text-[10px] text-white/40">Keep code blocks, inline code, and URLs. Strip only LaTeX.</div>
+                    </button>
+                    <button
+                      onClick={async () => {
+                        const updated = await updateTTSSettings({ ttsTextMode: "standard" });
+                        applyTtsSettingsUpdate(updated);
+                        textModeDd.close();
+                      }}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                        ttsSettings.ttsTextMode === "standard" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                      style={{
+                        backgroundColor: ttsSettings.ttsTextMode === "standard" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: ttsSettings.ttsTextMode === "standard" ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
+                    >
+                      <div className="font-medium">Standard</div>
+                      <div className="text-[10px] text-white/40">Strip code blocks and URLs, but keep inline code words like <code className="px-0.5 bg-white/5 rounded">variableName</code>.</div>
+                    </button>
+                    <button
+                      onClick={async () => {
+                        const updated = await updateTTSSettings({ ttsTextMode: "stripped" });
+                        applyTtsSettingsUpdate(updated);
+                        textModeDd.close();
+                      }}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                        ttsSettings.ttsTextMode === "stripped" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                      style={{
+                        backgroundColor: ttsSettings.ttsTextMode === "stripped" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: ttsSettings.ttsTextMode === "stripped" ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
+                    >
+                      <div className="font-medium">Stripped</div>
+                      <div className="text-[10px] text-white/40">Remove code blocks, inline code, URLs, and LaTeX. Most aggressive.</div>
+                    </button>
+                  </Dropdown>
+                  <p className="text-white/30 text-xs">Controls what markdown elements are included in TTS speech output</p>
+                </div>
 
                 {/* Auto-read toggle */}
                 <div className="flex items-center justify-between">

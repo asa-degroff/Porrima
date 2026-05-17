@@ -2,7 +2,7 @@ import express from "express";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { TTSBackend, TTSSettings } from "../types/tts.js";
+import type { TTSBackend, TTSSettings, TTSTextMode } from "../types/tts.js";
 import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
 import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkKokoroAvailability, checkQwen3TTSInstallation, checkSupertonicTTSInstallation } from "../services/tts.js";
 import { getQwen3AudioFile } from "../services/tts-qwen3.js";
@@ -59,6 +59,10 @@ function isTTSBackend(value: unknown): value is TTSBackend {
   return typeof value === "string" && TTS_BACKENDS.includes(value as TTSBackend);
 }
 
+function isTTSTextMode(value: unknown): value is TTSTextMode {
+  return typeof value === "string" && ["minimal", "standard", "stripped"].includes(value);
+}
+
 function sanitizeSupertonicLanguage(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_TTS_SETTINGS.supertonicLanguage;
   const trimmed = value.trim().toLowerCase();
@@ -88,10 +92,13 @@ function normalizeTTSSettings(settings: Partial<TTSSettings>): TTSSettings {
     voicesByBackend[backend] = settings.voice;
   }
 
+  const ttsTextMode = isTTSTextMode(settings.ttsTextMode) ? settings.ttsTextMode : DEFAULT_TTS_SETTINGS.ttsTextMode;
+
   return {
     ...DEFAULT_TTS_SETTINGS,
     ...settings,
     backend,
+    ttsTextMode,
     voicesByBackend,
     voice: settings.voice || voicesByBackend[backend] || DEFAULT_VOICE_BY_BACKEND[backend],
     supertonicPitchSemitones: sanitizeNumber(
@@ -165,6 +172,7 @@ router.post("/settings", async (req, res) => {
       pitch,
       enabled,
       autoReadEnabled,
+      ttsTextMode,
       backend,
       streamingEnabled,
       streamingChunkSize,
@@ -203,6 +211,13 @@ router.post("/settings", async (req, res) => {
         return res.status(400).json({ error: "autoReadEnabled must be a boolean" });
       }
       userSettings.autoReadEnabled = autoReadEnabled;
+    }
+
+    if (ttsTextMode !== undefined) {
+      if (!isTTSTextMode(ttsTextMode)) {
+        return res.status(400).json({ error: "ttsTextMode must be 'minimal', 'standard', or 'stripped'" });
+      }
+      userSettings.ttsTextMode = ttsTextMode;
     }
 
     let backendChanged = false;

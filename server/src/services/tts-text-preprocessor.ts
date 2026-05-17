@@ -3,6 +3,8 @@
  * Ported from GreenGale's tts.ts implementation
  */
 
+import type { TTSTextMode } from "../types/tts.js";
+
 /**
  * Strip URLs from text for TTS (URLs don't read well aloud)
  */
@@ -18,17 +20,46 @@ function formatHeadingForSpeech(heading: string): string {
 
 /**
  * Extract speakable text from markdown for TTS.
- * Removes code blocks and formatting while preserving readable content.
+ * Mode controls what elements are included or excluded:
+ * - "minimal": Keep almost everything (code blocks, inline code, URLs). Strip only LaTeX.
+ * - "standard": Strip code blocks and URLs, but keep inline code words.
+ * - "stripped": Remove code blocks, inline code, URLs, and LaTeX. (Most aggressive)
  */
-export function extractTextForTTS(markdown: string): string {
+export function extractTextForTTS(markdown: string, mode: TTSTextMode = "stripped"): string {
+  const keepFencedCode = mode === "minimal";
+  const keepInlineCode = mode === "minimal" || mode === "standard";
+  const keepUrls = mode === "minimal";
+  const stripLatex = true; // Always strip LaTeX — never speaks well
+
+  // Handle fenced code blocks based on mode
+  let text = markdown;
+  if (keepFencedCode) {
+    // Keep fenced code blocks but strip the language identifier and fence markers
+    text = text.replace(/```[\w-]*\n([\s\S]*?)```/g, "$1");
+  } else {
+    text = text.replace(/```[\w-]*\n[\s\S]*?```/g, "");
+  }
+
+  // Handle inline code based on mode
+  if (keepInlineCode) {
+    // Strip backtick markers but keep the content
+    text = text.replace(/`([^`]+)`/g, "$1");
+  } else {
+    text = text.replace(/`[^`]+`/g, "");
+  }
+
+  // Handle URLs based on mode
+  if (!keepUrls) {
+    text = stripUrls(text);
+  }
+
   return (
-    markdown
-      // Remove fenced code blocks (with optional language)
-      .replace(/```[\w-]*\n[\s\S]*?```/g, "")
-      // Remove inline code
-      .replace(/`[^`]+`/g, "")
+    text
       // Convert links to just text: [text](url) → text
+      // (done before markdown cleanup so link text is preserved)
       .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      // Clean up orphaned link fragments from URL stripping: [text]( → text
+      .replace(/\[([^\]]+)\]\([^)]*$/gm, "$1")
       // Convert headings to punctuated standalone phrases so the next line
       // does not run into the heading during TTS chunking.
       .replace(/^#{1,6}\s+(.+?)\s*$/gm, (_, heading) => formatHeadingForSpeech(heading))
@@ -54,9 +85,8 @@ export function extractTextForTTS(markdown: string): string {
       })
       // Remove HTML tags
       .replace(/<[^>]+>/g, "")
-      // Remove LaTeX block delimiters
+      // Remove LaTeX (always)
       .replace(/\$\$[\s\S]*?\$\$/g, "")
-      // Remove inline LaTeX
       .replace(/\$[^$\n]+\$/g, "")
       // Convert parentheses to commas for natural pauses in TTS
       // (parenthetical content) → , parenthetical content,

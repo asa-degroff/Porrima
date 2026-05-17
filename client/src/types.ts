@@ -548,6 +548,7 @@ export interface GenerationState {
 
 // TTS Types
 export type TTSBackend = "kokoro" | "qwen3-tts" | "supertonic-3";
+export type TTSTextMode = "minimal" | "standard" | "stripped";
 
 export interface TTSSettings {
   voice: string;
@@ -555,6 +556,7 @@ export interface TTSSettings {
   pitch: number;
   enabled: boolean;
   autoReadEnabled: boolean;
+  ttsTextMode: TTSTextMode;
   backend: TTSBackend;
   voicesByBackend?: Partial<Record<TTSBackend, string>>;
   streamingEnabled: boolean;

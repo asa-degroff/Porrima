@@ -8,6 +8,7 @@ const DEFAULT_SETTINGS: TTSSettings = {
   pitch: 1.0,
   enabled: false,
   autoReadEnabled: false,
+  ttsTextMode: "stripped",
   backend: "kokoro",
   voicesByBackend: {
     kokoro: "af_heart",

@@ -1,4 +1,4 @@
-import type { TTSGenerateRequest, TTSGenerateResponse, TTSSettings } from "../types/tts.js";
+import type { TTSGenerateRequest, TTSGenerateResponse, TTSSettings, TTSTextMode } from "../types/tts.js";
 import { extractTextForTTS, splitIntoSentences } from "./tts-text-preprocessor.js";
 import { generateTTS } from "./tts.js";
 
@@ -6,6 +6,7 @@ export interface TTSChunkPlanOptions {
   firstChunkTargetChars?: number;
   chunkTargetChars?: number;
   hardMaxChars?: number;
+  textMode?: TTSTextMode;
 }
 
 export interface TTSGeneratedChunk extends TTSGenerateResponse {
@@ -45,7 +46,7 @@ function splitLongText(text: string, hardMaxChars: number): string[] {
 }
 
 export function planTTSChunks(text: string, options: TTSChunkPlanOptions = {}): string[] {
-  const cleanText = extractTextForTTS(text);
+  const cleanText = extractTextForTTS(text, options.textMode ?? "stripped");
   if (!cleanText) return [];
 
   const firstChunkTarget = options.firstChunkTargetChars ?? DEFAULT_FIRST_CHUNK_TARGET;
@@ -89,7 +90,7 @@ export async function* generateTTSChunks(
   settings: TTSSettings,
   options: TTSChunkPlanOptions = {},
 ): AsyncGenerator<TTSGeneratedChunk> {
-  const textChunks = planTTSChunks(request.text, options);
+  const textChunks = planTTSChunks(request.text, { textMode: settings.ttsTextMode, ...options });
   const totalChunks = textChunks.length;
 
   for (let index = 0; index < totalChunks; index++) {
