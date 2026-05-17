@@ -9,7 +9,11 @@ import type { TTSTextMode } from "../types/tts.js";
  * Strip URLs from text for TTS (URLs don't read well aloud)
  */
 function stripUrls(text: string): string {
-  return text.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+  return text
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/[ \t]*\n[ \t]*/g, "\n")
+    .trim();
 }
 
 function formatHeadingForSpeech(heading: string): string {
