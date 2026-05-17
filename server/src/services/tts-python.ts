@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { TTSBackend } from "../types/tts.js";
 
@@ -21,15 +22,60 @@ export interface TtsPythonStatus {
   pythonPath?: string;
   source?: string;
   requiredImports: string[];
+  installCommand: string;
   error?: string;
   candidates: Array<{ path: string; source: string; available: boolean; missingImports?: string[]; error?: string }>;
 }
+
+const BACKEND_INSTALL_COMMANDS: Record<TtsPythonBackend, string> = {
+  kokoro: "./scripts/install-tts-backend.sh kokoro",
+  "qwen3-tts": "./scripts/install-tts-backend.sh qwen3-tts",
+  "supertonic-3": "./scripts/install-tts-backend.sh supertonic-3",
+};
 
 const REQUIRED_IMPORTS: Record<TtsPythonBackend, string[]> = {
   kokoro: ["numpy", "kokoro"],
   "qwen3-tts": ["qwen_tts", "torch", "soundfile"],
   "supertonic-3": ["supertonic", "soundfile", "numpy"],
 };
+
+function parseEnvLine(line: string): [string, string] | null {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) return null;
+  const [key, ...valueParts] = trimmed.split("=");
+  const name = key.trim();
+  let value = valueParts.join("=").trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return null;
+  if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1);
+  }
+  return [name, value];
+}
+
+function loadTtsEnvFiles(): void {
+  const envFiles = [
+    join(process.cwd(), "..", ".env"),
+    join(process.cwd(), ".env"),
+    join(process.cwd(), ".env.tts"),
+    join(homedir(), ".quje-agent", "tts.env"),
+  ];
+
+  for (const envFile of envFiles) {
+    if (!existsSync(envFile)) continue;
+    try {
+      for (const line of readFileSync(envFile, "utf-8").split(/\r?\n/)) {
+        const parsed = parseEnvLine(line);
+        if (!parsed) continue;
+        const [name, value] = parsed;
+        process.env[name] ??= value;
+      }
+    } catch (err) {
+      console.warn(`[TTS] Failed to read env file ${envFile}:`, err);
+    }
+  }
+}
+
+loadTtsEnvFiles();
 
 function envCandidates(backend: TtsPythonBackend): PythonCandidate[] {
   const envNames: Record<TtsPythonBackend, string[]> = {
@@ -50,15 +96,18 @@ function envCandidates(backend: TtsPythonBackend): PythonCandidate[] {
 function defaultCandidates(backend: TtsPythonBackend): PythonCandidate[] {
   const serverVenv = join(process.cwd(), ".venv", "bin", "python");
   const repoVenv = join(process.cwd(), "..", ".venv", "bin", "python");
+  const backendVenv = join(process.cwd(), "..", ".venv-tts", backend, "bin", "python");
 
   if (backend === "kokoro") {
     return [
+      { path: backendVenv, source: `.venv-tts/${backend}` },
       { path: serverVenv, source: "server .venv" },
       { path: repoVenv, source: "repo .venv" },
     ];
   }
 
   return [
+    { path: backendVenv, source: `.venv-tts/${backend}` },
     { path: repoVenv, source: "repo .venv" },
     { path: serverVenv, source: "server .venv" },
   ];
@@ -143,6 +192,7 @@ export async function getTtsPythonStatus(backend: TtsPythonBackend): Promise<Tts
       pythonPath: selected.path,
       source: selected.source,
       requiredImports,
+      installCommand: BACKEND_INSTALL_COMMANDS[backend],
       candidates,
     };
   }
@@ -150,8 +200,9 @@ export async function getTtsPythonStatus(backend: TtsPythonBackend): Promise<Tts
   return {
     available: false,
     requiredImports,
+    installCommand: BACKEND_INSTALL_COMMANDS[backend],
     candidates,
-    error: `No Python interpreter found with required imports: ${requiredImports.join(", ")}`,
+    error: `No Python interpreter found with required imports: ${requiredImports.join(", ")}. Run ${BACKEND_INSTALL_COMMANDS[backend]} or set a backend-specific Python override.`,
   };
 }
 

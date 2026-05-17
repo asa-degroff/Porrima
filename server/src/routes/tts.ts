@@ -515,6 +515,8 @@ router.get("/status", async (req, res) => {
         error: result.error,
         pythonPath: pythonStatus.pythonPath,
         pythonSource: pythonStatus.source,
+        requiredImports: pythonStatus.requiredImports,
+        installCommand: pythonStatus.installCommand,
         pythonCandidates: pythonStatus.candidates,
       });
     } else if (backend === "supertonic-3") {
@@ -525,6 +527,8 @@ router.get("/status", async (req, res) => {
         error: result.error,
         pythonPath: pythonStatus.pythonPath,
         pythonSource: pythonStatus.source,
+        requiredImports: pythonStatus.requiredImports,
+        installCommand: pythonStatus.installCommand,
         pythonCandidates: pythonStatus.candidates,
       });
     } else {
@@ -543,6 +547,8 @@ router.get("/status", async (req, res) => {
         error: result.error,
         pythonPath: result.pythonPath,
         pythonSource: result.source,
+        requiredImports: pythonStatus.requiredImports,
+        installCommand: pythonStatus.installCommand,
         pythonCandidates: pythonStatus.candidates,
       });
     }

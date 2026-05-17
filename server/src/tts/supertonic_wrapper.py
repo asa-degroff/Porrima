@@ -8,6 +8,7 @@ import argparse
 import io
 import json
 import os
+import math
 import subprocess
 import sys
 
@@ -38,7 +39,14 @@ def main():
     parser.add_argument("--text", required=True, help="Text to synthesize")
     parser.add_argument("--voice", default="M1", help="Voice style ID (M1-M5, F1-F5)")
     parser.add_argument("--speed", type=float, default=1.05, help="Speed multiplier (0.7-2.0)")
-    parser.add_argument("--pitch", type=float, default=1.0, help="Pitch multiplier applied with ffmpeg rubberband")
+    parser.add_argument("--pitch", type=float, default=1.0, help="Deprecated pitch multiplier; use --pitch-semitones")
+    parser.add_argument("--pitch-semitones", type=float, default=None, help="Pitch shift in semitones")
+    parser.add_argument(
+        "--pitch-processor",
+        default=os.environ.get("SUPERTONIC_TTS_PITCH_PROCESSOR", "resample"),
+        choices=("resample", "rubberband"),
+        help="Pitch shift processor",
+    )
     parser.add_argument("--lang", default=os.environ.get("SUPERTONIC_TTS_LANG", "en"), help="Language code")
     parser.add_argument("--steps", type=int, default=int(os.environ.get("SUPERTONIC_TTS_STEPS", "8")), help="Quality steps")
     parser.add_argument("--max-chunk-length", type=int, default=int(os.environ.get("SUPERTONIC_TTS_MAX_CHUNK_LENGTH", "300")), help="Max characters per chunk")
@@ -74,15 +82,28 @@ def main():
             raise ValueError("No audio generated")
 
         sample_rate = 44100
-        if abs(args.pitch - 1.0) >= 0.001:
+        pitch_semitones = args.pitch_semitones
+        if pitch_semitones is None:
+            pitch_semitones = 12 * math.log2(args.pitch) if args.pitch > 0 else 0.0
+
+        if abs(pitch_semitones) >= 0.05:
             native_buffer = io.BytesIO()
-            sf.write(native_buffer, audio, sample_rate, format="WAV", subtype="PCM_16")
-            filter_args = ":".join(
-                [
-                    f"pitch={args.pitch}",
-                    "pitchq=quality",
-                ]
-            )
+            sf.write(native_buffer, audio, sample_rate, format="WAV", subtype="FLOAT")
+            pitch_ratio = 2 ** (pitch_semitones / 12)
+
+            if args.pitch_processor == "rubberband":
+                filter_args = ":".join(
+                    [
+                        f"pitch={pitch_ratio:.8f}",
+                        "pitchq=quality",
+                        "formant=preserved",
+                    ]
+                )
+                pitch_filter = f"rubberband={filter_args}"
+            else:
+                shifted_rate = max(1000, int(round(sample_rate * pitch_ratio)))
+                tempo = 1 / pitch_ratio
+                pitch_filter = f"asetrate={shifted_rate},aresample={sample_rate}:resampler=soxr:precision=28,atempo={tempo:.8f}"
 
             process = subprocess.Popen(
                 [
@@ -103,7 +124,7 @@ def main():
             )
             out, err = process.communicate(input=native_buffer.getvalue())
             if process.returncode != 0:
-                raise RuntimeError(f"FFmpeg rubberband pitch processing failed: {err.decode().strip()}")
+                raise RuntimeError(f"FFmpeg pitch processing failed: {err.decode().strip()}")
 
             processed_audio, processed_rate = sf.read(io.BytesIO(out), dtype="float32")
             audio = np.asarray(processed_audio).squeeze()
@@ -124,7 +145,8 @@ def main():
             "sample_rate": sample_rate,
             "voice": args.voice,
             "speed": args.speed,
-            "pitch": args.pitch,
+            "pitch_semitones": pitch_semitones,
+            "pitch_processor": args.pitch_processor,
             "lang": args.lang,
             "steps": args.steps,
             "max_chunk_length": args.max_chunk_length,

@@ -15,13 +15,9 @@ if (!existsSync(CACHE_DIR)) {
   mkdirSync(CACHE_DIR, { recursive: true });
 }
 
-function pitchSemitonesToRatio(semitones: number): number {
-  return Math.pow(2, semitones / 12);
-}
-
 function generateCacheKey(text: string, settings: TTSSettings): string {
   const input = [
-    "supertonic-3-v6",
+    "supertonic-3-v7-resample-pitch",
     text,
     settings.voice,
     settings.speed,
@@ -96,7 +92,6 @@ async function runSupertonicTTS(
   const { pythonPath } = await resolveTtsPython("supertonic-3");
 
   return new Promise((resolve, reject) => {
-    const pitchRatio = pitchSemitonesToRatio(settings.supertonicPitchSemitones);
     const args = [
       PYTHON_SCRIPT,
       "--text",
@@ -105,8 +100,8 @@ async function runSupertonicTTS(
       settings.voice,
       "--speed",
       settings.speed.toString(),
-      "--pitch",
-      pitchRatio.toFixed(6),
+      "--pitch-semitones",
+      settings.supertonicPitchSemitones.toString(),
       "--lang",
       settings.supertonicLanguage,
       "--steps",
@@ -197,7 +192,7 @@ export async function generateSupertonicTTS(request: TTSGenerateRequest, setting
 
   console.log(`[TTS-Supertonic] Cache miss: ${cacheKey}, generating...`);
 
-  const cleanText = extractTextForTTS(request.text);
+  const cleanText = extractTextForTTS(request.text, settings.ttsTextMode);
   console.log(`[TTS-Supertonic] Preprocessed text: ${cleanText.substring(0, 100)}${cleanText.length > 100 ? "..." : ""}`);
 
   const { audio, duration } = await runSupertonicTTS(cleanText, settings);

@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { TTSSettings } from "../types";
-import { getTTSSettings, updateTTSSettings } from "../api/tts";
+import { getTTSSettings, getTTSStatus, updateTTSSettings } from "../api/tts";
 
 const DEFAULT_SETTINGS: TTSSettings = {
   voice: "af_heart",
@@ -602,14 +602,12 @@ export function useTTS() {
    */
   const checkAvailability = useCallback(async (): Promise<boolean> => {
     try {
-      const res = await fetch("/api/tts/status", { credentials: "include" });
-      if (!res.ok) return false;
-      const data = await res.json();
+      const data = await getTTSStatus(settings.backend);
       return data.available === true;
     } catch {
       return false;
     }
-  }, []);
+  }, [settings.backend]);
 
   return {
     settings,

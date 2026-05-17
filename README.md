@@ -44,6 +44,18 @@ cd quje-agent
 npm install
 ```
 
+## Optional TTS Backends
+
+TTS backends use Python packages that are intentionally optional. Install only the backends you want:
+
+```bash
+./scripts/install-tts-backend.sh kokoro
+./scripts/install-tts-backend.sh qwen3-tts
+./scripts/install-tts-backend.sh supertonic-3
+```
+
+The installer creates per-backend virtual environments under `.venv-tts/` and writes interpreter overrides to `server/.env.tts`. This keeps Kokoro, Qwen3-TTS, and Supertonic dependencies isolated so adding one backend does not break another. Backend status is available at `/api/tts/status?backend=kokoro`, `/api/tts/status?backend=qwen3-tts`, and `/api/tts/status?backend=supertonic-3`.
+
 ## Development
 
 Run the server and client in separate terminals:

@@ -1,4 +1,4 @@
-import type { TTSBackend, TTSSettings, TTSVoiceCategory } from "../types";
+import type { TTSBackend, TTSBackendStatus, TTSSettings, TTSVoiceCategory } from "../types";
 
 export interface TTSGenerateRequest {
   text: string;
@@ -93,16 +93,17 @@ export async function updateTTSSettings(settings: Partial<TTSSettings>): Promise
 /**
  * Check TTS service status
  */
-export async function getTTSStatus(): Promise<{ available: boolean; error?: string }> {
+export async function getTTSStatus(backend?: TTSBackend): Promise<TTSBackendStatus> {
   try {
-    const res = await fetch("/api/tts/status", {
+    const url = backend ? `/api/tts/status?backend=${backend}` : "/api/tts/status";
+    const res = await fetch(url, {
       credentials: "include",
     });
     if (!res.ok) {
-      return { available: false, error: "Service unavailable" };
+      return { backend: backend ?? "kokoro", available: false, error: "Service unavailable" };
     }
     return res.json();
   } catch {
-    return { available: false, error: "Connection failed" };
+    return { backend: backend ?? "kokoro", available: false, error: "Connection failed" };
   }
 }

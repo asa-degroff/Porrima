@@ -582,6 +582,25 @@ export interface TTSVoiceCategory {
   voices: TTSVoiceInfo[];
 }
 
+export interface TTSPythonCandidate {
+  path: string;
+  source: string;
+  available: boolean;
+  missingImports?: string[];
+  error?: string;
+}
+
+export interface TTSBackendStatus {
+  backend: TTSBackend;
+  available: boolean;
+  error?: string;
+  pythonPath?: string;
+  pythonSource?: string;
+  requiredImports?: string[];
+  installCommand?: string;
+  pythonCandidates?: TTSPythonCandidate[];
+}
+
 // Vision Analysis Types (re-export from API client for convenience)
 export interface VisionPreset {
   key: string;

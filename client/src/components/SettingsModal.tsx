@@ -22,8 +22,8 @@ import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinari
 import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { AutomationRun, AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, BlueskySettings, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
-import { getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
+import type { AutomationRun, AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, BlueskySettings, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
+import { getTTSStatus, getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { ProviderIcon } from "./ProviderIcon";
@@ -427,6 +427,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [ttsVoices, setTtsVoices] = useState<Array<{ label: string; voices: Array<{ id: string; name: string }> }>>([]);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsError, setTtsError] = useState<string | null>(null);
+  const [ttsBackendStatus, setTtsBackendStatus] = useState<TTSBackendStatus | null>(null);
+  const [ttsBackendStatusLoading, setTtsBackendStatusLoading] = useState(false);
   const ttsSliderSaveTimersRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
   const ttsSliderSaveSeqRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
   // Bluesky settings
@@ -887,6 +889,18 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           console.error("[TTS] Failed to load voices:", err);
         });
     }
+  }, [ttsSettings?.backend]);
+
+  useEffect(() => {
+    if (!ttsSettings?.backend) return;
+    setTtsBackendStatusLoading(true);
+    getTTSStatus(ttsSettings.backend)
+      .then(setTtsBackendStatus)
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : "Failed to check TTS backend";
+        setTtsBackendStatus({ backend: ttsSettings.backend, available: false, error: message });
+      })
+      .finally(() => setTtsBackendStatusLoading(false));
   }, [ttsSettings?.backend]);
 
   // Fetch llama.cpp binary path info
@@ -5325,6 +5339,28 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         ? "Advanced model with streaming support (~2GB)"
                         : "Fast local CPU inference with multilingual Supertonic voices"}
                   </p>
+                  <div className={`rounded-lg border px-3 py-2 text-xs ${
+                    ttsBackendStatusLoading
+                      ? "border-white/10 bg-white/5 text-white/40"
+                      : ttsBackendStatus?.available
+                        ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200"
+                        : "border-amber-400/20 bg-amber-500/10 text-amber-100"
+                  }`}>
+                    {ttsBackendStatusLoading ? (
+                      <span>Checking backend...</span>
+                    ) : ttsBackendStatus?.available ? (
+                      <span>
+                        Ready via {ttsBackendStatus.pythonSource || "Python"}{ttsBackendStatus.pythonPath ? ` (${ttsBackendStatus.pythonPath})` : ""}
+                      </span>
+                    ) : (
+                      <div className="space-y-1">
+                        <div>{ttsBackendStatus?.error || "Backend dependencies are not installed."}</div>
+                        {ttsBackendStatus?.installCommand && (
+                          <code className="block text-[11px] text-amber-50/80 break-all">{ttsBackendStatus.installCommand}</code>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Streaming toggle (Qwen3-TTS only) */}
