@@ -49,12 +49,14 @@ npm install
 TTS backends use Python packages that are intentionally optional. Install only the backends you want:
 
 ```bash
-./scripts/install-tts-backend.sh kokoro
+./scripts/install-tts-backend.sh kokoro --python /path/to/python3.12
 ./scripts/install-tts-backend.sh qwen3-tts
 ./scripts/install-tts-backend.sh supertonic-3
 ```
 
 The installer creates per-backend virtual environments under `.venv-tts/` and writes interpreter overrides to `server/.env.tts`. This keeps Kokoro, Qwen3-TTS, and Supertonic dependencies isolated so adding one backend does not break another. Backend status is available at `/api/tts/status?backend=kokoro`, `/api/tts/status?backend=qwen3-tts`, and `/api/tts/status?backend=supertonic-3`.
+
+Kokoro and Qwen3-TTS should use Python 3.10-3.13. Python 3.14 can force native dependencies such as spaCy or torch to build from source instead of installing prebuilt wheels.
 
 ## Development
 
