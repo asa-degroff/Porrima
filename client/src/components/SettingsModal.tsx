@@ -94,6 +94,29 @@ const SUPERTONIC_LANGUAGES = [
   { code: "na", label: "Unknown / fallback" },
 ] as const;
 
+const KOKORO_PITCH_MIN = 0.5;
+const KOKORO_PITCH_MAX = 2;
+const TTS_MULTIPLIER_MIN = 0.5;
+const TTS_MULTIPLIER_MAX = 2;
+
+function multiplierToSliderValue(multiplier: number, min = TTS_MULTIPLIER_MIN, max = TTS_MULTIPLIER_MAX): number {
+  const clamped = Math.min(max, Math.max(min, multiplier));
+  return 50 + Math.log2(clamped) * 50;
+}
+
+function sliderValueToMultiplier(value: number): number {
+  const clamped = Math.min(100, Math.max(0, value));
+  return 2 ** ((clamped - 50) / 50);
+}
+
+function kokoroPitchToSliderValue(pitch: number): number {
+  return multiplierToSliderValue(pitch, KOKORO_PITCH_MIN, KOKORO_PITCH_MAX);
+}
+
+function kokoroSliderValueToPitch(value: number): number {
+  return sliderValueToMultiplier(value);
+}
+
 function useActiveSection(sectionIds: readonly string[], root: Element | null) {
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -5630,22 +5653,47 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <label className="block text-sm text-white/50">Speed: {ttsSettings.speed.toFixed(1)}x</label>
                   <input
                     type="range"
-                    min="0.5"
-                    max="2"
-                    step="0.1"
-                    value={ttsSettings.speed}
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={multiplierToSliderValue(ttsSettings.speed)}
                     onChange={(e) => {
-                      updateTtsSliderSetting("speed", parseFloat(e.target.value));
+                      updateTtsSliderSetting("speed", sliderValueToMultiplier(parseFloat(e.target.value)));
                     }}
-                    onPointerUp={(e) => void saveTtsSliderSetting("speed", parseFloat(e.currentTarget.value))}
-                    onBlur={(e) => void saveTtsSliderSetting("speed", parseFloat(e.currentTarget.value))}
+                    onPointerUp={(e) => void saveTtsSliderSetting("speed", sliderValueToMultiplier(parseFloat(e.currentTarget.value)))}
+                    onBlur={(e) => void saveTtsSliderSetting("speed", sliderValueToMultiplier(parseFloat(e.currentTarget.value)))}
                     className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                   />
                   <div className="flex justify-between text-xs text-white/30">
                     <span>0.5x</span>
+                    <span>1.0x</span>
                     <span>2.0x</span>
                   </div>
                 </div>
+
+                {ttsSettings.backend === "kokoro" && (
+                  <div className="space-y-1">
+                    <label className="block text-sm text-white/50">Pitch: {ttsSettings.pitch.toFixed(2)}x</label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={kokoroPitchToSliderValue(ttsSettings.pitch)}
+                      onChange={(e) => {
+                        updateTtsSliderSetting("pitch", kokoroSliderValueToPitch(parseFloat(e.target.value)));
+                      }}
+                      onPointerUp={(e) => void saveTtsSliderSetting("pitch", kokoroSliderValueToPitch(parseFloat(e.currentTarget.value)))}
+                      onBlur={(e) => void saveTtsSliderSetting("pitch", kokoroSliderValueToPitch(parseFloat(e.currentTarget.value)))}
+                      className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                    />
+                    <div className="flex justify-between text-xs text-white/30">
+                      <span>0.5x</span>
+                      <span>1.0x</span>
+                      <span>2.0x</span>
+                    </div>
+                  </div>
+                )}
 
                 {ttsSettings.backend === "supertonic-3" && (
                   <div className="space-y-3 pt-2 border-t border-white/10">
