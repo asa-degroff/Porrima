@@ -612,7 +612,7 @@ export interface MemorySearchRankingOptions {
  * Maximal Marginal Relevance (MMR) re-ranking.
  * Balances relevance against redundancy by iteratively selecting items that
  * are both relevant to the query and dissimilar to already-selected items.
- * 
+ *
  * @param candidates - Pre-scored candidates (sorted by relevance)
  * @param queryEmbedding - The query embedding for similarity computation
  * @param k - Number of items to select
@@ -1043,7 +1043,7 @@ export async function searchMemoriesRaw(
   topK: number
 ): Promise<ScoredMemory[]> {
   const db = getDb();
-  
+
   const vecRows = db
     .prepare(
       `SELECT id, distance FROM vec_memories WHERE embedding MATCH ? ORDER BY distance LIMIT ?`
@@ -1193,25 +1193,25 @@ export async function removeSupersessionLink(
 ): Promise<void> {
   const db = getDb();
   const now = new Date().toISOString();
-  
+
   const remove = db.transaction(() => {
     // Mark the audit record as removed
     db.prepare(`
-      UPDATE memory_supersession_history 
+      UPDATE memory_supersession_history
       SET removed_at = ?, removal_reason = ?
       WHERE older_memory_id = ? AND newer_memory_id = ? AND removed_at IS NULL
     `).run(now, reason || '', olderMemoryId, newerMemoryId);
-    
+
     // Clear the links
     db.prepare(`
       UPDATE memories SET supersedes = NULL WHERE id = ? AND supersedes = ?
     `).run(newerMemoryId, olderMemoryId);
-    
+
     db.prepare(`
       UPDATE memories SET superseded_by = NULL WHERE id = ? AND superseded_by = ?
     `).run(olderMemoryId, newerMemoryId);
   });
-  
+
   remove();
   console.log(`[memory] Removed supersession link: ${olderMemoryId} → ${newerMemoryId}`);
 }
@@ -1276,6 +1276,77 @@ export async function getMemoryLineage(memoryId: string): Promise<{
 export interface DuplicateMatch {
   memory: Memory;
   similarity: number;
+}
+
+export async function findSimilarMemoryCandidates(
+  embedding: number[],
+  threshold: number,
+  limit: number
+): Promise<DuplicateMatch[]> {
+  const db = getDb();
+
+  const vecRows = db
+    .prepare(
+      "SELECT id, distance FROM vec_memories WHERE embedding MATCH ? ORDER BY distance LIMIT ?"
+    )
+    .all(new Float32Array(embedding), limit) as Array<{
+    id: string;
+    distance: number;
+  }>;
+
+  if (vecRows.length === 0) return [];
+
+  const ids = vecRows.map((r) => r.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const metaRows = db
+    .prepare(
+      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories WHERE id IN (${placeholders})`
+    )
+    .all(...ids) as Array<{
+    id: string;
+    text: string;
+    category: string;
+    importance: number;
+    created_at: string;
+    last_accessed: string;
+    access_count: number;
+    source_chat_id: string;
+    project_id: string;
+    source_type: string | null;
+    source_id: string | null;
+    superseded_by: string | null;
+    supersedes: string | null;
+  }>;
+
+  const rowsById = new Map(metaRows.map((row) => [row.id, row]));
+
+  const matches: DuplicateMatch[] = [];
+  for (const vecRow of vecRows) {
+    const similarity = 1 - vecRow.distance;
+    const metaRow = rowsById.get(vecRow.id);
+    if (!metaRow || similarity < threshold) continue;
+    matches.push({
+      memory: {
+        id: metaRow.id,
+        text: metaRow.text,
+        category: metaRow.category as Memory["category"],
+        importance: metaRow.importance,
+        embedding: [],
+        createdAt: metaRow.created_at,
+        lastAccessed: metaRow.last_accessed,
+        accessCount: metaRow.access_count,
+        sourceChatId: metaRow.source_chat_id,
+        ...(metaRow.project_id ? { projectId: metaRow.project_id } : {}),
+        ...(metaRow.source_type ? { sourceType: metaRow.source_type as Memory["sourceType"] } : {}),
+        sourceId: metaRow.source_id || undefined,
+        supersededBy: metaRow.superseded_by || undefined,
+        supersedes: metaRow.supersedes || undefined,
+      },
+      similarity,
+    });
+  }
+
+  return matches;
 }
 
 export async function findDuplicates(

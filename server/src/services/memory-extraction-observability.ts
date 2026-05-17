@@ -30,12 +30,29 @@ export interface ExtractionChunkInfo {
   timingsMs: number[];
 }
 
+export interface ExtractionSupersessionResolution {
+  newFactIndex: number;
+  newFactText: string;
+  existingMemoryId: string;
+  existingMemoryText: string;
+  embeddingSimilarity: number;
+  textDiffOverlap: number;
+  decision: "supersede" | "separate" | "unsure";
+  reason?: string;
+}
+
 export interface ExtractionResults {
   facts: ExtractionParsedFact[];
   saved: number;
   superseded: number;
   skippedDuplicates: number;
   errors: number;
+  /** Batched LLM comparison results for ambiguous supersession candidates. */
+  supersessionResolutions?: ExtractionSupersessionResolution[];
+  /** Count of supersession links resolved by the batch comparison step. */
+  comparisonSuperseded?: number;
+  /** Count of candidates left as separate facts by the batch comparison step. */
+  comparisonSeparate?: number;
   /** Chunking metadata — present only when chunkCount > 1. */
   chunks?: ExtractionChunkInfo;
 }

@@ -9,18 +9,14 @@ import { ensureRouterModelLoaded, normalizeRouterModelId } from "./llama-router-
 import {
   addMemory,
   updateMemory,
-  findDuplicates,
-  searchMemoriesRaw,
+  findSimilarMemoryCandidates,
   createSupersessionLink,
-  getAllMemories,
-  getDb,
   getMemoriesByChatId,
-  getMemoryById,
   getMaxBlockChars,
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
 import { invalidateMemoriesCache } from "./memory-context.js";
-import { startExtractionRun } from "./memory-extraction-observability.js";
+import { startExtractionRun, type ExtractionSupersessionResolution } from "./memory-extraction-observability.js";
 import { recordModelStats } from "./model-stats.js";
 import type { LlamaTimings } from "./model-stats.js";
 import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat } from "../types.js";
@@ -894,16 +890,252 @@ async function extractInChunks(
   };
 }
 
-const DEDUP_THRESHOLD = 0.85;
+const EXACT_DUPLICATE_THRESHOLD = 0.95;
+const SUPERSESSION_CANDIDATE_THRESHOLD = 0.82;
+const SUPERSESSION_CANDIDATE_LIMIT = 5;
+
+// ---------------------------------------------------------------------------
+// Text-aware supersession scoring
+// ---------------------------------------------------------------------------
+// Character-level diff scoring to distinguish "same fact, updated" from
+// "same topic, different fact." Two memories can share high embedding
+// similarity without one replacing the other.
+
+/**
+ * Compute normalized text overlap between two strings.
+ * Uses a simple set-of-words approach for speed.
+ * Returns a value in [0, 1] where 1 means nearly identical text.
+ */
+function textOverlapScore(newText: string, oldText: string): number {
+  // Word-level Jaccard similarity
+  const newWords = new Set(newText.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  const oldWords = new Set(oldText.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+
+  if (newWords.size === 0 || oldWords.size === 0) return 0;
+
+  const intersection = [...newWords].filter(w => oldWords.has(w)).length;
+  const union = new Set([...newWords, ...oldWords]).size;
+  const jaccard = intersection / union;
+
+  // Length ratio penalty — vastly different lengths suggest different facts
+  const lenRatio = Math.min(newText.length, oldText.length) / Math.max(newText.length, oldText.length);
+
+  // Combine: Jaccard weighted heavily, length ratio as a sanity check
+  return jaccard * 0.8 + lenRatio * 0.2;
+}
+
+function isNearDuplicate(
+  newText: string,
+  oldText: string,
+  embeddingSimilarity: number
+): boolean {
+  const normalize = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
+  if (normalize(newText) === normalize(oldText)) return true;
+  const overlap = textOverlapScore(newText, oldText);
+  if (embeddingSimilarity >= 0.985 && overlap >= 0.75) return true;
+  return embeddingSimilarity >= EXACT_DUPLICATE_THRESHOLD && overlap >= 0.82;
+}
+
+/**
+ * Batch LLM comparison for possible supersession candidates.
+ *
+ * Delayed extraction sends candidate pairs together with conversation context
+ * to the extraction model for a single pass of judgment. The model can reason
+ * about relationships across all candidates simultaneously.
+ *
+ * Returns an array of resolutions with decisions and reasons.
+ */
+interface SupersessionResolution {
+  newMemoryId: string;
+  oldMemoryId: string;
+  decision: "supersede" | "separate" | "unsure";
+  reason?: string;
+}
+
+async function batchCompareSupersessions(
+  candidates: DedupAndSaveAmbiguousCandidate[],
+  conversationContext: string,
+  modelId: string
+): Promise<SupersessionResolution[]> {
+  if (candidates.length === 0) return [];
+
+  // Build the comparison prompt
+  const candidatePairs = candidates.map((c, i) =>
+    `Candidate index ${i}:
+  New fact: "${c.newText}"
+  Existing memory: "${c.oldText}"
+  Embedding similarity: ${c.embeddingSimilarity.toFixed(3)}
+  Text overlap: ${c.textOverlap.toFixed(2)}`
+  ).join("\n\n");
+
+  const prompt = `You extracted new memories from a conversation. Some of them are semantically similar to existing memories, but it's unclear whether they update/replace the old memory or are separate facts about the same topic.
+
+CONVERSATION CONTEXT:
+${conversationContext.slice(0, 4000)}
+
+SUPERSESSION CANDIDATES:
+${candidatePairs}
+
+For each pair, decide whether the new memory SUPERSEDES the existing memory (same information, updated/corrected), or if they are SEPARATE memories that should be kept.
+If multiple existing memories are shown for the same new fact, choose at most the single best supersession target.
+
+Respond with a JSON array:
+[
+  { "index": 0, "decision": "supersede" | "separate" | "unsure", "reason": "brief explanation" },
+  ...
+]`;
+
+  try {
+    const responseText = await callExtractionLLM(
+      modelId,
+      prompt,
+      "You are a careful analyzer that determines whether new memories update existing memories or are distinct. Only mark as supersede when you are confident the new memory replaces the old one.",
+      AbortSignal.timeout(120_000)
+    );
+
+    // Parse the response
+    const cleaned = responseText.trim();
+    const start = cleaned.indexOf("[");
+    const end = cleaned.lastIndexOf("]");
+    if (start === -1 || end === -1) {
+      console.warn("[memory-comparison] Failed to parse comparison response");
+      return candidates.map((c, i) => ({
+        newMemoryId: c.newMemoryId,
+        oldMemoryId: c.oldMemoryId,
+        decision: "unsure",
+        reason: "Failed to parse model response",
+      }));
+    }
+
+    const decisions: Array<{ index: number; decision: string; reason?: string }> = JSON.parse(cleaned.slice(start, end + 1));
+
+    return candidates.map((c, i) => {
+      const d = decisions.find((dec) => dec.index === i);
+      if (!d || !["supersede", "separate", "unsure"].includes(d.decision)) {
+        return {
+          newMemoryId: c.newMemoryId,
+          oldMemoryId: c.oldMemoryId,
+          decision: "unsure",
+          reason: "Invalid decision in model response",
+        };
+      }
+      return {
+        newMemoryId: c.newMemoryId,
+        oldMemoryId: c.oldMemoryId,
+        decision: d.decision as "supersede" | "separate" | "unsure",
+        reason: d.reason,
+      };
+    });
+  } catch (e) {
+    console.error("[memory-comparison] Batch comparison failed:", e);
+    return candidates.map((c) => ({
+      newMemoryId: c.newMemoryId,
+      oldMemoryId: c.oldMemoryId,
+      decision: "unsure",
+      reason: `Error: ${e instanceof Error ? e.message : String(e)}`,
+    }));
+  }
+}
+
+/**
+ * Apply the results of a batch comparison, creating supersession links
+ * for pairs where the model decided "supersede".
+ */
+async function applyComparisonResolutions(
+  resolutions: SupersessionResolution[],
+  candidates: DedupAndSaveAmbiguousCandidate[]
+): Promise<{ superseded: number; separate: number; unsure: number }> {
+  let superseded = 0;
+  let separate = 0;
+  let unsure = 0;
+  const linkedNewMemoryIds = new Set<string>();
+
+  for (const res of resolutions) {
+    const candidate = candidates.find((c) => c.newMemoryId === res.newMemoryId);
+    if (!candidate) continue;
+
+    if (res.decision === "supersede") {
+      if (linkedNewMemoryIds.has(res.newMemoryId)) {
+        console.log(
+          `[memory-comparison] Ignoring additional supersession for "${candidate.newText}" (${res.reason || "model decision"})`
+        );
+        unsure++;
+        continue;
+      }
+      console.log(
+        `[memory-comparison] Linking supersession: "${candidate.oldText}" → "${candidate.newText}" (${res.reason || "model decision"})`
+      );
+      const linked = await createSupersessionLink(res.newMemoryId, res.oldMemoryId, candidate.embeddingSimilarity);
+      if (linked) {
+        linkedNewMemoryIds.add(res.newMemoryId);
+        superseded++;
+      } else {
+        console.log(`[memory-comparison] Supersession link rejected (cycle detected): ${res.oldMemoryId} ↛ ${res.newMemoryId}`);
+        unsure++;
+      }
+    } else if (res.decision === "separate") {
+      console.log(
+        `[memory-comparison] Leaving separate: "${candidate.newText}" and "${candidate.oldText}" (${res.reason || "model decision"})`
+      );
+      separate++;
+    } else {
+      console.log(
+        `[memory-comparison] Unsure: "${candidate.newText}" vs "${candidate.oldText}" (${res.reason || "no reason"})`
+      );
+      unsure++;
+    }
+  }
+
+  return { superseded, separate, unsure };
+}
 
 /**
  * Dedup + save: for each fact, find the nearest existing memory via sqlite-vec.
  * If similarity > threshold, update in place; otherwise insert new.
  */
+export interface DedupAndSaveAmbiguousCandidate {
+  factIndex: number;
+  newMemoryId: string;
+  newText: string;
+  oldMemoryId: string;
+  oldText: string;
+  embeddingSimilarity: number;
+  textOverlap: number;
+}
+
 export interface DedupAndSaveOutcome {
   added: number;
   superseded: number;
   skippedDuplicates: number;
+  /** Preserved for compatibility; delayed extraction owns LLM supersession comparison. */
+  ambiguousCandidates: DedupAndSaveAmbiguousCandidate[];
+}
+
+async function saveExtractedMemory(
+  fact: ExtractedFact,
+  embedding: number[],
+  chatId: string,
+  projectId: string | undefined,
+  sourceType: MemorySourceType,
+  sourceId: string | undefined
+): Promise<string> {
+  const now = new Date().toISOString();
+  const newMemoryId = uuid();
+  await addMemory({
+    id: newMemoryId,
+    text: fact.text,
+    category: fact.category,
+    importance: Math.min(10, Math.max(1, fact.importance)),
+    embedding,
+    createdAt: now,
+    lastAccessed: now,
+    accessCount: 0,
+    sourceChatId: sourceType === "chat" || sourceType === "chat_delayed" ? chatId : "",
+    ...(projectId ? { projectId } : {}),
+    sourceType,
+    sourceId: sourceId || chatId,
+  });
+  return newMemoryId;
 }
 
 export async function dedupAndSave(
@@ -915,78 +1147,35 @@ export async function dedupAndSave(
   sourceId?: string
 ): Promise<DedupAndSaveOutcome> {
   let added = 0;
-  let superseded = 0;
   let skippedDuplicates = 0;
+
   for (let i = 0; i < facts.length; i++) {
     const fact = facts[i];
     const factEmbedding = embeddings[i];
 
-    const match = await findDuplicates(factEmbedding, DEDUP_THRESHOLD);
+    const duplicateCandidates = await findSimilarMemoryCandidates(factEmbedding, EXACT_DUPLICATE_THRESHOLD, 3);
+    const duplicate = duplicateCandidates.find((candidate) =>
+      isNearDuplicate(fact.text, candidate.memory.text, candidate.similarity)
+    );
 
-    if (match) {
-      // If the text is effectively identical (very high similarity), just bump metadata
-      // without creating a new memory in the chain
-      if (match.similarity > 0.95) {
-        console.log(
-          `[memory] Near-identical match (sim=${match.similarity.toFixed(3)}), bumping metadata: "${match.memory.text}"`
-        );
-        await updateMemory(match.memory.id, {
-          importance: Math.max(match.memory.importance, fact.importance),
-          lastAccessed: new Date().toISOString(),
-        });
-        skippedDuplicates++;
-      } else {
-        // Text has meaningfully changed — create a new memory that supersedes the old one
-        console.log(
-          `[memory] Superseding memory (sim=${match.similarity.toFixed(3)}): "${match.memory.text}" → "${fact.text}"`
-        );
-        const now = new Date().toISOString();
-        const newMemoryId = uuid();
-        await addMemory({
-          id: newMemoryId,
-          text: fact.text,
-          category: fact.category || match.memory.category,
-          importance: Math.min(10, Math.max(1, Math.max(match.memory.importance, fact.importance))),
-          embedding: factEmbedding,
-          createdAt: now,
-          lastAccessed: now,
-          accessCount: 0,
-          sourceChatId: chatId,
-          ...(projectId ? { projectId } : {}),
-          sourceType,
-          sourceId: sourceId || chatId,
-        });
-        const linked = await createSupersessionLink(newMemoryId, match.memory.id, match.similarity);
-        if (!linked) {
-          console.log(`[memory] Supersession link rejected (cycle detected): ${match.memory.id} ↛ ${newMemoryId}`);
-        }
-        superseded++;
-      }
-    } else {
-      console.log(`[memory] New memory: "${fact.text}"`);
-      const now = new Date().toISOString();
-      const newMemoryId = uuid();
-      await addMemory({
-        id: newMemoryId,
-        text: fact.text,
-        category: fact.category,
-        importance: Math.min(10, Math.max(1, fact.importance)),
-        embedding: factEmbedding,
-        createdAt: now,
-        lastAccessed: now,
-        accessCount: 0,
-        sourceChatId: sourceType === 'chat' ? chatId : '',
-        ...(projectId ? { projectId } : {}),
-        sourceType,
-        sourceId: sourceId || chatId,
+    if (duplicate) {
+      console.log(
+        `[memory] Near-identical match (sim=${duplicate.similarity.toFixed(3)}), bumping metadata: "${duplicate.memory.text}"`
+      );
+      await updateMemory(duplicate.memory.id, {
+        importance: Math.max(duplicate.memory.importance, fact.importance),
+        lastAccessed: new Date().toISOString(),
       });
-      
-      // Check for automatic supersession after saving new memory
-      await checkSupersession(newMemoryId, fact.text, factEmbedding);
-      added++;
+      skippedDuplicates++;
+      continue;
     }
+
+    console.log(`[memory] New memory: "${fact.text}"`);
+    await saveExtractedMemory(fact, factEmbedding, chatId, projectId, sourceType, sourceId);
+    added++;
   }
-  return { added, superseded, skippedDuplicates };
+
+  return { added, superseded: 0, skippedDuplicates, ambiguousCandidates: [] };
 }
 
 export async function extractMemories(
@@ -1281,140 +1470,8 @@ export async function extractMemoriesFromText(
   }
 }
 
-/**
- * Check if a new memory supersedes any existing memories.
- * Uses semantic similarity + contradiction detection to auto-create supersession links.
- */
-async function checkSupersession(
-  newMemoryId: string,
-  newText: string,
-  newEmbedding: number[]
-): Promise<void> {
-  const newMemory = await getMemoryById(newMemoryId);
-  if (!newMemory) return;
-
-  const similarMemories = await searchMemoriesRaw(newEmbedding, 10);
-
-  for (const oldMemory of similarMemories) {
-    // Skip if same memory or already has supersession link
-    if (oldMemory.memory.id === newMemoryId) continue;
-    if (oldMemory.memory.supersededBy) continue;
-
-    // Only check memories older than the new one
-    if (new Date(oldMemory.memory.createdAt) >= new Date(newMemory.createdAt)) continue;
-    
-    const similarity = 1 - oldMemory.score; // Convert distance to similarity
-    const confidence = calculateSupersessionConfidence(newText, oldMemory.memory.text, similarity);
-    
-    if (confidence > 0.75) {
-      console.log(
-        `[memory] Auto-superson: "${oldMemory.memory.text}" → "${newText}" (confidence=${confidence.toFixed(2)}, similarity=${similarity.toFixed(2)})`
-      );
-      const linked = await createSupersessionLink(newMemoryId, oldMemory.memory.id, confidence);
-      if (!linked) {
-        console.log(`[memory] Supersession link rejected (cycle detected): ${oldMemory.memory.id} ↛ ${newMemoryId}`);
-      }
-    } else if (confidence > 0.50) {
-      console.log(
-        `[memory] Potential supersession flagged: "${oldMemory.memory.text}" vs "${newText}" (confidence=${confidence.toFixed(2)})`
-      );
-      // Could log to a review queue here for daily synthesis to pick up
-    }
-  }
-}
-
-function calculateSupersessionConfidence(newText: string, oldText: string, similarity: number): number {
-  // Weighted confidence scoring based on multiple signals
-  const similarityWeight = similarity * 0.4;
-  
-  // Check for contradiction patterns
-  const contradictionPatterns = [
-    /\bnot\b.*\b(previously|before|earlier)\b/i,
-    /\b(previously|before|earlier)\b.*\bnot\b/i,
-    /\bchanged\b.*\bfrom\b/i,
-    /\bno longer\b/i,
-    /\breplaced\b/i,
-    /\binstead of\b/i,
-    /\bupdated\b/i,
-    /\bcorrected\b/i,
-  ];
-  
-  const hasContradiction = contradictionPatterns.some(p => p.test(newText) || p.test(oldText));
-  const contradictionScore = hasContradiction ? 0.3 : 0;
-  
-  // Specificity gain (newer text is longer/more detailed)
-  const specificityGain = Math.max(0, newText.length - oldText.length) / 200;
-  const specificityScore = Math.min(0.2, specificityGain);
-  
-  // Entity overlap (simple word overlap for now)
-  const newWords = new Set(newText.toLowerCase().split(/\W+/).filter(w => w.length > 3));
-  const oldWords = new Set(oldText.toLowerCase().split(/\W+/).filter(w => w.length > 3));
-  const overlap = [...newWords].filter(w => oldWords.has(w)).length;
-  const entityScore = Math.min(0.1, overlap / 5);
-  
-  return similarityWeight + contradictionScore + specificityScore + entityScore;
-}
-
-/**
- * Backfill scan: check all existing memories for potential supersessions.
- * Uses embedding-based similarity for accurate detection.
- */
 export async function backfillSupersessions(): Promise<void> {
-  console.log("[memory] Starting backfill supersession scan...");
-  
-  const db = getDb();
-  const allMemories = await getAllMemories();
-  
-  // Sort by creation date descending (newest first)
-  const sorted = allMemories.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  
-  let processed = 0;
-  let linked = 0;
-  
-  for (let i = 0; i < sorted.length; i++) {
-    const newMemory = sorted[i];
-    
-    // Skip if already has supersession links
-    if (newMemory.supersededBy || newMemory.supersedes) continue;
-    
-    // Get embedding for this memory
-    const vecRow = db.prepare("SELECT embedding FROM vec_memories WHERE id = ?").get(newMemory.id) as { embedding: Buffer } | undefined;
-    if (!vecRow) continue;
-    
-    const embedding = Array.from(new Float32Array(vecRow.embedding.buffer, vecRow.embedding.byteOffset, vecRow.embedding.byteLength / 4));
-    
-    // Search for similar older memories
-    const similarMemories = await searchMemoriesRaw(embedding, 10);
-    
-    for (const match of similarMemories) {
-      const oldMemory = match.memory;
-      
-      // Skip if not actually older
-      if (new Date(oldMemory.createdAt).getTime() >= new Date(newMemory.createdAt).getTime()) continue;
-      
-      // Skip if already superseded
-      if (oldMemory.supersededBy) continue;
-      
-      const similarity = 1 - match.score;
-      const confidence = calculateSupersessionConfidence(newMemory.text, oldMemory.text, similarity);
-      
-      if (confidence > 0.75) {
-        console.log(
-          `[memory] Backfill: "${oldMemory.text}" → "${newMemory.text}" (confidence=${confidence.toFixed(2)}, similarity=${similarity.toFixed(2)})`
-        );
-        const linkCreated = await createSupersessionLink(newMemory.id, oldMemory.id, confidence);
-        if (linkCreated) {
-          linked++;
-        } else {
-          console.log(`[memory] Backfill supersession link rejected (cycle detected): ${oldMemory.id} ↛ ${newMemory.id}`);
-        }
-      }
-    }
-    
-    processed++;
-  }
-  
-  console.log(`[memory] Backfill complete: processed ${processed} memories, created ${linked} supersession links`);
+  console.log("[memory] Backfill supersession scan skipped: heuristic supersession is disabled; delayed extraction now performs LLM-reviewed linking.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1514,7 +1571,7 @@ function buildDelayedExtractionPrompt(
   const memoriesList = previousMemories.length > 0
     ? previousMemories.map((m, i) => `[${i + 1}]: "${m.text}" (${m.category}, importance: ${m.importance})`).join("\n")
     : "(none)";
-  
+
   return DELAYED_EXTRACTION_USER_TEMPLATE
     .replace("{{PREVIOUS_MEMORIES}}", memoriesList)
     .replace("{{MESSAGE_COUNT}}", String(messageCount))
@@ -1525,7 +1582,7 @@ function buildDelayedExtractionPrompt(
  * Extract memories from a full chat after a period of inactivity.
  * This is the delayed extraction layer — runs once per chat when inactive,
  * capturing patterns and context that immediate extraction missed.
- * 
+ *
  * @param chatId - The chat to extract from
  * @param modelId - The model to use for extraction
  * @param messageCap - Max messages to include (default 50)
@@ -1536,18 +1593,18 @@ export async function extractDelayedMemories(
   messageCap: number = DEFAULT_MESSAGE_CAP
 ): Promise<void> {
   console.log(`[memory-delayed] Starting delayed extraction for chat ${chatId}`);
-  
+
   const chat = await getChat(chatId);
   if (!chat) {
     console.error(`[memory-delayed] Chat ${chatId} not found`);
     return;
   }
-  
+
   if (!["agent", "system"].includes(chat.type)) {
     console.log(`[memory-delayed] Skipping ${chat.type} chat ${chatId}`);
     return;
   }
-  
+
   // Build context: messages added since last extraction + recent memories
   const context = await buildDelayedExtractionContext(chat, messageCap);
   if (!context.hasNewContent) {
@@ -1563,11 +1620,11 @@ export async function extractDelayedMemories(
 
   const startIndex = context.messages[0]?.index ?? 0;
   const endIndex = context.messages[context.messages.length - 1]?.index ?? -1;
-  
+
   console.log(
     `[memory-delayed] Processing ${context.messages.length} messages (${startIndex}-${endIndex}) with ${context.previousMemories.length} previous memories`
   );
-  
+
   // Build prompt with previous memories injected — used as the per-chunk header
   const userPromptHeader = `${buildDelayedExtractionPrompt(context.previousMemories, context.messages.length, startIndex)}\n\nCONVERSATION:`;
 
@@ -1648,40 +1705,100 @@ export async function extractDelayedMemories(
     }
 
     // Save with sourceType = 'chat_delayed'
+    // Collect ambiguous supersession candidates for batch comparison
+    const ambiguousCandidates: DedupAndSaveAmbiguousCandidate[] = [];
+    const runStartedAt = new Date().toISOString();
+
     for (let i = 0; i < facts.length; i++) {
       const fact = facts[i];
       const factEmbedding = embeddings[i];
 
-      // Check for duplicates against existing memories
-      const match = await findDuplicates(factEmbedding, DEDUP_THRESHOLD);
+      const candidates = await findSimilarMemoryCandidates(
+        factEmbedding,
+        SUPERSESSION_CANDIDATE_THRESHOLD,
+        SUPERSESSION_CANDIDATE_LIMIT
+      );
+      const duplicate = candidates.find((candidate) =>
+        isNearDuplicate(fact.text, candidate.memory.text, candidate.similarity)
+      );
 
-      if (match) {
+      if (duplicate) {
         console.log(
-          `[memory-delayed] Skipping duplicate (sim=${match.similarity.toFixed(3)}): "${fact.text}"`
+          `[memory-delayed] Near-identical match (sim=${duplicate.similarity.toFixed(3)}), bumping metadata: "${duplicate.memory.text}"`
         );
-        runSkipped++;
-      } else {
-        const now = new Date().toISOString();
-        const newMemoryId = uuid();
-        await addMemory({
-          id: newMemoryId,
-          text: fact.text,
-          category: fact.category,
-          importance: Math.min(10, Math.max(1, fact.importance)),
-          embedding: factEmbedding,
-          createdAt: now,
-          lastAccessed: now,
-          accessCount: 0,
-          sourceChatId: chatId,
-          ...(chat.projectId ? { projectId: chat.projectId } : {}),
-          sourceType: 'chat_delayed',
-          sourceId: chatId,
+        await updateMemory(duplicate.memory.id, {
+          importance: Math.max(duplicate.memory.importance, fact.importance),
+          lastAccessed: new Date().toISOString(),
         });
-
-        // Check for automatic supersession
-        await checkSupersession(newMemoryId, fact.text, factEmbedding);
-        runSaved++;
+        runSkipped++;
+        continue;
       }
+
+      const newMemoryId = await saveExtractedMemory(
+        fact,
+        factEmbedding,
+        chatId,
+        chat.projectId,
+        "chat_delayed",
+        chatId
+      );
+      runSaved++;
+
+      for (const candidate of candidates) {
+        if (candidate.memory.supersededBy) continue;
+        if (new Date(candidate.memory.createdAt).toISOString() >= runStartedAt) continue;
+        if (isNearDuplicate(fact.text, candidate.memory.text, candidate.similarity)) continue;
+
+        const overlap = textOverlapScore(fact.text, candidate.memory.text);
+        console.log(
+          `[memory-delayed] Queuing comparison (sim=${candidate.similarity.toFixed(3)}, overlap=${overlap.toFixed(2)}): "${fact.text}" vs "${candidate.memory.text}"`
+        );
+        ambiguousCandidates.push({
+          factIndex: i,
+          newMemoryId,
+          newText: fact.text,
+          oldMemoryId: candidate.memory.id,
+          oldText: candidate.memory.text,
+          embeddingSimilarity: candidate.similarity,
+          textOverlap: overlap,
+        });
+      }
+    }
+
+    // Batch LLM comparison for ambiguous supersession candidates
+    let comparisonSuperseded = 0;
+    let comparisonSeparate = 0;
+    let resolutions: ExtractionSupersessionResolution[] = [];
+
+    if (ambiguousCandidates.length > 0) {
+      console.log(`[memory-delayed] Running batch comparison for ${ambiguousCandidates.length} ambiguous candidate(s)...`);
+
+      // Build conversation context for the comparison
+      const conversationContext = context.messages
+        .map(({ message, index }) => formatMessageForExtraction(message, index))
+        .join("\n\n---\n\n");
+
+      const comparisonResults = await batchCompareSupersessions(
+        ambiguousCandidates,
+        conversationContext,
+        modelId
+      );
+
+      const applyResult = await applyComparisonResolutions(comparisonResults, ambiguousCandidates);
+      comparisonSuperseded = applyResult.superseded;
+      comparisonSeparate = applyResult.separate;
+
+      // Build resolution records for observability
+      resolutions = comparisonResults.map((res, i) => ({
+        newFactIndex: ambiguousCandidates[i].factIndex,
+        newFactText: ambiguousCandidates[i].newText,
+        existingMemoryId: res.oldMemoryId,
+        existingMemoryText: ambiguousCandidates[i].oldText,
+        embeddingSimilarity: ambiguousCandidates[i].embeddingSimilarity,
+        textDiffOverlap: ambiguousCandidates[i].textOverlap,
+        decision: res.decision,
+        reason: res.reason,
+      }));
     }
 
     // Update chat tracking fields without touching lastModified
@@ -1691,9 +1808,12 @@ export async function extractDelayedMemories(
     runHandle.complete({
       facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
       saved: runSaved,
-      superseded: 0,
+      superseded: comparisonSuperseded,
       skippedDuplicates: runSkipped,
       errors: 0,
+      supersessionResolutions: resolutions.length > 0 ? resolutions : undefined,
+      comparisonSuperseded,
+      comparisonSeparate,
       chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
     });
   } catch (e) {

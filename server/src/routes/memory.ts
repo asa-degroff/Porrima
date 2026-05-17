@@ -512,27 +512,27 @@ router.post("/:id/supersede", async (req, res) => {
   if (!olderMemoryId) {
     return res.status(400).json({ error: "olderMemoryId is required" });
   }
-  
+
   const newerMemoryId = req.params.id;
   const conf = confidence ?? 0.75;
-  
+
   // Fetch both memories to validate temporal ordering
   const newerMemory = await getMemoryById(newerMemoryId);
   const olderMemory = await getMemoryById(olderMemoryId);
-  
+
   if (!newerMemory || !olderMemory) {
     return res.status(404).json({ error: "Memory not found" });
   }
-  
+
   // Validate that newer memory was actually created after older memory
   if (new Date(newerMemory.createdAt) <= new Date(olderMemory.createdAt)) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: "Newer memory must be created after older memory",
       newerCreatedAt: newerMemory.createdAt,
       olderCreatedAt: olderMemory.createdAt,
     });
   }
-  
+
   try {
     const linked = await createSupersessionLink(newerMemoryId, olderMemoryId, conf);
     if (!linked) {
@@ -550,9 +550,9 @@ router.delete("/:id/supersession", async (req, res) => {
   if (!olderMemoryId) {
     return res.status(400).json({ error: "olderMemoryId is required" });
   }
-  
+
   const newerMemoryId = req.params.id;
-  
+
   try {
     await removeSupersessionLink(newerMemoryId, olderMemoryId, reason);
     res.status(200).json({ success: true, newerMemoryId, olderMemoryId });
@@ -564,9 +564,9 @@ router.delete("/:id/supersession", async (req, res) => {
 // Get memories by time range
 router.get("/timeline", async (req, res) => {
   const { from, to, groupedBy } = req.query;
-  
+
   const memories = await getAllMemories();
-  
+
   let filtered = memories;
   if (from) {
     filtered = filtered.filter(m => new Date(m.createdAt) >= new Date(from as string));
@@ -574,10 +574,10 @@ router.get("/timeline", async (req, res) => {
   if (to) {
     filtered = filtered.filter(m => new Date(m.createdAt) <= new Date(to as string));
   }
-  
+
   // Sort by createdAt descending (newest first)
   filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  
+
   res.json(filtered);
 });
 
@@ -585,7 +585,7 @@ router.get("/timeline", async (req, res) => {
 router.post("/backfill-supersessions", async (_req, res) => {
   try {
     await backfillSupersessions();
-    res.json({ success: true, message: "Backfill supersession scan complete" });
+    res.json({ success: true, message: "Heuristic backfill supersession is disabled; delayed extraction now performs LLM-reviewed linking." });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -594,7 +594,7 @@ router.post("/backfill-supersessions", async (_req, res) => {
 // Detect potential contradictions (for synthesis review)
 router.get("/contradictions", async (_req, res) => {
   const memories = await getAllMemories();
-  
+
   // Group by semantic similarity (simple heuristic: same topic keywords)
   const topicGroups: Record<string, string[]> = {};
   for (const m of memories) {
@@ -602,7 +602,7 @@ router.get("/contradictions", async (_req, res) => {
     if (!topicGroups[topic]) topicGroups[topic] = [];
     topicGroups[topic].push(m.id);
   }
-  
+
   const contradictions: Array<{
     olderId: string;
     newerId: string;
@@ -610,22 +610,22 @@ router.get("/contradictions", async (_req, res) => {
     newerText: string;
     confidence: number;
   }> = [];
-  
+
   for (const topic of Object.keys(topicGroups)) {
     const ids = topicGroups[topic];
     if (ids.length < 2) continue;
-    
+
     const groupMemories = memories.filter(m => ids.includes(m.id)).sort(
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     );
-    
+
     for (let i = 0; i < groupMemories.length - 1; i++) {
       const older = groupMemories[i];
       const newer = groupMemories[i + 1];
-      
+
       // Skip if already linked
       if (older.supersededBy || newer.supersedes) continue;
-      
+
       const confidence = calculateContradictionConfidence(older.text, newer.text);
       if (confidence > 0.50) {
         contradictions.push({
@@ -638,7 +638,7 @@ router.get("/contradictions", async (_req, res) => {
       }
     }
   }
-  
+
   res.json(contradictions);
 });
 
@@ -646,11 +646,11 @@ router.get("/contradictions", async (_req, res) => {
 router.post("/conversations/search", async (req, res) => {
   const { query, chatId, limit } = req.body;
   if (!query) return res.status(400).json({ error: "query is required" });
-  
+
   const { searchChatMessages, getChatTitle } = await import("../services/chat-storage.js");
-  
+
   const matches = searchChatMessages(query, { chatId, limit: limit || 10 });
-  
+
   const results = matches.map(m => ({
     chatId: m.chatId,
     chatTitle: getChatTitle(m.chatId),
@@ -659,7 +659,7 @@ router.post("/conversations/search", async (req, res) => {
     content: m.content,
     rank: m.rank,
   }));
-  
+
   res.json(results);
 });
 
@@ -674,15 +674,15 @@ function calculateContradictionConfidence(text1: string, text2: string): number 
     /\bpreviously\b/i,
     /\bwas\b.*\bnow\b/i,
   ];
-  
+
   const hasContradiction = contradictionPatterns.some(p => p.test(text1) || p.test(text2));
-  
+
   // Word overlap
   const words1 = new Set(text1.toLowerCase().split(/\W+/).filter(w => w.length > 3));
   const words2 = new Set(text2.toLowerCase().split(/\W+/).filter(w => w.length > 3));
   const overlap = [...words1].filter(w => words2.has(w)).length;
   const overlapScore = Math.min(1, overlap / 5);
-  
+
   return (hasContradiction ? 0.6 : 0.2) + overlapScore * 0.4;
 }
 

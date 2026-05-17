@@ -24,12 +24,26 @@ interface ExtractionChunkInfo {
   timingsMs: number[];
 }
 
+interface ExtractionSupersessionResolution {
+  newFactIndex: number;
+  newFactText: string;
+  existingMemoryId: string;
+  existingMemoryText: string;
+  embeddingSimilarity: number;
+  textDiffOverlap: number;
+  decision: "supersede" | "separate" | "unsure";
+  reason?: string;
+}
+
 interface ExtractionResults {
   facts: ExtractionParsedFact[];
   saved: number;
   superseded: number;
   skippedDuplicates: number;
   errors: number;
+  supersessionResolutions?: ExtractionSupersessionResolution[];
+  comparisonSuperseded?: number;
+  comparisonSeparate?: number;
   chunks?: ExtractionChunkInfo;
 }
 
@@ -525,6 +539,40 @@ function RunDetail({ run }: { run: ExtractionRun }) {
               </li>
             ))}
           </ul>
+        </Section>
+      )}
+      {run.results?.supersessionResolutions && run.results.supersessionResolutions.length > 0 && (
+        <Section title={`Batch Comparison (${run.results.supersessionResolutions.length})`} defaultOpen>
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-white/40 mb-2">
+            {run.results.comparisonSuperseded !== undefined && (
+              <span>linked: <span className="text-sky-300/70">{run.results.comparisonSuperseded}</span></span>
+            )}
+            {run.results.comparisonSeparate !== undefined && (
+              <span>separate: <span className="text-white/50">{run.results.comparisonSeparate}</span></span>
+            )}
+          </div>
+          <div className="space-y-2">
+            {run.results.supersessionResolutions.map((r, i) => (
+              <div key={i} className="text-[11px] border-l-2 pl-2" style={{
+                borderColor: r.decision === "supersede" ? "rgb(56, 189, 248, 0.5)" :
+                            r.decision === "separate" ? "rgb(255, 255, 255, 0.2)" :
+                            "rgb(251, 191, 36, 0.5)"
+              }}>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`text-[9px] uppercase tracking-wide px-1 rounded ${
+                    r.decision === "supersede" ? "bg-sky-500/20 text-sky-300/80" :
+                    r.decision === "separate" ? "bg-white/10 text-white/50" :
+                    "bg-amber-500/20 text-amber-300/80"
+                  }`}>{r.decision}</span>
+                  <span className="text-white/30">sim: {r.embeddingSimilarity.toFixed(2)}</span>
+                  <span className="text-white/30">overlap: {r.textDiffOverlap.toFixed(2)}</span>
+                </div>
+                <div className="text-white/50 truncate" title={r.existingMemoryText}>old: {r.existingMemoryText}</div>
+                <div className="text-white/70 truncate" title={r.newFactText}>new: {r.newFactText}</div>
+                {r.reason && <div className="text-white/30 text-[10px] mt-0.5 italic">{r.reason}</div>}
+              </div>
+            ))}
+          </div>
         </Section>
       )}
       <Section title={`Messages (${run.messages.length})`}>
