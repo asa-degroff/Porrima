@@ -80,10 +80,7 @@ def main():
             filter_args = ":".join(
                 [
                     f"pitch={args.pitch}",
-                    "formant=preserved",
                     "pitchq=quality",
-                    "transients=smooth",
-                    "detector=soft",
                 ]
             )
 

@@ -21,7 +21,7 @@ function pitchSemitonesToRatio(semitones: number): number {
 
 function generateCacheKey(text: string, settings: TTSSettings): string {
   const input = [
-    "supertonic-3-v5",
+    "supertonic-3-v6",
     text,
     settings.voice,
     settings.speed,
