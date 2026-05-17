@@ -8,7 +8,10 @@ import { v4 as uuid } from "uuid";
 import type { Memory, MemoryStore } from "../types.js";
 import {
   applyCrossProjectScoreMultiplier,
+  applyGlobalProjectScoreMultiplier,
+  GLOBAL_PROJECT_SCORE_MULTIPLIER_DEFAULT,
   normalizeCrossProjectScoreMultiplier,
+  normalizeGlobalProjectScoreMultiplier,
   sortByAdjustedScore,
 } from "./memory-retrieval-scope.js";
 
@@ -602,6 +605,7 @@ export interface ScoredMemory {
 export interface MemorySearchRankingOptions {
   projectId?: string;
   crossProjectScoreMultiplier?: number;
+  globalProjectScoreMultiplier?: number;
 }
 
 /**
@@ -740,7 +744,11 @@ export async function searchMemories(
   const RRF_K = 60; // standard RRF constant
 
   // Oversample from vec_memories to allow recency/importance re-ranking
-  const oversampleMultiplier = rankingOptions?.projectId ? 8 : 3;
+  const hasProjectScopePolicy = Boolean(
+    rankingOptions?.projectId ||
+    rankingOptions?.globalProjectScoreMultiplier !== undefined
+  );
+  const oversampleMultiplier = hasProjectScopePolicy ? 8 : 3;
   const oversample = Math.max(20, topK * oversampleMultiplier);
 
   const vecRows = db
@@ -852,6 +860,13 @@ export async function searchMemories(
       scored,
       rankingOptions.projectId,
       normalizeCrossProjectScoreMultiplier(rankingOptions.crossProjectScoreMultiplier),
+    );
+  } else if (rankingOptions?.globalProjectScoreMultiplier !== undefined) {
+    applyGlobalProjectScoreMultiplier(
+      scored,
+      normalizeGlobalProjectScoreMultiplier(
+        rankingOptions.globalProjectScoreMultiplier ?? GLOBAL_PROJECT_SCORE_MULTIPLIER_DEFAULT,
+      ),
     );
   }
 

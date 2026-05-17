@@ -401,6 +401,8 @@ export interface Settings {
   maxBlockChars?: number;
   // Cross-project score multiplier during memory retrieval. Default 0.3.
   crossProjectScoreMultiplier?: number;
+  // Project-scoped memory multiplier for global/system chats. Default 1.0.
+  globalProjectScoreMultiplier?: number;
 }
 
 export interface BlueskySettings {

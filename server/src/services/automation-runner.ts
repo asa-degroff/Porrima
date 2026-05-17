@@ -146,7 +146,7 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
   const { createPiModelFromProvider, discoverAllModels } = await import("./models.js");
   const { getAgentTools } = await import("./agent-tools.js");
   const { truncateBeforeSend } = await import("./compaction.js");
-  const { buildStablePrefix, invalidateAllStablePrefixCaches } = await import("./memory-context.js");
+  const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, resetMemoryContext } = await import("./memory-context.js");
   const { SynthesisEmitter, createEmitterSideEffects } = await import("./synthesis-stream.js");
 
   const emitter = new SynthesisEmitter(task.chatId);
@@ -189,11 +189,15 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
     if (chat.modelId !== modelId) chat.modelId = modelId;
     await saveChat(chat);
 
-    const { stablePrefix } = await buildStablePrefix(
+    resetMemoryContext(task.chatId);
+    const splitPrompt = await buildSplitAugmentedPrompt(
       chat.systemPrompt || "You are a helpful assistant.",
+      chat.messages,
       task.chatId,
+      chat.projectId,
+      "system",
     );
-    const systemPrompt = stablePrefix;
+    const systemPrompt = splitPrompt.systemPrompt;
 
     const artifacts: any[] = [];
     const visuals: any[] = [];

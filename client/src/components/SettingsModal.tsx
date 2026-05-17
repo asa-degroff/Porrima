@@ -420,6 +420,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [readFileMaxBytes, setReadFileMaxBytes] = useState(settings.readFileMaxBytes ?? 256 * 1024);
   const [maxBlockChars, setMaxBlockChars] = useState(settings.maxBlockChars ?? 4000);
   const [crossProjectScoreMultiplier, setCrossProjectScoreMultiplier] = useState(settings.crossProjectScoreMultiplier ?? 0.3);
+  const [globalProjectScoreMultiplier, setGlobalProjectScoreMultiplier] = useState(settings.globalProjectScoreMultiplier ?? 1.0);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
   const [passkeyMessage, setPasskeyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [ttsSettings, setTtsSettings] = useState<TTSSettings | null>(null);
@@ -1158,6 +1159,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       readFileMaxBytes,
       maxBlockChars,
       crossProjectScoreMultiplier,
+      globalProjectScoreMultiplier,
       bluesky: {
         ...settings.bluesky,
         enabled: blueskyEnabled,
@@ -4542,12 +4544,34 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                onChange={(e) => setCrossProjectScoreMultiplier(Number(e.target.value))}
 	                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
 	              />
-	              <div className="flex items-center justify-between text-[10px] text-white/25">
-	                <span>0.00x</span>
-	                <span>1.00x</span>
-	              </div>
-	            </div>
-	          </div>
+		              <div className="flex items-center justify-between text-[10px] text-white/25">
+		                <span>0.00x</span>
+		                <span>1.00x</span>
+		              </div>
+		            </div>
+		            <div className="space-y-2 pt-4">
+		              <div className="flex items-center justify-between gap-3">
+		                <div>
+		                  <label className="block text-sm font-medium text-white/60">Global chat project memory relevance</label>
+		                  <p className="text-xs text-white/30 mt-0.5">Controls project-scoped memories in global and system chats. At 1.00x, all projects compete equally. Default: 1.00x.</p>
+		                </div>
+		                <span className="text-xs text-white/40 font-mono">{globalProjectScoreMultiplier.toFixed(2)}x</span>
+		              </div>
+		              <input
+		                type="range"
+		                min={0}
+		                max={1}
+		                step={0.05}
+		                value={globalProjectScoreMultiplier}
+		                onChange={(e) => setGlobalProjectScoreMultiplier(Number(e.target.value))}
+		                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+		              />
+		              <div className="flex items-center justify-between text-[10px] text-white/25">
+		                <span>0.00x</span>
+		                <span>1.00x</span>
+		              </div>
+		            </div>
+		          </div>
 
 	          {/* Memory Blocks */}
 	          <div id="memory-blocks" className="border-t border-white/10 pt-6">

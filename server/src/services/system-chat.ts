@@ -347,10 +347,9 @@ async function buildSynthesisTriggerContent(
   const { getDb } = await import("./chat-storage.js");
   const { listNotebookEntries, getNotebookEntry } = await import("./notebook-storage.js");
   const { loadMemoryStore } = await import("./memory-storage.js");
-  // Persona, user doc, memory blocks, and zeitgeist are injected via the
-  // stable system-prompt prefix (see runSystemSynthesis → buildStablePrefix),
-  // not the trigger body — keeps them byte-identical across cycles so KV
-  // caching works, and avoids the text accumulating in chat history.
+  // Persona, user doc, memory blocks, zeitgeist, and retrieved memories are
+  // injected through memory-context prompt construction, not the trigger body.
+  // That avoids the text accumulating in chat history.
 
   const parts: string[] = [];
   const stamp = new Date().toLocaleString("en-US", {
@@ -918,15 +917,20 @@ export async function runSystemSynthesis(options?: {
     if (chat.modelId !== modelId) chat.modelId = modelId;
     await saveChat(chat);
 
-    // Compose the synthesis prompt from the stable prefix only. Phase
-    // instructions live in user-role tail messages so editing automation text
-    // does not invalidate the system chat's longest-common-prefix cache.
-    const { buildStablePrefix, invalidateAllStablePrefixCaches } = await import("./memory-context.js");
-    const { stablePrefix } = await buildStablePrefix(
+    // Compose the synthesis prompt through the normal memory augmentation path.
+    // Phase instructions live in user-role tail messages; resetting here lets
+    // each scheduled run retrieve memories against the current trigger instead
+    // of reusing a stale frozen set from a previous cycle.
+    const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, resetMemoryContext } = await import("./memory-context.js");
+    resetMemoryContext(SYSTEM_CHAT_ID);
+    const splitPrompt = await buildSplitAugmentedPrompt(
       chat.systemPrompt || "You are a helpful assistant.",
+      chat.messages,
       SYSTEM_CHAT_ID,
+      chat.projectId,
+      "system",
     );
-    const synthesisPrompt = stablePrefix;
+    const synthesisPrompt = splitPrompt.systemPrompt;
 
     // Build tools up front so the pre-send compaction estimator can account
     // for tool-schema tokens — otherwise the schema (5–10K tokens for the
@@ -1221,13 +1225,18 @@ export async function runWakeCycle(options?: {
     if (chat.modelId !== modelId) chat.modelId = modelId;
     await saveChat(chat);
 
-    // Build prompt — same stable prefix as regular chats + wake trigger
-    const { buildStablePrefix } = await import("./memory-context.js");
-    const { stablePrefix } = await buildStablePrefix(
+    // Build prompt through the normal memory augmentation path. Reset per wake
+    // cycle so retrieval follows the current trigger and recent system context.
+    const { buildSplitAugmentedPrompt, resetMemoryContext } = await import("./memory-context.js");
+    resetMemoryContext(SYSTEM_CHAT_ID);
+    const splitPrompt = await buildSplitAugmentedPrompt(
       chat.systemPrompt || "You are a helpful assistant.",
+      chat.messages,
       SYSTEM_CHAT_ID,
+      chat.projectId,
+      "system",
     );
-    const wakePrompt = stablePrefix; // No addendum needed — the trigger message is self-contained
+    const wakePrompt = splitPrompt.systemPrompt; // No addendum needed — the trigger message is self-contained
 
     // Build tools
     const artifacts: any[] = [];

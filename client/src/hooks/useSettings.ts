@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS: Settings = {
   readFileDefaultLines: 1000,
   readFileMaxBytes: 256 * 1024,
   crossProjectScoreMultiplier: 0.3,
+  globalProjectScoreMultiplier: 1.0,
 };
 
 export function useSettings() {

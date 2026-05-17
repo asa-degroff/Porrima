@@ -387,6 +387,10 @@ export interface Settings {
   // 0.3 means cross-project memories get 30% of their original score, preventing them from
   // dominating results while still allowing highly relevant content to surface. Default 0.3.
   crossProjectScoreMultiplier?: number;
+  // Global/system chat project-memory multiplier — controls how strongly project-scoped
+  // memories compete in chats without a current project. Default 1.0 means all projects
+  // are treated as equally relevant; lower values make no-project chats more global-focused.
+  globalProjectScoreMultiplier?: number;
   // Per-slot llama.cpp binary overrides. Maps slot id → absolute path to llama-server binary.
   // When set for a slot, that slot uses this binary instead of the global llama-current.
   // E.g. { "extraction": "/home/asa/bin/ik-llama/llama-server" }

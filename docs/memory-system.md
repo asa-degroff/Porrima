@@ -43,7 +43,7 @@ Memory retrieval uses a multi-stage pipeline for high-relevance results:
 
 3. **MMR diversity selection** (`memory-storage.ts`): Lambda=0.7 (70% relevance, 30% diversity) to avoid redundant memories
 
-4. **Project scoping**: Project-matching memories boosted to top
+4. **Project scoping**: Project chats dampen memories from other projects with the configurable cross-project multiplier. Global and system chats use a separate project-memory multiplier so project-scoped memories can compete equally by default, while still allowing users to make no-project chats more global-focused.
 
 5. **Context injection** (`memory-context.ts`, `passive-memory-recall.ts`): Top 15 current + up to 5 superseded memories are injected into the stable context on first turn/post-compaction. Later retrievals use delta or passive recall messages so the base system prompt stays byte-identical.
 

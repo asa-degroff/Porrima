@@ -14,8 +14,11 @@ import { getSettings } from "./chat-storage.js";
 import { log } from "./logger.js";
 import {
   applyCrossProjectScoreMultiplier,
+  applyGlobalProjectScoreMultiplier,
   CROSS_PROJECT_SCORE_MULTIPLIER_DEFAULT,
+  GLOBAL_PROJECT_SCORE_MULTIPLIER_DEFAULT,
   normalizeCrossProjectScoreMultiplier,
+  normalizeGlobalProjectScoreMultiplier,
   sortByAdjustedScore,
 } from "./memory-retrieval-scope.js";
 import type { ChatMessage } from "../types.js";
@@ -238,6 +241,15 @@ async function getConfiguredCrossProjectScoreMultiplier(): Promise<number> {
   }
 }
 
+async function getConfiguredGlobalProjectScoreMultiplier(): Promise<number> {
+  try {
+    const settings = await getSettings();
+    return normalizeGlobalProjectScoreMultiplier(settings.globalProjectScoreMultiplier);
+  } catch {
+    return GLOBAL_PROJECT_SCORE_MULTIPLIER_DEFAULT;
+  }
+}
+
 function recordStats(
   output: RerankOutput,
   chatType: string | undefined,
@@ -392,16 +404,17 @@ export class PassiveMemoryRecallController {
     options: PassiveMemoryRecallScheduleOptions,
   ): Promise<void> {
     const queryEmbedding = await embed(query);
-    const crossProjectMultiplier = options.projectId
-      ? await getConfiguredCrossProjectScoreMultiplier()
-      : CROSS_PROJECT_SCORE_MULTIPLIER_DEFAULT;
+    const crossProjectMultiplier = await getConfiguredCrossProjectScoreMultiplier();
+    const globalProjectMultiplier = await getConfiguredGlobalProjectScoreMultiplier();
     const searchResults = await searchMemories(
       queryEmbedding,
       FAST_SEARCH_LIMIT,
       new Date(),
       query,
       undefined,
-      options.projectId ? { projectId: options.projectId, crossProjectScoreMultiplier: crossProjectMultiplier } : undefined,
+      options.projectId
+        ? { projectId: options.projectId, crossProjectScoreMultiplier: crossProjectMultiplier }
+        : { globalProjectScoreMultiplier: globalProjectMultiplier },
     );
     const inContextIds = getMemoryContextIds(this.chatId);
     const excludedIds = new Set([...inContextIds, ...this.injectedIds, ...this.queuedIds]);
@@ -462,6 +475,11 @@ export class PassiveMemoryRecallController {
       const crossProjectCount = applyCrossProjectScoreMultiplier(candidates, options.projectId, crossProjectMultiplier);
       if (crossProjectCount > 0) {
         log(`[passive-memory] cross-project: dampened ${crossProjectCount} out-of-scope memories (×${crossProjectMultiplier})`);
+      }
+    } else {
+      const projectScopedCount = applyGlobalProjectScoreMultiplier(candidates, globalProjectMultiplier);
+      if (projectScopedCount > 0 && globalProjectMultiplier !== GLOBAL_PROJECT_SCORE_MULTIPLIER_DEFAULT) {
+        log(`[passive-memory] global-project: adjusted ${projectScopedCount} project-scoped memories (×${globalProjectMultiplier})`);
       }
     }
 

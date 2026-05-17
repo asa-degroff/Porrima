@@ -10,8 +10,11 @@ import { getWorkspaceForProject } from "./workspace.js";
 import { log } from "./logger.js";
 import {
   applyCrossProjectScoreMultiplier,
+  applyGlobalProjectScoreMultiplier,
   CROSS_PROJECT_SCORE_MULTIPLIER_DEFAULT,
+  GLOBAL_PROJECT_SCORE_MULTIPLIER_DEFAULT,
   normalizeCrossProjectScoreMultiplier,
+  normalizeGlobalProjectScoreMultiplier,
   sortByAdjustedScore,
 } from "./memory-retrieval-scope.js";
 import type { ChatMessage } from "../types.js";
@@ -170,6 +173,15 @@ async function getConfiguredCrossProjectScoreMultiplier(): Promise<number> {
   }
 }
 
+async function getConfiguredGlobalProjectScoreMultiplier(): Promise<number> {
+  try {
+    const settings = await getSettings();
+    return normalizeGlobalProjectScoreMultiplier(settings.globalProjectScoreMultiplier);
+  } catch {
+    return GLOBAL_PROJECT_SCORE_MULTIPLIER_DEFAULT;
+  }
+}
+
 async function retrieveMemories(
   recentMessages: ChatMessage[],
   chatType?: string,
@@ -184,16 +196,17 @@ async function retrieveMemories(
   if (!userMessages) return [];
 
   const queryEmbedding = await embed(userMessages);
-  const crossProjectMultiplier = projectId
-    ? await getConfiguredCrossProjectScoreMultiplier()
-    : CROSS_PROJECT_SCORE_MULTIPLIER_DEFAULT;
+  const crossProjectMultiplier = await getConfiguredCrossProjectScoreMultiplier();
+  const globalProjectMultiplier = await getConfiguredGlobalProjectScoreMultiplier();
   const results = await searchMemories(
     queryEmbedding,
     30,
     new Date(),
     userMessages,
     undefined,
-    projectId ? { projectId, crossProjectScoreMultiplier: crossProjectMultiplier } : undefined,
+    projectId
+      ? { projectId, crossProjectScoreMultiplier: crossProjectMultiplier }
+      : { globalProjectScoreMultiplier: globalProjectMultiplier },
   );
 
   const instruction = RERANK_INSTRUCTIONS[chatType || "agent"];
@@ -257,6 +270,11 @@ async function retrieveMemories(
     const crossProjectCount = applyCrossProjectScoreMultiplier(rerankedResults, projectId, crossProjectMultiplier);
     if (crossProjectCount > 0) {
       log(`[memory-retrieval] cross-project: dampened ${crossProjectCount} out-of-scope memories (×${crossProjectMultiplier})`);
+    }
+  } else {
+    const projectScopedCount = applyGlobalProjectScoreMultiplier(rerankedResults, globalProjectMultiplier);
+    if (projectScopedCount > 0 && globalProjectMultiplier !== GLOBAL_PROJECT_SCORE_MULTIPLIER_DEFAULT) {
+      log(`[memory-retrieval] global-project: adjusted ${projectScopedCount} project-scoped memories (×${globalProjectMultiplier})`);
     }
   }
 
@@ -329,7 +347,7 @@ export function formatRetrievedMemoryForContext(r: RetrievalResult, projectId?: 
   const supersededNote = r.memory.supersededBy
     ? "SUPERSEDED — a newer version of this memory exists"
     : "";
-  const projectNote = r.memory.projectId && projectId && r.memory.projectId !== projectId
+  const projectNote = r.memory.projectId && (!projectId || r.memory.projectId !== projectId)
     ? ` [project: ${r.memory.projectId}]`
     : "";
   return `- ${r.memory.text} [${r.memory.category}, importance: ${r.memory.importance}/10, saved: ${created}]${supersededNote}${projectNote}`;
