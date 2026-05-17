@@ -6,6 +6,11 @@ export interface TTSGenerateRequest {
   speed?: number;
   pitch?: number;
   backend?: TTSBackend;
+  supertonicLanguage?: string;
+  supertonicSteps?: number;
+  supertonicMaxChunkLength?: number;
+  supertonicSilenceDuration?: number;
+  supertonicTrailingSilence?: number;
 }
 
 export interface TTSGenerateResponse {

@@ -59,6 +59,41 @@ const SECTIONS = [
   { id: 'passkeys', label: 'Security' },
 ] as const;
 
+const SUPERTONIC_LANGUAGES = [
+  { code: "en", label: "English" },
+  { code: "ko", label: "Korean" },
+  { code: "ja", label: "Japanese" },
+  { code: "ar", label: "Arabic" },
+  { code: "bg", label: "Bulgarian" },
+  { code: "cs", label: "Czech" },
+  { code: "da", label: "Danish" },
+  { code: "de", label: "German" },
+  { code: "el", label: "Greek" },
+  { code: "es", label: "Spanish" },
+  { code: "et", label: "Estonian" },
+  { code: "fi", label: "Finnish" },
+  { code: "fr", label: "French" },
+  { code: "hi", label: "Hindi" },
+  { code: "hr", label: "Croatian" },
+  { code: "hu", label: "Hungarian" },
+  { code: "id", label: "Indonesian" },
+  { code: "it", label: "Italian" },
+  { code: "lt", label: "Lithuanian" },
+  { code: "lv", label: "Latvian" },
+  { code: "nl", label: "Dutch" },
+  { code: "pl", label: "Polish" },
+  { code: "pt", label: "Portuguese" },
+  { code: "ro", label: "Romanian" },
+  { code: "ru", label: "Russian" },
+  { code: "sk", label: "Slovak" },
+  { code: "sl", label: "Slovenian" },
+  { code: "sv", label: "Swedish" },
+  { code: "tr", label: "Turkish" },
+  { code: "uk", label: "Ukrainian" },
+  { code: "vi", label: "Vietnamese" },
+  { code: "na", label: "Unknown / fallback" },
+] as const;
+
 function useActiveSection(sectionIds: readonly string[], root: Element | null) {
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -408,6 +443,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const voiceDd = useDropdown();
   const backendDd = useDropdown();
   const boundaryTierDd = useDropdown();
+  const supertonicLanguageDd = useDropdown();
   const extractionModelDd = useDropdown();
   const embeddingModelDd = useDropdown();
   const rerankerModelDd = useDropdown();
@@ -5327,7 +5363,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                             text: "Hello! This is a test of the text-to-speech system.",
                             voice: ttsSettings.voice,
                             speed: ttsSettings.speed,
+                            pitch: ttsSettings.pitch,
                             backend: ttsSettings.backend,
+                            supertonicLanguage: ttsSettings.supertonicLanguage,
+                            supertonicSteps: ttsSettings.supertonicSteps,
+                            supertonicMaxChunkLength: ttsSettings.supertonicMaxChunkLength,
+                            supertonicSilenceDuration: ttsSettings.supertonicSilenceDuration,
+                            supertonicTrailingSilence: ttsSettings.supertonicTrailingSilence,
                           }),
                         });
                         if (res.ok) {
@@ -5414,26 +5456,146 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   </div>
                 </div>
 
-                {/* Pitch control */}
-                <div className="space-y-1">
-                  <label className="block text-sm text-white/50">Pitch: {ttsSettings.pitch.toFixed(1)}x</label>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="2"
-                    step="0.1"
-                    value={ttsSettings.pitch}
-                    onChange={async (e) => {
-                      const updated = await updateTTSSettings({ pitch: parseFloat(e.target.value) });
-                      applyTtsSettingsUpdate(updated);
-                    }}
-                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
-                  />
-                  <div className="flex justify-between text-xs text-white/30">
-                    <span>0.5x</span>
-                    <span>2.0x</span>
+                {ttsSettings.backend === "supertonic-3" && (
+                  <div className="space-y-3 pt-2 border-t border-white/10">
+                    <div className="space-y-1">
+                      <label className="block text-sm text-white/50">Language</label>
+                      <Dropdown
+                        state={supertonicLanguageDd}
+                        trigger={
+                          <span className="truncate flex-1 text-left">
+                            {SUPERTONIC_LANGUAGES.find((language) => language.code === ttsSettings.supertonicLanguage)?.label ||
+                              ttsSettings.supertonicLanguage.toUpperCase()}
+                          </span>
+                        }
+                      >
+                        {SUPERTONIC_LANGUAGES.map((language) => (
+                          <button
+                            key={language.code}
+                            onClick={async () => {
+                              const updated = await updateTTSSettings({ supertonicLanguage: language.code });
+                              applyTtsSettingsUpdate(updated);
+                              supertonicLanguageDd.close();
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                              ttsSettings.supertonicLanguage === language.code
+                                ? "text-white"
+                                : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                            }`}
+                            style={{
+                              backgroundColor: ttsSettings.supertonicLanguage === language.code ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                              color: ttsSettings.supertonicLanguage === language.code ? `rgba(var(--theme-secondary-text))` : '',
+                            }}
+                          >
+                            {language.label} ({language.code})
+                          </button>
+                        ))}
+                      </Dropdown>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block text-sm text-white/50">Pitch: {ttsSettings.pitch.toFixed(1)}x</label>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="2"
+                        step="0.1"
+                        value={ttsSettings.pitch}
+                        onChange={async (e) => {
+                          const updated = await updateTTSSettings({ pitch: parseFloat(e.target.value) });
+                          applyTtsSettingsUpdate(updated);
+                        }}
+                        className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                      />
+                      <div className="flex justify-between text-xs text-white/30">
+                        <span>0.5x</span>
+                        <span>2.0x</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block text-sm text-white/50">Quality Steps: {ttsSettings.supertonicSteps}</label>
+                      <input
+                        type="range"
+                        min="1"
+                        max="32"
+                        step="1"
+                        value={ttsSettings.supertonicSteps}
+                        onChange={async (e) => {
+                          const updated = await updateTTSSettings({ supertonicSteps: parseInt(e.target.value, 10) });
+                          applyTtsSettingsUpdate(updated);
+                        }}
+                        className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                      />
+                      <div className="flex justify-between text-xs text-white/30">
+                        <span>1</span>
+                        <span>32</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block text-sm text-white/50">Max Chunk Length: {ttsSettings.supertonicMaxChunkLength} chars</label>
+                      <input
+                        type="range"
+                        min="100"
+                        max="600"
+                        step="25"
+                        value={ttsSettings.supertonicMaxChunkLength}
+                        onChange={async (e) => {
+                          const updated = await updateTTSSettings({ supertonicMaxChunkLength: parseInt(e.target.value, 10) });
+                          applyTtsSettingsUpdate(updated);
+                        }}
+                        className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                      />
+                      <div className="flex justify-between text-xs text-white/30">
+                        <span>100</span>
+                        <span>600</span>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <label className="block text-sm text-white/50">Chunk Pause: {ttsSettings.supertonicSilenceDuration.toFixed(2)}s</label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={ttsSettings.supertonicSilenceDuration}
+                          onChange={async (e) => {
+                            const updated = await updateTTSSettings({ supertonicSilenceDuration: parseFloat(e.target.value) });
+                            applyTtsSettingsUpdate(updated);
+                          }}
+                          className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                        />
+                        <div className="flex justify-between text-xs text-white/30">
+                          <span>0.00s</span>
+                          <span>1.00s</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-sm text-white/50">Ending Pause: {ttsSettings.supertonicTrailingSilence.toFixed(2)}s</label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={ttsSettings.supertonicTrailingSilence}
+                          onChange={async (e) => {
+                            const updated = await updateTTSSettings({ supertonicTrailingSilence: parseFloat(e.target.value) });
+                            applyTtsSettingsUpdate(updated);
+                          }}
+                          className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-400"
+                        />
+                        <div className="flex justify-between text-xs text-white/30">
+                          <span>0.00s</span>
+                          <span>1.00s</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             )}
           </div>

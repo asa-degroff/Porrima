@@ -19,9 +19,54 @@ const DEFAULT_VOICE_BY_BACKEND: Record<TTSBackend, string> = {
   "qwen3-tts": "Ryan",
   "supertonic-3": "M1",
 };
+const SUPERTONIC_LANGUAGE_CODES = new Set([
+  "en",
+  "ko",
+  "ja",
+  "ar",
+  "bg",
+  "cs",
+  "da",
+  "de",
+  "el",
+  "es",
+  "et",
+  "fi",
+  "fr",
+  "hi",
+  "hr",
+  "hu",
+  "id",
+  "it",
+  "lt",
+  "lv",
+  "nl",
+  "pl",
+  "pt",
+  "ro",
+  "ru",
+  "sk",
+  "sl",
+  "sv",
+  "tr",
+  "uk",
+  "vi",
+  "na",
+]);
 
 function isTTSBackend(value: unknown): value is TTSBackend {
   return typeof value === "string" && TTS_BACKENDS.includes(value as TTSBackend);
+}
+
+function sanitizeSupertonicLanguage(value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_TTS_SETTINGS.supertonicLanguage;
+  const trimmed = value.trim().toLowerCase();
+  return SUPERTONIC_LANGUAGE_CODES.has(trimmed) ? trimmed : DEFAULT_TTS_SETTINGS.supertonicLanguage;
+}
+
+function sanitizeNumber(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
 }
 
 function normalizeTTSSettings(settings: Partial<TTSSettings>): TTSSettings {
@@ -41,6 +86,11 @@ function normalizeTTSSettings(settings: Partial<TTSSettings>): TTSSettings {
     backend,
     voicesByBackend,
     voice: settings.voice || voicesByBackend[backend] || DEFAULT_VOICE_BY_BACKEND[backend],
+    supertonicLanguage: sanitizeSupertonicLanguage(settings.supertonicLanguage),
+    supertonicSteps: Math.round(sanitizeNumber(settings.supertonicSteps, DEFAULT_TTS_SETTINGS.supertonicSteps, 1, 32)),
+    supertonicMaxChunkLength: Math.round(sanitizeNumber(settings.supertonicMaxChunkLength, DEFAULT_TTS_SETTINGS.supertonicMaxChunkLength, 100, 600)),
+    supertonicSilenceDuration: sanitizeNumber(settings.supertonicSilenceDuration, DEFAULT_TTS_SETTINGS.supertonicSilenceDuration, 0, 1),
+    supertonicTrailingSilence: sanitizeNumber(settings.supertonicTrailingSilence, DEFAULT_TTS_SETTINGS.supertonicTrailingSilence, 0, 1),
   };
 }
 
@@ -95,7 +145,22 @@ router.get("/settings", (req, res) => {
  */
 router.post("/settings", async (req, res) => {
   try {
-    const { voice, speed, pitch, enabled, autoReadEnabled, backend, streamingEnabled, streamingChunkSize, streamingBoundaryTier } = req.body;
+    const {
+      voice,
+      speed,
+      pitch,
+      enabled,
+      autoReadEnabled,
+      backend,
+      streamingEnabled,
+      streamingChunkSize,
+      streamingBoundaryTier,
+      supertonicLanguage,
+      supertonicSteps,
+      supertonicMaxChunkLength,
+      supertonicSilenceDuration,
+      supertonicTrailingSilence,
+    } = req.body;
 
     if (speed !== undefined) {
       if (typeof speed !== "number" || speed < 0.5 || speed > 2.0) {
@@ -171,6 +236,46 @@ router.post("/settings", async (req, res) => {
       userSettings.streamingBoundaryTier = streamingBoundaryTier;
     }
 
+    if (supertonicLanguage !== undefined) {
+      if (typeof supertonicLanguage !== "string" || sanitizeSupertonicLanguage(supertonicLanguage) !== supertonicLanguage.trim().toLowerCase()) {
+        return res.status(400).json({ error: "supertonicLanguage must be a supported Supertonic language code" });
+      }
+      userSettings.supertonicLanguage = supertonicLanguage.trim().toLowerCase();
+    }
+
+    if (supertonicSteps !== undefined) {
+      if (typeof supertonicSteps !== "number" || !Number.isInteger(supertonicSteps) || supertonicSteps < 1 || supertonicSteps > 32) {
+        return res.status(400).json({ error: "supertonicSteps must be an integer between 1 and 32" });
+      }
+      userSettings.supertonicSteps = supertonicSteps;
+    }
+
+    if (supertonicMaxChunkLength !== undefined) {
+      if (
+        typeof supertonicMaxChunkLength !== "number" ||
+        !Number.isInteger(supertonicMaxChunkLength) ||
+        supertonicMaxChunkLength < 100 ||
+        supertonicMaxChunkLength > 600
+      ) {
+        return res.status(400).json({ error: "supertonicMaxChunkLength must be an integer between 100 and 600" });
+      }
+      userSettings.supertonicMaxChunkLength = supertonicMaxChunkLength;
+    }
+
+    if (supertonicSilenceDuration !== undefined) {
+      if (typeof supertonicSilenceDuration !== "number" || supertonicSilenceDuration < 0 || supertonicSilenceDuration > 1) {
+        return res.status(400).json({ error: "supertonicSilenceDuration must be between 0 and 1 second" });
+      }
+      userSettings.supertonicSilenceDuration = supertonicSilenceDuration;
+    }
+
+    if (supertonicTrailingSilence !== undefined) {
+      if (typeof supertonicTrailingSilence !== "number" || supertonicTrailingSilence < 0 || supertonicTrailingSilence > 1) {
+        return res.status(400).json({ error: "supertonicTrailingSilence must be between 0 and 1 second" });
+      }
+      userSettings.supertonicTrailingSilence = supertonicTrailingSilence;
+    }
+
     await saveTTSSettings();
     res.json(userSettings);
   } catch (error) {
@@ -185,7 +290,18 @@ router.post("/settings", async (req, res) => {
  */
 router.post("/generate", async (req, res) => {
   try {
-    const { text, voice, speed, pitch, backend } = req.body;
+    const {
+      text,
+      voice,
+      speed,
+      pitch,
+      backend,
+      supertonicLanguage,
+      supertonicSteps,
+      supertonicMaxChunkLength,
+      supertonicSilenceDuration,
+      supertonicTrailingSilence,
+    } = req.body;
 
     if (!text || typeof text !== "string" || !text.trim()) {
       return res.status(400).json({ error: "Text is required" });
@@ -198,6 +314,11 @@ router.post("/generate", async (req, res) => {
       ...(speed !== undefined && { speed }),
       ...(pitch !== undefined && { pitch }),
       ...(backend !== undefined && { backend }),
+      ...(supertonicLanguage !== undefined && { supertonicLanguage }),
+      ...(supertonicSteps !== undefined && { supertonicSteps }),
+      ...(supertonicMaxChunkLength !== undefined && { supertonicMaxChunkLength }),
+      ...(supertonicSilenceDuration !== undefined && { supertonicSilenceDuration }),
+      ...(supertonicTrailingSilence !== undefined && { supertonicTrailingSilence }),
     };
 
     const response = await generateTTS({
@@ -221,7 +342,18 @@ router.post("/generate", async (req, res) => {
  */
 router.post("/generate-stream", async (req, res) => {
   try {
-    const { text, voice, speed, pitch, backend } = req.body;
+    const {
+      text,
+      voice,
+      speed,
+      pitch,
+      backend,
+      supertonicLanguage,
+      supertonicSteps,
+      supertonicMaxChunkLength,
+      supertonicSilenceDuration,
+      supertonicTrailingSilence,
+    } = req.body;
 
     if (!text || typeof text !== "string" || !text.trim()) {
       return res.status(400).json({ error: "Text is required" });
@@ -233,6 +365,11 @@ router.post("/generate-stream", async (req, res) => {
       ...(speed !== undefined && { speed }),
       ...(pitch !== undefined && { pitch }),
       ...(backend !== undefined && { backend }),
+      ...(supertonicLanguage !== undefined && { supertonicLanguage }),
+      ...(supertonicSteps !== undefined && { supertonicSteps }),
+      ...(supertonicMaxChunkLength !== undefined && { supertonicMaxChunkLength }),
+      ...(supertonicSilenceDuration !== undefined && { supertonicSilenceDuration }),
+      ...(supertonicTrailingSilence !== undefined && { supertonicTrailingSilence }),
     };
 
     if (!isTTSBackend(effectiveSettings.backend)) {

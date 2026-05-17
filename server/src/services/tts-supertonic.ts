@@ -16,7 +16,18 @@ if (!existsSync(CACHE_DIR)) {
 }
 
 function generateCacheKey(text: string, settings: TTSSettings): string {
-  const input = `supertonic-3-v2|${text}|${settings.voice}|${settings.speed}|${settings.pitch}`;
+  const input = [
+    "supertonic-3-v4",
+    text,
+    settings.voice,
+    settings.speed,
+    settings.pitch,
+    settings.supertonicLanguage,
+    settings.supertonicSteps,
+    settings.supertonicMaxChunkLength,
+    settings.supertonicSilenceDuration,
+    settings.supertonicTrailingSilence,
+  ].join("|");
   return createHash("sha256").update(input).digest("hex");
 }
 
@@ -76,8 +87,7 @@ function getWavDuration(audio: Buffer): number {
 
 async function runSupertonicTTS(
   text: string,
-  voice: string,
-  speed: number
+  settings: TTSSettings
 ): Promise<{ audio: Buffer; duration: number; sampleRate: number }> {
   return new Promise((resolve, reject) => {
     const args = [
@@ -85,9 +95,21 @@ async function runSupertonicTTS(
       "--text",
       text,
       "--voice",
-      voice,
+      settings.voice,
       "--speed",
-      speed.toString(),
+      settings.speed.toString(),
+      "--pitch",
+      settings.pitch.toString(),
+      "--lang",
+      settings.supertonicLanguage,
+      "--steps",
+      settings.supertonicSteps.toString(),
+      "--max-chunk-length",
+      settings.supertonicMaxChunkLength.toString(),
+      "--silence-duration",
+      settings.supertonicSilenceDuration.toString(),
+      "--trailing-silence",
+      settings.supertonicTrailingSilence.toString(),
     ];
 
     const proc = spawn(VENV_PYTHON, args, {
@@ -171,7 +193,7 @@ export async function generateSupertonicTTS(request: TTSGenerateRequest, setting
   const cleanText = extractTextForTTS(request.text);
   console.log(`[TTS-Supertonic] Preprocessed text: ${cleanText.substring(0, 100)}${cleanText.length > 100 ? "..." : ""}`);
 
-  const { audio, duration } = await runSupertonicTTS(cleanText, settings.voice, settings.speed);
+  const { audio, duration } = await runSupertonicTTS(cleanText, settings);
 
   writeFileSync(cachePath, audio);
   console.log(`[TTS-Supertonic] Saved ${cacheKey} (${Math.round(audio.length / 1024)}KB, ${duration.toFixed(2)}s)`);

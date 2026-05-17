@@ -17,6 +17,11 @@ const DEFAULT_SETTINGS: TTSSettings = {
   streamingEnabled: false,
   streamingChunkSize: 50,
   streamingBoundaryTier: "clause",
+  supertonicLanguage: "en",
+  supertonicSteps: 8,
+  supertonicMaxChunkLength: 300,
+  supertonicSilenceDuration: 0.3,
+  supertonicTrailingSilence: 0.1,
 };
 
 export interface PlaybackState {
@@ -353,6 +358,11 @@ export function useTTS() {
           speed: options?.speed ?? settings.speed,
           pitch: options?.pitch ?? settings.pitch,
           backend: settings.backend,
+          supertonicLanguage: settings.supertonicLanguage,
+          supertonicSteps: settings.supertonicSteps,
+          supertonicMaxChunkLength: settings.supertonicMaxChunkLength,
+          supertonicSilenceDuration: settings.supertonicSilenceDuration,
+          supertonicTrailingSilence: settings.supertonicTrailingSilence,
         }),
       });
 
@@ -404,7 +414,20 @@ export function useTTS() {
       resetChunkPlayback();
       setPlaybackState((prev) => ({ ...prev, isLoading: false, isPlaying: false }));
     }
-  }, [playQueuedChunk, readSseStream, resetChunkPlayback, settings.backend, settings.pitch, settings.speed, settings.voice]);
+  }, [
+    playQueuedChunk,
+    readSseStream,
+    resetChunkPlayback,
+    settings.backend,
+    settings.pitch,
+    settings.speed,
+    settings.supertonicLanguage,
+    settings.supertonicMaxChunkLength,
+    settings.supertonicSilenceDuration,
+    settings.supertonicSteps,
+    settings.supertonicTrailingSilence,
+    settings.voice,
+  ]);
 
   /**
    * Play text aloud
@@ -450,6 +473,11 @@ export function useTTS() {
             speed: options?.speed ?? settings.speed,
             pitch: options?.pitch ?? settings.pitch,
             backend: settings.backend,
+            supertonicLanguage: settings.supertonicLanguage,
+            supertonicSteps: settings.supertonicSteps,
+            supertonicMaxChunkLength: settings.supertonicMaxChunkLength,
+            supertonicSilenceDuration: settings.supertonicSilenceDuration,
+            supertonicTrailingSilence: settings.supertonicTrailingSilence,
           }),
         });
 
@@ -507,7 +535,20 @@ export function useTTS() {
         setPlaybackState((prev) => ({ ...prev, isLoading: false }));
       }
     },
-    [playChunked, resetChunkPlayback, settings.voice, settings.speed, settings.pitch, settings.backend, shouldUseChunkedPlayback]
+    [
+      playChunked,
+      resetChunkPlayback,
+      settings.voice,
+      settings.speed,
+      settings.pitch,
+      settings.backend,
+      settings.supertonicLanguage,
+      settings.supertonicSteps,
+      settings.supertonicMaxChunkLength,
+      settings.supertonicSilenceDuration,
+      settings.supertonicTrailingSilence,
+      shouldUseChunkedPlayback,
+    ]
   );
 
   /**

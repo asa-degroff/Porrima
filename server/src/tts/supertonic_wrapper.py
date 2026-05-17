@@ -8,6 +8,7 @@ import argparse
 import io
 import json
 import os
+import subprocess
 import sys
 
 # Keep third-party import logs out of stdout, which must contain only WAV bytes.
@@ -37,6 +38,7 @@ def main():
     parser.add_argument("--text", required=True, help="Text to synthesize")
     parser.add_argument("--voice", default="M1", help="Voice style ID (M1-M5, F1-F5)")
     parser.add_argument("--speed", type=float, default=1.05, help="Speed multiplier (0.7-2.0)")
+    parser.add_argument("--pitch", type=float, default=1.0, help="Pitch multiplier applied with ffmpeg rubberband")
     parser.add_argument("--lang", default=os.environ.get("SUPERTONIC_TTS_LANG", "en"), help="Language code")
     parser.add_argument("--steps", type=int, default=int(os.environ.get("SUPERTONIC_TTS_STEPS", "8")), help="Quality steps")
     parser.add_argument("--max-chunk-length", type=int, default=int(os.environ.get("SUPERTONIC_TTS_MAX_CHUNK_LENGTH", "300")), help="Max characters per chunk")
@@ -72,6 +74,35 @@ def main():
             raise ValueError("No audio generated")
 
         sample_rate = 44100
+        if abs(args.pitch - 1.0) >= 0.01:
+            native_buffer = io.BytesIO()
+            sf.write(native_buffer, audio, sample_rate, format="WAV", subtype="PCM_16")
+
+            process = subprocess.Popen(
+                [
+                    "ffmpeg",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    "pipe:0",
+                    "-filter:a",
+                    f"rubberband=pitch={args.pitch}",
+                    "-f",
+                    "wav",
+                    "pipe:1",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            out, err = process.communicate(input=native_buffer.getvalue())
+            if process.returncode != 0:
+                raise RuntimeError(f"FFmpeg rubberband pitch processing failed: {err.decode().strip()}")
+
+            processed_audio, processed_rate = sf.read(io.BytesIO(out), dtype="float32")
+            audio = np.asarray(processed_audio).squeeze()
+            sample_rate = int(processed_rate)
+
         if args.trailing_silence > 0:
             trailing_samples = int(sample_rate * args.trailing_silence)
             if trailing_samples > 0:
@@ -87,8 +118,11 @@ def main():
             "sample_rate": sample_rate,
             "voice": args.voice,
             "speed": args.speed,
+            "pitch": args.pitch,
             "lang": args.lang,
             "steps": args.steps,
+            "max_chunk_length": args.max_chunk_length,
+            "silence_duration": args.silence_duration,
             "model_duration": _duration_value(duration),
             "trailing_silence": args.trailing_silence,
         }
