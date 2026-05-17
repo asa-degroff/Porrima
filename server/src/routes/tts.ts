@@ -14,18 +14,43 @@ const router = express.Router();
 const BASE_DIR = join(homedir(), ".quje-agent");
 const TTS_SETTINGS_PATH = join(BASE_DIR, "tts-settings.json");
 const TTS_BACKENDS: TTSBackend[] = ["kokoro", "qwen3-tts", "supertonic-3"];
+const DEFAULT_VOICE_BY_BACKEND: Record<TTSBackend, string> = {
+  kokoro: "af_heart",
+  "qwen3-tts": "Ryan",
+  "supertonic-3": "M1",
+};
 
 function isTTSBackend(value: unknown): value is TTSBackend {
   return typeof value === "string" && TTS_BACKENDS.includes(value as TTSBackend);
 }
 
+function normalizeTTSSettings(settings: Partial<TTSSettings>): TTSSettings {
+  const backend = isTTSBackend(settings.backend) ? settings.backend : DEFAULT_TTS_SETTINGS.backend;
+  const voicesByBackend = {
+    ...DEFAULT_VOICE_BY_BACKEND,
+    ...(settings.voicesByBackend ?? {}),
+  };
+
+  if (settings.voice) {
+    voicesByBackend[backend] = settings.voice;
+  }
+
+  return {
+    ...DEFAULT_TTS_SETTINGS,
+    ...settings,
+    backend,
+    voicesByBackend,
+    voice: settings.voice || voicesByBackend[backend] || DEFAULT_VOICE_BY_BACKEND[backend],
+  };
+}
+
 // In-memory cache, loaded from disk on startup
-let userSettings: TTSSettings = { ...DEFAULT_TTS_SETTINGS };
+let userSettings: TTSSettings = normalizeTTSSettings(DEFAULT_TTS_SETTINGS);
 
 async function loadTTSSettings(): Promise<void> {
   try {
     const data = await readFile(TTS_SETTINGS_PATH, "utf-8");
-    userSettings = { ...DEFAULT_TTS_SETTINGS, ...JSON.parse(data) };
+    userSettings = normalizeTTSSettings({ ...DEFAULT_TTS_SETTINGS, ...JSON.parse(data) });
   } catch {
     // File doesn't exist yet, use defaults
   }
@@ -72,13 +97,6 @@ router.post("/settings", async (req, res) => {
   try {
     const { voice, speed, pitch, enabled, autoReadEnabled, backend, streamingEnabled, streamingChunkSize, streamingBoundaryTier } = req.body;
 
-    if (voice !== undefined) {
-      if (typeof voice !== "string" || !voice.trim()) {
-        return res.status(400).json({ error: "Voice must be a non-empty string" });
-      }
-      userSettings.voice = voice.trim();
-    }
-
     if (speed !== undefined) {
       if (typeof speed !== "number" || speed < 0.5 || speed > 2.0) {
         return res.status(400).json({ error: "Speed must be a number between 0.5 and 2.0" });
@@ -107,11 +125,29 @@ router.post("/settings", async (req, res) => {
       userSettings.autoReadEnabled = autoReadEnabled;
     }
 
+    let backendChanged = false;
     if (backend !== undefined) {
       if (!isTTSBackend(backend)) {
         return res.status(400).json({ error: "Backend must be 'kokoro', 'qwen3-tts', or 'supertonic-3'" });
       }
+      backendChanged = backend !== userSettings.backend;
       userSettings.backend = backend;
+    }
+
+    userSettings.voicesByBackend = {
+      ...DEFAULT_VOICE_BY_BACKEND,
+      ...(userSettings.voicesByBackend ?? {}),
+    };
+
+    if (voice !== undefined) {
+      if (typeof voice !== "string" || !voice.trim()) {
+        return res.status(400).json({ error: "Voice must be a non-empty string" });
+      }
+      const trimmedVoice = voice.trim();
+      userSettings.voice = trimmedVoice;
+      userSettings.voicesByBackend[userSettings.backend] = trimmedVoice;
+    } else if (backendChanged) {
+      userSettings.voice = userSettings.voicesByBackend[userSettings.backend] || DEFAULT_VOICE_BY_BACKEND[userSettings.backend];
     }
 
     if (streamingEnabled !== undefined) {

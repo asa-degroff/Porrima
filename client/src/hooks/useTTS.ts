@@ -9,6 +9,11 @@ const DEFAULT_SETTINGS: TTSSettings = {
   enabled: false,
   autoReadEnabled: false,
   backend: "kokoro",
+  voicesByBackend: {
+    kokoro: "af_heart",
+    "qwen3-tts": "Ryan",
+    "supertonic-3": "M1",
+  },
   streamingEnabled: false,
   streamingChunkSize: 50,
   streamingBoundaryTier: "clause",

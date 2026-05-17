@@ -554,6 +554,7 @@ export interface TTSSettings {
   enabled: boolean;
   autoReadEnabled: boolean;
   backend: TTSBackend;
+  voicesByBackend?: Partial<Record<TTSBackend, string>>;
   streamingEnabled: boolean;
   streamingChunkSize: number;
   streamingBoundaryTier: "clause" | "sentence";

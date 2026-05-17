@@ -8,6 +8,7 @@ export interface TTSSettings {
   autoReadEnabled: boolean; // Global default for new chats
   // Streaming TTS settings (Qwen3-TTS only for now)
   backend: TTSBackend;
+  voicesByBackend?: Partial<Record<TTSBackend, string>>;
   streamingEnabled: boolean;
   streamingChunkSize: number; // 30-80 tokens per chunk
   streamingBoundaryTier: "clause" | "sentence";
@@ -41,6 +42,11 @@ export const DEFAULT_TTS_SETTINGS: TTSSettings = {
   enabled: false,
   autoReadEnabled: false,
   backend: "kokoro",
+  voicesByBackend: {
+    kokoro: "af_heart",
+    "qwen3-tts": "Ryan",
+    "supertonic-3": "M1",
+  },
   streamingEnabled: false,
   streamingChunkSize: 50,
   streamingBoundaryTier: "clause",

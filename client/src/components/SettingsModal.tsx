@@ -5153,7 +5153,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   >
                     <button
                       onClick={async () => {
-                        const updated = await updateTTSSettings({ backend: "kokoro", voice: "af_heart" });
+                        const updated = await updateTTSSettings({ backend: "kokoro" });
                         applyTtsSettingsUpdate(updated);
                         backendDd.close();
                       }}
@@ -5169,7 +5169,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     </button>
                     <button
                       onClick={async () => {
-                        const updated = await updateTTSSettings({ backend: "qwen3-tts", voice: "Ryan" });
+                        const updated = await updateTTSSettings({ backend: "qwen3-tts" });
                         applyTtsSettingsUpdate(updated);
                         backendDd.close();
                       }}
@@ -5185,7 +5185,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     </button>
                     <button
                       onClick={async () => {
-                        const updated = await updateTTSSettings({ backend: "supertonic-3", voice: "M1", streamingEnabled: false });
+                        const updated = await updateTTSSettings({ backend: "supertonic-3", streamingEnabled: false });
                         applyTtsSettingsUpdate(updated);
                         backendDd.close();
                       }}
