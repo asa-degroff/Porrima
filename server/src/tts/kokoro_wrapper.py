@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--text", required=True, help="Text to synthesize")
     parser.add_argument("--voice", default="af_heart", help="Voice ID (default: af_heart)")
     parser.add_argument("--speed", type=float, default=1.0, help="Speed multiplier (default: 1.0)")
+    parser.add_argument("--pitch", type=float, default=1.0, help="Pitch multiplier (default: 1.0)")
     parser.add_argument("--lang", default="a", help="Language code: 'a'=American, 'b'=British (default: a)")
     args = parser.parse_args()
 
@@ -66,8 +67,19 @@ def main():
             wav_file.writeframes(audio_int16.tobytes())
         native_buffer.seek(0)
 
-        # If speed is 1.0, just output the native audio directly
-        if abs(args.speed - 1.0) < 0.01:
+        def atempo_chain(tempo):
+            filters = []
+            while tempo < 0.5:
+                filters.append("atempo=0.5")
+                tempo /= 0.5
+            while tempo > 2.0:
+                filters.append("atempo=2.0")
+                tempo /= 2.0
+            filters.append(f"atempo={tempo:.8f}")
+            return filters
+
+        # If speed and pitch are neutral, output the native audio directly.
+        if abs(args.speed - 1.0) < 0.01 and abs(args.pitch - 1.0) < 0.001:
             # Apply fade-out to prevent click at end
             fade_samples = int(sample_rate * FADE_DURATION)
             if len(audio) > fade_samples:
@@ -106,20 +118,34 @@ def main():
                 "sample_rate": sample_rate,
                 "voice": args.voice,
                 "speed": args.speed,
+                "pitch": args.pitch,
                 "lang_code": lang_code,
             }
             print(json.dumps(metadata), file=sys.stderr)
         else:
-            # Use ffmpeg to change speed with pitch correction (atempo)
+            # Use ffmpeg for post-processing. asetrate changes pitch, aresample
+            # restores the sample rate, and atempo compensates duration/speed.
             # We use a subprocess pipe to feed the native audio into ffmpeg
             # NOTE: We do NOT apply fade in ffmpeg - we'll do it in numpy after processing
             # because atempo changes the sample count and ffmpeg's afade timing is unreliable
+            filters = []
+            if abs(args.pitch - 1.0) >= 0.001:
+                shifted_rate = max(1000, int(round(sample_rate * args.pitch)))
+                filters.extend([
+                    f"asetrate={shifted_rate}",
+                    f"aresample={sample_rate}:resampler=soxr:precision=28",
+                ])
+                tempo = args.speed / args.pitch
+            else:
+                tempo = args.speed
+
+            filters.extend(atempo_chain(tempo))
             
             cmd = [
                 "ffmpeg",
                 "-loglevel", "error",
                 "-i", "pipe:0",
-                "-filter:a", f"atempo={args.speed}",
+                "-filter:a", ",".join(filters),
                 "-f", "wav",
                 "pipe:1"
             ]
@@ -194,6 +220,7 @@ def main():
                     "sample_rate": sample_rate,
                     "voice": args.voice,
                     "speed": args.speed,
+                    "pitch": args.pitch,
                     "lang_code": lang_code,
                 }
                 print(json.dumps(metadata), file=sys.stderr)

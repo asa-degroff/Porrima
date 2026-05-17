@@ -71,13 +71,11 @@ async function runKokoro(
   text: string,
   voice: string,
   speed: number,
-  _pitch: number
+  pitch: number
 ): Promise<{ audio: Buffer; duration: number; sampleRate: number }> {
   const { pythonPath } = await resolveTtsPython("kokoro");
 
   return new Promise((resolve, reject) => {
-    // Note: Kokoro doesn't support pitch control natively
-    // Pitch would require ffmpeg post-processing (not yet implemented)
     const args = [
       KOKORO_SCRIPT,
       "--text",
@@ -86,6 +84,8 @@ async function runKokoro(
       voice,
       "--speed",
       speed.toString(),
+      "--pitch",
+      pitch.toString(),
     ];
 
     const proc = spawn(pythonPath, args, {
