@@ -4,11 +4,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSy
 import { join } from "node:path";
 import type { TTSGenerateRequest, TTSGenerateResponse, TTSSettings } from "../types/tts.js";
 import { extractTextForTTS } from "./tts-text-preprocessor.js";
+import { getTtsPythonStatus, resolveTtsPython } from "./tts-python.js";
 
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache-qwen3");
 const MAX_CACHE_SIZE_MB = 500;
 const PYTHON_SCRIPT = join(process.cwd(), "src", "tts", "qwen3_wrapper.py");
-const VENV_PYTHON = process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), "..", ".venv", "bin", "python");
 
 // Ensure cache directory exists
 if (!existsSync(CACHE_DIR)) {
@@ -70,6 +70,8 @@ async function runQwen3TTS(
   _pitch: number,
   instruct?: string
 ): Promise<{ audio: Buffer; duration: number; sampleRate: number }> {
+  const { pythonPath } = await resolveTtsPython("qwen3-tts");
+
   return new Promise((resolve, reject) => {
     const args = [
       PYTHON_SCRIPT,
@@ -86,7 +88,7 @@ async function runQwen3TTS(
       args.push(instruct);
     }
 
-    const proc = spawn(VENV_PYTHON, args, {
+    const proc = spawn(pythonPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -139,7 +141,7 @@ async function runQwen3TTS(
       if (err.message.includes("ENOENT")) {
         reject(
           new Error(
-            `Python interpreter not found at ${VENV_PYTHON}. Set TTS_PYTHON_OVERRIDE env var or create a venv.`
+            `Python interpreter not found at ${pythonPath}. Set QWEN3_TTS_PYTHON_OVERRIDE or repair the Qwen3-TTS venv.`
           )
         );
       } else {
@@ -231,21 +233,6 @@ export function getQwen3Voices(): Array<{ id: string; name: string; gender: "fem
  * Check if Qwen3-TTS is available (Python package installed)
  */
 export async function checkQwen3Availability(): Promise<{ available: boolean; error?: string }> {
-  return new Promise((resolve) => {
-    const proc = spawn(VENV_PYTHON, ["-c", "import qwen_tts"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    proc.on("close", (code) => {
-      if (code === 0) {
-        resolve({ available: true });
-      } else {
-        resolve({ available: false, error: "qwen_tts package not installed" });
-      }
-    });
-
-    proc.on("error", () => {
-      resolve({ available: false, error: "Python interpreter error" });
-    });
-  });
+  const status = await getTtsPythonStatus("qwen3-tts");
+  return { available: status.available, error: status.error };
 }

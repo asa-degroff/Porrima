@@ -7,11 +7,11 @@ import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
 import { extractTextForTTS } from "./tts-text-preprocessor.js";
 import { generateQwen3TTS, getQwen3Voices, checkQwen3Availability } from "./tts-qwen3.js";
 import { generateSupertonicTTS, getSupertonicVoices, checkSupertonicAvailability } from "./tts-supertonic.js";
+import { getTtsPythonStatus, resolveTtsPython } from "./tts-python.js";
 
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache");
 const MAX_CACHE_SIZE_MB = 500; // LRU cleanup threshold
 const KOKORO_SCRIPT = join(process.cwd(), "src", "tts", "kokoro_wrapper.py");
-const VENV_PYTHON = process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), ".venv", "bin", "python");
 
 // Ensure cache directory exists
 if (!existsSync(CACHE_DIR)) {
@@ -73,6 +73,8 @@ async function runKokoro(
   speed: number,
   _pitch: number
 ): Promise<{ audio: Buffer; duration: number; sampleRate: number }> {
+  const { pythonPath } = await resolveTtsPython("kokoro");
+
   return new Promise((resolve, reject) => {
     // Note: Kokoro doesn't support pitch control natively
     // Pitch would require ffmpeg post-processing (not yet implemented)
@@ -86,7 +88,7 @@ async function runKokoro(
       speed.toString(),
     ];
 
-    const proc = spawn(VENV_PYTHON, args, {
+    const proc = spawn(pythonPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -141,7 +143,7 @@ async function runKokoro(
       if (err.message.includes("ENOENT")) {
         reject(
           new Error(
-            `Python interpreter not found at ${VENV_PYTHON}. Set TTS_PYTHON_OVERRIDE env var or create a venv.`
+            `Python interpreter not found at ${pythonPath}. Set KOKORO_TTS_PYTHON_OVERRIDE or repair the Kokoro venv.`
           )
         );
       } else {
@@ -255,6 +257,16 @@ export function getAvailableVoices(backend: TTSBackend = "kokoro"): Array<{ id: 
       { id: "bm_lewis", name: "Lewis", gender: "male", accent: "british" },
     ];
   }
+}
+
+export async function checkKokoroAvailability(): Promise<{ available: boolean; error?: string; pythonPath?: string; source?: string }> {
+  const status = await getTtsPythonStatus("kokoro");
+  return {
+    available: status.available,
+    error: status.error,
+    pythonPath: status.pythonPath,
+    source: status.source,
+  };
 }
 
 /**

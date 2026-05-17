@@ -6,11 +6,12 @@
  */
 
 import { spawn } from "node:child_process";
+import { join } from "node:path";
 import { StreamingTokenBuffer } from "./tts-buffer.js";
+import { resolveTtsPython } from "./tts-python.js";
 import type { TTSBackend, TTSSettings } from "../types/tts.js";
 
-const VENV_PYTHON = process.env.TTS_PYTHON_OVERRIDE || "/home/asa/quje-agent/.venv/bin/python";
-const QWEN3_WRAPPER = "/home/asa/quje-agent/server/src/tts/qwen3_wrapper.py";
+const QWEN3_WRAPPER = join(process.cwd(), "src", "tts", "qwen3_wrapper.py");
 
 export interface StreamingTTSOptions extends TTSSettings {
   chunkSize?: number;
@@ -72,6 +73,8 @@ async function generateTTSChunk(
   text: string,
   options: StreamingTTSOptions
 ): Promise<Buffer | null> {
+  const { pythonPath } = await resolveTtsPython("qwen3-tts");
+
   return new Promise((resolve, reject) => {
     const args = [
       QWEN3_WRAPPER,
@@ -85,7 +88,7 @@ async function generateTTSChunk(
       "English",
     ];
     
-    const proc = spawn(VENV_PYTHON, args, {
+    const proc = spawn(pythonPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,

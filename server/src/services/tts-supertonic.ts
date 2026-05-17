@@ -4,11 +4,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSy
 import { join } from "node:path";
 import type { TTSGenerateRequest, TTSGenerateResponse, TTSSettings } from "../types/tts.js";
 import { extractTextForTTS } from "./tts-text-preprocessor.js";
+import { getTtsPythonStatus, resolveTtsPython } from "./tts-python.js";
 
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache-supertonic");
 const MAX_CACHE_SIZE_MB = 500;
 const PYTHON_SCRIPT = join(process.cwd(), "src", "tts", "supertonic_wrapper.py");
-const VENV_PYTHON = process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), "..", ".venv", "bin", "python");
 const SAMPLE_RATE = 44100;
 
 if (!existsSync(CACHE_DIR)) {
@@ -93,6 +93,8 @@ async function runSupertonicTTS(
   text: string,
   settings: TTSSettings
 ): Promise<{ audio: Buffer; duration: number; sampleRate: number }> {
+  const { pythonPath } = await resolveTtsPython("supertonic-3");
+
   return new Promise((resolve, reject) => {
     const pitchRatio = pitchSemitonesToRatio(settings.supertonicPitchSemitones);
     const args = [
@@ -117,7 +119,7 @@ async function runSupertonicTTS(
       settings.supertonicTrailingSilence.toString(),
     ];
 
-    const proc = spawn(VENV_PYTHON, args, {
+    const proc = spawn(pythonPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -169,7 +171,7 @@ async function runSupertonicTTS(
       if (err.message.includes("ENOENT")) {
         reject(
           new Error(
-            `Python interpreter not found at ${VENV_PYTHON}. Set TTS_PYTHON_OVERRIDE env var or create a venv.`
+            `Python interpreter not found at ${pythonPath}. Set SUPERTONIC_TTS_PYTHON_OVERRIDE or repair the Supertonic venv.`
           )
         );
       } else {
@@ -236,21 +238,6 @@ export function getSupertonicVoices(): Array<{ id: string; name: string; gender:
 }
 
 export async function checkSupertonicAvailability(): Promise<{ available: boolean; error?: string }> {
-  return new Promise((resolve) => {
-    const proc = spawn(VENV_PYTHON, ["-c", "import supertonic, soundfile, numpy"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    proc.on("close", (code) => {
-      if (code === 0) {
-        resolve({ available: true });
-      } else {
-        resolve({ available: false, error: "supertonic package not installed" });
-      }
-    });
-
-    proc.on("error", () => {
-      resolve({ available: false, error: "Python interpreter error" });
-    });
-  });
+  const status = await getTtsPythonStatus("supertonic-3");
+  return { available: status.available, error: status.error };
 }

@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { TTSBackend, TTSSettings } from "../types/tts.js";
 import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
-import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkQwen3TTSInstallation, checkSupertonicTTSInstallation } from "../services/tts.js";
+import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkKokoroAvailability, checkQwen3TTSInstallation, checkSupertonicTTSInstallation } from "../services/tts.js";
 import { getQwen3AudioFile } from "../services/tts-qwen3.js";
 import { getSupertonicAudioFile } from "../services/tts-supertonic.js";
 import { generateTTSChunks, planTTSChunks } from "../services/tts-chunking.js";
+import { getTtsPythonStatus } from "../services/tts-python.js";
 
 const router = express.Router();
 
@@ -489,6 +490,7 @@ router.get("/status", async (req, res) => {
     const backend = isTTSBackend(req.query.backend) ? req.query.backend : "kokoro";
     const { existsSync } = await import("node:fs");
     const { join } = await import("node:path");
+    const pythonStatus = await getTtsPythonStatus(backend);
     
     if (backend === "qwen3-tts") {
       const result = await checkQwen3TTSInstallation();
@@ -496,7 +498,9 @@ router.get("/status", async (req, res) => {
         backend: "qwen3-tts",
         available: result.available,
         error: result.error,
-        pythonPath: process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), ".venv", "bin", "python"),
+        pythonPath: pythonStatus.pythonPath,
+        pythonSource: pythonStatus.source,
+        pythonCandidates: pythonStatus.candidates,
       });
     } else if (backend === "supertonic-3") {
       const result = await checkSupertonicTTSInstallation();
@@ -504,7 +508,9 @@ router.get("/status", async (req, res) => {
         backend: "supertonic-3",
         available: result.available,
         error: result.error,
-        pythonPath: process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), "..", ".venv", "bin", "python"),
+        pythonPath: pythonStatus.pythonPath,
+        pythonSource: pythonStatus.source,
+        pythonCandidates: pythonStatus.candidates,
       });
     } else {
       const scriptPath = join(process.cwd(), "src", "tts", "kokoro_wrapper.py");
@@ -515,10 +521,14 @@ router.get("/status", async (req, res) => {
           error: "TTS script not found" 
         });
       }
+      const result = await checkKokoroAvailability();
       res.json({
         backend: "kokoro",
-        available: true,
-        pythonPath: process.env.TTS_PYTHON_OVERRIDE || join(process.cwd(), ".venv", "bin", "python"),
+        available: result.available,
+        error: result.error,
+        pythonPath: result.pythonPath,
+        pythonSource: result.source,
+        pythonCandidates: pythonStatus.candidates,
       });
     }
   } catch (error) {
