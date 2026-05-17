@@ -78,7 +78,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
   const selectChatRef = useRef<((id: string) => Promise<void>) | null>(null);
-  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts } = useTTS();
+  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts } = useTTS();
   const {
     userNotebooks,
     agentNotebooks,
@@ -1064,12 +1064,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           <TTSControlBar
             playbackState={playbackState}
             onPause={() => pauseTts()}
-            onResume={() => {
-              if (lastMessageRef.current) {
-                const lastMsg = messages[messages.length - 1];
-                if (lastMsg) playTts(lastMsg.content);
-              }
-            }}
+            onResume={() => resumeTts()}
             onStop={() => stopTts()}
           />
         </div>

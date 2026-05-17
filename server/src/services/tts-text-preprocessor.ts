@@ -10,6 +10,12 @@ function stripUrls(text: string): string {
   return text.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
 }
 
+function formatHeadingForSpeech(heading: string): string {
+  const text = heading.replace(/\s+#+\s*$/, "").trim();
+  if (!text) return "";
+  return /[.!?:;]$/.test(text) ? text : `${text}.`;
+}
+
 /**
  * Extract speakable text from markdown for TTS.
  * Removes code blocks and formatting while preserving readable content.
@@ -23,8 +29,9 @@ export function extractTextForTTS(markdown: string): string {
       .replace(/`[^`]+`/g, "")
       // Convert links to just text: [text](url) → text
       .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-      // Remove heading markers but keep text
-      .replace(/^#{1,6}\s+/gm, "")
+      // Convert headings to punctuated standalone phrases so the next line
+      // does not run into the heading during TTS chunking.
+      .replace(/^#{1,6}\s+(.+?)\s*$/gm, (_, heading) => formatHeadingForSpeech(heading))
       // Remove bold/italic markers
       .replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
       .replace(/\*\*([^*]+)\*\*/g, "$1")

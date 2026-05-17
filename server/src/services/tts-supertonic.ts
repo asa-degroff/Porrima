@@ -16,7 +16,7 @@ if (!existsSync(CACHE_DIR)) {
 }
 
 function generateCacheKey(text: string, settings: TTSSettings): string {
-  const input = `supertonic-3|${text}|${settings.voice}|${settings.speed}|${settings.pitch}`;
+  const input = `supertonic-3-v2|${text}|${settings.voice}|${settings.speed}|${settings.pitch}`;
   return createHash("sha256").update(input).digest("hex");
 }
 

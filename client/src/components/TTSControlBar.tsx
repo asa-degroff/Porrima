@@ -43,6 +43,9 @@ export const TTSControlBar = memo(function TTSControlBar({
   const { light } = useHaptics();
 
   const { isPlaying, isPaused, isLoading, currentTime, duration } = playbackState;
+  const chunkLabel = playbackState.mode === "chunked" && playbackState.totalChunks
+    ? `Chunk ${playbackState.currentChunk || 0}/${playbackState.totalChunks}`
+    : null;
 
   if (!isPlaying && !isPaused && !isLoading) {
     return null;
@@ -91,10 +94,10 @@ export const TTSControlBar = memo(function TTSControlBar({
           )}
           <div className="flex justify-between mt-1 text-[10px] theme-primary-text opacity-60">
             {isLoading ? (
-              <span>Generating audio...</span>
+              <span>{chunkLabel ? `Generating next audio... ${chunkLabel}` : "Generating audio..."}</span>
             ) : (
               <>
-                <span>{formatTime(currentTime)}</span>
+                <span>{chunkLabel || formatTime(currentTime)}</span>
                 <span>{formatTime(duration)}</span>
               </>
             )}

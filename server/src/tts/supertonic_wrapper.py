@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--steps", type=int, default=int(os.environ.get("SUPERTONIC_TTS_STEPS", "8")), help="Quality steps")
     parser.add_argument("--max-chunk-length", type=int, default=int(os.environ.get("SUPERTONIC_TTS_MAX_CHUNK_LENGTH", "300")), help="Max characters per chunk")
     parser.add_argument("--silence-duration", type=float, default=float(os.environ.get("SUPERTONIC_TTS_SILENCE_DURATION", "0.3")), help="Silence between chunks in seconds")
+    parser.add_argument("--trailing-silence", type=float, default=float(os.environ.get("SUPERTONIC_TTS_TRAILING_SILENCE", "0.1")), help="Silence appended to the end in seconds")
     args = parser.parse_args()
 
     try:
@@ -71,18 +72,25 @@ def main():
             raise ValueError("No audio generated")
 
         sample_rate = 44100
+        if args.trailing_silence > 0:
+            trailing_samples = int(sample_rate * args.trailing_silence)
+            if trailing_samples > 0:
+                audio = np.concatenate([audio, np.zeros(trailing_samples, dtype=audio.dtype)])
+
         wav_buffer = io.BytesIO()
         sf.write(wav_buffer, audio, sample_rate, format="WAV", subtype="PCM_16")
         sys.stdout.buffer.write(wav_buffer.getvalue())
         sys.stdout.buffer.flush()
 
         metadata = {
-            "duration": _duration_value(duration),
+            "duration": len(audio) / sample_rate,
             "sample_rate": sample_rate,
             "voice": args.voice,
             "speed": args.speed,
             "lang": args.lang,
             "steps": args.steps,
+            "model_duration": _duration_value(duration),
+            "trailing_silence": args.trailing_silence,
         }
         print(json.dumps(metadata), file=sys.stderr)
     except Exception as e:

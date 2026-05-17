@@ -7,6 +7,7 @@ import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
 import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkQwen3TTSInstallation, checkSupertonicTTSInstallation } from "../services/tts.js";
 import { getQwen3AudioFile } from "../services/tts-qwen3.js";
 import { getSupertonicAudioFile } from "../services/tts-supertonic.js";
+import { generateTTSChunks, planTTSChunks } from "../services/tts-chunking.js";
 
 const router = express.Router();
 
@@ -175,6 +176,80 @@ router.post("/generate", async (req, res) => {
     console.error("[TTS] Generation error:", error);
     const message = error instanceof Error ? error.message : "Failed to generate audio";
     res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /api/tts/generate-stream
+ * Generate TTS audio as independently playable chunks.
+ */
+router.post("/generate-stream", async (req, res) => {
+  try {
+    const { text, voice, speed, pitch, backend } = req.body;
+
+    if (!text || typeof text !== "string" || !text.trim()) {
+      return res.status(400).json({ error: "Text is required" });
+    }
+
+    const effectiveSettings: TTSSettings = {
+      ...userSettings,
+      ...(voice !== undefined && { voice }),
+      ...(speed !== undefined && { speed }),
+      ...(pitch !== undefined && { pitch }),
+      ...(backend !== undefined && { backend }),
+    };
+
+    if (!isTTSBackend(effectiveSettings.backend)) {
+      return res.status(400).json({ error: "Backend must be 'kokoro', 'qwen3-tts', or 'supertonic-3'" });
+    }
+
+    const chunkTexts = planTTSChunks(text.trim());
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    const writeEvent = (event: string, data: unknown) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    writeEvent("chunk_plan", { totalChunks: chunkTexts.length });
+
+    let totalDuration = 0;
+    let totalFileSize = 0;
+    for await (const chunk of generateTTSChunks({ text: text.trim(), voice, speed, pitch }, effectiveSettings)) {
+      if (res.writableEnded) break;
+      totalDuration += chunk.duration;
+      totalFileSize += chunk.fileSize;
+      writeEvent("audio_chunk", {
+        chunkId: chunk.chunkId,
+        index: chunk.index,
+        totalChunks: chunk.totalChunks,
+        audioUrl: chunk.audioUrl,
+        duration: chunk.duration,
+        fileSize: chunk.fileSize,
+      });
+    }
+
+    if (!res.writableEnded) {
+      writeEvent("done", {
+        totalChunks: chunkTexts.length,
+        duration: totalDuration,
+        fileSize: totalFileSize,
+      });
+      res.end();
+    }
+  } catch (error) {
+    console.error("[TTS] Chunked generation error:", error);
+    const message = error instanceof Error ? error.message : "Failed to generate chunked audio";
+    if (res.headersSent) {
+      res.write(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`);
+      res.end();
+    } else {
+      res.status(500).json({ error: message });
+    }
   }
 });
 

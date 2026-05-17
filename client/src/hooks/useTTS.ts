@@ -21,6 +21,16 @@ export interface PlaybackState {
   currentTime: number;
   duration: number;
   audioUrl: string | null;
+  currentChunk?: number;
+  totalChunks?: number;
+  mode?: "single" | "chunked";
+}
+
+interface TTSQueueItem {
+  audioUrl: string;
+  duration: number;
+  index: number;
+  totalChunks: number;
 }
 
 /**
@@ -43,6 +53,15 @@ export function useTTS() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentAudioUrlRef = useRef<string | null>(null);
   const loadingRef = useRef(false);
+  const playIdRef = useRef(0);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const chunkQueueRef = useRef<TTSQueueItem[]>([]);
+  const chunkModeRef = useRef(false);
+  const chunkAudioActiveRef = useRef(false);
+  const chunkStreamDoneRef = useRef(false);
+  const onAudioEndedRef = useRef<() => void>(() => {
+    setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false, isLoading: false }));
+  });
 
   // Fetch TTS settings from server on mount
   useEffect(() => {
@@ -87,7 +106,7 @@ export function useTTS() {
     audioRef.current = audio;
 
     audio.addEventListener("ended", () => {
-      setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false }));
+      onAudioEndedRef.current();
     });
 
     audio.addEventListener("timeupdate", () => {
@@ -149,6 +168,239 @@ export function useTTS() {
     return null;
   }, []);
 
+  const resetChunkPlayback = useCallback(() => {
+    streamAbortRef.current?.abort();
+    streamAbortRef.current = null;
+    chunkQueueRef.current = [];
+    chunkModeRef.current = false;
+    chunkAudioActiveRef.current = false;
+    chunkStreamDoneRef.current = false;
+    onAudioEndedRef.current = () => {
+      setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false, isLoading: false }));
+    };
+  }, []);
+
+  const playQueuedChunk = useCallback(async (playId: number) => {
+    if (playId !== playIdRef.current || !chunkModeRef.current) return;
+
+    const next = chunkQueueRef.current.shift();
+    if (!next) {
+      chunkAudioActiveRef.current = false;
+      if (chunkStreamDoneRef.current) {
+        chunkModeRef.current = false;
+        setPlaybackState((prev) => ({
+          ...prev,
+          isPlaying: false,
+          isPaused: false,
+          isLoading: false,
+          currentTime: 0,
+        }));
+      } else {
+        setPlaybackState((prev) => ({
+          ...prev,
+          isPlaying: false,
+          isPaused: false,
+          isLoading: true,
+        }));
+      }
+      return;
+    }
+
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    chunkAudioActiveRef.current = true;
+    currentAudioUrlRef.current = next.audioUrl;
+    loadingRef.current = true;
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onReady = () => {
+          audio.removeEventListener("error", onError);
+          resolve();
+        };
+        const onError = () => {
+          audio.removeEventListener("canplay", onReady);
+          reject(new Error(`Failed to load audio from ${next.audioUrl}`));
+        };
+        audio.addEventListener("canplay", onReady, { once: true });
+        audio.addEventListener("error", onError, { once: true });
+        audio.src = next.audioUrl;
+      });
+
+      if (playId !== playIdRef.current || !chunkModeRef.current) return;
+
+      loadingRef.current = false;
+      setPlaybackState({
+        isPlaying: true,
+        isPaused: false,
+        isLoading: false,
+        currentTime: 0,
+        duration: next.duration,
+        audioUrl: next.audioUrl,
+        currentChunk: next.index + 1,
+        totalChunks: next.totalChunks,
+        mode: "chunked",
+      });
+
+      await audio.play();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to play audio chunk";
+      setError(message);
+      console.error("[TTS] Chunk playback error:", err);
+      loadingRef.current = false;
+      chunkAudioActiveRef.current = false;
+      setPlaybackState((prev) => ({ ...prev, isLoading: false, isPlaying: false }));
+    }
+  }, []);
+
+  const readSseStream = useCallback(async (
+    response: Response,
+    onEvent: (event: string, data: any) => void,
+  ) => {
+    if (!response.body) {
+      throw new Error("Streaming response body unavailable");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const rawEvent = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+
+        let eventName = "message";
+        const dataLines: string[] = [];
+        for (const line of rawEvent.split("\n")) {
+          if (line.startsWith("event:")) {
+            eventName = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trim());
+          }
+        }
+
+        if (dataLines.length > 0) {
+          onEvent(eventName, JSON.parse(dataLines.join("\n")));
+        }
+      }
+    }
+  }, []);
+
+  const shouldUseChunkedPlayback = useCallback((text: string) => {
+    return settings.backend === "supertonic-3" && text.trim().length > 220;
+  }, [settings.backend]);
+
+  const playChunked = useCallback(async (
+    text: string,
+    options?: { voice?: string; speed?: number; pitch?: number },
+  ) => {
+    const playId = ++playIdRef.current;
+    resetChunkPlayback();
+    setError(null);
+
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+    chunkModeRef.current = true;
+    chunkStreamDoneRef.current = false;
+    loadingRef.current = true;
+
+    onAudioEndedRef.current = () => {
+      if (chunkModeRef.current) {
+        void playQueuedChunk(playId);
+      } else {
+        setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false, isLoading: false }));
+      }
+    };
+
+    setPlaybackState({
+      isPlaying: false,
+      isPaused: false,
+      isLoading: true,
+      currentTime: 0,
+      duration: 0,
+      audioUrl: null,
+      currentChunk: 0,
+      totalChunks: 0,
+      mode: "chunked",
+    });
+
+    try {
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+
+      const res = await fetch("/api/tts/generate-stream", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          text,
+          voice: options?.voice ?? settings.voice,
+          speed: options?.speed ?? settings.speed,
+          pitch: options?.pitch ?? settings.pitch,
+          backend: settings.backend,
+        }),
+      });
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({ error: "Failed to generate audio" }));
+        throw new Error(error.error || "Failed to generate audio");
+      }
+
+      await readSseStream(res, (event, data) => {
+        if (playId !== playIdRef.current) return;
+
+        if (event === "chunk_plan") {
+          setPlaybackState((prev) => ({ ...prev, totalChunks: data.totalChunks ?? 0 }));
+          return;
+        }
+
+        if (event === "audio_chunk") {
+          chunkQueueRef.current.push({
+            audioUrl: data.audioUrl,
+            duration: data.duration,
+            index: data.index,
+            totalChunks: data.totalChunks,
+          });
+
+          if (!chunkAudioActiveRef.current) {
+            void playQueuedChunk(playId);
+          }
+          return;
+        }
+
+        if (event === "done") {
+          chunkStreamDoneRef.current = true;
+          if (!chunkAudioActiveRef.current && chunkQueueRef.current.length === 0) {
+            void playQueuedChunk(playId);
+          }
+          return;
+        }
+
+        if (event === "error") {
+          throw new Error(data.error || "Chunked TTS generation failed");
+        }
+      });
+    } catch (err) {
+      if ((err as Error).name === "AbortError") return;
+      const message = err instanceof Error ? err.message : "Failed to play audio";
+      setError(message);
+      console.error("[TTS] Chunked play error:", err);
+      loadingRef.current = false;
+      resetChunkPlayback();
+      setPlaybackState((prev) => ({ ...prev, isLoading: false, isPlaying: false }));
+    }
+  }, [playQueuedChunk, readSseStream, resetChunkPlayback, settings.backend, settings.pitch, settings.speed, settings.voice]);
+
   /**
    * Play text aloud
    */
@@ -156,12 +408,26 @@ export function useTTS() {
     async (text: string, options?: { voice?: string; speed?: number; pitch?: number }) => {
       if (!text.trim()) return;
 
+      if (shouldUseChunkedPlayback(text)) {
+        await playChunked(text, options);
+        return;
+      }
+
       setError(null);
 
       try {
+        const playId = ++playIdRef.current;
+        resetChunkPlayback();
+
         // Set loading state and suppress spurious error events
         loadingRef.current = true;
-        setPlaybackState((prev) => ({ ...prev, isLoading: true }));
+        setPlaybackState((prev) => ({
+          ...prev,
+          isLoading: true,
+          mode: "single",
+          currentChunk: 0,
+          totalChunks: 0,
+        }));
 
         // Stop any current playback
         if (audioRef.current) {
@@ -220,8 +486,12 @@ export function useTTS() {
             currentTime: 0,
             duration: data.duration,
             audioUrl,
+            currentChunk: 0,
+            totalChunks: 0,
+            mode: "single",
           });
 
+          if (playId !== playIdRef.current) return;
           await audio.play();
         }
       } catch (err) {
@@ -232,7 +502,7 @@ export function useTTS() {
         setPlaybackState((prev) => ({ ...prev, isLoading: false }));
       }
     },
-    [settings.voice, settings.speed, settings.pitch, settings.backend]
+    [playChunked, resetChunkPlayback, settings.voice, settings.speed, settings.pitch, settings.backend, shouldUseChunkedPlayback]
   );
 
   /**
@@ -259,6 +529,8 @@ export function useTTS() {
    * Stop playback
    */
   const stop = useCallback(() => {
+    playIdRef.current++;
+    resetChunkPlayback();
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -269,8 +541,9 @@ export function useTTS() {
       isPlaying: false,
       isPaused: false,
       currentTime: 0,
+      isLoading: false,
     }));
-  }, []);
+  }, [resetChunkPlayback]);
 
   /**
    * Check if TTS service is available
