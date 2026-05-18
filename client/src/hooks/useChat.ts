@@ -767,7 +767,7 @@ export function useChat(chatId: string | null) {
             }
           }
 
-          if (phase === "pre_send" || phase === "end_turn") {
+          if (phase === "pre_send" || phase === "end_turn" || (phase === "manual" && streamContinues)) {
             // Reload messages from server to ensure correct ordering.
             // The server has the authoritative message order after compaction —
             // manual index splicing is fragile and causes ordering bugs. For
@@ -972,6 +972,8 @@ export function useChat(chatId: string | null) {
           bg.thinking.length > 0 ||
           bg.tools.length > 0 ||
           bg.segments.length > 0 ||
+          bg.compacting ||
+          bg.compaction !== null ||
           bg.modelProgress !== null ||
           bg.inferenceActivityPhase !== null
         ) : false;

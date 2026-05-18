@@ -3006,23 +3006,56 @@ router.post("/", async (req, res) => {
   if (compactResult.compact) {
     console.log(`[chat] /compact command detected for chat ${chatId}`);
 
-    // Get settings for context window resolution
-    const settings = await getSettings();
-    const { getEffectiveContextWindow, discoverAllModels } = await import("../services/models.js");
-    const allModels = await discoverAllModels();
-    const ollamaModel = allModels.find(m => m.id === chat.modelId);
-    const contextWindow = getEffectiveContextWindow(chat, ollamaModel, settings);
-
     // Set up SSE stream BEFORE triggering compaction so keepalive pings can
-    // flow while the (CPU) extraction model runs index generation. Without
-    // this, the client's fetch() would hang until the first byte, and its
-    // subsequent SSE inactivity timer could fire during preCompactionFlush.
+    // flow while model discovery, memory retrieval, index generation, and the
+    // (CPU) extraction model run. Without this, the client's fetch() could hang
+    // without bytes long enough to trip its inactivity timeout.
     ensureSSEStream(res, req, chat.id);
     res.write(`event: compacting\ndata: {}\n\n`);
 
+    let contextWindow = 0;
+    let compactSystemPrompt = chat.systemPrompt || "You are a helpful assistant.";
+    let compactTools: unknown;
+
     // Wrap the whole compaction + flush in a keepalive ping loop.
     const compaction = await withSSEKeepalive(res, async () => {
-      const result = await triggerCompaction(chat, contextWindow);
+      // Get settings for context window resolution.
+      const settings = await getSettings();
+      const { getEffectiveContextWindow, discoverAllModels } = await import("../services/models.js");
+      const allModels = await discoverAllModels();
+      const ollamaModel = allModels.find(m => m.id === chat.modelId);
+      contextWindow = getEffectiveContextWindow(chat, ollamaModel, settings);
+
+      let compactProject: Project | undefined;
+      let compactProjectPath: string | undefined;
+      if (chat.projectId) {
+        compactProject = (await getProject(chat.projectId)) ?? undefined;
+        compactProjectPath = compactProject?.path;
+      }
+
+      // Manual compaction must budget for the real prompt shape. Passing no
+      // system prompt/tools makes the compactor think overhead is zero, which
+      // can leave an oversized post-compact prompt that fails on the next turn.
+      if (chat.type === "agent" || chat.type === "bluesky") {
+        const split = await buildSplitAugmentedPrompt(
+          chat.systemPrompt || "You are a helpful assistant.",
+          chat.messages,
+          chat.id,
+          chat.projectId,
+          chat.type,
+          compactProjectPath,
+        );
+        compactSystemPrompt = split.systemPrompt;
+      }
+      if (chat.activeSkills?.length) {
+        const skillsCache = new Map<string, Skill>();
+        const allSkills = await discoverSkills(chat.projectId);
+        for (const s of allSkills) skillsCache.set(s.name, s);
+        compactSystemPrompt = buildSkillAugmentedPrompt(compactSystemPrompt, chat.activeSkills, skillsCache);
+      }
+      compactTools = toolsForEstimate(chat, contextWindow, compactProject);
+
+      const result = await triggerCompaction(chat, contextWindow, compactSystemPrompt, compactTools);
       if (result && result.truncated) {
         // Extract memories from removed messages and await completion so they're
         // available when the next buildSplitAugmentedPrompt runs (either in this
@@ -3065,8 +3098,8 @@ router.post("/", async (req, res) => {
         const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
         const estimatedTokens = await estimatePostCompactionTokens(
           chat,
-          chat.systemPrompt || "",
-          toolsForEstimate(chat, contextWindow),
+          compactSystemPrompt,
+          compactTools,
         );
         res.write(`event: compaction\ndata: ${JSON.stringify({
           removedCount: compaction.removedCount,
@@ -3083,8 +3116,8 @@ router.post("/", async (req, res) => {
         const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
         const estimatedTokens = await estimatePostCompactionTokens(
           chat,
-          chat.systemPrompt || "",
-          toolsForEstimate(chat, contextWindow),
+          compactSystemPrompt,
+          compactTools,
         );
         res.write(`event: compaction\ndata: ${JSON.stringify({
           removedCount: compaction.removedCount,
