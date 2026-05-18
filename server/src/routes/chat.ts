@@ -26,6 +26,7 @@ import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, ImageAt
 import { saveUserImage } from "../services/user-image-storage.js";
 import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
+import { getCurrentTTSSettings } from "./tts.js";
 import { log } from "../services/logger.js";
 import { createSafeStreamFn } from "../services/llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop, stopAgentLoop } from "../services/agent-loop-runner.js";
@@ -1032,7 +1033,9 @@ async function handleChatStream(
     flushThinkingTimer();
     state.fullText += delta;
     state.pendingText += delta;
-    ttsTextQueue.push(delta);
+    if (ttsEnabled) {
+      ttsTextQueue.push(delta);
+    }
     res.write(`event: text_delta\ndata: ${JSON.stringify({ delta })}\n\n`);
     return true;
   }
@@ -1116,10 +1119,9 @@ async function handleChatStream(
 
   const isAgent = chat.type === "agent" || chat.type === "bluesky" || chat.type === "system";
 
-  // Load TTS settings
   const settings = await getSettings();
-  const ttsSettings: TTSSettings = (settings as any).tts || { enabled: false, backend: "kokoro" };
-  const ttsEnabled = ttsSettings.enabled && ttsSettings.streamingEnabled && isStreamingCapable(ttsSettings.backend);
+  const ttsSettings: TTSSettings = await getCurrentTTSSettings();
+  const ttsEnabled = ttsSettings.enabled && ttsSettings.autoReadEnabled && isStreamingCapable(ttsSettings.backend);
 
   // TTS pause controller - aborts TTS stream on tool execution
   let ttsPauseController: AbortController | null = null;

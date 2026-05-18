@@ -132,8 +132,15 @@ async function saveTTSSettings(): Promise<void> {
   await writeFile(TTS_SETTINGS_PATH, JSON.stringify(userSettings, null, 2));
 }
 
+let ttsSettingsLoadPromise: Promise<void> | null = null;
+
+export async function getCurrentTTSSettings(): Promise<TTSSettings> {
+  await ttsSettingsLoadPromise;
+  return userSettings;
+}
+
 // Load persisted settings on module init
-loadTTSSettings();
+ttsSettingsLoadPromise = loadTTSSettings();
 
 /**
  * GET /api/tts/voices
@@ -156,8 +163,8 @@ router.get("/voices", (req, res) => {
  * GET /api/tts/settings
  * Get current TTS settings
  */
-router.get("/settings", (req, res) => {
-  res.json(userSettings);
+router.get("/settings", async (req, res) => {
+  res.json(await getCurrentTTSSettings());
 });
 
 /**
@@ -166,6 +173,8 @@ router.get("/settings", (req, res) => {
  */
 router.post("/settings", async (req, res) => {
   try {
+    await getCurrentTTSSettings();
+
     const {
       voice,
       speed,

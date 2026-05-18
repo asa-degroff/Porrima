@@ -393,6 +393,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   }, [loadTtsSettings]);
 
   // Listen for live agent audio chunks from the chat SSE stream
+  const liveTtsAudioSeenChatRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!ttsSettings.enabled) return;
 
@@ -400,6 +402,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       const detail = (e as CustomEvent).detail as { chatId: string; chunk: { chunkId: string; index?: number; totalChunks?: number; data: string; mimeType: string; sampleRate: number; duration?: number } };
       // Only process audio for the currently active chat
       if (detail.chatId !== activeChatId) return;
+      liveTtsAudioSeenChatRef.current = detail.chatId;
       handleAgentAudioChunk(detail.chunk);
     };
     const doneHandler = (e: Event) => {
@@ -415,24 +418,59 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     };
   }, [activeChatId, ttsSettings.enabled, handleAgentAudioChunk, handleAgentAudioDone]);
 
-  // Handle auto-read for new assistant messages
-  const lastMessageRef = useRef<string>("");
+  // Handle auto-read for newly completed assistant messages.
+  const autoReadChatIdRef = useRef<string | null>(null);
+  const lastAutoReadMessageRef = useRef<string>("");
   
   useEffect(() => {
-    if (messages.length === 0) return;
-    
     const lastMsg = messages[messages.length - 1];
-    const lastMsgKey = `${lastMsg.role}-${lastMsg.content}-${lastMsg.timestamp}`;
-    
-    // Check if this is a new assistant message
-    if (lastMsg.role === "assistant" && lastMsgKey !== lastMessageRef.current) {
-      lastMessageRef.current = lastMsgKey;
-      
-      // Only auto-read if enabled and not currently playing
-      // Note: autoReadEnabled is stored in server TTS settings, not local settings
-      // We'll check a local state for this instead
+    const lastMsgKey = lastMsg
+      ? `${activeChatId ?? "no-chat"}:${lastMsg.role}:${lastMsg.timestamp}:${lastMsg.content}`
+      : `${activeChatId ?? "no-chat"}:empty`;
+
+    // Switching chats or loading history should not read an old assistant message.
+    if (autoReadChatIdRef.current !== activeChatId) {
+      autoReadChatIdRef.current = activeChatId;
+      lastAutoReadMessageRef.current = lastMsgKey;
+      return;
     }
-  }, [messages]);
+
+    if (!lastMsg || lastAutoReadMessageRef.current === lastMsgKey) return;
+
+    // While the assistant is streaming, the last message content changes many
+    // times. Wait until the turn finishes so auto-read speaks the final text.
+    if (streaming) return;
+
+    lastAutoReadMessageRef.current = lastMsgKey;
+
+    if (
+      lastMsg.role !== "assistant" ||
+      !lastMsg.content.trim() ||
+      !ttsSettings.enabled ||
+      !ttsSettings.autoReadEnabled ||
+      liveTtsAudioSeenChatRef.current === activeChatId ||
+      playbackState.isPlaying ||
+      playbackState.isPaused ||
+      playbackState.isLoading
+    ) {
+      if (lastMsg.role === "user") {
+        liveTtsAudioSeenChatRef.current = null;
+      }
+      return;
+    }
+
+    void playTts(lastMsg.content);
+  }, [
+    activeChatId,
+    messages,
+    playbackState.isLoading,
+    playbackState.isPaused,
+    playbackState.isPlaying,
+    playTts,
+    streaming,
+    ttsSettings.autoReadEnabled,
+    ttsSettings.enabled,
+  ]);
 
   // Process message queue when coming back online
   useEffect(() => {
@@ -1029,10 +1067,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         chatType={activeChat?.type}
         isSynthesizing={isSynthesizing}
         ttsEnabled={ttsSettings.enabled}
-        ttsAutoReadEnabled={playbackState.isPlaying || playbackState.isPaused}
+        ttsAutoReadEnabled={ttsSettings.autoReadEnabled}
         playbackState={playbackState}
         ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}
         onTtsAutoReadToggle={(enabled) => {
+          void updateTtsSettings({ autoReadEnabled: enabled });
           if (enabled) {
             const lastAssistantMsg = [...messages].reverse().find(m => m.role === "assistant" && m.content);
             if (lastAssistantMsg) {

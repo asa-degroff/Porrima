@@ -5340,7 +5340,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                     </button>
                     <button
                       onClick={async () => {
-                        const updated = await updateTTSSettings({ backend: "supertonic-3", streamingEnabled: false });
+                        const updated = await updateTTSSettings({ backend: "supertonic-3" });
                         applyTtsSettingsUpdate(updated);
                         backendDd.close();
                       }}
@@ -5386,25 +5386,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   </div>
                 </div>
 
-                {/* Streaming toggle (Qwen3-TTS only) */}
+                {/* Live speech tuning (Qwen3-TTS only) */}
                 {ttsSettings.backend === "qwen3-tts" && (
                   <>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <label className="block text-sm font-medium text-white/60">Streaming Mode</label>
-                        <p className="text-xs text-white/30 mt-0.5">Speak while generating (lower latency)</p>
-                      </div>
-                      <ToggleSwitch
-                        checked={ttsSettings.streamingEnabled}
-                        onChange={async () => {
-                          const updated = await updateTTSSettings({ streamingEnabled: !ttsSettings.streamingEnabled });
-                          applyTtsSettingsUpdate(updated);
-                        }}
-                        accentColor="purple"
-                      />
-                    </div>
-
-                    {/* Streaming chunk size */}
                     <div className="space-y-1">
                       <label className="block text-sm text-white/50">Chunk Size: {ttsSettings.streamingChunkSize} tokens</label>
                       <input
