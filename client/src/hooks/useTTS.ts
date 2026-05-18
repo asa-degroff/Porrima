@@ -79,6 +79,7 @@ export function useTTS() {
   const chunkModeRef = useRef<"url" | "data" | null>(null);
   const chunkAudioActiveRef = useRef(false);
   const chunkStreamDoneRef = useRef(false);
+  const liveAgentAudioActiveRef = useRef(false);
   const onAudioEndedRef = useRef<() => void>(() => {
     setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false, isLoading: false }));
   });
@@ -644,6 +645,24 @@ export function useTTS() {
     sampleRate: number;
     duration?: number;
   }) => {
+    if (!liveAgentAudioActiveRef.current) {
+      playIdRef.current++;
+      resetPlayback();
+      liveAgentAudioActiveRef.current = true;
+      setPlaybackState((prev) => ({
+        ...prev,
+        isPlaying: false,
+        isPaused: false,
+        isLoading: true,
+        currentTime: 0,
+        duration: 0,
+        audioUrl: null,
+        currentChunk: 0,
+        totalChunks: 0,
+        mode: "chunked-stream" as const,
+      }));
+    }
+
     streamingTTS.appendChunk(chunk.data);
     setPlaybackState(prev => ({
       ...prev,
@@ -657,9 +676,10 @@ export function useTTS() {
       totalChunks: chunk.totalChunks ?? prev.totalChunks,
       mode: "chunked-stream" as const,
     }));
-  }, [streamingTTS]);
+  }, [resetPlayback, streamingTTS]);
 
   const handleAgentAudioDone = useCallback(() => {
+    liveAgentAudioActiveRef.current = false;
     streamingTTS.endStream();
     setPlaybackState((prev) => ({ ...prev, isLoading: false }));
   }, [streamingTTS]);

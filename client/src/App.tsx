@@ -421,6 +421,40 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   // Handle auto-read for newly completed assistant messages.
   const autoReadChatIdRef = useRef<string | null>(null);
   const lastAutoReadMessageRef = useRef<string>("");
+  const autoReadAwaitingInitialMessagesRef = useRef(false);
+
+  const getAutoReadMessageId = useCallback((message: typeof messages[number]) => {
+    let hash = 0;
+    const input = `${message.role}:${message.timestamp}:${message.content}`;
+    for (let i = 0; i < input.length; i++) {
+      hash = ((hash << 5) - hash + input.charCodeAt(i)) | 0;
+    }
+    return `${message.timestamp}:${(hash >>> 0).toString(36)}`;
+  }, []);
+
+  const hasAutoReadMessage = useCallback((chatId: string, message: typeof messages[number]) => {
+    try {
+      const raw = localStorage.getItem("quje-tts-auto-read-messages");
+      if (!raw) return false;
+      const ids = JSON.parse(raw);
+      return Array.isArray(ids) && ids.includes(`${chatId}:${getAutoReadMessageId(message)}`);
+    } catch {
+      return false;
+    }
+  }, [getAutoReadMessageId]);
+
+  const markAutoReadMessage = useCallback((chatId: string, message: typeof messages[number]) => {
+    try {
+      const raw = localStorage.getItem("quje-tts-auto-read-messages");
+      const parsed = raw ? JSON.parse(raw) : [];
+      const ids = Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+      const nextId = `${chatId}:${getAutoReadMessageId(message)}`;
+      const next = ids.includes(nextId) ? ids : [...ids, nextId];
+      localStorage.setItem("quje-tts-auto-read-messages", JSON.stringify(next.slice(-500)));
+    } catch {
+      // Auto-read deduplication is best-effort; playback should still work if storage is unavailable.
+    }
+  }, [getAutoReadMessageId]);
   
   useEffect(() => {
     const lastMsg = messages[messages.length - 1];
@@ -431,11 +465,21 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     // Switching chats or loading history should not read an old assistant message.
     if (autoReadChatIdRef.current !== activeChatId) {
       autoReadChatIdRef.current = activeChatId;
+      autoReadAwaitingInitialMessagesRef.current = true;
       lastAutoReadMessageRef.current = lastMsgKey;
       return;
     }
 
     if (!lastMsg || lastAutoReadMessageRef.current === lastMsgKey) return;
+
+    if (autoReadAwaitingInitialMessagesRef.current) {
+      autoReadAwaitingInitialMessagesRef.current = false;
+      lastAutoReadMessageRef.current = lastMsgKey;
+      if (activeChatId && lastMsg.role === "assistant") {
+        markAutoReadMessage(activeChatId, lastMsg);
+      }
+      return;
+    }
 
     // While the assistant is streaming, the last message content changes many
     // times. Wait until the turn finishes so auto-read speaks the final text.
@@ -448,20 +492,29 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       !lastMsg.content.trim() ||
       !ttsSettings.enabled ||
       !ttsSettings.autoReadEnabled ||
+      (activeChatId ? hasAutoReadMessage(activeChatId, lastMsg) : false) ||
       liveTtsAudioSeenChatRef.current === activeChatId ||
       playbackState.isPlaying ||
       playbackState.isPaused ||
       playbackState.isLoading
     ) {
+      if (activeChatId && liveTtsAudioSeenChatRef.current === activeChatId) {
+        markAutoReadMessage(activeChatId, lastMsg);
+      }
       if (lastMsg.role === "user") {
         liveTtsAudioSeenChatRef.current = null;
       }
       return;
     }
 
+    if (activeChatId) {
+      markAutoReadMessage(activeChatId, lastMsg);
+    }
     void playTts(lastMsg.content);
   }, [
     activeChatId,
+    hasAutoReadMessage,
+    markAutoReadMessage,
     messages,
     playbackState.isLoading,
     playbackState.isPaused,

@@ -1,7 +1,7 @@
 /**
  * TTS Streaming Service
  * 
- * Generator-based streaming TTS for Qwen3-TTS backend.
+ * Generator-based streaming TTS for live-capable TTS backends.
  * Streams audio chunks incrementally as tokens arrive from LLM.
  */
 
@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { StreamingTokenBuffer } from "./tts-buffer.js";
 import { resolveTtsPython } from "./tts-python.js";
+import { generateTTS, getAudioFile } from "./tts.js";
 import { generateSupertonicTTSDirect } from "./tts-supertonic.js";
 import type { TTSBackend, TTSSettings } from "../types/tts.js";
 
@@ -68,7 +69,7 @@ export async function* streamTTS(
 /**
  * Generate TTS audio for a single chunk
  * 
- * Calls qwen3_wrapper.py as subprocess, returns WAV buffer.
+ * Returns a complete WAV buffer for one spoken text chunk.
  */
 async function generateTTSChunk(
   text: string,
@@ -77,6 +78,16 @@ async function generateTTSChunk(
   if (options.backend === "supertonic-3") {
     const result = await generateSupertonicTTSDirect(text, options);
     return Buffer.from(result.audioBase64, "base64");
+  }
+
+  if (options.backend === "kokoro") {
+    const audio = await generateTTS({ text }, options);
+    const cacheKey = audio.audioUrl.replace("/api/tts/audio/", "").replace(".wav", "");
+    const wav = getAudioFile(cacheKey);
+    if (!wav) {
+      throw new Error("Generated Kokoro TTS audio was not found in the cache");
+    }
+    return wav;
   }
 
   const { pythonPath } = await resolveTtsPython("qwen3-tts");
@@ -147,5 +158,5 @@ async function generateTTSChunk(
  * Check if streaming is supported for current backend
  */
 export function isStreamingCapable(backend: TTSBackend): boolean {
-  return backend === "qwen3-tts" || backend === "supertonic-3";
+  return backend === "qwen3-tts" || backend === "supertonic-3" || backend === "kokoro";
 }
