@@ -93,6 +93,8 @@ export interface ChatMessage {
   _inProgress?: boolean;
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
+  /** Hidden system row should be merged into the next user message, not replayed as prefix history. */
+  _mergeIntoNextUserMessage?: boolean;
   _isMidTurnCompaction?: boolean;
   _compactionRemovedCount?: number;
   _compactionCycle?: number;

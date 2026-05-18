@@ -78,9 +78,11 @@ export interface ChatMessage {
   _model?: string;
   /** Marks this message as a system-generated message (not from agent response) */
   _isSystemMessage?: boolean;
-  /** Hidden system row containing passively recalled memories injected mid-turn. */
+  /** Hidden system row containing passively recalled memories. */
   _isPassiveMemoryRecall?: boolean;
   _recalledMemoryIds?: string[];
+  /** Hidden system row should be merged into the next user message, not replayed as prefix history. */
+  _mergeIntoNextUserMessage?: boolean;
   _isMidTurnCompaction?: boolean;
   _compactionRemovedCount?: number;
   _compactionCycle?: number;

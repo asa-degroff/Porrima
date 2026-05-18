@@ -428,7 +428,7 @@ function truncateTitle(text: string, maxChars: number = 50): string {
 function buildUserPiMessage(
   message: string,
   images?: ImageAttachment[],
-  systemContext?: string
+  systemContext?: string | string[]
 ): Message {
   const contentWithSystemContext = mergeSystemContextWithUserContent(systemContext, message);
   if (images?.length) {
@@ -440,6 +440,45 @@ function buildUserPiMessage(
     return { role: "user", content, timestamp: Date.now() };
   }
   return { role: "user", content: contentWithSystemContext, timestamp: Date.now() };
+}
+
+function isPendingNextUserContextMessage(message: ChatMessage | undefined): message is ChatMessage {
+  return (
+    !!message &&
+    message.role === "system" &&
+    (message._mergeIntoNextUserMessage === true || message._isPassiveMemoryRecall === true) &&
+    typeof message.content === "string" &&
+    message.content.trim().length > 0
+  );
+}
+
+function splitNextUserContext(opts: {
+  messages: ChatMessage[];
+  currentUserIndex: number;
+  memoryDeltaContext: string;
+}): { persistedHistoryEnd: number; systemContexts: string[] } {
+  let persistedHistoryEnd = opts.currentUserIndex;
+  const systemContexts: string[] = [];
+
+  const takeContextRow = (row: ChatMessage) => {
+    systemContexts.unshift(row.content);
+    persistedHistoryEnd--;
+  };
+
+  const rowBeforeUser = opts.messages[persistedHistoryEnd - 1];
+  if (
+    opts.memoryDeltaContext &&
+    rowBeforeUser?.role === "system" &&
+    rowBeforeUser.content === opts.memoryDeltaContext
+  ) {
+    takeContextRow(rowBeforeUser);
+  }
+
+  while (persistedHistoryEnd > 0 && isPendingNextUserContextMessage(opts.messages[persistedHistoryEnd - 1])) {
+    takeContextRow(opts.messages[persistedHistoryEnd - 1]);
+  }
+
+  return { persistedHistoryEnd, systemContexts };
 }
 
 /** Persist images to disk and enrich attachments with id/url/thumbUrl (fire-and-forget safe) */
@@ -1176,6 +1215,7 @@ async function handleChatStream(
                 _isSystemMessage: true,
                 _isPassiveMemoryRecall: true,
                 _recalledMemoryIds: memoryIds,
+                _mergeIntoNextUserMessage: true,
               };
               chat.messages.push(row);
               await saveChat(chat);
@@ -3490,17 +3530,18 @@ router.post("/", async (req, res) => {
     }
 
     // Context = all messages before the current user prompt. If this turn has
-    // a fresh memory delta, exclude that hidden row here and merge it into the
-    // current user message below. Future replays reconstruct the same shape by
-    // merging the persisted system row with the following persisted user row.
+    // pending next-user context (post-turn passive recall and/or fresh memory
+    // delta), exclude those hidden rows here and merge them into the current
+    // user message below. Future replays reconstruct the same shape by merging
+    // the persisted system rows with the following persisted user row.
     const currentUserIndex = chat.messages.length - 1;
-    const persistedHistoryEnd =
-      memoryDeltaContext &&
-      currentUserIndex > 0 &&
-      chat.messages[currentUserIndex - 1]?.role === "system" &&
-      chat.messages[currentUserIndex - 1]?.content === memoryDeltaContext
-        ? currentUserIndex - 1
-        : currentUserIndex;
+    const nextUserContext = splitNextUserContext({
+      messages: chat.messages,
+      currentUserIndex,
+      memoryDeltaContext,
+    });
+    const nextUserContextChars = nextUserContext.systemContexts.reduce((sum, content) => sum + content.length, 0);
+    const persistedHistoryEnd = nextUserContext.persistedHistoryEnd;
     const persistedHistory = chat.messages.slice(0, persistedHistoryEnd);
     const replayIdentity = replayIdentityForModel(chat.modelId, model);
     const contextMessages = chatMessagesToPiMessages(persistedHistory, chat.modelId, replayIdentity);
@@ -3546,14 +3587,14 @@ router.post("/", async (req, res) => {
       chatId,
       source: "send",
       systemPromptChars: systemPrompt.length,
-      deltaChars: memoriesDelta.length,
+      deltaChars: nextUserContextChars,
       newMsgChars: message.length,
       persistedRows: persistedHistory.length,
       contextPiMessages: contextMessages,
       shape: summarizeReplayShape(persistedHistory),
     });
 
-    const userPiMessage = buildUserPiMessage(message, images, memoryDeltaContext);
+    const userPiMessage = buildUserPiMessage(message, images, nextUserContext.systemContexts);
 
     await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
   }

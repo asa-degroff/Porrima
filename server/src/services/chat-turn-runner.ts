@@ -212,6 +212,7 @@ export async function runHeadlessChatTurn(
       _isSystemMessage: true,
       _isPassiveMemoryRecall: true,
       _recalledMemoryIds: memoryIds,
+      _mergeIntoNextUserMessage: true,
     };
     const row = options.passiveMemoryRecall?.decorateMessage
       ? options.passiveMemoryRecall.decorateMessage(rowBase)
