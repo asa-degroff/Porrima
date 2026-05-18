@@ -1156,6 +1156,8 @@ export async function runSystemSynthesis(options?: {
 export async function runWakeCycle(options?: {
   modelId?: string;
   promptSteps?: AutomationPromptStep[];
+  maxIterations?: number;
+  timeoutMs?: number;
   automationTaskId?: string;
   automationRunId?: string;
 }): Promise<SynthesisResult> {
@@ -1260,7 +1262,8 @@ export async function runWakeCycle(options?: {
       await saveChat(chat);
     }
 
-    const MAX_ITERATIONS = 20; // Generous — no hard resource limits, just iteration cap
+    const maxIterations = Math.max(1, Math.floor(options?.maxIterations ?? 20));
+    const timeoutMs = Math.max(60_000, Math.floor(options?.timeoutMs ?? 1_800_000));
     const turn = await runHeadlessChatTurn({
       chat,
       modelId,
@@ -1268,9 +1271,9 @@ export async function runWakeCycle(options?: {
       systemPrompt: wakePrompt,
       tools,
       emitter,
-      maxIterations: MAX_ITERATIONS,
-      timeoutMs: 1_800_000,
-      keepAlive: "30m",
+      maxIterations,
+      timeoutMs,
+      keepAlive: `${Math.max(1, Math.ceil(timeoutMs / 60_000))}m`,
       logPrefix: "system-chat:wake",
       saveChat,
       passiveMemoryRecall: {

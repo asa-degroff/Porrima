@@ -363,6 +363,8 @@ async function executeAutomation(task: AutomationTask, run: AutomationRun): Prom
   if (task.id === WAKE_AUTOMATION_ID || task.kind === "wake") {
     const result = await runWakeCycle({
       promptSteps: task.promptSteps,
+      maxIterations: task.maxIterations,
+      timeoutMs: task.timeoutMs,
       automationTaskId: task.id,
       automationRunId: run.id,
     });
