@@ -1020,6 +1020,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           onCreateAgentEntry={async (content) => { await createAgentEntry(content); }}
           onUpdateEntry={async (author, id, updates) => { await updateEntry(author, id, updates); }}
           onDeleteEntry={async (author, id) => { await removeEntry(author, id); }}
+          onReadAloud={ttsSettings.enabled ? playTts : undefined}
           onTriggerAgentReview={async () => { return await triggerAgentReview(); }}
           chats={chats}
           onChatSelect={(chatId) => { selectChat(chatId); setActiveView('chats'); setImageSandboxOpen(false); }}

@@ -20,6 +20,7 @@ interface Props {
   onCreateAgentEntry: (content: string) => Promise<void>;
   onUpdateEntry: (author: 'user' | 'agent', id: string, updates: { content?: string; links?: NotebookLink }) => Promise<void>;
   onDeleteEntry: (author: 'user' | 'agent', id: string) => Promise<void>;
+  onReadAloud?: (text: string) => void;
   onTriggerAgentReview: () => Promise<{ skipped?: boolean; reason?: string } | NotebookEntry>;
   chats: ChatListItem[];
   onChatSelect: (chatId: string) => void;
@@ -41,6 +42,7 @@ export function NotebookView({
   onCreateAgentEntry,
   onUpdateEntry,
   onDeleteEntry,
+  onReadAloud,
   onTriggerAgentReview,
   chats,
   onChatSelect,
@@ -404,6 +406,7 @@ export function NotebookView({
               onToggleExpand={() => toggleExpand(author, entry.id)}
               onEdit={author === 'user' && expanded ? () => handleEdit(author, entry.id, fullEntries[entry.id]?.content || entry.content) : undefined}
               onDelete={() => handleDelete(author, entry.id)}
+              onReadAloud={onReadAloud}
               onLinkClick={handleEntryLinkClick}
               onChatLinkClick={handleChatLinkClick}
               onAddLink={author === 'user' && expanded ? (type: 'chat' | 'notebook', anchorRect) => openLinkPicker(type, anchorRect, entry.id, author) : undefined}

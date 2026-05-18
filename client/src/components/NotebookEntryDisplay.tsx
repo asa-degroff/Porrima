@@ -24,6 +24,7 @@ interface Props {
   onToggleExpand?: () => void;
   onEdit?: (id: string, content: string) => void;
   onDelete?: (id: string) => void;
+  onReadAloud?: (text: string) => void;
   onLinkClick?: (author: 'user' | 'agent', entryId: string) => void;
   onChatLinkClick?: (chatId: string) => void;
   onAddLink?: (type: 'chat' | 'notebook', anchorRect: DOMRect) => void;
@@ -37,6 +38,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
   onToggleExpand,
   onEdit,
   onDelete,
+  onReadAloud,
   onLinkClick,
   onChatLinkClick,
   onAddLink,
@@ -61,14 +63,14 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
   }, [confirmDelete, handleEscape]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    if (!onDelete) return;
+    if (!onDelete && !onReadAloud) return;
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY });
-  }, [onDelete]);
+  }, [onDelete, onReadAloud]);
 
   const openContextMenu = useCallback((pos: { x: number; y: number }) => {
-    if (onDelete) setContextMenu(pos);
-  }, [onDelete]);
+    if (onDelete || onReadAloud) setContextMenu(pos);
+  }, [onDelete, onReadAloud]);
   const longPressProps = useLongPress(openContextMenu);
 
   const handleAddLink = useCallback(() => {
@@ -341,21 +343,38 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
       )}
 
       {/* Context menu */}
-      {contextMenu && onDelete && (
+      {contextMenu && (onDelete || onReadAloud) && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
-          <ContextMenuItem
-            destructive
-            onClick={() => {
-              setContextMenu(null);
-              setConfirmDelete(true);
-            }}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 6h18" />
-              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-            </svg>
-            Delete
-          </ContextMenuItem>
+          {onReadAloud && (
+            <ContextMenuItem
+              onClick={() => {
+                setContextMenu(null);
+                onReadAloud(entry.content);
+              }}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              </svg>
+              Read aloud
+            </ContextMenuItem>
+          )}
+          {onDelete && (
+            <ContextMenuItem
+              destructive
+              onClick={() => {
+                setContextMenu(null);
+                setConfirmDelete(true);
+              }}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18" />
+                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+              </svg>
+              Delete
+            </ContextMenuItem>
+          )}
         </ContextMenu>
       )}
 
