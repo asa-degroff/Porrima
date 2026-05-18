@@ -119,6 +119,73 @@ export function computeExtractionInputBudget(
   return { maxInputChars, sysPromptTokens, inputBudgetTokens };
 }
 
+export async function readOpenAIContentStream(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal
+): Promise<{ content: string; timings?: LlamaTimings }> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let timings: LlamaTimings | undefined;
+
+  const onAbort = () => {
+    reader.cancel(new Error("aborted")).catch(() => {});
+  };
+  if (signal?.aborted) {
+    onAbort();
+  } else {
+    signal?.addEventListener("abort", onAbort, { once: true });
+  }
+
+  const handleLine = (line: string): boolean => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith(":")) return false;
+    if (trimmed === "data: [DONE]") return true;
+    if (!trimmed.startsWith("data: ")) return false;
+
+    try {
+      const chunk = JSON.parse(trimmed.slice(6));
+      const delta = chunk.choices?.[0]?.delta?.content;
+      if (typeof delta === "string") {
+        content += delta;
+      }
+      if (chunk.timings) {
+        timings = chunk.timings as LlamaTimings;
+      }
+    } catch {
+      // Ignore malformed SSE fragments; the final extraction parser validates output.
+    }
+    return false;
+  };
+
+  try {
+    while (true) {
+      if (signal?.aborted) break;
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (handleLine(line)) {
+          return { content: content.trim(), timings };
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      handleLine(buffer);
+    }
+    return { content: content.trim(), timings };
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    reader.releaseLock();
+  }
+}
+
 /**
  * Call the extraction LLM — uses dedicated CPU extraction model if configured,
  * otherwise falls back to streamChat with the main model.
@@ -160,6 +227,7 @@ async function callExtractionLLM(
       await ensureRouterModelLoaded(extractionUrl, extractionModelId, { contextWindow: ctxSize });
 
       // Direct call to dedicated extraction endpoint (CPU-only, no provider pipeline)
+      const requestSignal = signal ?? AbortSignal.timeout(600_000);
       const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -171,31 +239,34 @@ async function callExtractionLLM(
           ],
           max_tokens: 2000,
           temperature: 0.3,
-          stream: false,
+          stream: true,
         }),
-        signal: signal ?? AbortSignal.timeout(600_000),
+        signal: requestSignal,
       });
       if (!res.ok) {
         const err = await res.text().catch(() => "");
         throw new Error(`Extraction model error ${res.status}: ${err}`);
       }
-      const data = await res.json();
+      if (!res.body) {
+        throw new Error("Extraction model returned an empty stream");
+      }
+
+      const streamResult = await readOpenAIContentStream(res.body, requestSignal);
 
       // Record model stats from extraction timings (same structure as chat model)
-      const timings = data.timings as LlamaTimings | undefined;
-      if (timings) {
+      if (streamResult.timings) {
         try {
           recordModelStats(
             extractionModelId,
             "llamacpp-extraction",
-            timings
+            streamResult.timings
           );
         } catch (e) {
           console.warn("[memory] Failed to record extraction model stats:", e);
         }
       }
 
-      return data.choices?.[0]?.message?.content?.trim() || "";
+      return streamResult.content;
     });
   }
 
@@ -891,7 +962,7 @@ async function extractInChunks(
 }
 
 const EXACT_DUPLICATE_THRESHOLD = 0.95;
-const SUPERSESSION_CANDIDATE_THRESHOLD = 0.82;
+const SUPERSESSION_CANDIDATE_THRESHOLD = 0.90;
 const SUPERSESSION_CANDIDATE_LIMIT = 5;
 
 // ---------------------------------------------------------------------------

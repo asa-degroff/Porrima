@@ -1,7 +1,8 @@
 import type { Chat, ChatMessage } from "../types.js";
 import { getNextArchiveSequence, saveArchives, getArchive, getChat, saveChat, withChatWriteLock, type ContextArchive, updateChatTitle } from "./chat-storage.js";
 import { regenerateTitle } from "./title-generation.js";
-import { withExtractionMutex } from "./memory-extraction.js";
+import { readOpenAIContentStream, withExtractionMutex } from "./memory-extraction.js";
+import { recordModelStats } from "./model-stats.js";
 import { ensureRouterModelLoaded, normalizeRouterModelId } from "./llama-router-client.js";
 
 export interface CompactionResult {
@@ -961,6 +962,7 @@ async function runIndexGeneration(
         await ensureRouterModelLoaded(extractionUrl, extractionModelId, {
           contextWindow: settings.extractionCtxSize ?? 16384,
         });
+        const requestSignal = AbortSignal.timeout(300_000);
         const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -972,13 +974,20 @@ async function runIndexGeneration(
             ],
             max_tokens: 1000,
             temperature: 0.3,
-            stream: false,
+            stream: true,
           }),
-          signal: AbortSignal.timeout(60_000),
+          signal: requestSignal,
         });
-        if (res.ok) {
-          const data = await res.json();
-          return data.choices?.[0]?.message?.content?.trim() || "";
+        if (res.ok && res.body) {
+          const streamResult = await readOpenAIContentStream(res.body, requestSignal);
+          if (streamResult.timings) {
+            try {
+              recordModelStats(extractionModelId, "llamacpp-extraction", streamResult.timings);
+            } catch (e) {
+              console.warn("[compaction] Failed to record extraction model stats:", e);
+            }
+          }
+          return streamResult.content;
         }
         return "";
       });
