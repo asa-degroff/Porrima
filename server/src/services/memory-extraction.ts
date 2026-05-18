@@ -505,20 +505,25 @@ interface ExtractedFact {
 }
 
 export function parseExtractionResponse(text: string): ExtractedFact[] {
-  // Strip markdown code fences if present
+  // Strip thinking blocks before looking for JSON. Reasoning models can include
+  // bracketed examples in <think>...</think>, and grabbing the first "[" across
+  // the entire raw output can corrupt an otherwise valid final JSON array.
   let cleaned = text.trim();
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+  // Strip markdown code fences if present
   if (cleaned.startsWith("```")) {
     cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
   }
   cleaned = cleaned.trim();
 
-  // Find the JSON array
-  const start = cleaned.indexOf("[");
-  const end = cleaned.lastIndexOf("]");
-  if (start === -1 || end === -1) return [];
-
-  try {
-    const arr = JSON.parse(cleaned.slice(start, end + 1));
+  const parseCandidate = (candidate: string): ExtractedFact[] | null => {
+    let arr: unknown;
+    try {
+      arr = JSON.parse(candidate);
+    } catch {
+      return null;
+    }
     if (!Array.isArray(arr)) return [];
     return arr.filter(
       (f: any) =>
@@ -526,9 +531,54 @@ export function parseExtractionResponse(text: string): ExtractedFact[] {
         f.text.length > 0 &&
         ["preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"].includes(f.category)
     );
-  } catch {
-    return [];
+  };
+
+  // Prefer the last valid array. The final answer is usually after any
+  // reasoning/preamble, while earlier bracketed snippets are often examples.
+  const candidates: string[] = [];
+  for (let start = 0; start < cleaned.length; start++) {
+    if (cleaned[start] !== "[") continue;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === "\"") {
+        inString = true;
+      } else if (ch === "[") {
+        depth++;
+      } else if (ch === "]") {
+        depth--;
+        if (depth === 0) {
+          candidates.push(cleaned.slice(start, i + 1));
+          break;
+        }
+      }
+    }
   }
+
+  for (const candidate of candidates.reverse()) {
+    const facts = parseCandidate(candidate);
+    if (facts && facts.length > 0) return facts;
+  }
+
+  // Preserve the explicit "[]" no-facts response.
+  return candidates.some((candidate) => {
+    const facts = parseCandidate(candidate);
+    return facts !== null && facts.length === 0;
+  }) ? [] : [];
 }
 
 // ---------------------------------------------------------------------------
