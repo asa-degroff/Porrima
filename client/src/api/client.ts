@@ -219,6 +219,9 @@ export interface StreamCallbacks {
   onFollowUpStart?: (data: any) => void;
   onBackgroundActivity?: (info: { type: string; chatId?: string }) => void;
   onModelProgress?: (progress: ModelProgress) => void;
+  onAudioChunk?: (chunk: { chunkId: string; index?: number; totalChunks?: number; data: string; mimeType: string; sampleRate: number; duration?: number }) => void;
+  onAudioDone?: () => void;
+  onAudioError?: (error: string) => void;
 }
 
 /** Inactivity timeout for SSE streams — server sends keepalive pings every 30s,
@@ -594,6 +597,15 @@ function processSSEEvent(
       break;
     case "model_progress":
       callbacks.onModelProgress?.(data);
+      break;
+    case "audio_chunk":
+      callbacks.onAudioChunk?.(data);
+      break;
+    case "audio_done":
+      callbacks.onAudioDone?.();
+      break;
+    case "audio_error":
+      callbacks.onAudioError?.(data.error || "Audio streaming failed");
       break;
     case "error":
       callbacks.onError(data.error || "Unknown error");

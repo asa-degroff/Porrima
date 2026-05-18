@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { TTSGenerateRequest, TTSGenerateResponse, TTSSettings } from "../types/tts.js";
 import { extractTextForTTS } from "./tts-text-preprocessor.js";
 import { getTtsPythonStatus, resolveTtsPython } from "./tts-python.js";
+import { getWorker } from "./tts-worker-pool.js";
 
 const CACHE_DIR = join(process.cwd(), "data", "tts-cache-supertonic");
 const MAX_CACHE_SIZE_MB = 500;
@@ -195,7 +196,21 @@ export async function generateSupertonicTTS(request: TTSGenerateRequest, setting
   const cleanText = extractTextForTTS(request.text, settings.ttsTextMode);
   console.log(`[TTS-Supertonic] Preprocessed text: ${cleanText.substring(0, 100)}${cleanText.length > 100 ? "..." : ""}`);
 
-  const { audio, duration } = await runSupertonicTTS(cleanText, settings);
+  // Try worker first, fall back to subprocess
+  let audio: Buffer;
+  let duration: number;
+  try {
+    const worker = await getWorker("supertonic-3");
+    const result = await worker.synthesize({ text: cleanText, settings });
+    audio = Buffer.from(result.audioBase64, "base64");
+    duration = result.duration;
+    console.log(`[TTS-Supertonic] Worker generated ${Math.round(audio.length / 1024)}KB, ${duration.toFixed(2)}s`);
+  } catch (workerErr) {
+    console.warn(`[TTS-Supertonic] Worker failed, falling back to subprocess: ${workerErr}`);
+    const fallback = await runSupertonicTTS(cleanText, settings);
+    audio = fallback.audio;
+    duration = fallback.duration;
+  }
 
   writeFileSync(cachePath, audio);
   console.log(`[TTS-Supertonic] Saved ${cacheKey} (${Math.round(audio.length / 1024)}KB, ${duration.toFixed(2)}s)`);
@@ -206,6 +221,24 @@ export async function generateSupertonicTTS(request: TTSGenerateRequest, setting
     audioUrl: `/api/tts/audio/${cacheKey}.wav`,
     duration,
     fileSize: audio.length,
+  };
+}
+
+/**
+ * Generate TTS audio directly via worker, returning raw audio data.
+ * Used for SSE streaming — skips disk caching.
+ */
+export async function generateSupertonicTTSDirect(
+  text: string,
+  settings: TTSSettings,
+): Promise<{ audioBase64: string; duration: number; sampleRate: number }> {
+  const cleanText = extractTextForTTS(text, settings.ttsTextMode);
+  const worker = await getWorker("supertonic-3");
+  const result = await worker.synthesize({ text: cleanText, settings });
+  return {
+    audioBase64: result.audioBase64,
+    duration: result.duration,
+    sampleRate: result.sampleRate,
   };
 }
 

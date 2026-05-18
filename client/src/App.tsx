@@ -78,7 +78,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
   const selectChatRef = useRef<((id: string) => Promise<void>) | null>(null);
-  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts } = useTTS();
+  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, handleAgentAudioChunk, handleAgentAudioDone } = useTTS();
   const {
     userNotebooks,
     agentNotebooks,
@@ -391,6 +391,29 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     loadTtsSettings();
   }, [loadTtsSettings]);
+
+  // Listen for live agent audio chunks from the chat SSE stream
+  useEffect(() => {
+    if (!ttsSettings.enabled) return;
+
+    const chunkHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { chatId: string; chunk: { chunkId: string; index?: number; totalChunks?: number; data: string; mimeType: string; sampleRate: number; duration?: number } };
+      // Only process audio for the currently active chat
+      if (detail.chatId !== activeChatId) return;
+      handleAgentAudioChunk(detail.chunk);
+    };
+    const doneHandler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { chatId: string };
+      if (detail.chatId !== activeChatId) return;
+      handleAgentAudioDone();
+    };
+    window.addEventListener("agent-audio-chunk", chunkHandler);
+    window.addEventListener("agent-audio-done", doneHandler);
+    return () => {
+      window.removeEventListener("agent-audio-chunk", chunkHandler);
+      window.removeEventListener("agent-audio-done", doneHandler);
+    };
+  }, [activeChatId, ttsSettings.enabled, handleAgentAudioChunk, handleAgentAudioDone]);
 
   // Handle auto-read for new assistant messages
   const lastMessageRef = useRef<string>("");

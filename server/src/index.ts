@@ -66,6 +66,14 @@ const gracefulShutdown = async () => {
     httpServer.close();
   }
   await destroyAllMasters();
+  // Shut down TTS workers
+  try {
+    const { destroyAllWorkers } = await import("./services/tts-worker-pool.js");
+    destroyAllWorkers();
+    console.log("[shutdown] TTS workers destroyed");
+  } catch {
+    // Non-fatal
+  }
   process.exit(0);
 };
 process.on("SIGTERM", gracefulShutdown);
@@ -217,6 +225,9 @@ try {
 } catch {
   // Non-fatal — residency tracking will work fine without startup cleanup
 }
+
+// TTS worker is lazily initialized on first TTS request via getWorker().
+// This avoids blocking startup with model loading when TTS isn't in use.
 
 // Global error handler - must be after all routes
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

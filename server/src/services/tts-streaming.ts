@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { StreamingTokenBuffer } from "./tts-buffer.js";
 import { resolveTtsPython } from "./tts-python.js";
+import { generateSupertonicTTSDirect } from "./tts-supertonic.js";
 import type { TTSBackend, TTSSettings } from "../types/tts.js";
 
 const QWEN3_WRAPPER = join(process.cwd(), "src", "tts", "qwen3_wrapper.py");
@@ -73,6 +74,11 @@ async function generateTTSChunk(
   text: string,
   options: StreamingTTSOptions
 ): Promise<Buffer | null> {
+  if (options.backend === "supertonic-3") {
+    const result = await generateSupertonicTTSDirect(text, options);
+    return Buffer.from(result.audioBase64, "base64");
+  }
+
   const { pythonPath } = await resolveTtsPython("qwen3-tts");
 
   return new Promise((resolve, reject) => {
@@ -141,5 +147,5 @@ async function generateTTSChunk(
  * Check if streaming is supported for current backend
  */
 export function isStreamingCapable(backend: TTSBackend): boolean {
-  return backend === "qwen3-tts";
+  return backend === "qwen3-tts" || backend === "supertonic-3";
 }

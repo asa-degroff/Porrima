@@ -1,12 +1,12 @@
 /**
  * Streaming TTS Hook - MediaSource API Integration
- * 
- * Receives audio_chunk SSE events and streams them incrementally via MediaSource Extensions.
- * Supports pause on tool execution and graceful fallback to non-streaming playback.
+ *
+ * Receives base64 WAV chunks and appends them incrementally to a MediaSource.
+ * Chunks that arrive before the SourceBuffer opens are queued instead of
+ * dropped, which matters immediately after resetting for a new playback.
  */
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import type { TTSSettings } from "../types";
 
 export interface StreamingTTSState {
   isReady: boolean;
@@ -15,18 +15,23 @@ export interface StreamingTTSState {
   error: string | null;
 }
 
-/**
- * Hook for streaming TTS audio chunks via MediaSource API
- * 
- * Usage:
- *   const { appendChunk, isReady, isPaused } = useStreamingTTS();
- *   
- *   // In SSE event handler:
- *   eventSource.addEventListener('audio_chunk', (e) => {
- *     const { data } = JSON.parse(e.data);
- *     appendChunk(data.data); // base64 WAV
- *   });
- */
+const WAV_HEADER_SIZE = 44;
+
+function decodeBase64(base64Wav: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(base64Wav);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function stripWavHeader(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
+  if (bytes.length <= WAV_HEADER_SIZE) return bytes;
+  const sliced = bytes.slice(WAV_HEADER_SIZE);
+  return new Uint8Array<ArrayBuffer>(sliced.buffer, sliced.byteOffset, sliced.byteLength);
+}
+
 export function useStreamingTTS() {
   const [state, setState] = useState<StreamingTTSState>({
     isReady: false,
@@ -34,182 +39,221 @@ export function useStreamingTTS() {
     isPaused: false,
     error: null,
   });
-  
+
   const mediaSourceRef = useRef<MediaSource | null>(null);
   const sourceBufferRef = useRef<SourceBuffer | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const pendingChunksRef = useRef<string[]>([]); // Queue chunks while buffer is updating
-  
-  // Initialize MediaSource on mount
-  useEffect(() => {
-    // Check if MediaSource is supported
-    if (!window.MediaSource) {
-      setState(prev => ({ ...prev, error: "MediaSource API not supported" }));
+  const objectUrlRef = useRef<string | null>(null);
+  const pendingChunksRef = useRef<Uint8Array<ArrayBuffer>[]>([]);
+  const firstChunkRef = useRef(true);
+  const isStreamEndedRef = useRef(false);
+  const isPausedRef = useRef(false);
+
+  const prepareChunk = useCallback((base64Wav: string): Uint8Array<ArrayBuffer> => {
+    const bytes = decodeBase64(base64Wav);
+    if (firstChunkRef.current) {
+      firstChunkRef.current = false;
+      return bytes;
+    }
+    return stripWavHeader(bytes);
+  }, []);
+
+  const flushPending = useCallback(() => {
+    const ms = mediaSourceRef.current;
+    const sb = sourceBufferRef.current;
+    if (!ms || ms.readyState !== "open" || !sb || sb.updating) return;
+
+    const next = pendingChunksRef.current.shift();
+    if (next) {
+      try {
+        sb.appendBuffer(next);
+      } catch (err) {
+        console.error("[StreamingTTS] Failed to append queued chunk:", err);
+        setState((prev) => ({ ...prev, error: "Audio buffer append failed" }));
+      }
       return;
     }
-    
-    // Check if WAV/PCM is supported
-    if (!MediaSource.isTypeSupported('audio/wav; codecs=pcm')) {
-      // Fallback to MP3 if available
-      if (!MediaSource.isTypeSupported('audio/mpeg')) {
-        setState(prev => ({ 
-          ...prev, 
-          error: "WAV/PCM and MP3 not supported - falling back to non-streaming",
-          isReady: false 
-        }));
-        return;
+
+    if (isStreamEndedRef.current) {
+      try {
+        ms.endOfStream();
+      } catch {
+        // Ignore races with a closing MediaSource.
       }
     }
-    
+  }, []);
+
+  const disposeCurrentStream = useCallback(() => {
+    const ms = mediaSourceRef.current;
+    const audio = audioRef.current;
+
+    if (ms?.readyState === "open") {
+      try {
+        ms.endOfStream();
+      } catch {
+        // The source may already be ending; reset should still continue.
+      }
+    }
+
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+    }
+
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = null;
+    }
+
+    mediaSourceRef.current = null;
+    sourceBufferRef.current = null;
+    audioRef.current = null;
+  }, []);
+
+  const initializeStream = useCallback(() => {
+    if (!window.MediaSource) {
+      setState((prev) => ({ ...prev, isReady: false, error: "MediaSource API not supported" }));
+      return;
+    }
+
     const ms = new MediaSource();
     const audio = new Audio();
-    audio.src = URL.createObjectURL(ms);
+    const objectUrl = URL.createObjectURL(ms);
+    audio.src = objectUrl;
+
+    mediaSourceRef.current = ms;
     audioRef.current = audio;
-    
-    ms.addEventListener('sourceopen', () => {
+    objectUrlRef.current = objectUrl;
+
+    ms.addEventListener("sourceopen", () => {
+      if (mediaSourceRef.current !== ms) return;
       try {
-        // Try WAV first, fallback to MP3
-        const mimeType = MediaSource.isTypeSupported('audio/wav; codecs=pcm') 
-          ? 'audio/wav; codecs=pcm' 
-          : 'audio/mpeg';
-        
+        const mimeType = MediaSource.isTypeSupported("audio/wav; codecs=1")
+          ? "audio/wav; codecs=1"
+          : "audio/wav";
         const sb = ms.addSourceBuffer(mimeType);
-        sb.mode = 'sequence'; // Critical: tells MSE chunks are sequential
-        
-        sb.addEventListener('updateend', () => {
-          // Append pending chunks if any
-          if (pendingChunksRef.current.length > 0 && !sb.updating) {
-            const nextChunk = pendingChunksRef.current.shift();
-            if (nextChunk) {
-              try {
-                const binary = atob(nextChunk);
-                const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
-                sb.appendBuffer(bytes);
-              } catch (err) {
-                console.error('[StreamingTTS] Failed to append chunk:', err);
+        if ("mode" in sb) {
+          (sb as any).mode = "sequence";
+        }
+
+        sb.addEventListener("updateend", () => {
+          if (mediaSourceRef.current !== ms || sourceBufferRef.current !== sb) return;
+          flushPending();
+          if (audio.paused && !isPausedRef.current && !isStreamEndedRef.current) {
+            audio.play().catch((err) => {
+              if (err.name !== "NotAllowedError") {
+                console.warn("[StreamingTTS] Auto-play failed:", err);
               }
-            }
-          }
-          
-          // Auto-play if not already playing
-          if (ms.readyState === 'open' && audio.paused && !state.isPaused) {
-            audio.play().catch(err => {
-              console.warn('[StreamingTTS] Auto-play failed:', err);
             });
           }
         });
-        
-        sb.addEventListener('error', (e) => {
-          console.error('[StreamingTTS] SourceBuffer error:', e);
-          setState(prev => ({ ...prev, error: "Audio buffer error" }));
+
+        sb.addEventListener("error", () => {
+          if (mediaSourceRef.current !== ms || sourceBufferRef.current !== sb) return;
+          console.error("[StreamingTTS] SourceBuffer error");
+          setState((prev) => ({ ...prev, error: "Audio buffer error" }));
         });
-        
+
         sourceBufferRef.current = sb;
-        setState(prev => ({ ...prev, isReady: true }));
+        setState((prev) => ({ ...prev, isReady: true, error: null }));
+        flushPending();
       } catch (err) {
-        console.error('[StreamingTTS] Failed to add source buffer:', err);
-        setState(prev => ({ ...prev, error: "Failed to initialize audio buffer", isReady: false }));
+        console.error("[StreamingTTS] Failed to initialize audio buffer:", err);
+        setState((prev) => ({ ...prev, error: "Failed to initialize audio buffer", isReady: false }));
       }
     });
-    
-    ms.addEventListener('sourceclose', () => {
-      setState(prev => ({ ...prev, isPlaying: false, isReady: false }));
+
+    ms.addEventListener("sourceclose", () => {
+      if (mediaSourceRef.current !== ms) return;
+      setState((prev) => ({ ...prev, isPlaying: false, isReady: false }));
     });
-    
-    mediaSourceRef.current = ms;
-    
+
+    audio.addEventListener("playing", () => {
+      setState((prev) => ({ ...prev, isPlaying: true }));
+    });
+    audio.addEventListener("pause", () => {
+      if (!isPausedRef.current) {
+        setState((prev) => ({ ...prev, isPlaying: false }));
+      }
+    });
+    audio.addEventListener("ended", () => {
+      setState((prev) => ({ ...prev, isPlaying: false, isPaused: false }));
+    });
+  }, [flushPending]);
+
+  useEffect(() => {
+    initializeStream();
     return () => {
-      if (ms.readyState === 'open') {
-        ms.endOfStream();
-      }
-      audio.pause();
-      audio.src = '';
-      URL.revokeObjectURL(audio.src);
+      disposeCurrentStream();
     };
-  }, []);
-  
-  // Append WAV chunk (includes 44-byte header)
+  }, [disposeCurrentStream, initializeStream]);
+
   const appendChunk = useCallback((base64Wav: string) => {
+    const chunk = prepareChunk(base64Wav);
+    const ms = mediaSourceRef.current;
     const sb = sourceBufferRef.current;
-    
-    if (!sb) {
-      console.warn('[StreamingTTS] SourceBuffer not ready - queuing chunk');
-      pendingChunksRef.current.push(base64Wav);
+
+    if (!ms || ms.readyState !== "open" || !sb || sb.updating || isPausedRef.current) {
+      pendingChunksRef.current.push(chunk);
       return;
     }
-    
-    if (state.isPaused) {
-      // Don't append while paused - queue for later
-      pendingChunksRef.current.push(base64Wav);
-      return;
-    }
-    
-    if (sb.updating) {
-      // Buffer is busy - queue chunk
-      pendingChunksRef.current.push(base64Wav);
-      return;
-    }
-    
+
     try {
-      const binary = atob(base64Wav);
-      const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
-      sb.appendBuffer(bytes);
+      sb.appendBuffer(chunk);
     } catch (err) {
-      console.error('[StreamingTTS] Failed to append chunk:', err);
-      setState(prev => ({ ...prev, error: "Failed to append audio chunk" }));
+      console.error("[StreamingTTS] Failed to append chunk:", err);
+      setState((prev) => ({ ...prev, error: "Failed to append audio chunk" }));
     }
-  }, [state.isPaused]);
-  
-  // Pause playback
+  }, [prepareChunk]);
+
   const pause = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-    setState(prev => ({ ...prev, isPaused: true, isPlaying: false }));
+    isPausedRef.current = true;
+    audioRef.current?.pause();
+    setState((prev) => ({ ...prev, isPaused: true, isPlaying: false }));
   }, []);
-  
-  // Resume playback
+
   const resume = useCallback(() => {
-    setState(prev => ({ ...prev, isPaused: false }));
-    
-    // Append any pending chunks
-    if (sourceBufferRef.current && !sourceBufferRef.current.updating) {
-      while (pendingChunksRef.current.length > 0) {
-        const chunk = pendingChunksRef.current.shift();
-        if (chunk) {
-          try {
-            const binary = atob(chunk);
-            const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
-            sourceBufferRef.current.appendBuffer(bytes);
-          } catch (err) {
-            console.error('[StreamingTTS] Failed to append pending chunk:', err);
-          }
+    isPausedRef.current = false;
+    setState((prev) => ({ ...prev, isPaused: false }));
+    flushPending();
+
+    if (audioRef.current?.paused) {
+      audioRef.current.play().catch((err) => {
+        if (err.name !== "NotAllowedError") {
+          console.warn("[StreamingTTS] Resume play failed:", err);
         }
-      }
-    }
-    
-    if (audioRef.current && audioRef.current.paused) {
-      audioRef.current.play().catch(err => {
-        console.warn('[StreamingTTS] Resume play failed:', err);
       });
     }
-  }, []);
-  
-  // End stream (call when done event received)
+  }, [flushPending]);
+
   const endStream = useCallback(() => {
-    const ms = mediaSourceRef.current;
-    if (ms && ms.readyState === 'open') {
-      ms.endOfStream();
-    }
-    setState(prev => ({ ...prev, isPlaying: false }));
-  }, []);
-  
+    isStreamEndedRef.current = true;
+    flushPending();
+  }, [flushPending]);
+
+  const reset = useCallback(() => {
+    pendingChunksRef.current = [];
+    firstChunkRef.current = true;
+    isStreamEndedRef.current = false;
+    isPausedRef.current = false;
+    disposeCurrentStream();
+    setState({
+      isReady: false,
+      isPlaying: false,
+      isPaused: false,
+      error: null,
+    });
+    initializeStream();
+  }, [disposeCurrentStream, initializeStream]);
+
   return {
     ...state,
     appendChunk,
     pause,
     resume,
     endStream,
+    reset,
     audio: audioRef.current,
   };
 }

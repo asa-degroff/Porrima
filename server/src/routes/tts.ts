@@ -7,7 +7,7 @@ import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
 import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkKokoroAvailability, checkQwen3TTSInstallation, checkSupertonicTTSInstallation } from "../services/tts.js";
 import { getQwen3AudioFile } from "../services/tts-qwen3.js";
 import { getSupertonicAudioFile } from "../services/tts-supertonic.js";
-import { chunkPlanOptionsForSettings, generateTTSChunks, planTTSChunks } from "../services/tts-chunking.js";
+import { chunkPlanOptionsForSettings, generateTTSChunks, planTTSChunks, generateTTSChunksStreamed } from "../services/tts-chunking.js";
 import { getTtsPythonStatus } from "../services/tts-python.js";
 
 const router = express.Router();
@@ -378,6 +378,10 @@ router.post("/generate", async (req, res) => {
 /**
  * POST /api/tts/generate-stream
  * Generate TTS audio as independently playable chunks.
+ *
+ * When `streamMode: "data"` is set, audio is inlined as base64 in SSE events
+ * (uses persistent worker, no HTTP fetch round-trip per chunk).
+ * Default mode sends audioUrl references for backward compatibility.
  */
 router.post("/generate-stream", async (req, res) => {
   try {
@@ -387,6 +391,7 @@ router.post("/generate-stream", async (req, res) => {
       speed,
       pitch,
       backend,
+      streamMode,
       supertonicPitchSemitones,
       supertonicLanguage,
       supertonicSteps,
@@ -398,6 +403,8 @@ router.post("/generate-stream", async (req, res) => {
     if (!text || typeof text !== "string" || !text.trim()) {
       return res.status(400).json({ error: "Text is required" });
     }
+
+    const useInlineAudio = streamMode === "data";
 
     const effectiveSettings: TTSSettings = {
       ...userSettings,
@@ -429,31 +436,53 @@ router.post("/generate-stream", async (req, res) => {
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
-    writeEvent("chunk_plan", { totalChunks: chunkTexts.length });
+    writeEvent("chunk_plan", { totalChunks: chunkTexts.length, streamMode: useInlineAudio ? "data" : "url" });
 
-    let totalDuration = 0;
-    let totalFileSize = 0;
-    for await (const chunk of generateTTSChunks({ text: text.trim(), voice, speed, pitch }, effectiveSettings)) {
-      if (res.writableEnded) break;
-      totalDuration += chunk.duration;
-      totalFileSize += chunk.fileSize;
-      writeEvent("audio_chunk", {
-        chunkId: chunk.chunkId,
-        index: chunk.index,
-        totalChunks: chunk.totalChunks,
-        audioUrl: chunk.audioUrl,
-        duration: chunk.duration,
-        fileSize: chunk.fileSize,
-      });
-    }
-
-    if (!res.writableEnded) {
-      writeEvent("done", {
-        totalChunks: chunkTexts.length,
-        duration: totalDuration,
-        fileSize: totalFileSize,
-      });
-      res.end();
+    if (useInlineAudio) {
+      // Inline audio mode: base64 data in SSE events, no HTTP fetch needed
+      let totalDuration = 0;
+      for await (const chunk of generateTTSChunksStreamed({ text: text.trim(), voice, speed, pitch }, effectiveSettings)) {
+        if (res.writableEnded) break;
+        totalDuration += chunk.duration;
+        writeEvent("audio_chunk", {
+          chunkId: chunk.chunkId,
+          index: chunk.index,
+          totalChunks: chunk.totalChunks,
+          data: chunk.audioBase64,
+          mimeType: chunk.mimeType,
+          sampleRate: chunk.sampleRate,
+          duration: chunk.duration,
+        });
+      }
+      if (!res.writableEnded) {
+        writeEvent("done", { totalChunks: chunkTexts.length, duration: totalDuration });
+        res.end();
+      }
+    } else {
+      // URL mode: backward compatible, client fetches WAV files separately
+      let totalDuration = 0;
+      let totalFileSize = 0;
+      for await (const chunk of generateTTSChunks({ text: text.trim(), voice, speed, pitch }, effectiveSettings)) {
+        if (res.writableEnded) break;
+        totalDuration += chunk.duration;
+        totalFileSize += chunk.fileSize;
+        writeEvent("audio_chunk", {
+          chunkId: chunk.chunkId,
+          index: chunk.index,
+          totalChunks: chunk.totalChunks,
+          audioUrl: chunk.audioUrl,
+          duration: chunk.duration,
+          fileSize: chunk.fileSize,
+        });
+      }
+      if (!res.writableEnded) {
+        writeEvent("done", {
+          totalChunks: chunkTexts.length,
+          duration: totalDuration,
+          fileSize: totalFileSize,
+        });
+        res.end();
+      }
     }
   } catch (error) {
     console.error("[TTS] Chunked generation error:", error);

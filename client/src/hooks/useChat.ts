@@ -937,6 +937,25 @@ export function useChat(chatId: string | null) {
         setHasBackgroundActivity(true);
         setTimeout(() => setHasBackgroundActivity(false), 5000);
       },
+      onAudioChunk: (chunk) => {
+        // Live agent TTS streaming: forward audio data to TTS hook
+        const idx = chunk.index !== undefined ? `${chunk.index + 1}/${chunk.totalChunks}` : "?";
+        console.log(`[chat] audio_chunk #${idx} for ${streamChatId}`);
+        // Dispatch a custom event so the TTS hook can pick it up
+        window.dispatchEvent(new CustomEvent("agent-audio-chunk", {
+          detail: { chatId: streamChatId, chunk },
+        }));
+      },
+      onAudioDone: () => {
+        window.dispatchEvent(new CustomEvent("agent-audio-done", {
+          detail: { chatId: streamChatId },
+        }));
+      },
+      onAudioError: (error) => {
+        window.dispatchEvent(new CustomEvent("agent-audio-error", {
+          detail: { chatId: streamChatId, error },
+        }));
+      },
       onTitleUpdate: (chatId, title) => {
         setTitleUpdate({ chatId, title });
       },

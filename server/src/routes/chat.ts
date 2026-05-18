@@ -266,6 +266,54 @@ function attachToLiveStreamResponse(req: Request, res: Response, stream: LiveStr
   });
 }
 
+function createAsyncTextQueue(): AsyncIterable<string> & { push: (value: string) => void; close: () => void; fail: (err: unknown) => void } {
+  const values: string[] = [];
+  const waiters: Array<(result: IteratorResult<string>) => void> = [];
+  let closed = false;
+  let error: unknown = null;
+
+  const next = (): Promise<IteratorResult<string>> => {
+    if (values.length > 0) {
+      return Promise.resolve({ value: values.shift()!, done: false });
+    }
+    if (error) {
+      return Promise.reject(error);
+    }
+    if (closed) {
+      return Promise.resolve({ value: undefined, done: true });
+    }
+    return new Promise((resolve) => waiters.push(resolve));
+  };
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    while (waiters.length > 0) {
+      waiters.shift()!({ value: undefined, done: true });
+    }
+  };
+
+  return {
+    push(value: string) {
+      if (closed || error) return;
+      const waiter = waiters.shift();
+      if (waiter) {
+        waiter({ value, done: false });
+      } else {
+        values.push(value);
+      }
+    },
+    close,
+    fail(err: unknown) {
+      error = err;
+      close();
+    },
+    [Symbol.asyncIterator]() {
+      return { next };
+    },
+  };
+}
+
 function shouldGenerateInitialTitle(chat: Chat): boolean {
   return chat.messages.filter((m) => m.role === "user").length === 1;
 }
@@ -696,7 +744,8 @@ async function handleChatStream(
     duplicateToolCallStreak: 0,
     lastIterationToolCallSignature: null as string | null,
   };
-  const ttsTextChunks: string[] = [];
+  const ttsTextQueue = createAsyncTextQueue();
+  let audioStreamTask: Promise<void> | null = null;
 
   function resetAccumulators() {
     state.fullText = "";
@@ -730,7 +779,6 @@ async function handleChatStream(
     state.pendingFinalAssistantMessage = null;
     state.duplicateToolCallStreak = 0;
     state.lastIterationToolCallSignature = null;
-    ttsTextChunks.length = 0;
   }
 
   function isPlaceholderEllipsis(text: string | undefined): boolean {
@@ -984,7 +1032,7 @@ async function handleChatStream(
     flushThinkingTimer();
     state.fullText += delta;
     state.pendingText += delta;
-    ttsTextChunks.push(delta);
+    ttsTextQueue.push(delta);
     res.write(`event: text_delta\ndata: ${JSON.stringify({ delta })}\n\n`);
     return true;
   }
@@ -1420,21 +1468,39 @@ async function handleChatStream(
     }).join(", ")}`);
     console.log("[chat] Agent loop started, waiting for events...");
 
-    // Extract token stream for TTS (if enabled). The shared loop callback
-    // accumulates text deltas into ttsTextChunks; TTS is still emitted after
-    // the main model stream, matching the route's previous lifecycle.
-    async function* extractTokenStream() {
-      for (const token of ttsTextChunks) {
-        yield token;
-      }
-    }
+    if (ttsEnabled) {
+      console.log("[TTS] Starting live audio stream");
+      audioStreamTask = (async () => {
+        try {
+          const audioStream = streamTTS(ttsTextQueue, {
+            ...ttsSettings,
+            chunkSize: ttsSettings.streamingChunkSize ?? 50,
+            boundaryTier: ttsSettings.streamingBoundaryTier ?? 'clause',
+          });
 
-    // Create TTS audio stream if enabled
-    const audioStream = ttsEnabled ? streamTTS(extractTokenStream(), {
-      ...ttsSettings,
-      chunkSize: ttsSettings.streamingChunkSize ?? 50,
-      boundaryTier: ttsSettings.streamingBoundaryTier ?? 'clause',
-    }) : null;
+          for await (const wavChunk of audioStream) {
+            if (connectionClosed || res.writableEnded) break;
+
+            res.write(`event: audio_chunk\ndata: ${JSON.stringify({
+              chunkId: crypto.randomUUID(),
+              data: wavChunk.toString('base64'),
+              mimeType: 'audio/wav',
+              sampleRate: ttsSettings.backend === "supertonic-3" ? 44100 : 24000,
+            })}\n\n`);
+          }
+
+          if (!connectionClosed && !res.writableEnded) {
+            res.write(`event: audio_done\ndata: {}\n\n`);
+          }
+          console.log("[TTS] Audio stream completed");
+        } catch (err) {
+          console.error("[TTS] Streaming error:", err);
+          if (!connectionClosed && !res.writableEnded) {
+            res.write(`event: audio_error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : String(err) })}\n\n`);
+          }
+        }
+      })();
+    }
 
     // Process LLM events -> SSE (main loop)
     await runAgentLoop({
@@ -1867,29 +1933,6 @@ async function handleChatStream(
       }
       },
     });
-
-    // Parallel: Stream audio chunks if TTS enabled
-    if (audioStream) {
-      console.log("[TTS] Starting audio stream");
-      (async () => {
-        try {
-          for await (const wavChunk of audioStream) {
-            // Check if connection is still open
-            if (res.writableEnded) break;
-
-            res.write(`event: audio_chunk\ndata: ${JSON.stringify({
-              chunkId: crypto.randomUUID(),
-              data: wavChunk.toString('base64'),
-              mimeType: 'audio/wav',
-              sampleRate: 24000,
-            })}\n\n`);
-          }
-          console.log("[TTS] Audio stream completed");
-        } catch (err) {
-          console.error("[TTS] Streaming error:", err);
-        }
-      })();
-    }
 
     // --- Post-loop: compaction check, then handle incomplete tool turns, ask_user, build message ---
 
@@ -2906,6 +2949,14 @@ async function handleChatStream(
     markLlamaCacheResidencyFinished(chat.id);
     markChatInactive(chat.id);
     stopSSEKeepalive();
+    ttsTextQueue.close();
+    if (audioStreamTask) {
+      try {
+        await audioStreamTask;
+      } catch (err) {
+        console.warn("[TTS] audio stream task failed during shutdown:", err instanceof Error ? err.message : err);
+      }
+    }
 
     // Wait for any in-flight title generation so the title_update SSE event
     // reaches the client before we close the live stream.

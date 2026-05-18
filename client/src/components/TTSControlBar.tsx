@@ -43,7 +43,8 @@ export const TTSControlBar = memo(function TTSControlBar({
   const { light } = useHaptics();
 
   const { isPlaying, isPaused, isLoading, currentTime, duration } = playbackState;
-  const chunkLabel = playbackState.mode === "chunked" && playbackState.totalChunks
+  const isChunked = playbackState.mode === "chunked-url" || playbackState.mode === "chunked-stream";
+  const chunkLabel = isChunked && playbackState.totalChunks
     ? `Chunk ${playbackState.currentChunk || 0}/${playbackState.totalChunks}`
     : null;
 

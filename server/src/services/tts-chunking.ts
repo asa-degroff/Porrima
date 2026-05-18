@@ -1,6 +1,18 @@
 import type { TTSGenerateRequest, TTSGenerateResponse, TTSSettings, TTSTextMode } from "../types/tts.js";
 import { extractTextForTTS, splitIntoSentences } from "./tts-text-preprocessor.js";
-import { generateTTS } from "./tts.js";
+import { generateTTS, getAudioFile } from "./tts.js";
+import { getQwen3AudioFile } from "./tts-qwen3.js";
+import { generateSupertonicTTSDirect } from "./tts-supertonic.js";
+
+export interface TTSStreamedChunk {
+  chunkId: string;
+  index: number;
+  totalChunks: number;
+  audioBase64: string;
+  duration: number;
+  sampleRate: number;
+  mimeType: string;
+}
 
 export interface TTSChunkPlanOptions {
   firstChunkTargetChars?: number;
@@ -123,4 +135,56 @@ export function chunkPlanOptionsForSettings(settings: TTSSettings, options: TTSC
     textMode: settings.ttsTextMode,
     ...options,
   };
+}
+
+/**
+ * Generate TTS chunks with inline audio data (base64) instead of URLs.
+ * Uses the persistent worker for zero-spawn-overhead generation.
+ * Designed for SSE streaming — no disk I/O, audio flows directly to the client.
+ */
+export async function* generateTTSChunksStreamed(
+  request: TTSGenerateRequest,
+  settings: TTSSettings,
+  options: TTSChunkPlanOptions = {},
+): AsyncGenerator<TTSStreamedChunk> {
+  const textChunks = planTTSChunks(request.text, chunkPlanOptionsForSettings(settings, options));
+  const totalChunks = textChunks.length;
+
+  for (let index = 0; index < totalChunks; index++) {
+    const chunkText = textChunks[index];
+
+    if (settings.backend === "supertonic-3") {
+      const result = await generateSupertonicTTSDirect(chunkText, settings);
+      yield {
+        chunkId: `${index + 1}-${Date.now().toString(36)}`,
+        index,
+        totalChunks,
+        audioBase64: result.audioBase64,
+        duration: result.duration,
+        sampleRate: result.sampleRate,
+        mimeType: "audio/wav",
+      };
+    } else {
+      // Fallback: use existing disk-based generation for other backends
+      const audio = await generateTTS({ ...request, text: chunkText }, settings);
+      const cacheKey = audio.audioUrl.replace("/api/tts/audio/", "").replace(".wav", "");
+      const buf = settings.backend === "qwen3-tts"
+        ? getQwen3AudioFile(cacheKey)
+        : getAudioFile(cacheKey);
+
+      if (buf) {
+        yield {
+          chunkId: `${index + 1}-${Date.now().toString(36)}`,
+          index,
+          totalChunks,
+          audioBase64: buf.toString("base64"),
+          duration: audio.duration,
+          sampleRate: 24000,
+          mimeType: "audio/wav",
+        };
+      } else {
+        throw new Error(`Generated TTS audio was not found in the ${settings.backend} cache`);
+      }
+    }
+  }
 }
