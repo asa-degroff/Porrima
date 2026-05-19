@@ -430,6 +430,10 @@ export interface Memory {
   // Temporal layering fields
   sourceType?: MemorySourceType;
   sourceId?: string;  // chatId or notebookEntryId
+  sourceMessageStartTimestamp?: number;
+  sourceMessageEndTimestamp?: number;
+  sourceMessageStartIndex?: number;
+  sourceMessageEndIndex?: number;
   supersededBy?: string;  // ID of newer memory that supersedes this one
   supersedes?: string;  // ID of older memory that this one supersedes
 }

@@ -6,6 +6,22 @@ import {
   normalizeCrossProjectScoreMultiplier,
   sortByAdjustedScore,
 } from "../services/memory-retrieval-scope.js";
+import { filterMemoriesAlreadyInCurrentContext } from "../services/memory-context.js";
+import type { ChatMessage, Memory } from "../types.js";
+
+function memory(overrides: Partial<Memory>): Memory {
+  return {
+    id: overrides.id || "memory-1",
+    text: overrides.text || "Remember the active topic.",
+    category: overrides.category || "context",
+    importance: overrides.importance ?? 5,
+    embedding: overrides.embedding || [0.1, 0.2],
+    createdAt: overrides.createdAt || new Date(0).toISOString(),
+    lastAccessed: overrides.lastAccessed || new Date(0).toISOString(),
+    accessCount: overrides.accessCount ?? 0,
+    ...overrides,
+  };
+}
 
 describe("memory retrieval project scoping", () => {
   it("dampens cross-project scores without filtering them out", () => {
@@ -64,5 +80,60 @@ describe("memory retrieval project scoping", () => {
 
   it("defaults global/project memory sharing to equal relevance", () => {
     expect(normalizeGlobalProjectScoreMultiplier(undefined)).toBe(1);
+  });
+
+  it("skips same-chat memories whose source messages are still in context", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Tell me about cache residency.", timestamp: 1000 },
+      { role: "assistant", content: "Cache residency keeps the slot warm.", timestamp: 2000 },
+    ];
+    const candidates = [
+      {
+        memory: memory({
+          id: "same-visible",
+          sourceChatId: "chat-1",
+          sourceMessageStartTimestamp: 1000,
+          sourceMessageEndTimestamp: 2000,
+        }),
+        score: 0.9,
+      },
+      {
+        memory: memory({
+          id: "other-chat",
+          sourceChatId: "chat-2",
+          sourceMessageStartTimestamp: 1000,
+          sourceMessageEndTimestamp: 2000,
+        }),
+        score: 0.8,
+      },
+    ];
+
+    const filtered = filterMemoriesAlreadyInCurrentContext(candidates, "chat-1", messages, "test");
+
+    expect(filtered.map((candidate) => candidate.memory.id)).toEqual(["other-chat"]);
+  });
+
+  it("keeps same-chat memories once their source messages are out of context", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Old topic", timestamp: 1000, _outOfContext: true },
+      { role: "assistant", content: "Old answer", timestamp: 2000, _outOfContext: true },
+      { role: "assistant", content: "Summary of compacted work", timestamp: 2500, _isCompactionSummary: true },
+      { role: "user", content: "Return to the old topic.", timestamp: 3000 },
+    ];
+    const candidates = [
+      {
+        memory: memory({
+          id: "same-compacted",
+          sourceChatId: "chat-1",
+          sourceMessageStartTimestamp: 1000,
+          sourceMessageEndTimestamp: 2000,
+        }),
+        score: 0.9,
+      },
+    ];
+
+    const filtered = filterMemoriesAlreadyInCurrentContext(candidates, "chat-1", messages, "test");
+
+    expect(filtered.map((candidate) => candidate.memory.id)).toEqual(["same-compacted"]);
   });
 });

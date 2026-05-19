@@ -17,7 +17,7 @@ import {
   normalizeGlobalProjectScoreMultiplier,
   sortByAdjustedScore,
 } from "./memory-retrieval-scope.js";
-import type { ChatMessage } from "../types.js";
+import type { ChatMessage, Memory } from "../types.js";
 
 // Cache the last-built augmented prompt per chat so the prompt viewer
 // can return it instantly without a cold Ollama embedding call.
@@ -160,8 +160,43 @@ export interface AugmentedPromptResult {
 // ---- Shared retrieval pipeline ----
 
 export interface RetrievalResult {
-  memory: { id: string; text: string; category: string; importance: number; createdAt: string; supersededBy?: string; accessCount: number; projectId?: string; embedding: number[] };
+  memory: Memory;
   score: number;
+}
+
+function messageTimestamp(message: ChatMessage): number | null {
+  return typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+    ? message.timestamp
+    : null;
+}
+
+function sourceSpanOverlapsCurrentContext(memory: RetrievalResult["memory"], recentMessages: ChatMessage[]): boolean {
+  const start = memory.sourceMessageStartTimestamp;
+  const end = memory.sourceMessageEndTimestamp;
+  if (start === undefined || end === undefined) {
+    return !recentMessages.some((message) => message._isCompactionSummary && !message._outOfContext);
+  }
+
+  for (const message of recentMessages) {
+    if (message._outOfContext || message.role === "system") continue;
+    const ts = messageTimestamp(message);
+    if (ts === null) continue;
+    if (ts >= start && ts <= end) return true;
+  }
+  return false;
+}
+
+export function filterMemoriesAlreadyInCurrentContext<T extends RetrievalResult>(
+  memories: T[],
+  chatId: string | undefined,
+  recentMessages: ChatMessage[],
+  _source: string,
+): T[] {
+  if (!chatId) return memories;
+  return memories.filter((result) => {
+    if (!result.memory.sourceChatId || result.memory.sourceChatId !== chatId) return true;
+    return !sourceSpanOverlapsCurrentContext(result.memory, recentMessages);
+  });
 }
 
 async function getConfiguredCrossProjectScoreMultiplier(): Promise<number> {
@@ -184,6 +219,7 @@ async function getConfiguredGlobalProjectScoreMultiplier(): Promise<number> {
 
 async function retrieveMemories(
   recentMessages: ChatMessage[],
+  chatId?: string,
   chatType?: string,
   projectId?: string,
 ): Promise<RetrievalResult[]> {
@@ -198,7 +234,7 @@ async function retrieveMemories(
   const queryEmbedding = await embed(userMessages);
   const crossProjectMultiplier = await getConfiguredCrossProjectScoreMultiplier();
   const globalProjectMultiplier = await getConfiguredGlobalProjectScoreMultiplier();
-  const results = await searchMemories(
+  const searchResults = await searchMemories(
     queryEmbedding,
     30,
     new Date(),
@@ -208,6 +244,13 @@ async function retrieveMemories(
       ? { projectId, crossProjectScoreMultiplier: crossProjectMultiplier }
       : { globalProjectScoreMultiplier: globalProjectMultiplier },
   );
+  const results = filterMemoriesAlreadyInCurrentContext(
+    searchResults as RetrievalResult[],
+    chatId,
+    recentMessages,
+    "memory-retrieval",
+  );
+  if (results.length === 0) return [];
 
   const instruction = RERANK_INSTRUCTIONS[chatType || "agent"];
   const rerankOutput: RerankOutput = await rerank(
@@ -539,7 +582,7 @@ export async function buildMemoryAugmentedPrompt(
   // the stablePrefix — persona/user-doc/blocks/zeitgeist live there and are
   // independent of memory retrieval.
   try {
-    const memories = await retrieveMemories(recentMessages, chatType, projectId);
+    const memories = await retrieveMemories(recentMessages, chatId, chatType, projectId);
     updateAccessMetadata(memories);
 
     const cached = stablePrefixCache.get(chatId || "_default");
@@ -617,7 +660,7 @@ export async function buildSplitAugmentedPrompt(
   // Case 1: No state — first turn or post-reset. Full retrieval into system prompt.
   if (!state) {
     try {
-      const memories = await retrieveMemories(recentMessages, chatType, projectId);
+      const memories = await retrieveMemories(recentMessages, chatId, chatType, projectId);
       updateAccessMetadata(memories);
 
       const memoriesSection = buildMemoriesSection(memories, projectId, blockHint, zeitgeistHint);
@@ -652,7 +695,7 @@ export async function buildSplitAugmentedPrompt(
 
   // Case 3: State exists, dirty — re-retrieve and compute delta.
   try {
-    const memories = await retrieveMemories(recentMessages, chatType, projectId);
+    const memories = await retrieveMemories(recentMessages, chatId, chatType, projectId);
     const inContextIds = new Set([...state.frozenIds, ...state.deltaIds]);
     // Only bump access for memories NOT already in context — frozen memories
     // get retrieved every turn and shouldn't have their recency signal inflated.

@@ -1232,13 +1232,69 @@ export interface DedupAndSaveOutcome {
   ambiguousCandidates: DedupAndSaveAmbiguousCandidate[];
 }
 
+interface MemorySourceSpan {
+  startTimestamp?: number;
+  endTimestamp?: number;
+  startIndex?: number;
+  endIndex?: number;
+}
+
+function sourceSpanFromIndexedMessages(messages: Array<{ message: ChatMessage; index?: number }>): MemorySourceSpan | undefined {
+  const spans = messages
+    .map(({ message, index }) => ({
+      timestamp: typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+        ? message.timestamp
+        : undefined,
+      index,
+    }))
+    .filter((entry) => entry.timestamp !== undefined || entry.index !== undefined);
+  if (spans.length === 0) return undefined;
+
+  const timestamps = spans
+    .map((entry) => entry.timestamp)
+    .filter((timestamp): timestamp is number => timestamp !== undefined);
+  const indices = spans
+    .map((entry) => entry.index)
+    .filter((index): index is number => index !== undefined);
+
+  return {
+    ...(timestamps.length > 0 ? {
+      startTimestamp: Math.min(...timestamps),
+      endTimestamp: Math.max(...timestamps),
+    } : {}),
+    ...(indices.length > 0 ? {
+      startIndex: Math.min(...indices),
+      endIndex: Math.max(...indices),
+    } : {}),
+  };
+}
+
+function findExchangeSourceSpan(chat: Chat | null, userMsg: string, assistantMsg: string): MemorySourceSpan | undefined {
+  if (!chat) return undefined;
+  for (let assistantIndex = chat.messages.length - 1; assistantIndex >= 0; assistantIndex--) {
+    const assistant = chat.messages[assistantIndex];
+    if (assistant.role !== "assistant" || assistant.content !== assistantMsg) continue;
+    for (let userIndex = assistantIndex - 1; userIndex >= 0; userIndex--) {
+      const user = chat.messages[userIndex];
+      if (user.role !== "user") continue;
+      if (user.content !== userMsg) continue;
+      return sourceSpanFromIndexedMessages([
+        { message: user, index: userIndex },
+        { message: assistant, index: assistantIndex },
+      ]);
+    }
+  }
+  return undefined;
+}
+
 async function saveExtractedMemory(
   fact: ExtractedFact,
   embedding: number[],
   chatId: string,
   projectId: string | undefined,
   sourceType: MemorySourceType,
-  sourceId: string | undefined
+  sourceId: string | undefined,
+  sourceSpan?: MemorySourceSpan,
 ): Promise<string> {
   const now = new Date().toISOString();
   const newMemoryId = uuid();
@@ -1255,6 +1311,10 @@ async function saveExtractedMemory(
     ...(projectId ? { projectId } : {}),
     sourceType,
     sourceId: sourceId || chatId,
+    sourceMessageStartTimestamp: sourceSpan?.startTimestamp,
+    sourceMessageEndTimestamp: sourceSpan?.endTimestamp,
+    sourceMessageStartIndex: sourceSpan?.startIndex,
+    sourceMessageEndIndex: sourceSpan?.endIndex,
   });
   return newMemoryId;
 }
@@ -1265,7 +1325,8 @@ export async function dedupAndSave(
   chatId: string,
   projectId?: string,
   sourceType: MemorySourceType = 'chat',
-  sourceId?: string
+  sourceId?: string,
+  sourceSpan?: MemorySourceSpan,
 ): Promise<DedupAndSaveOutcome> {
   let added = 0;
   let skippedDuplicates = 0;
@@ -1292,7 +1353,7 @@ export async function dedupAndSave(
     }
 
     console.log(`[memory] New memory: "${fact.text}"`);
-    await saveExtractedMemory(fact, factEmbedding, chatId, projectId, sourceType, sourceId);
+    await saveExtractedMemory(fact, factEmbedding, chatId, projectId, sourceType, sourceId, sourceSpan);
     added++;
   }
 
@@ -1374,7 +1435,8 @@ export async function extractMemories(
   }
 
   // Dedup and save inside a single write lock to prevent concurrent overwrites
-  const outcome = await dedupAndSave(facts, embeddings, chatId, projectId);
+  const sourceSpan = findExchangeSourceSpan(chat, userMsg, assistantMsg);
+  const outcome = await dedupAndSave(facts, embeddings, chatId, projectId, "chat", chatId, sourceSpan);
 
   // Invalidate the memories cache for this chat so the next turn re-retrieves
   // with the newly extracted memories included. This keeps the system prompt
@@ -1518,7 +1580,10 @@ export async function preCompactionFlush(
       return;
     }
 
-    const outcome = await dedupAndSave(facts, embeddings, chatId, projectId);
+    const sourceSpan = sourceSpanFromIndexedMessages(
+      substantiveMessages.map((message) => ({ message })),
+    );
+    const outcome = await dedupAndSave(facts, embeddings, chatId, projectId, "chat", chatId, sourceSpan);
 
     // Invalidate memories cache so next turn picks up new memories.
     // Block updates are not performed here — they're handled by the main
@@ -1829,6 +1894,7 @@ export async function extractDelayedMemories(
     // Collect ambiguous supersession candidates for batch comparison
     const ambiguousCandidates: DedupAndSaveAmbiguousCandidate[] = [];
     const runStartedAt = new Date().toISOString();
+    const sourceSpan = sourceSpanFromIndexedMessages(context.messages);
 
     for (let i = 0; i < facts.length; i++) {
       const fact = facts[i];
@@ -1861,7 +1927,8 @@ export async function extractDelayedMemories(
         chatId,
         chat.projectId,
         "chat_delayed",
-        chatId
+        chatId,
+        sourceSpan,
       );
       runSaved++;
 

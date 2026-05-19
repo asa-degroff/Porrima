@@ -140,6 +140,22 @@ export function getDb(): Database.Database {
     db.exec(`ALTER TABLE memories ADD COLUMN supersedes TEXT`);
     console.log("[memory] Added supersedes column for lineage tracking");
   }
+  if (!cols.some((c) => c.name === "source_message_start_ts")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN source_message_start_ts INTEGER`);
+    console.log("[memory] Added source_message_start_ts column for source-span filtering");
+  }
+  if (!cols.some((c) => c.name === "source_message_end_ts")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN source_message_end_ts INTEGER`);
+    console.log("[memory] Added source_message_end_ts column for source-span filtering");
+  }
+  if (!cols.some((c) => c.name === "source_message_start_index")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN source_message_start_index INTEGER`);
+    console.log("[memory] Added source_message_start_index column for source-span filtering");
+  }
+  if (!cols.some((c) => c.name === "source_message_end_index")) {
+    db.exec(`ALTER TABLE memories ADD COLUMN source_message_end_index INTEGER`);
+    console.log("[memory] Added source_message_end_index column for source-span filtering");
+  }
 
   // Create memory_supersession_history table for audit trail
   db.exec(`
@@ -477,8 +493,14 @@ export async function addMemory(memory: Memory): Promise<void> {
 
   const add = db.transaction(() => {
     db.prepare(`
-      INSERT INTO memories (id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO memories (
+        id, text, category, importance, created_at, last_accessed, access_count,
+        source_chat_id, project_id, source_type, source_id,
+        source_message_start_ts, source_message_end_ts,
+        source_message_start_index, source_message_end_index,
+        superseded_by, supersedes
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       memory.id,
       memory.text,
@@ -491,6 +513,10 @@ export async function addMemory(memory: Memory): Promise<void> {
       memory.projectId || "",
       memory.sourceType || 'chat',
       memory.sourceId || '',
+      memory.sourceMessageStartTimestamp ?? null,
+      memory.sourceMessageEndTimestamp ?? null,
+      memory.sourceMessageStartIndex ?? null,
+      memory.sourceMessageEndIndex ?? null,
       memory.supersededBy || null,
       memory.supersedes || null
     );
@@ -806,7 +832,9 @@ export async function searchMemories(
 
   const metaRows = db
     .prepare(
-      `SELECT m.id, m.text, m.category, m.importance, m.created_at, m.last_accessed, m.access_count, m.source_chat_id, m.project_id, m.superseded_by, m.supersedes, v.embedding
+      `SELECT m.id, m.text, m.category, m.importance, m.created_at, m.last_accessed, m.access_count,
+              m.source_chat_id, m.project_id, m.source_message_start_ts, m.source_message_end_ts,
+              m.source_message_start_index, m.source_message_end_index, m.superseded_by, m.supersedes, v.embedding
        FROM memories m
        JOIN vec_memories v ON m.id = v.id
        WHERE m.id IN (${placeholders})${dateFilter}`
@@ -821,6 +849,10 @@ export async function searchMemories(
     access_count: number;
     source_chat_id: string;
     project_id: string;
+    source_message_start_ts: number | null;
+    source_message_end_ts: number | null;
+    source_message_start_index: number | null;
+    source_message_end_index: number | null;
     superseded_by: string | null;
     supersedes: string | null;
     embedding: Buffer;
@@ -847,6 +879,10 @@ export async function searchMemories(
         lastAccessed: r.last_accessed,
         accessCount: r.access_count,
         sourceChatId: r.source_chat_id,
+        sourceMessageStartTimestamp: r.source_message_start_ts ?? undefined,
+        sourceMessageEndTimestamp: r.source_message_end_ts ?? undefined,
+        sourceMessageStartIndex: r.source_message_start_index ?? undefined,
+        sourceMessageEndIndex: r.source_message_end_index ?? undefined,
         ...(r.project_id ? { projectId: r.project_id } : {}),
         supersededBy: r.superseded_by || undefined,
         supersedes: r.supersedes || undefined,

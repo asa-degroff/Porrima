@@ -6,6 +6,7 @@ import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { recordRerankerStats } from "./reranker-stats.js";
 import {
   formatRetrievedMemoryForContext,
+  filterMemoriesAlreadyInCurrentContext,
   getMemoryContextIds,
   markMemoryDeltaInjected,
 } from "./memory-context.js";
@@ -406,15 +407,20 @@ export class PassiveMemoryRecallController {
     const queryEmbedding = await embed(query);
     const crossProjectMultiplier = await getConfiguredCrossProjectScoreMultiplier();
     const globalProjectMultiplier = await getConfiguredGlobalProjectScoreMultiplier();
-    const searchResults = await searchMemories(
-      queryEmbedding,
-      FAST_SEARCH_LIMIT,
-      new Date(),
-      query,
-      undefined,
-      options.projectId
-        ? { projectId: options.projectId, crossProjectScoreMultiplier: crossProjectMultiplier }
-        : { globalProjectScoreMultiplier: globalProjectMultiplier },
+    const searchResults = filterMemoriesAlreadyInCurrentContext(
+      await searchMemories(
+        queryEmbedding,
+        FAST_SEARCH_LIMIT,
+        new Date(),
+        query,
+        undefined,
+        options.projectId
+          ? { projectId: options.projectId, crossProjectScoreMultiplier: crossProjectMultiplier }
+          : { globalProjectScoreMultiplier: globalProjectMultiplier },
+      ),
+      this.chatId,
+      options.chatMessages,
+      "passive-memory",
     );
     const inContextIds = getMemoryContextIds(this.chatId);
     const excludedIds = new Set([...inContextIds, ...this.injectedIds, ...this.queuedIds]);
