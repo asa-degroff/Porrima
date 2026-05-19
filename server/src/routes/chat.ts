@@ -743,6 +743,7 @@ async function handleChatStream(
     committedThinkingDurationMs: 0,
     hasCommittedToolLoopRows: false,
     pendingFinalAssistantMessage: null as ChatMessage | null,
+    pendingPassiveRecallRows: [] as ChatMessage[],
     // Dedup guard: count of consecutive iterations whose tool calls were
     // byte-identical to the prior iteration. Breaks loops where the model
     // re-emits the same tool call instead of moving on.
@@ -782,6 +783,7 @@ async function handleChatStream(
     state.committedThinkingDurationMs = 0;
     state.hasCommittedToolLoopRows = false;
     state.pendingFinalAssistantMessage = null;
+    state.pendingPassiveRecallRows = [];
     state.duplicateToolCallStreak = 0;
     state.lastIterationToolCallSignature = null;
   }
@@ -1014,6 +1016,12 @@ async function handleChatStream(
       state.allToolResults.length > state.committedToolResultCount ||
       state.segments.length > state.committedSegmentCount
     );
+  }
+
+  function flushPendingPassiveRecallRows(): void {
+    if (state.pendingPassiveRecallRows.length === 0) return;
+    chat.messages.push(...state.pendingPassiveRecallRows);
+    state.pendingPassiveRecallRows = [];
   }
 
   /** Flush any active thinking timer into accumulated duration */
@@ -1348,8 +1356,17 @@ async function handleChatStream(
             if (!agentMessage) return messages;
 
             try {
-              chat.messages.push(row);
-              await saveChat(chat);
+              const deferPersistence = hasUncommittedAssistantActivity();
+              if (deferPersistence) {
+                // The live pi-agent context already contains the just-finished
+                // tool fragment, but chat.messages may not have persisted it
+                // yet. Defer the hidden row until turn_end commits that
+                // fragment so replay preserves the live KV-cache prompt order.
+                state.pendingPassiveRecallRows.push(row);
+              } else {
+                chat.messages.push(row);
+                await saveChat(chat);
+              }
               messages.push(agentMessage);
               if (messages !== context.messages) {
                 context.messages.push(agentMessage);
@@ -1363,11 +1380,12 @@ async function handleChatStream(
               console.log(
                 `[passive-memory] injected ${injection.memoryIds.length} recalled memor${
                   injection.memoryIds.length === 1 ? "y" : "ies"
-                } before provider call at iteration ${iterations}`,
+                } before provider call at iteration ${iterations} (${deferPersistence ? "deferred persistence" : "persisted"})`,
               );
             } catch (err) {
               const idx = chat.messages.indexOf(row);
               if (idx >= 0) chat.messages.splice(idx, 1);
+              state.pendingPassiveRecallRows = state.pendingPassiveRecallRows.filter((pending) => pending !== row);
               console.warn("[passive-memory] failed to persist recalled memories:", err);
             }
             return messages;
@@ -1796,6 +1814,7 @@ async function handleChatStream(
           } else {
             state.pendingFinalAssistantMessage = buildAssistantMessageFromTurn(msg);
           }
+          flushPendingPassiveRecallRows();
 
           // Compute a current-context estimate that accounts for accumulated
           // tool results. Raw usage.totalTokens reflects iter=N's (input+output)
