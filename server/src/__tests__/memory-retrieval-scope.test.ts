@@ -136,4 +136,58 @@ describe("memory retrieval project scoping", () => {
 
     expect(filtered.map((candidate) => candidate.memory.id)).toEqual(["same-compacted"]);
   });
+
+  it("keeps same-chat memories when a meaningful part of their source span was compacted away", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Part 1", timestamp: 1000, _outOfContext: true },
+      { role: "assistant", content: "Part 2", timestamp: 2000, _outOfContext: true },
+      { role: "user", content: "Part 3", timestamp: 3000, _outOfContext: true },
+      { role: "assistant", content: "Part 4", timestamp: 4000 },
+      { role: "user", content: "Part 5", timestamp: 5000 },
+    ];
+    const candidates = [
+      {
+        memory: memory({
+          id: "same-mixed",
+          sourceChatId: "chat-1",
+          sourceMessageStartTimestamp: 1000,
+          sourceMessageEndTimestamp: 5000,
+          sourceMessageStartIndex: 0,
+          sourceMessageEndIndex: 4,
+        }),
+        score: 0.9,
+      },
+    ];
+
+    const filtered = filterMemoriesAlreadyInCurrentContext(candidates, "chat-1", messages, "test");
+
+    expect(filtered.map((candidate) => candidate.memory.id)).toEqual(["same-mixed"]);
+  });
+
+  it("skips same-chat memories when most of their source span is still visible", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Part 1", timestamp: 1000, _outOfContext: true },
+      { role: "assistant", content: "Part 2", timestamp: 2000 },
+      { role: "user", content: "Part 3", timestamp: 3000 },
+      { role: "assistant", content: "Part 4", timestamp: 4000 },
+      { role: "user", content: "Part 5", timestamp: 5000 },
+    ];
+    const candidates = [
+      {
+        memory: memory({
+          id: "same-mostly-visible",
+          sourceChatId: "chat-1",
+          sourceMessageStartTimestamp: 1000,
+          sourceMessageEndTimestamp: 5000,
+          sourceMessageStartIndex: 0,
+          sourceMessageEndIndex: 4,
+        }),
+        score: 0.9,
+      },
+    ];
+
+    const filtered = filterMemoriesAlreadyInCurrentContext(candidates, "chat-1", messages, "test");
+
+    expect(filtered).toEqual([]);
+  });
 });

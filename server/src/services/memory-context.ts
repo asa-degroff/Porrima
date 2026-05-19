@@ -164,26 +164,54 @@ export interface RetrievalResult {
   score: number;
 }
 
+const SAME_CHAT_VISIBLE_SOURCE_COVERAGE_THRESHOLD = 0.8;
+
 function messageTimestamp(message: ChatMessage): number | null {
   return typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
     ? message.timestamp
     : null;
 }
 
-function sourceSpanOverlapsCurrentContext(memory: RetrievalResult["memory"], recentMessages: ChatMessage[]): boolean {
+function isSourceMessage(message: ChatMessage): boolean {
+  return message.role !== "system";
+}
+
+function shouldSuppressSameChatMemory(memory: RetrievalResult["memory"], recentMessages: ChatMessage[]): boolean {
+  const indexStart = memory.sourceMessageStartIndex;
+  const indexEnd = memory.sourceMessageEndIndex;
+  if (indexStart !== undefined && indexEnd !== undefined) {
+    let total = 0;
+    let visible = 0;
+    for (let i = Math.max(0, indexStart); i <= indexEnd && i < recentMessages.length; i++) {
+      const message = recentMessages[i];
+      if (!message || !isSourceMessage(message)) continue;
+      total++;
+      if (!message._outOfContext) visible++;
+    }
+    if (total > 0) {
+      return visible / total >= SAME_CHAT_VISIBLE_SOURCE_COVERAGE_THRESHOLD;
+    }
+  }
+
   const start = memory.sourceMessageStartTimestamp;
   const end = memory.sourceMessageEndTimestamp;
   if (start === undefined || end === undefined) {
     return !recentMessages.some((message) => message._isCompactionSummary && !message._outOfContext);
   }
 
+  let total = 0;
+  let visible = 0;
   for (const message of recentMessages) {
-    if (message._outOfContext || message.role === "system") continue;
+    if (!isSourceMessage(message)) continue;
     const ts = messageTimestamp(message);
     if (ts === null) continue;
-    if (ts >= start && ts <= end) return true;
+    if (ts >= start && ts <= end) {
+      total++;
+      if (!message._outOfContext) visible++;
+    }
   }
-  return false;
+  if (total === 0) return false;
+  return visible / total >= SAME_CHAT_VISIBLE_SOURCE_COVERAGE_THRESHOLD;
 }
 
 export function filterMemoriesAlreadyInCurrentContext<T extends RetrievalResult>(
@@ -195,7 +223,7 @@ export function filterMemoriesAlreadyInCurrentContext<T extends RetrievalResult>
   if (!chatId) return memories;
   return memories.filter((result) => {
     if (!result.memory.sourceChatId || result.memory.sourceChatId !== chatId) return true;
-    return !sourceSpanOverlapsCurrentContext(result.memory, recentMessages);
+    return !shouldSuppressSameChatMemory(result.memory, recentMessages);
   });
 }
 
