@@ -46,6 +46,15 @@ interface TTSQueueItem {
   totalChunks: number;
 }
 
+function audioBlobUrlFromBase64(base64Audio: string, mimeType = "audio/wav"): string {
+  const binary = atob(base64Audio);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+}
+
 /**
  * Hook for managing TTS playback
  *
@@ -80,6 +89,8 @@ export function useTTS() {
   const chunkAudioActiveRef = useRef(false);
   const chunkStreamDoneRef = useRef(false);
   const liveAgentAudioActiveRef = useRef(false);
+  const liveAgentChunkIndexRef = useRef(0);
+  const objectAudioUrlsRef = useRef<Set<string>>(new Set());
   const onAudioEndedRef = useRef<() => void>(() => {
     setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false, isLoading: false }));
   });
@@ -181,18 +192,51 @@ export function useTTS() {
     return null;
   }, []);
 
+  const cleanupLiveAudio = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+    }
+
+    const currentAudioUrl = currentAudioUrlRef.current;
+    if (currentAudioUrl?.startsWith("blob:")) {
+      URL.revokeObjectURL(currentAudioUrl);
+      objectAudioUrlsRef.current.delete(currentAudioUrl);
+    }
+    currentAudioUrlRef.current = null;
+
+    for (const item of chunkQueueRef.current) {
+      if (item.audioUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(item.audioUrl);
+        objectAudioUrlsRef.current.delete(item.audioUrl);
+      }
+    }
+
+    for (const url of objectAudioUrlsRef.current) {
+      URL.revokeObjectURL(url);
+    }
+    objectAudioUrlsRef.current.clear();
+
+    chunkQueueRef.current = [];
+    chunkStreamDoneRef.current = true;
+    liveAgentAudioActiveRef.current = false;
+    liveAgentChunkIndexRef.current = 0;
+    chunkAudioActiveRef.current = false;
+    chunkModeRef.current = null;
+    loadingRef.current = false;
+  }, []);
+
   const resetPlayback = useCallback(() => {
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
-    chunkQueueRef.current = [];
-    chunkModeRef.current = null;
-    chunkAudioActiveRef.current = false;
-    chunkStreamDoneRef.current = false;
+    cleanupLiveAudio();
     onAudioEndedRef.current = () => {
       setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false, isLoading: false }));
     };
     streamingTTS.reset();
-  }, [streamingTTS]);
+  }, [cleanupLiveAudio, streamingTTS]);
 
   // --- URL MODE: Play queued chunk using legacy HTMLAudioElement ---
   const playQueuedChunk = useCallback(async (playId: number) => {
@@ -203,6 +247,12 @@ export function useTTS() {
       chunkAudioActiveRef.current = false;
       if (chunkStreamDoneRef.current) {
         chunkModeRef.current = null;
+        const currentAudioUrl = currentAudioUrlRef.current;
+        if (currentAudioUrl?.startsWith("blob:")) {
+          URL.revokeObjectURL(currentAudioUrl);
+          objectAudioUrlsRef.current.delete(currentAudioUrl);
+          currentAudioUrlRef.current = null;
+        }
         setPlaybackState((prev) => ({
           ...prev,
           isPlaying: false,
@@ -223,6 +273,12 @@ export function useTTS() {
 
     const audio = audioRef.current;
     if (!audio) return;
+
+    const previousAudioUrl = currentAudioUrlRef.current;
+    if (previousAudioUrl?.startsWith("blob:") && previousAudioUrl !== next.audioUrl) {
+      URL.revokeObjectURL(previousAudioUrl);
+      objectAudioUrlsRef.current.delete(previousAudioUrl);
+    }
 
     chunkAudioActiveRef.current = true;
     currentAudioUrlRef.current = next.audioUrl;
@@ -247,7 +303,10 @@ export function useTTS() {
         audio.src = next.audioUrl;
       });
 
-      if (playId !== playIdRef.current || chunkModeRef.current !== "url") return;
+      if (playId !== playIdRef.current || chunkModeRef.current !== "url") {
+        loadingRef.current = false;
+        return;
+      }
 
       loadingRef.current = false;
       setPlaybackState({
@@ -634,7 +693,8 @@ export function useTTS() {
   /**
    * Handle an incoming live audio chunk from agent streaming.
    * Called by the chat SSE handler when the agent emits audio_chunk events.
-   * Live agent chunks may not have index/totalChunks — those are only for manual TTS.
+   * Live agent chunks are complete WAV files. Play them as a small URL queue;
+   * appending arbitrary WAV files through MediaSource is unreliable in browsers.
    */
   const handleAgentAudioChunk = useCallback((chunk: {
     chunkId: string;
@@ -649,6 +709,9 @@ export function useTTS() {
       playIdRef.current++;
       resetPlayback();
       liveAgentAudioActiveRef.current = true;
+      liveAgentChunkIndexRef.current = 0;
+      chunkModeRef.current = "url";
+      chunkStreamDoneRef.current = false;
       setPlaybackState((prev) => ({
         ...prev,
         isPlaying: false,
@@ -659,30 +722,34 @@ export function useTTS() {
         audioUrl: null,
         currentChunk: 0,
         totalChunks: 0,
-        mode: "chunked-stream" as const,
+        mode: "chunked-url" as const,
       }));
     }
 
-    streamingTTS.appendChunk(chunk.data);
-    setPlaybackState(prev => ({
-      ...prev,
-      isPlaying: true,
-      isPaused: false,
-      isLoading: false,
-      currentTime: 0,
-      duration: chunk.duration ?? prev.duration,
-      audioUrl: null,
-      currentChunk: chunk.index !== undefined ? chunk.index + 1 : prev.currentChunk,
-      totalChunks: chunk.totalChunks ?? prev.totalChunks,
-      mode: "chunked-stream" as const,
-    }));
-  }, [resetPlayback, streamingTTS]);
+    const audioUrl = audioBlobUrlFromBase64(chunk.data, chunk.mimeType || "audio/wav");
+    objectAudioUrlsRef.current.add(audioUrl);
+    const index = chunk.index ?? liveAgentChunkIndexRef.current++;
+    chunkQueueRef.current.push({
+      audioUrl,
+      duration: chunk.duration ?? 0,
+      index,
+      totalChunks: chunk.totalChunks ?? 0,
+    });
+
+    if (!chunkAudioActiveRef.current) {
+      void playQueuedChunk(playIdRef.current);
+    }
+  }, [playQueuedChunk, resetPlayback]);
 
   const handleAgentAudioDone = useCallback(() => {
+    chunkStreamDoneRef.current = true;
     liveAgentAudioActiveRef.current = false;
-    streamingTTS.endStream();
     setPlaybackState((prev) => ({ ...prev, isLoading: false }));
-  }, [streamingTTS]);
+
+    if (!chunkAudioActiveRef.current && chunkQueueRef.current.length === 0) {
+      void playQueuedChunk(playIdRef.current);
+    }
+  }, [playQueuedChunk]);
 
   return {
     settings,
@@ -697,5 +764,6 @@ export function useTTS() {
     checkAvailability,
     handleAgentAudioChunk,
     handleAgentAudioDone,
+    cleanupLiveAudio,
   };
 }

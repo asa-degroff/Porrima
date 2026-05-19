@@ -78,7 +78,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
   const selectChatRef = useRef<((id: string) => Promise<void>) | null>(null);
-  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, handleAgentAudioChunk, handleAgentAudioDone } = useTTS();
+  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio } = useTTS();
   const {
     userNotebooks,
     agentNotebooks,
@@ -417,6 +417,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       window.removeEventListener("agent-audio-done", doneHandler);
     };
   }, [activeChatId, ttsSettings.enabled, handleAgentAudioChunk, handleAgentAudioDone]);
+
+  useEffect(() => {
+    return () => {
+      cleanupLiveAudio();
+    };
+  }, [activeChatId, cleanupLiveAudio]);
 
   // Handle auto-read for newly completed assistant messages.
   const autoReadChatIdRef = useRef<string | null>(null);
