@@ -428,6 +428,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const autoReadChatIdRef = useRef<string | null>(null);
   const lastAutoReadMessageRef = useRef<string>("");
   const autoReadAwaitingInitialMessagesRef = useRef(false);
+  const autoReadPendingTurnRef = useRef(false);
+  const autoReadSawStreamingRef = useRef(false);
+  const autoReadStreamingCompletedRef = useRef(false);
 
   const getAutoReadMessageId = useCallback((message: typeof messages[number]) => {
     let hash = 0;
@@ -472,13 +475,29 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     if (autoReadChatIdRef.current !== activeChatId) {
       autoReadChatIdRef.current = activeChatId;
       autoReadAwaitingInitialMessagesRef.current = true;
+      autoReadPendingTurnRef.current = false;
+      autoReadSawStreamingRef.current = false;
+      autoReadStreamingCompletedRef.current = false;
       lastAutoReadMessageRef.current = lastMsgKey;
       return;
     }
 
+    if (streaming) {
+      if (autoReadPendingTurnRef.current) {
+        autoReadSawStreamingRef.current = true;
+      }
+      autoReadStreamingCompletedRef.current = false;
+      return;
+    }
+
+    if (autoReadSawStreamingRef.current) {
+      autoReadSawStreamingRef.current = false;
+      autoReadStreamingCompletedRef.current = true;
+    }
+
     if (!lastMsg || lastAutoReadMessageRef.current === lastMsgKey) return;
 
-    if (autoReadAwaitingInitialMessagesRef.current) {
+    if (autoReadAwaitingInitialMessagesRef.current && !autoReadStreamingCompletedRef.current) {
       autoReadAwaitingInitialMessagesRef.current = false;
       lastAutoReadMessageRef.current = lastMsgKey;
       if (activeChatId && lastMsg.role === "assistant") {
@@ -487,13 +506,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       return;
     }
 
-    // While the assistant is streaming, the last message content changes many
-    // times. Wait until the turn finishes so auto-read speaks the final text.
-    if (streaming) return;
-
     lastAutoReadMessageRef.current = lastMsgKey;
 
     if (
+      !autoReadPendingTurnRef.current ||
+      !autoReadStreamingCompletedRef.current ||
       lastMsg.role !== "assistant" ||
       !lastMsg.content.trim() ||
       !ttsSettings.enabled ||
@@ -510,12 +527,18 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       if (lastMsg.role === "user") {
         liveTtsAudioSeenChatRef.current = null;
       }
+      if (lastMsg.role === "assistant") {
+        autoReadPendingTurnRef.current = false;
+      }
+      autoReadStreamingCompletedRef.current = false;
       return;
     }
 
     if (activeChatId) {
       markAutoReadMessage(activeChatId, lastMsg);
     }
+    autoReadPendingTurnRef.current = false;
+    autoReadStreamingCompletedRef.current = false;
     void playTts(lastMsg.content);
   }, [
     activeChatId,
@@ -774,6 +797,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleSend = useCallback(
     (text: string, images?: import("./types").ImageAttachment[]) => {
       if (activeChatId) setLastActiveChatId(activeChatId);
+      autoReadPendingTurnRef.current = true;
       send(text, images);
     },
     [activeChatId, send]
@@ -782,6 +806,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleEditMessage = useCallback(
     (index: number, newText: string, images?: import("./types").ImageAttachment[]) => {
       if (activeChatId) setLastActiveChatId(activeChatId);
+      autoReadPendingTurnRef.current = true;
       editMessage(index, newText, images);
     },
     [activeChatId, editMessage]
@@ -790,6 +815,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const handleRetryMessage = useCallback(
     (index: number) => {
       if (activeChatId) setLastActiveChatId(activeChatId);
+      autoReadPendingTurnRef.current = true;
       retryMessage(index);
     },
     [activeChatId, retryMessage]
