@@ -515,6 +515,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       !lastMsg.content.trim() ||
       !ttsSettings.enabled ||
       !ttsSettings.autoReadEnabled ||
+      lastMsg._isAutomationMessage ||
       (activeChatId ? hasAutoReadMessage(activeChatId, lastMsg) : false) ||
       liveTtsAudioSeenChatRef.current === activeChatId ||
       playbackState.isPlaying ||
