@@ -20,6 +20,8 @@ const DEFAULT_SETTINGS: TTSSettings = {
   streamingChunkSize: 50,
   streamingBoundaryTier: "clause",
   supertonicPitchSemitones: 0,
+  kokoroPitchShiftProcessor: "resample",
+  supertonicPitchShiftProcessor: "rubberband",
   supertonicLanguage: "en",
   supertonicSteps: 8,
   supertonicMaxChunkLength: 300,
@@ -422,6 +424,8 @@ export function useTTS() {
         supertonicMaxChunkLength: settings.supertonicMaxChunkLength,
         supertonicSilenceDuration: settings.supertonicSilenceDuration,
         supertonicTrailingSilence: settings.supertonicTrailingSilence,
+        kokoroPitchShiftProcessor: settings.kokoroPitchShiftProcessor,
+        supertonicPitchShiftProcessor: settings.supertonicPitchShiftProcessor,
       };
 
       if (streamMode === "data") {
@@ -510,9 +514,11 @@ export function useTTS() {
     readSseStream,
     resetPlayback,
     settings.backend,
+    settings.kokoroPitchShiftProcessor,
     settings.pitch,
     settings.speed,
     settings.supertonicPitchSemitones,
+    settings.supertonicPitchShiftProcessor,
     settings.supertonicLanguage,
     settings.supertonicMaxChunkLength,
     settings.supertonicSilenceDuration,
@@ -569,6 +575,8 @@ export function useTTS() {
             supertonicMaxChunkLength: settings.supertonicMaxChunkLength,
             supertonicSilenceDuration: settings.supertonicSilenceDuration,
             supertonicTrailingSilence: settings.supertonicTrailingSilence,
+            kokoroPitchShiftProcessor: settings.kokoroPitchShiftProcessor,
+            supertonicPitchShiftProcessor: settings.supertonicPitchShiftProcessor,
           }),
         });
 
@@ -630,7 +638,9 @@ export function useTTS() {
       settings.speed,
       settings.pitch,
       settings.backend,
+      settings.kokoroPitchShiftProcessor,
       settings.supertonicPitchSemitones,
+      settings.supertonicPitchShiftProcessor,
       settings.supertonicLanguage,
       settings.supertonicSteps,
       settings.supertonicMaxChunkLength,

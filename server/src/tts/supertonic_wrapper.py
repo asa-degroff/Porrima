@@ -43,7 +43,7 @@ def main():
     parser.add_argument("--pitch-semitones", type=float, default=None, help="Pitch shift in semitones")
     parser.add_argument(
         "--pitch-processor",
-        default=os.environ.get("SUPERTONIC_TTS_PITCH_PROCESSOR", "resample"),
+        default=os.environ.get("SUPERTONIC_TTS_PITCH_PROCESSOR", "rubberband"),
         choices=("resample", "rubberband"),
         help="Pitch shift processor",
     )
@@ -113,7 +113,7 @@ def main():
                     "-i",
                     "pipe:0",
                     "-filter:a",
-                    f"rubberband={filter_args}",
+                    pitch_filter,
                     "-f",
                     "wav",
                     "pipe:1",

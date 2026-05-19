@@ -18,11 +18,12 @@ if (!existsSync(CACHE_DIR)) {
 
 function generateCacheKey(text: string, settings: TTSSettings): string {
   const input = [
-    "supertonic-3-v7-resample-pitch",
+    "supertonic-3-v8-pitchproc",
     text,
     settings.voice,
     settings.speed,
     settings.supertonicPitchSemitones,
+    settings.supertonicPitchShiftProcessor,
     settings.supertonicLanguage,
     settings.supertonicSteps,
     settings.supertonicMaxChunkLength,
@@ -103,6 +104,8 @@ async function runSupertonicTTS(
       settings.speed.toString(),
       "--pitch-semitones",
       settings.supertonicPitchSemitones.toString(),
+      "--pitch-processor",
+      settings.supertonicPitchShiftProcessor ?? "rubberband",
       "--lang",
       settings.supertonicLanguage,
       "--steps",

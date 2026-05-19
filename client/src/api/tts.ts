@@ -12,6 +12,8 @@ export interface TTSGenerateRequest {
   supertonicMaxChunkLength?: number;
   supertonicSilenceDuration?: number;
   supertonicTrailingSilence?: number;
+  kokoroPitchShiftProcessor?: "resample" | "rubberband";
+  supertonicPitchShiftProcessor?: "resample" | "rubberband";
 }
 
 export interface TTSGenerateResponse {

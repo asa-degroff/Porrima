@@ -22,7 +22,7 @@ if (!existsSync(CACHE_DIR)) {
  * Generate a cache key from text and settings
  */
 function generateCacheKey(text: string, settings: TTSSettings): string {
-  const input = `${settings.backend}|${text}|${settings.voice}|${settings.speed}|${settings.pitch}`;
+  const input = `${settings.backend}|${text}|${settings.voice}|${settings.speed}|${settings.pitch}|${settings.kokoroPitchShiftProcessor}`;
   return createHash("sha256").update(input).digest("hex");
 }
 
@@ -71,7 +71,8 @@ async function runKokoro(
   text: string,
   voice: string,
   speed: number,
-  pitch: number
+  pitch: number,
+  pitchProcessor: string
 ): Promise<{ audio: Buffer; duration: number; sampleRate: number }> {
   const { pythonPath } = await resolveTtsPython("kokoro");
 
@@ -86,6 +87,8 @@ async function runKokoro(
       speed.toString(),
       "--pitch",
       pitch.toString(),
+      "--pitch-processor",
+      pitchProcessor,
     ];
 
     const proc = spawn(pythonPath, args, {
@@ -190,7 +193,7 @@ export async function generateTTS(request: TTSGenerateRequest, settings: TTSSett
     return result; // Supertonic handles its own caching
   } else {
     // Kokoro backend
-    const result = await runKokoro(cleanText, settings.voice, settings.speed, settings.pitch);
+    const result = await runKokoro(cleanText, settings.voice, settings.speed, settings.pitch, settings.kokoroPitchShiftProcessor ?? "resample");
     audio = result.audio;
     duration = result.duration;
     

@@ -23,6 +23,8 @@ export interface TTSSettings {
   streamingChunkSize: number; // 30-80 tokens per chunk
   streamingBoundaryTier: "clause" | "sentence";
   supertonicPitchSemitones: number;
+  kokoroPitchShiftProcessor: "resample" | "rubberband";
+  supertonicPitchShiftProcessor: "resample" | "rubberband";
   supertonicLanguage: string;
   supertonicSteps: number;
   supertonicMaxChunkLength: number;
@@ -42,6 +44,8 @@ export interface TTSGenerateRequest {
   supertonicMaxChunkLength?: number;
   supertonicSilenceDuration?: number;
   supertonicTrailingSilence?: number;
+  kokoroPitchShiftProcessor?: "resample" | "rubberband";
+  supertonicPitchShiftProcessor?: "resample" | "rubberband";
 }
 
 export interface TTSGenerateResponse {
@@ -74,6 +78,8 @@ export const DEFAULT_TTS_SETTINGS: TTSSettings = {
   streamingChunkSize: 50,
   streamingBoundaryTier: "clause",
   supertonicPitchSemitones: 0,
+  kokoroPitchShiftProcessor: "resample",
+  supertonicPitchShiftProcessor: "rubberband",
   supertonicLanguage: "en",
   supertonicSteps: 8,
   supertonicMaxChunkLength: 300,

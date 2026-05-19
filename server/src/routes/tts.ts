@@ -63,6 +63,10 @@ function isTTSTextMode(value: unknown): value is TTSTextMode {
   return typeof value === "string" && ["minimal", "standard", "stripped"].includes(value);
 }
 
+function isPitchShiftProcessor(value: unknown): value is "resample" | "rubberband" {
+  return typeof value === "string" && ["resample", "rubberband"].includes(value);
+}
+
 function sanitizeSupertonicLanguage(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_TTS_SETTINGS.supertonicLanguage;
   const trimmed = value.trim().toLowerCase();
@@ -82,6 +86,10 @@ function pitchMultiplierToSemitones(pitch: unknown): number {
 }
 
 function normalizeTTSSettings(settings: Partial<TTSSettings>): TTSSettings {
+  const {
+    pitchShiftProcessor: legacyPitchShiftProcessor,
+    ...settingsWithoutLegacyPitchProcessor
+  } = settings as Partial<TTSSettings> & { pitchShiftProcessor?: unknown };
   const backend = isTTSBackend(settings.backend) ? settings.backend : DEFAULT_TTS_SETTINGS.backend;
   const voicesByBackend = {
     ...DEFAULT_VOICE_BY_BACKEND,
@@ -96,7 +104,7 @@ function normalizeTTSSettings(settings: Partial<TTSSettings>): TTSSettings {
 
   return {
     ...DEFAULT_TTS_SETTINGS,
-    ...settings,
+    ...settingsWithoutLegacyPitchProcessor,
     backend,
     ttsTextMode,
     voicesByBackend,
@@ -112,6 +120,16 @@ function normalizeTTSSettings(settings: Partial<TTSSettings>): TTSSettings {
     supertonicMaxChunkLength: Math.round(sanitizeNumber(settings.supertonicMaxChunkLength, DEFAULT_TTS_SETTINGS.supertonicMaxChunkLength, 100, 600)),
     supertonicSilenceDuration: sanitizeNumber(settings.supertonicSilenceDuration, DEFAULT_TTS_SETTINGS.supertonicSilenceDuration, 0, 1),
     supertonicTrailingSilence: sanitizeNumber(settings.supertonicTrailingSilence, DEFAULT_TTS_SETTINGS.supertonicTrailingSilence, 0, 1),
+    kokoroPitchShiftProcessor: isPitchShiftProcessor(settings.kokoroPitchShiftProcessor)
+      ? settings.kokoroPitchShiftProcessor
+      : isPitchShiftProcessor(legacyPitchShiftProcessor)
+        ? legacyPitchShiftProcessor
+        : DEFAULT_TTS_SETTINGS.kokoroPitchShiftProcessor,
+    supertonicPitchShiftProcessor: isPitchShiftProcessor(settings.supertonicPitchShiftProcessor)
+      ? settings.supertonicPitchShiftProcessor
+      : isPitchShiftProcessor(legacyPitchShiftProcessor)
+        ? legacyPitchShiftProcessor
+        : DEFAULT_TTS_SETTINGS.supertonicPitchShiftProcessor,
   };
 }
 
@@ -192,6 +210,9 @@ router.post("/settings", async (req, res) => {
       supertonicMaxChunkLength,
       supertonicSilenceDuration,
       supertonicTrailingSilence,
+      kokoroPitchShiftProcessor,
+      supertonicPitchShiftProcessor,
+      pitchShiftProcessor,
     } = req.body;
 
     if (speed !== undefined) {
@@ -322,6 +343,31 @@ router.post("/settings", async (req, res) => {
       userSettings.supertonicTrailingSilence = supertonicTrailingSilence;
     }
 
+    if (kokoroPitchShiftProcessor !== undefined) {
+      if (!isPitchShiftProcessor(kokoroPitchShiftProcessor)) {
+        return res.status(400).json({ error: "kokoroPitchShiftProcessor must be 'resample' or 'rubberband'" });
+      }
+      userSettings.kokoroPitchShiftProcessor = kokoroPitchShiftProcessor;
+    }
+
+    if (supertonicPitchShiftProcessor !== undefined) {
+      if (!isPitchShiftProcessor(supertonicPitchShiftProcessor)) {
+        return res.status(400).json({ error: "supertonicPitchShiftProcessor must be 'resample' or 'rubberband'" });
+      }
+      userSettings.supertonicPitchShiftProcessor = supertonicPitchShiftProcessor;
+    }
+
+    if (pitchShiftProcessor !== undefined) {
+      if (!isPitchShiftProcessor(pitchShiftProcessor)) {
+        return res.status(400).json({ error: "pitchShiftProcessor must be 'resample' or 'rubberband'" });
+      }
+      if (userSettings.backend === "supertonic-3") {
+        userSettings.supertonicPitchShiftProcessor = pitchShiftProcessor;
+      } else if (userSettings.backend === "kokoro") {
+        userSettings.kokoroPitchShiftProcessor = pitchShiftProcessor;
+      }
+    }
+
     await saveTTSSettings();
     res.json(userSettings);
   } catch (error) {
@@ -348,10 +394,18 @@ router.post("/generate", async (req, res) => {
       supertonicMaxChunkLength,
       supertonicSilenceDuration,
       supertonicTrailingSilence,
+      kokoroPitchShiftProcessor,
+      supertonicPitchShiftProcessor,
     } = req.body;
 
     if (!text || typeof text !== "string" || !text.trim()) {
       return res.status(400).json({ error: "Text is required" });
+    }
+    if (kokoroPitchShiftProcessor !== undefined && !isPitchShiftProcessor(kokoroPitchShiftProcessor)) {
+      return res.status(400).json({ error: "kokoroPitchShiftProcessor must be 'resample' or 'rubberband'" });
+    }
+    if (supertonicPitchShiftProcessor !== undefined && !isPitchShiftProcessor(supertonicPitchShiftProcessor)) {
+      return res.status(400).json({ error: "supertonicPitchShiftProcessor must be 'resample' or 'rubberband'" });
     }
 
     // Build effective settings: request body overrides > server-side user settings > defaults
@@ -367,6 +421,8 @@ router.post("/generate", async (req, res) => {
       ...(supertonicMaxChunkLength !== undefined && { supertonicMaxChunkLength }),
       ...(supertonicSilenceDuration !== undefined && { supertonicSilenceDuration }),
       ...(supertonicTrailingSilence !== undefined && { supertonicTrailingSilence }),
+      ...(kokoroPitchShiftProcessor !== undefined && { kokoroPitchShiftProcessor }),
+      ...(supertonicPitchShiftProcessor !== undefined && { supertonicPitchShiftProcessor }),
     };
 
     const response = await generateTTS({
@@ -407,10 +463,18 @@ router.post("/generate-stream", async (req, res) => {
       supertonicMaxChunkLength,
       supertonicSilenceDuration,
       supertonicTrailingSilence,
+      kokoroPitchShiftProcessor,
+      supertonicPitchShiftProcessor,
     } = req.body;
 
     if (!text || typeof text !== "string" || !text.trim()) {
       return res.status(400).json({ error: "Text is required" });
+    }
+    if (kokoroPitchShiftProcessor !== undefined && !isPitchShiftProcessor(kokoroPitchShiftProcessor)) {
+      return res.status(400).json({ error: "kokoroPitchShiftProcessor must be 'resample' or 'rubberband'" });
+    }
+    if (supertonicPitchShiftProcessor !== undefined && !isPitchShiftProcessor(supertonicPitchShiftProcessor)) {
+      return res.status(400).json({ error: "supertonicPitchShiftProcessor must be 'resample' or 'rubberband'" });
     }
 
     const useInlineAudio = streamMode === "data";
@@ -427,6 +491,8 @@ router.post("/generate-stream", async (req, res) => {
       ...(supertonicMaxChunkLength !== undefined && { supertonicMaxChunkLength }),
       ...(supertonicSilenceDuration !== undefined && { supertonicSilenceDuration }),
       ...(supertonicTrailingSilence !== undefined && { supertonicTrailingSilence }),
+      ...(kokoroPitchShiftProcessor !== undefined && { kokoroPitchShiftProcessor }),
+      ...(supertonicPitchShiftProcessor !== undefined && { supertonicPitchShiftProcessor }),
     };
 
     if (!isTTSBackend(effectiveSettings.backend)) {

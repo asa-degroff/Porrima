@@ -5567,6 +5567,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                             supertonicMaxChunkLength: ttsSettings.supertonicMaxChunkLength,
                             supertonicSilenceDuration: ttsSettings.supertonicSilenceDuration,
                             supertonicTrailingSilence: ttsSettings.supertonicTrailingSilence,
+                            kokoroPitchShiftProcessor: ttsSettings.kokoroPitchShiftProcessor,
+                            supertonicPitchShiftProcessor: ttsSettings.supertonicPitchShiftProcessor,
                           }),
                         });
                         if (res.ok) {
@@ -5656,25 +5658,53 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 </div>
 
                 {ttsSettings.backend === "kokoro" && (
-                  <div className="space-y-1">
-                    <label className="block text-sm text-white/50">Pitch: {ttsSettings.pitch.toFixed(2)}x</label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="1"
-                      value={kokoroPitchToSliderValue(ttsSettings.pitch)}
-                      onChange={(e) => {
-                        updateTtsSliderSetting("pitch", kokoroSliderValueToPitch(parseFloat(e.target.value)));
-                      }}
-                      onPointerUp={(e) => void saveTtsSliderSetting("pitch", kokoroSliderValueToPitch(parseFloat(e.currentTarget.value)))}
-                      onBlur={(e) => void saveTtsSliderSetting("pitch", kokoroSliderValueToPitch(parseFloat(e.currentTarget.value)))}
-                      className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
-                    />
-                    <div className="flex justify-between text-xs text-white/30">
-                      <span>0.5x</span>
-                      <span>1.0x</span>
-                      <span>2.0x</span>
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <label className="block text-sm text-white/50">Pitch Shift Method</label>
+                      <div className="flex rounded-lg overflow-hidden border border-white/10">
+                        {(["resample", "rubberband"] as const).map((method) => (
+                          <button
+                            key={method}
+                            onClick={async () => {
+                              const updated = await updateTTSSettings({ kokoroPitchShiftProcessor: method });
+                              applyTtsSettingsUpdate(updated);
+                            }}
+                            className={`flex-1 px-3 py-1.5 text-xs font-medium transition-all ${
+                              ttsSettings.kokoroPitchShiftProcessor === method
+                                ? "bg-purple-500/20 text-purple-300"
+                                : "text-white/40 hover:text-white/70 hover:bg-white/5"
+                            }`}
+                          >
+                            {method === "resample" ? "Resample" : "Rubberband"}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-xs text-white/30">
+                        {ttsSettings.kokoroPitchShiftProcessor === "resample"
+                          ? "Resampling changes timbre with pitch - brighter when shifted up"
+                          : "Rubberband preserves formants - natural vocal quality at any pitch"}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-sm text-white/50">Pitch: {ttsSettings.pitch.toFixed(2)}x</label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={kokoroPitchToSliderValue(ttsSettings.pitch)}
+                        onChange={(e) => {
+                          updateTtsSliderSetting("pitch", kokoroSliderValueToPitch(parseFloat(e.target.value)));
+                        }}
+                        onPointerUp={(e) => void saveTtsSliderSetting("pitch", kokoroSliderValueToPitch(parseFloat(e.currentTarget.value)))}
+                        onBlur={(e) => void saveTtsSliderSetting("pitch", kokoroSliderValueToPitch(parseFloat(e.currentTarget.value)))}
+                        className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+                      />
+                      <div className="flex justify-between text-xs text-white/30">
+                        <span>0.5x</span>
+                        <span>1.0x</span>
+                        <span>2.0x</span>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -5716,6 +5746,32 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                       </Dropdown>
                     </div>
 
+                    <div className="space-y-1">
+                      <label className="block text-sm text-white/50">Pitch Shift Method</label>
+                      <div className="flex rounded-lg overflow-hidden border border-white/10">
+                        {(["resample", "rubberband"] as const).map((method) => (
+                          <button
+                            key={method}
+                            onClick={async () => {
+                              const updated = await updateTTSSettings({ supertonicPitchShiftProcessor: method });
+                              applyTtsSettingsUpdate(updated);
+                            }}
+                            className={`flex-1 px-3 py-1.5 text-xs font-medium transition-all ${
+                              ttsSettings.supertonicPitchShiftProcessor === method
+                                ? "bg-purple-500/20 text-purple-300"
+                                : "text-white/40 hover:text-white/70 hover:bg-white/5"
+                            }`}
+                          >
+                            {method === "resample" ? "Resample" : "Rubberband"}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-xs text-white/30">
+                        {ttsSettings.supertonicPitchShiftProcessor === "resample"
+                          ? "Resampling changes timbre with pitch - brighter when shifted up"
+                          : "Rubberband preserves formants - natural vocal quality at any pitch"}
+                      </p>
+                    </div>
                     <div className="space-y-1">
                       <label className="block text-sm text-white/50">
                         Pitch Shift: {ttsSettings.supertonicPitchSemitones >= 0 ? "+" : ""}{ttsSettings.supertonicPitchSemitones.toFixed(2)} st

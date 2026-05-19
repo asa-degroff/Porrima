@@ -204,7 +204,7 @@ class TTSWorker {
       voice: params.settings.voice || "M1",
       speed: params.settings.speed ?? 1.05,
       pitchSemitones: params.settings.supertonicPitchSemitones ?? 0,
-      pitchProcessor: "resample",
+      pitchProcessor: params.settings.supertonicPitchShiftProcessor ?? "rubberband",
       lang: params.settings.supertonicLanguage ?? "en",
       steps: params.settings.supertonicSteps ?? 8,
       maxChunkLength: params.settings.supertonicMaxChunkLength ?? 300,

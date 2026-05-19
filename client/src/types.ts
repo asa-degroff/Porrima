@@ -565,6 +565,8 @@ export interface TTSSettings {
   streamingChunkSize: number;
   streamingBoundaryTier: "clause" | "sentence";
   supertonicPitchSemitones: number;
+  kokoroPitchShiftProcessor: "resample" | "rubberband";
+  supertonicPitchShiftProcessor: "resample" | "rubberband";
   supertonicLanguage: string;
   supertonicSteps: number;
   supertonicMaxChunkLength: number;

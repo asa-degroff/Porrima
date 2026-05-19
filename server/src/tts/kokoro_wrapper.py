@@ -5,11 +5,11 @@ Generates WAV audio from text and outputs to stdout.
 """
 
 import argparse
+import io
 import json
+import subprocess
 import sys
 import wave
-import io
-import subprocess
 import numpy as np
 from kokoro import KPipeline
 
@@ -20,6 +20,8 @@ def main():
     parser.add_argument("--voice", default="af_heart", help="Voice ID (default: af_heart)")
     parser.add_argument("--speed", type=float, default=1.0, help="Speed multiplier (default: 1.0)")
     parser.add_argument("--pitch", type=float, default=1.0, help="Pitch multiplier (default: 1.0)")
+    parser.add_argument("--pitch-processor", default="resample", choices=("resample", "rubberband"),
+                        help="Pitch shift processor (default: resample)")
     parser.add_argument("--lang", default="a", help="Language code: 'a'=American, 'b'=British (default: a)")
     args = parser.parse_args()
 
@@ -123,21 +125,41 @@ def main():
             }
             print(json.dumps(metadata), file=sys.stderr)
         else:
-            # Use ffmpeg for post-processing. asetrate changes pitch, aresample
-            # restores the sample rate, and atempo compensates duration/speed.
-            # We use a subprocess pipe to feed the native audio into ffmpeg
+            # Use ffmpeg for post-processing.
+            # We use a subprocess pipe to feed the native audio into ffmpeg.
             # NOTE: We do NOT apply fade in ffmpeg - we'll do it in numpy after processing
-            # because atempo changes the sample count and ffmpeg's afade timing is unreliable
+            # because atempo changes the sample count and ffmpeg's afade timing is unreliable.
+            #
+            # Two pitch shift processors:
+            #   "resample" - asetrate + aresample + atempo (changes timbre with pitch)
+            #   "rubberband" - rubberband filter with formant preservation + atempo for speed
             filters = []
-            if abs(args.pitch - 1.0) >= 0.001:
-                shifted_rate = max(1000, int(round(sample_rate * args.pitch)))
-                filters.extend([
-                    f"asetrate={shifted_rate}",
-                    f"aresample={sample_rate}:resampler=soxr:precision=28",
+            pitch_changed = abs(args.pitch - 1.0) >= 0.001
+
+            if args.pitch_processor == "rubberband" and pitch_changed:
+                # Rubberband: pitch and speed are independent.
+                # rubberband handles pitch with formant preservation.
+                # atempo handles speed separately.
+                pitch_ratio = args.pitch
+                filter_args = ":".join([
+                    f"pitch={pitch_ratio:.8f}",
+                    "pitchq=quality",
+                    "formant=preserved",
                 ])
-                tempo = args.speed / args.pitch
-            else:
+                filters.append(f"rubberband={filter_args}")
                 tempo = args.speed
+            else:
+                # Resample path: asetrate changes pitch, aresample restores sample rate,
+                # atempo compensates both speed and pitch-induced duration change.
+                if pitch_changed:
+                    shifted_rate = max(1000, int(round(sample_rate * args.pitch)))
+                    filters.extend([
+                        f"asetrate={shifted_rate}",
+                        f"aresample={sample_rate}:resampler=soxr:precision=28",
+                    ])
+                    tempo = args.speed / args.pitch
+                else:
+                    tempo = args.speed
 
             filters.extend(atempo_chain(tempo))
             
