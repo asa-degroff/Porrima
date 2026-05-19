@@ -165,11 +165,58 @@ export interface RetrievalResult {
 }
 
 const SAME_CHAT_VISIBLE_SOURCE_COVERAGE_THRESHOLD = 0.8;
+const MEMORY_SEARCH_QUERY_CHARS = 6000;
+const MEMORY_RERANK_QUERY_CHARS = 900;
+const MEMORY_RERANK_MESSAGE_CHARS = 450;
+const MEMORY_RERANK_CANDIDATE_POOL = 24;
+const MEMORY_RERANK_DOCUMENT_LIMIT = 16;
+const MEMORY_RERANK_TOP_N = 15;
 
 function messageTimestamp(message: ChatMessage): number | null {
   return typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
     ? message.timestamp
     : null;
+}
+
+function clampText(text: string, maxChars: number): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  return `${trimmed.slice(0, maxChars).trimEnd()}\n[truncated]`;
+}
+
+function isSyntheticUserContext(message: ChatMessage): boolean {
+  if (message.role !== "user") return false;
+  const content = message.content.trim();
+  return (
+    content.startsWith("[System:") ||
+    content.startsWith("Key context from this conversation") ||
+    content.includes("\nKey context from this conversation")
+  );
+}
+
+function recentRealUserMessages(recentMessages: ChatMessage[], limit: number): ChatMessage[] {
+  return recentMessages
+    .filter((m) => m.role === "user" && !m._outOfContext && !m._isCompactionSummary && !isSyntheticUserContext(m))
+    .slice(-limit);
+}
+
+export function buildMemoryRerankQuery(recentMessages: ChatMessage[], maxChars = MEMORY_RERANK_QUERY_CHARS): string {
+  const messages = recentRealUserMessages(recentMessages, 3);
+  const parts: string[] = [];
+  let used = 0;
+
+  for (const message of [...messages].reverse()) {
+    const text = clampText(message.content, MEMORY_RERANK_MESSAGE_CHARS).replace(/\s+/g, " ");
+    if (!text) continue;
+    const separator = parts.length > 0 ? 2 : 0;
+    if (used + separator + text.length > maxChars && parts.length > 0) break;
+    parts.unshift(text);
+    used += separator + text.length;
+  }
+
+  const query = parts.join("\n\n").trim();
+  if (query.length <= maxChars) return query;
+  return query.slice(query.length - maxChars).trimStart();
 }
 
 function isSourceMessage(message: ChatMessage): boolean {
@@ -251,22 +298,25 @@ async function retrieveMemories(
   chatType?: string,
   projectId?: string,
 ): Promise<RetrievalResult[]> {
-  const userMessages = recentMessages
-    .filter((m) => m.role === "user")
-    .slice(-3)
+  const userMessages = recentRealUserMessages(recentMessages, 3)
     .map((m) => m.content)
-    .join("\n");
+    .join("\n")
+    .trim();
 
   if (!userMessages) return [];
 
-  const queryEmbedding = await embed(userMessages);
+  const searchQuery = clampText(userMessages, MEMORY_SEARCH_QUERY_CHARS);
+  const rerankQuery = buildMemoryRerankQuery(recentMessages);
+  if (!rerankQuery) return [];
+
+  const queryEmbedding = await embed(searchQuery);
   const crossProjectMultiplier = await getConfiguredCrossProjectScoreMultiplier();
   const globalProjectMultiplier = await getConfiguredGlobalProjectScoreMultiplier();
   const searchResults = await searchMemories(
     queryEmbedding,
     30,
     new Date(),
-    userMessages,
+    searchQuery,
     undefined,
     projectId
       ? { projectId, crossProjectScoreMultiplier: crossProjectMultiplier }
@@ -281,15 +331,21 @@ async function retrieveMemories(
   if (results.length === 0) return [];
 
   const instruction = RERANK_INSTRUCTIONS[chatType || "agent"];
+  const rerankCandidates = mmrRerank(
+    sortByAdjustedScore(results).slice(0, MEMORY_RERANK_CANDIDATE_POOL),
+    queryEmbedding,
+    MEMORY_RERANK_DOCUMENT_LIMIT,
+    0.65,
+  );
   const rerankOutput: RerankOutput = await rerank(
-    userMessages,
-    results.map((r) => r.memory.text),
+    rerankQuery,
+    rerankCandidates.map((r) => r.memory.text),
     instruction,
-    25
+    Math.min(MEMORY_RERANK_TOP_N, rerankCandidates.length)
   );
 
   const rerankedResults = rerankOutput.results.map(({ index, score }) => ({
-    ...results[index],
+    ...rerankCandidates[index],
     score,
   }));
 
@@ -386,8 +442,8 @@ async function retrieveMemories(
       scoreMedian: rerankOutput.scoreMedian,
       chatType: chatType || "agent",
       source: "memory-context",
-      query: `Instruct: ${instruction}\nQuery: ${userMessages}`,
-      documents: results.map((r) => r.memory.text),
+      query: `Instruct: ${instruction}\nQuery: ${rerankQuery}`,
+      documents: rerankCandidates.map((r) => r.memory.text),
       selectedResults: finalMemories.map((r) => ({
         text: r.memory.text,
         score: r.score,

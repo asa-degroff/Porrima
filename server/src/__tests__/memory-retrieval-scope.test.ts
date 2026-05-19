@@ -6,7 +6,7 @@ import {
   normalizeCrossProjectScoreMultiplier,
   sortByAdjustedScore,
 } from "../services/memory-retrieval-scope.js";
-import { filterMemoriesAlreadyInCurrentContext } from "../services/memory-context.js";
+import { buildMemoryRerankQuery, filterMemoriesAlreadyInCurrentContext } from "../services/memory-context.js";
 import type { ChatMessage, Memory } from "../types.js";
 
 function memory(overrides: Partial<Memory>): Memory {
@@ -24,6 +24,40 @@ function memory(overrides: Partial<Memory>): Memory {
 }
 
 describe("memory retrieval project scoping", () => {
+  it("builds memory-context rerank queries from recent real user messages", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Earlier topic about cache behavior.", timestamp: 1000 },
+      { role: "assistant", content: "Some answer.", timestamp: 2000 },
+      {
+        role: "user",
+        content: "[System: Context was compacted mid-turn.]\n\nKey context from this conversation\n" + "x".repeat(5000),
+        timestamp: 3000,
+      },
+      { role: "user", content: "Why did the reranker fallback happen?", timestamp: 4000 },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 900);
+
+    expect(query).toContain("Earlier topic about cache behavior.");
+    expect(query).toContain("Why did the reranker fallback happen?");
+    expect(query).not.toContain("[System:");
+    expect(query).not.toContain("Key context from this conversation");
+    expect(query.length).toBeLessThanOrEqual(900);
+  });
+
+  it("keeps the latest memory-context rerank query within the configured budget", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "first " + "a".repeat(1000), timestamp: 1000 },
+      { role: "user", content: "second " + "b".repeat(1000), timestamp: 2000 },
+      { role: "user", content: "latest " + "c".repeat(1000), timestamp: 3000 },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 500);
+
+    expect(query).toContain("latest");
+    expect(query.length).toBeLessThanOrEqual(500);
+  });
+
   it("dampens cross-project scores without filtering them out", () => {
     const candidates = [
       { memory: { projectId: "other" }, score: 0.9 },
