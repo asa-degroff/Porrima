@@ -10,6 +10,7 @@ const execAsync = promisify(exec);
 
 export interface GpuInfo {
   id: string; // "card0", "card1"
+  pci: string; // stable PCI address, e.g. "0000:03:00.0" — use this for hiding
   name: string;
   driver: "amdgpu" | "nvidia" | "i915" | "unknown";
   usage: number; // 0-100, -1 if unavailable
@@ -36,7 +37,10 @@ let pollIntervalMs = 2000; // 2 seconds
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let lastSample: SystemStatsSample | null = null;
 let lastCpuStats: { total: number; idle: number; timestamp: number } | null = null;
-let hiddenGpuIds = new Set<string>();
+// Hidden GPUs are tracked by PCI address (stable across reboots).
+// Legacy card-name IDs (e.g. "card2") are intentionally ignored because card
+// numbering can change after reboot and may point at a different GPU.
+let hiddenGpuPcis = new Set<string>();
 
 export function setHistoryDuration(seconds: number) {
   bufferSeconds = seconds;
@@ -47,19 +51,32 @@ export function getHistoryDuration(): number {
   return bufferSeconds;
 }
 
+function isPciAddress(value: string): boolean {
+  return /^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$/.test(value);
+}
+
+function normalizeHiddenGpus(ids: string[]): string[] {
+  return Array.from(new Set(ids.filter(isPciAddress)));
+}
+
 export function setHiddenGpus(ids: string[]) {
-  hiddenGpuIds = new Set(ids);
+  hiddenGpuPcis = new Set(normalizeHiddenGpus(ids));
 }
 
 export function getHiddenGpus(): string[] {
-  return Array.from(hiddenGpuIds);
+  return Array.from(hiddenGpuPcis);
+}
+
+// Check if a GPU should be hidden (by PCI address)
+function isGpuHidden(pci: string): boolean {
+  return hiddenGpuPcis.has(pci);
 }
 
 export function getHistory(): SystemStatsSample[] {
   pruneHistory();
   return history.map((s) => ({
     ...s,
-    gpus: s.gpus.filter((g) => !hiddenGpuIds.has(g.id)),
+    gpus: s.gpus.filter((g) => !isGpuHidden(g.pci)),
   }));
 }
 
@@ -67,8 +84,13 @@ export function getCurrent(): SystemStatsSample | null {
   if (!lastSample) return null;
   return {
     ...lastSample,
-    gpus: lastSample.gpus.filter((g) => !hiddenGpuIds.has(g.id)),
+    gpus: lastSample.gpus.filter((g) => !isGpuHidden(g.pci)),
   };
+}
+
+// Return ALL discovered GPUs (unfiltered) — used by settings UI for discovery
+export function getAllGpus(): GpuInfo[] {
+  return lastSample?.gpus ?? [];
 }
 
 function pruneHistory() {
@@ -295,29 +317,36 @@ async function discoverGpus(): Promise<GpuInfo[]> {
       try {
         const vendor = (await fs.readFile(`${devicePath}/vendor`, "utf-8")).trim();
         const deviceId = (await fs.readFile(`${devicePath}/device`, "utf-8")).trim();
-        const driver = (await fs.readFile(`${devicePath}/uevent`, "utf-8"))
+        const uevent = await fs.readFile(`${devicePath}/uevent`, "utf-8");
+        const driver = uevent
           .split("\n")
           .find((l) => l.startsWith("DRIVER="))
+          ?.split("=")[1];
+        // PCI_SLOT_NAME is stable across reboots — use it for hidden GPU identification
+        const pci = uevent
+          .split("\n")
+          .find((l) => l.startsWith("PCI_SLOT_NAME="))
           ?.split("=")[1];
 
         let name = `PCI ${vendor}:${deviceId}`;
         let gpuDriver: GpuInfo["driver"] = "unknown";
+        const gpuPci = pci || "";
 
         if (vendor === VENDOR_AMD) {
           gpuDriver = "amdgpu";
           name = AMD_CHIP_NAMES[deviceId] || `AMD ${deviceId}`;
           const info = await readAmdGpuStats(card, devicePath);
-          gpus.push({ id: card, name, driver: gpuDriver, ...info });
+          gpus.push({ id: card, pci: gpuPci, name, driver: gpuDriver, ...info });
         } else if (vendor === VENDOR_NVIDIA) {
           gpuDriver = "nvidia";
           const info = await readNvidiaGpuStats(card);
           name = info.name || `NVIDIA GPU (${card})`;
-          gpus.push({ id: card, name, driver: gpuDriver, ...info });
+          gpus.push({ id: card, pci: gpuPci, name, driver: gpuDriver, ...info });
         } else if (vendor === VENDOR_INTEL) {
           gpuDriver = "i915";
           const info = await readIntelGpuStats(devicePath);
           name = `Intel iGPU (${card})`;
-          gpus.push({ id: card, name, driver: gpuDriver, ...info });
+          gpus.push({ id: card, pci: gpuPci, name, driver: gpuDriver, ...info });
         }
         // Unknown vendor — skip
       } catch {

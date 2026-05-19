@@ -246,6 +246,12 @@ interface Props {
   onLogout: () => void;
 }
 
+const PCI_ADDRESS_RE = /^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$/;
+
+function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
+  return Array.from(new Set((ids ?? []).filter((id) => PCI_ADDRESS_RE.test(id))));
+}
+
 export function SettingsModal({ settings, models, onSave, onClose, onLogout }: Props) {
   const visionModelOptions = (() => {
     const capable = models.filter(isVisionModel);
@@ -414,8 +420,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [systemStatsBufferSeconds, setSystemStatsBufferSeconds] = useState(settings.systemStatsBufferSeconds ?? 60);
   const systemStatsBufferDd = useDropdown();
   // GPU visibility: list of discovered GPUs with visibility toggles
-  const [availableGpus, setAvailableGpus] = useState<Array<{ id: string; name: string; driver: string }>>([]);
-  const [hiddenGpus, setHiddenGpus] = useState<Set<string>>(() => new Set(settings.systemStatsHiddenGpus ?? []));
+  const [availableGpus, setAvailableGpus] = useState<Array<{ id: string; pci: string; name: string; driver: string }>>([]);
+  const [hiddenGpus, setHiddenGpus] = useState<Set<string>>(
+    () => new Set(normalizeSystemStatsHiddenGpus(settings.systemStatsHiddenGpus)),
+  );
   // Header image
   const [headerImageEnabled, setHeaderImageEnabled] = useState(settings.headerImageEnabled ?? false);
   const [headerImageUrl, setHeaderImageUrl] = useState<string | null>(null);
@@ -584,8 +592,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
         const { fetchSystemStats: fetchStats } = await import("../api/client");
         const data = await fetchStats();
         if (cancelled) return;
-        if (data.current && data.current.gpus.length > 0) {
-          const gpus = data.current.gpus.map((g) => ({ id: g.id, name: g.name, driver: g.driver }));
+        // Use allGpus (unfiltered) so hidden GPUs remain visible in settings
+        if (data.allGpus && data.allGpus.length > 0) {
+          const gpus = data.allGpus.map((g) => ({ id: g.id, pci: g.pci, name: g.name, driver: g.driver }));
           setAvailableGpus(gpus);
         }
       } catch {
@@ -1188,7 +1197,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       postSynthesisWarmCount,
       systemStatsEnabled,
       systemStatsBufferSeconds,
-      systemStatsHiddenGpus: Array.from(hiddenGpus),
+      systemStatsHiddenGpus: normalizeSystemStatsHiddenGpus(Array.from(hiddenGpus)),
       headerImageEnabled,
       extractionModelId,
       extractionModelUrl: extractionModelUrl.trim() || undefined,
@@ -4445,23 +4454,23 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                    <p className="text-xs text-white/30 mb-2">Select which GPUs to show in the sidebar</p>
 	                    <div className="space-y-1.5">
 	                      {availableGpus.map((gpu) => {
-	                        const isHidden = hiddenGpus.has(gpu.id);
+	                        const isHidden = hiddenGpus.has(gpu.pci);
 	                        return (
-	                          <div key={gpu.id} className="flex items-center justify-between">
+	                          <div key={gpu.pci} className="flex items-center justify-between">
 	                            <div className="flex items-center gap-2">
                               <ToggleSwitch
                                 checked={!isHidden}
                                 onChange={() => {
                                   const next = new Set(hiddenGpus);
-                                  if (isHidden) next.delete(gpu.id);
-                                  else next.add(gpu.id);
+                                  if (isHidden) next.delete(gpu.pci);
+                                  else next.add(gpu.pci);
                                   setHiddenGpus(next);
                                 }}
                                 accentColor="purple"
                               />
 	                              <div>
 	                                <span className="text-xs text-white/60">{gpu.name}</span>
-	                                <span className="text-[10px] text-white/30 ml-1.5">({gpu.id})</span>
+	                                <span className="text-[10px] text-white/30 ml-1.5">({gpu.id}, {gpu.pci})</span>
 	                              </div>
 	                            </div>
 	                            <span className="text-[10px] text-white/30">{gpu.driver}</span>

@@ -143,13 +143,13 @@ function getGpuAvgVramPct(gpus: GpuInfo[]): number {
 export function SystemStatsBar({ history, current, hiddenGpus }: Props) {
   const hiddenSet = useMemo(() => new Set(hiddenGpus ?? []), [hiddenGpus]);
 
-  // Filter out hidden GPUs from all data
+  // Filter out hidden GPUs from all data (uses PCI for stability)
   const filteredHistory = useMemo(
-    () => history.map((s) => ({ ...s, gpus: s.gpus.filter((g) => !hiddenSet.has(g.id)) })),
+    () => history.map((s) => ({ ...s, gpus: s.gpus.filter((g) => !hiddenSet.has(g.pci)) })),
     [history, hiddenSet],
   );
   const filteredCurrent = useMemo(
-    () => current ? { ...current, gpus: current.gpus.filter((g) => !hiddenSet.has(g.id)) } : null,
+    () => current ? { ...current, gpus: current.gpus.filter((g) => !hiddenSet.has(g.pci)) } : null,
     [current, hiddenSet],
   );
   // Build time-series data for each metric (most recent last)
@@ -170,7 +170,7 @@ export function SystemStatsBar({ history, current, hiddenGpus }: Props) {
   const gpuIndices = useMemo(() => {
     const indices = new Set<string>();
     for (const s of filteredHistory) {
-      for (const g of s.gpus) indices.add(g.id);
+      for (const g of s.gpus) indices.add(g.pci || g.id);
     }
     return Array.from(indices);
   }, [filteredHistory]);
@@ -178,7 +178,7 @@ export function SystemStatsBar({ history, current, hiddenGpus }: Props) {
   const gpuUsageSeries = useMemo(() => {
     return gpuIndices.map((id, idx) => ({
       data: filteredHistory.map((s) => {
-        const gpu = s.gpus.find((g) => g.id === id);
+        const gpu = s.gpus.find((g) => (g.pci || g.id) === id);
         return gpu?.usage ?? -1;
       }).slice(-30),
       color: GPU_COLORS[idx % GPU_COLORS.length],
@@ -188,10 +188,10 @@ export function SystemStatsBar({ history, current, hiddenGpus }: Props) {
   // VRAM usage — also multi-series
   const gpuVramSeries = useMemo(() => {
     return gpuIndices.map((id, idx) => {
-      const total = filteredHistory[filteredHistory.length - 1]?.gpus.find((g) => g.id === id)?.vramTotal ?? 0;
+      const total = filteredHistory[filteredHistory.length - 1]?.gpus.find((g) => (g.pci || g.id) === id)?.vramTotal ?? 0;
       return {
         data: filteredHistory.map((s) => {
-          const gpu = s.gpus.find((g) => g.id === id);
+          const gpu = s.gpus.find((g) => (g.pci || g.id) === id);
           if (!gpu || gpu.vramTotal <= 0) return -1;
           return (gpu.vramUsed / gpu.vramTotal) * 100;
         }).slice(-30),

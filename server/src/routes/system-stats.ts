@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getHistory, getCurrent, setHistoryDuration, getHistoryDuration, setHiddenGpus, getHiddenGpus } from "../services/system-stats.js";
+import { getHistory, getCurrent, setHistoryDuration, getHistoryDuration, setHiddenGpus, getHiddenGpus, getAllGpus } from "../services/system-stats.js";
 
 const router = Router();
 
@@ -11,6 +11,7 @@ router.get("/", (_req, res) => {
       history: getHistory(),
       bufferSeconds: getHistoryDuration(),
       hiddenGpus: getHiddenGpus(),
+      allGpus: getAllGpus(), // unfiltered — for settings discovery
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

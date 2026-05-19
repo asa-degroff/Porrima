@@ -667,6 +667,7 @@ export interface NotebookSearchResult {
 // System stats
 export interface GpuInfo {
   id: string;
+  pci: string; // stable PCI address — used for hiding
   name: string;
   driver: "amdgpu" | "nvidia" | "i915" | "unknown";
   usage: number;
@@ -688,4 +689,5 @@ export interface SystemStatsResponse {
   history: SystemStatsSample[];
   bufferSeconds: number;
   hiddenGpus: string[];
+  allGpus: GpuInfo[]; // unfiltered — for settings discovery
 }

@@ -44,6 +44,11 @@ import type { Chat, ChatType, CornerShape, CornerRadius } from "./types";
 const CORNER_SHAPE_KEY = "quje-corner-shape";
 const CORNER_RADIUS_KEY = "quje-corner-radius";
 const INITIAL_MESSAGE_LIMIT = 200;
+const PCI_ADDRESS_RE = /^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$/;
+
+function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
+  return Array.from(new Set((ids ?? []).filter((id) => PCI_ADDRESS_RE.test(id))));
+}
 
 function readCachedCornerShape(): CornerShape {
   try {
@@ -146,7 +151,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   // Sync hidden GPU settings to server whenever they change
   useEffect(() => {
-    const hiddenGpus = settings.systemStatsHiddenGpus ?? [];
+    const hiddenGpus = normalizeSystemStatsHiddenGpus(settings.systemStatsHiddenGpus);
     updateSystemStatsSettings({ hiddenGpus }).catch(() => {});
   }, [settings.systemStatsHiddenGpus]);
 

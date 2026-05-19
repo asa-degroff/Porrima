@@ -372,7 +372,7 @@ export interface Settings {
   systemStatsEnabled?: boolean;
   // System stats history buffer duration in seconds (default 60)
   systemStatsBufferSeconds?: number;
-  // GPU IDs to hide from system stats (e.g. ["card2"] for iGPU)
+  // GPU PCI addresses to hide from system stats (e.g. ["0000:17:00.0"])
   systemStatsHiddenGpus?: string[];
   // Header image — user-uploaded image displayed in the chat header instead of model name
   headerImageEnabled?: boolean;
