@@ -104,6 +104,29 @@ function isPlaceholderEllipsis(text: string | undefined): boolean {
   return normalized.length > 0 && /^(\.{3})+$/.test(normalized);
 }
 
+function segmentKey(
+  segment: NonNullable<ChatMessage["segments"]>[number],
+  fallbackIndex: number
+): string {
+  switch (segment.type) {
+    case "tool_call":
+      return `tool-call-${segment.toolCall?.id ?? segment.seq}`;
+    case "tool_result":
+      return `tool-result-${segment.toolResult?.toolCallId ?? segment.seq}`;
+    case "artifact":
+      return `artifact-${segment.artifact?.id ?? segment.seq}`;
+    case "generated_image":
+      return `generated-image-${segment.generatedImage?.id ?? segment.seq}`;
+    case "visual":
+      return `visual-${segment.visual?.id ?? segment.seq}`;
+    case "compaction_marker":
+      return `compaction-marker-${segment.seq}`;
+    case "text":
+    default:
+      return `${segment.type}-${segment.seq ?? fallbackIndex}`;
+  }
+}
+
 /** Format a Unix-ms timestamp into a compact human-readable string */
 function formatTimestamp(ts: number): string {
   const d = new Date(ts);
@@ -817,7 +840,7 @@ function MessageSegments({
               >
                 {group.segments.map((segment, i) => (
                   <SegmentRenderer
-                    key={`${segment.type}-${segment.seq}-${i}`}
+                    key={segmentKey(segment, i)}
                     segment={segment}
                     index={groupStartIndex + i}
                     allSegments={segments || []}
@@ -839,7 +862,7 @@ function MessageSegments({
         globalIndex += group.segments.length;
         return group.segments.map((segment, i) => (
           <SegmentRenderer
-            key={`${segment.type}-${segment.seq}-${i}`}
+            key={segmentKey(segment, i)}
             segment={segment}
             index={groupStartIndex + i}
             allSegments={segments || []}
@@ -938,7 +961,7 @@ function ScrollableToolContainer({
   return (
     <div className="my-2 rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden relative">
       {header}
-      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto max-h-[300px]">
+      <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto max-h-[300px] custom-scrollbar">
         {children}
       </div>
       {/* Scroll to bottom button - appears when user scrolls away during streaming */}

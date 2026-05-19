@@ -121,12 +121,14 @@ body::before {
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
   touch-action: pan-y;
+  overflow-anchor: none;
 }
 
 /* Custom scrollbar for tool call containers */
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  overflow-anchor: none;
 }
 
 .custom-scrollbar::-webkit-scrollbar {
