@@ -63,6 +63,10 @@ const ARTIFACT_ERROR_REPAIR_TTL_MS = 30 * 60 * 1000;
 const artifactErrorRepairAttempts = new Map<string, number>();
 const artifactAutoRepairAttempts = new Map<string, number>();
 
+function isMemoryAugmentedChatType(type: Chat["type"] | undefined): boolean {
+  return type === "agent" || type === "bluesky" || type === "system";
+}
+
 interface ArtifactRuntimeErrorReport {
   chatId: string;
   artifactId: string;
@@ -1251,7 +1255,7 @@ async function handleChatStream(
       tools: agentTools,
     };
     const passiveRecall =
-      chat.type === "agent" || chat.type === "bluesky"
+      isMemoryAugmentedChatType(chat.type)
         ? new PassiveMemoryRecallController(chat.id, {
             // Post-turn injection: when the agent stops without tool use,
             // the search runs in the background and injects after the turn ends.
@@ -1392,7 +1396,7 @@ async function handleChatStream(
         res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queued.id })}\n\n`);
 
         // Defer memory extraction for the completed turn
-        if (assistantMsg && !currentTurnIsHidden && (chat.type === "agent" || chat.type === "bluesky")) {
+        if (assistantMsg && !currentTurnIsHidden && isMemoryAugmentedChatType(chat.type)) {
           deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: assistantMsg.content });
         }
 
@@ -1422,7 +1426,7 @@ async function handleChatStream(
 
         // Defer memory extraction until after the agent loop finishes
         // to avoid concurrent LLM calls that can interfere with the active tool loop
-        if (assistantMsg && !currentTurnIsHidden && chat.type === "agent") {
+        if (assistantMsg && !currentTurnIsHidden && isMemoryAugmentedChatType(chat.type)) {
           deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: assistantMsg.content });
         }
 
@@ -1992,15 +1996,15 @@ async function handleChatStream(
             await withSSEKeepalive(res, async () => {
               const compaction = await truncateChatHistory(chat, effectiveContextWindow, hitContextLimit || (lastUsage === 0 && needsCompaction), emitCompacting, emitKeepalive, lastUsage, systemPrompt, agentTools);
               if (compaction.truncated) {
-                // Extract memories from removed messages (agent chats only)
-                if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+                // Extract memories from removed messages before rebuilding the memory prompt.
+                if (isMemoryAugmentedChatType(chat.type) && compaction.removedMessages?.length) {
                   await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
                 }
                 await saveChat(chat, { allowTruncation: true });
 
                 // Full reset of memory context after compaction — rebuild with
                 // fresh retrieval, all memories frozen into the new system prompt.
-                if (chat.type === "agent" || chat.type === "bluesky") {
+                if (isMemoryAugmentedChatType(chat.type)) {
                   resetMemoryContext(chat.id);
                   const split = await buildSplitAugmentedPrompt(
                     chat.systemPrompt || "You are a helpful assistant.",
@@ -2629,7 +2633,7 @@ async function handleChatStream(
       res.write(`event: follow_up_start\ndata: ${JSON.stringify({ queuedMessageId: queuedFollowUp.id })}\n\n`);
 
       // Defer memory extraction until after the follow-up loop finishes
-      if (currentAssistantMsg && !currentTurnIsHidden && chat.type === "agent") {
+      if (currentAssistantMsg && !currentTurnIsHidden && isMemoryAugmentedChatType(chat.type)) {
         deferredExtractions.push({ userMsg: lastUserMessage, assistantMsg: currentAssistantMsg.content });
       }
 
@@ -2660,7 +2664,7 @@ async function handleChatStream(
         console.error(`[chat] follow-up context is empty despite ${chat.messages.length} messages - this indicates a conversion bug`);
       }
 
-      let followUpSystemPrompt = (chat.type === "agent" || chat.type === "bluesky")
+      let followUpSystemPrompt = isMemoryAugmentedChatType(chat.type)
         ? (await buildSplitAugmentedPrompt(chat.systemPrompt || "You are a helpful assistant.", chat.messages, chat.id, chat.projectId, chat.type, projectPath)).systemPrompt
         : chat.systemPrompt || "You are a helpful assistant.";
 
@@ -2862,7 +2866,7 @@ async function handleChatStream(
       }
 
       // Memory extraction — runs after agent loop is fully complete (no concurrent LLM interference)
-      if (!currentTurnIsHidden && (chat.type === "agent" || chat.type === "bluesky") && hasContent) {
+      if (!currentTurnIsHidden && isMemoryAugmentedChatType(chat.type) && hasContent) {
         extractMemories(chat.modelId, chat.id, lastUserMessage, logicalAssistantContent, chat.projectId)
           .catch((err) => console.error("[memory] extraction failed:", err));
       }
@@ -3038,7 +3042,7 @@ router.post("/", async (req, res) => {
       // Manual compaction must budget for the real prompt shape. Passing no
       // system prompt/tools makes the compactor think overhead is zero, which
       // can leave an oversized post-compact prompt that fails on the next turn.
-      if (chat.type === "agent" || chat.type === "bluesky") {
+      if (isMemoryAugmentedChatType(chat.type)) {
         const split = await buildSplitAugmentedPrompt(
           chat.systemPrompt || "You are a helpful assistant.",
           chat.messages,
@@ -3062,7 +3066,7 @@ router.post("/", async (req, res) => {
         // Extract memories from removed messages and await completion so they're
         // available when the next buildSplitAugmentedPrompt runs (either in this
         // handler's follow-up path or in the main handler).
-        if ((chat.type === "agent" || chat.type === "bluesky") && result.removedMessages?.length) {
+        if (isMemoryAugmentedChatType(chat.type) && result.removedMessages?.length) {
           try {
             await preCompactionFlush(chat.modelId, chat.id, result.removedMessages, chat.projectId);
           } catch (err) {
@@ -3074,7 +3078,7 @@ router.post("/", async (req, res) => {
         // so the next buildSplitAugmentedPrompt call will do a full retrieval with
         // all memories frozen into the new system prompt. No need to rebuild here
         // because the main handler (or follow-up path) will call buildSplitAugmentedPrompt.
-        if (chat.type === "agent" || chat.type === "bluesky") {
+        if (isMemoryAugmentedChatType(chat.type)) {
           resetMemoryContext(chat.id);
         }
       }
@@ -3337,7 +3341,7 @@ router.post("/", async (req, res) => {
             // Extract memories from removed messages and await completion so they're
             // available for the system prompt rebuild below. Without awaiting, the
             // rebuilt prompt would miss freshly extracted memories from removed context.
-            if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+            if (isMemoryAugmentedChatType(chat.type) && compaction.removedMessages?.length) {
               try {
                 await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
               } catch (err) {
@@ -3348,7 +3352,7 @@ router.post("/", async (req, res) => {
             await saveChat(chat, { allowTruncation: true });
             // Rebuild system prompt after truncation with full memory reset
             resetMemoryContext(chat.id);
-            if (chat.type === "agent" || chat.type === "bluesky") {
+            if (isMemoryAugmentedChatType(chat.type)) {
               let resumeProjectPath: string | undefined;
               if (chat.projectId) {
                 const project = await getProject(chat.projectId);
@@ -3456,11 +3460,11 @@ router.post("/", async (req, res) => {
     // Build system prompt with delta-based memory injection for KV cache optimization.
     // Frozen memories live in the system prompt (byte-identical between turns).
     // When extraction adds new memories, only the delta is appended at end of context.
-    // For the system chat, skip memory augmentation — context is injected directly
-    // as messages during synthesis runs.
+    // User-initiated system-chat turns use the same memory prompt path as
+    // automation-initiated system turns so both entry points have recall parity.
     let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
     let memoriesDelta = "";
-    if (chat.type === "agent" || chat.type === "bluesky") {
+    if (isMemoryAugmentedChatType(chat.type)) {
       // Get project path for AGENTS.md loading
       let projectPath: string | undefined;
       if (chat.projectId) {
@@ -3527,7 +3531,7 @@ router.post("/", async (req, res) => {
             // Extract memories from removed messages and await completion so they're
             // available for the system prompt rebuild below. Without awaiting, the
             // rebuilt prompt would miss freshly extracted memories from removed context.
-            if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+            if (isMemoryAugmentedChatType(chat.type) && compaction.removedMessages?.length) {
               try {
                 await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
               } catch (err) {
@@ -3542,7 +3546,7 @@ router.post("/", async (req, res) => {
             // the frozen context state is set up immediately, avoiding a redundant retrieval
             // on the next turn.
             resetMemoryContext(chat.id);
-            if (chat.type === "agent" || chat.type === "bluesky") {
+            if (isMemoryAugmentedChatType(chat.type)) {
               let projectPath: string | undefined;
               if (chat.projectId) {
                 const project = await getProject(chat.projectId);
@@ -3806,7 +3810,7 @@ router.post("/artifact-error", async (req, res) => {
 
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
   let memoriesDelta = "";
-  if (chat.type === "agent" || chat.type === "bluesky") {
+  if (isMemoryAugmentedChatType(chat.type)) {
     let projectPath: string | undefined;
     if (chat.projectId) {
       const project = await getProject(chat.projectId);
@@ -4066,10 +4070,10 @@ router.post("/edit", async (req, res) => {
 
   await saveChat(chat, { allowTruncation: true });
 
-  // Build context with skills (using delta-aware prompt builder for agent chats)
+  // Build context with skills (using delta-aware prompt builder for memory-augmented chats)
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
   let editMemoriesDelta = "";
-  if (chat.type === "agent" || chat.type === "bluesky") {
+  if (isMemoryAugmentedChatType(chat.type)) {
     let editProjectPath: string | undefined;
     if (chat.projectId) {
       const project = await getProject(chat.projectId);
@@ -4121,7 +4125,7 @@ router.post("/edit", async (req, res) => {
         if (compaction && compaction.truncated) {
           // Extract memories from removed messages and await completion so they're
           // available for the system prompt rebuild below.
-          if ((chat.type === "agent" || chat.type === "bluesky") && compaction.removedMessages?.length) {
+          if (isMemoryAugmentedChatType(chat.type) && compaction.removedMessages?.length) {
             try {
               await preCompactionFlush(chat.modelId, chat.id, compaction.removedMessages, chat.projectId);
             } catch (err) {
@@ -4132,7 +4136,7 @@ router.post("/edit", async (req, res) => {
           await saveChat(chat, { allowTruncation: true });
           // Rebuild system prompt after truncation with full memory reset
           resetMemoryContext(chat.id);
-          if (chat.type === "agent" || chat.type === "bluesky") {
+          if (isMemoryAugmentedChatType(chat.type)) {
             let editProjectPath: string | undefined;
             if (chat.projectId) {
               const project = await getProject(chat.projectId);
