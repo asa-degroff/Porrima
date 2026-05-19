@@ -254,7 +254,7 @@ async function readSSEBody(
     inactivityTimer = setTimeout(() => {
       console.warn("[SSE] inactivity timeout — aborting stream");
       controller.abort();
-      callbacks.onError("Model appears unresponsive — try again or switch models");
+      callbacks.onError("__SSE_INACTIVITY__:Model appears unresponsive — try again or switch models");
     }, SSE_INACTIVITY_TIMEOUT_MS);
   };
   resetInactivityTimer();

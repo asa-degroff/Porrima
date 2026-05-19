@@ -963,10 +963,14 @@ export function useChat(chatId: string | null) {
         const bg = bgStreams.get(streamChatId);
         const isOfflineError = err.startsWith("__OFFLINE__:");
         const isConnectionError = err.startsWith("Connection error:");
+        const isInactivityError = err.startsWith("__SSE_INACTIVITY__:");
+        const displayErr = isInactivityError ? err.replace("__SSE_INACTIVITY__:", "") : err;
 
         // Determine whether the server received the message before the
         // connection dropped. If any streaming data was received, the server
-        // already processed the request.
+        // already processed the request. An SSE inactivity timeout also means
+        // the POST already reached the server because response headers were
+        // accepted and the client was reading the stream body.
         const receivedData = bg ? (
           bg.content.length > 0 ||
           bg.thinking.length > 0 ||
@@ -977,15 +981,18 @@ export function useChat(chatId: string | null) {
           bg.modelProgress !== null ||
           bg.inferenceActivityPhase !== null
         ) : false;
+        const serverLikelyHasStream = receivedData || isInactivityError;
 
         // When the connection drops after receiving data and the browser
         // reports we're online, this is a background connection kill (especially
         // on mobile Safari). Don't show an error — silently reconnect to the
         // server stream so the in-progress response continues seamlessly.
         // Covers both __OFFLINE__ errors (when navigator.onLine is incorrectly
-        // false during a visibility change) and Connection errors (fetch killed
-        // while online).
-        if (bg && receivedData && (isOfflineError || isConnectionError) && navigator.onLine) {
+        // false during a visibility change), Connection errors (fetch killed
+        // while online), and the client's own SSE inactivity timeout. The
+        // inactivity timeout is not a model failure once an SSE response exists:
+        // the live stream may still be running and replayable server-side.
+        if (bg && serverLikelyHasStream && (isOfflineError || isConnectionError || isInactivityError) && navigator.onLine) {
           // Don't show error or delete bgStreams. The partial content stays
           // visible. The reconnect attempt below will pick up the server stream.
           console.log(`[chat] stream dropped after receiving data, attempting reconnect for ${streamChatId}`);
@@ -999,7 +1006,25 @@ export function useChat(chatId: string | null) {
               const status = await getChatStatus(streamChatId);
               if (bgStreams.get(streamChatId) !== bg) return; // raced with another reconnect/switch
               if (!status.active) {
-                // Server stream ended naturally — clean up quietly
+                // Server stream ended naturally before we reattached. Pull the
+                // authoritative persisted messages so the UI catches up instead
+                // of waiting for a chat switch or full reload.
+                try {
+                  const chat = await apiFetchChat(streamChatId);
+                  if (chat && bgStreams.get(streamChatId) === bg) {
+                    setActiveChatData(chat);
+                    bg.messages = cloneMessages(chat.messages);
+                    bg.messageOffset = chat.messageOffset ?? 0;
+                    bg.messageTotal = chat.messageTotal ?? chat.messages.length;
+                    if (activeChatIdRef.current === streamChatId) {
+                      setMessages([...bg.messages]);
+                      setMessageOffset(bg.messageOffset);
+                      setMessageTotal(bg.messageTotal);
+                    }
+                  }
+                } catch {
+                  // If the refresh fails, still clear local streaming state.
+                }
                 bg.streaming = false;
                 bg.modelProgress = null;
                 bg.inferenceActivityPhase = null;
@@ -1098,7 +1123,7 @@ export function useChat(chatId: string | null) {
           // Non-offline error (could be Connection error, auth error, model error, etc.)
           if (bg) {
             bg.streaming = false;
-            bg.error = err;
+            bg.error = displayErr;
             bg.modelProgress = null;
             bg.inferenceActivityPhase = null;
           }
@@ -1106,12 +1131,12 @@ export function useChat(chatId: string | null) {
           // For transient connection errors when we're online but the fetch was
           // killed (e.g. backgrounded tab), show a more helpful message.
           // Don't queue since we can't tell if the server received the request.
-          const displayErr = isConnectionError
+          const finalDisplayErr = isConnectionError
             ? "Connection interrupted — tap Retry to resend"
-            : err;
+            : displayErr;
 
           if (activeChatIdRef.current === streamChatId) {
-            setError(displayErr);
+            setError(finalDisplayErr);
             setModelProgress(null);
             setInferenceActivityPhase(null);
             setStreaming(false);
