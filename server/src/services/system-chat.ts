@@ -153,7 +153,7 @@ Your zeitgeist (\`blk-zeitgeist-continuity\`) is your continuity narrative — u
 
 After completing maintenance, wait for the next phase trigger.`;
 
-const SYNTHESIS_PHASE4_INSTRUCTIONS = `## Phase 3: Reflections
+const SYNTHESIS_PHASE3_INSTRUCTIONS = `## Phase 3: Reflections
 
 Your synthesis and block maintenance are complete. Now generate reflection memories — higher-order insights about what you observed. Focus on meta-observations: patterns, contradictions, openings, shifts in understanding.
 
@@ -178,7 +178,7 @@ const PHASE_ORDER: SynthesisPhase[] = ["synthesis", "maintenance", "reflections"
 const PHASE_INSTRUCTIONS: Record<SynthesisPhase, string> = {
   synthesis: SYNTHESIS_PHASE1_INSTRUCTIONS,
   maintenance: SYNTHESIS_PHASE2_INSTRUCTIONS,
-  reflections: SYNTHESIS_PHASE4_INSTRUCTIONS,
+  reflections: SYNTHESIS_PHASE3_INSTRUCTIONS,
 };
 
 export function getDefaultSynthesisPromptSteps(): AutomationPromptStep[] {

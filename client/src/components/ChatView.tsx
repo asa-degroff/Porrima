@@ -163,6 +163,36 @@ function buildDisplayMessages(messages: ChatMessage[]): DisplayMessage[] {
       continue;
     }
 
+    if (msg.role === "assistant" && msg._isSynthesisMessage) {
+      const groupStart = i;
+      const group: ChatMessage[] = [msg];
+      let groupEnd = i;
+      i++;
+      while (i < messages.length) {
+        if (messages[i]._isSystemMessage && messages[i]._isMidTurnCompaction) break;
+        if (messages[i].role === "system") {
+          i++;
+          continue;
+        }
+        if (messages[i].role !== "assistant" || !messages[i]._isSynthesisMessage) break;
+        group.push(messages[i]);
+        groupEnd = i;
+        i++;
+      }
+
+      const streamingSegmentOffset = group
+        .slice(0, -1)
+        .reduce((sum, m) => sum + (m.segments?.length || 0), 0);
+
+      display.push({
+        message: group.length === 1 ? msg : mergeToolLoopMessages(group),
+        localStartIdx: groupStart,
+        localEndIdx: groupEnd,
+        streamingSegmentOffset,
+      });
+      continue;
+    }
+
     if (msg.role === "assistant" && msg._toolLoopId) {
       const groupStart = i;
       const group: ChatMessage[] = [msg];
