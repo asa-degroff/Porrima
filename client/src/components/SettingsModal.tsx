@@ -164,6 +164,82 @@ const RETRIEVAL_DEPTH_OPTIONS: Array<{ id: RetrievalDepthProfile; label: string;
   { id: "custom", label: "Custom", description: "Use the advanced controls below." },
 ];
 
+interface RetrievalPresetValues {
+  rerankerTimeoutMs: number;
+  memoryContextSearchQueryChars: number;
+  memoryContextRerankQueryChars: number;
+  memoryContextSearchLimit: number;
+  memoryContextCandidatePool: number;
+  memoryContextRerankDocumentLimit: number;
+  memoryContextRerankTopN: number;
+  passiveRecallQueryChars: number;
+  passiveRecallRerankQueryChars: number;
+  passiveRecallSearchLimit: number;
+  passiveRecallCandidatePool: number;
+  passiveRecallDiverseCandidateLimit: number;
+  passiveRecallRerankDocumentLimit: number;
+  passiveRecallRerankTopN: number;
+  passiveRecallMemoriesPerInjection: number;
+  passiveRecallMemoriesPerTurn: number;
+}
+
+const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, RetrievalPresetValues> = {
+  fast: {
+    rerankerTimeoutMs: 25_000,
+    memoryContextSearchQueryChars: 4000,
+    memoryContextRerankQueryChars: 700,
+    memoryContextSearchLimit: 24,
+    memoryContextCandidatePool: 18,
+    memoryContextRerankDocumentLimit: 12,
+    memoryContextRerankTopN: 10,
+    passiveRecallQueryChars: 4000,
+    passiveRecallRerankQueryChars: 700,
+    passiveRecallSearchLimit: 28,
+    passiveRecallCandidatePool: 18,
+    passiveRecallDiverseCandidateLimit: 12,
+    passiveRecallRerankDocumentLimit: 8,
+    passiveRecallRerankTopN: 3,
+    passiveRecallMemoriesPerInjection: 1,
+    passiveRecallMemoriesPerTurn: 8,
+  },
+  balanced: {
+    rerankerTimeoutMs: 25_000,
+    memoryContextSearchQueryChars: 6000,
+    memoryContextRerankQueryChars: 900,
+    memoryContextSearchLimit: 30,
+    memoryContextCandidatePool: 24,
+    memoryContextRerankDocumentLimit: 16,
+    memoryContextRerankTopN: 15,
+    passiveRecallQueryChars: 6000,
+    passiveRecallRerankQueryChars: 900,
+    passiveRecallSearchLimit: 40,
+    passiveRecallCandidatePool: 24,
+    passiveRecallDiverseCandidateLimit: 16,
+    passiveRecallRerankDocumentLimit: 12,
+    passiveRecallRerankTopN: 4,
+    passiveRecallMemoriesPerInjection: 2,
+    passiveRecallMemoriesPerTurn: 12,
+  },
+  thorough: {
+    rerankerTimeoutMs: 25_000,
+    memoryContextSearchQueryChars: 8000,
+    memoryContextRerankQueryChars: 1200,
+    memoryContextSearchLimit: 48,
+    memoryContextCandidatePool: 36,
+    memoryContextRerankDocumentLimit: 24,
+    memoryContextRerankTopN: 20,
+    passiveRecallQueryChars: 8000,
+    passiveRecallRerankQueryChars: 1200,
+    passiveRecallSearchLimit: 64,
+    passiveRecallCandidatePool: 36,
+    passiveRecallDiverseCandidateLimit: 24,
+    passiveRecallRerankDocumentLimit: 20,
+    passiveRecallRerankTopN: 6,
+    passiveRecallMemoriesPerInjection: 3,
+    passiveRecallMemoriesPerTurn: 18,
+  },
+};
+
 function coerceRetrievalDepthProfile(profile: Settings["retrievalDepthProfile"]): RetrievalDepthProfile {
   return RETRIEVAL_DEPTH_OPTIONS.some((option) => option.id === profile) ? profile! : "balanced";
 }
@@ -177,6 +253,7 @@ function RetrievalRange({
   step,
   suffix,
   onChange,
+  onCommit,
 }: {
   label: string;
   description: string;
@@ -186,6 +263,7 @@ function RetrievalRange({
   step: number;
   suffix?: string;
   onChange: (value: number) => void;
+  onCommit?: () => void;
 }) {
   return (
     <div className="space-y-2">
@@ -204,7 +282,10 @@ function RetrievalRange({
         max={max}
         step={step}
         value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={(e) => {
+          onChange(Number(e.target.value));
+          onCommit?.();
+        }}
         className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
       />
       <div className="flex items-center justify-between text-[10px] text-white/25">
@@ -529,6 +610,51 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [passiveRecallRerankTopN, setPassiveRecallRerankTopN] = useState(settings.passiveRecallRerankTopN ?? 4);
   const [passiveRecallMemoriesPerInjection, setPassiveRecallMemoriesPerInjection] = useState(settings.passiveRecallMemoriesPerInjection ?? 2);
   const [passiveRecallMemoriesPerTurn, setPassiveRecallMemoriesPerTurn] = useState(settings.passiveRecallMemoriesPerTurn ?? 12);
+
+  const applyRetrievalPreset = (preset: RetrievalPresetValues) => {
+    setRerankerTimeoutMs(preset.rerankerTimeoutMs);
+    setMemoryContextSearchQueryChars(preset.memoryContextSearchQueryChars);
+    setMemoryContextRerankQueryChars(preset.memoryContextRerankQueryChars);
+    setMemoryContextSearchLimit(preset.memoryContextSearchLimit);
+    setMemoryContextCandidatePool(preset.memoryContextCandidatePool);
+    setMemoryContextRerankDocumentLimit(preset.memoryContextRerankDocumentLimit);
+    setMemoryContextRerankTopN(preset.memoryContextRerankTopN);
+    setPassiveRecallQueryChars(preset.passiveRecallQueryChars);
+    setPassiveRecallRerankQueryChars(preset.passiveRecallRerankQueryChars);
+    setPassiveRecallSearchLimit(preset.passiveRecallSearchLimit);
+    setPassiveRecallCandidatePool(preset.passiveRecallCandidatePool);
+    setPassiveRecallDiverseCandidateLimit(preset.passiveRecallDiverseCandidateLimit);
+    setPassiveRecallRerankDocumentLimit(preset.passiveRecallRerankDocumentLimit);
+    setPassiveRecallRerankTopN(preset.passiveRecallRerankTopN);
+    setPassiveRecallMemoriesPerInjection(preset.passiveRecallMemoriesPerInjection);
+    setPassiveRecallMemoriesPerTurn(preset.passiveRecallMemoriesPerTurn);
+  };
+
+  const switchToCustom = () => {
+    setRetrievalDepthProfile("custom");
+    setRetrievalAdvancedOpen(true);
+  };
+
+  const loadSavedCustom = () => {
+    applyRetrievalPreset({
+      rerankerTimeoutMs: settings.rerankerTimeoutMs ?? 25_000,
+      memoryContextSearchQueryChars: settings.memoryContextSearchQueryChars ?? 6000,
+      memoryContextRerankQueryChars: settings.memoryContextRerankQueryChars ?? 900,
+      memoryContextSearchLimit: settings.memoryContextSearchLimit ?? 30,
+      memoryContextCandidatePool: settings.memoryContextCandidatePool ?? 24,
+      memoryContextRerankDocumentLimit: settings.memoryContextRerankDocumentLimit ?? 16,
+      memoryContextRerankTopN: settings.memoryContextRerankTopN ?? 15,
+      passiveRecallQueryChars: settings.passiveRecallQueryChars ?? 6000,
+      passiveRecallRerankQueryChars: settings.passiveRecallRerankQueryChars ?? 900,
+      passiveRecallSearchLimit: settings.passiveRecallSearchLimit ?? 40,
+      passiveRecallCandidatePool: settings.passiveRecallCandidatePool ?? 24,
+      passiveRecallDiverseCandidateLimit: settings.passiveRecallDiverseCandidateLimit ?? 16,
+      passiveRecallRerankDocumentLimit: settings.passiveRecallRerankDocumentLimit ?? 12,
+      passiveRecallRerankTopN: settings.passiveRecallRerankTopN ?? 4,
+      passiveRecallMemoriesPerInjection: settings.passiveRecallMemoriesPerInjection ?? 2,
+      passiveRecallMemoriesPerTurn: settings.passiveRecallMemoriesPerTurn ?? 12,
+    });
+  };
   const [passkeyAdding, setPasskeyAdding] = useState(false);
   const [passkeyMessage, setPasskeyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [ttsSettings, setTtsSettings] = useState<TTSSettings | null>(null);
@@ -4696,10 +4822,16 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                    <button
 	                      key={option.id}
 	                      type="button"
-	                      onClick={() => {
-	                        setRetrievalDepthProfile(option.id);
-	                        if (option.id === "custom") setRetrievalAdvancedOpen(true);
-	                      }}
+                      onClick={() => {
+                        setRetrievalDepthProfile(option.id);
+                        if (option.id === "custom") {
+                          switchToCustom();
+                          loadSavedCustom();
+                        } else {
+                          applyRetrievalPreset(RETRIEVAL_PRESETS[option.id]);
+                          setRetrievalAdvancedOpen(true);
+                        }
+                      }}
 	                      className={`text-left rounded-lg border px-3 py-2 transition-all ${active ? "border-purple-400/40 bg-purple-400/15 text-white" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80"}`}
 	                    >
 	                      <div className="text-xs font-medium">{option.label}</div>
@@ -4718,9 +4850,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	              </button>
 	              {retrievalAdvancedOpen && (
 	                <div className="rounded-lg border border-white/10 bg-white/5 p-3 space-y-5">
-	                  {retrievalDepthProfile !== "custom" && (
-	                    <p className="text-[11px] text-white/35">Depth overrides apply only with Custom. Reranker timeout always applies.</p>
-	                  )}
 	                  <RetrievalRange
 	                    label="Reranker timeout"
 	                    description="Abort slow rerank requests and fall back after this many milliseconds."
@@ -4737,27 +4866,27 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                        <div className="text-xs font-medium text-white/50">Turn-start memory context</div>
 	                        <div className="text-[10px] text-white/30">Runs before the model starts a response.</div>
 	                      </div>
-	                      <RetrievalRange label="Search query length" description="Maximum recent user-message text used for embedding and FTS search." value={memoryContextSearchQueryChars} min={2000} max={12000} step={500} suffix="chars" onChange={setMemoryContextSearchQueryChars} />
-	                      <RetrievalRange label="Rerank query length" description="Maximum text sent as the cross-encoder query." value={memoryContextRerankQueryChars} min={400} max={2000} step={100} suffix="chars" onChange={setMemoryContextRerankQueryChars} />
-	                      <RetrievalRange label="Search results" description="Hybrid retrieval results kept before MMR and reranking." value={memoryContextSearchLimit} min={12} max={80} step={2} suffix="docs" onChange={setMemoryContextSearchLimit} />
-	                      <RetrievalRange label="Candidate pool" description="Adjusted-score candidates considered by MMR." value={memoryContextCandidatePool} min={8} max={80} step={2} suffix="docs" onChange={setMemoryContextCandidatePool} />
-	                      <RetrievalRange label="Reranked documents" description="Documents scored by the reranker for turn-start context." value={memoryContextRerankDocumentLimit} min={8} max={40} step={1} suffix="docs" onChange={setMemoryContextRerankDocumentLimit} />
-	                      <RetrievalRange label="Returned rerank results" description="Top reranker scores retained before final filtering." value={memoryContextRerankTopN} min={4} max={40} step={1} suffix="docs" onChange={setMemoryContextRerankTopN} />
+	                      <RetrievalRange label="Search query length" description="Maximum recent user-message text used for embedding and FTS search." value={memoryContextSearchQueryChars} min={2000} max={12000} step={500} suffix="chars" onChange={setMemoryContextSearchQueryChars} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Rerank query length" description="Maximum text sent as the cross-encoder query." value={memoryContextRerankQueryChars} min={400} max={2000} step={100} suffix="chars" onChange={setMemoryContextRerankQueryChars} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Search results" description="Hybrid retrieval results kept before MMR and reranking." value={memoryContextSearchLimit} min={12} max={80} step={2} suffix="docs" onChange={setMemoryContextSearchLimit} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Candidate pool" description="Adjusted-score candidates considered by MMR." value={memoryContextCandidatePool} min={8} max={80} step={2} suffix="docs" onChange={setMemoryContextCandidatePool} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Reranked documents" description="Documents scored by the reranker for turn-start context." value={memoryContextRerankDocumentLimit} min={8} max={40} step={1} suffix="docs" onChange={setMemoryContextRerankDocumentLimit} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Returned rerank results" description="Top reranker scores retained before final filtering." value={memoryContextRerankTopN} min={4} max={40} step={1} suffix="docs" onChange={setMemoryContextRerankTopN} onCommit={switchToCustom} />
 	                    </div>
 	                    <div className="space-y-4">
 	                      <div>
 	                        <div className="text-xs font-medium text-white/50">Passive recall</div>
 	                        <div className="text-[10px] text-white/30">Runs during tool loops and after substantial responses.</div>
 	                      </div>
-	                      <RetrievalRange label="Recall query length" description="Maximum recent transcript text used for passive search." value={passiveRecallQueryChars} min={2000} max={12000} step={500} suffix="chars" onChange={setPassiveRecallQueryChars} />
-	                      <RetrievalRange label="Recall rerank query length" description="Maximum trajectory text sent to the reranker." value={passiveRecallRerankQueryChars} min={400} max={2000} step={100} suffix="chars" onChange={setPassiveRecallRerankQueryChars} />
-	                      <RetrievalRange label="Recall search results" description="Hybrid retrieval results kept for passive recall." value={passiveRecallSearchLimit} min={12} max={96} step={2} suffix="docs" onChange={setPassiveRecallSearchLimit} />
-	                      <RetrievalRange label="Recall candidate pool" description="Adjusted-score candidates accumulated before reranking." value={passiveRecallCandidatePool} min={8} max={96} step={2} suffix="docs" onChange={setPassiveRecallCandidatePool} />
-	                      <RetrievalRange label="Recall diverse candidates" description="MMR-selected candidates eligible for the passive reranker batch." value={passiveRecallDiverseCandidateLimit} min={8} max={48} step={1} suffix="docs" onChange={setPassiveRecallDiverseCandidateLimit} />
-	                      <RetrievalRange label="Recall reranked documents" description="Documents scored by the reranker for passive recall." value={passiveRecallRerankDocumentLimit} min={8} max={32} step={1} suffix="docs" onChange={setPassiveRecallRerankDocumentLimit} />
-	                      <RetrievalRange label="Recall returned results" description="Top passive reranker scores retained before precision filtering." value={passiveRecallRerankTopN} min={2} max={32} step={1} suffix="docs" onChange={setPassiveRecallRerankTopN} />
-	                      <RetrievalRange label="Memories per injection" description="Maximum passive memories injected at once." value={passiveRecallMemoriesPerInjection} min={1} max={5} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerInjection} />
-	                      <RetrievalRange label="Memories per turn" description="Maximum passive memories injected across one assistant turn." value={passiveRecallMemoriesPerTurn} min={0} max={30} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerTurn} />
+	                      <RetrievalRange label="Recall query length" description="Maximum recent transcript text used for passive search." value={passiveRecallQueryChars} min={2000} max={12000} step={500} suffix="chars" onChange={setPassiveRecallQueryChars} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Recall rerank query length" description="Maximum trajectory text sent to the reranker." value={passiveRecallRerankQueryChars} min={400} max={2000} step={100} suffix="chars" onChange={setPassiveRecallRerankQueryChars} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Recall search results" description="Hybrid retrieval results kept for passive recall." value={passiveRecallSearchLimit} min={12} max={96} step={2} suffix="docs" onChange={setPassiveRecallSearchLimit} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Recall candidate pool" description="Adjusted-score candidates accumulated before reranking." value={passiveRecallCandidatePool} min={8} max={96} step={2} suffix="docs" onChange={setPassiveRecallCandidatePool} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Recall diverse candidates" description="MMR-selected candidates eligible for the passive reranker batch." value={passiveRecallDiverseCandidateLimit} min={8} max={48} step={1} suffix="docs" onChange={setPassiveRecallDiverseCandidateLimit} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Recall reranked documents" description="Documents scored by the reranker for passive recall." value={passiveRecallRerankDocumentLimit} min={8} max={32} step={1} suffix="docs" onChange={setPassiveRecallRerankDocumentLimit} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Recall returned results" description="Top passive reranker scores retained before precision filtering." value={passiveRecallRerankTopN} min={2} max={32} step={1} suffix="docs" onChange={setPassiveRecallRerankTopN} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Memories per injection" description="Maximum passive memories injected at once." value={passiveRecallMemoriesPerInjection} min={1} max={5} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerInjection} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Memories per turn" description="Maximum passive memories injected across one assistant turn." value={passiveRecallMemoriesPerTurn} min={0} max={30} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerTurn} onCommit={switchToCustom} />
 	                    </div>
 	                  </div>
 	                </div>
