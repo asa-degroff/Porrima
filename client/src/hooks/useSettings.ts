@@ -17,6 +17,8 @@ const DEFAULT_SETTINGS: Settings = {
   readFileMaxBytes: 256 * 1024,
   crossProjectScoreMultiplier: 0.3,
   globalProjectScoreMultiplier: 1.0,
+  retrievalDepthProfile: "balanced",
+  rerankerTimeoutMs: 25_000,
 };
 
 export function useSettings() {

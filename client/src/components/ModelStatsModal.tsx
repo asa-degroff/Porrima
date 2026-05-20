@@ -88,6 +88,7 @@ interface RerankerStatsSummary {
 interface RerankerStatsData {
   summary: RerankerStatsSummary;
   runs: RerankerStatsRun[];
+  timeoutMs?: number;
 }
 
 interface Props {
@@ -434,8 +435,6 @@ function ModelDetail({
 
 // --- Reranker Stats Panel ---
 
-const RERANKER_TIMEOUT_S = 25; // must match server RERANKER_TIMEOUT_MS / 1000
-
 function rerankerSuccessColor(rate: number | null): string {
   if (rate === null) return "text-white/30";
   if (rate >= 0.95) return "text-emerald-300";
@@ -468,9 +467,8 @@ function formatRerankerSource(source: string | undefined): string {
   return source || "memory";
 }
 
-function RerankerRunRow({ run }: { run: RerankerStatsRun }) {
+function RerankerRunRow({ run, timeoutMs }: { run: RerankerStatsRun; timeoutMs: number }) {
   const [expanded, setExpanded] = useState(false);
-  const timeoutMs = RERANKER_TIMEOUT_S * 1000;
   const hasQuery = !!run.query;
   const hasDocs = !!run.documents && run.documents.length > 0;
   const hasSelected = !!run.selectedResults && run.selectedResults.length > 0;
@@ -558,7 +556,7 @@ function RerankerRunRow({ run }: { run: RerankerStatsRun }) {
 function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
   const { summary, runs } = data;
   const last = summary.lastRun;
-  const timeoutMs = RERANKER_TIMEOUT_S * 1000;
+  const timeoutMs = data.timeoutMs ?? 25_000;
 
   return (
     <div className="space-y-3">
@@ -638,7 +636,7 @@ function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
               <div className="h-full rounded-full bg-red-400/40" style={{ width: "100%" }} />
             </div>
             <span className="text-[10px] w-20 text-right shrink-0 font-mono text-red-300/60">
-              {RERANKER_TIMEOUT_S}s
+              {Math.round(timeoutMs / 1000)}s
             </span>
           </div>
         </div>
@@ -676,7 +674,7 @@ function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
         ) : (
           <div className="space-y-0">
             {runs.map((run) => (
-              <RerankerRunRow key={run.id} run={run} />
+              <RerankerRunRow key={run.id} run={run} timeoutMs={timeoutMs} />
             ))}
           </div>
         )}

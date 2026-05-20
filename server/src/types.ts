@@ -277,6 +277,7 @@ export interface SystemPromptPreset {
 }
 
 export type WebSearchProvider = "brave" | "exa" | "tavily";
+export type RetrievalDepthProfile = "fast" | "balanced" | "thorough" | "custom";
 
 export interface Settings {
   defaultModelId: string;
@@ -330,6 +331,25 @@ export interface Settings {
   rerankerEnabled?: boolean;    // default true
   rerankerUrl?: string;         // default "http://localhost:8082"
   rerankerModelId?: string;     // default "qwen3-reranker" — model name sent to the reranker server
+  rerankerTimeoutMs?: number;   // default 25000 — abort rerank requests after this many milliseconds
+  // Retrieval pipeline budget. Presets control both turn-start memory retrieval
+  // and passive recall; custom unlocks the numeric overrides below.
+  retrievalDepthProfile?: RetrievalDepthProfile;
+  memoryContextSearchQueryChars?: number;
+  memoryContextRerankQueryChars?: number;
+  memoryContextSearchLimit?: number;
+  memoryContextCandidatePool?: number;
+  memoryContextRerankDocumentLimit?: number;
+  memoryContextRerankTopN?: number;
+  passiveRecallQueryChars?: number;
+  passiveRecallRerankQueryChars?: number;
+  passiveRecallSearchLimit?: number;
+  passiveRecallCandidatePool?: number;
+  passiveRecallDiverseCandidateLimit?: number;
+  passiveRecallRerankDocumentLimit?: number;
+  passiveRecallRerankTopN?: number;
+  passiveRecallMemoriesPerInjection?: number;
+  passiveRecallMemoriesPerTurn?: number;
   // Title generation server (CPU-only llama.cpp instance, tiny model)
   titleGenerationEnabled?: boolean;  // default true
   titleGenerationUrl?: string;       // default "http://localhost:8085"

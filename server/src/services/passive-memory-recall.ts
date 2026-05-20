@@ -13,6 +13,7 @@ import {
 import { hiddenSystemContextToUserMessage } from "./agent.js";
 import { getSettings } from "./chat-storage.js";
 import { log } from "./logger.js";
+import { getRetrievalBudget } from "./retrieval-settings.js";
 import {
   applyCrossProjectScoreMultiplier,
   applyGlobalProjectScoreMultiplier,
@@ -25,19 +26,11 @@ import {
 import type { ChatMessage } from "../types.js";
 
 const MIN_QUERY_CHARS = 80;
-const MAX_QUERY_CHARS = 6000;
-const MAX_RERANK_QUERY_CHARS = 900;
 const RECENT_MESSAGE_COUNT = 12;
 const SEARCH_EVERY_ITERATIONS = 2;
 const MIN_CANDIDATES_BEFORE_RERANK = 3;
-const FAST_SEARCH_LIMIT = 40;
-const DIVERSE_CANDIDATE_LIMIT = 16;
-const RERANK_DOCUMENT_LIMIT = 12;
-const RERANK_TOP_N = 4;
 const MAX_RERANK_DOCUMENT_CHARS = 1200;
 const MIN_RERANK_SCORE = 0.12;
-const MAX_MEMORIES_PER_INJECTION = 2;
-const MAX_PASSIVE_MEMORIES_PER_TURN = 12;
 const MIN_ITERATIONS_BETWEEN_INJECTIONS = 3;
 
 export interface PassiveMemoryRecallInjection {
@@ -152,7 +145,7 @@ function formatToolObservations(message: ChatMessage, maxItems = 4): string {
   return parts.join("\n");
 }
 
-export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = MAX_QUERY_CHARS): string {
+export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = 6000): string {
   const recent = messages
     .filter((message) => !message._outOfContext && message.role !== "system")
     .slice(-RECENT_MESSAGE_COUNT);
@@ -185,7 +178,7 @@ export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = MAX_
   return query.length > maxChars ? query.slice(query.length - maxChars) : query;
 }
 
-export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = MAX_RERANK_QUERY_CHARS): string {
+export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = 900): string {
   const recent = messages
     .filter((message) => !message._outOfContext && message.role !== "system")
     .slice(-RECENT_MESSAGE_COUNT);
@@ -313,6 +306,7 @@ export class PassiveMemoryRecallController {
   private lastScheduledIteration = 0;
   private lastInjectionIteration = 0;
   private totalInjected = 0;
+  private maxMemoriesPerTurn = 12;
 
   constructor(
     private readonly chatId: string,
@@ -343,23 +337,29 @@ export class PassiveMemoryRecallController {
     }
 
     if (this.inFlight) return;
-    if (this.totalInjected >= MAX_PASSIVE_MEMORIES_PER_TURN) return;
     // Spacing guard: avoid redundant searches during tool loops.
     // For post-turn schedules (conversational stops), skip the spacing guard —
     // the query hash dedup already prevents redundant searches, and the first
     // conversational turn (iteration=0) needs to be allowed through.
     if (isToolUse && options.iteration - this.lastScheduledIteration < SEARCH_EVERY_ITERATIONS) return;
 
-    const query = buildPassiveRecallQuery(options.chatMessages);
-    if (query.length < MIN_QUERY_CHARS) return;
-    const rerankQuery = buildPassiveRerankQuery(options.chatMessages) || clampText(query, MAX_RERANK_QUERY_CHARS);
+    this.inFlight = getRetrievalBudget()
+      .then((budget) => {
+        this.maxMemoriesPerTurn = budget.passiveRecall.memoriesPerTurn;
+        if (this.totalInjected >= budget.passiveRecall.memoriesPerTurn) return;
 
-    const queryHash = hashText(query);
-    if (queryHash === this.lastQueryHash) return;
-    this.lastQueryHash = queryHash;
-    this.lastScheduledIteration = options.iteration;
+        const query = buildPassiveRecallQuery(options.chatMessages, budget.passiveRecall.queryChars);
+        if (query.length < MIN_QUERY_CHARS) return;
+        const rerankQuery = buildPassiveRerankQuery(options.chatMessages, budget.passiveRecall.rerankQueryChars) ||
+          clampText(query, budget.passiveRecall.rerankQueryChars);
 
-    this.inFlight = this.runRecall(query, rerankQuery, options)
+        const queryHash = hashText(query);
+        if (queryHash === this.lastQueryHash) return;
+        this.lastQueryHash = queryHash;
+        this.lastScheduledIteration = options.iteration;
+
+        return this.runRecall(query, rerankQuery, options, budget);
+      })
       .catch((err) => {
         console.warn("[passive-memory] recall failed:", err instanceof Error ? err.message : err);
       })
@@ -370,7 +370,7 @@ export class PassiveMemoryRecallController {
 
   peekReady(iteration: number): PassiveMemoryRecallInjection | null {
     if (this.readyQueue.length === 0) return null;
-    if (this.totalInjected >= MAX_PASSIVE_MEMORIES_PER_TURN) return null;
+    if (this.totalInjected >= this.maxMemoriesPerTurn) return null;
     if (
       this.lastInjectionIteration > 0 &&
       iteration - this.lastInjectionIteration < MIN_ITERATIONS_BETWEEN_INJECTIONS
@@ -403,6 +403,7 @@ export class PassiveMemoryRecallController {
     query: string,
     rerankQuery: string,
     options: PassiveMemoryRecallScheduleOptions,
+    budget: Awaited<ReturnType<typeof getRetrievalBudget>>,
   ): Promise<void> {
     const queryEmbedding = await embed(query);
     const crossProjectMultiplier = await getConfiguredCrossProjectScoreMultiplier();
@@ -410,7 +411,7 @@ export class PassiveMemoryRecallController {
     const searchResults = filterMemoriesAlreadyInCurrentContext(
       await searchMemories(
         queryEmbedding,
-        FAST_SEARCH_LIMIT,
+        budget.passiveRecall.searchLimit,
         new Date(),
         query,
         undefined,
@@ -431,9 +432,9 @@ export class PassiveMemoryRecallController {
     if (freshResults.length === 0) return;
 
     const diverse = mmrRerank(
-      sortByAdjustedScore(freshResults).slice(0, 24),
+      sortByAdjustedScore(freshResults).slice(0, budget.passiveRecall.candidatePool),
       queryEmbedding,
-      DIVERSE_CANDIDATE_LIMIT,
+      budget.passiveRecall.diverseCandidateLimit,
       0.55,
     );
     for (const candidate of diverse) {
@@ -450,7 +451,7 @@ export class PassiveMemoryRecallController {
 
     const rerankCandidates = sortByAdjustedScore([...this.candidates.values()])
       .filter((candidate) => !excludedIds.has(candidate.memory.id))
-      .slice(0, RERANK_DOCUMENT_LIMIT);
+      .slice(0, budget.passiveRecall.rerankDocumentLimit);
     if (rerankCandidates.length === 0) return;
 
     const instruction = RERANK_INSTRUCTIONS["passive-memory"];
@@ -460,7 +461,7 @@ export class PassiveMemoryRecallController {
       rerankQuery,
       rerankDocuments,
       instruction,
-      Math.min(RERANK_TOP_N, rerankCandidates.length),
+      Math.min(budget.passiveRecall.rerankTopN, rerankCandidates.length),
     );
 
     // Passive recall should be precision-heavy. If the reranker is disabled or
@@ -492,7 +493,10 @@ export class PassiveMemoryRecallController {
     const selected = sortByAdjustedScore(candidates)
       .filter((candidate) => candidate.score >= MIN_RERANK_SCORE)
       .filter((candidate) => !excludedIds.has(candidate.memory.id))
-      .slice(0, Math.min(MAX_MEMORIES_PER_INJECTION, MAX_PASSIVE_MEMORIES_PER_TURN - this.totalInjected));
+      .slice(0, Math.min(
+        budget.passiveRecall.memoriesPerInjection,
+        budget.passiveRecall.memoriesPerTurn - this.totalInjected,
+      ));
 
     // Record stats after selection so we know which memories were actually injected.
     recordStats(output, options.chatType, formattedQuery, rerankDocuments,

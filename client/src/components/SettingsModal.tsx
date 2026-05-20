@@ -144,6 +144,7 @@ function useActiveSection(sectionIds: readonly string[], root: Element | null) {
 }
 
 type WebSearchProvider = NonNullable<Settings["defaultWebSearchProvider"]>;
+type RetrievalDepthProfile = NonNullable<Settings["retrievalDepthProfile"]>;
 
 const AUTOMATION_INTERVAL_MINUTES_MIN = 5;
 const AUTOMATION_INTERVAL_MINUTES_MAX = 366 * 24 * 60;
@@ -155,6 +156,64 @@ const WEB_SEARCH_PROVIDER_OPTIONS: Array<{ id: WebSearchProvider; label: string;
   { id: "exa", label: "Exa", description: "Richer search with highlights, summaries, and deep modes." },
   { id: "tavily", label: "Tavily", description: "Ranked web results with optional answers and date filters." },
 ];
+
+const RETRIEVAL_DEPTH_OPTIONS: Array<{ id: RetrievalDepthProfile; label: string; description: string }> = [
+  { id: "fast", label: "Fast", description: "Lower CPU use, fewer reranked memories." },
+  { id: "balanced", label: "Balanced", description: "Safest baseline for most setups." },
+  { id: "thorough", label: "Thorough", description: "More candidates and deeper reranking." },
+  { id: "custom", label: "Custom", description: "Use the advanced controls below." },
+];
+
+function coerceRetrievalDepthProfile(profile: Settings["retrievalDepthProfile"]): RetrievalDepthProfile {
+  return RETRIEVAL_DEPTH_OPTIONS.some((option) => option.id === profile) ? profile! : "balanced";
+}
+
+function RetrievalRange({
+  label,
+  description,
+  value,
+  min,
+  max,
+  step,
+  suffix,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  suffix?: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <label className="block text-sm font-medium text-white/60">{label}</label>
+          <p className="text-xs text-white/30 mt-0.5">{description}</p>
+        </div>
+        <span className="text-xs text-white/40 font-mono shrink-0">
+          {value.toLocaleString()}{suffix ? ` ${suffix}` : ""}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+      />
+      <div className="flex items-center justify-between text-[10px] text-white/25">
+        <span>{min.toLocaleString()}</span>
+        <span>{max.toLocaleString()}</span>
+      </div>
+    </div>
+  );
+}
 
 function coerceWebSearchProvider(provider: Settings["defaultWebSearchProvider"]): WebSearchProvider {
   return WEB_SEARCH_PROVIDER_OPTIONS.some((option) => option.id === provider) ? provider! : "brave";
@@ -452,6 +511,24 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [maxBlockChars, setMaxBlockChars] = useState(settings.maxBlockChars ?? 4000);
   const [crossProjectScoreMultiplier, setCrossProjectScoreMultiplier] = useState(settings.crossProjectScoreMultiplier ?? 0.3);
   const [globalProjectScoreMultiplier, setGlobalProjectScoreMultiplier] = useState(settings.globalProjectScoreMultiplier ?? 1.0);
+  const [retrievalDepthProfile, setRetrievalDepthProfile] = useState<RetrievalDepthProfile>(coerceRetrievalDepthProfile(settings.retrievalDepthProfile));
+  const [retrievalAdvancedOpen, setRetrievalAdvancedOpen] = useState(settings.retrievalDepthProfile === "custom");
+  const [rerankerTimeoutMs, setRerankerTimeoutMs] = useState(settings.rerankerTimeoutMs ?? 25_000);
+  const [memoryContextSearchQueryChars, setMemoryContextSearchQueryChars] = useState(settings.memoryContextSearchQueryChars ?? 6000);
+  const [memoryContextRerankQueryChars, setMemoryContextRerankQueryChars] = useState(settings.memoryContextRerankQueryChars ?? 900);
+  const [memoryContextSearchLimit, setMemoryContextSearchLimit] = useState(settings.memoryContextSearchLimit ?? 30);
+  const [memoryContextCandidatePool, setMemoryContextCandidatePool] = useState(settings.memoryContextCandidatePool ?? 24);
+  const [memoryContextRerankDocumentLimit, setMemoryContextRerankDocumentLimit] = useState(settings.memoryContextRerankDocumentLimit ?? 16);
+  const [memoryContextRerankTopN, setMemoryContextRerankTopN] = useState(settings.memoryContextRerankTopN ?? 15);
+  const [passiveRecallQueryChars, setPassiveRecallQueryChars] = useState(settings.passiveRecallQueryChars ?? 6000);
+  const [passiveRecallRerankQueryChars, setPassiveRecallRerankQueryChars] = useState(settings.passiveRecallRerankQueryChars ?? 900);
+  const [passiveRecallSearchLimit, setPassiveRecallSearchLimit] = useState(settings.passiveRecallSearchLimit ?? 40);
+  const [passiveRecallCandidatePool, setPassiveRecallCandidatePool] = useState(settings.passiveRecallCandidatePool ?? 24);
+  const [passiveRecallDiverseCandidateLimit, setPassiveRecallDiverseCandidateLimit] = useState(settings.passiveRecallDiverseCandidateLimit ?? 16);
+  const [passiveRecallRerankDocumentLimit, setPassiveRecallRerankDocumentLimit] = useState(settings.passiveRecallRerankDocumentLimit ?? 12);
+  const [passiveRecallRerankTopN, setPassiveRecallRerankTopN] = useState(settings.passiveRecallRerankTopN ?? 4);
+  const [passiveRecallMemoriesPerInjection, setPassiveRecallMemoriesPerInjection] = useState(settings.passiveRecallMemoriesPerInjection ?? 2);
+  const [passiveRecallMemoriesPerTurn, setPassiveRecallMemoriesPerTurn] = useState(settings.passiveRecallMemoriesPerTurn ?? 12);
   const [passkeyAdding, setPasskeyAdding] = useState(false);
   const [passkeyMessage, setPasskeyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [ttsSettings, setTtsSettings] = useState<TTSSettings | null>(null);
@@ -1208,6 +1285,23 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       maxBlockChars,
       crossProjectScoreMultiplier,
       globalProjectScoreMultiplier,
+      retrievalDepthProfile,
+      rerankerTimeoutMs,
+      memoryContextSearchQueryChars,
+      memoryContextRerankQueryChars,
+      memoryContextSearchLimit,
+      memoryContextCandidatePool,
+      memoryContextRerankDocumentLimit,
+      memoryContextRerankTopN,
+      passiveRecallQueryChars,
+      passiveRecallRerankQueryChars,
+      passiveRecallSearchLimit,
+      passiveRecallCandidatePool,
+      passiveRecallDiverseCandidateLimit,
+      passiveRecallRerankDocumentLimit,
+      passiveRecallRerankTopN,
+      passiveRecallMemoriesPerInjection,
+      passiveRecallMemoriesPerTurn,
       bluesky: {
         ...settings.bluesky,
         enabled: blueskyEnabled,
@@ -4590,6 +4684,85 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	          {/* Memory Retrieval */}
 	          <div id="memory-retrieval" className="border-t border-white/10 pt-6">
 	            <h3 className="text-sm font-semibold text-white/80 mb-4">Memory Retrieval</h3>
+	            <div className="space-y-3 mb-5">
+	              <div>
+	                <label className="block text-sm font-medium text-white/60">Retrieval depth</label>
+	                <p className="text-xs text-white/30 mt-0.5">Controls how many memory candidates are searched and reranked.</p>
+	              </div>
+	              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+	                {RETRIEVAL_DEPTH_OPTIONS.map((option) => {
+	                  const active = retrievalDepthProfile === option.id;
+	                  return (
+	                    <button
+	                      key={option.id}
+	                      type="button"
+	                      onClick={() => {
+	                        setRetrievalDepthProfile(option.id);
+	                        if (option.id === "custom") setRetrievalAdvancedOpen(true);
+	                      }}
+	                      className={`text-left rounded-lg border px-3 py-2 transition-all ${active ? "border-purple-400/40 bg-purple-400/15 text-white" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80"}`}
+	                    >
+	                      <div className="text-xs font-medium">{option.label}</div>
+	                      <div className="text-[10px] text-white/35 mt-0.5 leading-snug">{option.description}</div>
+	                    </button>
+	                  );
+	                })}
+	              </div>
+	              <button
+	                type="button"
+	                onClick={() => setRetrievalAdvancedOpen((v) => !v)}
+	                className="flex items-center gap-2 text-xs text-white/45 hover:text-white/70"
+	              >
+	                <Chevron open={retrievalAdvancedOpen} size={10} />
+	                Advanced controls
+	              </button>
+	              {retrievalAdvancedOpen && (
+	                <div className="rounded-lg border border-white/10 bg-white/5 p-3 space-y-5">
+	                  {retrievalDepthProfile !== "custom" && (
+	                    <p className="text-[11px] text-white/35">Depth overrides apply only with Custom. Reranker timeout always applies.</p>
+	                  )}
+	                  <RetrievalRange
+	                    label="Reranker timeout"
+	                    description="Abort slow rerank requests and fall back after this many milliseconds."
+	                    value={rerankerTimeoutMs}
+	                    min={5000}
+	                    max={60000}
+	                    step={1000}
+	                    suffix="ms"
+	                    onChange={setRerankerTimeoutMs}
+	                  />
+	                  <div className="grid gap-5 lg:grid-cols-2">
+	                    <div className="space-y-4">
+	                      <div>
+	                        <div className="text-xs font-medium text-white/50">Turn-start memory context</div>
+	                        <div className="text-[10px] text-white/30">Runs before the model starts a response.</div>
+	                      </div>
+	                      <RetrievalRange label="Search query length" description="Maximum recent user-message text used for embedding and FTS search." value={memoryContextSearchQueryChars} min={2000} max={12000} step={500} suffix="chars" onChange={setMemoryContextSearchQueryChars} />
+	                      <RetrievalRange label="Rerank query length" description="Maximum text sent as the cross-encoder query." value={memoryContextRerankQueryChars} min={400} max={2000} step={100} suffix="chars" onChange={setMemoryContextRerankQueryChars} />
+	                      <RetrievalRange label="Search results" description="Hybrid retrieval results kept before MMR and reranking." value={memoryContextSearchLimit} min={12} max={80} step={2} suffix="docs" onChange={setMemoryContextSearchLimit} />
+	                      <RetrievalRange label="Candidate pool" description="Adjusted-score candidates considered by MMR." value={memoryContextCandidatePool} min={8} max={80} step={2} suffix="docs" onChange={setMemoryContextCandidatePool} />
+	                      <RetrievalRange label="Reranked documents" description="Documents scored by the reranker for turn-start context." value={memoryContextRerankDocumentLimit} min={8} max={40} step={1} suffix="docs" onChange={setMemoryContextRerankDocumentLimit} />
+	                      <RetrievalRange label="Returned rerank results" description="Top reranker scores retained before final filtering." value={memoryContextRerankTopN} min={4} max={40} step={1} suffix="docs" onChange={setMemoryContextRerankTopN} />
+	                    </div>
+	                    <div className="space-y-4">
+	                      <div>
+	                        <div className="text-xs font-medium text-white/50">Passive recall</div>
+	                        <div className="text-[10px] text-white/30">Runs during tool loops and after substantial responses.</div>
+	                      </div>
+	                      <RetrievalRange label="Recall query length" description="Maximum recent transcript text used for passive search." value={passiveRecallQueryChars} min={2000} max={12000} step={500} suffix="chars" onChange={setPassiveRecallQueryChars} />
+	                      <RetrievalRange label="Recall rerank query length" description="Maximum trajectory text sent to the reranker." value={passiveRecallRerankQueryChars} min={400} max={2000} step={100} suffix="chars" onChange={setPassiveRecallRerankQueryChars} />
+	                      <RetrievalRange label="Recall search results" description="Hybrid retrieval results kept for passive recall." value={passiveRecallSearchLimit} min={12} max={96} step={2} suffix="docs" onChange={setPassiveRecallSearchLimit} />
+	                      <RetrievalRange label="Recall candidate pool" description="Adjusted-score candidates accumulated before reranking." value={passiveRecallCandidatePool} min={8} max={96} step={2} suffix="docs" onChange={setPassiveRecallCandidatePool} />
+	                      <RetrievalRange label="Recall diverse candidates" description="MMR-selected candidates eligible for the passive reranker batch." value={passiveRecallDiverseCandidateLimit} min={8} max={48} step={1} suffix="docs" onChange={setPassiveRecallDiverseCandidateLimit} />
+	                      <RetrievalRange label="Recall reranked documents" description="Documents scored by the reranker for passive recall." value={passiveRecallRerankDocumentLimit} min={8} max={32} step={1} suffix="docs" onChange={setPassiveRecallRerankDocumentLimit} />
+	                      <RetrievalRange label="Recall returned results" description="Top passive reranker scores retained before precision filtering." value={passiveRecallRerankTopN} min={2} max={32} step={1} suffix="docs" onChange={setPassiveRecallRerankTopN} />
+	                      <RetrievalRange label="Memories per injection" description="Maximum passive memories injected at once." value={passiveRecallMemoriesPerInjection} min={1} max={5} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerInjection} />
+	                      <RetrievalRange label="Memories per turn" description="Maximum passive memories injected across one assistant turn." value={passiveRecallMemoriesPerTurn} min={0} max={30} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerTurn} />
+	                    </div>
+	                  </div>
+	                </div>
+	              )}
+	            </div>
 	            <div className="space-y-2">
 	              <div className="flex items-center justify-between gap-3">
 	                <div>

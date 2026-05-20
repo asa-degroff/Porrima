@@ -8,6 +8,7 @@ import { readAgentsMd } from "./project-storage.js";
 import { getProject, getSettings } from "./chat-storage.js";
 import { getWorkspaceForProject } from "./workspace.js";
 import { log } from "./logger.js";
+import { getRetrievalBudget } from "./retrieval-settings.js";
 import {
   applyCrossProjectScoreMultiplier,
   applyGlobalProjectScoreMultiplier,
@@ -165,12 +166,8 @@ export interface RetrievalResult {
 }
 
 const SAME_CHAT_VISIBLE_SOURCE_COVERAGE_THRESHOLD = 0.8;
-const MEMORY_SEARCH_QUERY_CHARS = 6000;
 const MEMORY_RERANK_QUERY_CHARS = 900;
 const MEMORY_RERANK_MESSAGE_CHARS = 450;
-const MEMORY_RERANK_CANDIDATE_POOL = 24;
-const MEMORY_RERANK_DOCUMENT_LIMIT = 16;
-const MEMORY_RERANK_TOP_N = 15;
 
 function messageTimestamp(message: ChatMessage): number | null {
   return typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
@@ -305,8 +302,9 @@ async function retrieveMemories(
 
   if (!userMessages) return [];
 
-  const searchQuery = clampText(userMessages, MEMORY_SEARCH_QUERY_CHARS);
-  const rerankQuery = buildMemoryRerankQuery(recentMessages);
+  const budget = await getRetrievalBudget();
+  const searchQuery = clampText(userMessages, budget.memoryContext.searchQueryChars);
+  const rerankQuery = buildMemoryRerankQuery(recentMessages, budget.memoryContext.rerankQueryChars);
   if (!rerankQuery) return [];
 
   const queryEmbedding = await embed(searchQuery);
@@ -314,7 +312,7 @@ async function retrieveMemories(
   const globalProjectMultiplier = await getConfiguredGlobalProjectScoreMultiplier();
   const searchResults = await searchMemories(
     queryEmbedding,
-    30,
+    budget.memoryContext.searchLimit,
     new Date(),
     searchQuery,
     undefined,
@@ -332,16 +330,16 @@ async function retrieveMemories(
 
   const instruction = RERANK_INSTRUCTIONS[chatType || "agent"];
   const rerankCandidates = mmrRerank(
-    sortByAdjustedScore(results).slice(0, MEMORY_RERANK_CANDIDATE_POOL),
+    sortByAdjustedScore(results).slice(0, budget.memoryContext.candidatePool),
     queryEmbedding,
-    MEMORY_RERANK_DOCUMENT_LIMIT,
+    budget.memoryContext.rerankDocumentLimit,
     0.65,
   );
   const rerankOutput: RerankOutput = await rerank(
     rerankQuery,
     rerankCandidates.map((r) => r.memory.text),
     instruction,
-    Math.min(MEMORY_RERANK_TOP_N, rerankCandidates.length)
+    Math.min(budget.memoryContext.rerankTopN, rerankCandidates.length)
   );
 
   const rerankedResults = rerankOutput.results.map(({ index, score }) => ({

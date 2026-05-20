@@ -5,10 +5,10 @@
  */
 
 import { getSettings } from "./chat-storage.js";
+import { DEFAULT_RERANKER_TIMEOUT_MS, resolveRetrievalBudget } from "./retrieval-settings.js";
 
 const DEFAULT_RERANKER_URL = "http://localhost:8082";
 const DEFAULT_RERANKER_MODEL = "qwen3-reranker";
-const RERANKER_TIMEOUT_MS = 25_000;
 
 /**
  * Chat-type-specific reranking instructions.
@@ -107,6 +107,7 @@ export async function rerank(
 
   const rerankerUrl = settings.rerankerUrl || DEFAULT_RERANKER_URL;
   const rerankerModel = settings.rerankerModelId || DEFAULT_RERANKER_MODEL;
+  const rerankerTimeoutMs = resolveRetrievalBudget(settings).rerankerTimeoutMs || DEFAULT_RERANKER_TIMEOUT_MS;
 
   // Build the instruction-aware query in Qwen3-Reranker format
   const formattedQuery = instruction
@@ -123,7 +124,7 @@ export async function rerank(
         documents,
         top_n: topN ?? documents.length,
       }),
-      signal: AbortSignal.timeout(RERANKER_TIMEOUT_MS),
+      signal: AbortSignal.timeout(rerankerTimeoutMs),
     });
 
     if (!res.ok) {
