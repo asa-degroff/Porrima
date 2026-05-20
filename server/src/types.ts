@@ -374,6 +374,8 @@ export interface Settings {
   systemStatsBufferSeconds?: number;
   // GPU PCI addresses to hide from system stats (e.g. ["0000:17:00.0"])
   systemStatsHiddenGpus?: string[];
+  // Agent display name — shown in the sidebar search bar and elsewhere
+  agentName?: string;
   // Header image — user-uploaded image displayed in the chat header instead of model name
   headerImageEnabled?: boolean;
   headerImageId?: string;  // filename stem (e.g. "header")

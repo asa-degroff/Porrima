@@ -1092,6 +1092,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         systemStatsCurrent={systemStatsCurrent}
         systemStatsHiddenGpus={settings.systemStatsHiddenGpus}
         showSystemStats={settings.systemStatsEnabled ?? false}
+        agentName={settings.agentName}
       />
       {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}
       {imageSandboxOpen ? (

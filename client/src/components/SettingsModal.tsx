@@ -50,7 +50,6 @@ const SECTIONS = [
   { id: 'extraction', label: 'Extraction' },
   { id: 'memory-retrieval', label: 'Memory Retrieval' },
   { id: 'system-stats', label: 'System Stats' },
-  { id: 'header-image', label: 'Header Image' },
   { id: 'memory-blocks', label: 'Memory Blocks' },
   { id: 'automations', label: 'Automations' },
   { id: 'tools', label: 'Tool Options' },
@@ -261,6 +260,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [defaultVisionModelId, setDefaultVisionModelId] = useState(settings.defaultVisionModelId || settings.defaultModelId);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [defaultSystemPromptExpanded, setDefaultSystemPromptExpanded] = useState(false);
+  const [agentName, setAgentName] = useState(settings.agentName || "");
   const [persona, setPersona] = useState<PersonaStore | null>(null);
   const [personaEditing, setPersonaEditing] = useState(false);
   const [personaContent, setPersonaContent] = useState("");
@@ -1143,6 +1143,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     const effectivePrompt = defaultPreset ? defaultPreset.content.trim() : defaultSystemPrompt.trim();
     onSave({
       ...settings,
+      agentName: agentName.trim() || undefined,
       defaultModelId,
       defaultVisionModelId: defaultVisionModelId || undefined,
       defaultSystemPrompt: effectivePrompt,
@@ -3521,7 +3522,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 
             {push.support === "needs-install" && (
               <p className="text-xs text-amber-300/80">
-                Add qu.je to your Home Screen first — iOS only delivers push notifications to installed PWAs.
+                Add Porrima to your Home Screen first — iOS only delivers push notifications to installed PWAs.
               </p>
             )}
             {push.support === "unsupported" && (
@@ -3763,7 +3764,110 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
               The agent's core identity, voice, and values. Loaded from <code className="text-white/40">~/.quje-agent/persona.md</code>.
             </p>
 
+            {/* Agent Name */}
             <div className="space-y-2">
+              <label className="block text-sm font-medium text-white/60">Agent Name</label>
+              <p className="text-white/30 text-xs -mt-1">
+                Display name shown in the sidebar. Defaults to "Porrima" if left blank.
+              </p>
+              <input
+                type="text"
+                value={agentName}
+                onChange={(e) => setAgentName(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+                placeholder="Porrima"
+              />
+            </div>
+
+            {/* Header Image */}
+            <div className="space-y-2 pt-1 border-t border-white/5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="block text-sm font-medium text-white/60">Header Image</label>
+                  <p className="text-white/30 text-xs -mt-1">Display a custom image in the chat header instead of the model name</p>
+                </div>
+                <ToggleSwitch checked={headerImageEnabled} onChange={() => setHeaderImageEnabled(!headerImageEnabled)} accentColor="purple" />
+              </div>
+
+              {/* Image preview and upload */}
+              <div className="flex items-center gap-4">
+                {/* Preview box — matches the SystemStatsBar square window style */}
+                <div className="rounded-lg bg-black/20 border border-white/[0.05] p-1.5 flex items-center justify-center shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]"
+                  style={{ width: 56, height: 56 }}>
+                  {headerImageUrl ? (
+                    <img
+                      src={headerImageUrl}
+                      alt="Header preview"
+                      className="w-8 h-8 rounded-md object-cover"
+                    />
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-white/20">
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                      <circle cx="8.5" cy="8.5" r="1.5"/>
+                      <polyline points="21 15 16 10 5 21"/>
+                    </svg>
+                  )}
+                </div>
+
+                <div className="flex-1 space-y-2">
+                  {!headerImageExists ? (
+                    <label className="inline-flex items-center gap-2 px-3 py-2 text-xs text-white/70 bg-white/5 hover:bg-white/10 rounded-lg cursor-pointer transition-colors border border-white/10">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                      </svg>
+                      {headerImageUploading ? 'Uploading...' : 'Upload image'}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleHeaderImageUpload(file);
+                          e.target.value = '';
+                        }}
+                        disabled={headerImageUploading}
+                      />
+                    </label>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <label className="inline-flex items-center gap-2 px-3 py-2 text-xs text-white/70 bg-white/5 hover:bg-white/10 rounded-lg cursor-pointer transition-colors border border-white/10">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                          <polyline points="17 8 12 3 7 8"/>
+                          <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                        {headerImageUploading ? 'Replacing...' : 'Replace'}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleHeaderImageUpload(file);
+                            e.target.value = '';
+                          }}
+                          disabled={headerImageUploading}
+                        />
+                      </label>
+                      <button
+                        onClick={handleHeaderImageRemove}
+                        className="px-3 py-2 text-xs text-red-300/70 hover:text-red-300 bg-red-500/5 hover:bg-red-500/10 rounded-lg transition-colors border border-red-500/10"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  )}
+                  <p className="text-[10px] text-white/25">Square images work best. Cropped to center on upload.</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Persona document */}
+            <div className="space-y-2 pt-1 border-t border-white/5">
+              <label className="block text-sm font-medium text-white/60">Persona Document</label>
+
               {personaMessage && (
                 <p className={`text-xs ${personaMessage.type === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
                   {personaMessage.text}
@@ -4480,94 +4584,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                    </div>
 	                  </div>
 	                )}
-	              </div>
-	            </div>
-
-	          {/* Header Image */}
-	          <div id="header-image" className="border-t border-white/10 pt-6">
-	            <h3 className="text-sm font-semibold text-white/80 mb-4">Header Image</h3>
-	            <div className="space-y-4">
-	              <div className="flex items-center justify-between">
-	                <div>
-	                  <label className="block text-sm font-medium text-white/60">Show in chat header</label>
-	                  <p className="text-xs text-white/30 mt-0.5">Display a custom image in the header instead of the model name</p>
-	                </div>
-	                <ToggleSwitch checked={headerImageEnabled} onChange={() => setHeaderImageEnabled(!headerImageEnabled)} accentColor="purple" />
-	              </div>
-
-	              {/* Image preview and upload */}
-	              <div className="flex items-center gap-4">
-	                {/* Preview box — matches the SystemStatsBar square window style */}
-	                <div className="rounded-lg bg-black/20 border border-white/[0.05] p-1.5 flex items-center justify-center shadow-[inset_0_1px_7px_rgba(0,0,0,0.5)]"
-	                  style={{ width: 56, height: 56 }}>
-	                  {headerImageUrl ? (
-	                    <img
-	                      src={headerImageUrl}
-	                      alt="Header preview"
-	                      className="w-8 h-8 rounded-md object-cover"
-	                    />
-	                  ) : (
-	                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-white/20">
-	                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-	                      <circle cx="8.5" cy="8.5" r="1.5"/>
-	                      <polyline points="21 15 16 10 5 21"/>
-	                    </svg>
-	                  )}
-	                </div>
-
-	                <div className="flex-1 space-y-2">
-	                  {!headerImageExists ? (
-	                    <label className="inline-flex items-center gap-2 px-3 py-2 text-xs text-white/70 bg-white/5 hover:bg-white/10 rounded-lg cursor-pointer transition-colors border border-white/10">
-	                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-	                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-	                        <polyline points="17 8 12 3 7 8"/>
-	                        <line x1="12" y1="3" x2="12" y2="15"/>
-	                      </svg>
-	                      {headerImageUploading ? 'Uploading...' : 'Upload image'}
-	                      <input
-	                        type="file"
-	                        accept="image/*"
-	                        className="hidden"
-	                        onChange={(e) => {
-	                          const file = e.target.files?.[0];
-	                          if (file) handleHeaderImageUpload(file);
-	                          e.target.value = '';
-	                        }}
-	                        disabled={headerImageUploading}
-	                      />
-	                    </label>
-	                  ) : (
-	                    <div className="flex items-center gap-2">
-	                      <label className="inline-flex items-center gap-2 px-3 py-2 text-xs text-white/70 bg-white/5 hover:bg-white/10 rounded-lg cursor-pointer transition-colors border border-white/10">
-	                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-	                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-	                          <polyline points="17 8 12 3 7 8"/>
-	                          <line x1="12" y1="3" x2="12" y2="15"/>
-	                        </svg>
-	                        {headerImageUploading ? 'Replacing...' : 'Replace'}
-	                        <input
-	                          type="file"
-	                          accept="image/*"
-	                          className="hidden"
-	                          onChange={(e) => {
-	                            const file = e.target.files?.[0];
-	                            if (file) handleHeaderImageUpload(file);
-	                            e.target.value = '';
-	                          }}
-	                          disabled={headerImageUploading}
-	                        />
-	                      </label>
-	                      <button
-	                        onClick={handleHeaderImageRemove}
-	                        className="px-3 py-2 text-xs text-red-300/70 hover:text-red-300 bg-red-500/5 hover:bg-red-500/10 rounded-lg transition-colors border border-red-500/10"
-	                      >
-	                        Remove
-	                      </button>
-	                    </div>
-	                  )}
-	                  <p className="text-[10px] text-white/25">Square images work best. Cropped to center on upload.</p>
-	                </div>
-	              </div>
 	              </div>
 	            </div>
 

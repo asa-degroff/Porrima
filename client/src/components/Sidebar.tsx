@@ -59,6 +59,7 @@ interface Props {
   systemStatsCurrent?: SystemStatsSample | null;
   systemStatsHiddenGpus?: string[];
   showSystemStats?: boolean;
+  agentName?: string;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -631,6 +632,7 @@ export function Sidebar({
   systemStatsCurrent,
   systemStatsHiddenGpus,
   showSystemStats = false,
+  agentName = "Porrima",
 }: Props) {
   const {
     projectsExpanded,
@@ -817,7 +819,7 @@ export function Sidebar({
                 <div className={`flex items-center gap-2 transition-opacity duration-300 ${sidebarActivityActive ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
                   <SidebarLogo size={24} />
                   <h1 className="text-lg font-semibold text-white/90 tracking-tight">
-                    qu.je
+                    {agentName}
                   </h1>
                 </div>
                 {/* Background activity indicator — octahedron for memory extraction, synthesis, creative directions */}

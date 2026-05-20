@@ -390,6 +390,8 @@ export interface Settings {
   systemStatsEnabled?: boolean;
   systemStatsBufferSeconds?: number;
   systemStatsHiddenGpus?: string[];
+  // Agent display name — shown in the sidebar search bar and elsewhere
+  agentName?: string;
   // Header image — user-uploaded image displayed in the chat header instead of model name
   headerImageEnabled?: boolean;
   headerImageId?: string;  // filename stem
