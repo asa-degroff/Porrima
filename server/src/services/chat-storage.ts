@@ -575,9 +575,12 @@ export async function getChat(id: string): Promise<Chat | null> {
     }
   }
 
-  const messages = rowMessages && (rowMessages.length > 0 || legacyMessages.length === 0)
+  const rawMessages = rowMessages && (rowMessages.length > 0 || legacyMessages.length === 0)
     ? rowMessages
     : legacyMessages;
+  const messages = rawMessages.map((message, index) =>
+    message._rowSequence === undefined ? withRowSequence(message, index) : message
+  );
 
   const chat: Chat = {
     id: row.id,
@@ -630,7 +633,7 @@ export function getChatMessageWindow(
   const messages: ChatMessage[] = [];
   for (const row of rows) {
     try {
-      messages.push(JSON.parse(row.payload_json) as ChatMessage);
+      messages.push(withRowSequence(JSON.parse(row.payload_json) as ChatMessage, row.sequence));
     } catch (e) {
       console.warn(
         `[chat-storage] Skipping corrupt message row ${chatId}:${row.sequence} in window: ${(e as Error).message}`
@@ -735,7 +738,7 @@ export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean })
         chat.contextWindow ?? null,
         chat.projectId ?? null,
         chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
-        JSON.stringify(chat.messages),
+        JSON.stringify(chat.messages.map(withoutTransientMessageMetadata)),
         chat.createdAt,
         chat.lastModified,
         chat.lastDelayedExtractionAt ?? null,
@@ -807,7 +810,7 @@ export async function createChat(chat: Chat): Promise<void> {
       chat.contextWindow ?? null,
       chat.projectId ?? null,
       chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
-      JSON.stringify(chat.messages),
+      JSON.stringify(chat.messages.map(withoutTransientMessageMetadata)),
       chat.createdAt,
       chat.lastModified,
       chat.lastDelayedExtractionAt ?? null,
@@ -1263,7 +1266,7 @@ function loadChatMessageRows(db: Database.Database, chatId: string): ChatMessage
       return null;
     }
     try {
-      messages.push(JSON.parse(row.payload_json) as ChatMessage);
+      messages.push(withRowSequence(JSON.parse(row.payload_json) as ChatMessage, row.sequence));
     } catch (e) {
       console.warn(
         `[chat-storage] Corrupt message row ${chatId}:${row.sequence}; falling back to legacy JSON: ${(e as Error).message}`
@@ -1272,6 +1275,15 @@ function loadChatMessageRows(db: Database.Database, chatId: string): ChatMessage
     }
   }
   return messages;
+}
+
+function withRowSequence(message: ChatMessage, sequence: number): ChatMessage {
+  return { ...message, _rowSequence: sequence };
+}
+
+function withoutTransientMessageMetadata(message: ChatMessage): ChatMessage {
+  const { _rowSequence, ...persisted } = message;
+  return persisted;
 }
 
 function buildSearchContent(msg: ChatMessage): string {
@@ -1349,7 +1361,8 @@ function syncChatMessageRows(
     }
   }
 
-  const serialized = messages.map((msg) => JSON.stringify(msg));
+  const persistedMessages = messages.map(withoutTransientMessageMetadata);
+  const serialized = persistedMessages.map((msg) => JSON.stringify(msg));
   const commonLength = Math.min(existing.length, serialized.length);
   let firstChanged = commonLength;
 
@@ -1391,7 +1404,7 @@ function syncChatMessageRows(
   `);
 
   for (let i = firstChanged; i < messages.length; i++) {
-    const msg = messages[i];
+    const msg = persistedMessages[i];
     insert.run(
       chatId,
       i,
@@ -1859,7 +1872,7 @@ function migrateChatsFromJson(db: Database.Database): void {
             chat.contextWindow ?? null,
             chat.projectId ?? null,
             chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
-            JSON.stringify(chat.messages),
+            JSON.stringify(chat.messages.map(withoutTransientMessageMetadata)),
             chat.createdAt,
             chat.lastModified,
             chat.lastDelayedExtractionAt ?? null,

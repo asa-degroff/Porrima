@@ -66,6 +66,8 @@ export interface ImageAttachment {
 }
 
 export interface ChatMessage {
+  /** Absolute server row sequence for stable edit/retry targeting. */
+  _rowSequence?: number;
   role: "user" | "assistant" | "system";
   content: string;
   thinking?: string;

@@ -146,9 +146,10 @@ interface Props {
   activeTools?: ToolStatus[];
   artifacts?: Artifact[];
   generatedImages?: GeneratedImage[];
-  onEditMessage?: (index: number, newText: string, images?: ImageAttachment[]) => void;
-  onRetryMessage?: (index: number) => void;
+  onEditMessage?: (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number) => void;
+  onRetryMessage?: (index: number, messageSequence?: number) => void;
   messageIndex?: number;
+  messageSequence?: number;
   editable?: boolean;
   onReadAloud?: (text: string) => void;
   isPlayingTts?: boolean;
@@ -227,6 +228,7 @@ export const MessageBubble = memo(function MessageBubble({
   onEditMessage,
   onRetryMessage,
   messageIndex,
+  messageSequence,
   editable,
   onReadAloud,
   isPlayingTts,
@@ -278,7 +280,7 @@ export const MessageBubble = memo(function MessageBubble({
 
   const handleRetry = () => {
     if (messageIndex != null) {
-      onRetryMessage?.(messageIndex);
+      onRetryMessage?.(messageIndex, messageSequence);
     }
     setContextMenu(null);
   };
@@ -310,7 +312,7 @@ export const MessageBubble = memo(function MessageBubble({
     const imagesChanged = editImages.length !== (message.images?.length || 0);
     
     if (textChanged || imagesChanged) {
-      onEditMessage?.(messageIndex, trimmed, editImages);
+      onEditMessage?.(messageIndex, trimmed, editImages, messageSequence);
     }
     setEditing(false);
   };

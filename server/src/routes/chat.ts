@@ -3979,60 +3979,66 @@ router.get("/reconnect/:chatId", async (req, res) => {
 });
 
 // Edit message at index and regenerate response via SSE
+function isEmptyAssistantPlaceholder(message: ChatMessage | undefined): boolean {
+  return Boolean(
+    message?.role === "assistant" &&
+    !message.content?.trim() &&
+    !message.thinking?.trim() &&
+    !message.toolCalls?.length &&
+    !message.toolResults?.length &&
+    !message.artifacts?.length &&
+    !message.generatedImages?.length &&
+    !message.visuals?.length &&
+    !message.segments?.length
+  );
+}
+
 router.post("/edit", async (req, res) => {
-  const { chatId, messageIndex, message, images } = req.body as {
+  const { chatId, messageIndex, messageSequence, message, images } = req.body as {
     chatId: string;
-    messageIndex: number;
+    messageIndex?: number;
+    messageSequence?: number;
     message: string;
     images?: ImageAttachment[];
   };
 
-  if (!chatId || messageIndex == null || !message) {
-    return res.status(400).json({ error: "chatId, messageIndex, and message are required" });
+  if (!chatId || (messageIndex == null && messageSequence == null) || !message) {
+    return res.status(400).json({ error: "chatId, messageIndex/messageSequence, and message are required" });
   }
 
   const chat = await getChat(chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
-  if (messageIndex < 0 || messageIndex >= chat.messages.length) {
+  if (messageIndex != null && (messageIndex < 0 || messageIndex >= chat.messages.length)) {
     return res.status(400).json({ error: "messageIndex out of bounds" });
   }
 
-  // Resolve the target index: if the client's index is off (e.g. due to a stale
-  // empty assistant message from a prior provider error), scan backwards to find
-  // the actual user message and clean up the orphaned assistant.
-  let targetIndex = messageIndex;
-  if (chat.messages[targetIndex].role !== "user") {
-    // Scan backwards from the given index to find the nearest user message
-    let scanIdx = targetIndex;
-    while (scanIdx >= 0 && chat.messages[scanIdx].role !== "user") {
-      scanIdx--;
-    }
-    if (scanIdx < 0) {
-      return res.status(400).json({ error: "messageIndex must point to a user message" });
-    }
-    console.log(`[chat] edit: client index ${targetIndex} points to ${chat.messages[targetIndex].role}, resolved to user message at index ${scanIdx}`);
-    targetIndex = scanIdx;
+  const hasStableSequence = Number.isInteger(messageSequence);
+  let targetIndex = hasStableSequence
+    ? chat.messages.findIndex((m, index) => (m._rowSequence ?? index) === messageSequence)
+    : messageIndex!;
 
-    // Remove any empty assistant messages after the resolved user message
-    // These are orphaned from prior provider errors where the server didn't persist
-    // but the client kept a local placeholder, causing index drift.
-    const afterUser = chat.messages.slice(targetIndex + 1);
-    const firstNonEmptyAssistant = afterUser.findIndex(m =>
-      m.role === "assistant" && (m.content?.trim() || m.toolCalls?.length || m.thinking?.trim())
-    );
-    if (firstNonEmptyAssistant === 0) {
-      // The first message after the user is a valid assistant — nothing to clean
-    } else if (firstNonEmptyAssistant > 0) {
-      // Remove empty assistant(s) between the user and the first valid assistant
-      const messagesToRemove = firstNonEmptyAssistant;
-      chat.messages.splice(targetIndex + 1, messagesToRemove);
-      console.log(`[chat] edit: removed ${messagesToRemove} empty assistant message(s) after user message at ${targetIndex}`);
-    } else if (afterUser.length > 0) {
-      // All messages after the user are assistants but none have content — remove them all
-      const messagesToRemove = afterUser.length;
-      chat.messages.splice(targetIndex + 1, messagesToRemove);
-      console.log(`[chat] edit: removed ${messagesToRemove} empty assistant message(s) after user message at ${targetIndex}`);
+  if (targetIndex < 0) {
+    return res.status(400).json({ error: "messageSequence not found" });
+  }
+
+  // Edits are destructive truncations, so fail closed if the client target is
+  // ambiguous. The only tolerated drift is the local empty assistant placeholder
+  // immediately after a user message.
+  if (chat.messages[targetIndex].role !== "user") {
+    if (
+      isEmptyAssistantPlaceholder(chat.messages[targetIndex]) &&
+      targetIndex > 0 &&
+      chat.messages[targetIndex - 1]?.role === "user"
+    ) {
+      console.log(`[chat] edit: resolved empty assistant placeholder at index ${targetIndex} to user message at index ${targetIndex - 1}`);
+      targetIndex = targetIndex - 1;
+    } else {
+      console.warn(
+        `[chat] edit rejected: target index ${targetIndex} is ${chat.messages[targetIndex].role}; ` +
+        `messageSequence=${messageSequence ?? "none"} messageIndex=${messageIndex ?? "none"}`
+      );
+      return res.status(400).json({ error: "Edit target must be a user message" });
     }
   }
 

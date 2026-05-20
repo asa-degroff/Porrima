@@ -1395,13 +1395,17 @@ export function useChat(chatId: string | null) {
   );
 
   const editMessage = useCallback(
-    (index: number, newText: string, images?: ImageAttachment[]) => {
+    (index: number, newText: string, images?: ImageAttachment[], messageSequence?: number) => {
       if (!chatId || streaming || !navigator.onLine) return;
       const targetChatId = chatId;
       markRecentlyStreaming(targetChatId);
       const currentOffset = messageOffsetRef.current;
-      const localIndex = index - messageOffsetRef.current;
+      const sequenceLocalIndex = messageSequence == null
+        ? -1
+        : messages.findIndex((m) => m._rowSequence === messageSequence);
+      const localIndex = sequenceLocalIndex >= 0 ? sequenceLocalIndex : index - messageOffsetRef.current;
       if (localIndex < 0 || localIndex >= messages.length) return;
+      const targetAbsoluteIndex = messageSequence ?? index;
 
       // Use provided images if explicitly passed (including empty array), otherwise preserve originals
       const originalMessage = messages[localIndex];
@@ -1424,14 +1428,14 @@ export function useChat(chatId: string | null) {
         return next;
       });
       bg.messageOffset = currentOffset;
-      bg.messageTotal = index + 2;
+      bg.messageTotal = targetAbsoluteIndex + 2;
       setMessageOffset(currentOffset);
-      setMessageTotal(index + 2);
+      setMessageTotal(targetAbsoluteIndex + 2);
 
       prepareStream();
 
       const callbacks = makeStreamCallbacks(targetChatId);
-      const controller = apiEditMessage(targetChatId, index, newText, callbacks, originalImages);
+      const controller = apiEditMessage(targetChatId, index, newText, callbacks, originalImages, messageSequence);
       bg.abortController = controller;
       abortRef.current = controller;
     },
@@ -1439,11 +1443,14 @@ export function useChat(chatId: string | null) {
   );
 
   const retryMessage = useCallback(
-    (index: number) => {
-      const localIndex = index - messageOffsetRef.current;
+    (index: number, messageSequence?: number) => {
+      const sequenceLocalIndex = messageSequence == null
+        ? -1
+        : messages.findIndex((m) => m._rowSequence === messageSequence);
+      const localIndex = sequenceLocalIndex >= 0 ? sequenceLocalIndex : index - messageOffsetRef.current;
       const msg = localIndex >= 0 ? messages[localIndex] : undefined;
       if (msg) {
-        editMessage(index, msg.content, msg.images);
+        editMessage(index, msg.content, msg.images, messageSequence ?? msg._rowSequence);
       }
     },
     [editMessage, messages]

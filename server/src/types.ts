@@ -39,6 +39,8 @@ export interface MessageSegment {
 }
 
 export interface ChatMessage {
+  /** Absolute chat_message_rows.sequence for UI edit/retry targeting. Never persisted. */
+  _rowSequence?: number;
   role: "user" | "assistant" | "system";
   content: string;
   thinking?: string;
