@@ -3,7 +3,7 @@
 ## Notebook System
 
 Dual user/agent notebook for structured notes, reflections, and cross-referencing:
-- **Storage**: `notebook-storage.ts` with file-based persistence in `~/.quje-agent/notebooks/`
+- **Storage**: `notebook-storage.ts` with file-based persistence in `~/.porrima/notebooks/`
 - **Entry types**: user-created and agent-created entries (e.g., synthesis summaries)
 - **Linking**: `NotebookLink` cross-references between notebooks, chats, and external URLs
 - **Attachments**: image attachments, tool results, artifacts, visuals, and memory associations
@@ -28,7 +28,7 @@ Dual user/agent notebook for structured notes, reflections, and cross-referencin
 - Upload and attach images to chats
 - Vision model analysis
 - Thumbnails and full-resolution serving
-- Stored in `~/.quje-agent/user-images/`
+- Stored in `~/.porrima/user-images/`
 
 ## Skills
 

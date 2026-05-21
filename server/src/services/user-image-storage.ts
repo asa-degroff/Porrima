@@ -1,9 +1,9 @@
 import { writeFile, mkdir, access, rm } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import sharp from "sharp";
+import { appDataPath } from "./paths.js";
 
-const USER_IMAGES_DIR = join(homedir(), ".quje-agent", "user-images");
+const USER_IMAGES_DIR = appDataPath("user-images");
 const THUMB_WIDTH = 384;
 const THUMB_QUALITY = 80;
 

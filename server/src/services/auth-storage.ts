@@ -1,9 +1,9 @@
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import { randomBytes } from "crypto";
+import { APP_DATA_DIR } from "./paths.js";
 
-const BASE_DIR = join(homedir(), ".quje-agent");
+const BASE_DIR = APP_DATA_DIR;
 const AUTH_DIR = join(BASE_DIR, "auth");
 const CREDENTIALS_FILE = join(AUTH_DIR, "credentials.json");
 const SECRET_FILE = join(AUTH_DIR, "session-secret.txt");

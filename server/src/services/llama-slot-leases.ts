@@ -1,9 +1,9 @@
 import { randomUUID } from "crypto";
 import { mkdir, readFile, writeFile } from "fs/promises";
-import { homedir } from "os";
 import { join } from "path";
+import { APP_DATA_DIR } from "./paths.js";
 
-const BASE_DIR = join(homedir(), ".quje-agent");
+const BASE_DIR = APP_DATA_DIR;
 const STATE_PATH = join(BASE_DIR, "llama-slot-bindings.json");
 const DISCOVERY_TTL_MS = 5 * 60 * 1000;
 const FOSSIL_CUTOFF_MS = 24 * 60 * 60 * 1000; // remove inactive entries older than 24h

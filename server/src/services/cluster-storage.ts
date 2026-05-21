@@ -1,10 +1,10 @@
-import { homedir } from "os";
 import { join } from "path";
 import { mkdir, writeFile, readFile, access } from "fs/promises";
 import { existsSync } from "fs";
 import type { ImageCorpusEntry } from "./image-corpus.js";
+import { appDataPath } from "./paths.js";
 
-const CLUSTERS_DIR = join(homedir(), ".quje-agent", "clusters");
+const CLUSTERS_DIR = appDataPath("clusters");
 const CLUSTERS_FILE = join(CLUSTERS_DIR, "clusters.json");
 
 export interface PromptCluster {

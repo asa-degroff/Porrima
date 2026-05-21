@@ -1,12 +1,12 @@
 import { Router, Request, Response } from "express";
 import { join } from "path";
-import { homedir } from "os";
 import { readFile } from "fs/promises";
 import { lookup } from "../utils/mime.js";
+import { appDataPath } from "../services/paths.js";
 
 const router = Router();
-const ARTIFACTS_DIR = join(homedir(), ".quje-agent", "artifacts");
-const VISUALS_DIR = join(homedir(), ".quje-agent", "visuals");
+const ARTIFACTS_DIR = appDataPath("artifacts");
+const VISUALS_DIR = appDataPath("visuals");
 
 // Serve latest version of artifact (backward compat + convenience)
 router.get("/:id", async (req, res) => {

@@ -1,7 +1,6 @@
 import express from "express";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import type { TTSBackend, TTSSettings, TTSTextMode } from "../types/tts.js";
 import { DEFAULT_TTS_SETTINGS } from "../types/tts.js";
 import { generateTTS, getAudioFile, getAvailableVoices, groupVoices, checkKokoroAvailability, checkQwen3TTSInstallation, checkSupertonicTTSInstallation } from "../services/tts.js";
@@ -9,10 +8,11 @@ import { getQwen3AudioFile } from "../services/tts-qwen3.js";
 import { getSupertonicAudioFile } from "../services/tts-supertonic.js";
 import { chunkPlanOptionsForSettings, generateTTSChunks, planTTSChunks, generateTTSChunksStreamed } from "../services/tts-chunking.js";
 import { getTtsPythonStatus } from "../services/tts-python.js";
+import { APP_DATA_DIR } from "../services/paths.js";
 
 const router = express.Router();
 
-const BASE_DIR = join(homedir(), ".quje-agent");
+const BASE_DIR = APP_DATA_DIR;
 const TTS_SETTINGS_PATH = join(BASE_DIR, "tts-settings.json");
 const TTS_BACKENDS: TTSBackend[] = ["kokoro", "qwen3-tts", "supertonic-3"];
 const DEFAULT_VOICE_BY_BACKEND: Record<TTSBackend, string> = {

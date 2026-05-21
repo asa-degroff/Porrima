@@ -7,7 +7,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 
 const SYSTEMD_USER_DIR = path.join(os.homedir(), ".config", "systemd", "user");
-const OVERRIDE_FILENAME = "quje-model.conf";
+const OVERRIDE_FILENAME = "porrima-model.conf";
 
 const HEADER = [
   "# Managed by Porrima — written by the Models settings UI.",

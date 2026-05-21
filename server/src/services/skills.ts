@@ -2,9 +2,10 @@ import { readFile, readdir, stat, access, writeFile, mkdir, rm } from "fs/promis
 import { resolve, join } from "path";
 import { homedir } from "os";
 import { fetch } from "undici";
+import { appDataPath } from "./paths.js";
 
 const HOME = homedir();
-const GLOBAL_SKILLS_DIR = resolve(HOME, ".quje-agent", "skills");
+const GLOBAL_SKILLS_DIR = appDataPath("skills");
 
 export interface Skill {
   name: string;

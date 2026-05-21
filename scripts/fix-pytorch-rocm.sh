@@ -12,7 +12,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-VENV_PATH="${1:-/home/asa/quje-agent/.venv}"
+VENV_PATH="${1:-/home/asa/porrima/.venv}"
 PYTHON="$VENV_PATH/bin/python"
 PIP="$VENV_PATH/bin/pip"
 

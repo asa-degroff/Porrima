@@ -3788,7 +3788,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           <div id="persona" className="space-y-3 pt-2 border-t border-white/10">
             <label className="block text-sm font-medium text-white/60">Agent Persona</label>
             <p className="text-white/30 text-xs -mt-2">
-              The agent's core identity, voice, and values. Loaded from <code className="text-white/40">~/.quje-agent/persona.md</code>.
+              The agent's core identity, voice, and values. Loaded from <code className="text-white/40">~/.porrima/persona.md</code>.
             </p>
 
             {/* Agent Name */}

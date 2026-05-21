@@ -3,9 +3,9 @@ import * as sqliteVec from "sqlite-vec";
 import { writeFile, mkdir } from "fs/promises";
 import { existsSync, mkdirSync, readFileSync, renameSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import { v4 as uuid } from "uuid";
 import type { Memory, MemoryStore } from "../types.js";
+import { APP_DATA_DIR } from "./paths.js";
 import {
   applyCrossProjectScoreMultiplier,
   applyGlobalProjectScoreMultiplier,
@@ -15,7 +15,7 @@ import {
   sortByAdjustedScore,
 } from "./memory-retrieval-scope.js";
 
-const BASE_DIR = join(homedir(), ".quje-agent");
+const BASE_DIR = APP_DATA_DIR;
 const MEMORY_DIR = join(BASE_DIR, "memory");
 const MEMORY_FILE = join(MEMORY_DIR, "memories.json");
 const MEMORY_DB = join(MEMORY_DIR, "memories.db");

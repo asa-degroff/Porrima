@@ -1,7 +1,7 @@
 import { readFile, readdir, mkdir, rename, unlink, writeFile } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import type { NotebookEntry, NotebookIndex, NotebookLink } from "../types.js";
+import { APP_DATA_DIR } from "./paths.js";
 import {
   createMemoryBlock,
   updateMemoryBlock,
@@ -15,7 +15,7 @@ import { getDb } from "./memory-storage.js";
 
 // --- Paths (kept for migration only; all active operations use SQLite) ---
 
-const BASE_DIR = join(homedir(), ".quje-agent");
+const BASE_DIR = APP_DATA_DIR;
 const NOTEBOOKS_DIR = join(BASE_DIR, "notebooks");
 const USER_ENTRIES_DIR = join(NOTEBOOKS_DIR, "user", "entries");
 const AGENT_ENTRIES_DIR = join(NOTEBOOKS_DIR, "agent", "entries");

@@ -9,7 +9,7 @@ interface QueuedMessage {
   timestamp: number;
 }
 
-interface QujeAgentDB extends DBSchema {
+interface PorrimaDB extends DBSchema {
   chatList: {
     key: string;
     value: { key: string; items: ChatListItem[] };
@@ -25,11 +25,35 @@ interface QujeAgentDB extends DBSchema {
   };
 }
 
-let dbPromise: Promise<IDBPDatabase<QujeAgentDB>> | null = null;
+const DB_NAME = "porrima-db";
+const LEGACY_DB_NAME = "quje-agent-db";
+
+let dbPromise: Promise<IDBPDatabase<PorrimaDB>> | null = null;
+let legacyMigrationPromise: Promise<void> | null = null;
 
 function getDB() {
   if (!dbPromise) {
-    dbPromise = openDB<QujeAgentDB>("quje-agent-db", 1, {
+    dbPromise = (async () => {
+      const db = await openDB<PorrimaDB>(DB_NAME, 1, {
+        upgrade(db) {
+          db.createObjectStore("chatList");
+          db.createObjectStore("chats", { keyPath: "id" });
+          const queue = db.createObjectStore("messageQueue", {
+            keyPath: "id",
+            autoIncrement: true,
+          });
+          queue.createIndex("by-chatId", "chatId");
+        },
+      });
+      await migrateLegacyDB(db);
+      return db;
+    })();
+  }
+  return dbPromise;
+}
+
+async function openLegacyDB(): Promise<IDBPDatabase<PorrimaDB>> {
+  return openDB<PorrimaDB>(LEGACY_DB_NAME, 1, {
       upgrade(db) {
         db.createObjectStore("chatList");
         db.createObjectStore("chats", { keyPath: "id" });
@@ -39,9 +63,34 @@ function getDB() {
         });
         queue.createIndex("by-chatId", "chatId");
       },
-    });
-  }
-  return dbPromise;
+  });
+}
+
+async function migrateLegacyDB(db: IDBPDatabase<PorrimaDB>): Promise<void> {
+  if (legacyMigrationPromise) return legacyMigrationPromise;
+  legacyMigrationPromise = (async () => {
+    const hasCurrentData =
+      (await db.count("chatList")) > 0 ||
+      (await db.count("chats")) > 0 ||
+      (await db.count("messageQueue")) > 0;
+    if (hasCurrentData) return;
+
+    const legacy = await openLegacyDB();
+    try {
+      for (const row of await legacy.getAll("chatList")) {
+        await db.put("chatList", row, row.key);
+      }
+      for (const chat of await legacy.getAll("chats")) {
+        await db.put("chats", chat);
+      }
+      for (const queued of await legacy.getAll("messageQueue")) {
+        await db.put("messageQueue", queued);
+      }
+    } finally {
+      legacy.close();
+    }
+  })();
+  return legacyMigrationPromise;
 }
 
 // Chat list cache

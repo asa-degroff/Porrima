@@ -156,10 +156,10 @@ porrima/
 
 ## Data storage
 
-All data is stored in `~/.quje-agent/`:
+All data is stored in `~/.porrima/`:
 
 ```
-~/.quje-agent/
+~/.porrima/
 ├── app.db              # SQLite database for chats, settings, automations, search projections
 ├── chats/              # Legacy chat JSON files migrated to app.db
 ├── settings.json       # Legacy settings JSON migrated to app.db

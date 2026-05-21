@@ -1,8 +1,7 @@
 import Database from "better-sqlite3";
-import { join } from "path";
-import { homedir } from "os";
+import { appDataPath } from "./paths.js";
 
-const DB_PATH = join(homedir(), ".quje-agent", "quje-agent.db");
+const DB_PATH = appDataPath("porrima.db");
 const MAX_RUNS_PER_MODEL = 50;
 
 // EMA decay factor — recent runs matter more, but we smooth out variance.

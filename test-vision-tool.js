@@ -10,7 +10,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 
-const IMAGES_DIR = join(homedir(), '.quje-agent', 'images');
+const IMAGES_DIR = join(homedir(), '.porrima', 'images');
 
 async function testVisionWithImage() {
   console.log('=== Vision Model Test ===\n');
@@ -23,7 +23,7 @@ async function testVisionWithImage() {
     console.log('Usage: node test-vision-tool.js [model] [image-uuid]');
     console.log('\nExample: node test-vision-tool.js qwen3.5:latest abc123-def456');
     console.log('\nTo find recent image UUIDs:');
-    console.log('  ls -lt ~/.quje-agent/images/ | head');
+    console.log('  ls -lt ~/.porrima/images/ | head');
     process.exit(1);
   }
   

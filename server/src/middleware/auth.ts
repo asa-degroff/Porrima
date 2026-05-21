@@ -5,7 +5,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
     const token = authHeader.substring(7);
-    const devToken = process.env.QUJE_DEV_TOKEN;
+    const devToken = process.env.PORRIMA_DEV_TOKEN || process.env.QUJE_DEV_TOKEN;
     if (devToken && token === devToken) {
       return next();
     }

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { buildClusters, ensureClustersFresh } from "../services/cluster-engine.js";
 import { getAllCorpusEntries, cleanupOrphanedEntries } from "../services/image-corpus.js";
+import { APP_DATA_DIR } from "../services/paths.js";
 
 const router = Router();
 
@@ -158,10 +159,9 @@ router.get("/cleanup/dry-run", async (_req, res) => {
   try {
     const { access } = await import("fs/promises");
     const { join } = await import("path");
-    const { homedir } = await import("os");
     const { getAllCorpusEntries } = await import("../services/image-corpus.js");
     
-    const BASE_DIR = join(homedir(), ".quje-agent");
+    const BASE_DIR = APP_DATA_DIR;
     const IMAGES_DIR = join(BASE_DIR, "images");
     const VISION_DIR = join(BASE_DIR, "vision");
     

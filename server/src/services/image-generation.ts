@@ -1,12 +1,12 @@
 import { EventEmitter } from "events";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import type { ImageGenerationParams, GeneratedImage } from "../types.js";
 import { addCorpusEntry, enrichCorpusEntry } from "./image-corpus.js";
 import { getSettings } from "./chat-storage.js";
+import { appDataPath } from "./paths.js";
 
-const IMAGES_DIR = join(homedir(), ".quje-agent", "images");
+const IMAGES_DIR = appDataPath("images");
 const GENERATIONS_FILE = join(IMAGES_DIR, "generations.json");
 
 export type GenerationStatus = "queued" | "processing" | "completed" | "error";

@@ -1,7 +1,8 @@
 import fs from "fs";
 import { join } from "path";
+import { appDataPath } from "./paths.js";
 
-const LOG_DIR = join(process.env.HOME || "", ".quje-agent", "logs");
+const LOG_DIR = appDataPath("logs");
 const LOG_FILE = join(LOG_DIR, "server.log");
 
 let writeStream: fs.WriteStream | null = null;

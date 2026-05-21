@@ -3,7 +3,7 @@
  * after changing the embedding model or provider.
  *
  * Storage layout:
- *   ~/.quje-agent/backups/<id>/
+ *   ~/.porrima/backups/<id>/
  *     manifest.json
  *     memories.db
  *     corpus.db
@@ -16,7 +16,6 @@
 import { copyFile, mkdir, readdir, readFile, stat, writeFile, rm } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import {
   getDb as getMemoryDb,
   closeMemoryDb,
@@ -35,8 +34,9 @@ import {
   type EmbeddingConfig,
 } from "./embeddings.js";
 import { getSettings, saveSettings } from "./chat-storage.js";
+import { appDataPath } from "./paths.js";
 
-const BACKUPS_DIR = join(homedir(), ".quje-agent", "backups");
+const BACKUPS_DIR = appDataPath("backups");
 const EMBED_BATCH_SIZE = 16;
 
 export interface BackupManifest {

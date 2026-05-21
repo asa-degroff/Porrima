@@ -11,7 +11,11 @@ import {
   searchNotebooks,
   OfflineError,
 } from "../api/client";
+import { readStoredValue, writeStoredValue } from "../lib/storage";
 import type { NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, ImageAttachment } from "../types";
+
+const NOTEBOOK_LAST_SEEN_KEY = "porrima-notebook-agent-last-seen";
+const LEGACY_NOTEBOOK_LAST_SEEN_KEY = "quje-notebook-agent-last-seen";
 
 export function useNotebooks() {
   const [userNotebooks, setUserNotebooks] = useState<NotebookIndex>({ entries: [], lastActivityDate: null });
@@ -36,7 +40,7 @@ export function useNotebooks() {
       .catch((err) => {
         console.warn("Failed to load notebook last-seen from server:", err);
         // Fall back to localStorage for backward compatibility
-        const local = localStorage.getItem("quje-notebook-agent-last-seen");
+        const local = readStoredValue(NOTEBOOK_LAST_SEEN_KEY, LEGACY_NOTEBOOK_LAST_SEEN_KEY);
         if (local) setNotebookLastSeen(local);
         setSynced(true);
       });
@@ -122,7 +126,7 @@ export function useNotebooks() {
     });
     
     // Also save to localStorage for backward compatibility and offline support
-    localStorage.setItem("quje-notebook-agent-last-seen", now);
+    writeStoredValue(NOTEBOOK_LAST_SEEN_KEY, now, LEGACY_NOTEBOOK_LAST_SEEN_KEY);
   }, []);
 
   const searchNotebookEntries = useCallback(async (query: string) => {

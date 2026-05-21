@@ -11,7 +11,7 @@
 - **Build server**: `cd server && npm run build` (outputs to `server/dist/`)
 - **Build client**: `cd client && npm run build` (outputs to `client/dist/`)
 - **Type check**: `npx tsc --noEmit` from either `server/` or `client/`
-- **Data dir**: `~/.quje-agent/` (chats, projects, settings, memories, artifacts)
+- **Data dir**: `~/.porrima/` (chats, projects, settings, memories, artifacts)
 - **Models dir**: `~/.local/share/llama-models/` (symlinked GGUFs for llama.cpp router)
 - **systemd services**:
   - `porrima.service` — main server (auto-starts on boot)
@@ -53,7 +53,7 @@ See also: [docs/memory-blocks.md](docs/memory-blocks.md) for the block system de
 
 See [docs/artifacts-and-images.md](docs/artifacts-and-images.md) for full details.
 
-- **Artifacts**: `create_artifact` tool writes HTML to `~/.quje-agent/artifacts/`. Blob URLs for iframe src (critical for Chrome animation performance).
+- **Artifacts**: `create_artifact` tool writes HTML to `~/.porrima/artifacts/`. Blob URLs for iframe src (critical for Chrome animation performance).
 - **Image Corpus**: SQLite + sqlite-vec + FTS5. Hybrid search via RRF. Density-based clustering (0.85 threshold).
 - **Corpus/Clustering**: SQLite corpus storage, enrichment, FTS/vector search, density-based clustering, and D3 visualization.
 - **Image Generation**: ComfyUI integration with GPU/resource coordination for agent/tool-initiated image work.
@@ -65,7 +65,7 @@ See [docs/integrations.md](docs/integrations.md) for full details.
 
 - **Notebooks**: Dual user/agent notebook with linking and attachments. Synthesis integration. Agent entries are dual-represented as filesystem JSON (for UI) and memory blocks (for searchability).
 - **TTS**: Kokoro + Qwen3-TTS backends. Generator-based streaming with 3-tier boundary detection.
-- **User Images**: Upload, thumbnails, vision analysis. Stored in `~/.quje-agent/user-images/`.
+- **User Images**: Upload, thumbnails, vision analysis. Stored in `~/.porrima/user-images/`.
 - **Skills**: Pluggable definitions, per-chat activation, URL installation.
 - **Persona**: Dynamic synthesis from memories, daily updates.
 - **Auth**: Passkey-based (WebAuthn) with express-session.

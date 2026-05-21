@@ -15,8 +15,9 @@ import { getOllamaUrl } from "./ollama-url.js";
 import { discoverAllModels } from "./models.js";
 import type { OllamaModel } from "../types.js";
 import { beginStream, endStream } from "./llm-activity.js";
+import { appDataPath } from "./paths.js";
 
-const VISION_DIR = join(process.env.HOME || process.env.USERPROFILE || ".", ".quje-agent", "vision");
+const VISION_DIR = appDataPath("vision");
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
 
 async function resolveOllamaBase(): Promise<string> {

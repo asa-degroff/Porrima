@@ -7,7 +7,7 @@ import { homedir } from 'os';
 import sharp from 'sharp';
 import { jxl } from 'icodec/node';
 
-const IMAGES_DIR = join(homedir(), '.quje-agent', 'images');
+const IMAGES_DIR = join(homedir(), '.porrima', 'images');
 
 // Load corpus
 const { getCorpus } = await import('./src/services/image-corpus.js');

@@ -106,7 +106,7 @@ const NOOP_TOOL_EFFECTS: ToolSideEffects = {
   onAskUser: () => {},
 };
 
-const CACHE_WARM_SENTINEL_PREFIX = "__quje_cache_warm_next_user_";
+const CACHE_WARM_SENTINEL_PREFIX = "__porrima_cache_warm_next_user_";
 
 // ---------------------------------------------------------------------------
 // Helpers

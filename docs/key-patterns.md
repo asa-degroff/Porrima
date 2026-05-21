@@ -4,7 +4,7 @@
 
 - **Streaming**: SSE with event types `text_delta`, `thinking_delta`, `tool_status`, `artifact`, `ask_user`, `done`, `error`, `iteration`, `warning`, `compaction`, `title_update`, `message_complete`, `follow_up_start`
 - **Types**: Shared interfaces in `server/src/types.ts` and `client/src/types.ts` (kept in sync manually)
-- **Storage**: SQLite for chats/projects/settings/pending/automations/push subscriptions (`chat-storage.ts` plus feature schemas → `~/.quje-agent/app.db`), SQLite + sqlite-vec for memories (`memory-storage.ts` → `~/.quje-agent/memory/memories.db`), SQLite + sqlite-vec for image corpus (`image-corpus.ts` → `~/.quje-agent/image-corpus/corpus.db`), notebooks via `notebook-storage.ts` → `~/.quje-agent/notebooks/`. All use `~/.quje-agent/` as the base directory.
+- **Storage**: SQLite for chats/projects/settings/pending/automations/push subscriptions (`chat-storage.ts` plus feature schemas → `~/.porrima/app.db`), SQLite + sqlite-vec for memories (`memory-storage.ts` → `~/.porrima/memory/memories.db`), SQLite + sqlite-vec for image corpus (`image-corpus.ts` → `~/.porrima/image-corpus/corpus.db`), notebooks via `notebook-storage.ts` → `~/.porrima/notebooks/`. All use `~/.porrima/` as the base directory.
 - **Chat message rows**: `chat_message_rows` is the full-fidelity message source keyed by `(chat_id, sequence)`; `chats.messages` remains a compatibility snapshot. Initial chat fetches use a recent message window (`messageLimit`, default client value 200), and older windows load by absolute `before` sequence.
 - **Tool-loop persistence**: Tool-use iterations are persisted as canonical split assistant rows grouped by `_toolLoopId`, with `_toolLoopFragment` on rows that end in tool calls. Do not collapse those rows into one assistant message; replay must preserve the live pi-ai transcript shape for llama.cpp longest-common-prefix KV cache reuse.
 - **Shared agent loop**: `agent-loop-runner.ts` is the low-level `agentLoop` / `agentLoopContinue` driver used by the HTTP chat route and headless system/automation turns. Prompt construction, history mutation, compaction, SSE emission, and persistence stay caller-owned so KV-cache-sensitive replay shape remains explicit.
@@ -37,7 +37,7 @@
 - `streamChat` from `agent.ts` is for one-shot LLM calls. Tool-loop work uses `runAgentLoop()` through the chat route or `runHeadlessChatTurn()`.
 - The scheduler (`scheduler.ts`) starts the configurable automation scheduler, delayed extraction, and image-corpus enrichment. Automations check every 5 minutes; delayed extraction checks every 5 minutes; enrichment checks every 30 minutes.
 - Automation defaults are ensured once during server startup in `index.ts`, not on every scheduler tick or route request.
-- **Cluster persistence**: Clusters saved to JSON (`~/.quje-agent/clusters/clusters.json`), not SQLite. Rebuilt on demand via `/api/corpus/rebuild-clusters`.
+- **Cluster persistence**: Clusters saved to JSON (`~/.porrima/clusters/clusters.json`), not SQLite. Rebuilt on demand via `/api/corpus/rebuild-clusters`.
 - **Corpus migration**: On first startup, `corpus.json` auto-migrates to `corpus.db` with FTS5 + sqlite-vec indexes. Original renamed to `corpus.json.bak`.
 - When editing types, update both `server/src/types.ts` and `client/src/types.ts`.
 - The server may run compiled `dist/index.js` (via `npm start` / systemd) rather than tsx dev mode — source changes require `npm run build` + restart to take effect.

@@ -1,9 +1,9 @@
 # Data Storage
 
-All data is stored in `~/.quje-agent/`:
+All data is stored in `~/.porrima/`:
 
 ```
-~/.quje-agent/
+~/.porrima/
 ├── app.db              # SQLite database (chats, chat_message_rows, projects, settings, pending states, automations, chat_messages FTS5)
 ├── chats/              # Legacy JSON files (migrated to app.db on startup)
 ├── projects/           # Legacy JSON files (migrated to app.db on startup)

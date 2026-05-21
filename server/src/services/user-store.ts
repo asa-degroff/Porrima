@@ -1,12 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
 import { promisify } from "util";
+import { APP_DATA_DIR } from "./paths.js";
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
 const mkdir = promisify(fs.mkdir);
 
-const USER_DATA_DIR = path.join(process.env.HOME || "~", ".quje-agent");
+const USER_DATA_DIR = APP_DATA_DIR;
 const USER_FILE = path.join(USER_DATA_DIR, "user.md");
 
 export interface UserStore {

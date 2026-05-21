@@ -29,6 +29,7 @@ import { useOnlineStatus } from "./hooks/useOnlineStatus";
 import { useKeyboardInset } from "./hooks/useKeyboardInset";
 import { fetchChat, fetchChatHeader, updateChat as apiUpdateChat } from "./api/client";
 import { setCachedChat, getCachedChat, clearCachedChat } from "./lib/db";
+import { readStoredValue, removeStoredValue, writeStoredValue } from "./lib/storage";
 import { HapticsProvider } from "./hooks/useHaptics";
 import { ActivityStyleProvider } from "./hooks/useActivityStyle";
 import { useTTS } from "./hooks/useTTS";
@@ -41,8 +42,16 @@ import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMo
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
 import type { Chat, ChatType, CornerShape, CornerRadius } from "./types";
 
-const CORNER_SHAPE_KEY = "quje-corner-shape";
-const CORNER_RADIUS_KEY = "quje-corner-radius";
+const CORNER_SHAPE_KEY = "porrima-corner-shape";
+const LEGACY_CORNER_SHAPE_KEY = "quje-corner-shape";
+const CORNER_RADIUS_KEY = "porrima-corner-radius";
+const LEGACY_CORNER_RADIUS_KEY = "quje-corner-radius";
+const ACTIVE_CHAT_KEY = "porrima-active-chat-id";
+const LEGACY_ACTIVE_CHAT_KEY = "quje-active-chat-id";
+const ACTIVE_VIEW_KEY = "porrima-active-view";
+const LEGACY_ACTIVE_VIEW_KEY = "quje-active-view";
+const TTS_AUTO_READ_MESSAGES_KEY = "porrima-tts-auto-read-messages";
+const LEGACY_TTS_AUTO_READ_MESSAGES_KEY = "quje-tts-auto-read-messages";
 const INITIAL_MESSAGE_LIMIT = 200;
 const PCI_ADDRESS_RE = /^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$/;
 
@@ -52,7 +61,7 @@ function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
 
 function readCachedCornerShape(): CornerShape {
   try {
-    return localStorage.getItem(CORNER_SHAPE_KEY) === "squircle" ? "squircle" : "round";
+    return readStoredValue(CORNER_SHAPE_KEY, LEGACY_CORNER_SHAPE_KEY) === "squircle" ? "squircle" : "round";
   } catch {
     return "round";
   }
@@ -60,7 +69,7 @@ function readCachedCornerShape(): CornerShape {
 
 function readCachedCornerRadius(): CornerRadius {
   try {
-    const v = localStorage.getItem(CORNER_RADIUS_KEY);
+    const v = readStoredValue(CORNER_RADIUS_KEY, LEGACY_CORNER_RADIUS_KEY);
     return v === "compact" || v === "generous" ? v : "default";
   } catch {
     return "default";
@@ -183,12 +192,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       })
       .catch((err) => {
         console.warn("Failed to load UI state from server, using localStorage:", err);
-        const cachedChatId = localStorage.getItem("quje-active-chat-id");
+        const cachedChatId = readStoredValue(ACTIVE_CHAT_KEY, LEGACY_ACTIVE_CHAT_KEY);
         if (cachedChatId) {
           setActiveChatId(cachedChatId);
           selectChat(cachedChatId);
         }
-        if (localStorage.getItem("quje-active-view") === "image-sandbox") {
+        if (readStoredValue(ACTIVE_VIEW_KEY, LEGACY_ACTIVE_VIEW_KEY) === "image-sandbox") {
           setImageSandboxOpen(true);
         }
         setUiStateSynced(true);
@@ -340,14 +349,14 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     const shape = settings.cornerShape || 'round';
     document.documentElement.setAttribute('data-corner', shape);
-    try { localStorage.setItem(CORNER_SHAPE_KEY, shape); } catch {}
+    try { writeStoredValue(CORNER_SHAPE_KEY, shape, LEGACY_CORNER_SHAPE_KEY); } catch {}
   }, [settings.cornerShape]);
 
   // Apply corner radius scale (and mirror to localStorage)
   useEffect(() => {
     const radius = settings.cornerRadius || 'default';
     document.documentElement.setAttribute('data-radius', radius);
-    try { localStorage.setItem(CORNER_RADIUS_KEY, radius); } catch {}
+    try { writeStoredValue(CORNER_RADIUS_KEY, radius, LEGACY_CORNER_RADIUS_KEY); } catch {}
   }, [settings.cornerRadius]);
 
   // Apply background effect
@@ -363,9 +372,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
     // Also save to localStorage for backward compatibility and offline support
     if (activeChatId) {
-      localStorage.setItem("quje-active-chat-id", activeChatId);
+      writeStoredValue(ACTIVE_CHAT_KEY, activeChatId, LEGACY_ACTIVE_CHAT_KEY);
     } else {
-      localStorage.removeItem("quje-active-chat-id");
+      removeStoredValue(ACTIVE_CHAT_KEY, LEGACY_ACTIVE_CHAT_KEY);
     }
 
     const timer = setTimeout(() => {
@@ -381,7 +390,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     if (!uiStateSynced) return;
 
     // Also save to localStorage for backward compatibility and offline support
-    localStorage.setItem("quje-active-view", activeView);
+    writeStoredValue(ACTIVE_VIEW_KEY, activeView, LEGACY_ACTIVE_VIEW_KEY);
 
     const timer = setTimeout(() => {
       saveUserUIState({ activeView }).catch((err) => {
@@ -448,7 +457,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   const hasAutoReadMessage = useCallback((chatId: string, message: typeof messages[number]) => {
     try {
-      const raw = localStorage.getItem("quje-tts-auto-read-messages");
+      const raw = readStoredValue(TTS_AUTO_READ_MESSAGES_KEY, LEGACY_TTS_AUTO_READ_MESSAGES_KEY);
       if (!raw) return false;
       const ids = JSON.parse(raw);
       return Array.isArray(ids) && ids.includes(`${chatId}:${getAutoReadMessageId(message)}`);
@@ -459,12 +468,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   const markAutoReadMessage = useCallback((chatId: string, message: typeof messages[number]) => {
     try {
-      const raw = localStorage.getItem("quje-tts-auto-read-messages");
+      const raw = readStoredValue(TTS_AUTO_READ_MESSAGES_KEY, LEGACY_TTS_AUTO_READ_MESSAGES_KEY);
       const parsed = raw ? JSON.parse(raw) : [];
       const ids = Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
       const nextId = `${chatId}:${getAutoReadMessageId(message)}`;
       const next = ids.includes(nextId) ? ids : [...ids, nextId];
-      localStorage.setItem("quje-tts-auto-read-messages", JSON.stringify(next.slice(-500)));
+      writeStoredValue(TTS_AUTO_READ_MESSAGES_KEY, JSON.stringify(next.slice(-500)), LEGACY_TTS_AUTO_READ_MESSAGES_KEY);
     } catch {
       // Auto-read deduplication is best-effort; playback should still work if storage is unavailable.
     }

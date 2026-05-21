@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { join } from "path";
-import { homedir } from "os";
 import { readFile } from "fs/promises";
+import { appDataPath } from "../services/paths.js";
 
 const router = Router();
-const VISUALS_DIR = join(homedir(), ".quje-agent", "visuals");
+const VISUALS_DIR = appDataPath("visuals");
 
 // Serve visual HTML by ID
 router.get("/:id", async (req, res) => {

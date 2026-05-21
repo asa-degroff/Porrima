@@ -6,9 +6,9 @@ import { extractElements } from './src/services/element-extraction.js';
 import { embedPrompt } from './src/services/image-corpus.js';
 import sharp from 'sharp';
 
-const IMAGES_DIR = join(homedir(), '.quje-agent', 'images');
-const VISION_DIR = join(homedir(), '.quje-agent', 'vision', 'images');
-const CORPUS_FILE = join(homedir(), '.quje-agent', 'image-corpus', 'corpus.json');
+const IMAGES_DIR = join(homedir(), '.porrima', 'images');
+const VISION_DIR = join(homedir(), '.porrima', 'vision', 'images');
+const CORPUS_FILE = join(homedir(), '.porrima', 'image-corpus', 'corpus.json');
 
 const corpus = [];
 

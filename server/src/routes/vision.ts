@@ -13,6 +13,7 @@ import {
   ensureVisionThumbnail,
 } from "../services/vision-analysis.js";
 import { deleteCorpusEntryByVisionId } from "../services/image-corpus.js";
+import { appDataPath } from "../services/paths.js";
 
 const router = Router();
 
@@ -293,11 +294,7 @@ router.get("/images/:id/:filename", async (req, res) => {
   const { createReadStream } = await import("fs");
   const { access } = await import("fs/promises");
   const { join } = await import("path");
-  const visionDir = join(
-    process.env.HOME || process.env.USERPROFILE || ".",
-    ".quje-agent",
-    "vision"
-  );
+  const visionDir = appDataPath("vision");
 
   const imagePath = join(
     visionDir,

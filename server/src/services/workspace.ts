@@ -6,11 +6,11 @@ import { homedir } from "os";
 import { glob } from "fs/promises";
 import type { Project, ProjectLocationType, SshConnection } from "../types.js";
 import { getSshConnection } from "./chat-storage.js";
+import { appDataPath } from "./paths.js";
 
 const HOME = homedir();
-const QUJE_DIR = join(HOME, ".quje-agent");
-const SSH_MUX_DIR = join(QUJE_DIR, "ssh-mux");
-const SSH_KNOWN_HOSTS = join(QUJE_DIR, "ssh-known-hosts");
+const SSH_MUX_DIR = appDataPath("ssh-mux");
+const SSH_KNOWN_HOSTS = appDataPath("ssh-known-hosts");
 
 /**
  * Initialize SSH infrastructure: create mux directory and clean stale sockets.
@@ -803,6 +803,6 @@ export async function destroyAllMasters(): Promise<void> {
 
 export async function testSshConnection(connection: SshConnection): Promise<{ ok: boolean; output: string }> {
   const adapter = new SshWorkspaceAdapter(connection, ".");
-  const result = await adapter.exec("printf quje-ssh-ok", 15000);
-  return { ok: !result.isError && result.content.includes("quje-ssh-ok"), output: result.content };
+  const result = await adapter.exec("printf porrima-ssh-ok", 15000);
+  return { ok: !result.isError && result.content.includes("porrima-ssh-ok"), output: result.content };
 }

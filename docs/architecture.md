@@ -18,7 +18,7 @@ The core pi-agent loop is shared through `server/src/services/agent-loop-runner.
 ## Projects
 
 Projects provide persistent context for agent chats through AGENTS.md files:
-- Created via UI or API, stored in `~/.quje-agent/projects/`
+- Created via UI or API, stored in `~/.porrima/projects/`
 - Each project has a name, filesystem path, and optional AGENTS.md
 - New chats in a project automatically inject AGENTS.md content into the system prompt
 - Chats within projects are grouped under their project in the UI

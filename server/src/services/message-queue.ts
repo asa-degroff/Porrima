@@ -1,9 +1,9 @@
 import { readFile, writeFile, unlink, mkdir } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import type { ImageAttachment } from "../types.js";
+import { appDataPath } from "./paths.js";
 
-const QUEUE_DIR = join(homedir(), ".quje-agent", "queue");
+const QUEUE_DIR = appDataPath("queue");
 const MAX_QUEUE_SIZE = 10;
 
 export interface QueuedUserMessage {

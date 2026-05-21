@@ -1,11 +1,11 @@
 import { mkdirSync } from "fs";
 import { readFile, writeFile } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import webpush from "web-push";
 import { getDb } from "./chat-storage.js";
+import { APP_DATA_DIR } from "./paths.js";
 
-const BASE_DIR = join(homedir(), ".quje-agent");
+const BASE_DIR = APP_DATA_DIR;
 const PUSH_DIR = join(BASE_DIR, "push");
 const VAPID_FILE = join(PUSH_DIR, "vapid.json");
 
@@ -170,7 +170,7 @@ export function incrementFailureCount(deviceId: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// VAPID keys — lazy generate-on-first-use, persisted to ~/.quje-agent/push/vapid.json
+// VAPID keys — lazy generate-on-first-use, persisted to ~/.porrima/push/vapid.json
 // ---------------------------------------------------------------------------
 
 let _vapidCache: VapidKeys | null = null;

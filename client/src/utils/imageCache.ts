@@ -6,7 +6,9 @@
 import { useState, useEffect } from "react";
 
 const CACHE_VERSION = "v1";
-const CACHE_NAME = `quje-images-${CACHE_VERSION}`;
+const CACHE_PREFIX = "porrima-images-";
+const LEGACY_CACHE_PREFIX = "quje-images-";
+const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 
 // Track in-flight requests to avoid duplicates
 const inFlightRequests = new Map<string, Promise<Response>>();
@@ -118,7 +120,7 @@ export async function clearImageCache(): Promise<void> {
     const keys = await caches.keys();
     await Promise.all(
       keys
-        .filter((key) => key.startsWith("quje-images-"))
+        .filter((key) => key.startsWith(CACHE_PREFIX) || key.startsWith(LEGACY_CACHE_PREFIX))
         .map((key) => caches.delete(key))
     );
   } catch (error) {
@@ -134,7 +136,7 @@ export async function cleanupOldCaches(): Promise<void> {
     const keys = await caches.keys();
     await Promise.all(
       keys
-        .filter((key) => key.startsWith("quje-images-") && key !== CACHE_NAME)
+        .filter((key) => (key.startsWith(CACHE_PREFIX) || key.startsWith(LEGACY_CACHE_PREFIX)) && key !== CACHE_NAME)
         .map((key) => caches.delete(key))
     );
   } catch (error) {

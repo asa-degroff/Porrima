@@ -1,12 +1,12 @@
 import Database from "better-sqlite3";
 import { readdirSync, readFileSync, existsSync, renameSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, Project, Settings, SshConnection } from "../types.js";
+import { APP_DATA_DIR } from "./paths.js";
 
 const PROJECT_COLORS = ["emerald", "purple", "blue", "amber", "rose", "cyan", "violet", "orange", "pink", "teal"];
 
-const BASE_DIR = join(homedir(), ".quje-agent");
+const BASE_DIR = APP_DATA_DIR;
 const CHATS_DIR = join(BASE_DIR, "chats");
 const PROJECTS_DIR = join(BASE_DIR, "projects");
 const SETTINGS_PATH = join(BASE_DIR, "settings.json");

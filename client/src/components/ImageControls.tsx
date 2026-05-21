@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import type { ImageGenerationParams, GenerationState } from "../types";
 import { Dropdown } from "./ui/Dropdown";
 import { useDropdown } from "../hooks/useDropdown";
+import { readStoredValue, writeStoredValue } from "../lib/storage";
 
 const MODEL_PRESETS: Record<string, Partial<ImageGenerationParams>> = {
   "z-image-base": { steps: 30, cfgScale: 4.0, sampler: "euler", scheduler: "normal" },
@@ -17,7 +18,8 @@ const ASPECT_RATIOS = [
   { label: "Free", ratio: null, w: 1024, h: 1024 },
 ];
 
-const STORAGE_KEY = "quje-image-settings";
+const STORAGE_KEY = "porrima-image-settings";
+const LEGACY_STORAGE_KEY = "quje-image-settings";
 
 interface Props {
   models: string[];
@@ -56,7 +58,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
   // Load saved settings on mount
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = readStoredValue(STORAGE_KEY, LEGACY_STORAGE_KEY);
       if (saved) {
         const settings = JSON.parse(saved);
         if (settings.width !== undefined) setWidth(settings.width);
@@ -77,7 +79,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
   // Persist all settings when they change
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      writeStoredValue(STORAGE_KEY, JSON.stringify({
         width,
         height,
         aspectRatio,
@@ -89,7 +91,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
         showNegative,
         negativePrompt,
         seed,
-      }));
+      }), LEGACY_STORAGE_KEY);
     } catch {}
   }, [width, height, aspectRatio, steps, cfgScale, sampler, scheduler, model, showNegative, negativePrompt, seed]);
 

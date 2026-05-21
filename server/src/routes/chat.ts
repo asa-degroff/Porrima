@@ -2,7 +2,6 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { randomUUID, createHash } from "crypto";
 import { readFile } from "fs/promises";
-import { homedir } from "os";
 import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { AgentContext } from "@mariozechner/pi-agent-core";
@@ -57,8 +56,9 @@ import {
   stampStreamPresence,
 } from "../services/live-streams.js";
 import { sendPush, truncateForBody } from "../services/push-dispatch.js";
+import { appDataPath } from "../services/paths.js";
 
-const ARTIFACTS_DIR = join(homedir(), ".quje-agent", "artifacts");
+const ARTIFACTS_DIR = appDataPath("artifacts");
 const ARTIFACT_ERROR_REPAIR_TTL_MS = 30 * 60 * 1000;
 const artifactErrorRepairAttempts = new Map<string, number>();
 const artifactAutoRepairAttempts = new Map<string, number>();

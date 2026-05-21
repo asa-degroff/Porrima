@@ -8,15 +8,15 @@ import { existsSync } from "fs";
 import { createHash } from "crypto";
 import { writeFile, mkdir, readFile, rm } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import { getSettings } from "./chat-storage.js";
+import { appDataPath } from "./paths.js";
 
 const MAX_CONTENT_LENGTH = 250_000;
 const WEB_SEARCH_PROVIDERS = ["brave", "exa", "tavily"] as const;
 
 // --- Web fetch cache ---
 
-const WEB_CACHE_DIR = join(homedir(), ".quje-agent", "cache", "web-pages");
+const WEB_CACHE_DIR = appDataPath("cache", "web-pages");
 const MANIFEST_PATH = join(WEB_CACHE_DIR, "manifest.json");
 const PREVIEW_LENGTH = 10_000;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours

@@ -174,7 +174,7 @@ Then in Settings → Inference Servers → Embedding server, switch the provider
 Embeddings from different models are not comparable — existing memory searches will return poor results until all vectors are regenerated. To switch models safely:
 
 1. Open Settings → Inference Servers → Embedding server → Migration & Backups.
-2. Click **Back up now** (optionally with a label). This writes `memories.db` and `corpus.db` under `~/.quje-agent/backups/<timestamp>/`.
+2. Click **Back up now** (optionally with a label). This writes `memories.db` and `corpus.db` under `~/.porrima/backups/<timestamp>/`.
 3. Change the provider / URL / model to the new embedding config and save.
 4. Click **Re-embed all memories & corpus**. The UI shows progress; the operation may take several minutes for large stores and the chat is unavailable while vectors are being rewritten.
 5. If anything goes wrong, the backup can be restored from the same panel (the restored config will also overwrite your current embedding settings).

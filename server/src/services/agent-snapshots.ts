@@ -3,13 +3,13 @@ import * as sqliteVec from "sqlite-vec";
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { dirname, join } from "path";
-import { homedir } from "os";
 import { closeChatDb, getChatDbPath, getDb as getChatDb, backupChatDb, getSettings } from "./chat-storage.js";
 import { closeMemoryDb, getDb as getMemoryDb, getMemoryDbPath } from "./memory-storage.js";
 import { closeCorpusDb, getCorpusDb, getCorpusDbPath } from "./image-corpus.js";
 import { resetAllMemoryContextCaches } from "./memory-context.js";
+import { appDataPath } from "./paths.js";
 
-const SNAPSHOTS_DIR = join(homedir(), ".quje-agent", "snapshots");
+const SNAPSHOTS_DIR = appDataPath("snapshots");
 const SYSTEM_SNAPSHOT_MAX_COUNT = 10;
 const SYSTEM_SNAPSHOT_MAX_AGE_DAYS = 30;
 const COUNT_TABLES = new Set([

@@ -1,7 +1,6 @@
 import { v4 as uuid } from "uuid";
 import { appendFile, mkdir } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import { streamChat } from "./agent.js";
 import { getSettings } from "./chat-storage.js";
 import { embedBatch } from "./embeddings.js";
@@ -20,8 +19,9 @@ import { startExtractionRun, type ExtractionSupersessionResolution } from "./mem
 import { recordModelStats } from "./model-stats.js";
 import type { LlamaTimings } from "./model-stats.js";
 import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat } from "../types.js";
+import { appDataPath } from "./paths.js";
 
-const LOG_DIR = join(homedir(), ".quje-agent", "logs");
+const LOG_DIR = appDataPath("logs");
 
 // ---------------------------------------------------------------------------
 // Extraction server mutex

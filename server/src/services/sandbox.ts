@@ -1,12 +1,13 @@
 import { execFile } from "child_process";
 import { writeFile, mkdir, unlink, rm as rmDir, readFile } from "fs/promises";
 import { join } from "path";
-import { tmpdir, homedir } from "os";
+import { tmpdir } from "os";
 import { v4 as uuid } from "uuid";
+import { appDataPath } from "./paths.js";
 
-const ARTIFACTS_DIR = join(homedir(), ".quje-agent", "artifacts");
-const VISUALS_DIR = join(homedir(), ".quje-agent", "visuals");
-const WORKSPACE_DIR = join(homedir(), ".quje-agent", "workspace");
+const ARTIFACTS_DIR = appDataPath("artifacts");
+const VISUALS_DIR = appDataPath("visuals");
+const WORKSPACE_DIR = appDataPath("workspace");
 
 // Persistent workspace sessions: sessionId -> { dir, createdAt, lastUsed }
 const persistentSessions = new Map<string, { dir: string; createdAt: number; lastUsed: number }>();
@@ -102,7 +103,7 @@ export async function executePython(
     }
   } else {
     const sandboxId = uuid();
-    workspaceDir = join(tmpdir(), `quje-python-${sandboxId}`);
+    workspaceDir = join(tmpdir(), `porrima-python-${sandboxId}`);
     await mkdir(workspaceDir, { recursive: true });
   }
 

@@ -1,11 +1,11 @@
 import { writeFile, mkdir, readFile, readdir, access, rm } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import sharp from "sharp";
 import { jxl } from "icodec/node";
 import type { ImageGenerationParams } from "../types.js";
+import { appDataPath } from "./paths.js";
 
-const IMAGES_DIR = join(homedir(), ".quje-agent", "images");
+const IMAGES_DIR = appDataPath("images");
 const THUMB_WIDTH = 384;
 
 interface ImageMetadata {

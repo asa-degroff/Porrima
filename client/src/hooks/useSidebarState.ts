@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { fetchUserUIState, saveUserUIState, type UserUIState } from "../api/client";
+import { readStoredValue, writeStoredValue } from "../lib/storage";
 
 interface SidebarState {
   projectsExpanded: boolean;
@@ -8,7 +9,8 @@ interface SidebarState {
   projectStates: Record<string, boolean>;
 }
 
-const LOCAL_STORAGE_KEY = "quje-sidebar-state";
+const LOCAL_STORAGE_KEY = "porrima-sidebar-state";
+const LEGACY_LOCAL_STORAGE_KEY = "quje-sidebar-state";
 
 const DEFAULT_STATE: SidebarState = {
   projectsExpanded: true,
@@ -19,7 +21,7 @@ const DEFAULT_STATE: SidebarState = {
 
 function loadLocalState(): SidebarState {
   try {
-    const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+    const stored = readStoredValue(LOCAL_STORAGE_KEY, LEGACY_LOCAL_STORAGE_KEY);
     if (stored) {
       return { ...DEFAULT_STATE, ...JSON.parse(stored) };
     }
@@ -31,7 +33,7 @@ function loadLocalState(): SidebarState {
 
 function saveLocalState(state: SidebarState) {
   try {
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(state));
+    writeStoredValue(LOCAL_STORAGE_KEY, JSON.stringify(state), LEGACY_LOCAL_STORAGE_KEY);
   } catch (e) {
     console.warn("Failed to save sidebar state to localStorage:", e);
   }

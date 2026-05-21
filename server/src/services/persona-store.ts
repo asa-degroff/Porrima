@@ -1,12 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
 import { promisify } from "util";
+import { APP_DATA_DIR } from "./paths.js";
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
 const mkdir = promisify(fs.mkdir);
 
-const PERSONA_DIR = path.join(process.env.HOME || "~", ".quje-agent");
+const PERSONA_DIR = APP_DATA_DIR;
 const PERSONA_FILE = path.join(PERSONA_DIR, "persona.md");
 const PERSONA_HISTORY_DIR = path.join(PERSONA_DIR, "persona-history");
 

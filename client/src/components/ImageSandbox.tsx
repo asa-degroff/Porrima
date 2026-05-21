@@ -16,6 +16,7 @@ import { DragHandle } from "./ui/DragHandle";
 import { ImageSearch } from "./ImageSearch";
 import CorpusView from "./CorpusView";
 import type { GeneratedImage, ImageGenerationParams, OllamaModel } from "../types";
+import { readStoredValue, writeStoredValue } from "../lib/storage";
 
 interface Props {
   models: OllamaModel[];
@@ -26,6 +27,12 @@ interface Props {
 
 type SandboxMode = "generate" | "analyze" | "corpus" | "directions";
 type ViewMode = "gallery" | "detail";
+const SANDBOX_MODE_KEY = "porrima-sandbox-mode";
+const LEGACY_SANDBOX_MODE_KEY = "quje-sandbox-mode";
+const SANDBOX_AGENT_FILTER_KEY = "porrima-sandbox-agent-filter";
+const LEGACY_SANDBOX_AGENT_FILTER_KEY = "quje-sandbox-agent-filter";
+const VISION_MODEL_KEY = "porrima-vision-model";
+const LEGACY_VISION_MODEL_KEY = "quje-vision-model";
 
 function isVisionCapable(model: OllamaModel): boolean {
   const family = model.family.toLowerCase();
@@ -160,7 +167,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
 
   const [mode, setMode] = useState<SandboxMode>(() => {
     try {
-      const saved = localStorage.getItem("quje-sandbox-mode");
+      const saved = readStoredValue(SANDBOX_MODE_KEY, LEGACY_SANDBOX_MODE_KEY);
       if (saved === "generate" || saved === "analyze") return saved;
     } catch {}
     return "analyze";
@@ -169,7 +176,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   // Persist filter preference
   useEffect(() => {
     try {
-      localStorage.setItem("quje-sandbox-agent-filter", showAgentOnly ? "true" : "false");
+      writeStoredValue(SANDBOX_AGENT_FILTER_KEY, showAgentOnly ? "true" : "false", LEGACY_SANDBOX_AGENT_FILTER_KEY);
     } catch {}
   }, [showAgentOnly]);
   const [controlParams, setControlParams] = useState<Partial<ImageGenerationParams> | undefined>();
@@ -177,7 +184,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   // Persist mode to localStorage
   useEffect(() => {
     try {
-      localStorage.setItem("quje-sandbox-mode", mode);
+      writeStoredValue(SANDBOX_MODE_KEY, mode, LEGACY_SANDBOX_MODE_KEY);
     } catch {}
   }, [mode]);
 
@@ -190,7 +197,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
   const [visionModel, setVisionModelRaw] = useState<string>(() => {
     // 1. Check localStorage for a previously selected vision model
     try {
-      const saved = localStorage.getItem("quje-vision-model");
+      const saved = readStoredValue(VISION_MODEL_KEY, LEGACY_VISION_MODEL_KEY);
       const savedModel = ollamaModels.find((m) => m.id === saved);
       if (saved && savedModel && isVisionCapable(savedModel)) return saved;
     } catch {}
@@ -209,7 +216,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
 
   const setVisionModel = useCallback((id: string) => {
     setVisionModelRaw(id);
-    try { localStorage.setItem("quje-vision-model", id); } catch {}
+    try { writeStoredValue(VISION_MODEL_KEY, id, LEGACY_VISION_MODEL_KEY); } catch {}
   }, []);
 
   // Re-validate selection when models list arrives/changes
@@ -219,7 +226,7 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     if (ollamaModels.some((m) => m.id === visionModel && isVisionCapable(m))) return;
     // Try localStorage
     try {
-      const saved = localStorage.getItem("quje-vision-model");
+      const saved = readStoredValue(VISION_MODEL_KEY, LEGACY_VISION_MODEL_KEY);
       if (saved && ollamaModels.some((m) => m.id === saved && isVisionCapable(m))) {
         setVisionModelRaw(saved);
         return;
@@ -244,14 +251,14 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     setControlParams({ positivePrompt: description });
     setMode("generate");
     try {
-      localStorage.setItem("quje-sandbox-mode", "generate");
+      writeStoredValue(SANDBOX_MODE_KEY, "generate", LEGACY_SANDBOX_MODE_KEY);
     } catch {}
   }, []);
 
   // Persist mode on change
   useEffect(() => {
     try {
-      localStorage.setItem("quje-sandbox-mode", mode);
+      writeStoredValue(SANDBOX_MODE_KEY, mode, LEGACY_SANDBOX_MODE_KEY);
     } catch {}
   }, [mode]);
 

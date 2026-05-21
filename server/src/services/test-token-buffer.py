@@ -5,7 +5,7 @@ Simulates LLM token stream and tests boundary detection.
 """
 
 import sys
-sys.path.insert(0, '/home/asa/quje-agent/server')
+sys.path.insert(0, '/home/asa/porrima/server')
 
 # We'll test via TypeScript instead - this is a placeholder
 

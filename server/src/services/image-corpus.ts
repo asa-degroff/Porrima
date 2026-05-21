@@ -2,13 +2,13 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { existsSync, mkdirSync, readFileSync, renameSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { APP_DATA_DIR } from "./paths.js";
 
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
 
-const BASE_DIR = join(homedir(), ".quje-agent");
+const BASE_DIR = APP_DATA_DIR;
 const CORPUS_DIR = join(BASE_DIR, "image-corpus");
 const CORPUS_JSON = join(CORPUS_DIR, "corpus.json");
 const CORPUS_DB = join(CORPUS_DIR, "corpus.db");
@@ -473,9 +473,8 @@ export async function cleanupOrphanedEntries(): Promise<{
   const db = getDb();
   const { access } = await import("fs/promises");
   const { join } = await import("path");
-  const { homedir } = await import("os");
   
-  const BASE_DIR = join(homedir(), ".quje-agent");
+  const BASE_DIR = APP_DATA_DIR;
   const IMAGES_DIR = join(BASE_DIR, "images");
   const VISION_DIR = join(BASE_DIR, "vision");
   

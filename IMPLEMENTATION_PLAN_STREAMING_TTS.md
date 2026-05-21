@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This document outlines the complete implementation plan for adding streaming TTS support to quje-agent using Qwen3-TTS. The architecture enables the agent to speak *while* streaming tokens, not after generation completes.
+This document outlines the complete implementation plan for adding streaming TTS support to porrima using Qwen3-TTS. The architecture enables the agent to speak *while* streaming tokens, not after generation completes.
 
 **Key assumption**: Users run recent Chrome/Firefox/Safari versions with MediaSource API support. No legacy fallbacks needed.
 
@@ -654,4 +654,4 @@ interface TTSSettings {
 
 **Document Version**: 1.0  
 **Last Updated**: 2026-03-16  
-**Author**: quje
+**Author**: Porrima

@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("block revision history", () => {
-  const mkHomeDir = () => mkdtempSync(join(tmpdir(), "quje-block-history-"));
+  const mkHomeDir = () => mkdtempSync(join(tmpdir(), "porrima-block-history-"));
 
   it("captures history entries on content edits and returns oldest-first timeline", async () => {
     const homeDir = mkHomeDir();

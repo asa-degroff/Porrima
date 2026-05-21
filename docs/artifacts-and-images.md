@@ -2,7 +2,7 @@
 
 ## Artifact System
 
-**Creation**: The `create_artifact` tool receives `{ title, html }`. `sandbox.ts` writes the HTML to `~/.quje-agent/artifacts/{uuid}/index.html` and returns URL `/api/artifacts/{uuid}`.
+**Creation**: The `create_artifact` tool receives `{ title, html }`. `sandbox.ts` writes the HTML to `~/.porrima/artifacts/{uuid}/index.html` and returns URL `/api/artifacts/{uuid}`.
 
 **Serving** (`server/src/routes/artifacts.ts`):
 - `GET /api/artifacts/:id` — serves `index.html` with `Content-Type: text/html`
@@ -55,7 +55,7 @@ Minimal pattern:
 ## Image Corpus & Clustering
 
 **Corpus Storage** (`server/src/services/image-corpus.ts`):
-- Migrated from JSON to SQLite (`~/.quje-agent/image-corpus/corpus.db`) with sqlite-vec for vector search
+- Migrated from JSON to SQLite (`~/.porrima/image-corpus/corpus.db`) with sqlite-vec for vector search
 - Stores all images: generated (ComfyUI), analyzed (vision), uploaded (user)
 - **Schema**: `corpus_entries` table with JSON `elements` column (themes, settings, characters, concepts, styles, mood)
 - **Vector search**: `vec_corpus` virtual table with 1024-dim prompt embeddings, cosine distance
@@ -68,7 +68,7 @@ Minimal pattern:
 - Threshold: 0.85 similarity (configurable); images above threshold grouped together
 - **Cluster properties**: centroid (average embedding), dominantElements (top 5 themes/settings/etc.), variance, size
 - **Singletons**: unclustered images become single-member clusters
-- **Persistence**: clusters saved to `~/.quje-agent/clusters/clusters.json`
+- **Persistence**: clusters saved to `~/.porrima/clusters/clusters.json`
 - **UI**: CorpusView with force-directed graph visualization (D3), cluster detail panels
 
 ## Corpus Utilities
@@ -77,7 +77,7 @@ The current corpus backend focuses on storage, enrichment, clustering, cleanup, 
 
 - `image-corpus.ts` stores entries, embeddings, FTS rows, enrichment metadata, and orphan cleanup.
 - `cluster-engine.ts` rebuilds density-based clusters from the current corpus.
-- `cluster-storage.ts` persists cluster maps in `~/.quje-agent/clusters/clusters.json`.
+- `cluster-storage.ts` persists cluster maps in `~/.porrima/clusters/clusters.json`.
 - `visualization.ts` generates the D3 force-directed graph served by `/api/corpus/visualization`.
 
 ## Image Generation
@@ -86,7 +86,7 @@ The current corpus backend focuses on storage, enrichment, clustering, cleanup, 
 - Queue-based generation with progress tracking via SSE
 - Generation state tracked in-memory with clientId for SSE subscriptions
 - Links ComfyUI promptId to internal generationId for progress correlation
-- Stored in `~/.quje-agent/images/{uuid}/` with metadata JSON
+- Stored in `~/.porrima/images/{uuid}/` with metadata JSON
 
 **Agent-driven generation**:
 - Agent/tool-initiated image work flows through the image tools and ComfyUI services rather than a dedicated synthesis-time creative-direction scheduler.
@@ -98,5 +98,5 @@ The current corpus backend focuses on storage, enrichment, clustering, cleanup, 
 
 - Image description and analysis with pluggable presets
 - Conversation about analyzed images
-- Stored in `~/.quje-agent/vision/`
+- Stored in `~/.porrima/vision/`
 - UI: `VisionGallery`, `VisionChat`, `VisionControls`

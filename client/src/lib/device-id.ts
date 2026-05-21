@@ -1,15 +1,17 @@
 // Per-install device id used to identify a single PWA/browser install for
 // push subscriptions and presence tracking. Generated lazily and persisted in
 // localStorage so it survives page reloads.
+import { readStoredValue, writeStoredValue } from "./storage";
 
-const STORAGE_KEY = "quje-device-id";
+const STORAGE_KEY = "porrima-device-id";
+const LEGACY_STORAGE_KEY = "quje-device-id";
 
 export function getOrCreateDeviceId(): string {
   try {
-    const existing = localStorage.getItem(STORAGE_KEY);
+    const existing = readStoredValue(STORAGE_KEY, LEGACY_STORAGE_KEY);
     if (existing) return existing;
     const fresh = crypto.randomUUID();
-    localStorage.setItem(STORAGE_KEY, fresh);
+    writeStoredValue(STORAGE_KEY, fresh, LEGACY_STORAGE_KEY);
     return fresh;
   } catch {
     // localStorage unavailable (private mode on some platforms). Return a
@@ -21,7 +23,7 @@ export function getOrCreateDeviceId(): string {
 
 export function readDeviceId(): string | null {
   try {
-    return localStorage.getItem(STORAGE_KEY);
+    return readStoredValue(STORAGE_KEY, LEGACY_STORAGE_KEY);
   } catch {
     return null;
   }

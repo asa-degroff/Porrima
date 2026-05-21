@@ -14,9 +14,10 @@ import { getSettings } from "./chat-storage.js";
 import { getWorkspaceForProject } from "./workspace.js";
 import { v4 as uuid } from "uuid";
 import type { Artifact, InlineVisual, Project } from "../types.js";
+import { appDataPath } from "./paths.js";
 
 const HOME = homedir();
-const VISUALS_DIR = join(homedir(), ".quje-agent", "visuals");
+const VISUALS_DIR = appDataPath("visuals");
 
 // --- Filesystem tool definitions ---
 
@@ -411,7 +412,7 @@ URL: ${result.url}${warningText}` }], details: {} };
 
   tools.push({
     name: "remove_skill",
-    description: "Remove a global skill by name. This deletes the skill from ~/.quje-agent/skills/. Use when a skill is no longer needed or is causing issues.",
+    description: "Remove a global skill by name. This deletes the skill from ~/.porrima/skills/. Use when a skill is no longer needed or is causing issues.",
     parameters: Type.Object({
       name: Type.String({ description: "Name of the skill to remove (folder name, not display name)" }),
     }),
@@ -450,7 +451,7 @@ URL: ${result.url}${warningText}` }], details: {} };
         
         if (skills.length === 0) {
           return { 
-            content: [{ type: "text", text: "No skills available. Install skills using install_skill or add them to ~/.quje-agent/skills/" }], 
+            content: [{ type: "text", text: "No skills available. Install skills using install_skill or add them to ~/.porrima/skills/" }],
             details: { skills: [] },
           };
         }
@@ -833,7 +834,7 @@ print(json.dumps(result))
     const { v4: uuid } = await import("uuid");
     
     const sandboxId = uuid();
-    const sandboxDir = join(tmpdir(), `quje-pdf-${sandboxId}`);
+    const sandboxDir = join(tmpdir(), `porrima-pdf-${sandboxId}`);
     await mkdir(sandboxDir, { recursive: true });
     
     const scriptPath = join(sandboxDir, "process_pdf.py");

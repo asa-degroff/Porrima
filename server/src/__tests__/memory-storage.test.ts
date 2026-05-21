@@ -22,7 +22,7 @@ afterEach(() => {
 
 describe("memory block storage", () => {
   it("updates global blocks without binding a null projectId", async () => {
-    const homeDir = mkdtempSync(join(tmpdir(), "quje-memory-storage-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
     try {
       const { createMemoryBlock, getMemoryBlock, updateMemoryBlock } = await loadMemoryStorage(homeDir);
       const now = new Date().toISOString();

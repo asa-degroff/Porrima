@@ -1,9 +1,9 @@
 import { writeFile, mkdir, access, rm } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import sharp from "sharp";
+import { appDataPath } from "./paths.js";
 
-const HEADER_IMAGE_DIR = join(homedir(), ".quje-agent", "header-image");
+const HEADER_IMAGE_DIR = appDataPath("header-image");
 const HEADER_SIZE = 96;
 const HEADER_QUALITY = 85;
 

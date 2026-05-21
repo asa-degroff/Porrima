@@ -2,29 +2,29 @@
 
 # Test script for persona system
 # Run this after starting the server
-# Requires QUJE_DEV_TOKEN to be set, or server running with QUJE_DEV_TOKEN env var
+# Requires PORRIMA_DEV_TOKEN to be set, or server running with PORRIMA_DEV_TOKEN env var
 
 set -e
 
 # Check for dev token
-if [ -z "$QUJE_DEV_TOKEN" ]; then
+if [ -z "$PORRIMA_DEV_TOKEN" ]; then
   # Try to load from .env file if it exists
   if [ -f ".env" ]; then
-    export QUJE_DEV_TOKEN=$(grep QUJE_DEV_TOKEN .env | cut -d'=' -f2)
+    export PORRIMA_DEV_TOKEN=$(grep PORRIMA_DEV_TOKEN .env | cut -d'=' -f2)
   fi
 fi
 
-if [ -z "$QUJE_DEV_TOKEN" ]; then
-  echo "⚠️  Warning: QUJE_DEV_TOKEN not set"
+if [ -z "$PORRIMA_DEV_TOKEN" ]; then
+  echo "⚠️  Warning: PORRIMA_DEV_TOKEN not set"
   echo "   Set it in your environment or .env file for API access"
-  echo "   Example: export QUJE_DEV_TOKEN=test-token-123"
+  echo "   Example: export PORRIMA_DEV_TOKEN=test-token-123"
   echo ""
   echo "   Starting tests without auth (may fail if auth is required)..."
   echo ""
   AUTH_HEADER=""
 else
   echo "✓ Using dev token for authentication"
-  AUTH_HEADER="-H \"Authorization: Bearer $QUJE_DEV_TOKEN\""
+  AUTH_HEADER="-H \"Authorization: Bearer $PORRIMA_DEV_TOKEN\""
 fi
 
 BASE_URL="http://localhost:3001/api"
@@ -42,7 +42,7 @@ else
     echo "❌ FAIL: Could not retrieve persona"
     echo "   Response: $response"
     if echo "$response" | grep -q "Authentication required"; then
-        echo "   → Auth error. Set QUJE_DEV_TOKEN environment variable"
+        echo "   → Auth error. Set PORRIMA_DEV_TOKEN environment variable"
     fi
     exit 1
 fi
@@ -134,7 +134,7 @@ echo ""
 
 # Test 6: Verify persona.md content
 echo "Test 6: Verify persona.md file"
-persona_file="$HOME/.quje-agent/persona.md"
+persona_file="$HOME/.porrima/persona.md"
 if [ -f "$persona_file" ]; then
     echo "✅ PASS: persona.md exists at $persona_file"
     section_count=$(grep -c "^##" "$persona_file" || echo "0")
@@ -147,7 +147,7 @@ echo ""
 
 # Test 7: Check changelog
 echo "Test 7: Check CHANGELOG.md"
-changelog_file="$HOME/.quje-agent/persona-history/CHANGELOG.md"
+changelog_file="$HOME/.porrima/persona-history/CHANGELOG.md"
 if [ -f "$changelog_file" ]; then
     echo "✅ PASS: CHANGELOG.md exists"
     entry_count=$(grep -c "^#" "$changelog_file" || echo "0")
@@ -160,8 +160,8 @@ echo ""
 echo "=== All Tests Complete ==="
 echo ""
 echo "Manual verification steps:"
-echo "1. Check ~/.quje-agent/persona.md content"
-echo "2. Check ~/.quje-agent/persona-history/ for backups"
+echo "1. Check ~/.porrima/persona.md content"
+echo "2. Check ~/.porrima/persona-history/ for backups"
 echo "3. Start a chat and verify persona appears in prompt"
 echo "4. Test update_persona tool in an agent chat"
 echo ""
