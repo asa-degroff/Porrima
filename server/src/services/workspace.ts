@@ -120,7 +120,9 @@ function formatReadContent(content: string, args: Record<string, any>, opts: Wor
   if (hasMore || byteTruncated) {
     const reason = byteTruncated
       ? `output exceeded the ${(maxBytes / 1024).toFixed(0)}KB byte cap`
-      : `default line limit of ${defaultLines} reached`;
+      : limitProvided
+        ? `requested line limit of ${requestedLimit} reached`
+        : `default line limit of ${defaultLines} reached`;
     numbered += `\n\n[Truncated: ${reason}. File has ${totalLines} total lines; showing ${offset}-${lastShown}. To read more, call read_file again with offset=${lastShown + 1}.]`;
   }
 
@@ -530,6 +532,7 @@ content = target.read_text(encoding="utf-8")
 lines = content.split("\\n")
 offset = max(1, int(data.get("offset") or 1))
 default_lines = int(data.get("default_lines") or 1000)
+limit_provided = data.get("limit") is not None and int(data.get("limit") or 0) > 0
 limit = int(data.get("limit") or default_lines)
 max_bytes = int(data.get("max_bytes") or 262144)
 selected = lines[offset - 1:offset - 1 + limit]
@@ -543,7 +546,11 @@ if len(numbered.encode("utf-8")) > max_bytes:
 lines_shown = 0 if not numbered else len(numbered.split("\\n"))
 last_shown = offset - 1 + lines_shown
 if last_shown < len(lines) or byte_truncated:
-    reason = f"output exceeded the {max_bytes // 1024}KB byte cap" if byte_truncated else f"default line limit of {default_lines} reached"
+    reason = (
+        f"output exceeded the {max_bytes // 1024}KB byte cap"
+        if byte_truncated
+        else (f"requested line limit of {limit} reached" if limit_provided else f"default line limit of {default_lines} reached")
+    )
     numbered += f"\\n\\n[Truncated: {reason}. File has {len(lines)} total lines; showing {offset}-{last_shown}. To read more, call read_file again with offset={last_shown + 1}.]"
 print(numbered)
 `;

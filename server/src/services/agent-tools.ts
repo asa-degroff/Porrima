@@ -142,6 +142,14 @@ function getMaxToolResultChars(contextWindow: number): number {
   return Math.max(8_000, Math.floor(contextWindow * 4 * 0.15));
 }
 
+function getReadFileMaxBytes(settingsMaxBytes: number | undefined, contextWindow: number): number {
+  const configuredMaxBytes = settingsMaxBytes ?? 256 * 1024;
+  // Leave room for the truncation marker so read_file, not the generic wrapper,
+  // owns pagination guidance and can report the exact next offset.
+  const wrapperBudgetBytes = Math.max(1024, getMaxToolResultChars(contextWindow) - 1024);
+  return Math.min(configuredMaxBytes, wrapperBudgetBytes);
+}
+
 function createWrapResult(contextWindow: number) {
   const maxChars = getMaxToolResultChars(contextWindow);
   return function wrapResult(result: { content: string; isError: boolean }): AgentToolResult<{}> {
@@ -246,7 +254,7 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       const workspace = await workspacePromise;
       return wrapResult(await workspace.readFile(params as Record<string, any>, {
         defaultLines: settings?.readFileDefaultLines,
-        maxBytes: settings?.readFileMaxBytes,
+        maxBytes: getReadFileMaxBytes(settings?.readFileMaxBytes, contextWindow),
       }));
     },
   });
@@ -558,7 +566,9 @@ async function executeReadFile(args: Record<string, any>, baseDir: string = HOME
     if (hasMore || byteTruncated) {
       const reason = byteTruncated
         ? `output exceeded the ${(maxBytes / 1024).toFixed(0)}KB byte cap`
-        : `default line limit of ${defaultLines} reached`;
+        : limitProvided
+          ? `requested line limit of ${requestedLimit} reached`
+          : `default line limit of ${defaultLines} reached`;
       const nextOffset = lastShown + 1;
       numbered += `\n\n[Truncated: ${reason}. File has ${totalLines} total lines; showing ${offset}-${lastShown}. To read more, call read_file again with offset=${nextOffset}.]`;
     }
