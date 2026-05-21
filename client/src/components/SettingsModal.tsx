@@ -3152,10 +3152,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 
 
 
-          {/* Agent Snapshots */}
+          {/* Agent Database Snapshots */}
           <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
             <div className="flex items-center justify-between">
-              <h5 className="text-xs font-medium text-white/70 uppercase tracking-wider">Agent Snapshots</h5>
+              <h5 className="text-xs font-medium text-white/70 uppercase tracking-wider">Agent Database Snapshots</h5>
               <button
                 onClick={refreshAgentSnapshots}
                 disabled={agentSnapshotsLoading}
@@ -3166,7 +3166,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             </div>
 
             <p className="text-xs text-white/40">
-              Snapshots preserve chats, full message history, context archives, settings, projects, memories, and memory blocks. Restoring replaces the current agent state and first creates a pre-restore snapshot.
+              Database snapshots preserve chats, full message history, context archives, settings, projects, memories, and memory blocks. Files in artifacts, uploads, generated images, skills, and notebook folders are not included.
+            </p>
+            <p className="text-xs text-white/40">
+              Restoring replaces the current database state and first creates a pre-restore snapshot.
             </p>
 
             {agentSnapshotMessage && (

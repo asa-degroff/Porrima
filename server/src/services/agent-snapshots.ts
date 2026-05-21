@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
-import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "fs/promises";
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
@@ -10,6 +10,14 @@ import { closeCorpusDb, getCorpusDb, getCorpusDbPath } from "./image-corpus.js";
 import { resetAllMemoryContextCaches } from "./memory-context.js";
 
 const SNAPSHOTS_DIR = join(homedir(), ".quje-agent", "snapshots");
+const COUNT_TABLES = new Set([
+  "chats",
+  "chat_message_rows",
+  "context_archives",
+  "memories",
+  "memory_blocks",
+  "corpus_entries",
+]);
 
 export interface AgentSnapshotManifest {
   id: string;
@@ -48,7 +56,24 @@ export interface CreateAgentSnapshotOptions {
   includeCorpus?: boolean;
 }
 
-let restoreInProgress = false;
+let operationQueue: Promise<void> = Promise.resolve();
+
+async function withSnapshotOperation<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = operationQueue;
+  let release: () => void;
+  operationQueue = previous.then(
+    () => new Promise<void>((resolve) => {
+      release = resolve;
+    })
+  );
+
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release!();
+  }
+}
 
 async function ensureSnapshotsDir(): Promise<void> {
   if (!existsSync(SNAPSHOTS_DIR)) {
@@ -87,10 +112,12 @@ export async function listAgentSnapshots(): Promise<AgentSnapshotManifest[]> {
 export async function createAgentSnapshot(
   options: CreateAgentSnapshotOptions = {}
 ): Promise<AgentSnapshotManifest> {
-  if (restoreInProgress) {
-    throw new Error("Cannot create a snapshot while restore is in progress");
-  }
+  return withSnapshotOperation(() => createAgentSnapshotUnlocked(options));
+}
 
+async function createAgentSnapshotUnlocked(
+  options: CreateAgentSnapshotOptions = {}
+): Promise<AgentSnapshotManifest> {
   await ensureSnapshotsDir();
   const id = await nextAvailableId();
   const dir = join(SNAPSHOTS_DIR, id);
@@ -144,14 +171,19 @@ export async function createAgentSnapshot(
 }
 
 export async function deleteAgentSnapshot(id: string): Promise<void> {
-  if (restoreInProgress) {
-    throw new Error("Cannot delete a snapshot while restore is in progress");
-  }
-  const dir = snapshotDir(id);
-  await rm(dir, { recursive: true, force: true });
+  return withSnapshotOperation(async () => {
+    const dir = snapshotDir(id);
+    await rm(dir, { recursive: true, force: true });
+  });
 }
 
 export async function restoreAgentSnapshot(
+  id: string
+): Promise<{ restored: AgentSnapshotManifest; preRestoreSnapshot: AgentSnapshotManifest }> {
+  return withSnapshotOperation(() => restoreAgentSnapshotUnlocked(id));
+}
+
+async function restoreAgentSnapshotUnlocked(
   id: string
 ): Promise<{ restored: AgentSnapshotManifest; preRestoreSnapshot: AgentSnapshotManifest }> {
   const dir = snapshotDir(id);
@@ -177,13 +209,14 @@ export async function restoreAgentSnapshot(
     validateSqliteDb(corpusSrc, true);
   }
 
-  const preRestoreSnapshot = await createAgentSnapshot({
+  const preRestoreSnapshot = await createAgentSnapshotUnlocked({
     label: `pre-restore ${id}`,
     includeCorpus: manifest.includes.corpus,
   });
+  const rollbackSources = getSnapshotSources(preRestoreSnapshot);
 
-  restoreInProgress = true;
   try {
+    checkpointActiveDbs(manifest.includes.corpus);
     closeChatDb();
     closeMemoryDb();
     if (manifest.includes.corpus) {
@@ -196,15 +229,31 @@ export async function restoreAgentSnapshot(
       await replaceSqliteFile(corpusSrc, getCorpusDbPath());
     }
 
-    getChatDb();
-    getMemoryDb();
-    if (manifest.includes.corpus) {
-      getCorpusDb();
+    reopenRestoredDbs(manifest.includes.corpus);
+  } catch (restoreError: any) {
+    try {
+      closeChatDb();
+      closeMemoryDb();
+      if (manifest.includes.corpus) {
+        closeCorpusDb();
+      }
+      await replaceSqliteFile(rollbackSources.app, getChatDbPath());
+      await replaceSqliteFile(rollbackSources.memories, getMemoryDbPath());
+      if (manifest.includes.corpus && rollbackSources.corpus && existsSync(rollbackSources.corpus)) {
+        await replaceSqliteFile(rollbackSources.corpus, getCorpusDbPath());
+      }
+      reopenRestoredDbs(manifest.includes.corpus);
+    } catch (rollbackError: any) {
+      throw new Error(
+        `Restore failed and rollback also failed. Restore error: ${restoreError?.message || restoreError}. Rollback error: ${rollbackError?.message || rollbackError}`
+      );
     }
-    resetAllMemoryContextCaches();
-  } finally {
-    restoreInProgress = false;
+    throw new Error(
+      `Restore failed while reopening databases. Rolled back to pre-restore snapshot ${preRestoreSnapshot.id}. ${restoreError?.message || restoreError}`
+    );
   }
+
+  resetAllMemoryContextCaches();
 
   return { restored: manifest, preRestoreSnapshot };
 }
@@ -229,8 +278,11 @@ function countRows(includeCorpus: boolean): AgentSnapshotManifest["counts"] {
 }
 
 function countTable(db: Database.Database, table: string): number {
+  if (!COUNT_TABLES.has(table)) {
+    throw new Error(`Unsupported count table: ${table}`);
+  }
   try {
-    return (db.prepare(`SELECT COUNT(*) c FROM ${table}`).get() as { c: number }).c;
+    return (db.prepare(`SELECT COUNT(*) c FROM "${table}"`).get() as { c: number }).c;
   } catch {
     return 0;
   }
@@ -266,10 +318,58 @@ async function fileSize(path: string): Promise<number> {
 }
 
 async function replaceSqliteFile(sourcePath: string, destinationPath: string): Promise<void> {
+  const tmpPath = `${destinationPath}.tmp-${process.pid}-${Date.now()}`;
   await mkdir(dirname(destinationPath), { recursive: true });
+  await copyFile(sourcePath, tmpPath);
   await rm(`${destinationPath}-wal`, { force: true });
   await rm(`${destinationPath}-shm`, { force: true });
-  await copyFile(sourcePath, destinationPath);
+  try {
+    await rename(tmpPath, destinationPath);
+  } catch (e) {
+    await rm(tmpPath, { force: true });
+    throw e;
+  }
+}
+
+function getSnapshotSources(manifest: AgentSnapshotManifest): {
+  app: string;
+  memories: string;
+  corpus?: string;
+} {
+  const dir = snapshotDir(manifest.id);
+  return {
+    app: join(dir, "app.db"),
+    memories: join(dir, "memories.db"),
+    ...(manifest.includes.corpus ? { corpus: join(dir, "corpus.db") } : {}),
+  };
+}
+
+function checkpointActiveDbs(includeCorpus: boolean): void {
+  try {
+    getChatDb().pragma("wal_checkpoint(TRUNCATE)");
+  } catch (e) {
+    console.warn("[snapshots] app wal_checkpoint failed:", e);
+  }
+  try {
+    getMemoryDb().pragma("wal_checkpoint(TRUNCATE)");
+  } catch (e) {
+    console.warn("[snapshots] memory wal_checkpoint failed:", e);
+  }
+  if (includeCorpus) {
+    try {
+      getCorpusDb().pragma("wal_checkpoint(TRUNCATE)");
+    } catch (e) {
+      console.warn("[snapshots] corpus wal_checkpoint failed:", e);
+    }
+  }
+}
+
+function reopenRestoredDbs(includeCorpus: boolean): void {
+  getChatDb();
+  getMemoryDb();
+  if (includeCorpus) {
+    getCorpusDb();
+  }
 }
 
 function validateSqliteDb(path: string, loadVec: boolean): void {
