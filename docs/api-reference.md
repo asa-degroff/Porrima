@@ -75,8 +75,6 @@
 | POST | `/api/push/presence` | Update short-lived foreground presence for notification suppression |
 | GET | `/api/push/devices` | List registered push devices |
 | POST | `/api/push/test` | Send a test push notification |
-| POST | `/api/bluesky/login` | Login to Bluesky and create dedicated chat |
-| POST | `/api/bluesky/logout` | Logout from Bluesky |
 | GET | `/api/notebooks/user` | List user notebook entries |
 | GET | `/api/notebooks/agent` | List agent notebook entries |
 | GET | `/api/notebooks/:id` | Get single notebook entry |

@@ -23,13 +23,13 @@
 
 See [docs/architecture.md](docs/architecture.md) for full details.
 
-Four chat types: **agent** (memory-augmented), **quick** (standalone), **bluesky** (social), and **system** (synthesis, wake cycles, and automations). The chat route (`server/src/routes/chat.ts`) owns memory augmentation, SSE/persistence, compaction, and extraction around the shared agent loop in `agent-loop-runner.ts`. Chat storage is SQLite with FTS5 full-text search. Multi-provider LLM system supports Ollama native and OpenAI-compatible (llama.cpp) backends.
+Three chat types: **agent** (memory-augmented), **quick** (standalone), and **system** (synthesis, wake cycles, and automations). The chat route (`server/src/routes/chat.ts`) owns memory augmentation, SSE/persistence, compaction, and extraction around the shared agent loop in `agent-loop-runner.ts`. Chat storage is SQLite with FTS5 full-text search. Multi-provider LLM system supports Ollama native and OpenAI-compatible (llama.cpp) backends.
 
 ## Tool System
 
 See [docs/tool-system.md](docs/tool-system.md) for full details.
 
-Native pi-ai tool calling with TypeBox schemas. Registry in `agent-tools.ts` with memory, filesystem, sandbox, and Bluesky tools. The low-level loop lives in `agent-loop-runner.ts`; the HTTP chat route and headless automation runner provide their own callbacks for transport, persistence, compaction, and follow-up prompts. `ask_user` pauses the HTTP loop and persists state. Message reconstruction splits persisted messages back into the pi-ai multi-message format.
+Native pi-ai tool calling with TypeBox schemas. Registry in `agent-tools.ts` with memory, filesystem, and sandbox tools. The low-level loop lives in `agent-loop-runner.ts`; the HTTP chat route and headless automation runner provide their own callbacks for transport, persistence, compaction, and follow-up prompts. `ask_user` pauses the HTTP loop and persists state. Message reconstruction splits persisted messages back into the pi-ai multi-message format.
 
 ## Memory System
 
@@ -64,7 +64,6 @@ See [docs/artifacts-and-images.md](docs/artifacts-and-images.md) for full detail
 See [docs/integrations.md](docs/integrations.md) for full details.
 
 - **Notebooks**: Dual user/agent notebook with linking and attachments. Synthesis integration. Agent entries are dual-represented as filesystem JSON (for UI) and memory blocks (for searchability).
-- **Bluesky**: AT Protocol with encrypted sessions, notification polling, auto-respond, thread splitting.
 - **TTS**: Kokoro + Qwen3-TTS backends. Generator-based streaming with 3-tier boundary detection.
 - **User Images**: Upload, thumbnails, vision analysis. Stored in `~/.quje-agent/user-images/`.
 - **Skills**: Pluggable definitions, per-chat activation, URL installation.
@@ -76,7 +75,7 @@ See [docs/integrations.md](docs/integrations.md) for full details.
 
 See [docs/ui-patterns.md](docs/ui-patterns.md) for full details.
 
-SSE streaming with thinking blocks, token usage indicator, compaction indicator. Mobile: gesture drawer, keyboard inset, haptic feedback. Conversation search via FTS5. Tailwind v4 glassmorphism. Purple for agent, blue for quick, sky for bluesky, emerald for projects.
+SSE streaming with thinking blocks, token usage indicator, compaction indicator. Mobile: gesture drawer, keyboard inset, haptic feedback. Conversation search via FTS5. Tailwind v4 glassmorphism. Purple for agent, blue for quick, emerald for projects.
 
 ## Project Structure
 
@@ -101,7 +100,6 @@ quje-agent/
 │   │   ├── skills.ts                # Skill definitions
 │   │   ├── persona.ts               # Persona endpoints
 │   │   ├── auth.ts                  # Passkey auth
-│   │   ├── bluesky.ts               # Bluesky login/logout
 │   │   ├── corpus.ts                # Corpus clusters, directions, creative engine
 │   │   ├── image-corpus.ts          # Corpus entry CRUD + search + enrichment
 │   │   ├── notebooks.ts             # Notebook entry CRUD (user/agent)
@@ -153,9 +151,6 @@ quje-agent/
 │       ├── auth-storage.ts          # Passkey credential storage
 │       ├── title-generation.ts      # LLM-generated chat titles
 │       ├── sandbox.ts               # Python code execution sandbox
-│       ├── bluesky-agent.ts         # AT Protocol agent with session encryption
-│       ├── bluesky-poller.ts        # Notification polling with auto-respond
-│       ├── bluesky-tools.ts         # Agent tool definitions for Bluesky
 │       ├── notebook-storage.ts      # Dual notebook system (user/agent entries)
 │       ├── project-storage.ts       # Filesystem utility for reading AGENTS.md
 │       ├── user-store.ts            # User profile markdown file management
@@ -163,8 +158,8 @@ quje-agent/
 ├── client/src/
 │   ├── types.ts                     # Shared interfaces (client copy)
 │   ├── api/client.ts                # Fetch API client + SSE parser
-│   ├── hooks/                       # React hooks (useChat, useChats, useProjects, useModels, useSettings, useTTS, useBluesky, useNotebooks, useStreamingTTS, useGestureDrawer, useHaptics, useOnlineStatus, etc.)
-│   ├── components/                  # React components (Sidebar, ChatView, MessageBubble, ArtifactPanel, ImageSandbox, VisionGallery, BlueskySection, NotebookView, ConversationSearch, SidebarSearch, CompactionIndicator, OfflineIndicator, TokenIndicator, SkillsBrowser, etc.)
+│   ├── hooks/                       # React hooks (useChat, useChats, useProjects, useModels, useSettings, useTTS, useNotebooks, useStreamingTTS, useGestureDrawer, useHaptics, useOnlineStatus, etc.)
+│   ├── components/                  # React components (Sidebar, ChatView, MessageBubble, ArtifactPanel, ImageSandbox, VisionGallery, NotebookView, ConversationSearch, SidebarSearch, CompactionIndicator, OfflineIndicator, TokenIndicator, SkillsBrowser, etc.)
 │   ├── styles/                      # Tailwind styles
 │   ├── lib/                         # IndexedDB cache, utils
 │   └── utils/                       # Helper functions

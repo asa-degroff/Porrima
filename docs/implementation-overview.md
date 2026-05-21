@@ -10,7 +10,7 @@ Sleep cycle: button is a "release" signal (stamps `sleepModeTriggeredAt`, 2h syn
 Wake cycle: autonomous exploration on inactivity (15-min check, 20-iter cap, 30-min timeout). Mutual exclusivity enforced.
 
 ## Chat System
-Three types: agent (memory-augmented), quick, bluesky. `chat.ts`: memory augmentation, LLM streaming, tools (max 20 iters, pi-ai native, `ask_user` persists). SQLite + FTS5, multi-provider.
+Two types: agent (memory-augmented), quick. `chat.ts`: memory augmentation, LLM streaming, tools (max 20 iters, pi-ai native, `ask_user` persists). SQLite + FTS5, multi-provider.
 Stranded tool recovery: detects `<function=` in thinking after stopReason="stop", triggers continuation.
 SSE: `LiveStream` with headless flag for background tasks. Bounded replay, grace timer. Mid-turn compaction resume via `onCompaction(midTurn=true)`.
 Activity stamping: user stamps before synthesis wait, assistant stamps after `done` (non-system only).

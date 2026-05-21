@@ -22,7 +22,7 @@ import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinari
 import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { AutomationRun, AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, BlueskySettings, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
+import type { AutomationRun, AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
 import { getTTSStatus, getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
@@ -54,7 +54,6 @@ const SECTIONS = [
   { id: 'memory-blocks', label: 'Memory Blocks' },
   { id: 'automations', label: 'Automations' },
   { id: 'tools', label: 'Tool Options' },
-  { id: 'bluesky', label: 'Bluesky' },
   { id: 'tts', label: 'TTS' },
   { id: 'passkeys', label: 'Security' },
 ] as const;
@@ -673,18 +672,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [ttsBackendStatusLoading, setTtsBackendStatusLoading] = useState(false);
   const ttsSliderSaveTimersRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
   const ttsSliderSaveSeqRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
-  // Bluesky settings
-  const blueskyDefaults = settings.bluesky ?? ({} as Partial<BlueskySettings>);
-  const [blueskyEnabled, setBlueskyEnabled] = useState(blueskyDefaults.enabled ?? false);
-  const [blueskyUsername, setBlueskyUsername] = useState(blueskyDefaults.username ?? "");
-  const [blueskyAppPassword, setBlueskyAppPassword] = useState("");
-  const [blueskyPollingInterval, setBlueskyPollingInterval] = useState(blueskyDefaults.pollingIntervalMinutes ?? 10);
-  const [blueskyAutoSendToAgent, setBlueskyAutoSendToAgent] = useState(blueskyDefaults.autoSendToAgent ?? false);
-  const [blueskyAutoRespond, setBlueskyAutoRespond] = useState(blueskyDefaults.autoRespondToNotifications ?? false);
-  const [blueskyConnecting, setBlueskyConnecting] = useState(false);
-  const [blueskyMessage, setBlueskyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-  const [blueskyAuthenticated, setBlueskyAuthenticated] = useState(false);
-  const [blueskyHandle, setBlueskyHandle] = useState<string | null>(null);
   const modelDd = useDropdown();
   const visionModelDd = useDropdown();
   const voiceDd = useDropdown();
@@ -1260,17 +1247,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     return () => { cancelled = true; };
   }, [titleGenerationEnabled, loadDiskModels]);
 
-  // Fetch Bluesky status
-  useEffect(() => {
-    fetch("/api/bluesky/status", { credentials: "include" })
-      .then((r) => r.json())
-      .then((data) => {
-        setBlueskyAuthenticated(data.authenticated ?? false);
-        setBlueskyHandle(data.currentHandle ?? null);
-      })
-      .catch(() => {});
-  }, []);
-
   const refreshSshConnections = useCallback(async () => {
     setSshLoading(true);
     try {
@@ -1436,14 +1412,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       passiveRecallRerankTopN,
       passiveRecallMemoriesPerInjection,
       passiveRecallMemoriesPerTurn,
-      bluesky: {
-        ...settings.bluesky,
-        enabled: blueskyEnabled,
-        username: blueskyAuthenticated ? blueskyUsername : undefined,
-        pollingIntervalMinutes: blueskyPollingInterval,
-        autoSendToAgent: blueskyAutoSendToAgent,
-        autoRespondToNotifications: blueskyAutoRespond,
-      },
     });
     
     // Emit TTS settings update event for useTTS hook
@@ -1947,47 +1915,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     }
     setLlamaPathUpdating(false);
   }, [llamaPathInput]);
-
-  const handleBlueskyConnect = useCallback(async () => {
-    if (!blueskyUsername || !blueskyAppPassword) {
-      setBlueskyMessage({ type: "err", text: "Please enter both username and app password" });
-      return;
-    }
-    setBlueskyConnecting(true);
-    setBlueskyMessage(null);
-    try {
-      const res = await fetch("/api/bluesky/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier: blueskyUsername, password: blueskyAppPassword }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setBlueskyMessage({ type: "ok", text: `Connected as @${data.handle}` });
-        setBlueskyAuthenticated(true);
-        setBlueskyHandle(data.handle);
-        setBlueskyAppPassword("");
-        window.dispatchEvent(new Event('bluesky-updated'));
-      } else {
-        setBlueskyMessage({ type: "err", text: data.error || "Failed to connect" });
-      }
-    } catch (err: any) {
-      setBlueskyMessage({ type: "err", text: err.message || "Failed to connect" });
-    }
-    setBlueskyConnecting(false);
-  }, [blueskyUsername, blueskyAppPassword]);
-
-  const handleBlueskyDisconnect = useCallback(async () => {
-    try {
-      await fetch("/api/bluesky/logout", { method: "POST" });
-      setBlueskyAuthenticated(false);
-      setBlueskyHandle(null);
-      setBlueskyMessage({ type: "ok", text: "Disconnected from Bluesky" });
-      window.dispatchEvent(new Event('bluesky-updated'));
-    } catch (err: any) {
-      setBlueskyMessage({ type: "err", text: err.message || "Failed to disconnect" });
-    }
-  }, []);
 
   const handleSavePersona = useCallback(async () => {
     setPersonaSaving(true);
@@ -5612,158 +5539,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 <p className="text-xs text-white/30">Hard cap on returned bytes (after line slicing) — safety net for files with pathological line lengths like minified bundles or base64 blobs.</p>
               </div>
             </div>
-          </div>
-
-          {/* Bluesky Section */}
-          <div id="bluesky" className="border-t border-white/10 pt-6">
-            <h3 className="text-sm font-semibold text-white/80 mb-4">Bluesky</h3>
-            
-            {blueskyMessage && (
-              <p className={`text-sm mb-3 ${blueskyMessage.type === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
-                {blueskyMessage.text}
-              </p>
-            )}
-
-            {blueskyAuthenticated ? (
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-500/10 border border-emerald-400/20">
-                  <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className="text-emerald-300 text-sm">Connected as @{blueskyHandle}</span>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="block text-sm font-medium text-white/60">Enable Bluesky integration</label>
-                    <p className="text-xs text-white/30 mt-0.5">Poll for notifications and send to agent</p>
-                  </div>
-                  <ToggleSwitch
-                    checked={blueskyEnabled}
-                    onChange={() => setBlueskyEnabled(!blueskyEnabled)}
-                    accentColor="emerald"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="block text-sm font-medium text-white/60">Polling interval</label>
-                    <span className="text-xs text-white/40">{blueskyPollingInterval} minutes</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={5}
-                    max={30}
-                    step={5}
-                    value={blueskyPollingInterval}
-                    onChange={(e) => setBlueskyPollingInterval(Number(e.target.value))}
-                    disabled={!blueskyEnabled}
-                    className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer disabled:opacity-50 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-emerald-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
-                  />
-                  <p className="text-xs text-white/30">How often to check for new notifications</p>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="block text-sm font-medium text-white/60">Auto-send to agent</label>
-                    <p className="text-xs text-white/30 mt-0.5">Automatically send notifications to Bluesky chat</p>
-                  </div>
-                  <ToggleSwitch
-                    checked={blueskyAutoSendToAgent}
-                    onChange={() => setBlueskyAutoSendToAgent(!blueskyAutoSendToAgent)}
-                    accentColor="emerald"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className={`block text-sm font-medium ${blueskyAutoSendToAgent ? "text-white/60" : "text-white/30"}`}>Auto-respond to notifications</label>
-                    <p className="text-xs text-white/30 mt-0.5">Agent autonomously reviews and replies to mentions/replies</p>
-                  </div>
-                  <ToggleSwitch
-                    checked={blueskyAutoRespond && blueskyAutoSendToAgent}
-                    onChange={() => setBlueskyAutoRespond(!blueskyAutoRespond)}
-                    accentColor="emerald"
-                    disabled={!blueskyAutoSendToAgent}
-                  />
-                </div>
-
-                <button
-                  onClick={handleBlueskyDisconnect}
-                  className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-red-500/10 border border-red-400/15 text-red-300/80 hover:bg-red-500/20 transition-all flex items-center justify-center gap-2"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                    <polyline points="16 17 21 12 16 7" />
-                    <line x1="21" y1="12" x2="9" y2="12" />
-                  </svg>
-                  Disconnect
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-xs text-white/40">
-                  Connect the agent's Bluesky account to receive notifications and interact with the platform.
-                  You'll need to create an app password in Bluesky settings.
-                </p>
-                
-                <div className="space-y-2">
-                  <label className="block text-sm text-white/50">Username (handle)</label>
-                  <input
-                    type="text"
-                    value={blueskyUsername}
-                    onChange={(e) => setBlueskyUsername(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
-                    placeholder="user.bsky.social"
-                    autoComplete="off"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="block text-sm text-white/50">App Password</label>
-                  <input
-                    type="password"
-                    value={blueskyAppPassword}
-                    onChange={(e) => setBlueskyAppPassword(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
-                    placeholder="xxxx-xxxx-xxxx-xxxx"
-                    autoComplete="off"
-                  />
-                  <p className="text-xs text-white/30">
-                    Create one at{" "}
-                    <a href="https://bsky.app/settings/app-passwords" target="_blank" rel="noopener noreferrer" className="text-emerald-400/60 hover:text-emerald-400/80">
-                      bsky.app/settings/app-passwords
-                    </a>
-                  </p>
-                </div>
-
-                <button
-                  onClick={handleBlueskyConnect}
-                  disabled={blueskyConnecting}
-                  className="w-full px-3 py-2 rounded-lg text-sm font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                  style={{
-                    backgroundColor: `rgba(var(--theme-secondary), 0.15)`,
-                    borderColor: `rgba(var(--theme-secondary-border))`,
-                    color: `rgba(var(--theme-secondary-text))`,
-                  }}
-                >
-                  {blueskyConnecting ? (
-                    <>
-                      <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-                      </svg>
-                      Connecting...
-                    </>
-                  ) : (
-                    <>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z" />
-                        <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
-                      </svg>
-                      Connect to Bluesky
-                    </>
-                  )}
-                </button>
-              </div>
-            )}
           </div>
 
           {/* TTS Section */}

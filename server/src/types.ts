@@ -97,7 +97,7 @@ export interface ChatMessage {
   recap?: string;
 }
 
-export type ChatType = "agent" | "quick" | "bluesky" | "system";
+export type ChatType = "agent" | "quick" | "system";
 
 export interface Chat {
   id: string;
@@ -368,8 +368,6 @@ export interface Settings {
   // preserve_thinking:true so the model sees its own historical reasoning
   // traces (Qwen3.6+ feature). Ignored by models that don't recognize the kwarg.
   modelPreserveThinking?: Record<string, boolean>;
-  // Bluesky integration settings
-  bluesky?: BlueskySettings;
   // Sleep mode — when the user clicked the sleep button to release the system
   // to autonomous mode. Acts as both: (a) immediate activation of the sleep cycle,
   // and (b) 2h synthesis cooldown (scheduler skips periodic runs while < 2h elapsed).
@@ -423,17 +421,6 @@ export interface Settings {
   llamaServerBins?: Record<string, string>;
   // The default llama.cpp binary path (from llama-current symlink). Used by UI for display.
   llamaServerDefaultBin?: string;
-}
-
-export interface BlueskySettings {
-  enabled: boolean;
-  username?: string;  // Handle (e.g., "user.bsky.social")
-  appPassword?: string;  // Encrypted at rest
-  pollingIntervalMinutes?: number;  // Default: 10
-  notificationTypes?: string[];  // ['mention', 'reply', 'follow', 'like', 'repost']
-  autoSendToAgent?: boolean;  // Auto-send notifications to Bluesky chat
-  autoRespondToNotifications?: boolean;  // Agent autonomously responds to notifications
-  blueskyChatId?: string;  // Dedicated chat for Bluesky interactions
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
@@ -555,83 +542,4 @@ export interface NotebookIndex {
   lastActivityDate: string | null;  // ISO date of most recent entry
 }
 
-// Bluesky types
-export interface BlueskyNotification {
-  uri: string;
-  cid: string;
-  reason: 'mention' | 'reply' | 'follow' | 'like' | 'repost' | 'quote';
-  author: {
-    did: string;
-    handle: string;
-    displayName?: string;
-  };
-  record: {
-    text?: string;
-    createdAt?: string;
-    reply?: {
-      root?: { uri: string; cid: string };
-      parent?: { uri: string; cid: string };
-    };
-  };
-  indexedAt: string;
-  isRead: boolean;
-}
 
-export interface BlueskyThread {
-  uri: string;
-  cid: string;
-  author: {
-    did: string;
-    handle: string;
-    displayName?: string;
-  };
-  record: {
-    text: string;
-    createdAt: string;
-    reply?: {
-      root: { uri: string; cid: string };
-      parent: { uri: string; cid: string };
-    };
-  };
-  embed?: any;
-  replyCount: number;
-  likeCount: number;
-  repostCount: number;
-  parent?: BlueskyThreadPost;
-  replies?: BlueskyThreadPost[];
-}
-
-export interface BlueskyThreadPost {
-  uri: string;
-  cid: string;
-  author: {
-    did: string;
-    handle: string;
-    displayName?: string;
-  };
-  record: {
-    text: string;
-    createdAt: string;
-  };
-  embed?: any;
-  replyCount: number;
-  likeCount: number;
-  repostCount: number;
-}
-
-export interface BlueskyPostResult {
-  uri: string;
-  cid: string;
-  success: boolean;
-}
-
-export interface BlueskyProfile {
-  did: string;
-  handle: string;
-  displayName?: string;
-  description?: string;
-  avatar?: string;
-  followersCount: number;
-  followsCount: number;
-  postsCount: number;
-}

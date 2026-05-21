@@ -738,7 +738,7 @@ export function ChatView({
         onChange={onSystemPromptChange}
         disabled={streaming}
         presets={systemPromptPresets}
-        isAgent={chatType === "agent" || chatType === "bluesky"}
+        isAgent={chatType === "agent"}
         hidden={messages.length > 0}
       />
 

@@ -1073,7 +1073,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         isStreaming={anyStreaming}
         hasUnreadNotebooks={hasUnreadAgentEntries()}
         ttsBarVisible={playbackState.isPlaying || playbackState.isPaused || playbackState.isLoading}
-        blueskyChatId={settings.bluesky?.blueskyChatId}
         hasBackgroundActivity={hasBackgroundActivity}
         lastActiveChatId={lastActiveChatId}
         cacheResidency={cacheResidency}

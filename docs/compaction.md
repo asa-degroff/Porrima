@@ -210,7 +210,7 @@ By using `buildSplitAugmentedPrompt` everywhere, we ensure:
 2. Subsequent turns can do efficient delta retrieval (case 2: not dirty → reuse frozen prompt)
 3. KV cache prefix matching works correctly across turns
 
-The only remaining uses of `buildMemoryAugmentedPrompt` are in non-compaction contexts (chat listing cache, Bluesky auto-respond) where delta tracking is not needed.
+The only remaining uses of `buildMemoryAugmentedPrompt` are in non-compaction contexts (chat listing cache) where delta tracking is not needed.
 
 ### Memory delta injection
 

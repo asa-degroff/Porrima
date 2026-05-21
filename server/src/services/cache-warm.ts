@@ -284,7 +284,7 @@ async function buildWarmSystemPrompt(chat: Awaited<ReturnType<typeof getChat>>, 
 
   let systemPrompt = chat.systemPrompt || "You are a helpful assistant.";
 
-  if (chat.type === "agent" || chat.type === "bluesky") {
+  if (chat.type === "agent") {
     // Cache warming is meant to prepare the next turn's stable prefix. Freeze
     // the current memory context into the system prompt now, so the later send
     // path reuses the same prompt instead of doing a fresh retrieval that shifts

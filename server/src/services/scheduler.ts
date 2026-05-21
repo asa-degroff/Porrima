@@ -6,13 +6,10 @@ import {
   runWakeCycle,
   isWakeCycleActive,
 } from "./system-chat.js";
-import { getDb, getSettings, saveSettings, createChat, findBlueskyChatId } from "./chat-storage.js";
+import { getDb, getSettings, saveSettings } from "./chat-storage.js";
 import { getLastWakeCycleAt } from "./memory-storage.js";
-import { v4 as uuidv4 } from "uuid";
 import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
 import { getQueueLength } from "./cache-warm-queue.js";
-import { getBlueskyPoller } from "./bluesky-poller.js";
-import { BLUESKY_SYSTEM_PROMPT } from "../routes/bluesky.js";
 import { enrichCorpusBatch } from "./image-corpus.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js";
@@ -411,65 +408,5 @@ export function startScheduler(): void {
   // process dies and restarts, the old residency data is no longer valid.
   setInterval(checkLlamaServerPids, 30_000);
   console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, enrichment every 30min, llama PID check every 30s)");
-
-  // Start Bluesky poller if enabled
-  startBlueskyPoller();
 }
 
-/**
- * Start the Bluesky notification poller if enabled in settings.
- */
-async function startBlueskyPoller(): Promise<void> {
-  try {
-    const settings = await getSettings();
-
-    if (settings.bluesky?.enabled) {
-      // Backfill missing blueskyChatId (e.g. interrupted setup, direct settings edit)
-      if (!settings.bluesky.blueskyChatId) {
-        const existing = await findBlueskyChatId();
-        if (existing) {
-          settings.bluesky.blueskyChatId = existing;
-        } else {
-          const chatId = uuidv4();
-          await createChat({
-            id: chatId, title: 'Bluesky', type: 'bluesky' as any,
-            modelId: settings.defaultModelId,
-            systemPrompt: BLUESKY_SYSTEM_PROMPT,
-            messages: [],
-            createdAt: new Date().toISOString(),
-            lastModified: new Date().toISOString(),
-          });
-          settings.bluesky.blueskyChatId = chatId;
-        }
-        await saveSettings(settings);
-        console.log(`[scheduler] Backfilled Bluesky chat: ${settings.bluesky.blueskyChatId}`);
-      }
-
-      const poller = getBlueskyPoller();
-      const interval = settings.bluesky.pollingIntervalMinutes ?? 10;
-
-      // Restore session if we have one
-      if (settings.bluesky.blueskyChatId) {
-        // Try to restore the most recent session
-        const sessions = await import('./bluesky-agent.js').then(m => m.BlueskyAgent);
-        const sessionInfos = sessions.getAllSessionInfo();
-        
-        if (sessionInfos.length > 0) {
-          const agent = await import('./bluesky-agent.js').then(m => m.getBlueskyAgent());
-          const restored = await agent.restoreSession(sessionInfos[0].did);
-          
-          if (restored) {
-            console.log(`[scheduler] Restored Bluesky session for ${agent.getHandle()}`);
-          }
-        }
-      }
-      
-      poller.start(interval);
-      console.log(`[scheduler] Bluesky poller started (interval: ${interval}min)`);
-    } else {
-      console.log("[scheduler] Bluesky poller disabled in settings");
-    }
-  } catch (err: any) {
-    console.error("[scheduler] Failed to start Bluesky poller:", err.message);
-  }
-}

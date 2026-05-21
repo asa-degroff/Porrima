@@ -27,7 +27,7 @@
 ## Style
 
 - Tailwind v4 with glassmorphism (`backdrop-blur-xl bg-white/[0.08]`)
-- Agent-related UI uses purple accent colors; quick chats use blue; bluesky chats use sky blue; projects use emerald
+- Agent-related UI uses purple accent colors; quick chats use blue; projects use emerald
 - No external state management — React hooks + API calls
 - Lazy loading for heavy components (ImageSandbox, MarkdownRenderer, RippleGridBackground)
 

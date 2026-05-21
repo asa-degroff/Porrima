@@ -12,7 +12,6 @@ Uses **native pi-ai tool calling** (`Context.tools`, `ToolCall`, `ToolResultMess
 - **Filesystem tools**: `read_file`, `write_file`, `edit_file`, `list_files`, `bash`
 - **Web tools**: `web_search`, `web_fetch` — provider-backed web search (Brave, Exa, Tavily) plus rendered page fetch.
 - **Sandbox tools**: `run_python`, `create_artifact`
-- **Bluesky tools** (from `bluesky-tools.ts`): `list_notifications`, `get_thread`, `reply`, `post` (bluesky chats only)
 - **Flow control**: `ask_user` (pauses tool loop, saves pending state to `pending_states` table in SQLite, resumes on next user message)
 
 ## Tool Result Limits

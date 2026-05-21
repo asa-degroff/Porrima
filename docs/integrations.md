@@ -11,19 +11,6 @@ Dual user/agent notebook for structured notes, reflections, and cross-referencin
 - **UI**: `NotebookView.tsx`, `NotebookEntryComposer.tsx`, `NotebookEntryDisplay.tsx`, `NotebookLinkPicker.tsx`
 - **Routes** (`notebooks.ts`): CRUD for entries, filtered by author (user/agent)
 
-## Bluesky Integration
-
-Social media integration with the AT Protocol (Bluesky):
-- **Authentication** (`bluesky-agent.ts`): AT Protocol agent with encrypted session persistence
-- **Notification polling** (`bluesky-poller.ts`): EventEmitter-based polling with configurable interval, auto-respond capability
-- **Agent tools** (`bluesky-tools.ts`): `list_notifications`, `get_thread`, `reply`, `post` — available in bluesky chat type
-- **Chat type**: Dedicated `"bluesky"` chat type with specialized system prompt, notification context injection
-- **Multi-post replies**: Automatic thread splitting for responses >300 characters
-- **Thread context**: Reads parent thread before replying for conversational awareness
-- **Settings**: `BlueskySettings` — polling interval, notification types, auto-send, auto-respond, dedicated chat ID
-- **UI**: `BlueskySection.tsx` in sidebar with expand/collapse, unread count, quick access to dedicated chat
-- **Routes** (`bluesky.ts`): `POST /api/bluesky/login`, `POST /api/bluesky/logout`
-
 ## TTS (Text-to-Speech)
 
 - **Kokoro TTS**: Original integration (ported from GreenGale codebase)

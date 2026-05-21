@@ -8,7 +8,6 @@ import { homedir } from "os";
 import { glob } from "fs/promises";
 import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
-import { BLUESKY_TOOLS, executeBlueskyTool } from "./bluesky-tools.js";
 import { executePython, createArtifact, createVisual, updateArtifact, updateVisual } from "./sandbox.js";
 import { P5_INSTANCE_MODE_GUIDANCE, formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
 import { getSettings } from "./chat-storage.js";
@@ -193,7 +192,7 @@ const FILESYSTEM_TOOLS: Tool[] = [
 
 /** Get tool definitions (name + description) for display/metadata only */
 export function getAgentToolDefinitions(chatType?: string): { name: string; description: string }[] {
-  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS, ...(chatType === "bluesky" ? BLUESKY_TOOLS : [])];
+  const allTools = [...MEMORY_TOOLS, ...FILESYSTEM_TOOLS, ...WEB_TOOLS];
   return allTools.map(t => ({ name: t.name, description: t.description }));
 }
 
@@ -226,23 +225,6 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
         return wrapResult(await executeWebTool(makeToolCall(toolCallId, tool.name, args)));
       },
     });
-  }
-
-  // Bluesky tools — only for bluesky chat context
-  if (chatType === "bluesky") {
-    for (const tool of BLUESKY_TOOLS) {
-      tools.push({
-        name: tool.name,
-        description: tool.description,
-        parameters: (tool.schema as any),
-        label: tool.name,
-        execute: async (toolCallId, params) => {
-          const args = params as Record<string, any>;
-          const result = await executeBlueskyTool(tool.name, args);
-          return wrapResult({ content: result, isError: result.startsWith("Error:") });
-        },
-      });
-    }
   }
 
   // Filesystem tools

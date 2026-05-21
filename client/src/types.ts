@@ -122,7 +122,7 @@ export interface ChatMessage {
   recap?: string;
 }
 
-export type ChatType = "agent" | "quick" | "bluesky" | "system";
+export type ChatType = "agent" | "quick" | "system";
 
 export interface Chat {
   id: string;
@@ -392,7 +392,6 @@ export interface Settings {
   // preserve_thinking:true so the model sees its own historical reasoning
   // traces (Qwen3.6+ feature). Ignored by models that don't recognize the kwarg.
   modelPreserveThinking?: Record<string, boolean>;
-  bluesky?: BlueskySettings;
   // Last active chat ID (for warm cache indicator)
   lastActiveChatId?: string;
   // Sleep mode — tracks when the user manually triggered synthesis
@@ -427,17 +426,6 @@ export interface Settings {
   crossProjectScoreMultiplier?: number;
   // Project-scoped memory multiplier for global/system chats. Default 1.0.
   globalProjectScoreMultiplier?: number;
-}
-
-export interface BlueskySettings {
-  enabled: boolean;
-  username?: string;
-  appPassword?: string;
-  pollingIntervalMinutes?: number;
-  notificationTypes?: string[];
-  autoSendToAgent?: boolean;
-  autoRespondToNotifications?: boolean;
-  blueskyChatId?: string;
 }
 
 export interface LlamaPathInfo {

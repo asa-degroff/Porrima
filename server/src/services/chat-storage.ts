@@ -174,41 +174,7 @@ export function getDb(): Database.Database {
     );
   `);
 
-  // Bluesky session storage (encrypted)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS bluesky_sessions (
-      did TEXT PRIMARY KEY,
-      handle TEXT NOT NULL,
-      encryptedSession TEXT NOT NULL,
-      iv TEXT NOT NULL,
-      createdAt TEXT NOT NULL,
-      expiresAt TEXT,
-      lastUsedAt TEXT NOT NULL
-    );
-  `);
 
-  // Bluesky notification cache
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS bluesky_notifications (
-      uri TEXT PRIMARY KEY,
-      cid TEXT NOT NULL,
-      reason TEXT NOT NULL,
-      authorDid TEXT NOT NULL,
-      authorHandle TEXT NOT NULL,
-      authorDisplayName TEXT,
-      recordJson TEXT,
-      indexedAt TEXT NOT NULL,
-      isRead INTEGER DEFAULT 0,
-      chatMessageId TEXT,
-      createdAt TEXT NOT NULL
-    );
-  `);
-
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_bluesky_notifications_indexedAt ON bluesky_notifications(indexedAt DESC);
-    CREATE INDEX IF NOT EXISTS idx_bluesky_notifications_reason ON bluesky_notifications(reason);
-    CREATE INDEX IF NOT EXISTS idx_bluesky_notifications_author ON bluesky_notifications(authorHandle);
-  `);
 
   // User UI state persistence (sidebar state, notebook last-seen, etc.)
   db.exec(`
@@ -499,7 +465,7 @@ export async function listChats(): Promise<ChatListItem[]> {
   return rows.map((r) => ({
     id: r.id,
     title: r.title,
-    type: r.type as "agent" | "quick" | "system" | "bluesky",
+    type: r.type as "agent" | "quick" | "system",
     lastModified: r.lastModified,
     preview: r.preview || "",
     ...(r.projectId ? { projectId: r.projectId } : {}),
@@ -604,7 +570,7 @@ export async function getChat(id: string): Promise<Chat | null> {
   const chat: Chat = {
     id: row.id,
     title: row.title,
-    type: (row.type as "agent" | "quick" | "system" | "bluesky") || "quick",
+    type: (row.type as "agent" | "quick" | "system") || "quick",
     modelId: row.modelId,
     systemPrompt: row.systemPrompt || "You are a helpful assistant.",
     ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
@@ -706,7 +672,7 @@ export async function getChatWithWindow(
   const chat: Chat = {
     id: row.id,
     title: row.title,
-    type: (row.type as "agent" | "quick" | "system" | "bluesky") || "quick",
+    type: (row.type as "agent" | "quick" | "system") || "quick",
     modelId: row.modelId,
     systemPrompt: row.systemPrompt || "You are a helpful assistant.",
     ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
@@ -842,18 +808,6 @@ export async function createChat(chat: Chat): Promise<void> {
   });
 
   create();
-}
-
-/**
- * Find an existing bluesky-type chat, returning its ID (or null).
- * Used by backfill logic to avoid creating duplicate bluesky chats.
- */
-export async function findBlueskyChatId(): Promise<string | null> {
-  const db = getDb();
-  const row = db.prepare(
-    "SELECT id FROM chats WHERE type = 'bluesky' ORDER BY lastModified DESC LIMIT 1"
-  ).get() as { id: string } | undefined;
-  return row?.id ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1980,162 +1934,6 @@ function migrateSettingsFromJson(db: Database.Database): void {
     // settings.json may not exist or be corrupt — not fatal
     console.warn("[chat-storage] Settings migration skipped:", (e as Error).message);
   }
-}
-
-// ---------------------------------------------------------------------------
-// Bluesky Session Storage
-// ---------------------------------------------------------------------------
-
-export interface StoredBlueskySession {
-  did: string;
-  handle: string;
-  encryptedSession: string;
-  iv: string;
-  createdAt: string;
-  expiresAt?: string;
-  lastUsedAt: string;
-}
-
-export function saveBlueskySession(session: StoredBlueskySession): void {
-  const db = getDb();
-  db.prepare(`
-    INSERT OR REPLACE INTO bluesky_sessions (did, handle, encryptedSession, iv, createdAt, expiresAt, lastUsedAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    session.did,
-    session.handle,
-    session.encryptedSession,
-    session.iv,
-    session.createdAt,
-    session.expiresAt ?? null,
-    session.lastUsedAt
-  );
-}
-
-export function getBlueskySession(did: string): StoredBlueskySession | null {
-  const db = getDb();
-  const row = db.prepare(`
-    SELECT * FROM bluesky_sessions WHERE did = ?
-  `).get(did) as StoredBlueskySession | undefined;
-
-  return row ?? null;
-}
-
-export function getAllBlueskySessions(): StoredBlueskySession[] {
-  const db = getDb();
-  return db.prepare(`
-    SELECT * FROM bluesky_sessions ORDER BY lastUsedAt DESC
-  `).all() as StoredBlueskySession[];
-}
-
-export function deleteBlueskySession(did: string): void {
-  const db = getDb();
-  db.prepare(`
-    DELETE FROM bluesky_sessions WHERE did = ?
-  `).run(did);
-}
-
-export function updateBlueskySessionLastUsed(did: string): void {
-  const db = getDb();
-  db.prepare(`
-    UPDATE bluesky_sessions SET lastUsedAt = ? WHERE did = ?
-  `).run(new Date().toISOString(), did);
-}
-
-// ---------------------------------------------------------------------------
-// Bluesky Notification Cache
-// ---------------------------------------------------------------------------
-
-export interface StoredBlueskyNotification {
-  uri: string;
-  cid: string;
-  reason: string;
-  authorDid: string;
-  authorHandle: string;
-  authorDisplayName?: string;
-  recordJson: string;  // JSON stringified record
-  indexedAt: string;
-  isRead: boolean;
-  chatMessageId?: string;
-  createdAt: string;
-}
-
-export function saveBlueskyNotification(notif: StoredBlueskyNotification): void {
-  const db = getDb();
-  db.prepare(`
-    INSERT OR REPLACE INTO bluesky_notifications (uri, cid, reason, authorDid, authorHandle, authorDisplayName, recordJson, indexedAt, isRead, chatMessageId, createdAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    notif.uri,
-    notif.cid,
-    notif.reason,
-    notif.authorDid,
-    notif.authorHandle,
-    notif.authorDisplayName ?? null,
-    notif.recordJson,
-    notif.indexedAt,
-    notif.isRead ? 1 : 0,
-    notif.chatMessageId ?? null,
-    notif.createdAt
-  );
-}
-
-export function getBlueskyNotifications(options?: {
-  limit?: number;
-  reason?: string;
-  isRead?: boolean;
-  since?: string;
-}): StoredBlueskyNotification[] {
-  const db = getDb();
-  
-  let query = `SELECT * FROM bluesky_notifications WHERE 1=1`;
-  const params: any[] = [];
-
-  if (options?.reason) {
-    query += ` AND reason = ?`;
-    params.push(options.reason);
-  }
-
-  if (options?.isRead !== undefined) {
-    query += ` AND isRead = ?`;
-    params.push(options.isRead ? 1 : 0);
-  }
-
-  if (options?.since) {
-    query += ` AND indexedAt > ?`;
-    params.push(options.since);
-  }
-
-  query += ` ORDER BY indexedAt DESC`;
-
-  if (options?.limit) {
-    query += ` LIMIT ?`;
-    params.push(options.limit);
-  }
-
-  return db.prepare(query).all(...params) as StoredBlueskyNotification[];
-}
-
-export function markBlueskyNotificationAsRead(uri: string): void {
-  const db = getDb();
-  db.prepare(`
-    UPDATE bluesky_notifications SET isRead = 1 WHERE uri = ?
-  `).run(uri);
-}
-
-export function linkNotificationToChat(uri: string, chatMessageId: string): void {
-  const db = getDb();
-  db.prepare(`
-    UPDATE bluesky_notifications SET chatMessageId = ? WHERE uri = ?
-  `).run(chatMessageId, uri);
-}
-
-export function getUnreadBlueskyNotificationCount(): number {
-  const db = getDb();
-  const result = db.prepare(`
-    SELECT COUNT(*) as count FROM bluesky_notifications WHERE isRead = 0
-  `).get() as { count: number };
-  return result.count;
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,6 @@ A local chat UI and agent framework for Ollama and OpenAI-compatible local model
 **Chat types**
 - **Agent chats** — Memory-augmented conversations. The agent remembers facts about you across sessions, has explicit memory tools (`save_memory`, `search_memory`, `forget_memory`), and automatically extracts important details from conversations in the background.
 - **Quick chats** — Standalone one-off conversations with no memory behavior.
-- **Bluesky chats** — Dedicated social-media conversations with Bluesky tools and notification context.
 - **System chats** — Background synthesis, wake cycles, and custom automations with auditable message history.
 
 **Memory system**

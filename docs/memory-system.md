@@ -37,7 +37,6 @@ Memory retrieval uses a multi-stage pipeline for high-relevance results:
 
 2. **Cross-encoder reranking** (`reranker.ts`): Top 30 candidates are reranked by Qwen3-Reranker-0.6B (dedicated CPU instance on port 8082) using chat-type-specific instructions:
    - **Agent**: "judge whether this memory is relevant to the user's current task, question, or topic of discussion"
-   - **Bluesky**: "judge whether this memory is relevant to the TOPIC being discussed. Ignore notification metadata, reply counts, handle mentions..."
    - **Quick**: "judge whether this memory contains information useful for responding"
    - Graceful fallback to RRF-only scoring if reranker is unavailable
 

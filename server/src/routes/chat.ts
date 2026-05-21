@@ -64,7 +64,7 @@ const artifactErrorRepairAttempts = new Map<string, number>();
 const artifactAutoRepairAttempts = new Map<string, number>();
 
 function isMemoryAugmentedChatType(type: Chat["type"] | undefined): boolean {
-  return type === "agent" || type === "bluesky" || type === "system";
+  return type === "agent" || type === "system";
 }
 
 interface ArtifactRuntimeErrorReport {
@@ -1129,7 +1129,7 @@ async function handleChatStream(
     },
   };
 
-  const isAgent = chat.type === "agent" || chat.type === "bluesky" || chat.type === "system";
+  const isAgent = chat.type === "agent" || chat.type === "system";
 
   const settings = await getSettings();
   const ttsSettings: TTSSettings = await getCurrentTTSSettings();
@@ -3736,7 +3736,7 @@ router.post("/artifact-error", async (req, res) => {
 
   const chat = await getChat(report.chatId);
   if (!chat) return res.status(404).json({ error: "Chat not found" });
-  if (!(chat.type === "agent" || chat.type === "bluesky" || chat.type === "system")) {
+  if (!(chat.type === "agent" || chat.type === "system")) {
     return res.status(400).json({ error: "Artifact repair requires a tool-capable chat" });
   }
 

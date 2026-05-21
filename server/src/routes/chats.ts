@@ -159,7 +159,7 @@ router.get("/:id/rendered-prompt", async (req, res) => {
   if (!chat) return res.status(404).json({ error: "Chat not found" });
 
   let systemPrompt = chat.systemPrompt || "You are an autonmous agent.";
-  if (chat.type === "agent" || chat.type === "bluesky") {
+  if (chat.type === "agent") {
     const cached = getCachedAugmentedPrompt(chat.id);
     if (cached) {
       systemPrompt = cached;
@@ -201,7 +201,7 @@ router.get("/:id/rendered-prompt", async (req, res) => {
     systemPrompt = buildSkillAugmentedPrompt(systemPrompt, chat.activeSkills, skillsCache);
   }
 
-  const tools = (chat.type === "agent" || chat.type === "bluesky" || chat.type === "system")
+  const tools = (chat.type === "agent" || chat.type === "system")
     ? getAgentToolDefinitions(chat.type)
     : [];
 

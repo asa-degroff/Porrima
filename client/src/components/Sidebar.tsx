@@ -5,7 +5,6 @@ import { ChatListItem } from "./ChatListItem";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { useActivityShape, useActivityHue, useActivitySaturation } from "../hooks/useActivityStyle";
-import { BlueskySection } from "./BlueskySection";
 import { useSidebarState } from "../hooks/useSidebarState";
 import { useGestureDrawer } from "../hooks/useGestureDrawer";
 import { SidebarSearch, SearchResults } from "./SidebarSearch";
@@ -40,7 +39,6 @@ interface Props {
   isStreaming?: boolean;
   hasUnreadNotebooks?: boolean;
   ttsBarVisible?: boolean;
-  blueskyChatId?: string;
   hasBackgroundActivity?: boolean;
   lastActiveChatId?: string | null;
   isSynthesizing?: boolean;
@@ -613,7 +611,6 @@ export function Sidebar({
   isStreaming = false,
   hasUnreadNotebooks = false,
   ttsBarVisible = false,
-  blueskyChatId,
   hasBackgroundActivity = false,
   lastActiveChatId = null,
   isSynthesizing = false,
@@ -733,8 +730,8 @@ export function Sidebar({
   }
 
   const agentChats = useMemo(
-    () => chats.filter((c) => (c.type === "agent" || c.type === "bluesky") && !c.projectId && c.id !== blueskyChatId),
-    [chats, blueskyChatId]
+    () => chats.filter((c) => c.type === "agent" && !c.projectId),
+    [chats]
   );
   const quickChats = useMemo(
     () => chats.filter((c) => c.type === "quick" && !c.projectId),
@@ -1324,8 +1321,7 @@ export function Sidebar({
           <SectionDepthShadow visible={quickExpanded} />
         </div>
 
-        {/* Bluesky Section */}
-        <BlueskySection onOpenSettings={onOpenSettings} onSelectChat={(id) => { onSelectChat(id); onClose(); }} />
+
       </div>
 
       {/* Notebooks + Images — alternative views */}
