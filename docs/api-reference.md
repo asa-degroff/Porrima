@@ -24,6 +24,10 @@
 | POST | `/api/memory/synthesis/run` | Dispatch a synthesis run. Returns **202 Accepted** `{ started: true }` immediately and runs in the background (synthesis can take minutes; longer than any reasonable HTTP idle timeout). Clients poll `/synthesis/status` for completion. Returns **409 Conflict** if a run is already active. |
 | POST | `/api/memory/synthesis/sleep` | Same as `/run`, but also stamps `settings.sleepModeTriggeredAt` so the scheduler suppresses periodic runs for 2 hours. Returns **202** `{ started: true, sleepModeTriggeredAt }`. |
 | POST | `/api/memory/conversations/search` | Conversation search (`{ query, chatId?, limit? }`) — FTS5 on chat history |
+| GET | `/api/snapshots` | List full agent snapshots |
+| POST | `/api/snapshots` | Create a full agent snapshot (`{ label?, includeCorpus? }`) containing `app.db` and `memory/memories.db`, optionally `image-corpus/corpus.db` |
+| DELETE | `/api/snapshots/:id` | Delete an agent snapshot |
+| POST | `/api/snapshots/:id/restore` | Restore an agent snapshot as a full replacement. Creates a pre-restore snapshot before replacing databases. |
 | GET | `/api/automations` | List automation tasks plus `{ isRunning, activeTaskId }` |
 | POST | `/api/automations` | Create a custom automation task |
 | PATCH | `/api/automations/:id` | Update schedule, order, enabled state, activation policy, prompt steps, notifications, or runtime limits |

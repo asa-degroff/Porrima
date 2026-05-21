@@ -18,8 +18,8 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
-import type { EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
+import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
 import type { AutomationRun, AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, BlueskySettings, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
@@ -477,6 +477,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [confirmMigrate, setConfirmMigrate] = useState(false);
   const [confirmRestoreId, setConfirmRestoreId] = useState<string | null>(null);
   const migrationAbortRef = useRef<null | (() => void)>(null);
+  // Agent snapshot state
+  const [agentSnapshots, setAgentSnapshots] = useState<AgentSnapshot[]>([]);
+  const [agentSnapshotsLoading, setAgentSnapshotsLoading] = useState(false);
+  const [agentSnapshotMessage, setAgentSnapshotMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [agentSnapshotLabel, setAgentSnapshotLabel] = useState("");
+  const [agentSnapshotIncludeCorpus, setAgentSnapshotIncludeCorpus] = useState(false);
+  const [confirmAgentSnapshotRestoreId, setConfirmAgentSnapshotRestoreId] = useState<string | null>(null);
   // Llama.cpp binary path management
   const [llamaPathInfo, setLlamaPathInfo] = useState<LlamaPathInfo | null>(null);
   // Aggregate HTTP-ping health for all five configured servers
@@ -1815,6 +1822,59 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     }
   }, [refreshBackups]);
 
+  const refreshAgentSnapshots = useCallback(async () => {
+    setAgentSnapshotsLoading(true);
+    try {
+      const list = await listAgentSnapshots();
+      setAgentSnapshots(list);
+    } catch (e: any) {
+      setAgentSnapshotMessage({ type: "err", text: e?.message || "Failed to load snapshots" });
+    } finally {
+      setAgentSnapshotsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshAgentSnapshots();
+  }, [refreshAgentSnapshots]);
+
+  const handleCreateAgentSnapshot = useCallback(async () => {
+    setAgentSnapshotMessage(null);
+    try {
+      await createAgentSnapshot(agentSnapshotLabel.trim() || undefined, agentSnapshotIncludeCorpus);
+      setAgentSnapshotLabel("");
+      setAgentSnapshotMessage({ type: "ok", text: "Snapshot created" });
+      await refreshAgentSnapshots();
+    } catch (e: any) {
+      setAgentSnapshotMessage({ type: "err", text: e?.message || "Snapshot failed" });
+    }
+  }, [agentSnapshotIncludeCorpus, agentSnapshotLabel, refreshAgentSnapshots]);
+
+  const handleDeleteAgentSnapshot = useCallback(async (id: string) => {
+    setAgentSnapshotMessage(null);
+    try {
+      await deleteAgentSnapshot(id);
+      await refreshAgentSnapshots();
+    } catch (e: any) {
+      setAgentSnapshotMessage({ type: "err", text: e?.message || "Delete failed" });
+    }
+  }, [refreshAgentSnapshots]);
+
+  const handleRestoreAgentSnapshot = useCallback(async (id: string) => {
+    setAgentSnapshotMessage(null);
+    setConfirmAgentSnapshotRestoreId(null);
+    try {
+      const result = await restoreAgentSnapshot(id);
+      setAgentSnapshotMessage({
+        type: "ok",
+        text: `Restore complete. Pre-restore snapshot ${result.preRestoreSnapshot.id} was created. Reload to pick up restored state.`,
+      });
+      await refreshAgentSnapshots();
+    } catch (e: any) {
+      setAgentSnapshotMessage({ type: "err", text: e?.message || "Restore failed" });
+    }
+  }, [refreshAgentSnapshots]);
+
   const handleRunMigration = useCallback(() => {
     setConfirmMigrate(false);
     setMigrationRunning(true);
@@ -3091,6 +3151,115 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
           </div>
 
 
+
+          {/* Agent Snapshots */}
+          <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <h5 className="text-xs font-medium text-white/70 uppercase tracking-wider">Agent Snapshots</h5>
+              <button
+                onClick={refreshAgentSnapshots}
+                disabled={agentSnapshotsLoading}
+                className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
+              >
+                {agentSnapshotsLoading ? "Loading…" : "Refresh"}
+              </button>
+            </div>
+
+            <p className="text-xs text-white/40">
+              Snapshots preserve chats, full message history, context archives, settings, projects, memories, and memory blocks. Restoring replaces the current agent state and first creates a pre-restore snapshot.
+            </p>
+
+            {agentSnapshotMessage && (
+              <div className={`text-xs p-2 rounded ${agentSnapshotMessage.type === "ok" ? "bg-green-500/10 text-green-300/80" : "bg-red-500/10 text-red-300/80"}`}>
+                {agentSnapshotMessage.text}
+              </div>
+            )}
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                type="text"
+                value={agentSnapshotLabel}
+                onChange={(e) => setAgentSnapshotLabel(e.target.value)}
+                placeholder="Optional label (e.g., 'before cleanup')"
+                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+              />
+              <button
+                onClick={handleCreateAgentSnapshot}
+                className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0"
+              >
+                Create snapshot
+              </button>
+            </div>
+
+            <label className="flex items-center gap-2 text-xs text-white/45">
+              <input
+                type="checkbox"
+                checked={agentSnapshotIncludeCorpus}
+                onChange={(e) => setAgentSnapshotIncludeCorpus(e.target.checked)}
+                className="accent-purple-400"
+              />
+              Include image corpus database
+            </label>
+
+            {agentSnapshots.length > 0 && (
+              <div className="space-y-1 max-h-52 overflow-y-auto">
+                {agentSnapshots.map((s) => {
+                  const isConfirming = confirmAgentSnapshotRestoreId === s.id;
+                  const sizeBytes = s.sourceSizes.appBytes + s.sourceSizes.memoriesBytes + (s.sourceSizes.corpusBytes || 0);
+                  const sizeMb = sizeBytes / (1024 * 1024);
+                  return (
+                    <div key={s.id} className="p-2 rounded-lg bg-white/[0.03] border border-white/5 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-white/70">{s.id}</span>
+                            {s.label && <span className="text-white/50 truncate">— {s.label}</span>}
+                          </div>
+                          <div className="text-[11px] text-white/40 mt-0.5">
+                            {s.counts.chats} chats · {s.counts.memories} memories · {s.counts.memoryBlocks} blocks · {s.counts.contextArchives} archives · {sizeMb.toFixed(1)} MB
+                            {s.includes.corpus && s.counts.corpus !== undefined ? ` · ${s.counts.corpus} corpus` : ""}
+                          </div>
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          {isConfirming ? (
+                            <>
+                              <button
+                                onClick={() => handleRestoreAgentSnapshot(s.id)}
+                                className="px-2 py-0.5 rounded text-[11px] bg-red-500/20 border border-red-400/30 text-red-200 hover:bg-red-500/30 transition-all"
+                              >
+                                Confirm restore
+                              </button>
+                              <button
+                                onClick={() => setConfirmAgentSnapshotRestoreId(null)}
+                                className="px-2 py-0.5 rounded text-[11px] text-white/50 hover:text-white/80"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => setConfirmAgentSnapshotRestoreId(s.id)}
+                                className="px-2 py-0.5 rounded text-[11px] bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
+                              >
+                                Restore
+                              </button>
+                              <button
+                                onClick={() => handleDeleteAgentSnapshot(s.id)}
+                                className="px-2 py-0.5 rounded text-[11px] text-white/30 hover:text-red-400/80 transition-all"
+                              >
+                                Delete
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           {/* Migration + Backups */}
           <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">

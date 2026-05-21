@@ -506,6 +506,25 @@ export async function listChats(): Promise<ChatListItem[]> {
   }));
 }
 
+export async function backupChatDb(destinationPath: string): Promise<void> {
+  await getDb().backup(destinationPath);
+}
+
+export function closeChatDb(): void {
+  if (_db) {
+    try {
+      _db.close();
+    } catch (e) {
+      console.warn("[chat-storage] close failed:", e);
+    }
+    _db = null;
+  }
+}
+
+export function getChatDbPath(): string {
+  return DB_PATH;
+}
+
 export async function getChat(id: string): Promise<Chat | null> {
   const db = getDb();
   const row = db.prepare("SELECT * FROM chats WHERE id = ?").get(id) as

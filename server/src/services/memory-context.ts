@@ -152,6 +152,11 @@ export function invalidateAllStablePrefixCaches(): void {
   stablePrefixCache.clear();
 }
 
+export function resetAllMemoryContextCaches(): void {
+  contextState.clear();
+  stablePrefixCache.clear();
+}
+
 export interface AugmentedPromptResult {
   systemPrompt: string;        // Stable system prompt (with frozen memories)
   memoriesMessage: string;     // Delta: only NEW memories not already in context

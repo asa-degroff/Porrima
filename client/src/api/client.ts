@@ -1968,6 +1968,72 @@ export function runEmbeddingMigration(cb: EmbeddingMigrationCallbacks): () => vo
   return () => controller.abort();
 }
 
+export interface AgentSnapshot {
+  id: string;
+  kind: "agent-snapshot";
+  schemaVersion: 1;
+  createdAt: string;
+  label?: string;
+  includes: { app: true; memories: true; corpus: boolean };
+  embedding: { provider: string; url: string; model: string; dimension?: number };
+  counts: {
+    chats: number;
+    chatMessageRows: number;
+    contextArchives: number;
+    memories: number;
+    memoryBlocks: number;
+    corpus?: number;
+  };
+  sourceSizes: {
+    appBytes: number;
+    memoriesBytes: number;
+    corpusBytes?: number;
+  };
+}
+
+export async function listAgentSnapshots(): Promise<AgentSnapshot[]> {
+  const res = await apiFetch(`${BASE}/snapshots`);
+  if (!res.ok) throw new Error("Failed to list snapshots");
+  const data = await res.json();
+  return data.snapshots || [];
+}
+
+export async function createAgentSnapshot(label?: string, includeCorpus = false): Promise<AgentSnapshot> {
+  const res = await apiFetch(`${BASE}/snapshots`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, includeCorpus }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to create snapshot");
+  }
+  const data = await res.json();
+  return data.manifest;
+}
+
+export async function deleteAgentSnapshot(id: string): Promise<void> {
+  const res = await apiFetch(`${BASE}/snapshots/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to delete snapshot");
+  }
+}
+
+export async function restoreAgentSnapshot(id: string): Promise<{ preRestoreSnapshot: AgentSnapshot }> {
+  const res = await apiFetch(`${BASE}/snapshots/${encodeURIComponent(id)}/restore`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to restore snapshot");
+  }
+  const data = await res.json();
+  return { preRestoreSnapshot: data.preRestoreSnapshot };
+}
+
 // --- Cache Warm API ---
 
 export interface CacheWarmResult {

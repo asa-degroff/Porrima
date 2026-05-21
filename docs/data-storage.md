@@ -16,6 +16,7 @@ All data is stored in `~/.quje-agent/`:
 ├── clusters/           # Cluster data (clusters.json with centroids, dominant elements)
 ├── notebooks/          # Notebook entries (user + agent)
 ├── push/               # VAPID keys for browser push notifications
+├── snapshots/          # Full agent snapshots (app.db + memories.db, optionally corpus.db)
 ├── image-corpus/       # Image corpus SQLite database
 │   ├── corpus.db       # SQLite: corpus_entries + vec_corpus (sqlite-vec) + fts_corpus (FTS5)
 │   └── corpus.json.bak # Legacy JSON (migrated on first startup)
