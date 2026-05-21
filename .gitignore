@@ -3,8 +3,13 @@ dist
 .cache
 .chainlink
 /server/data/*
-.env
-/server/.env
 .codex
 .venv*
-.env.tts
+
+# Local environment files
+.env
+.env.*
+server/.env
+server/.env.*
+!.env.example
+!server/.env.example
