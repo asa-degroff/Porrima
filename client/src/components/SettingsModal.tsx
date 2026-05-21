@@ -48,6 +48,7 @@ const SECTIONS = [
   { id: 'images', label: 'Images' },
   { id: 'skills', label: 'Skills' },
   { id: 'extraction', label: 'Extraction' },
+  { id: 'backups', label: 'Backups' },
   { id: 'memory-retrieval', label: 'Memory Retrieval' },
   { id: 'system-stats', label: 'System Stats' },
   { id: 'memory-blocks', label: 'Memory Blocks' },
@@ -3150,304 +3151,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             </Dropdown>
           </div>
 
-
-
-          {/* Agent Database Snapshots */}
-          <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
-            <div className="flex items-center justify-between">
-              <h5 className="text-xs font-medium text-white/70 uppercase tracking-wider">Agent Database Snapshots</h5>
-              <button
-                onClick={refreshAgentSnapshots}
-                disabled={agentSnapshotsLoading}
-                className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
-              >
-                {agentSnapshotsLoading ? "Loading…" : "Refresh"}
-              </button>
-            </div>
-
-            <p className="text-xs text-white/40">
-              Database snapshots preserve chats, full message history, context archives, settings, projects, memories, and memory blocks. Files in artifacts, uploads, generated images, skills, and notebook folders are not included.
-            </p>
-            <p className="text-xs text-white/40">
-              Restoring replaces the current database state and first creates a pre-restore snapshot.
-            </p>
-            <p className="text-xs text-white/40">
-              Manual snapshots are kept until deleted. Automatic pre-restore snapshots keep the latest 10 for up to 30 days.
-            </p>
-
-            {agentSnapshotMessage && (
-              <div className={`text-xs p-2 rounded ${agentSnapshotMessage.type === "ok" ? "bg-green-500/10 text-green-300/80" : "bg-red-500/10 text-red-300/80"}`}>
-                {agentSnapshotMessage.text}
-              </div>
-            )}
-
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <input
-                type="text"
-                value={agentSnapshotLabel}
-                onChange={(e) => setAgentSnapshotLabel(e.target.value)}
-                placeholder="Optional label (e.g., 'before cleanup')"
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
-              />
-              <button
-                onClick={handleCreateAgentSnapshot}
-                className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0"
-              >
-                Create snapshot
-              </button>
-            </div>
-
-            <label className="flex items-center gap-2 text-xs text-white/45">
-              <input
-                type="checkbox"
-                checked={agentSnapshotIncludeCorpus}
-                onChange={(e) => setAgentSnapshotIncludeCorpus(e.target.checked)}
-                className="accent-purple-400"
-              />
-              Include image corpus database
-            </label>
-
-            {agentSnapshots.length > 0 && (
-              <div className="space-y-1 max-h-52 overflow-y-auto">
-                {agentSnapshots.map((s) => {
-                  const isConfirming = confirmAgentSnapshotRestoreId === s.id;
-                  const sizeBytes = s.sourceSizes.appBytes + s.sourceSizes.memoriesBytes + (s.sourceSizes.corpusBytes || 0);
-                  const sizeMb = sizeBytes / (1024 * 1024);
-                  return (
-                    <div key={s.id} className="p-2 rounded-lg bg-white/[0.03] border border-white/5 text-xs">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-white/70">{s.id}</span>
-                            {s.label && <span className="text-white/50 truncate">— {s.label}</span>}
-                          </div>
-                          <div className="text-[11px] text-white/40 mt-0.5">
-                            {s.counts.chats} chats · {s.counts.memories} memories · {s.counts.memoryBlocks} blocks · {s.counts.contextArchives} archives · {sizeMb.toFixed(1)} MB
-                            {s.includes.corpus && s.counts.corpus !== undefined ? ` · ${s.counts.corpus} corpus` : ""}
-                            {s.createdBy === "system" || s.reason === "pre-restore" ? " · automatic" : ""}
-                          </div>
-                        </div>
-                        <div className="flex gap-1 shrink-0">
-                          {isConfirming ? (
-                            <>
-                              <button
-                                onClick={() => handleRestoreAgentSnapshot(s.id)}
-                                className="px-2 py-0.5 rounded text-[11px] bg-red-500/20 border border-red-400/30 text-red-200 hover:bg-red-500/30 transition-all"
-                              >
-                                Confirm restore
-                              </button>
-                              <button
-                                onClick={() => setConfirmAgentSnapshotRestoreId(null)}
-                                className="px-2 py-0.5 rounded text-[11px] text-white/50 hover:text-white/80"
-                              >
-                                Cancel
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                onClick={() => setConfirmAgentSnapshotRestoreId(s.id)}
-                                className="px-2 py-0.5 rounded text-[11px] bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
-                              >
-                                Restore
-                              </button>
-                              <button
-                                onClick={() => handleDeleteAgentSnapshot(s.id)}
-                                className="px-2 py-0.5 rounded text-[11px] text-white/30 hover:text-red-400/80 transition-all"
-                              >
-                                Delete
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Migration + Backups */}
-          <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
-            <div className="flex items-center justify-between">
-              <h5 className="text-xs font-medium text-white/70 uppercase tracking-wider">Migration &amp; Backups</h5>
-              <button
-                onClick={refreshBackups}
-                disabled={backupsLoading}
-                className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
-              >
-                {backupsLoading ? "Loading…" : "Refresh"}
-              </button>
-            </div>
-
-            <p className="text-xs text-white/40">
-              Re-embedding rebuilds vector tables for every memory. This can take several minutes on large stores and the chat is unavailable while vectors are being rewritten. A backup is strongly recommended.
-            </p>
-
-            {backupMessage && (
-              <div className={`text-xs p-2 rounded ${backupMessage.type === "ok" ? "bg-green-500/10 text-green-300/80" : "bg-red-500/10 text-red-300/80"}`}>
-                {backupMessage.text}
-              </div>
-            )}
-
-            {/* Backup controls */}
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={backupLabel}
-                onChange={(e) => setBackupLabel(e.target.value)}
-                placeholder="Optional label (e.g., 'before qwen3 switch')"
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
-              />
-              <button
-                onClick={handleCreateBackup}
-                className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0"
-              >
-                Back up now
-              </button>
-            </div>
-
-            {/* Backups list */}
-            {backups.length > 0 && (
-              <div className="space-y-1 max-h-48 overflow-y-auto">
-                {backups.map((b) => {
-                  const isConfirming = confirmRestoreId === b.id;
-                  const sizeMb = (b.sourceSizes.memoriesBytes + b.sourceSizes.corpusBytes) / (1024 * 1024);
-                  return (
-                    <div key={b.id} className="p-2 rounded-lg bg-white/[0.03] border border-white/5 text-xs">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-white/70">{b.id}</span>
-                            {b.label && <span className="text-white/50 truncate">— {b.label}</span>}
-                          </div>
-                          <div className="text-[11px] text-white/40 mt-0.5">
-                            {b.counts.memories} memories · {b.counts.corpus} corpus · {sizeMb.toFixed(1)} MB · {b.embedding.model}
-                            {b.embedding.dimension ? ` (dim ${b.embedding.dimension})` : ""}
-                          </div>
-                        </div>
-                        <div className="flex gap-1 shrink-0">
-                          {isConfirming ? (
-                            <>
-                              <button
-                                onClick={() => handleRestoreBackup(b.id)}
-                                className="px-2 py-0.5 rounded text-[11px] bg-red-500/20 border border-red-400/30 text-red-200 hover:bg-red-500/30 transition-all"
-                              >
-                                Confirm restore
-                              </button>
-                              <button
-                                onClick={() => setConfirmRestoreId(null)}
-                                className="px-2 py-0.5 rounded text-[11px] text-white/50 hover:text-white/80"
-                              >
-                                Cancel
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                onClick={() => setConfirmRestoreId(b.id)}
-                                className="px-2 py-0.5 rounded text-[11px] bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
-                              >
-                                Restore
-                              </button>
-                              <button
-                                onClick={() => handleDeleteBackup(b.id)}
-                                className="px-2 py-0.5 rounded text-[11px] text-white/30 hover:text-red-400/80 transition-all"
-                              >
-                                Delete
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Migrate controls */}
-            <div className="pt-2 border-t border-white/5 space-y-2">
-              {!migrationRunning && !confirmMigrate && (
-                <button
-                  onClick={() => setConfirmMigrate(true)}
-                  className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/25 text-purple-200 hover:bg-purple-500/25 transition-all"
-                >
-                  Re-embed all memories &amp; corpus
-                </button>
-              )}
-
-              {!migrationRunning && confirmMigrate && (
-                <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-2.5 text-xs space-y-2">
-                  <p className="text-amber-200/90 font-medium">Re-embed with <code className="font-mono text-amber-100">{embeddingModel}</code>?</p>
-                  <p className="text-amber-100/70">
-                    This rewrites every vector. It may take minutes, and the chat is unavailable while it runs. Create a backup first if you haven't.
-                  </p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleRunMigration}
-                      className="px-3 py-1 rounded text-[11px] font-medium bg-amber-500/25 border border-amber-400/40 text-amber-100 hover:bg-amber-500/40 transition-all"
-                    >
-                      Start migration
-                    </button>
-                    <button
-                      onClick={() => setConfirmMigrate(false)}
-                      className="px-3 py-1 rounded text-[11px] text-white/50 hover:text-white/80 transition-all"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {migrationRunning && migrationProgress && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-white/60 capitalize">{migrationProgress.phase}</span>
-                    {migrationProgress.total != null && (
-                      <span className="text-white/40">
-                        {migrationProgress.processed ?? 0} / {migrationProgress.total}
-                      </span>
-                    )}
-                  </div>
-                  {migrationProgress.total != null && migrationProgress.total > 0 && (
-                    <div className="h-1.5 bg-white/5 rounded overflow-hidden">
-                      <div
-                        className="h-full bg-purple-400/60 transition-all"
-                        style={{
-                          width: `${Math.min(100, ((migrationProgress.processed ?? 0) / migrationProgress.total) * 100)}%`,
-                        }}
-                      />
-                    </div>
-                  )}
-                  {migrationProgress.message && (
-                    <p className="text-[11px] text-white/40">{migrationProgress.message}</p>
-                  )}
-                  <button
-                    onClick={handleCancelMigration}
-                    className="text-[11px] text-red-400/70 hover:text-red-400"
-                  >
-                    Cancel migration
-                  </button>
-                </div>
-              )}
-
-              {migrationError && (
-                <div className="text-xs p-2 rounded bg-red-500/10 border border-red-400/20 text-red-300/90">
-                  {migrationError}
-                </div>
-              )}
-
-              {migrationResult && !migrationRunning && (
-                <div className="text-xs p-2 rounded bg-green-500/10 border border-green-400/20 text-green-300/90">
-                  Migrated {migrationResult.memories} memories and {migrationResult.corpus} corpus entries at dimension {migrationResult.dimension}.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Default Vision Model */}
+         {/* Default Vision Model */}
           <div id="vision" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Default Vision Model</label>
             <Dropdown
@@ -4892,6 +4596,303 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   <p className="text-xs text-white/30">Warm caches for recent chats after synthesis. 0 disables. System chat is always warmed.</p>
                 </div>
 
+	              </div>
+	            </div>
+	          </div>
+
+	          {/* Backups */}
+	          <div id="backups" className="border-t border-white/10 pt-6 space-y-3">
+	            <h3 className="text-sm font-semibold text-white/80 mb-1">Backups</h3>
+	            <p className="text-xs text-white/40">
+	              Agent database snapshots and embedding backups. Filesystem assets (artifacts, uploads, generated images, skills, notebooks) are not included.
+	            </p>
+
+	            {/* Agent Database Snapshots */}
+	            <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
+	              <div className="flex items-center justify-between">
+	                <h5 className="text-xs font-medium text-white/70 uppercase tracking-wider">Agent Database Snapshots</h5>
+	                <button
+	                  onClick={refreshAgentSnapshots}
+	                  disabled={agentSnapshotsLoading}
+	                  className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
+	                >
+	                  {agentSnapshotsLoading ? "Loading…" : "Refresh"}
+	                </button>
+	              </div>
+
+	              <p className="text-xs text-white/40">
+	                Database snapshots preserve chats, full message history, context archives, settings, projects, memories, and memory blocks. Restoring replaces the current database state and first creates a pre-restore snapshot.
+	              </p>
+	              <p className="text-xs text-white/40">
+	                Manual snapshots are kept until deleted. Automatic pre-restore snapshots keep the latest 10 for up to 30 days.
+	              </p>
+
+	              {agentSnapshotMessage && (
+	                <div className={`text-xs p-2 rounded ${agentSnapshotMessage.type === "ok" ? "bg-green-500/10 text-green-300/80" : "bg-red-500/10 text-red-300/80"}`}>
+	                  {agentSnapshotMessage.text}
+	                </div>
+	              )}
+
+	              <div className="flex flex-col gap-2 sm:flex-row">
+	                <input
+	                  type="text"
+	                  value={agentSnapshotLabel}
+	                  onChange={(e) => setAgentSnapshotLabel(e.target.value)}
+	                  placeholder="Optional label (e.g., 'before cleanup')"
+	                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+	                />
+	                <button
+	                  onClick={handleCreateAgentSnapshot}
+	                  className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0"
+	                >
+	                  Create snapshot
+	                </button>
+	              </div>
+
+	              <label className="flex items-center gap-2 text-xs text-white/45">
+	                <input
+	                  type="checkbox"
+	                  checked={agentSnapshotIncludeCorpus}
+	                  onChange={(e) => setAgentSnapshotIncludeCorpus(e.target.checked)}
+	                  className="accent-purple-400"
+	                />
+	                Include image corpus database
+	              </label>
+
+	              {agentSnapshots.length > 0 && (
+	                <div className="space-y-1 max-h-52 overflow-y-auto">
+	                  {agentSnapshots.map((s) => {
+	                    const isConfirming = confirmAgentSnapshotRestoreId === s.id;
+	                    const sizeBytes = s.sourceSizes.appBytes + s.sourceSizes.memoriesBytes + (s.sourceSizes.corpusBytes || 0);
+	                    const sizeMb = sizeBytes / (1024 * 1024);
+	                    return (
+	                      <div key={s.id} className="p-2 rounded-lg bg-white/[0.03] border border-white/5 text-xs">
+	                        <div className="flex items-center justify-between gap-2">
+	                          <div className="min-w-0 flex-1">
+	                            <div className="flex items-center gap-2">
+	                              <span className="font-mono text-white/70">{s.id}</span>
+	                              {s.label && <span className="text-white/50 truncate">— {s.label}</span>}
+	                            </div>
+	                            <div className="text-[11px] text-white/40 mt-0.5">
+	                              {s.counts.chats} chats · {s.counts.memories} memories · {s.counts.memoryBlocks} blocks · {s.counts.contextArchives} archives · {sizeMb.toFixed(1)} MB
+	                              {s.includes.corpus && s.counts.corpus !== undefined ? ` · ${s.counts.corpus} corpus` : ""}
+	                              {s.createdBy === "system" || s.reason === "pre-restore" ? " · automatic" : ""}
+	                            </div>
+	                          </div>
+	                          <div className="flex gap-1 shrink-0">
+	                            {isConfirming ? (
+	                              <>
+	                                <button
+	                                  onClick={() => handleRestoreAgentSnapshot(s.id)}
+	                                  className="px-2 py-0.5 rounded text-[11px] bg-red-500/20 border border-red-400/30 text-red-200 hover:bg-red-500/30 transition-all"
+	                                >
+	                                  Confirm restore
+	                                </button>
+	                                <button
+	                                  onClick={() => setConfirmAgentSnapshotRestoreId(null)}
+	                                  className="px-2 py-0.5 rounded text-[11px] text-white/50 hover:text-white/80"
+	                                >
+	                                  Cancel
+	                                </button>
+	                              </>
+	                            ) : (
+	                              <>
+	                                <button
+	                                  onClick={() => setConfirmAgentSnapshotRestoreId(s.id)}
+	                                  className="px-2 py-0.5 rounded text-[11px] bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
+	                                >
+	                                  Restore
+	                                </button>
+	                                <button
+	                                  onClick={() => handleDeleteAgentSnapshot(s.id)}
+	                                  className="px-2 py-0.5 rounded text-[11px] text-white/30 hover:text-red-400/80 transition-all"
+	                                >
+	                                  Delete
+	                                </button>
+	                              </>
+	                            )}
+	                          </div>
+	                        </div>
+	                      </div>
+	                    );
+	                  })}
+	                </div>
+	              )}
+	            </div>
+
+	            {/* Embedding Backups & Migration */}
+	            <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-3">
+	              <div className="flex items-center justify-between">
+	                <h5 className="text-xs font-medium text-white/70 uppercase tracking-wider">Embedding Backups &amp; Migration</h5>
+	                <button
+	                  onClick={refreshBackups}
+	                  disabled={backupsLoading}
+	                  className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
+	                >
+	                  {backupsLoading ? "Loading…" : "Refresh"}
+	                </button>
+	              </div>
+
+	              <p className="text-xs text-white/40">
+	                Re-embedding rebuilds vector tables for every memory. This can take several minutes on large stores and the chat is unavailable while vectors are being rewritten. A backup is strongly recommended.
+	              </p>
+
+	              {backupMessage && (
+	                <div className={`text-xs p-2 rounded ${backupMessage.type === "ok" ? "bg-green-500/10 text-green-300/80" : "bg-red-500/10 text-red-300/80"}`}>
+	                  {backupMessage.text}
+	                </div>
+	              )}
+
+	              <div className="flex gap-2">
+	                <input
+	                  type="text"
+	                  value={backupLabel}
+	                  onChange={(e) => setBackupLabel(e.target.value)}
+	                  placeholder="Optional label (e.g., 'before qwen3 switch')"
+	                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
+	                />
+	                <button
+	                  onClick={handleCreateBackup}
+	                  className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0"
+	                >
+	                  Back up now
+	                </button>
+	              </div>
+
+	              {backups.length > 0 && (
+	                <div className="space-y-1 max-h-48 overflow-y-auto">
+	                  {backups.map((b) => {
+	                    const isConfirming = confirmRestoreId === b.id;
+	                    const sizeMb = (b.sourceSizes.memoriesBytes + b.sourceSizes.corpusBytes) / (1024 * 1024);
+	                    return (
+	                      <div key={b.id} className="p-2 rounded-lg bg-white/[0.03] border border-white/5 text-xs">
+	                        <div className="flex items-center justify-between gap-2">
+	                          <div className="min-w-0 flex-1">
+	                            <div className="flex items-center gap-2">
+	                              <span className="font-mono text-white/70">{b.id}</span>
+	                              {b.label && <span className="text-white/50 truncate">— {b.label}</span>}
+	                            </div>
+	                            <div className="text-[11px] text-white/40 mt-0.5">
+	                              {b.counts.memories} memories · {b.counts.corpus} corpus · {sizeMb.toFixed(1)} MB · {b.embedding.model}
+	                              {b.embedding.dimension ? ` (dim ${b.embedding.dimension})` : ""}
+	                            </div>
+	                          </div>
+	                          <div className="flex gap-1 shrink-0">
+	                            {isConfirming ? (
+	                              <>
+	                                <button
+	                                  onClick={() => handleRestoreBackup(b.id)}
+	                                  className="px-2 py-0.5 rounded text-[11px] bg-red-500/20 border border-red-400/30 text-red-200 hover:bg-red-500/30 transition-all"
+	                                >
+	                                  Confirm restore
+	                                </button>
+	                                <button
+	                                  onClick={() => setConfirmRestoreId(null)}
+	                                  className="px-2 py-0.5 rounded text-[11px] text-white/50 hover:text-white/80"
+	                                >
+	                                  Cancel
+	                                </button>
+	                              </>
+	                            ) : (
+	                              <>
+	                                <button
+	                                  onClick={() => setConfirmRestoreId(b.id)}
+	                                  className="px-2 py-0.5 rounded text-[11px] bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
+	                                >
+	                                  Restore
+	                                </button>
+	                                <button
+	                                  onClick={() => handleDeleteBackup(b.id)}
+	                                  className="px-2 py-0.5 rounded text-[11px] text-white/30 hover:text-red-400/80 transition-all"
+	                                >
+	                                  Delete
+	                                </button>
+	                              </>
+	                            )}
+	                          </div>
+	                        </div>
+	                      </div>
+	                    );
+	                  })}
+	                </div>
+	              )}
+
+	              <div className="pt-2 border-t border-white/5 space-y-2">
+	                {!migrationRunning && !confirmMigrate && (
+	                  <button
+	                    onClick={() => setConfirmMigrate(true)}
+	                    className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/25 text-purple-200 hover:bg-purple-500/25 transition-all"
+	                  >
+	                    Re-embed all memories &amp; corpus
+	                  </button>
+	                )}
+
+	                {!migrationRunning && confirmMigrate && (
+	                  <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-2.5 text-xs space-y-2">
+	                    <p className="text-amber-200/90 font-medium">Re-embed with <code className="font-mono text-amber-100">{embeddingModel}</code>?</p>
+	                    <p className="text-amber-100/70">
+	                      This rewrites every vector. It may take minutes, and the chat is unavailable while it runs. Create a backup first if you haven't.
+	                    </p>
+	                    <div className="flex gap-2">
+	                      <button
+	                        onClick={handleRunMigration}
+	                        className="px-3 py-1 rounded text-[11px] font-medium bg-amber-500/25 border border-amber-400/40 text-amber-100 hover:bg-amber-500/40 transition-all"
+	                      >
+	                        Start migration
+	                      </button>
+	                      <button
+	                        onClick={() => setConfirmMigrate(false)}
+	                        className="px-3 py-1 rounded text-[11px] text-white/50 hover:text-white/80 transition-all"
+	                      >
+	                        Cancel
+	                      </button>
+	                    </div>
+	                  </div>
+	                )}
+
+	                {migrationRunning && migrationProgress && (
+	                  <div className="space-y-2">
+	                    <div className="flex items-center justify-between text-xs">
+	                      <span className="text-white/60 capitalize">{migrationProgress.phase}</span>
+	                      {migrationProgress.total != null && (
+	                        <span className="text-white/40">
+	                          {migrationProgress.processed ?? 0} / {migrationProgress.total}
+	                        </span>
+	                      )}
+	                    </div>
+	                    {migrationProgress.total != null && migrationProgress.total > 0 && (
+	                      <div className="h-1.5 bg-white/5 rounded overflow-hidden">
+	                        <div
+	                          className="h-full bg-purple-400/60 transition-all"
+	                          style={{
+	                            width: `${Math.min(100, ((migrationProgress.processed ?? 0) / migrationProgress.total) * 100)}%`,
+	                          }}
+	                        />
+	                      </div>
+	                    )}
+	                    {migrationProgress.message && (
+	                      <p className="text-[11px] text-white/40">{migrationProgress.message}</p>
+	                    )}
+	                    <button
+	                      onClick={handleCancelMigration}
+	                      className="text-[11px] text-red-400/70 hover:text-red-400"
+	                    >
+	                      Cancel migration
+	                    </button>
+	                  </div>
+	                )}
+
+	                {migrationError && (
+	                  <div className="text-xs p-2 rounded bg-red-500/10 border border-red-400/20 text-red-300/90">
+	                    {migrationError}
+	                  </div>
+	                )}
+
+	                {migrationResult && !migrationRunning && (
+	                  <div className="text-xs p-2 rounded bg-green-500/10 border border-green-400/20 text-green-300/90">
+	                    Migrated {migrationResult.memories} memories and {migrationResult.corpus} corpus entries at dimension {migrationResult.dimension}.
+	                  </div>
+	                )}
 	              </div>
 	            </div>
 	          </div>
