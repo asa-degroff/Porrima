@@ -10,6 +10,6 @@ set -a
 [[ -f "$SERVER_DIR/.env.tts" ]] && source "$SERVER_DIR/.env.tts"
 set +a
 
-echo "Starting quje-agent server with TTS backend-specific Python overrides where configured"
+echo "Starting Porrima server with TTS backend-specific Python overrides where configured"
 cd "$SERVER_DIR"
 npm run dev

@@ -14,8 +14,8 @@
 ## Setup
 
 ```bash
-git clone <repo-url> quje-agent
-cd quje-agent
+git clone <repo-url> porrima
+cd porrima
 npm install
 ```
 
@@ -51,17 +51,17 @@ The compiled server serves on port 3001. Serve the client build (`client/dist/`)
 
 ### Main Server
 
-Create `~/.config/systemd/user/quje-agent.service`:
+Create `~/.config/systemd/user/porrima.service`:
 
 ```ini
 [Unit]
-Description=qu.je Agent Server
+Description=Porrima Server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/path/to/quje-agent/server
+WorkingDirectory=/path/to/porrima/server
 ExecStart=/usr/bin/node dist/index.js
 Restart=on-failure
 RestartSec=5
@@ -183,6 +183,6 @@ Embeddings from different models are not comparable — existing memory searches
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now quje-agent llama-server reranker
+systemctl --user enable --now porrima llama-server reranker
 loginctl enable-linger $USER   # start without login
 ```

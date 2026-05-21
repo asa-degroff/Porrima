@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Supertonic 3 TTS Installation Script for quje-agent
+# Supertonic 3 TTS Installation Script for Porrima
 #
 # Installs the Supertonic Python package and verifies a local generation path.
 #
@@ -45,7 +45,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "============================================="
-echo "  Supertonic 3 TTS Installation for quje-agent"
+echo "  Supertonic 3 TTS Installation for Porrima"
 echo "============================================="
 echo ""
 

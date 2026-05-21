@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Qwen3-TTS Installation Script for quje-agent
+# Qwen3-TTS Installation Script for Porrima
 # 
 # This script installs the qwen-tts Python package, downloads model weights,
 # and verifies the installation.
@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "========================================"
-echo "  Qwen3-TTS Installation for quje-agent"
+echo "  Qwen3-TTS Installation for Porrima"
 echo "========================================"
 echo ""
 
@@ -253,7 +253,7 @@ print_summary() {
     echo -e "${GREEN}✓ TTS generation verified${NC}"
     echo ""
     echo "Next steps:"
-    echo "  1. Restart the quje-agent server"
+    echo "  1. Restart the Porrima server"
     echo "  2. Test the API: curl http://localhost:3001/api/tts/status?backend=qwen3-tts"
     echo "  3. Generate audio: curl -X POST http://localhost:3001/api/tts/generate -H 'Content-Type: application/json' -d '{\"text\":\"Hello\",\"voice\":\"Ryan\"}'"
     echo ""

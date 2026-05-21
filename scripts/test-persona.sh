@@ -67,7 +67,7 @@ echo "Test 3: PUT /api/persona"
 test_content="# Agent Persona
 
 ## Core Identity
-- **Name:** quje-agent
+- **Name:** Porrima
 - **Role:** Test persona for verification
 
 ## Communication Style

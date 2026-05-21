@@ -10,7 +10,7 @@ const SYSTEMD_USER_DIR = path.join(os.homedir(), ".config", "systemd", "user");
 const OVERRIDE_FILENAME = "quje-model.conf";
 
 const HEADER = [
-  "# Managed by qu.je Agent — written by the Models settings UI.",
+  "# Managed by Porrima — written by the Models settings UI.",
   "# To change the model, use Settings → Models. To revert to the unit's",
   "# default, delete this file or use the \"Reset to default\" action.",
 ].join("\n");

@@ -95,7 +95,7 @@ router.post("/test", async (_req, res) => {
       OWNER_ID,
       {
         type: "test",
-        title: "qu.je",
+        title: "Porrima",
         body: "Push notifications are working.",
         url: "/",
         tag: "push-test",

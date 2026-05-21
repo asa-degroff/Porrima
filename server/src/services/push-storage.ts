@@ -190,7 +190,7 @@ export async function getVapidKeys(): Promise<VapidKeys> {
       const keys: VapidKeys = {
         publicKey: envPub,
         privateKey: envPriv,
-        subject: envSubject || "mailto:owner@quje.local",
+        subject: envSubject || "mailto:owner@porrima.local",
       };
       _vapidCache = keys;
       return keys;

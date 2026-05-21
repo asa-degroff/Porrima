@@ -50,17 +50,17 @@ interface PushPayload {
 }
 
 function parsePushData(event: PushEvent): PushPayload {
-  if (!event.data) return { title: "qu.je", body: "" };
+  if (!event.data) return { title: "Porrima", body: "" };
   try {
     return event.data.json() as PushPayload;
   } catch {
-    return { title: "qu.je", body: event.data.text() };
+    return { title: "Porrima", body: event.data.text() };
   }
 }
 
 self.addEventListener("push", (event) => {
   const payload = parsePushData(event);
-  const title = payload.title || "qu.je";
+  const title = payload.title || "Porrima";
 
   event.waitUntil(
     (async () => {

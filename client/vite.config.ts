@@ -19,9 +19,9 @@ export default defineConfig({
       },
       includeAssets: ["favicon.ico", "logo.svg"],
       manifest: {
-        name: "qu.je agent",
-        short_name: "qu.je",
-        description: "qu.je",
+        name: "Porrima",
+        short_name: "Porrima",
+        description: "Porrima",
         theme_color: "#0f172a",
         background_color: "#0f172a",
         display: "standalone",

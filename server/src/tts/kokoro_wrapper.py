@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Kokoro TTS wrapper for quje-agent.
+Kokoro TTS wrapper for Porrima.
 Generates WAV audio from text and outputs to stdout.
 """
 

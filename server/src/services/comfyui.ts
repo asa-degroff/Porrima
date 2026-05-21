@@ -141,7 +141,7 @@ function buildWorkflow(params: ImageGenerationParams, clientId: string): Record<
       class_type: "SaveImage",
       inputs: {
         images: ["8", 0],
-        filename_prefix: "quje",
+        filename_prefix: "porrima",
       },
     },
   };

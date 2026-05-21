@@ -1,5 +1,5 @@
 {
-  "name": "quje-agent",
+  "name": "porrima",
   "private": true,
   "workspaces": [
     "server",

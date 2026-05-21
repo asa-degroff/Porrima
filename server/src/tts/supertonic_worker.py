@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Persistent Supertonic 3 TTS worker for quje-agent.
+Persistent Supertonic 3 TTS worker for Porrima.
 Runs as a long-lived process, reading JSON requests from stdin,
 returning JSON responses with base64-encoded WAV on stdout.
 Model stays loaded in memory between requests.

@@ -307,7 +307,7 @@ export async function installSkillFromUrl(url: string, customName?: string): Pro
   try {
     const response = await fetch(fetchUrl, {
       headers: {
-        "User-Agent": "quje-agent/1.0",
+        "User-Agent": "porrima/1.0",
         "Accept": "text/markdown,text/plain,*/*",
       },
       // GitHub raw URLs may need redirect following

@@ -1,4 +1,4 @@
-# quje-agent Implementation Overview
+# Porrima Implementation Overview
 
 ## Core Architecture
 npm workspaces monorepo. `server/`: Express + TS (3001). `client/`: React + Vite + Tailwind v4 (5173).

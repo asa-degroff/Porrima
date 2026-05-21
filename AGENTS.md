@@ -2,7 +2,7 @@
 
 ## Project
 
-**qu.je Agent** — A feature-rich agent framework and user interface with persistent memory, project context, image generation, social media integration, and agentic tool execution. npm workspaces monorepo: `server/` (Express + TypeScript) and `client/` (React + Vite + Tailwind).
+**Porrima** — A feature-rich agent framework and user interface with persistent memory, project context, image generation, social media integration, and agentic tool execution. npm workspaces monorepo: `server/` (Express + TypeScript) and `client/` (React + Vite + Tailwind).
 
 ## Quick Reference
 
@@ -14,7 +14,7 @@
 - **Data dir**: `~/.quje-agent/` (chats, projects, settings, memories, artifacts)
 - **Models dir**: `~/.local/share/llama-models/` (symlinked GGUFs for llama.cpp router)
 - **systemd services**:
-  - `quje-agent.service` — main server (auto-starts on boot)
+  - `porrima.service` — main server (auto-starts on boot)
   - `llama-server.service` — llama.cpp router (port 8080, GPU inference)
   - `reranker.service` — Qwen3-Reranker-0.6B (port 8082, CPU-only, memory retrieval)
   - `sync-llama-models.timer` — auto-syncs HuggingFace GGUF downloads every 5 min
@@ -80,7 +80,7 @@ SSE streaming with thinking blocks, token usage indicator, compaction indicator.
 ## Project Structure
 
 ```
-quje-agent/
+porrima/
 ├── server/src/
 │   ├── index.ts                     # Express app, route mounting, scheduler start
 │   ├── types.ts                     # Shared TypeScript interfaces

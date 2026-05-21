@@ -2806,7 +2806,7 @@ async function handleChatStream(
           "owner",
           {
             type: "message_complete",
-            title: chat.title || "qu.je",
+            title: chat.title || "Porrima",
             body: pushBody || "Reply ready.",
             url: `/?chat=${chat.id}`,
             chatId: chat.id,

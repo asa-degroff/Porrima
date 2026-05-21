@@ -684,7 +684,7 @@ async function fetchPdfFromUrl(url: string, timeoutMs: number = 30000): Promise<
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; quje-agent/1.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; porrima/1.0)",
       },
     });
     

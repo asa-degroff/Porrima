@@ -29,7 +29,7 @@ export function ImageDetails({ image, onUseParams, onOpenLightbox }: Props) {
   const handleDownload = () => {
     const a = document.createElement("a");
     a.href = image.url;
-    a.download = `quje-${image.resolvedSeed || image.id}.jxl`;
+    a.download = `porrima-${image.resolvedSeed || image.id}.jxl`;
     a.click();
   };
 

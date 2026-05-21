@@ -180,7 +180,7 @@ export function usePushNotifications(): UsePushNotificationsResult {
     if (support !== "supported") {
       setError(
         support === "needs-install"
-          ? "Install qu.je to your Home Screen first to enable push notifications."
+          ? "Install Porrima to your Home Screen first to enable push notifications."
           : "Push notifications aren't supported on this browser."
       );
       return;

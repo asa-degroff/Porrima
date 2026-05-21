@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Qwen3-TTS wrapper for quje-agent.
+Qwen3-TTS wrapper for Porrima.
 Generates WAV audio from text and outputs to stdout.
 
 Usage:

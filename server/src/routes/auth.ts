@@ -17,7 +17,7 @@ import type { AuthenticatorTransportFuture } from "@simplewebauthn/server";
 
 const router = Router();
 
-const rpName = "qu.je";
+const rpName = "Porrima";
 
 function getRpID(req: Request): string {
   if (process.env.RP_ID) return process.env.RP_ID;

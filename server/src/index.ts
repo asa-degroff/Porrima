@@ -236,7 +236,7 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 httpServer = app.listen(PORT, () => {
-  console.log(`qu.je agent server running on http://localhost:${PORT}`);
+  console.log(`Porrima server running on http://localhost:${PORT}`);
   if (backgroundJobsEnabled) {
     startScheduler();
     startSystemStatsPolling();

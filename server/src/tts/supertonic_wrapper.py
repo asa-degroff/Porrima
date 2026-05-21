@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Supertonic 3 TTS wrapper for quje-agent.
+Supertonic 3 TTS wrapper for Porrima.
 Generates WAV audio from text and outputs to stdout.
 """
 

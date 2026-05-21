@@ -1,4 +1,4 @@
-# qu.je Agent
+# Porrima
 
 A local chat UI and agent framework for Ollama and OpenAI-compatible local models. Agent chats learn about you over time through automatic fact extraction, semantic search, indexed compaction, memory blocks, and configurable system-chat automations. Quick chats work as standalone conversations with no memory.
 
@@ -38,8 +38,8 @@ A local chat UI and agent framework for Ollama and OpenAI-compatible local model
 ## Setup
 
 ```bash
-git clone <repo-url> quje-agent
-cd quje-agent
+git clone <repo-url> porrima
+cd porrima
 npm install
 ```
 
@@ -87,17 +87,17 @@ The compiled server serves on port 3001. Serve the client build (`client/dist/`)
 
 ### systemd service
 
-To run the server on boot, create `~/.config/systemd/user/quje-agent.service`:
+To run the server on boot, create `~/.config/systemd/user/porrima.service`:
 
 ```ini
 [Unit]
-Description=qu.je Agent Server
+Description=Porrima Server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/path/to/quje-agent/server
+WorkingDirectory=/path/to/porrima/server
 ExecStart=/usr/bin/node dist/index.js
 Restart=on-failure
 RestartSec=5
@@ -111,14 +111,14 @@ Then enable it:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now quje-agent
+systemctl --user enable --now porrima
 loginctl enable-linger $USER   # start without login
 ```
 
 ## Project structure
 
 ```
-quje-agent/
+porrima/
 ├── server/src/
 │   ├── index.ts                     # Express app, route mounting, scheduler start
 │   ├── types.ts                     # Shared TypeScript interfaces
