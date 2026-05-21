@@ -3171,6 +3171,9 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             <p className="text-xs text-white/40">
               Restoring replaces the current database state and first creates a pre-restore snapshot.
             </p>
+            <p className="text-xs text-white/40">
+              Manual snapshots are kept until deleted. Automatic pre-restore snapshots keep the latest 10 for up to 30 days.
+            </p>
 
             {agentSnapshotMessage && (
               <div className={`text-xs p-2 rounded ${agentSnapshotMessage.type === "ok" ? "bg-green-500/10 text-green-300/80" : "bg-red-500/10 text-red-300/80"}`}>
@@ -3221,6 +3224,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                           <div className="text-[11px] text-white/40 mt-0.5">
                             {s.counts.chats} chats · {s.counts.memories} memories · {s.counts.memoryBlocks} blocks · {s.counts.contextArchives} archives · {sizeMb.toFixed(1)} MB
                             {s.includes.corpus && s.counts.corpus !== undefined ? ` · ${s.counts.corpus} corpus` : ""}
+                            {s.createdBy === "system" || s.reason === "pre-restore" ? " · automatic" : ""}
                           </div>
                         </div>
                         <div className="flex gap-1 shrink-0">

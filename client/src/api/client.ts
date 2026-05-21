@@ -1974,6 +1974,9 @@ export interface AgentSnapshot {
   schemaVersion: 1;
   createdAt: string;
   label?: string;
+  createdBy?: "user" | "system";
+  reason?: "manual" | "pre-restore";
+  protected?: boolean;
   includes: { app: true; memories: true; corpus: boolean };
   embedding: { provider: string; url: string; model: string; dimension?: number };
   counts: {

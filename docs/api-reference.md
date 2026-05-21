@@ -27,7 +27,7 @@
 | GET | `/api/snapshots` | List agent database snapshots |
 | POST | `/api/snapshots` | Create an agent database snapshot (`{ label?, includeCorpus? }`) containing `app.db` and `memory/memories.db`, optionally `image-corpus/corpus.db`. Filesystem assets are not included. |
 | DELETE | `/api/snapshots/:id` | Delete an agent database snapshot |
-| POST | `/api/snapshots/:id/restore` | Restore an agent database snapshot as a full database replacement. Creates a pre-restore snapshot before replacing databases. |
+| POST | `/api/snapshots/:id/restore` | Restore an agent database snapshot as a full database replacement. Creates a pre-restore snapshot before replacing databases; automatic pre-restore snapshots retain the latest 10 for up to 30 days. |
 | GET | `/api/automations` | List automation tasks plus `{ isRunning, activeTaskId }` |
 | POST | `/api/automations` | Create a custom automation task |
 | PATCH | `/api/automations/:id` | Update schedule, order, enabled state, activation policy, prompt steps, notifications, or runtime limits |

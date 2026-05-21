@@ -10,6 +10,8 @@ import { closeCorpusDb, getCorpusDb, getCorpusDbPath } from "./image-corpus.js";
 import { resetAllMemoryContextCaches } from "./memory-context.js";
 
 const SNAPSHOTS_DIR = join(homedir(), ".quje-agent", "snapshots");
+const SYSTEM_SNAPSHOT_MAX_COUNT = 10;
+const SYSTEM_SNAPSHOT_MAX_AGE_DAYS = 30;
 const COUNT_TABLES = new Set([
   "chats",
   "chat_message_rows",
@@ -25,6 +27,9 @@ export interface AgentSnapshotManifest {
   schemaVersion: 1;
   createdAt: string;
   label?: string;
+  createdBy?: "user" | "system";
+  reason?: "manual" | "pre-restore";
+  protected?: boolean;
   includes: {
     app: true;
     memories: true;
@@ -54,6 +59,9 @@ export interface AgentSnapshotManifest {
 export interface CreateAgentSnapshotOptions {
   label?: string;
   includeCorpus?: boolean;
+  createdBy?: "user" | "system";
+  reason?: "manual" | "pre-restore";
+  protected?: boolean;
 }
 
 let operationQueue: Promise<void> = Promise.resolve();
@@ -147,6 +155,9 @@ async function createAgentSnapshotUnlocked(
     schemaVersion: 1,
     createdAt: new Date().toISOString(),
     label: options.label,
+    createdBy: options.createdBy ?? "user",
+    reason: options.reason ?? "manual",
+    protected: options.protected === true,
     includes: {
       app: true,
       memories: true,
@@ -212,7 +223,10 @@ async function restoreAgentSnapshotUnlocked(
   const preRestoreSnapshot = await createAgentSnapshotUnlocked({
     label: `pre-restore ${id}`,
     includeCorpus: manifest.includes.corpus,
+    createdBy: "system",
+    reason: "pre-restore",
   });
+  await pruneSystemSnapshots(new Set([id, preRestoreSnapshot.id]));
   const rollbackSources = getSnapshotSources(preRestoreSnapshot);
 
   try {
@@ -286,6 +300,42 @@ function countTable(db: Database.Database, table: string): number {
   } catch {
     return 0;
   }
+}
+
+async function pruneSystemSnapshots(protectedIds: Set<string>): Promise<void> {
+  const snapshots = await listAgentSnapshots();
+  const now = Date.now();
+  const maxAgeMs = SYSTEM_SNAPSHOT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+  const systemSnapshots = snapshots
+    .filter((snapshot) => isSystemManagedSnapshot(snapshot))
+    .filter((snapshot) => !snapshot.protected)
+    .filter((snapshot) => !protectedIds.has(snapshot.id))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  const toDelete = new Set<string>();
+  for (let i = 0; i < systemSnapshots.length; i++) {
+    const snapshot = systemSnapshots[i];
+    const createdMs = Date.parse(snapshot.createdAt);
+    const isExpired = Number.isFinite(createdMs) && now - createdMs > maxAgeMs;
+    const exceedsCount = i >= SYSTEM_SNAPSHOT_MAX_COUNT;
+    if (isExpired || exceedsCount) {
+      toDelete.add(snapshot.id);
+    }
+  }
+
+  for (const snapshotId of toDelete) {
+    try {
+      await rm(snapshotDir(snapshotId), { recursive: true, force: true });
+    } catch (e) {
+      console.warn(`[snapshots] Failed to prune system snapshot ${snapshotId}:`, e);
+    }
+  }
+}
+
+function isSystemManagedSnapshot(snapshot: AgentSnapshotManifest): boolean {
+  if (snapshot.createdBy === "system") return true;
+  // Legacy auto-created rollback snapshots existed before createdBy/reason metadata.
+  return snapshot.label?.startsWith("pre-restore ") === true;
 }
 
 async function nextAvailableId(): Promise<string> {
