@@ -1259,6 +1259,7 @@ export default function App() {
         error={error}
         onRegister={register}
         onLogin={login}
+        agentName={appSettings.agentName}
         cornerShape={appSettings.cornerShape || readCachedCornerShape()}
       />
     );

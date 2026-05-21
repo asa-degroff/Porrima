@@ -12,10 +12,11 @@ interface Props {
   error: string | null;
   onRegister: () => void;
   onLogin: () => void;
+  agentName?: string;
   cornerShape?: CornerShape;
 }
 
-export function LoginPage({ authState, error, onRegister, onLogin, cornerShape = 'round' }: Props) {
+export function LoginPage({ authState, error, onRegister, onLogin, agentName, cornerShape = 'round' }: Props) {
   const isSetup = authState === "needs-setup";
   const cornerClass = cornerShape === 'squircle' ? 'corner-squircle' : 'corner-round';
 
@@ -41,7 +42,7 @@ export function LoginPage({ authState, error, onRegister, onLogin, cornerShape =
         {/* Title + button row */}
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold text-white/90 tracking-tight shrink-0">
-            qu.je
+            {agentName || "Porrima"}
           </h1>
           <button
             onClick={isSetup ? onRegister : onLogin}
