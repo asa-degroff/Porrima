@@ -1234,7 +1234,7 @@ export function Sidebar({
         </div>
 
         {/* Quick Chats Section */}
-        <div className={`relative flex flex-col min-h-0 border-b border-white/5 ${quickExpanded ? "flex-1" : "shrink-0"}`}>
+        <div className={`relative flex flex-col min-h-0 ${quickExpanded ? "flex-1" : "shrink-0"}`}>
           {/* Section header — always visible */}
           <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center">
             <button
