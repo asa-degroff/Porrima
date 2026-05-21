@@ -188,4 +188,4 @@ All data is stored in `~/.porrima/`:
 
 ## License
 
-MIT
+Apache 2.0
