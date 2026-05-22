@@ -1523,6 +1523,15 @@ async function buildPreCompactionSystemPrompt(): Promise<string> {
   return `${prefix}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
 }
 
+export function isSubstantiveForPreCompactionExtraction(message: ChatMessage): boolean {
+  return (
+    !message._isCompactionSummary &&
+    !message._outOfContext &&
+    !message._isSynthesisMessage &&
+    message.role !== "system"
+  );
+}
+
 /**
  * Pre-compaction flush: extract memories from messages that are about to be removed.
  * Only sends the removed messages (not full conversation) to avoid hitting context limits.
@@ -1539,19 +1548,24 @@ export async function preCompactionFlush(
     return;
   }
 
-  // Filter out compaction summary messages — they contain archive indices
-  // and system metadata, not actual conversation content worth remembering.
-  // Also filter persisted system-delta messages — their content is already
-  // in the memory store; re-extracting would create duplicates.
-  const substantiveMessages = removedMessages.filter(
-    (m) => !m._isCompactionSummary && m.role !== "system"
-  );
+  // Filter out non-substantive rows. Compaction summaries contain archive
+  // metadata, system rows are prompt/delta plumbing, and synthesis rows are
+  // already a review of previously extracted memories and archived chat
+  // content. Re-extracting them turns the synthesis cycle itself into memory.
+  const substantiveMessages = removedMessages.filter(isSubstantiveForPreCompactionExtraction);
   if (substantiveMessages.length === 0) {
-    console.log("[memory] Pre-compaction flush: only compaction summaries, skipping");
+    console.log("[memory] Pre-compaction flush: no substantive messages after filtering, skipping");
     return;
   }
 
-  console.log(`[memory] Pre-compaction flush: processing ${substantiveMessages.length} removed messages (${removedMessages.length - substantiveMessages.length} compaction summaries skipped)`);
+  const skippedCompaction = removedMessages.filter((m) => m._isCompactionSummary).length;
+  const skippedOutOfContext = removedMessages.filter((m) => m._outOfContext).length;
+  const skippedSynthesis = removedMessages.filter((m) => m._isSynthesisMessage).length;
+  const skippedSystem = removedMessages.filter((m) => m.role === "system").length;
+  console.log(
+    `[memory] Pre-compaction flush: processing ${substantiveMessages.length} removed messages ` +
+    `(skipped: compaction=${skippedCompaction}, outOfContext=${skippedOutOfContext}, synthesis=${skippedSynthesis}, system=${skippedSystem})`
+  );
 
   // Only send the messages being removed, not the full conversation
   const removedText = substantiveMessages

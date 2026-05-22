@@ -27,7 +27,7 @@ Memories track `sourceType` ('chat_immediate', 'chat_delayed', 'synthesis', 'sup
 
 - **Immediate extraction**: after each agent response, a background LLM call extracts memories (1-3 sentences each with context and rationale) and deduplicates them against existing memories using cosine similarity (>0.85 triggers UPDATE). Extraction is **deferred** until after the agent loop completes to prevent concurrent LLM calls from interfering with the active tool loop (e.g., triggering model reloads on llama.cpp).
 - **Delayed extraction**: time-based trigger (configurable threshold, default 30 min) runs on inactive chats. Extracts the full conversation context, injects previously-extracted memories for density, and focuses on new patterns/decisions. Tracks `lastDelayedExtractionAt` and `lastDelayedExtractionMessageIndex` per chat. Uses `updateChatExtractionState()` to avoid touching `lastModified` (preserves chat ordering).
-- **Pre-compaction flush**: when conversation context is compacted, memories are extracted from the removed messages before archival. Compaction summary messages (`_isCompactionSummary`) are filtered out to prevent extracting metadata like "context approaching limit" as memories.
+- **Pre-compaction flush**: when conversation context is compacted, memories are extracted from the removed messages before archival. Compaction summary messages (`_isCompactionSummary`), out-of-context rows, system rows, and synthesis rows (`_isSynthesisMessage`) are filtered out to prevent extracting operational metadata or the synthesis cycle's own review of already-extracted memory content.
 
 ## Retrieval Pipeline
 

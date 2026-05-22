@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseExtractionResponse } from "../services/memory-extraction.js";
+import {
+  isSubstantiveForPreCompactionExtraction,
+  parseExtractionResponse,
+} from "../services/memory-extraction.js";
+import type { ChatMessage } from "../types.js";
 
 describe("parseExtractionResponse", () => {
   it("parses a valid JSON array of facts", () => {
@@ -86,5 +90,22 @@ describe("parseExtractionResponse", () => {
     const result = parseExtractionResponse(input);
     expect(result).toHaveLength(1);
     expect(result[0].text).toBe("Found it");
+  });
+});
+
+describe("isSubstantiveForPreCompactionExtraction", () => {
+  const base = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
+    role: "user",
+    content: "substantive user content",
+    timestamp: 1,
+    ...overrides,
+  });
+
+  it("excludes synthesis, compaction, out-of-context, and system-role rows", () => {
+    expect(isSubstantiveForPreCompactionExtraction(base())).toBe(true);
+    expect(isSubstantiveForPreCompactionExtraction(base({ _isSynthesisMessage: true }))).toBe(false);
+    expect(isSubstantiveForPreCompactionExtraction(base({ _isCompactionSummary: true }))).toBe(false);
+    expect(isSubstantiveForPreCompactionExtraction(base({ _outOfContext: true }))).toBe(false);
+    expect(isSubstantiveForPreCompactionExtraction(base({ role: "system" }))).toBe(false);
   });
 });
