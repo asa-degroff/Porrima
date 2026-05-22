@@ -21,7 +21,7 @@ import {
 import type { ChatMessage, Memory } from "../types.js";
 
 // Cache the last-built augmented prompt per chat so the prompt viewer
-// can return it instantly without a cold Ollama embedding call.
+// can return it instantly without a cold embedding call.
 const promptCache = new Map<string, string>();
 
 export function getCachedAugmentedPrompt(chatId: string): string | undefined {

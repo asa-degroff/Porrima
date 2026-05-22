@@ -91,7 +91,7 @@ router.post("/", async (req, res) => {
   const settings = await getSettings();
   const effectiveModelId = modelId || settings.defaultModelId;
   
-  // Skip model validation on chat creation — it blocks for 1-2s due to Ollama discovery.
+  // Skip model validation on chat creation — it blocks for 1-2s due to model discovery.
   // The model will be validated when the first message is sent (chat.ts validates there).
   // This makes chat creation instant.
   const savedContextWindow = settings.modelContextWindows?.[effectiveModelId];
@@ -153,7 +153,7 @@ router.patch("/:id", async (req, res) => {
 
 // Get the rendered system prompt and tools for debugging
 // Uses cached prompt from last message send when available to avoid
-// a cold Ollama embedding call that can take seconds on first use.
+// a cold embedding call that can take seconds on first use.
 router.get("/:id/rendered-prompt", async (req, res) => {
   const chat = await getChat(req.params.id);
   if (!chat) return res.status(404).json({ error: "Chat not found" });

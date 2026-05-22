@@ -40,11 +40,10 @@ export interface SafeStreamHooks {
 
 /**
  * Create a stream function that handles pre-aborted signals gracefully, merges
- * per-chat Ollama options, records LLM activity, and converts stream stalls into
+ * per-chat options, records LLM activity, and converts stream stalls into
  * explicit assistant error events.
  */
 export function createSafeStreamFn(
-  chatOllamaOptions?: { keepAlive?: string | number; numGpu?: number; numPredict?: number },
   llamaSlotLease?: LlamaSlotLease | null,
   hooks?: SafeStreamHooks,
 ): StreamFn {
@@ -100,11 +99,6 @@ export function createSafeStreamFn(
       mergedOptions.modelProgressShowIndicator = showIndicatorConfig(iterationCount);
     } else {
       mergedOptions.modelProgressShowIndicator = showIndicatorConfig ?? false;
-    }
-    if (chatOllamaOptions) {
-      mergedOptions.keepAlive = chatOllamaOptions.keepAlive;
-      mergedOptions.numGpu = chatOllamaOptions.numGpu;
-      mergedOptions.numPredict = chatOllamaOptions.numPredict;
     }
     if (llamaSlotLease) {
       mergedOptions.llamaSlotLease = llamaSlotLease;

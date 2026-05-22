@@ -399,7 +399,7 @@ router.patch("/:id", async (req, res) => {
       }
     }
     if (def.id === "embedding") {
-      if (body.provider !== undefined) settings.embeddingProvider = body.provider as "ollama" | "llamacpp";
+      if (body.provider !== undefined) settings.embeddingProvider = body.provider as "llamacpp";
       if (body.url !== undefined) settings.embeddingUrl = (body.url as string).trim() || undefined;
       if (body.modelId !== undefined) {
         const v = (body.modelId as string).trim();

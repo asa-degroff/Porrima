@@ -1,42 +1,18 @@
 import { getSettings } from "./chat-storage.js";
-import { getOllamaUrl } from "./ollama-url.js";
 
 const LLAMACPP_DEFAULT_URL = "http://localhost:8084";
 const DEFAULT_EMBEDDING_MODEL = "qwen3-embedding:0.6b";
 
 interface EmbeddingConfig {
-  provider: "ollama" | "llamacpp";
   url: string;
   model: string;
 }
 
 async function getEmbeddingConfig(): Promise<EmbeddingConfig> {
   const s = await getSettings();
-  const provider = s.embeddingProvider ?? "ollama";
-  const url = s.embeddingUrl || (provider === "llamacpp" ? LLAMACPP_DEFAULT_URL : getOllamaUrl(s));
+  const url = s.embeddingUrl || LLAMACPP_DEFAULT_URL;
   const model = s.embeddingModel || DEFAULT_EMBEDDING_MODEL;
-  return { provider, url, model };
-}
-
-async function embedOllama(cfg: EmbeddingConfig, input: string | string[]): Promise<number[][]> {
-  const res = await fetch(`${cfg.url}/api/embed`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: cfg.model,
-      input,
-      keep_alive: "0s",
-      options: { num_gpu: 0 },
-    }),
-  });
-
-  if (!res.ok) {
-    const msg = await res.text().catch(() => res.statusText);
-    throw new Error(`Embedding failed (${res.status}): ${msg}`);
-  }
-
-  const data = (await res.json()) as { embeddings: number[][] };
-  return data.embeddings;
+  return { url, model };
 }
 
 async function embedLlamaCpp(cfg: EmbeddingConfig, input: string | string[]): Promise<number[][]> {
@@ -76,24 +52,24 @@ function normalizeL2(v: number[]): number[] {
 
 export async function embed(text: string): Promise<number[]> {
   const cfg = await getEmbeddingConfig();
-  const vectors = cfg.provider === "llamacpp" ? await embedLlamaCpp(cfg, text) : await embedOllama(cfg, text);
+  const vectors = await embedLlamaCpp(cfg, text);
   return vectors[0];
 }
 
 export async function embedBatch(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
   const cfg = await getEmbeddingConfig();
-  return cfg.provider === "llamacpp" ? await embedLlamaCpp(cfg, texts) : await embedOllama(cfg, texts);
+  return embedLlamaCpp(cfg, texts);
 }
 
 export async function embedWithConfig(cfg: EmbeddingConfig, text: string): Promise<number[]> {
-  const vectors = cfg.provider === "llamacpp" ? await embedLlamaCpp(cfg, text) : await embedOllama(cfg, text);
+  const vectors = await embedLlamaCpp(cfg, text);
   return vectors[0];
 }
 
 export async function embedBatchWithConfig(cfg: EmbeddingConfig, texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
-  return cfg.provider === "llamacpp" ? await embedLlamaCpp(cfg, texts) : await embedOllama(cfg, texts);
+  return embedLlamaCpp(cfg, texts);
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {
@@ -108,21 +84,14 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 export async function isEmbeddingModelAvailable(): Promise<boolean> {
   try {
     const cfg = await getEmbeddingConfig();
-    if (cfg.provider === "llamacpp") {
-      // Probe with a tiny embed; if it works, the model is loaded.
-      const res = await fetch(`${cfg.url}/v1/embeddings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: cfg.model, input: "ping" }),
-        signal: AbortSignal.timeout(3000),
-      });
-      return res.ok;
-    }
-    const res = await fetch(`${cfg.url}/api/tags`, { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) return false;
-    const data = (await res.json()) as { models: Array<{ name: string }> };
-    const prefix = cfg.model.split(":")[0];
-    return data.models.some((m) => m.name.startsWith(prefix));
+    // Probe with a tiny embed; if it works, the model is loaded.
+    const res = await fetch(`${cfg.url}/v1/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: cfg.model, input: "ping" }),
+      signal: AbortSignal.timeout(3000),
+    });
+    return res.ok;
   } catch {
     return false;
   }

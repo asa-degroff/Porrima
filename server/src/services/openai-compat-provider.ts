@@ -783,7 +783,7 @@ async function convertMessages(model: Model<Api>, context: Context): Promise<any
       }
       i = j - 1;
 
-      // Inject images as a follow-up user message (same pattern as Ollama provider)
+      // Inject images as a follow-up user message (same as other vision-capable providers)
       if (imageParts.length > 0) {
         params.push({
           role: "user",
@@ -1152,30 +1152,8 @@ export async function ensureModelLoaded(
       }
     }
 
-    // Free Ollama GPU VRAM before loading — Ollama models sitting in VRAM
-    // can prevent llama.cpp from offloading layers to GPU, causing CPU fallback.
-    try {
-      const { getSettings } = await import("./chat-storage.js");
-      const { getOllamaUrl } = await import("./ollama-url.js");
-      const ollamaBase = getOllamaUrl(await getSettings());
-      const psRes = await fetch(`${ollamaBase}/api/ps`, { signal: AbortSignal.timeout(3000) });
-      if (psRes.ok) {
-        const psData = await psRes.json();
-        const loadedModels: string[] = (psData.models || []).map((m: any) => m.name || m.model).filter(Boolean);
-        for (const ollamaModel of loadedModels) {
-          await fetch(`${ollamaBase}/api/generate`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model: ollamaModel, prompt: "", keep_alive: "0s" }),
-            signal: AbortSignal.timeout(10_000),
-          }).catch(() => {});
-        }
-        if (loadedModels.length > 0) {
-          console.log(`[openai-compat] Freed Ollama VRAM: unloaded ${loadedModels.join(", ")}`);
-          await new Promise((r) => setTimeout(r, 2000)); // Wait for VRAM release
-        }
-      }
-    } catch { /* non-critical */ }
+    // Wait briefly after unload for VRAM to be freed
+    if (needsUnload) await new Promise((r) => setTimeout(r, 1000));
 
     const loadBody: any = { model: modelId };
     if (contextWindow) {

@@ -3,11 +3,9 @@
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) v22+
-- [Ollama](https://ollama.ai/) running locally on port 11434
-- A chat model pulled in Ollama (e.g. `ollama pull qwen3:8b`)
-- An embedding model (default: `ollama pull qwen3-embedding:0.6b`). The provider, URL, and model name are configurable in Settings → Inference Servers → Embedding server. A llama.cpp server exposing `/v1/embeddings` works as an alternative backend.
-- **Creative Engine**: `ollama pull qwen3.5:9b` (recommended for direction generation with vision context)
-- (Optional) [llama.cpp](https://github.com/ggml-org/llama.cpp) server for direct GGUF inference with router mode
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) server running locally (default port 8080)
+- A chat model loaded in llama.cpp (e.g., a Qwen3 GGUF model in the models directory)
+- An embedding model served by llama.cpp (default: `qwen3-embedding:0.6b` on port 8084). Configurable in Settings → Inference Servers → Embedding server.
 - (Optional) ComfyUI for image generation
 - (Optional) Kokoro TTS voices, Qwen3-TTS, or Supertonic 3 (`./scripts/install-supertonic-tts.sh`)
 
@@ -143,9 +141,9 @@ WantedBy=default.target
 
 The `--alias` flag must match the **Model name** configured in Settings — the reranker client sends that string as the `model` field in `/v1/rerank` requests.
 
-### Embedding Service (Optional, llama.cpp backend)
+### Embedding Service (llama.cpp backend)
 
-If you prefer llama.cpp over Ollama for embeddings (for example, to avoid running Ollama at all), expose a llama.cpp server with `--embeddings` on its own port:
+The embedding service runs as a dedicated llama.cpp server with `--embeddings` on its own port:
 
 ```ini
 [Unit]

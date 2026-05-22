@@ -122,12 +122,7 @@ export interface Chat {
   lastDelayedExtractionMessageIndex?: number;
   // Zeitgeist synthesis tracking
   lastZeitgeistSynthesisAt?: string;
-  // Ollama runtime options (per-chat overrides)
-  ollamaOptions?: {
-    keepAlive?: string | number;  // e.g., "15m", "5m", 300, -1, 0
-    numGpu?: number;              // GPU layers to offload
-    numPredict?: number;          // Max tokens to generate
-  };
+
 }
 
 export type ProjectLocationType = "local" | "ssh";
@@ -238,7 +233,7 @@ export interface ChatMessageWindow {
   hasMoreBefore: boolean;
 }
 
-export type InferenceProvider = "ollama" | "llamacpp";
+export type InferenceProvider = "llamacpp";
 
 export type MemoryBlockScope = "global" | "project";
 
@@ -257,14 +252,14 @@ export interface MemoryBlock {
   supersedes?: string;
 }
 
-export interface OllamaModel {
+export interface InferenceModel {
   id: string;
   name: string;
   parameterSize: string;
   family: string;
   contextWindow: number;
   supportsImages?: boolean;  // True if model has vision capabilities
-  provider?: InferenceProvider;  // Default: "ollama" for backward compat
+  provider: InferenceProvider;
 }
 
 export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper" | "iron" | "rust";
@@ -315,14 +310,10 @@ export interface Settings {
   extractionModelId?: string;
   extractionModelUrl?: string;  // Direct URL for dedicated extraction model (e.g., http://localhost:8083)
   extractionFallbackEnabled?: boolean;
-  // Ollama server URL (shared by model discovery, title gen, zeitgeist, vision,
-  // GPU coordination, and — when embeddingProvider is "ollama" — the default
-  // embedding URL). default "http://localhost:11434".
-  ollamaUrl?: string;
-  // llama.cpp server settings
+// llama.cpp server settings
   llamacppEnabled?: boolean;
   llamacppUrl?: string;         // default "http://localhost:8080"
-  llamacppSharesGpu?: boolean;  // default true — unload Ollama before llama.cpp and vice versa
+  llamacppSharesGpu?: boolean;  // default true — unload idle models before image generation
   // App-level behavior for llama.cpp physical slot routing. "auto" lets
   // llama.cpp choose slots and use its RAM prompt cache; "enforced" sends
   // id_slot based on app-managed leases.
@@ -356,9 +347,9 @@ export interface Settings {
   titleGenerationEnabled?: boolean;  // default true
   titleGenerationUrl?: string;       // default "http://localhost:8085"
   titleGenerationModelId?: string;   // default "qwen3.5-0.8b" — model name sent to the title-generation server
-  // Embedding server (Ollama or llama.cpp)
-  embeddingProvider?: "ollama" | "llamacpp";  // default "ollama"
-  embeddingUrl?: string;        // default "http://localhost:11434" (ollama) or "http://localhost:8084" (llamacpp)
+// Embedding server (llama.cpp)
+  embeddingProvider?: "llamacpp";
+  embeddingUrl?: string;        // default "http://localhost:8084"
   embeddingModel?: string;      // default "qwen3-embedding:0.6b"
   embeddingDimension?: number;  // dimension of currently stored vectors; set by migration
   // Model favorites

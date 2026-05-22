@@ -138,7 +138,7 @@ export async function createBackup(label?: string): Promise<BackupManifest> {
     createdAt: new Date().toISOString(),
     label,
     embedding: {
-      provider: settings.embeddingProvider ?? "ollama",
+      provider: settings.embeddingProvider ?? "llamacpp",
       url: settings.embeddingUrl ?? "",
       model: settings.embeddingModel ?? "qwen3-embedding:0.6b",
       dimension: settings.embeddingDimension,
@@ -186,7 +186,7 @@ export async function restoreBackup(id: string): Promise<void> {
   const settings = await getSettings();
   await saveSettings({
     ...settings,
-    embeddingProvider: (manifest.embedding.provider as "ollama" | "llamacpp") || "ollama",
+    embeddingProvider: (manifest.embedding.provider === "llamacpp" ? "llamacpp" : "llamacpp") as "llamacpp",
     embeddingUrl: manifest.embedding.url || undefined,
     embeddingModel: manifest.embedding.model || undefined,
     embeddingDimension: manifest.embedding.dimension,
@@ -198,7 +198,7 @@ export async function migrate(
 ): Promise<{ memories: number; corpus: number; dimension: number }> {
   const cfg = await getEmbeddingConfig();
 
-  onProgress({ phase: "probe", message: `Probing ${cfg.provider} ${cfg.model}` });
+  onProgress({ phase: "probe", message: `Probing ${cfg.model}` });
   const probe = await embedBatchWithConfig(cfg, ["migration probe"]);
   if (!probe.length || !probe[0].length) {
     throw new Error("Embedding probe returned no vector");

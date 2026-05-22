@@ -23,7 +23,7 @@
 
 See [docs/architecture.md](docs/architecture.md) for full details.
 
-Three chat types: **agent** (memory-augmented), **quick** (standalone), and **system** (synthesis, wake cycles, and automations). The chat route (`server/src/routes/chat.ts`) owns memory augmentation, SSE/persistence, compaction, and extraction around the shared agent loop in `agent-loop-runner.ts`. Chat storage is SQLite with FTS5 full-text search. Multi-provider LLM system supports Ollama native and OpenAI-compatible (llama.cpp) backends.
+Three chat types: **agent** (memory-augmented), **quick** (standalone), and **system** (synthesis, wake cycles, and automations). The chat route (`server/src/routes/chat.ts`) owns memory augmentation, SSE/persistence, compaction, and extraction around the shared agent loop in `agent-loop-runner.ts`. Chat storage is SQLite with FTS5 full-text search. LLM system uses OpenAI-compatible (llama.cpp) backend for all inference.
 
 ## Tool System
 
@@ -90,7 +90,7 @@ porrima/
 │   │   ├── projects.ts              # Project CRUD + AGENTS.md injection
 │   │   ├── memory.ts                # Memory CRUD + search + synthesis + conversation search
 │   │   ├── automations.ts           # Automation CRUD + manual run + run history
-│   │   ├── models.ts                # Model discovery (Ollama + llama.cpp)
+│   │   ├── models.ts                # Model discovery (llama.cpp)
 │   │   ├── settings.ts              # User preferences
 │   │   ├── tts.ts                   # TTS settings + voice info
 │   │   ├── vision.ts                # Vision analysis endpoints
@@ -117,7 +117,7 @@ porrima/
 │       ├── automation-scheduler.ts  # Configurable recurring task scheduler
 │       ├── automation-runner.ts     # Built-in/custom automation execution
 │       ├── automation-lock.ts       # Global automation run lock
-│       ├── embeddings.ts            # Ollama embedding API wrapper
+│       ├── embeddings.ts            # Embedding API wrapper (llama.cpp /v1/embeddings)
 │       ├── memory-storage.ts        # Memory + block SQLite + sqlite-vec persistence + KNN search
 │       ├── memory-extraction.ts     # Immediate + delayed extraction + supersession tracking
 │       ├── memory-context.ts        # System prompt augmentation with memories + blocks + stable prefix caching
@@ -126,7 +126,6 @@ porrima/
 │       ├── scheduler.ts             # Automations, delayed extraction, enrichment, pollers
 │       ├── compaction.ts            # Message compaction + indexed archival
 │       ├── reranker.ts              # Qwen3-Reranker client for memory retrieval
-│       ├── ollama-native-provider.ts # Ollama native API provider for pi-ai
 │       ├── openai-compat-provider.ts # OpenAI-compatible API provider (llama.cpp)
 │       ├── models.ts                # Model discovery, provider dispatch, reasoning detection
 │       ├── tts.ts                   # Kokoro TTS integration

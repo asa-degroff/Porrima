@@ -6,45 +6,34 @@ import sharp from "sharp";
 import { addCorpusEntry, enrichCorpusEntry } from "./image-corpus.js";
 import { getSettings } from "./chat-storage.js";
 import {
-  isLlamaCppModelLoaded,
   ensureModelLoaded,
   isLlamaCppChildConnectionError,
   normalizeImageForLlamaCpp,
 } from "./openai-compat-provider.js";
-import { getOllamaUrl } from "./ollama-url.js";
 import { discoverAllModels } from "./models.js";
-import type { OllamaModel } from "../types.js";
+import type { InferenceModel } from "../types.js";
 import { beginStream, endStream } from "./llm-activity.js";
 import { appDataPath } from "./paths.js";
 
 const VISION_DIR = appDataPath("vision");
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
 
-async function resolveOllamaBase(): Promise<string> {
-  return getOllamaUrl(await getSettings());
-}
-
-type VisionBackend =
-  | { provider: "ollama"; baseUrl: string }
-  | { provider: "llamacpp"; baseUrl: string; contextWindow?: number };
+type VisionBackend = { provider: "llamacpp"; baseUrl: string; contextWindow?: number };
 
 async function resolveVisionBackend(modelId: string): Promise<VisionBackend> {
   const settings = await getSettings();
-  let match: OllamaModel | undefined;
+  let match: InferenceModel | undefined;
   try {
     const models = await discoverAllModels();
     match = models.find((m) => m.id === modelId);
   } catch {
-    // Discovery failed — fall through to Ollama default
+    // Discovery failed — fall through to default
   }
-  if (match?.provider === "llamacpp") {
-    return {
-      provider: "llamacpp",
-      baseUrl: settings.llamacppUrl?.trim() || LLAMACPP_DEFAULT_URL,
-      contextWindow: match.contextWindow,
-    };
-  }
-  return { provider: "ollama", baseUrl: getOllamaUrl(settings) };
+  return {
+    provider: "llamacpp",
+    baseUrl: settings.llamacppUrl?.trim() || LLAMACPP_DEFAULT_URL,
+    contextWindow: match?.contextWindow,
+  };
 }
 
 /**
@@ -295,15 +284,14 @@ function base64ToBuffer(base64: string): Buffer {
   return Buffer.from(base64Data, "base64");
 }
 
-async function waitForOllama(timeout = 30000): Promise<boolean> {
-  const ollamaBase = await resolveOllamaBase();
+async function waitForLlamaCpp(baseUrl: string, timeout = 30000): Promise<boolean> {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${ollamaBase}/api/ps`);
+      const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(3000) });
       if (res.ok) return true;
     } catch {
-      // Ollama not reachable yet
+      // Not reachable yet
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
@@ -323,59 +311,18 @@ export async function analyzeImage(
     const modelName = model || getVLMModel();
     const backend = await resolveVisionBackend(modelName);
     console.log(
-      `[vision] analyze model=${modelName} backend=${backend.provider}${
-        backend.provider === "llamacpp" && backend.contextWindow ? ` ctx=${backend.contextWindow}` : ""
+      `[vision] analyze model=${modelName} backend=llama.cpp${
+        backend.contextWindow ? ` ctx=${backend.contextWindow}` : ""
       }`
     );
 
-    if (backend.provider === "llamacpp") {
-      const description = await analyzeViaLlamaCpp(
-        imageData,
-        preset.prompt,
-        modelName,
-        backend.baseUrl,
-        backend.contextWindow
-      );
-      return { description, preset: presetKey, model: modelName };
-    }
-
-    const ollamaReady = await waitForOllama();
-    if (!ollamaReady) {
-      throw new Error("Cannot reach Ollama. Is it running?");
-    }
-
-    const imageBuffer = base64ToBuffer(imageData).toString("base64");
-
-    const visionOptions: Record<string, any> = { temperature: 0.7 };
-    if (isLlamaCppModelLoaded()) visionOptions.num_gpu = 0;
-
-    const res = await fetch(`${backend.baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: modelName,
-        stream: false,
-        messages: [
-          { role: "system", content: preset.prompt },
-          {
-            role: "user",
-            content: "Describe this image.",
-            images: [imageBuffer],
-          },
-        ],
-        keep_alive: 0,
-        options: visionOptions,
-      }),
-    });
-
-    if (!res.ok) {
-      const errorText = await res.text().catch(() => res.statusText);
-      throw new Error(`Vision analysis failed (${res.status}): ${errorText}`);
-    }
-
-    const response = await res.json();
-    const description = cleanOutput(response.message.content);
-
+    const description = await analyzeViaLlamaCpp(
+      imageData,
+      preset.prompt,
+      modelName,
+      backend.baseUrl,
+      backend.contextWindow
+    );
     return { description, preset: presetKey, model: modelName };
   } finally {
     endStream();
@@ -396,107 +343,23 @@ export async function analyzeImageStream(
     const modelName = model || getVLMModel();
     const backend = await resolveVisionBackend(modelName);
     console.log(
-      `[vision] analyze-stream model=${modelName} backend=${backend.provider}${
-        backend.provider === "llamacpp" && backend.contextWindow ? ` ctx=${backend.contextWindow}` : ""
+      `[vision] analyze-stream model=${modelName} backend=llama.cpp${
+        backend.contextWindow ? ` ctx=${backend.contextWindow}` : ""
       }`
     );
 
     // Send initial keepalive to show we're starting
     onEvent({ event: "keepalive", data: { status: "starting", timestamp: Date.now() } });
 
-    if (backend.provider === "llamacpp") {
-      const description = await analyzeViaLlamaCpp(
-        imageData,
-        preset.prompt,
-        modelName,
-        backend.baseUrl,
-        backend.contextWindow,
-        (delta) => onEvent({ event: "text_delta", data: { delta } })
-      );
-      onEvent({ event: "description_complete", data: { description, preset: presetKey, model: modelName } });
-      return { description, preset: presetKey, model: modelName };
-    }
-
-    const ollamaReady = await waitForOllama();
-    if (!ollamaReady) {
-      onEvent({ event: "error", data: { message: "Cannot reach Ollama. Is it running?" } });
-      throw new Error("Cannot reach Ollama. Is it running?");
-    }
-
-    const imageBuffer = base64ToBuffer(imageData).toString("base64");
-    const streamOptions: Record<string, any> = { temperature: 0.7 };
-    if (isLlamaCppModelLoaded()) streamOptions.num_gpu = 0;
-
-    const res = await fetch(`${backend.baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: modelName,
-        stream: true,
-        messages: [
-          { role: "system", content: preset.prompt },
-          {
-            role: "user",
-            content: "Describe this image.",
-            images: [imageBuffer],
-          },
-        ],
-        keep_alive: 0,
-        options: streamOptions,
-      }),
-    });
-
-    if (!res.ok) {
-      const errorText = await res.text().catch(() => res.statusText);
-      onEvent({ event: "error", data: { message: `Vision analysis failed (${res.status}): ${errorText}` } });
-      throw new Error(`Vision analysis failed (${res.status}): ${errorText}`);
-    }
-
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let fullContent = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        if (line.trim()) {
-          try {
-            const json = JSON.parse(line);
-            if (json.message?.content) {
-              const delta = json.message.content;
-              fullContent += delta;
-              onEvent({ event: "text_delta", data: { delta } });
-            }
-          } catch {
-            // skip malformed
-          }
-        }
-      }
-    }
-
-    // Process remaining buffer
-    if (buffer.trim()) {
-      try {
-        const json = JSON.parse(buffer);
-        if (json.message?.content) {
-          fullContent += json.message.content;
-          onEvent({ event: "text_delta", data: { delta: json.message.content } });
-        }
-      } catch {
-        // skip malformed
-      }
-    }
-
-    const description = cleanOutput(fullContent);
+    const description = await analyzeViaLlamaCpp(
+      imageData,
+      preset.prompt,
+      modelName,
+      backend.baseUrl,
+      backend.contextWindow,
+      (delta) => onEvent({ event: "text_delta", data: { delta } })
+    );
     onEvent({ event: "description_complete", data: { description, preset: presetKey, model: modelName } });
-
     return { description, preset: presetKey, model: modelName };
   } finally {
     endStream();
@@ -516,56 +379,15 @@ export async function chatAboutImage(
   const backend = await resolveVisionBackend(modelName);
   const systemPrompt = buildChatSystemPrompt(presetKey, currentDescription);
 
-  if (backend.provider === "llamacpp") {
-    return chatAboutImageViaLlamaCpp(
-      imageData,
-      conversation.slice(-maxHistoryTurns),
-      userMessage,
-      systemPrompt,
-      modelName,
-      backend.baseUrl,
-      backend.contextWindow
-    );
-  }
-
-  const imageBuffer = base64ToBuffer(imageData).toString("base64");
-
-  const messages: any[] = [
-    { role: "system", content: systemPrompt },
-    {
-      role: "user",
-      content: "Analyze this image.",
-      images: [imageBuffer],
-    },
-    ...conversation.slice(-maxHistoryTurns).map((m) => ({
-      role: m.role,
-      content: m.content,
-    })),
-    { role: "user", content: userMessage },
-  ];
-
-  const chatOptions: Record<string, any> = { temperature: 0.7 };
-  if (isLlamaCppModelLoaded()) chatOptions.num_gpu = 0;
-
-  const res = await fetch(`${backend.baseUrl}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: modelName,
-      stream: false,
-      messages,
-      keep_alive: "5m",
-      options: chatOptions,
-    }),
-  });
-
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => res.statusText);
-    throw new Error(`Vision chat failed (${res.status}): ${errorText}`);
-  }
-
-  const response = await res.json();
-  return cleanOutput(response.message.content);
+  return chatAboutImageViaLlamaCpp(
+    imageData,
+    conversation.slice(-maxHistoryTurns),
+    userMessage,
+    systemPrompt,
+    modelName,
+    backend.baseUrl,
+    backend.contextWindow
+  );
 }
 
 // ---------------------------------------------------------------------------

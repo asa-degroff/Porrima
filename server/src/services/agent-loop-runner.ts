@@ -21,7 +21,7 @@ export interface CreateAgentLoopConfigOptions {
 export function createAgentLoopConfig(options: CreateAgentLoopConfigOptions): AgentLoopConfig {
   const config: AgentLoopConfig = {
     model: options.model,
-    apiKey: options.apiKey || "ollama",
+    apiKey: options.apiKey || "llamacpp",
     reasoning: options.model.reasoning ? "medium" : undefined,
     convertToLlm: options.convertToLlm || ((messages) => messages as Message[]),
     transformContext: options.transformContext,

@@ -180,7 +180,7 @@ porrima/
 │       ├── automation-scheduler.ts  # Configurable recurring task scheduler
 │       ├── automation-runner.ts     # Built-in/custom automation execution
 │       ├── system-chat.ts           # Synthesis and wake cycles in system chat
-│       ├── embeddings.ts            # Ollama embedding API wrapper
+│       ├── embeddings.ts            # Embedding API wrapper (llama.cpp /v1/embeddings)
 │       ├── memory-storage.ts        # Memory SQLite + sqlite-vec persistence + KNN search
 │       ├── memory-extraction.ts     # Background fact extraction + pre-compaction flush
 │       ├── memory-context.ts        # System prompt augmentation with memories
@@ -212,7 +212,7 @@ All data is stored in `~/.porrima/`:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/models` | List available Ollama models |
+| GET | `/api/models` | List available inference models |
 | GET | `/api/chats` | List all chats |
 | POST | `/api/chats` | Create chat (`{ modelId, type: "agent"\|"quick" }`) |
 | POST | `/api/chat` | Send message (SSE stream) |

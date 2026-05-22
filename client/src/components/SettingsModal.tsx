@@ -22,7 +22,7 @@ import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinari
 import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
-import type { AutomationRun, AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
+import type { AutomationRun, AutomationTask, InferenceModel, Settings, SystemPromptPreset, Theme, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
 import { getTTSStatus, getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
 import { SkillsBrowser } from "./SkillsBrowser";
 import { PolyhedronLogo } from "./PolyhedronLogo";
@@ -300,7 +300,7 @@ function coerceWebSearchProvider(provider: Settings["defaultWebSearchProvider"])
   return WEB_SEARCH_PROVIDER_OPTIONS.some((option) => option.id === provider) ? provider! : "brave";
 }
 
-function isVisionModel(model: OllamaModel): boolean {
+function isVisionModel(model: InferenceModel): boolean {
   const family = model.family.toLowerCase();
   const id = model.id.toLowerCase();
   return Boolean(model.supportsImages) ||
@@ -379,7 +379,7 @@ function formatAutomationDuration(startedAt: string, finishedAt?: string): strin
 
 interface Props {
   settings: Settings;
-  models: OllamaModel[];
+  models: InferenceModel[];
   onSave: (settings: Settings) => void;
   onClose: () => void;
   onLogout: () => void;
@@ -423,8 +423,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [imageBackend, setImageBackend] = useState<"comfyui" | "sdcpp">(settings.imageBackend ?? "comfyui");
   const [sdcppUrl, setSdcppUrl] = useState(settings.sdcppUrl || "http://127.0.0.1:1234");
   const [sdcppStatus, setSdcppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
-  // Ollama server settings
-  const [ollamaUrl, setOllamaUrl] = useState(settings.ollamaUrl || "http://localhost:11434");
   // llama.cpp server settings
   const [llamacppEnabled, setLlamacppEnabled] = useState(settings.llamacppEnabled ?? false);
   const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || "http://localhost:8080");
@@ -449,12 +447,11 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [titleGenerationModelsLoading, setTitleGenerationModelsLoading] = useState(false);
   const [titleGenerationUseCustom, setTitleGenerationUseCustom] = useState(false);
   // Embedding server settings
-  const savedEmbeddingProvider: "ollama" | "llamacpp" = settings.embeddingProvider ?? "ollama";
+  const savedEmbeddingProvider = settings.embeddingProvider ?? "llamacpp";
   const savedEmbeddingUrl =
-    settings.embeddingUrl ||
-    (savedEmbeddingProvider === "llamacpp" ? "http://localhost:8084" : "http://localhost:11434");
+    settings.embeddingUrl || "http://localhost:8084";
   const savedEmbeddingModel = settings.embeddingModel || "qwen3-embedding:0.6b";
-  const [embeddingProvider, setEmbeddingProvider] = useState<"ollama" | "llamacpp">(savedEmbeddingProvider);
+  const [embeddingProvider, setEmbeddingProvider] = useState(savedEmbeddingProvider);
   const [embeddingUrl, setEmbeddingUrl] = useState(savedEmbeddingUrl);
   const [embeddingModel, setEmbeddingModel] = useState(savedEmbeddingModel);
   const [embeddingModels, setEmbeddingModels] = useState<DiscoveredModel[]>([]);
@@ -1306,7 +1303,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       .then((h) => { if (!cancelled) setServerHealth(h); })
       .catch(() => { if (!cancelled) setServerHealth(null); });
     return () => { cancelled = true; };
-  }, [ollamaUrl, llamacppUrl, rerankerUrl, embeddingUrl, embeddingProvider, extractionModelUrl, titleGenerationUrl]);
+  }, [llamacppUrl, rerankerUrl, embeddingUrl, embeddingProvider, extractionModelUrl, titleGenerationUrl]);
 
   // Slot-keyed disk-model loader. Local GGUFs in ~/.local/share/llama-models/
   // are the source of truth for swappable models. listAvailableLlamaModels
@@ -1328,31 +1325,16 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     }
   }, []);
 
-  // Embedding dropdown: still uses Ollama discovery for provider=ollama.
+  // Embedding model discovery from llama.cpp server.
   // For provider=llamacpp, source from local llama-models dir so swaps go
   // through the systemd-override flow.
   useEffect(() => {
     let cancelled = false;
-    if (embeddingProvider === "llamacpp") {
-      loadDiskModels("embedding",
-        (m) => { if (!cancelled) setEmbeddingModels(m); },
-        (b) => { if (!cancelled) setEmbeddingModelsLoading(b); });
-      return () => { cancelled = true; };
-    }
-    const url = embeddingUrl.trim();
-    if (!url) {
-      setEmbeddingModels([]);
-      return;
-    }
-    setEmbeddingModelsLoading(true);
-    const handle = setTimeout(() => {
-      discoverModels({ provider: "ollama", kind: "embedding", url })
-        .then((r) => { if (!cancelled) setEmbeddingModels(r.models); })
-        .catch(() => { if (!cancelled) setEmbeddingModels([]); })
-        .finally(() => { if (!cancelled) setEmbeddingModelsLoading(false); });
-    }, 300);
-    return () => { cancelled = true; clearTimeout(handle); };
-  }, [embeddingProvider, embeddingUrl, loadDiskModels]);
+    loadDiskModels("embedding",
+      (m) => { if (!cancelled) setEmbeddingModels(m); },
+      (b) => { if (!cancelled) setEmbeddingModelsLoading(b); });
+    return () => { cancelled = true; };
+  }, [embeddingUrl, loadDiskModels]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1477,7 +1459,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       comfyuiUrl: comfyuiUrl.trim() || undefined,
       sdcppUrl: sdcppUrl.trim() || undefined,
       imageBackend,
-      ollamaUrl: ollamaUrl.trim() || undefined,
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
       llamacppSharesGpu,
@@ -2292,7 +2273,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   ["reranker", "Reranker"],
                   ["embedding", "Embedding"],
                   ["titleGeneration", "Titles"],
-                  ["ollama", "Ollama"],
                 ] as const).map(([key, label]) => {
                   const status = serverHealth?.[key];
                   const dotClass =
@@ -2309,24 +2289,6 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 })}
               </div>
             </div>
-
-            {/* Ollama server URL */}
-            <div className="space-y-2">
-              <h4 className="text-sm text-white/80">Ollama server</h4>
-              <div className="space-y-2 ml-2">
-                <input
-                  type="text"
-                  value={ollamaUrl}
-                  onChange={(e) => setOllamaUrl(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
-                  placeholder="http://localhost:11434"
-                />
-                <p className="text-xs text-white/30">
-                  Optional Ollama server URL. Also the default embedding URL when embedding provider is Ollama.
-                </p>
-              </div>
-            </div>
-
             {/* Binaries — discovered llama.cpp builds + global symlink management */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -2877,24 +2839,15 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                          {server.id === "embedding" && (
 	                            <div className="space-y-2">
 	                              <div className="flex gap-2">
-	                                {(["ollama", "llamacpp"] as const).map((p) => (
-	                                  <button key={p} onClick={() => {
-	                                    setEmbeddingProvider(p);
-	                                    const url = p === "llamacpp" ? "http://localhost:8084" : "http://localhost:11434";
-	                                    setEmbeddingUrl(url);
-	                                    setEmbeddingModels([]); setEmbeddingUseCustom(false);
-	                                    handleLlamaServerSettings("embedding", { provider: p, url });
-	                                  }} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-	                                    embeddingProvider === p ? "bg-purple-500/20 border-purple-400/30 text-purple-200" : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
-	                                  }`}>{p === "ollama" ? "Ollama" : "llama.cpp"}</button>
-	                                ))}
+	                                <label className="block text-xs text-white/50 w-12">Provider</label>
+	                                <span className="text-xs text-white/70">llama.cpp</span>
 	                              </div>
 	                              <div className="flex gap-2">
 	                                <label className="block text-xs text-white/50 w-12">URL</label>
 	                                <input type="text" value={embeddingUrl} onChange={(e) => setEmbeddingUrl(e.target.value)}
 	                                  onBlur={() => handleLlamaServerSettings("embedding", { url: embeddingUrl })}
 	                                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-	                                  placeholder={embeddingProvider === "llamacpp" ? "http://localhost:8084" : "http://localhost:11434"} />
+	                                  placeholder="http://localhost:8084" />
 	                              </div>
 	                              <div>
 	                                <label className="block text-xs text-white/50 mb-1">Model</label>
@@ -3384,7 +3337,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                 const isFav = favoriteModels.has(m.id);
                 return (
                   <button
-                    key={`${m.provider || "ollama"}-${m.id}`}
+                    key={`${m.provider}-${m.id}`}
                     onClick={() => {
                       setFavoriteModels((prev) => {
                         const next = new Set(prev);

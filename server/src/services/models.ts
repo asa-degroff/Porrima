@@ -1,152 +1,9 @@
 import type { Model } from "@mariozechner/pi-ai";
-import type { OllamaModel, Settings } from "../types.js";
+import type { InferenceModel, Settings } from "../types.js";
 import { getSettings } from "./chat-storage.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
-import { getOllamaUrl } from "./ollama-url.js";
 
 const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
-
-interface OllamaTagResponse {
-  models: Array<{
-    name: string;
-    model: string;
-    details: {
-      parameter_size: string;
-      family: string;
-    };
-  }>;
-}
-
-interface ModelInfoResult {
-  contextWindow: number;
-  supportsImages: boolean;
-}
-
-async function getModelCapabilities(modelName: string, ollamaBase: string): Promise<ModelInfoResult> {
-  // Safe default for cloud models and models with failed /api/show calls.
-  // When detection succeeds, the model's actual context_length is used.
-  // Users can set a lower limit per-model in settings if KV cache is a concern.
-  const DEFAULT_CONTEXT_WINDOW = 32768;
-  const result: ModelInfoResult = {
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    supportsImages: false,
-  };
-
-  // Cloud models can't be queried via /api/show (local Ollama endpoint only)
-  // Return the conservative default with a log message
-  if (modelName.includes(":cloud")) {
-    console.log(`[models] ${modelName}: cloud model, using default context window ${result.contextWindow}`);
-    return result;
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
-    const res = await fetch(`${ollamaBase}/api/show`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: modelName }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    if (!res.ok) {
-      console.warn(`[models] ${modelName}: /api/show returned ${res.status}, using default context window ${result.contextWindow}`);
-      return result;
-    }
-    const data = await res.json();
-    const modelInfo = data.model_info as Record<string, unknown> | undefined;
-    if (modelInfo) {
-      let detected = false;
-      for (const key of Object.keys(modelInfo)) {
-        // Context length detection
-        if (key.endsWith(".context_length") && typeof modelInfo[key] === "number") {
-          result.contextWindow = modelInfo[key] as number;
-          detected = true;
-        }
-        // Vision capability detection: look for vision-related keys
-        // Examples: qwen35.vision.*, llava.*, bakllava.*, etc.
-        if (key.includes(".vision") || key.includes("llava") || key.includes("clip")) {
-          result.supportsImages = true;
-        }
-      }
-      if (detected) {
-        console.log(`[models] ${modelName}: detected context window ${result.contextWindow}`);
-      } else {
-        console.warn(`[models] ${modelName}: /api/show succeeded but no context_length found, using default ${result.contextWindow}`);
-      }
-    } else {
-      console.warn(`[models] ${modelName}: /api/show returned no model_info, using default ${result.contextWindow}`);
-    }
-  } catch (err) {
-    console.warn(`[models] ${modelName}: /api/show failed (${err instanceof Error ? err.message : String(err)}), using default context window ${result.contextWindow}`);
-  }
-  return result;
-}
-
-// Cache for model discovery results (TTL-based)
-const MODEL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-let modelCache: { models: OllamaModel[]; timestamp: number } | null = null;
-
-export async function discoverOllamaModels(): Promise<OllamaModel[]> {
-  if (modelCache && Date.now() - modelCache.timestamp < MODEL_CACHE_TTL_MS) {
-    return modelCache.models;
-  }
-
-  const settings = await getSettings();
-  const ollamaBase = getOllamaUrl(settings);
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout for discovery (handles 50+ models)
-
-  try {
-    const res = await fetch(`${ollamaBase}/api/tags`, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (!res.ok) throw new Error(`Ollama not reachable: ${res.status}`);
-    const data = (await res.json()) as OllamaTagResponse;
-
-    const filtered = data.models.filter((m) => !m.name.includes("embedding"));
-
-    // Use Promise.allSettled to isolate individual model failures
-    // A single broken model shouldn't take down all model discovery
-    const results = await Promise.allSettled(
-      filtered.map(async (m) => {
-        const capabilities = await getModelCapabilities(m.name, ollamaBase);
-        return {
-          id: m.name,
-          name: formatModelName(m.name, m.details.parameter_size),
-          parameterSize: m.details.parameter_size,
-          family: m.details.family,
-          contextWindow: capabilities.contextWindow,
-          supportsImages: capabilities.supportsImages,
-        };
-      })
-    );
-
-    const fulfilled = results.filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled");
-    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
-    
-    if (rejected.length > 0) {
-      console.warn(`[models] ${rejected.length} model(s) failed to load:`);
-      rejected.forEach((r, idx) => {
-        const modelName = filtered[idx]?.name ?? "unknown";
-        console.warn(`  - ${modelName}: ${r.reason?.message || String(r.reason)}`);
-      });
-    }
-    
-    const models = fulfilled.map(r => r.value);
-    modelCache = { models, timestamp: Date.now() };
-    return models;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    console.error("[models] discoverOllamaModels failed:", error);
-    // Return cached models on failure if available (graceful degradation)
-    if (modelCache) {
-      console.warn("[models] returning stale cache due to Ollama failure");
-      return modelCache.models;
-    }
-    throw error;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // llama.cpp model discovery
@@ -178,9 +35,11 @@ interface LlamaCppPropsResponse {
   };
 }
 
-let llamacppCache: { models: OllamaModel[]; timestamp: number } | null = null;
+// Cache for model discovery results (TTL-based)
+const MODEL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let llamacppCache: { models: InferenceModel[]; timestamp: number } | null = null;
 
-export async function discoverLlamaCppModels(settings?: Settings): Promise<OllamaModel[]> {
+export async function discoverLlamaCppModels(settings?: Settings): Promise<InferenceModel[]> {
   if (llamacppCache && Date.now() - llamacppCache.timestamp < MODEL_CACHE_TTL_MS) {
     return llamacppCache.models;
   }
@@ -226,7 +85,7 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Ollam
       })
     );
 
-    const models: OllamaModel[] = modelsData.data
+    const models: InferenceModel[] = modelsData.data
       .filter((m) => m.id && !m.id.includes("embedding"))
       // Exclude HF-cached model presets (contain '/') — they duplicate local models
       // and try to download from HuggingFace which is unreliable. Local models in
@@ -274,9 +133,6 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Ollam
           const nameLower = m.id.toLowerCase();
           supportsImages = nameLower.includes("vision") || nameLower.includes("-vl") ||
             nameLower.includes("llava") || nameLower.includes("pixtral");
-          // Note: removed qwen3.5 and gemma-4 from the heuristic since those
-          // models are ONLY vision-capable when mmproj is configured. Without
-          // mmproj, they run as text-only models.
         }
         return {
           id: m.id,
@@ -298,7 +154,7 @@ export async function discoverLlamaCppModels(settings?: Settings): Promise<Ollam
       console.warn("[models] returning stale llama.cpp cache");
       return llamacppCache.models;
     }
-    return []; // Graceful — llama.cpp being down shouldn't break Ollama
+    return [];
   }
 }
 
@@ -322,24 +178,12 @@ function formatLlamaCppModelName(id: string): string {
  * Discover models from all enabled providers.
  * Returns a unified list tagged with their provider.
  */
-export async function discoverAllModels(): Promise<OllamaModel[]> {
-  const settings = await getSettings();
-  const [ollamaModels, llamacppModels] = await Promise.all([
-    discoverOllamaModels().catch((err) => {
-      console.error("[models] Ollama discovery failed:", err);
-      return [] as OllamaModel[];
-    }),
-    discoverLlamaCppModels(settings),
-  ]);
-
-  // Tag Ollama models that don't have a provider field yet
-  const tagged = ollamaModels.map((m) => ({ ...m, provider: m.provider ?? ("ollama" as const) }));
-  return [...tagged, ...llamacppModels];
+export async function discoverAllModels(): Promise<InferenceModel[]> {
+  return discoverLlamaCppModels();
 }
 
 /** Invalidate model caches (e.g., after settings change). */
 export function invalidateModelCache() {
-  modelCache = null;
   llamacppCache = null;
 }
 
@@ -377,12 +221,12 @@ function supportsReasoning(family: string): boolean {
  * Priority order:
  * 1. Explicit chat override (chat.contextWindow) - user knows best
  * 2. Per-model setting (settings.modelContextWindows[modelId]) - user's persistent preference
- * 3. Model's detected context window (model.contextWindow) - from /api/show
+ * 3. Model's detected context window (model.contextWindow) - from discovery
  * 4. Safe fallback (32768) - when detection fails
  */
 export function getEffectiveContextWindow(
   chat: { contextWindow?: number; modelId?: string },
-  model: OllamaModel | undefined,
+  model: InferenceModel | undefined,
   settings?: { modelContextWindows?: Record<string, number> }
 ): number {
   if (chat.contextWindow) {
@@ -398,58 +242,26 @@ export function getEffectiveContextWindow(
   return 32768;
 }
 
-export function createPiModel(
-  ollamaModel: OllamaModel,
-  ollamaBase: string
-): Model<"ollama-native"> {
-  const reasoning = supportsReasoning(ollamaModel.family);
-  // Only advertise image support if the model actually has vision capabilities
-  const input: ("text" | "image")[] = ollamaModel.supportsImages ? ["text", "image"] : ["text"];
-  return {
-    id: ollamaModel.id,
-    name: ollamaModel.name,
-    api: "ollama-native",
-    provider: "ollama",
-    baseUrl: ollamaBase,
-    reasoning,
-    input,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: ollamaModel.contextWindow,
-    maxTokens: 32768,
-  };
-}
-
 /**
- * Create a pi-ai Model from any provider's model.
- * Dispatches to the correct API based on the model's provider field.
+ * Create a pi-ai Model from a discovered inference model.
+ * All models now route through the openai-compat (llama.cpp) provider.
  */
 export async function createPiModelFromProvider(
-  model: OllamaModel
+  model: InferenceModel
 ): Promise<Model<string>> {
-  if (model.provider === "llamacpp") {
-    const settings = await getSettings();
-    const baseUrl = settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
-    const input: ("text" | "image")[] = model.supportsImages ? ["text", "image"] : ["text"];
-    return {
-      id: model.id,
-      name: model.name,
-      api: "openai-compat",
-      provider: "llamacpp",
-      baseUrl,
-      reasoning: true, // llama.cpp serves reasoning models; thinking via delta.reasoning_content
-      input,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: model.contextWindow,
-      maxTokens: 32768,
-    };
-  }
   const settings = await getSettings();
-  return createPiModel(model, getOllamaUrl(settings));
-}
-
-function formatModelName(id: string, paramSize: string): string {
-  const base = id.split(":")[0];
-  const parts = base.split(/[-_]/);
-  const name = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
-  return paramSize ? `${name} ${paramSize}` : name;
+  const baseUrl = settings.llamacppUrl || LLAMACPP_DEFAULT_URL;
+  const input: ("text" | "image")[] = model.supportsImages ? ["text", "image"] : ["text"];
+  return {
+    id: model.id,
+    name: model.name,
+    api: "openai-compat",
+    provider: "llamacpp",
+    baseUrl,
+    reasoning: supportsReasoning(model.family) || true, // llama.cpp serves reasoning models; thinking via delta.reasoning_content
+    input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: model.contextWindow,
+    maxTokens: 32768,
+  };
 }

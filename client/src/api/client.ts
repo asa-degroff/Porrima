@@ -1,4 +1,4 @@
-import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, OllamaModel, Settings } from "../types";
+import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, InferenceModel, Settings } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -42,7 +42,7 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
   return res;
 }
 
-export async function fetchModels(): Promise<OllamaModel[]> {
+export async function fetchModels(): Promise<InferenceModel[]> {
   const res = await apiFetch(`${BASE}/models`);
   if (!res.ok) throw new Error("Failed to fetch models");
   return res.json();
@@ -54,7 +54,7 @@ export interface DiscoveredModel {
 }
 
 export async function discoverModels(params: {
-  provider: "ollama" | "llamacpp";
+  provider: "llamacpp";
   kind: "embedding" | "rerank" | "chat";
   url?: string;
 }): Promise<{ models: DiscoveredModel[]; error?: string }> {
@@ -1635,7 +1635,6 @@ export interface ServerHealthMap {
   reranker: ServerHealth;
   titleGeneration: ServerHealth;
   embedding: ServerHealth;
-  ollama: ServerHealth;
 }
 
 export async function getAllServerHealth(): Promise<ServerHealthMap> {
@@ -1863,7 +1862,7 @@ export interface LlamaServerUpdate {
   sharesGpu?: boolean;
   ctxSize?: number;
   fallbackEnabled?: boolean;
-  provider?: "ollama" | "llamacpp";
+  provider?: "llamacpp";
   binaryPath?: string;
 }
 

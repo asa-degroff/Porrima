@@ -164,7 +164,7 @@ async function createAgentSnapshotUnlocked(
       corpus: options.includeCorpus === true,
     },
     embedding: {
-      provider: settings.embeddingProvider ?? "ollama",
+      provider: settings.embeddingProvider ?? "llamacpp",
       url: settings.embeddingUrl ?? "",
       model: settings.embeddingModel ?? "qwen3-embedding:0.6b",
       dimension: settings.embeddingDimension,

@@ -462,7 +462,7 @@ export async function runHeadlessChatTurn(
       context,
       config,
       signal: controller.signal,
-      streamFn: createSafeStreamFn(chat.ollamaOptions),
+      streamFn: createSafeStreamFn(),
       logPrefix,
       onEvent: async (event) => {
         if (event.type === "message_update") {

@@ -15,11 +15,11 @@ import { useActivityShape } from "../hooks/useActivityStyle";
 import { DragHandle } from "./ui/DragHandle";
 import { ImageSearch } from "./ImageSearch";
 import CorpusView from "./CorpusView";
-import type { GeneratedImage, ImageGenerationParams, OllamaModel } from "../types";
+import type { GeneratedImage, ImageGenerationParams, InferenceModel } from "../types";
 import { readStoredValue, writeStoredValue } from "../lib/storage";
 
 interface Props {
-  models: OllamaModel[];
+  models: InferenceModel[];
   defaultModelId: string;
   defaultVisionModelId?: string;
   onClose: () => void;
@@ -34,7 +34,7 @@ const LEGACY_SANDBOX_AGENT_FILTER_KEY = "quje-sandbox-agent-filter";
 const VISION_MODEL_KEY = "porrima-vision-model";
 const LEGACY_VISION_MODEL_KEY = "quje-vision-model";
 
-function isVisionCapable(model: OllamaModel): boolean {
+function isVisionCapable(model: InferenceModel): boolean {
   const family = model.family.toLowerCase();
   const id = model.id.toLowerCase();
   return Boolean(model.supportsImages) ||
@@ -46,14 +46,14 @@ function isVisionCapable(model: OllamaModel): boolean {
     id.includes("pixtral");
 }
 
-export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisionModelId, onClose }: Props) {
+export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionModelId, onClose }: Props) {
   const activityShape = useActivityShape();
   const { settings } = useSettings();
   const backendLabel = settings.imageBackend === "sdcpp" ? "sd-server" : "ComfyUI";
   const visionModels = useMemo(() => {
-    const capable = ollamaModels.filter(isVisionCapable);
-    return capable.length > 0 ? capable : ollamaModels;
-  }, [ollamaModels]);
+    const capable = allModels.filter(isVisionCapable);
+    return capable.length > 0 ? capable : allModels;
+  }, [allModels]);
 
   const {
     images,
@@ -198,19 +198,19 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
     // 1. Check localStorage for a previously selected vision model
     try {
       const saved = readStoredValue(VISION_MODEL_KEY, LEGACY_VISION_MODEL_KEY);
-      const savedModel = ollamaModels.find((m) => m.id === saved);
+      const savedModel = allModels.find((m) => m.id === saved);
       if (saved && savedModel && isVisionCapable(savedModel)) return saved;
     } catch {}
     // 2. Use explicit vision model setting if set
     if (defaultVisionModelId) {
-      const configured = ollamaModels.find((m) => m.id === defaultVisionModelId);
+      const configured = allModels.find((m) => m.id === defaultVisionModelId);
       if (configured && isVisionCapable(configured)) return defaultVisionModelId;
     }
     // 3. Use chat default if it's vision-capable
-    const chatDefault = ollamaModels.find((m) => m.id === defaultModelId);
+    const chatDefault = allModels.find((m) => m.id === defaultModelId);
     if (chatDefault && isVisionCapable(chatDefault)) return defaultModelId;
     // 4. Fall back to first vision model
-    const visionDefault = ollamaModels.find(isVisionCapable);
+    const visionDefault = allModels.find(isVisionCapable);
     return visionDefault?.id || defaultModelId;
   });
 
@@ -221,21 +221,21 @@ export function ImageSandbox({ models: ollamaModels, defaultModelId, defaultVisi
 
   // Re-validate selection when models list arrives/changes
   useEffect(() => {
-    if (ollamaModels.length === 0) return;
+    if (allModels.length === 0) return;
     // Current selection is valid — keep it
-    if (ollamaModels.some((m) => m.id === visionModel && isVisionCapable(m))) return;
+    if (allModels.some((m) => m.id === visionModel && isVisionCapable(m))) return;
     // Try localStorage
     try {
       const saved = readStoredValue(VISION_MODEL_KEY, LEGACY_VISION_MODEL_KEY);
-      if (saved && ollamaModels.some((m) => m.id === saved && isVisionCapable(m))) {
+      if (saved && allModels.some((m) => m.id === saved && isVisionCapable(m))) {
         setVisionModelRaw(saved);
         return;
       }
     } catch {}
     // Fall back to best vision model
-    const visionDefault = ollamaModels.find(isVisionCapable);
-    setVisionModelRaw(visionDefault?.id || ollamaModels[0].id);
-  }, [ollamaModels]);
+    const visionDefault = allModels.find(isVisionCapable);
+    setVisionModelRaw(visionDefault?.id || allModels[0].id);
+  }, [allModels]);
 
   const error = mode === "generate" ? imageError : visionError;
 

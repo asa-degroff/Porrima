@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import type { Artifact, ChatMessage, GeneratedImage, InferenceActivityPhase, MessageUsage, ModelProgress, OllamaModel, SystemPromptPreset } from "../types";
+import type { Artifact, ChatMessage, GeneratedImage, InferenceActivityPhase, MessageUsage, ModelProgress, InferenceModel, SystemPromptPreset } from "../types";
 import type { ArtifactRuntimeErrorReport, ToolStatus, StreamWarning, SkillInfo } from "../api/client";
 import { fetchRenderedPrompt, fetchSkills } from "../api/client";
 import { MessageBubble } from "./MessageBubble";
@@ -265,7 +265,7 @@ interface Props {
   contextWindow: number;
   error: string | null;
   warning: StreamWarning | null;
-  models: OllamaModel[];
+  models: InferenceModel[];
   selectedModelId: string;
   systemPrompt: string;
   systemPromptPresets?: SystemPromptPreset[];

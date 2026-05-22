@@ -86,7 +86,6 @@ export async function getFreeRAMBytes(): Promise<number> {
 // ─── LLM unload (incremental, smallest-first) ────────────────────────────────
 
 interface UnloadableModel {
-  source: "ollama" | "llamacpp";
   id: string;
   sizeBytes: number;
   unload: () => Promise<void>;
@@ -107,37 +106,8 @@ function estimateLlamaCppSize(modelId: string): number {
 
 async function collectLoadedModels(): Promise<UnloadableModel[]> {
   const { getSettings } = await import("./chat-storage.js");
-  const { getOllamaUrl } = await import("./ollama-url.js");
   const settings = await getSettings();
-  const ollamaBase = getOllamaUrl(settings);
   const result: UnloadableModel[] = [];
-
-  // Ollama: /api/ps returns loaded models with a reliable `size` field.
-  try {
-    const psRes = await fetch(`${ollamaBase}/api/ps`, { signal: AbortSignal.timeout(5000) });
-    if (psRes.ok) {
-      const psData = await psRes.json();
-      for (const m of psData.models || []) {
-        const id: string | undefined = m.name || m.model;
-        if (!id) continue;
-        result.push({
-          source: "ollama",
-          id,
-          sizeBytes: typeof m.size === "number" ? m.size : 0,
-          unload: async () => {
-            await fetch(`${ollamaBase}/api/generate`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ model: id, prompt: "", keep_alive: "0s" }),
-              signal: AbortSignal.timeout(30_000),
-            });
-          },
-        });
-      }
-    }
-  } catch (err) {
-    console.warn("[coordinator] Failed to list Ollama models:", err);
-  }
 
   // llama.cpp: /v1/models lists all configured models; filter to loaded.
   if (settings.llamacppEnabled) {
@@ -151,7 +121,6 @@ async function collectLoadedModels(): Promise<UnloadableModel[]> {
           const id: string | undefined = m.id;
           if (!id) continue;
           result.push({
-            source: "llamacpp",
             id,
             sizeBytes: estimateLlamaCppSize(id),
             unload: async () => {
@@ -176,7 +145,7 @@ async function collectLoadedModels(): Promise<UnloadableModel[]> {
 }
 
 export interface UnloadOptions {
-  onProgress?: (modelId: string, source: "ollama" | "llamacpp") => void;
+  onProgress?: (modelId: string) => void;
   // Called after each successful unload. Return true to stop early.
   shouldStop?: () => Promise<boolean> | boolean;
   signal?: AbortSignal;
@@ -195,8 +164,8 @@ export async function unloadLLMModels(options: UnloadOptions = {}): Promise<void
 
   for (const m of models) {
     if (signal?.aborted) return;
-    console.log(`[coordinator] Unloading ${m.source} model: ${m.id} (${fmtGB(m.sizeBytes)})`);
-    onProgress?.(m.id, m.source);
+    console.log(`[coordinator] Unloading model: ${m.id} (${fmtGB(m.sizeBytes)})`);
+    onProgress?.(m.id);
     try {
       await m.unload();
     } catch (err) {

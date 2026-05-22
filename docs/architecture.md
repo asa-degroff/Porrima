@@ -30,7 +30,6 @@ Projects provide persistent context for agent chats through AGENTS.md files:
 
 Multi-provider system supporting multiple inference backends through pi-ai's provider abstraction:
 
-- **Ollama Native** (`ollama-native-provider.ts`): Registers with pi-ai for Ollama's native `/api/chat` format
 - **OpenAI-Compatible** (`openai-compat-provider.ts`): Registers with pi-ai for OpenAI-format APIs (llama.cpp)
   - SSE parser for OpenAI streaming format
   - Incremental tool call handling with argument accumulation
@@ -39,9 +38,8 @@ Multi-provider system supporting multiple inference backends through pi-ai's pro
   - Vision model support with base64 image encoding (OpenAI content parts format)
   - Router mode model management: `ensureModelLoaded()` handles load/unload/reload; `waitForModelReady()` polls `/v1/models` status; `waitForModelUnloaded()` ensures clean transitions
   - Retry on transient fetch failures (3 attempts, 1s delay) for TCP connection hiccups between rapid tool iterations
-  - Ollama VRAM cleanup before model loads — unloads Ollama models via `/api/ps` to prevent GPU memory contention
-- **Model Discovery** (`models.ts`): `discoverAllModels()` queries both Ollama and llama.cpp servers, tags each model with `provider: "ollama"` or `provider: "llamacpp"`. HF-cached models (IDs with `/`) are filtered out. `createPiModelFromProvider()` routes to the correct pi-ai API provider. Vision detection uses `/props` modalities for loaded models, name heuristics for unloaded.
-- **Reasoning Detection**: `supportsReasoning()` checks model family (`qwen3*`, `gemma4*`) — enables `think: true` for Ollama, `chat_template_kwargs` for llama.cpp
+- **Model Discovery** (`models.ts`): `discoverAllModels()` queries the llama.cpp server via `/v1/models`, tags each model with `provider: "llamacpp"`. HF-cached models (IDs with `/`) are filtered out. `createPiModelFromProvider()` creates openai-compat models. Vision detection uses `/props` modalities for loaded models, `--mmproj` args and name heuristics for unloaded.
+- **Reasoning Detection**: `supportsReasoning()` checks model family (`qwen3*`, `gemma4*`) — enables `chat_template_kwargs` for llama.cpp
 - **Settings**: `llamacppEnabled`, `llamacppUrl`, `llamacppSharesGpu` control llama.cpp integration. `favoriteModels`, `showOnlyFavorites` for model selector filtering.
 
 ## llama.cpp Infrastructure
@@ -50,7 +48,7 @@ Multi-provider system supporting multiple inference backends through pi-ai's pro
 - **Model directory structure**: Each model in a subdirectory with the GGUF + optional mmproj file for vision. Router auto-detects `mmproj*` files.
 - **Auto-sync** (`sync-llama-models.sh` + `sync-llama-models.timer`): Every 5 min, scans `~/.cache/huggingface/` for new GGUF downloads, creates symlinked subdirectories, restarts llama-server if new models found. Excludes reranker/embedding models.
 - **Reranker service** (`reranker.service`): Dedicated Qwen3-Reranker-0.6B instance on port 8082, CPU-only, for memory retrieval reranking.
-- **Title generation**: Uses Ollama with `num_gpu: 0` and `keep_alive: "0s"` — forced to CPU to avoid VRAM contention with larger models.
+- **Title generation**: Uses a dedicated CPU-only llama.cpp instance with `keep_alive: "0s"` to avoid VRAM contention with larger models.
 
 ## Memory Services
 
@@ -108,9 +106,9 @@ See [docs/compaction.md](compaction.md) for full details.
 
 ## GPU Coordination
 
-VRAM management across Ollama, llama.cpp, and ComfyUI:
+VRAM management across llama.cpp and ComfyUI:
 
-- **ComfyUI generation**: `waitForFreeVRAM()` checks `/system_stats` for free VRAM, unloads all LLM models (Ollama via `/api/ps` + llama.cpp via `/v1/models`) if insufficient, polls every 3s until 6GB free
-- **llama.cpp model loading**: `ensureModelLoaded()` unloads Ollama models before loading to maximize GPU offloading
+- **ComfyUI generation**: `waitForFreeVRAM()` checks `/system_stats` for free VRAM, unloads llama.cpp models via `/v1/models` if insufficient, polls every 3s until 6GB free
+- **llama.cpp model loading**: `ensureModelLoaded()` handles load/unload/reload cycles for model swaps
 - **Idle unloading**: llama.cpp `--sleep-idle-seconds 300` auto-unloads after 5 min of inactivity
 - **Tool result limits**: Dynamic truncation scaled to 15% of context window (min 8k chars)

@@ -31,7 +31,6 @@ import {
   type LlamaCacheBindingMode,
 } from "./llama-cache-residency.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "./models.js";
-import { getOllamaUrl } from "./ollama-url.js";
 import {
   buildSplitAugmentedPrompt,
   resetMemoryContext,
@@ -40,7 +39,7 @@ import {
 import { getAgentTools, type ToolSideEffects } from "./agent-tools.js";
 import { digestPromptText, recordWarmPromptSnapshot } from "./llama-prompt-debug.js";
 import { buildSkillAugmentedPrompt, discoverSkills, type Skill } from "./skills.js";
-import type { OllamaModel } from "../types.js";
+import type { InferenceModel } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -115,7 +114,7 @@ const CACHE_WARM_SENTINEL_PREFIX = "__porrima_cache_warm_next_user_";
 /**
  * Find the model info for a given model ID.
  */
-async function findModelInfo(modelId: string): Promise<{ model: OllamaModel; baseUrl: string } | null> {
+async function findModelInfo(modelId: string): Promise<{ model: InferenceModel; baseUrl: string } | null> {
   const allModels = await discoverAllModels();
   const normalizedId = normalizeRouterModelId(modelId);
   const model = allModels.find((m) => m.id === modelId) ||
@@ -124,16 +123,8 @@ async function findModelInfo(modelId: string): Promise<{ model: OllamaModel; bas
   if (!model) return null;
 
   // Derive the baseUrl from the model's provider
-  if (model.provider === "llamacpp") {
-    const settings = await getSettings();
-    return { model, baseUrl: settings.llamacppUrl || "http://localhost:8080" };
-  } else if (model.provider === "ollama") {
-    const settings = await getSettings();
-    return { model, baseUrl: getOllamaUrl(settings) };
-  }
-
-  // Unknown provider — can't resolve URL
-  return null;
+  const settings = await getSettings();
+  return { model, baseUrl: settings.llamacppUrl || "http://localhost:8080" };
 }
 
 /**
@@ -271,11 +262,9 @@ async function makeOneTokenShortPrompt(
 function buildReplayMessages(
   chatMessages: any[],
   modelId: string,
-  model: OllamaModel,
+  model: InferenceModel,
 ): ReturnType<typeof chatMessagesToPiMessages> {
-  const replayIdentity = model?.provider === "llamacpp"
-    ? { api: "openai-compat", provider: "llamacpp", model: modelId }
-    : { api: "ollama-native", provider: "ollama", model: modelId };
+  const replayIdentity = { api: "openai-compat", provider: "llamacpp", model: modelId };
   return chatMessagesToPiMessages(chatMessages, modelId, replayIdentity as ReplayModelIdentity);
 }
 
@@ -565,7 +554,7 @@ function supportsReasoningFamily(family: string | undefined): boolean {
 }
 
 /** Check if a model supports reasoning, using family or name as fallback. */
-function modelSupportsReasoning(model: OllamaModel): boolean {
+function modelSupportsReasoning(model: InferenceModel): boolean {
   if (supportsReasoningFamily(model.family)) return true;
   // llama.cpp models often have empty family — check the model ID/name instead
   const id = (model.id || "").toLowerCase();

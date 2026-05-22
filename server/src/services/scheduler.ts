@@ -270,7 +270,7 @@ async function checkAndRunDelayedExtractions() {
 
     if (!extractionRoute) {
       // No dedicated server: verify the model is loaded somewhere reachable
-      // (Ollama or chat-router llama.cpp) before dispatching work.
+      // (extraction or chat-router llama.cpp) before dispatching work.
       const availableModels = await discoverAllModels();
       const availableModelIds = new Set(availableModels.map(m => m.id));
       if (!availableModelIds.has(extractionModelId)) {

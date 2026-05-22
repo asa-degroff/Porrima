@@ -8,7 +8,7 @@ import type { AgentContext } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat, getDb, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
 import { chatMessagesToPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
-import type { OllamaModel } from "../types.js";
+import type { InferenceModel } from "../types.js";
 import { extractMemories, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
 import { generateTitle, generateRecap, RECAP_THRESHOLD } from "../services/title-generation.js";
 import { truncateChatHistory, truncateBeforeSend, triggerCompaction, hasStrandedToolCall } from "../services/compaction.js";
@@ -341,11 +341,14 @@ interface SentPrefixSnapshot {
 
 const lastSentPrefixSnapshot = new Map<string, SentPrefixSnapshot>();
 
-function replayIdentityForModel(modelId: string, model?: OllamaModel | null): ReplayModelIdentity {
+function replayIdentityForModel(modelId: string, model?: InferenceModel | null): ReplayModelIdentity {
+  // All models now go through llama.cpp (openai-compat). Legacy ollama models
+  // are mapped to openai-compat for backward compatibility.
   if (model?.provider === "llamacpp") {
     return { api: "openai-compat", provider: "llamacpp", model: modelId };
   }
-  return { api: "ollama-native", provider: "ollama", model: modelId };
+  // Fallback: treat unknown/legacy models as openai-compat
+  return { api: "openai-compat", provider: "llamacpp", model: modelId };
 }
 
 function replayIdentityFromPiModel(model: Model<string>): ReplayModelIdentity {
@@ -1211,21 +1214,21 @@ async function handleChatStream(
 
   try {
     // Discover model with timeout protection
-    let allModels: OllamaModel[];
-    let ollamaModel: OllamaModel | undefined;
+    let allModels: InferenceModel[];
+    let inferenceModel: InferenceModel | undefined;
     let piModel: Model<string>;
 
     try {
       allModels = await discoverAllModels();
-      ollamaModel = allModels.find(m => m.id === chat.modelId);
-      if (!ollamaModel) throw new Error(`Model not found: ${chat.modelId}`);
-      piModel = await createPiModelFromProvider(ollamaModel);
-      // Override contextWindow with effective value so num_ctx sent to Ollama
-      // respects per-chat and per-model settings. Without this, Ollama receives
+      inferenceModel = allModels.find(m => m.id === chat.modelId);
+      if (!inferenceModel) throw new Error(`Model not found: ${chat.modelId}`);
+      piModel = await createPiModelFromProvider(inferenceModel);
+      // Override contextWindow with effective value so the context window size sent to llama.cpp
+      // respects per-chat and per-model settings. Without this, llama.cpp receives
       // the full detected context window (e.g. 128k) and may overflow VRAM.
-      piModel.contextWindow = getEffectiveContextWindow(chat, ollamaModel, settings);
+      piModel.contextWindow = getEffectiveContextWindow(chat, inferenceModel, settings);
       activeAssistantIdentity = replayIdentityFromPiModel(piModel);
-      if (ollamaModel.provider === "llamacpp" && piModel.baseUrl) {
+      if (inferenceModel.provider === "llamacpp" && piModel.baseUrl) {
         llamaSlotLease = await acquireLlamaSlotLease({
           baseUrl: piModel.baseUrl,
           chatId: chat.id,
@@ -1321,8 +1324,8 @@ async function handleChatStream(
     //   - Tool iterations (iteration > 1): always hide
     const isFirstTurn = chat.messages.length === 1;
 
-    // Pass per-chat Ollama runtime options to the stream function
-    const safeStreamFn = createSafeStreamFn(chat.ollamaOptions, llamaSlotLease, {
+    // Pass llamacpp slot lease and hooks to the stream function
+    const safeStreamFn = createSafeStreamFn(llamaSlotLease, {
       promptDebugChatId: chat.id,
       onModelProgress: emitModelProgress,
       modelProgressShowIndicator: (iteration) => {
@@ -1823,7 +1826,7 @@ async function handleChatStream(
           // single large one (e.g. read_file on a 50 KB source file) can push
           // past the hard context cap before the next iteration even starts.
           const { estimateContextTokens } = await import("../services/compaction.js");
-          const effectiveCWForCheck = getEffectiveContextWindow(chat, ollamaModel, settings);
+          const effectiveCWForCheck = getEffectiveContextWindow(chat, inferenceModel, settings);
           const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
 
           // Send iteration event with usage AND estimate so client can update
@@ -1846,7 +1849,7 @@ async function handleChatStream(
           }
 
           // Detect implicit context overflow: model errored without usage data.
-          // Ollama often returns a stream error (not "length") when the context is exhausted.
+          // llama.cpp often returns a stream error (not "length") when the context is exhausted.
           // If we have prior usage near the limit or high iteration count with no usage, treat as context limit.
           if (!hitContextLimit && !msg.usage && (stopReason as string) !== "stop" && (stopReason as string) !== "toolUse" && (stopReason as string) !== "length") {
             // Check if the last known usage was already high
@@ -1986,7 +1989,7 @@ async function handleChatStream(
     // not compact away the context the model was working with.
     if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && !state.strandedToolCall) {
       try {
-        const model = allModels.find((m: OllamaModel) => m.id === chat.modelId);
+        const model = allModels.find((m: InferenceModel) => m.id === chat.modelId);
         if (model) {
           const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
           const lastUsage = state.finalUsage?.totalTokens ?? 0;
@@ -2373,7 +2376,7 @@ async function handleChatStream(
       await saveChat(chat);
 
       // 2. Run compaction to free context space
-      const effectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
+      const effectiveCW = getEffectiveContextWindow(chat, inferenceModel, settings);
       const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
       const emitKeepalive = () => res.write(`: keepalive\n\n`);
       // Wrap all compaction work in a keepalive ping loop so the client's
@@ -2603,7 +2606,7 @@ async function handleChatStream(
             }
 
             // Check for overflow — if hit, set flag and break to trigger another compaction cycle
-            const resumeEffectiveCW = getEffectiveContextWindow(chat, ollamaModel, settings);
+            const resumeEffectiveCW = getEffectiveContextWindow(chat, inferenceModel, settings);
             let resumeTokens = state.finalUsage?.totalTokens ?? 0;
             if (!resumeTokens) {
               const { estimateContextTokens } = await import("../services/compaction.js");
@@ -2865,17 +2868,17 @@ async function handleChatStream(
       // Record model performance stats for every llama.cpp provider call in
       // this visible turn. A tool loop can make multiple model calls, and a
       // slow first prefill must not be hidden by a later tiny follow-up call.
-      if (ollamaModel?.provider === "llamacpp" && state.llamaRuns.length > 0) {
+      if (inferenceModel?.provider === "llamacpp" && state.llamaRuns.length > 0) {
         try {
           const { recordModelStats } = await import("../services/model-stats.js");
           state.llamaRuns.forEach((run, idx) => {
-            const stats = recordModelStats(ollamaModel.id, "llamacpp", run.timings, run.cache ?? undefined);
+            const stats = recordModelStats(inferenceModel.id, "llamacpp", run.timings, run.cache ?? undefined);
             const cacheText = stats.inferredCachedTokens !== undefined
               ? ` cache=${stats.inferredCachedTokens}/${stats.reportedPromptTokens ?? "?"}`
               : "";
             const digestText = stats.requestDigest ? ` digest=${stats.requestDigest}` : "";
             console.log(
-              `[model-stats] recorded: ${ollamaModel.id} run=${idx + 1}/${state.llamaRuns.length} ` +
+              `[model-stats] recorded: ${inferenceModel.id} run=${idx + 1}/${state.llamaRuns.length} ` +
               `decode=${run.timings.predicted_per_second.toFixed(1)} tok/s${cacheText}${digestText}`,
             );
           });
@@ -3048,8 +3051,8 @@ router.post("/", async (req, res) => {
       const settings = await getSettings();
       const { getEffectiveContextWindow, discoverAllModels } = await import("../services/models.js");
       const allModels = await discoverAllModels();
-      const ollamaModel = allModels.find(m => m.id === chat.modelId);
-      contextWindow = getEffectiveContextWindow(chat, ollamaModel, settings);
+      const inferenceModel = allModels.find(m => m.id === chat.modelId);
+      contextWindow = getEffectiveContextWindow(chat, inferenceModel, settings);
 
       let compactProject: Project | undefined;
       let compactProjectPath: string | undefined;
@@ -3292,7 +3295,7 @@ router.post("/", async (req, res) => {
     if (contextMessages.length === 0 && chat.messages.length > 0) {
       console.warn(`[chat] pending state has empty context, rebuilding from chat.messages (${chat.messages.length} messages)`);
       // Exclude the last message (current user message) from context
-      let resumeModel: OllamaModel | undefined;
+      let resumeModel: InferenceModel | undefined;
       try {
         resumeModel = (await discoverAllModels()).find((m) => m.id === chat.modelId);
       } catch {
@@ -3327,7 +3330,7 @@ router.post("/", async (req, res) => {
     await saveChat(chat);
 
     // Discover model for pre-send truncation
-    let model: OllamaModel | undefined;
+    let model: InferenceModel | undefined;
     try {
       const allModels = await discoverAllModels();
       model = allModels.find((m) => m.id === chat.modelId);
@@ -3517,7 +3520,7 @@ router.post("/", async (req, res) => {
     }
 
     // Discover model for pre-send truncation
-    let model: OllamaModel | undefined;
+    let model: InferenceModel | undefined;
     try {
       const allModels = await discoverAllModels();
       model = allModels.find((m) => m.id === chat.modelId);
@@ -3877,7 +3880,7 @@ router.post("/artifact-error", async (req, res) => {
     chat.messages[currentPromptIndex - 1]?.content === memoryDeltaContext
       ? currentPromptIndex - 1
       : currentPromptIndex;
-  let repairModel: OllamaModel | undefined;
+  let repairModel: InferenceModel | undefined;
   try {
     repairModel = (await discoverAllModels()).find((m) => m.id === chat.modelId);
   } catch {
@@ -4125,7 +4128,7 @@ router.post("/edit", async (req, res) => {
   }
 
   // Discover model for pre-send truncation
-  let model: OllamaModel | undefined;
+  let model: InferenceModel | undefined;
   try {
     const allModels = await discoverAllModels();
     model = allModels.find((m) => m.id === chat.modelId);

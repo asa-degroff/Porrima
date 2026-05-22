@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { fetchModels } from "../api/client";
-import type { OllamaModel } from "../types";
+import type { InferenceModel } from "../types";
 
 export function useModels() {
-  const [models, setModels] = useState<OllamaModel[]>([]);
+  const [models, setModels] = useState<InferenceModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 

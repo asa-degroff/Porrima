@@ -87,8 +87,8 @@ export function chatMessagesToPiMessages(
   const pendingSystemContexts: string[] = [];
   let pendingSystemTimestamp: number | undefined;
   const defaultAssistantIdentity: ReplayModelIdentity = {
-    api: fallbackIdentity?.api ?? "ollama-native",
-    provider: fallbackIdentity?.provider ?? "ollama",
+    api: fallbackIdentity?.api ?? "openai-compat",
+    provider: fallbackIdentity?.provider ?? "llamacpp",
     model: fallbackIdentity?.model ?? modelId,
   };
 
@@ -321,9 +321,9 @@ export async function streamChat(
     tools: options?.tools,
   };
 
-  // Pass Ollama-specific options (they're extensions to SimpleStreamOptions)
+  // Pass llama.cpp-specific options (extensions to SimpleStreamOptions)
   const streamOptions: any = {
-    apiKey: "ollama",
+    apiKey: "llamacpp",
     signal: options?.signal,
     reasoning: piModel.reasoning ? "medium" : undefined,
   };
@@ -379,8 +379,8 @@ export async function streamChat(
     assistantMessage = {
       role: "assistant",
       content: [{ type: "text", text: fullText }],
-      api: "ollama-native",
-      provider: "ollama",
+      api: "openai-compat",
+      provider: "llamacpp",
       model: modelId,
       usage: {
         input: 0,

@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { VisionPreset, AnalyzedImage } from "../api/client";
-import type { OllamaModel } from "../types";
+import type { InferenceModel } from "../types";
 import { ProviderIcon } from "./ProviderIcon";
 import { Dropdown } from "./ui/Dropdown";
 import { useDropdown } from "../hooks/useDropdown";
@@ -45,7 +45,7 @@ function compressImage(file: File): Promise<string> {
 
 interface Props {
   presets: VisionPreset[];
-  models: OllamaModel[];
+  models: InferenceModel[];
   selectedModel: string;
   onModelChange: (modelId: string) => void;
   analyzing: boolean;
