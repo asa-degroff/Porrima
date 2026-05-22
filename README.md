@@ -1,39 +1,79 @@
 # Porrima
 
-A local chat UI and agent framework for Ollama and OpenAI-compatible local models. Agent chats learn about you over time through automatic fact extraction, semantic search, indexed compaction, memory blocks, and configurable system-chat automations. Quick chats work as standalone conversations with no memory.
+Memory-native AI agent system. Runs on your own hardware, learns and evolves over time, and offers endless customization.
 
-## Features
+### Features
+##### First-class GUI
+Install anywhere, do anything. The client app is a PWA built for desktop, tablet, and mobile. Access remotely with Cloudflare Tunnels. Secured with Webauthn passkeys. 
 
-**Chat types**
-- **Agent chats** — Memory-augmented conversations. The agent remembers facts about you across sessions, has explicit memory tools (`save_memory`, `search_memory`, `forget_memory`), and automatically extracts important details from conversations in the background.
-- **Quick chats** — Standalone one-off conversations with no memory behavior.
-- **System chats** — Background synthesis, wake cycles, and custom automations with auditable message history.
+Color themes, animations, and style options to make it your own.
 
-**Memory system**
-- Automatic extraction: after each agent response, a background LLM call extracts facts (preferences, personal details, behaviors, instructions) and deduplicates them against existing memories using cosine similarity.
-- Context augmentation: relevant memories are retrieved via semantic search and injected into the system prompt so the agent naturally references what it knows.
-- Agent tools: the agent can explicitly save, search, and forget memories when asked.
-- Synthesis and wake cycles: built-in configurable automations run in the persistent system chat with full tool access, editable prompts, run history, and optional push notifications.
-- Custom automations: schedule recurring system-chat tasks on interval or daily schedules.
-- Pre-compaction flush: when a conversation approaches the context window limit (>75% usage), all important facts are extracted and preserved before truncation.
+Chat list, chat search, and projects shown in the sidebar.
 
-**Streaming & reasoning**
-- Server-Sent Events for real-time token streaming
-- Collapsible thinking blocks for reasoning-capable models (Qwen3+)
-- Token usage indicator with context window progress bar
+Push notification support so you can be notified when your agent has a new message for you.
 
-**Other**
-- Per-chat model selector and system prompt editor
-- Glassmorphism UI with Tailwind CSS v4
-- Markdown rendering with GFM support
-- SQLite-backed chat, settings, automation, memory, and corpus storage with FTS5 search and sqlite-vec where vector search is needed
+Displays rich streaming output with thinking, tool calls, uploaded images, and generated HTML+JS artifacts. 
 
-## Prerequisites
+Detailed observability and debugging information: view and manage memory blocks, memory database, model stats, extraction and retrieval runs, context size, and constructed system prompt.
 
-- [Node.js](https://nodejs.org/) v22+
-- [Ollama](https://ollama.ai/) running locally on port 11434
-- A chat model pulled in Ollama (e.g. `ollama pull qwen3:8b`)
-- The embedding model for memory: `ollama pull qwen3-embedding:0.6b`
+##### Multithreaded cognition
+Porrima remembers and recalls its experiences both consciously and subconsciously. It runs two language models and a reranker model during operation, designed to fully utilize both the GPU and CPU on a typical high-end consumer desktop. It has self-managed memory blocks, as well as ambient associative memory with the capacity to recall memory content both in response to user messages, using memory tools, and spontaneously while it runs, with non-blocking live context injection between tool calls. 
+
+The memory extraction model operates in the background, taking a first and second pass over the same context as the main model, recording memories of everything new, supersession chains for everything old, to form a database of atomic memories with dense vector embeddings for subconscious recall. Control depth of recall with granular configuration options. 
+
+The agent's main model reviews its recent atomic memories during regular synthesis cycles, and incorporates its experiences into self-managed memory blocks which exist globally and for project scopes, attached to the starting context for chats in the respective scope.
+
+##### Modular foundation
+Five managed Llama.cpp server instances can be configured from the settings menu. Bring your own binaries, including mainline or any LLama.cpp forks of your choosing. Bring your own GGUFs for each of the main chat, memory extraction, title generation, cross-encoder reranker, and embedding models, remaining flexible for present and future. 
+
+##### Continuous operation
+Porrima has a sleep/wake cycle and will spend the non-interactive time synthesizing its experiences, managing its memory blocks, pulling at threads of curiosity, or whatever else you configure. The 'system chat' is the context where all fully autonomous operation takes place, and you can also chime in afterwards as the user if you want. 
+
+##### Chat scopes
+Offers global chats and project-scoped chats. Projects include AGENTS.md support and a working directory, optionally on a remote host. Includes a configurable project memory relevance multiplier so you can adjust how much or how little the agent remembers from projects outside its current context. 
+
+Also offers non-agent quick chats for one-off questions or model testing, which exist independently of the memory system or tools. 
+
+##### Web access
+Bring an API key for the included Exa, Tavily, and/or Brave Search providers. 
+
+Includes web fetch and PDF parsing tools.
+
+##### Text-to-speech
+Porrima can read its responses out loud with backend wrappers included for Kokoro, Qwen3-TTS, and Supertonic 3. Voice selection, speed, and pitch post-processing are configurable. Supports streaming output with Qwen3-TTS, and chunked playback for reading in-progress responses with Kokoro and Supertonic 3. 
+
+##### Asynchronous thinking space
+Features a notebook section where you can write down anything on your mind that doesn't elicit an immediate response. Your agent will read your notes later, and then write notebook entries of its own after reflecting on its recent experiences, as well as things that you wrote. 
+
+##### Skills
+Supports global and project-scoped skills. Offers skill invocation with the classic '/' command. Features automatic skills discovery in project directories, and a UI for installing global skills from remote sources and managing installed skills. 
+
+##### Image Sandbox
+Offers an image analysis interface for vision tasks, frontend for ComfyUI server and/or stable-diffusion.cpp, a gallery viewer, and an image corpus graph for seeing your generated image collection.
+
+##### Cache-aware
+Agent harness designed to be LCP cache-friendly. Features cache warmth indicators with multi-slot awareness in the chat list, a cache warmer button, and post-synthesis auto-rewarming. 
+
+##### Hardware-aware
+Balance the processing and memory load with built-in llama.cpp server configuration, view inference speed stats, reranking latency stats, and keep an eye on your system resources with the graphical hardware monitor. 
+
+##### Self-modifying
+Ask Porrima to tweak anything in its own codebase if you want to tinker. 
+
+##### Personal AI
+Full sovereignty over data, model, infrastructure, and operation. Safe from deprecation, surveillance, and censorship. 
+
+##### Recommended use cases
+- Software engineering: Porrima is excellent at coding, learns your projects over time, and has a memory system that affords very high context-density.
+- Personal agent: Porrima can do anything on your computer that's accessible by command line. 
+- Research: keeps going down rabbit holes and writing about findings while you sleep.
+- Therapist, companion, or advisor: complete privacy, long-term permanence, no topical restrictions.
+
+##### Naming information
+38 light-years from Earth, Porrima is a binary star that can be seen in our night sky in the constellation Virgo. The star system takes its name from the Ancient Roman goddess of the future. 
+
+You can, of course, assign your agent any name and persona you want.
+
 
 ## Setup
 
