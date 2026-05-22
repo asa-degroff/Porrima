@@ -385,6 +385,14 @@ async function loadExtractionPrefix(): Promise<string> {
   return _extractionPrefixCache;
 }
 
+/**
+ * Invalidate the cached extraction prefix so the next call reloads from disk.
+ * Called after the user saves a new prompt via the API.
+ */
+export function invalidateExtractionPrefixCache(): void {
+  _extractionPrefixCache = null;
+}
+
 const EXTRACTION_INSTRUCTIONS = `---
 
 ## Memory Extraction Task

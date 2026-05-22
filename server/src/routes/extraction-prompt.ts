@@ -6,6 +6,7 @@ import {
   getExtractionPromptVersion,
   getExtractionPromptPath,
 } from "../services/extraction-prompt-store.js";
+import { invalidateExtractionPrefixCache } from "../services/memory-extraction.js";
 
 const router = express.Router();
 
@@ -37,6 +38,8 @@ router.put("/", async (req, res) => {
       return res.status(400).json({ error: "Content is required" });
     }
     await saveExtractionPrompt(content, reason || "Manual update via API");
+    // Invalidate the in-memory cache so the next extraction run picks up the new prompt.
+    invalidateExtractionPrefixCache();
     const prompt = await loadExtractionPrompt();
     res.json({
       content: prompt.content,
