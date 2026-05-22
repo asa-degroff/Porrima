@@ -4,6 +4,7 @@ import { fetchSshConnections, type CacheResidency } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
 import { Dropdown } from "./ui/Dropdown";
+import { AutomationRunnerDropdown } from "./AutomationRunnerDropdown";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { useActivityShape, useActivityHue, useActivitySaturation } from "../hooks/useActivityStyle";
 import { useSidebarState } from "../hooks/useSidebarState";
@@ -61,8 +62,6 @@ interface Props {
   isExtractionRunning?: boolean;
   isWakeCycleRunning?: boolean;
   onSynthesisSleep?: () => void;
-  onSynthesisRun?: () => void;
-  onWakeRun?: () => void;
   isImageSandboxOpen?: boolean;
   cacheResidency?: Map<string, CacheResidency>;
   systemStatsHistory?: SystemStatsSample[];
@@ -963,8 +962,6 @@ export function Sidebar({
   isExtractionRunning = false,
   isWakeCycleRunning = false,
   onSynthesisSleep,
-  onSynthesisRun,
-  onWakeRun,
   isImageSandboxOpen = false,
   cacheResidency = new Map(),
   systemStatsHistory = [],
@@ -1251,17 +1248,12 @@ export function Sidebar({
                   </svg>
                 </button>
               )}
-              {onSynthesisRun && !isSynthesizing && (
-                <button
-                  onClick={onSynthesisRun}
-                  className={`p-2 rounded-lg transition-all cursor-pointer text-white/30 hover:text-white/60 hover:bg-white/5`}
-                  title="Run synthesis now"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-                  </svg>
-                </button>
-              )}
+              <AutomationRunnerDropdown
+                isSynthesizing={isSynthesizing}
+                isWakeCycleRunning={isWakeCycleRunning}
+                isAutomationRunning={isAutomationRunning}
+                isStreaming={isStreaming}
+              />
               {/* Memory — unified memory system interface */}
               {onOpenMemoryDebug && (
                 <button
