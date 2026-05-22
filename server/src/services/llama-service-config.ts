@@ -191,6 +191,7 @@ export function mergeServiceConfig(id: LlamaServerId, settings: Settings, patch:
   if (next.mode === "router") {
     next.modelsDir = (next.modelsDir || defaults.modelsDir || getLlamaModelsDir()).trim();
     next.modelPath = undefined;
+    next.modelId = undefined;
   }
   return withRequiredExtraArgs(id, normalizeServiceConfig(next));
 }

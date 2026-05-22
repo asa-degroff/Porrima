@@ -455,12 +455,10 @@ function getDefinition(id: string): { id: string } | null {
 async function hydrateDefaultConfig(id: LlamaServerId, settings: Awaited<ReturnType<typeof getSettings>>): Promise<LlamaServiceConfig> {
   const saved = settings.llamaServiceConfigs?.[id] as Partial<LlamaServiceConfig> | undefined;
   let config = mergeServiceConfig(id, settings, saved || {});
-  if (!saved) {
-    const unitName = await resolveSlotUnitName(id);
-    const override = await readOverride(unitName);
-    if (override.contents) {
-      config = parseManagedServiceConfig(id, override.contents, config);
-    }
+  const unitName = await resolveSlotUnitName(id);
+  const override = await readOverride(unitName);
+  if (override.contents) {
+    config = parseManagedServiceConfig(id, override.contents, config);
   }
   if (config.mode === "single" && config.modelId && !config.modelPath) {
     const model = await findLocalModel(config.modelId);
@@ -488,7 +486,7 @@ function persistServiceConfigToSettings(id: LlamaServerId, settings: Awaited<Ret
 
   if (id === "inference") {
     settings.llamacppUrl = `http://${config.host}:${config.port}`;
-    if (config.modelId) settings.defaultModelId = config.modelId;
+    if (config.mode === "single" && config.modelId) settings.defaultModelId = config.modelId;
   } else if (id === "extraction") {
     settings.extractionModelUrl = `http://${config.host}:${config.port}`;
     settings.extractionCtxSize = config.ctxSize;

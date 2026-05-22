@@ -238,12 +238,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   }, []);
 
   // Persist lastActiveChatId to settings (debounced, so we don't churn writes)
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
   useEffect(() => {
     if (!lastActiveChatId) return;
     const timer = setTimeout(async () => {
-      await updateSettings({ ...settingsRef.current, lastActiveChatId });
+      await updateSettings({ lastActiveChatId } as import("./types").Settings);
     }, 1000);
     return () => clearTimeout(timer);
   }, [lastActiveChatId, updateSettings]);

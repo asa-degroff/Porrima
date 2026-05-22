@@ -33,6 +33,7 @@ const SERVER_OWNED_ACTIVITY_FIELDS = [
   "sleepModeTriggeredAt",
   "lastUserActivityAt",
   "lastAgentCompletedAt",
+  "llamaServiceConfigs",
 ] as const satisfies readonly (keyof Settings)[];
 
 function stripServerOwnedActivityFields(settings: Settings): Settings {
