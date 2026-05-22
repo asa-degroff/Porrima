@@ -134,6 +134,7 @@ export interface LlamaCacheMetadata {
   requestDigest: string;
   requestMessageCount: number;
   requestCharCount: number;
+  estimatedPromptTokens?: number;
   slotId?: number;
   reportedPromptTokens?: number;
   promptEvalTokens?: number;
@@ -141,11 +142,64 @@ export interface LlamaCacheMetadata {
   inferredCacheHitRatio?: number;
 }
 
+const IMAGE_PROMPT_TOKEN_ESTIMATE = 256;
+
 function estimateRequestChars(messages: any[], tools: any[] | undefined): number {
   try {
     return JSON.stringify({ messages, tools: tools ?? [] }).length;
   } catch {
     return 0;
+  }
+}
+
+function estimatePromptTokensFromChars(charCount: number): number | undefined {
+  if (!Number.isFinite(charCount) || charCount <= 0) return undefined;
+  return Math.max(1, Math.ceil(charCount / 3.3));
+}
+
+function redactPromptPayloadForTokenEstimate(value: unknown): { value: unknown; imageCount: number } {
+  let imageCount = 0;
+
+  const redact = (item: unknown): unknown => {
+    if (typeof item === "string") {
+      if (/^data:image\/[\w+.-]+;base64,/i.test(item)) {
+        imageCount++;
+        return "[image]";
+      }
+      return item.replace(/data:image\/[\w+.-]+;base64,[A-Za-z0-9+/=_-]+/gi, () => {
+        imageCount++;
+        return "[image]";
+      });
+    }
+
+    if (Array.isArray(item)) {
+      return item.map(redact);
+    }
+
+    if (item && typeof item === "object") {
+      const record = item as Record<string, unknown>;
+      const redacted: Record<string, unknown> = {};
+      for (const [key, child] of Object.entries(record)) {
+        redacted[key] = redact(child);
+      }
+      return redacted;
+    }
+
+    return item;
+  };
+
+  return { value: redact(value), imageCount };
+}
+
+export function estimatePromptTokensForProgress(messages: any[], tools: any[] | undefined): number | undefined {
+  try {
+    const { value, imageCount } = redactPromptPayloadForTokenEstimate({ messages, tools: tools ?? [] });
+    const textTokens = estimatePromptTokensFromChars(JSON.stringify(value).length) ?? 0;
+    const imageTokens = imageCount * IMAGE_PROMPT_TOKEN_ESTIMATE;
+    const total = textTokens + imageTokens;
+    return total > 0 ? total : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -245,6 +299,7 @@ function buildCacheMetadata(
     requestDigest: digestPromptPayload(body),
     requestMessageCount: messages.length,
     requestCharCount: estimateRequestChars(messages, tools),
+    estimatedPromptTokens: estimatePromptTokensForProgress(messages, tools),
     slotId,
   };
 }
@@ -317,11 +372,6 @@ async function renderPromptForDebug(
 
 function clampRatio(value: number): number {
   return Math.max(0, Math.min(1, value));
-}
-
-function estimatePromptTokensFromChars(charCount: number): number | undefined {
-  if (!Number.isFinite(charCount) || charCount <= 0) return undefined;
-  return Math.max(1, Math.ceil(charCount / 3.3));
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -1386,7 +1436,7 @@ export const streamOpenAICompat = (
         baseUrl: model.baseUrl,
         modelId: model.id,
         slotId: cacheMetadata.slotId,
-        estimatedPromptTokens: estimatePromptTokensFromChars(cacheMetadata.requestCharCount),
+        estimatedPromptTokens: cacheMetadata.estimatedPromptTokens,
         onProgress: onModelProgress,
         signal: options?.signal,
         showIndicator,
