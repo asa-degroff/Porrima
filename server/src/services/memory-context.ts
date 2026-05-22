@@ -143,6 +143,7 @@ export function invalidateStablePrefixCache(chatId: string): void {
 export function invalidateAllCaches(chatId: string): void {
   contextState.delete(chatId);
   stablePrefixCache.delete(chatId);
+  promptCache.delete(chatId);
 }
 
 /**

@@ -1,18 +1,30 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import type { ChatListItem as ChatListItemType, ChatType, Project } from "../types";
-import type { CacheResidency } from "../api/client";
+import type { ChatListItem as ChatListItemType, ChatType, Project, ProjectLocationType, SshConnection } from "../types";
+import { fetchSshConnections, type CacheResidency } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
+import { Dropdown } from "./ui/Dropdown";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { useActivityShape, useActivityHue, useActivitySaturation } from "../hooks/useActivityStyle";
 import { useSidebarState } from "../hooks/useSidebarState";
 import { useGestureDrawer } from "../hooks/useGestureDrawer";
+import { useDropdown } from "../hooks/useDropdown";
 import { SidebarSearch, SearchResults } from "./SidebarSearch";
 import { searchConversations } from "../api/client";
 import type { ConversationSearchResult } from "../types";
 import { PrefillActivityIcon } from "./PrefillActivityIcon";
 import { SystemStatsBar } from "./SystemStatsBar";
 import type { SystemStatsSample } from "../types";
+
+interface PathValidation {
+  valid: boolean;
+  exists: boolean;
+  isDirectory: boolean;
+  isReadable: boolean;
+  canCreate?: boolean;
+  error?: string;
+  hasAgentsMd?: boolean;
+}
 
 interface Props {
   chats: ChatListItemType[];
@@ -141,6 +153,320 @@ function formatCacheResidencyTitle(residency?: CacheResidency | null): string | 
     parts.push(`${residency.bindingMode} slot selection`);
   }
   return parts.join(" - ");
+}
+
+function ChangeProjectDirectoryModal({
+  project,
+  onClose,
+  onSave,
+}: {
+  project: Project;
+  onClose: () => void;
+  onSave: (project: Project) => Promise<void>;
+}) {
+  const [path, setPath] = useState(project.path);
+  const [locationType, setLocationType] = useState<ProjectLocationType>(project.locationType || "local");
+  const [sshConnectionId, setSshConnectionId] = useState(project.sshConnectionId || "");
+  const [sshConnections, setSshConnections] = useState<SshConnection[]>([]);
+  const [loadingSshConnections, setLoadingSshConnections] = useState(false);
+  const [validation, setValidation] = useState<PathValidation | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const sshConnectionDd = useDropdown();
+  const selectedSshConnection = sshConnections.find((connection) => connection.id === sshConnectionId);
+
+  const validatePath = useCallback(async (pathToValidate: string) => {
+    setValidating(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/projects/validate", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: pathToValidate,
+          locationType,
+          sshConnectionId: locationType === "ssh" ? sshConnectionId : undefined,
+        }),
+      });
+      const data = await res.json();
+      setValidation(data);
+    } catch {
+      setValidation({ valid: false, exists: false, isDirectory: false, isReadable: false, error: "Network error" });
+    } finally {
+      setValidating(false);
+    }
+  }, [locationType, sshConnectionId]);
+
+  useEffect(() => {
+    setLoadingSshConnections(true);
+    fetchSshConnections()
+      .then((connections) => {
+        setSshConnections(connections);
+        setSshConnectionId((current) => current || connections[0]?.id || "");
+      })
+      .catch(() => setSshConnections([]))
+      .finally(() => setLoadingSshConnections(false));
+  }, []);
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!path.trim() || (locationType === "ssh" && !sshConnectionId)) {
+        setValidation(null);
+        return;
+      }
+      validatePath(path.trim());
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [path, locationType, sshConnectionId, validatePath]);
+
+  const handleSave = async () => {
+    if (!validation?.valid || !path.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({
+        ...project,
+        path: path.trim(),
+        locationType,
+        sshConnectionId: locationType === "ssh" ? sshConnectionId : undefined,
+      });
+      onClose();
+    } catch (e: any) {
+      setError(e.message || "Failed to update working directory");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const hasRemoteTarget = locationType === "local" || Boolean(sshConnectionId);
+  const changed =
+    path.trim() !== project.path ||
+    locationType !== (project.locationType || "local") ||
+    (locationType === "ssh" && sshConnectionId !== (project.sshConnectionId || ""));
+  const canSave = Boolean(changed && validation?.valid && hasRemoteTarget && !saving);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={modalRef}
+        className="w-full max-w-lg mx-4 bg-[#111318] border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col"
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-white/90">Working Directory</h2>
+            <p className="text-xs text-white/40 truncate">{project.name}</p>
+          </div>
+          <button onClick={onClose} className="text-white/40 hover:text-white/70 transition-colors" aria-label="Close">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 6L6 18" />
+              <path d="M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="px-6 py-5 space-y-5 overflow-y-auto">
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+            <div className="text-xs text-white/35">Current</div>
+            <div className="text-xs font-mono text-white/60 truncate" title={project.path}>{project.path}</div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-white/60">Location</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setLocationType("local");
+                  setValidation(null);
+                }}
+                className={`px-3 py-2 text-sm rounded-lg border transition-all ${
+                  locationType === "local"
+                    ? "bg-emerald-500/15 border-emerald-400/30 text-emerald-200"
+                    : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10"
+                }`}
+              >
+                Local
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLocationType("ssh");
+                  setValidation(null);
+                }}
+                className={`px-3 py-2 text-sm rounded-lg border transition-all ${
+                  locationType === "ssh"
+                    ? "bg-emerald-500/15 border-emerald-400/30 text-emerald-200"
+                    : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10"
+                }`}
+              >
+                SSH
+              </button>
+            </div>
+          </div>
+
+          {locationType === "ssh" && (
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-white/60">SSH Connection</label>
+              <Dropdown
+                state={sshConnectionDd}
+                disabled={loadingSshConnections || sshConnections.length === 0}
+                panelClassName="left-0 right-0 top-full mt-1 max-h-[260px] overflow-y-auto"
+                trigger={
+                  <span className="truncate flex-1 text-left">
+                    {loadingSshConnections
+                      ? "Loading connections..."
+                      : selectedSshConnection
+                        ? `${selectedSshConnection.name} (${selectedSshConnection.username ? `${selectedSshConnection.username}@` : ""}${selectedSshConnection.host})`
+                        : "Select a connection"}
+                  </span>
+                }
+              >
+                {sshConnections.map((connection) => (
+                  <button
+                    key={connection.id}
+                    onClick={() => {
+                      setSshConnectionId(connection.id);
+                      setValidation(null);
+                      sshConnectionDd.close();
+                    }}
+                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      connection.id === sshConnectionId
+                        ? "text-white bg-emerald-500/15"
+                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    }`}
+                  >
+                    {connection.name} ({connection.username ? `${connection.username}@` : ""}{connection.host})
+                  </button>
+                ))}
+              </Dropdown>
+              {sshConnections.length === 0 && !loadingSshConnections && (
+                <p className="text-xs text-amber-300/80 bg-amber-500/10 border border-amber-400/20 rounded-lg px-3 py-2">
+                  Add an SSH connection in Settings before using a remote working directory.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-white/60">Project Path</label>
+            <div className="relative">
+              <input
+                type="text"
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder={locationType === "ssh" ? "/home/user/projects/my-project on the remote host" : "/home/user/projects/my-project"}
+                className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all pr-10"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && canSave) {
+                    handleSave();
+                  }
+                }}
+              />
+              {validating && (
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <div className="w-4 h-4 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+                </div>
+              )}
+              {!validating && validation && (
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  {validation.valid ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgb(34, 197, 94)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                      <polyline points="22 4 12 14.01 9 11.01" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgb(239, 68, 68)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {locationType === "ssh" && !sshConnectionId && (
+              <div className="text-xs px-3 py-2 rounded-lg border bg-amber-500/10 border-amber-400/20 text-amber-300">
+                Select an SSH connection to validate the remote path.
+              </div>
+            )}
+            {validation && hasRemoteTarget && (
+              <div className={`text-xs px-3 py-2 rounded-lg border ${
+                validation.valid
+                  ? "bg-emerald-500/10 border-emerald-400/20 text-emerald-300"
+                  : "bg-red-500/10 border-red-400/20 text-red-300"
+              }`}>
+                {validation.valid ? (
+                  <div className="space-y-1">
+                    <div className="font-medium">Path is valid</div>
+                    {validation.hasAgentsMd ? (
+                      <div className="opacity-80">AGENTS.md will be used for project context</div>
+                    ) : (
+                      <div className="opacity-80">No AGENTS.md was found in this directory</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <div className="font-medium">{validation.error || "Invalid path"}</div>
+                    {!validation.exists && <div className="opacity-80">Path does not exist</div>}
+                    {validation.exists && !validation.isDirectory && <div className="opacity-80">Path is a file, not a directory</div>}
+                    {validation.exists && !validation.isReadable && <div className="opacity-80">Path is not readable</div>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="text-xs text-white/40 leading-relaxed">
+            Existing chats stay attached to this project. Future file tools, shell commands, and project context will use the new directory.
+          </div>
+
+          {error && (
+            <div className="text-sm text-red-400 bg-red-500/10 border border-red-400/20 rounded-lg px-3 py-2">
+              {error}
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-white/10 shrink-0 flex justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm rounded-lg bg-white/5 border border-white/10 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!canSave}
+            className={`px-4 py-2 text-sm rounded-lg font-medium transition-all flex items-center gap-2 ${
+              canSave
+                ? "bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 hover:bg-emerald-500/30"
+                : "bg-white/5 border border-white/10 text-white/30 cursor-not-allowed"
+            }`}
+          >
+            {saving && <div className="w-3 h-3 border-2 border-emerald-400/30 border-t-emerald-200 rounded-full animate-spin" />}
+            {saving ? "Saving..." : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function RecentChatItem({
@@ -324,7 +650,7 @@ function ProjectSection({
   onNewChat: (type: ChatType, projectId?: string) => void;
   onDeleteChat: (id: string) => void;
   onDeleteProject: (id: string) => void;
-  onEditProject: (project: Project) => void;
+  onEditProject: (project: Project) => Promise<void>;
   onSendToNotebook?: (chatId: string, chatTitle: string) => void;
   onWarmCache?: (chatId: string) => void;
   cacheWarmingChatIds?: Set<string>;
@@ -334,6 +660,7 @@ function ProjectSection({
 }) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [changingDirectory, setChangingDirectory] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(project.name);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -473,6 +800,14 @@ function ProjectSection({
             </svg>
             Rename
           </ContextMenuItem>
+          <ContextMenuItem onClick={() => { setContextMenu(null); setChangingDirectory(true); }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-[14px] h-[14px]">
+              <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+              <path d="M12 11h7" />
+              <path d="m16 8 3 3-3 3" />
+            </svg>
+            Working directory
+          </ContextMenuItem>
           {/* Color sub-section */}
           <div className="px-4 py-1.5 border-t border-white/5">
             <div className="flex gap-1.5 flex-wrap">
@@ -525,6 +860,13 @@ function ProjectSection({
             </div>
           </div>
         </div>
+      )}
+      {changingDirectory && (
+        <ChangeProjectDirectoryModal
+          project={project}
+          onClose={() => setChangingDirectory(false)}
+          onSave={onEditProject}
+        />
       )}
       {/* Recent chat when collapsed */}
       {!expanded && chats.length > 0 && (
@@ -1099,16 +1441,23 @@ export function Sidebar({
                       onDeleteChat={onDeleteChat}
                       onDeleteProject={onDeleteProject}
                       onEditProject={async (updatedProject) => {
-                        await fetch(`/api/projects/${updatedProject.id}`, {
+                        const res = await fetch(`/api/projects/${updatedProject.id}`, {
                           method: "PATCH",
                           credentials: "include",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ 
                             name: updatedProject.name, 
+                            path: updatedProject.path,
+                            locationType: updatedProject.locationType || "local",
+                            sshConnectionId: updatedProject.locationType === "ssh" ? updatedProject.sshConnectionId : undefined,
                             color: updatedProject.color, 
                             pinned: updatedProject.pinned 
                           }),
                         });
+                        if (!res.ok) {
+                          const err = await res.json().catch(() => ({}));
+                          throw new Error((err as any).error || "Failed to update project");
+                        }
                         // Trigger a refresh of projects
                         window.dispatchEvent(new CustomEvent("projects:updated"));
                       }}

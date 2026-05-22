@@ -252,7 +252,13 @@ export class LocalWorkspaceAdapter implements WorkspaceAdapter {
       } catch {
         return { valid: false, exists: true, isDirectory: true, isReadable: false, error: "Path is not readable" };
       }
-      return { valid: true, exists: true, isDirectory: true, isReadable: true, hasAgentsMd: await pathExists(join(this.root, "AGENTS.md")) };
+      return {
+        valid: true,
+        exists: true,
+        isDirectory: true,
+        isReadable: true,
+        hasAgentsMd: (await pathExists(join(this.root, "AGENTS.md"))) || (await pathExists(join(this.root, "agents.md"))),
+      };
     } catch (e: any) {
       return { valid: false, exists: false, isDirectory: false, isReadable: false, error: e.message };
     }
@@ -718,7 +724,7 @@ elif not p.is_dir():
     result.update({"exists": True, "error": "Path is a file, not a directory"})
 else:
     readable = os.access(p, os.R_OK)
-    result.update({"exists": True, "isDirectory": True, "isReadable": readable, "valid": readable, "hasAgentsMd": (p / "AGENTS.md").exists()})
+    result.update({"exists": True, "isDirectory": True, "isReadable": readable, "valid": readable, "hasAgentsMd": (p / "AGENTS.md").exists() or (p / "agents.md").exists()})
     if not readable:
         result["error"] = "Path is not readable"
 print(json.dumps(result))

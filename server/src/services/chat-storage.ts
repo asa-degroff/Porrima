@@ -472,6 +472,12 @@ export async function listChats(): Promise<ChatListItem[]> {
   }));
 }
 
+export async function listChatIdsByProject(projectId: string): Promise<string[]> {
+  const db = getDb();
+  const rows = db.prepare("SELECT id FROM chats WHERE projectId = ?").all(projectId) as Array<{ id: string }>;
+  return rows.map((r) => r.id);
+}
+
 export async function backupChatDb(destinationPath: string): Promise<void> {
   await getDb().backup(destinationPath);
 }

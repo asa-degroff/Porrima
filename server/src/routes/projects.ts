@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { homedir } from "os";
-import { createProject, updateProject, deleteProject, listProjects, getProject } from "../services/chat-storage.js";
+import { createProject, updateProject, deleteProject, listProjects, getProject, listChatIdsByProject } from "../services/chat-storage.js";
 import { expandTilde } from "../utils/path.js";
 import { getWorkspaceForLocation, getWorkspaceForProject } from "../services/workspace.js";
+import { invalidateAllCaches } from "../services/memory-context.js";
 import type { Project } from "../types.js";
 
 const router = Router();
@@ -111,8 +112,37 @@ router.patch("/:id", async (req, res) => {
     return res.status(400).json({ error: "sshConnectionId is required for remote projects" });
   }
 
+  const finalPath = updates.path ?? project.path;
+  const finalLocationType = updates.locationType ?? (project.locationType || "local");
+  const finalSshConnectionId = finalLocationType === "ssh"
+    ? (updates.sshConnectionId ?? project.sshConnectionId)
+    : undefined;
+  const workspaceChanged =
+    finalPath !== project.path ||
+    finalLocationType !== (project.locationType || "local") ||
+    (finalSshConnectionId || undefined) !== (project.sshConnectionId || undefined);
+
+  if (workspaceChanged) {
+    try {
+      const workspace = await getWorkspaceForLocation(finalLocationType, finalPath, finalSshConnectionId);
+      const validation = await workspace.validateRoot();
+      if (!validation.valid) {
+        return res.status(400).json({ error: validation.error || "Working directory is not valid" });
+      }
+    } catch (e: any) {
+      return res.status(400).json({ error: e.message || "Failed to validate working directory" });
+    }
+  }
+
   const success = await updateProject(req.params.id, updates);
   if (!success) return res.status(404).json({ error: "Project not found" });
+
+  if (workspaceChanged) {
+    const chatIds = await listChatIdsByProject(req.params.id);
+    for (const chatId of chatIds) {
+      invalidateAllCaches(chatId);
+    }
+  }
   
   const updated = await getProject(req.params.id);
   res.json(updated);

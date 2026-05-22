@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { fetchSshConnections, type ProjectLocationType, type SshConnection } from "../api/client";
+import { Dropdown } from "./ui/Dropdown";
+import { useDropdown } from "../hooks/useDropdown";
 
 interface Props {
   onClose: () => void;
@@ -30,6 +32,8 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
   const [error, setError] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const sshConnectionDd = useDropdown();
+  const selectedSshConnection = sshConnections.find((connection) => connection.id === sshConnectionId);
 
   // Prefill home directory on mount
   useEffect(() => {
@@ -171,7 +175,7 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
     >
       <div
         ref={modalRef}
-        className="w-full max-w-lg mx-4 backdrop-blur-xl bg-white/[0.08] border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col"
+        className="w-full max-w-lg mx-4 bg-[#111318] border border-white/15 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
@@ -244,21 +248,38 @@ export function CreateProjectModal({ onClose, onCreate }: Props) {
           {locationType === "ssh" && (
             <div className="space-y-2">
               <label className="block text-sm font-medium text-white/60">SSH Connection</label>
-              <select
-                value={sshConnectionId}
-                onChange={(e) => {
-                  setSshConnectionId(e.target.value);
-                  setValidation(null);
-                }}
-                className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
+              <Dropdown
+                state={sshConnectionDd}
+                disabled={loadingSshConnections || sshConnections.length === 0}
+                panelClassName="left-0 right-0 top-full mt-1 max-h-[260px] overflow-y-auto"
+                trigger={
+                  <span className="truncate flex-1 text-left">
+                    {loadingSshConnections
+                      ? "Loading connections..."
+                      : selectedSshConnection
+                        ? `${selectedSshConnection.name} (${selectedSshConnection.username ? `${selectedSshConnection.username}@` : ""}${selectedSshConnection.host})`
+                        : "Select a connection"}
+                  </span>
+                }
               >
-                <option value="">{loadingSshConnections ? "Loading connections..." : "Select a connection"}</option>
                 {sshConnections.map((connection) => (
-                  <option key={connection.id} value={connection.id}>
+                  <button
+                    key={connection.id}
+                    onClick={() => {
+                      setSshConnectionId(connection.id);
+                      setValidation(null);
+                      sshConnectionDd.close();
+                    }}
+                    className={`w-full text-left px-3 py-2 text-xs transition-all ${
+                      connection.id === sshConnectionId
+                        ? "text-white bg-emerald-500/15"
+                        : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    }`}
+                  >
                     {connection.name} ({connection.username ? `${connection.username}@` : ""}{connection.host})
-                  </option>
+                  </button>
                 ))}
-              </select>
+              </Dropdown>
               {sshConnections.length === 0 && !loadingSshConnections && (
                 <p className="text-xs text-amber-300/80 bg-amber-500/10 border border-amber-400/20 rounded-lg px-3 py-2">
                   Add an SSH connection in Settings before creating a remote project.
