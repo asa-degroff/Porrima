@@ -21,6 +21,8 @@ import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
 import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
 import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
+import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
+import type { ExtractionPromptStore } from "../api/extraction-prompt";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
 import type { AutomationRun, AutomationTask, InferenceModel, Settings, SystemPromptPreset, Theme, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
 import { getTTSStatus, getTTSVoices, getTTSSettings, updateTTSSettings } from "../api/tts";
@@ -406,6 +408,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [personaContent, setPersonaContent] = useState("");
   const [personaSaving, setPersonaSaving] = useState(false);
   const [personaMessage, setPersonaMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  // Extraction prompt
+  const [extractionPrompt, setExtractionPrompt] = useState<ExtractionPromptStore | null>(null);
+  const [extractionPromptEditing, setExtractionPromptEditing] = useState(false);
+  const [extractionPromptContent, setExtractionPromptContent] = useState("");
+  const [extractionPromptSaving, setExtractionPromptSaving] = useState(false);
+  const [extractionPromptMessage, setExtractionPromptMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [userDoc, setUserDoc] = useState<UserDocument | null>(null);
   const [userDocEditing, setUserDocEditing] = useState(false);
   const [userDocContent, setUserDocContent] = useState("");
@@ -1181,6 +1189,16 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       .then((data) => {
         setPersona(data);
         setPersonaContent(data.content);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Fetch extraction prompt
+  useEffect(() => {
+    getExtractionPrompt()
+      .then((data) => {
+        setExtractionPrompt(data);
+        setExtractionPromptContent(data.content);
       })
       .catch(() => {});
   }, []);
@@ -2049,6 +2067,26 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     setPersonaEditing(false);
     setPersonaMessage(null);
   }, [persona]);
+
+  const handleSaveExtractionPrompt = useCallback(async () => {
+    setExtractionPromptSaving(true);
+    setExtractionPromptMessage(null);
+    try {
+      const updated = await updateExtractionPrompt(extractionPromptContent, "Manual edit via Settings");
+      setExtractionPrompt(updated);
+      setExtractionPromptMessage({ type: "ok", text: "Extraction prompt updated" });
+      setExtractionPromptEditing(false);
+    } catch (err: any) {
+      setExtractionPromptMessage({ type: "err", text: err.message || "Failed to save" });
+    }
+    setExtractionPromptSaving(false);
+  }, [extractionPromptContent]);
+
+  const handleCancelExtractionPromptEdit = useCallback(() => {
+    setExtractionPromptContent(extractionPrompt?.content || "");
+    setExtractionPromptEditing(false);
+    setExtractionPromptMessage(null);
+  }, [extractionPrompt]);
 
   const handleSaveUserDoc = useCallback(async () => {
     setUserDocSaving(true);
@@ -4824,6 +4862,75 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	            </div>
 	          </div>
 
+	          {/* Extraction Prompt */}
+	          <div id="extraction-prompt" className="border-t border-white/10 pt-6 space-y-3">
+	            <h3 className="text-sm font-semibold text-white/80 mb-1">Extraction Prompt</h3>
+	            <p className="text-xs text-white/40">
+	              The system prompt prefix that frames how the extraction agent thinks about memory — loaded from <code className="text-white/40">~/.porrima/extraction-prompt.md</code>.
+	            </p>
+
+	            {extractionPromptMessage && (
+	              <p className={`text-xs ${extractionPromptMessage.type === "ok" ? "text-green-400/80" : "text-red-400/80"}`}>
+	                {extractionPromptMessage.text}
+	              </p>
+	            )}
+
+	            {extractionPromptEditing ? (
+	              <div className="space-y-2">
+	                <textarea
+	                  value={extractionPromptContent}
+	                  onChange={(e) => setExtractionPromptContent(e.target.value)}
+	                  rows={14}
+	                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white/80 placeholder-white/30 resize-y outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all font-mono"
+	                  placeholder="# Archival Mode..."
+	                />
+	                <div className="flex gap-2">
+	                  <button
+	                    onClick={handleSaveExtractionPrompt}
+	                    disabled={extractionPromptSaving}
+	                    className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40"
+	                    style={{
+	                      backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
+	                      borderColor: `rgba(var(--theme-primary-border))`,
+	                      color: `rgba(var(--theme-primary-text))`,
+	                    }}
+	                  >
+	                    {extractionPromptSaving ? "Saving..." : "Save"}
+	                  </button>
+	                  <button
+	                    onClick={handleCancelExtractionPromptEdit}
+	                    disabled={extractionPromptSaving}
+	                    className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40"
+	                  >
+	                    Cancel
+	                  </button>
+	                </div>
+	              </div>
+	            ) : extractionPrompt ? (
+	              <div className="flex items-center justify-between gap-2">
+	                <div className="flex-1 min-w-0">
+	                  <p className="text-xs text-white/50 truncate">
+	                    {extractionPrompt.content.split("\n")[0]?.replace(/^#+\s*/, "") || "Extraction prompt"}
+	                  </p>
+	                  <p className="text-[10px] text-white/30">
+	                    {extractionPrompt.lastModified ? `Last modified: ${new Date(extractionPrompt.lastModified).toLocaleDateString()}` : ""}
+	                  </p>
+	                </div>
+	                <button
+	                  onClick={() => {
+	                    setExtractionPromptEditing(true);
+	                    setExtractionPromptContent(extractionPrompt.content);
+	                  }}
+	                  className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0"
+	                >
+	                  Edit
+	                </button>
+	              </div>
+	            ) : (
+	              <p className="text-white/30 text-xs">Loading extraction prompt...</p>
+	            )}
+	          </div>
+
 	          {/* Backups */}
 	          <div id="backups" className="border-t border-white/10 pt-6 space-y-3">
 	            <h3 className="text-sm font-semibold text-white/80 mb-1">Backups</h3>
@@ -5962,14 +6069,14 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                   </div>
                 </div>
 
-                {/* Live speech tuning (Qwen3-TTS only) */}
-                {ttsSettings.backend === "qwen3-tts" && (
+                {/* Live speech tuning */}
+                {(["kokoro", "qwen3-tts", "supertonic-3"] as const).includes(ttsSettings.backend) && (
                   <>
                     <div className="space-y-1">
-                      <label className="block text-sm text-white/50">Chunk Size: {ttsSettings.streamingChunkSize} tokens</label>
+                      <label className="block text-sm text-white/50">Live Speech Responsiveness: {ttsSettings.streamingChunkSize} tokens</label>
                       <input
                         type="range"
-                        min="30"
+                        min="15"
                         max="80"
                         step="5"
                         value={ttsSettings.streamingChunkSize}
@@ -5981,7 +6088,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
                         className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                       />
                       <div className="flex justify-between text-xs text-white/30">
-                        <span>30 (low latency)</span>
+                        <span>15 (fastest)</span>
                         <span>80 (smoother)</span>
                       </div>
                     </div>

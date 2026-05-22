@@ -360,6 +360,31 @@ What I capture: things worth remembering for future interactions — written in 
 
 What I skip: my own identity traits, broad preferences, anything already in existing knowledge blocks, and generic observations without specific context.`;
 
+// Cached prefix — loaded from disk once, falls back to hardcoded default.
+let _extractionPrefixCache: string | null = null;
+
+/**
+ * Load the extraction agent prefix from the file-based store.
+ * Falls back to the hardcoded default if the store fails.
+ * Result is cached for the process lifetime — the user edits infrequently
+ * and the cache is invalidated on server restart.
+ */
+async function loadExtractionPrefix(): Promise<string> {
+  if (_extractionPrefixCache) return _extractionPrefixCache;
+  try {
+    const { loadExtractionPrompt } = await import("./extraction-prompt-store.js");
+    const stored = await loadExtractionPrompt();
+    if (stored.content.trim()) {
+      _extractionPrefixCache = stored.content;
+      return _extractionPrefixCache;
+    }
+  } catch {
+    // Non-critical — fall through to default
+  }
+  _extractionPrefixCache = EXTRACTION_AGENT_PREFIX;
+  return _extractionPrefixCache;
+}
+
 const EXTRACTION_INSTRUCTIONS = `---
 
 ## Memory Extraction Task
@@ -426,6 +451,7 @@ async function computeBlockCharBudget(
 async function buildExtractionSystemPrompt(projectId?: string): Promise<string> {
   const settings = await getSettings();
   const ctxSize = settings.extractionCtxSize ?? 16384;
+  const prefix = await loadExtractionPrefix();
 
   // Include loaded block summaries so extraction avoids redundant facts.
   let blockContext = "";
@@ -444,7 +470,7 @@ async function buildExtractionSystemPrompt(projectId?: string): Promise<string> 
     const allBlocks = [...globalBlocks, ...projectBlocks];
     if (allBlocks.length > 0) {
       const staticChars =
-        EXTRACTION_AGENT_PREFIX.length + EXTRACTION_INSTRUCTIONS.length + 400;
+        prefix.length + EXTRACTION_INSTRUCTIONS.length + 400;
       const perBlockChars = await computeBlockCharBudget(allBlocks.length, staticChars, ctxSize);
       const summaries = allBlocks
         .map((b) => `- ${b.name}: ${b.content.slice(0, perBlockChars)}`)
@@ -453,7 +479,7 @@ async function buildExtractionSystemPrompt(projectId?: string): Promise<string> 
     }
   } catch { /* non-critical */ }
 
-  return `${EXTRACTION_AGENT_PREFIX}${blockContext}\n\n${EXTRACTION_INSTRUCTIONS}`;
+  return `${prefix}${blockContext}\n\n${EXTRACTION_INSTRUCTIONS}`;
 }
 
 const DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS = `---
@@ -495,7 +521,8 @@ The conversation below uses this format:
 Attribution rule: only create user facts/preferences/instructions from USER messages or from ASSISTANT content that a later USER message explicitly confirms.`;
 
 async function buildDelayedExtractionSystemPrompt(): Promise<string> {
-  return `${EXTRACTION_AGENT_PREFIX}\n\n${DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS}`;
+  const prefix = await loadExtractionPrefix();
+  return `${prefix}\n\n${DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS}`;
 }
 
 interface ExtractedFact {
@@ -1484,7 +1511,8 @@ Output a JSON array. Each item:
 Output ONLY the JSON array.`;
 
 async function buildPreCompactionSystemPrompt(): Promise<string> {
-  return `${EXTRACTION_AGENT_PREFIX}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
+  const prefix = await loadExtractionPrefix();
+  return `${prefix}\n\n${PRE_COMPACTION_INSTRUCTIONS}`;
 }
 
 /**

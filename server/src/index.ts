@@ -17,6 +17,7 @@ import imageCorpusRouter from "./routes/image-corpus.js";
 import corpusRouter from "./routes/corpus.js";
 import authRouter from "./routes/auth.js";
 import personaRouter from "./routes/persona.js";
+import extractionPromptRouter from "./routes/extraction-prompt.js";
 import userRouter from "./routes/user.js";
 import ttsRouter from "./routes/tts.js";
 import skillsRouter from "./routes/skills.js";
@@ -37,6 +38,7 @@ import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
 import { startSystemStatsPolling } from "./services/system-stats.js";
 import { initializePersona } from "./services/persona-store.js";
+import { initializeExtractionPrompt } from "./services/extraction-prompt-store.js";
 import { createSystemChat } from "./services/system-chat.js";
 import { ensureAutomationDefaults } from "./services/automation-storage.js";
 import { migrateAgentNotebookToBlocks, migrateUserNotebookToDb } from "./services/notebook-storage.js";
@@ -97,6 +99,7 @@ const sessionSecret = await getSessionSecret();
 
 // Initialize persona system on startup
 await initializePersona();
+await initializeExtractionPrompt();
 
 // Create system chat for synthesis/reflection
 await createSystemChat();
@@ -164,6 +167,7 @@ app.use("/api/chat", chatRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/memory", memoryRouter);
 app.use("/api/persona", personaRouter);
+app.use("/api/extraction-prompt", extractionPromptRouter);
 app.use("/api/user", userRouter);
 app.use("/api/artifacts", artifactsRouter);
 app.use("/api/visuals", visualsRouter);
