@@ -67,6 +67,10 @@ function isPitchShiftProcessor(value: unknown): value is "resample" | "rubberban
   return typeof value === "string" && ["resample", "rubberband"].includes(value);
 }
 
+function isStreamingBoundaryTier(value: unknown): value is TTSSettings["streamingBoundaryTier"] {
+  return typeof value === "string" && ["clause", "sentence"].includes(value);
+}
+
 function sanitizeSupertonicLanguage(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_TTS_SETTINGS.supertonicLanguage;
   const trimmed = value.trim().toLowerCase();
@@ -109,6 +113,10 @@ function normalizeTTSSettings(settings: Partial<TTSSettings>): TTSSettings {
     ttsTextMode,
     voicesByBackend,
     voice: settings.voice || voicesByBackend[backend] || DEFAULT_VOICE_BY_BACKEND[backend],
+    streamingChunkSize: Math.round(sanitizeNumber(settings.streamingChunkSize, DEFAULT_TTS_SETTINGS.streamingChunkSize, 15, 80)),
+    streamingBoundaryTier: isStreamingBoundaryTier(settings.streamingBoundaryTier)
+      ? settings.streamingBoundaryTier
+      : DEFAULT_TTS_SETTINGS.streamingBoundaryTier,
     supertonicPitchSemitones: sanitizeNumber(
       settings.supertonicPitchSemitones ?? pitchMultiplierToSemitones(settings.pitch),
       DEFAULT_TTS_SETTINGS.supertonicPitchSemitones,
@@ -283,14 +291,14 @@ router.post("/settings", async (req, res) => {
     }
 
     if (streamingChunkSize !== undefined) {
-      if (typeof streamingChunkSize !== "number" || streamingChunkSize < 30 || streamingChunkSize > 80) {
-        return res.status(400).json({ error: "streamingChunkSize must be between 30 and 80" });
+      if (typeof streamingChunkSize !== "number" || streamingChunkSize < 15 || streamingChunkSize > 80) {
+        return res.status(400).json({ error: "streamingChunkSize must be between 15 and 80" });
       }
       userSettings.streamingChunkSize = streamingChunkSize;
     }
 
     if (streamingBoundaryTier !== undefined) {
-      if (!["clause", "sentence"].includes(streamingBoundaryTier)) {
+      if (!isStreamingBoundaryTier(streamingBoundaryTier)) {
         return res.status(400).json({ error: "streamingBoundaryTier must be 'clause' or 'sentence'" });
       }
       userSettings.streamingBoundaryTier = streamingBoundaryTier;

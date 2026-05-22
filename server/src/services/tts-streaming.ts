@@ -20,6 +20,9 @@ export interface StreamingTTSOptions extends TTSSettings {
   boundaryTier?: 'clause' | 'sentence';
 }
 
+export const TTS_FLUSH_SIGNAL = Symbol("tts-flush");
+export type StreamingTTSTextInput = string | typeof TTS_FLUSH_SIGNAL;
+
 /**
  * Stream TTS audio chunks as tokens arrive
  * 
@@ -31,7 +34,7 @@ export interface StreamingTTSOptions extends TTSSettings {
  * @yields Complete WAV buffers (with 44-byte header)
  */
 export async function* streamTTS(
-  textStream: AsyncIterable<string>,
+  textStream: AsyncIterable<StreamingTTSTextInput>,
   options: StreamingTTSOptions
 ): AsyncGenerator<Buffer> {
   const buffer = new StreamingTokenBuffer({
@@ -42,6 +45,19 @@ export async function* streamTTS(
   });
   
   for await (const token of textStream) {
+    if (token === TTS_FLUSH_SIGNAL) {
+      if (buffer.length > 0) {
+        const chunkText = buffer.flush();
+        if (chunkText.trim()) {
+          const wav = await generateTTSChunk(chunkText, options);
+          if (wav) {
+            yield wav;
+          }
+        }
+      }
+      continue;
+    }
+
     buffer.push(token);
     
     const result = buffer.checkBoundary();

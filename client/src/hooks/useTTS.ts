@@ -17,7 +17,7 @@ const DEFAULT_SETTINGS: TTSSettings = {
     "supertonic-3": "M1",
   },
   streamingEnabled: false,
-  streamingChunkSize: 50,
+  streamingChunkSize: 30,
   streamingBoundaryTier: "clause",
   supertonicPitchSemitones: 0,
   kokoroPitchShiftProcessor: "resample",

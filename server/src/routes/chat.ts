@@ -23,7 +23,7 @@ import * as messageQueue from "../services/message-queue.js";
 import type { QueuedUserMessage } from "../services/message-queue.js";
 import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, ImageAttachment, InlineVisual, Project } from "../types.js";
 import { saveUserImage } from "../services/user-image-storage.js";
-import { streamTTS, isStreamingCapable } from "../services/tts-streaming.js";
+import { streamTTS, isStreamingCapable, TTS_FLUSH_SIGNAL, type StreamingTTSTextInput } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
 import { getCurrentTTSSettings } from "./tts.js";
 import { log } from "../services/logger.js";
@@ -271,13 +271,13 @@ function attachToLiveStreamResponse(req: Request, res: Response, stream: LiveStr
   });
 }
 
-function createAsyncTextQueue(): AsyncIterable<string> & { push: (value: string) => void; close: () => void; fail: (err: unknown) => void } {
-  const values: string[] = [];
-  const waiters: Array<(result: IteratorResult<string>) => void> = [];
+function createAsyncTextQueue(): AsyncIterable<StreamingTTSTextInput> & { push: (value: StreamingTTSTextInput) => void; flush: () => void; close: () => void; fail: (err: unknown) => void } {
+  const values: StreamingTTSTextInput[] = [];
+  const waiters: Array<(result: IteratorResult<StreamingTTSTextInput>) => void> = [];
   let closed = false;
   let error: unknown = null;
 
-  const next = (): Promise<IteratorResult<string>> => {
+  const next = (): Promise<IteratorResult<StreamingTTSTextInput>> => {
     if (values.length > 0) {
       return Promise.resolve({ value: values.shift()!, done: false });
     }
@@ -298,15 +298,20 @@ function createAsyncTextQueue(): AsyncIterable<string> & { push: (value: string)
     }
   };
 
+  const push = (value: StreamingTTSTextInput) => {
+    if (closed || error) return;
+    const waiter = waiters.shift();
+    if (waiter) {
+      waiter({ value, done: false });
+    } else {
+      values.push(value);
+    }
+  };
+
   return {
-    push(value: string) {
-      if (closed || error) return;
-      const waiter = waiters.shift();
-      if (waiter) {
-        waiter({ value, done: false });
-      } else {
-        values.push(value);
-      }
+    push,
+    flush() {
+      push(TTS_FLUSH_SIGNAL);
     },
     close,
     fail(err: unknown) {
@@ -1565,6 +1570,9 @@ async function handleChatStream(
 
         case "tool_execution_start": {
           flushThinkingTimer();
+          if (ttsEnabled) {
+            ttsTextQueue.flush();
+          }
           flushTextSegment();
           const toolCall: ChatToolCall = {
             id: event.toolCallId,
@@ -2212,6 +2220,9 @@ async function handleChatStream(
             // Tool call was recovered — reset the flag and let the normal tool loop continue
             state.strandedToolCall = false;
             console.log(`[chat] stranded recovery SUCCESS: model emitted structured tool call: ${event.toolName}`);
+            if (ttsEnabled) {
+              ttsTextQueue.flush();
+            }
 
             const toolCall: ChatToolCall = {
               id: event.toolCallId,
@@ -2538,6 +2549,9 @@ async function handleChatStream(
             }
           } else if (event.type === "tool_execution_start") {
             flushThinkingTimer();
+            if (ttsEnabled) {
+              ttsTextQueue.flush();
+            }
             flushTextSegment();
             const toolCall: ChatToolCall = {
               id: event.toolCallId,

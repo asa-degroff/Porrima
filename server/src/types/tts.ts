@@ -16,11 +16,11 @@ export interface TTSSettings {
   autoReadEnabled: boolean; // Global default for new chats
   // Text preprocessing mode — controls what markdown elements are included in TTS
   ttsTextMode: TTSTextMode;
-  // Streaming TTS settings (Qwen3-TTS only for now)
+  // Live streaming TTS settings
   backend: TTSBackend;
   voicesByBackend?: Partial<Record<TTSBackend, string>>;
   streamingEnabled: boolean;
-  streamingChunkSize: number; // 30-80 tokens per chunk
+  streamingChunkSize: number; // 15-80 tokens per chunk
   streamingBoundaryTier: "clause" | "sentence";
   supertonicPitchSemitones: number;
   kokoroPitchShiftProcessor: "resample" | "rubberband";
@@ -75,7 +75,7 @@ export const DEFAULT_TTS_SETTINGS: TTSSettings = {
     "supertonic-3": "M1",
   },
   streamingEnabled: false,
-  streamingChunkSize: 50,
+  streamingChunkSize: 30,
   streamingBoundaryTier: "clause",
   supertonicPitchSemitones: 0,
   kokoroPitchShiftProcessor: "resample",
