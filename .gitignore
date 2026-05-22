@@ -5,7 +5,7 @@ dist
 /server/data/*
 .codex
 .venv*
-
+CHANGELOG.md
 # Local environment files
 .env
 .env.*
