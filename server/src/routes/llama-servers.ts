@@ -4,14 +4,28 @@ import {
   getLlamaServerLogs,
   getLlamaServerStatus,
   getLlamaServerStatuses,
+  getLlamaUnitCat,
+  getLlamaUnitEnabled,
   resolveSlotUnitName,
   runLlamaServerAction,
+  setLlamaUnitEnabled,
   type LlamaServerAction,
+  type LlamaServerId,
 } from "../services/llama-supervisor.js";
 import { findLocalModel, listLocalModels, type LlamaModelKind } from "../services/llama-models-disk.js";
-import { isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart, resolveSlotEnvironment } from "../services/llama-launch-templates.js";
-import { applyModelOverride, clearModelOverride } from "../services/llama-overrides.js";
+import { getDefaultLlamaBin, isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart, resolveSlotEnvironment } from "../services/llama-launch-templates.js";
+import { applyModelOverride, clearModelOverride, readOverride } from "../services/llama-overrides.js";
 import { ensureRouterModelLoaded, invalidateRouterCache, normalizeRouterModelId } from "../services/llama-router-client.js";
+import {
+  getDefaultServiceConfig,
+  getServiceCapabilities,
+  mergeServiceConfig,
+  parseManagedServiceConfig,
+  renderManagedDropIn,
+  renderServiceExecStart,
+  validateServiceConfig,
+  type LlamaServiceConfig,
+} from "../services/llama-service-config.js";
 
 const router = Router();
 
@@ -80,6 +94,114 @@ router.get("/:id/logs", async (req, res) => {
     res.json(result);
   } catch (e: any) {
     res.status(400).json({ error: e?.message || "Failed to load llama.cpp server logs" });
+  }
+});
+
+router.get("/:id/config", async (req, res) => {
+  const id = req.params.id;
+  if (!getDefinition(id)) {
+    res.status(400).json({ error: `Unknown server: ${id}` });
+    return;
+  }
+  try {
+    const settings = await getSettings();
+    const unitName = await resolveSlotUnitName(id);
+    const defaults = await hydrateDefaultConfig(id as LlamaServerId, settings);
+    const enabled = await getLlamaUnitEnabled(id);
+    const cat = await getLlamaUnitCat(id).catch(() => ({ unitName, contents: "" }));
+    const preview = renderManagedDropIn({ id: id as LlamaServerId, unitName, config: defaults });
+    res.json({
+      config: defaults,
+      defaults,
+      capabilities: getServiceCapabilities(id as LlamaServerId),
+      unit: {
+        unitName,
+        enabled: enabled.enabled,
+        enabledState: enabled.state,
+        cat: cat.contents,
+      },
+      preview,
+    });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || "Failed to load service config" });
+  }
+});
+
+router.post("/:id/config/preview", async (req, res) => {
+  const id = req.params.id;
+  if (!getDefinition(id)) {
+    res.status(400).json({ error: `Unknown server: ${id}` });
+    return;
+  }
+  try {
+    const settings = await getSettings();
+    const unitName = await resolveSlotUnitName(id);
+    const config = await hydrateServiceConfig(id as LlamaServerId, settings, req.body?.config || req.body || {});
+    const preview = renderManagedDropIn({ id: id as LlamaServerId, unitName, config });
+    res.json({ config, preview });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || "Failed to preview service config" });
+  }
+});
+
+router.put("/:id/config", async (req, res) => {
+  const id = req.params.id;
+  if (!getDefinition(id)) {
+    res.status(400).json({ error: `Unknown server: ${id}` });
+    return;
+  }
+  try {
+    const settings = await getSettings();
+    const unitName = await resolveSlotUnitName(id);
+    const config = await hydrateServiceConfig(id as LlamaServerId, settings, req.body?.config || req.body || {});
+    await validateServiceConfig(id as LlamaServerId, config);
+    const execStart = renderServiceExecStart(id as LlamaServerId, config);
+    const result = await applyModelOverride(unitName, execStart, { environmentLines: config.environment.length ? config.environment : undefined });
+    persistServiceConfigToSettings(id as LlamaServerId, settings, config);
+    await saveSettings(settings);
+    invalidateRouterCache();
+    const server = await getLlamaServerStatus(id, settings);
+    const preview = renderManagedDropIn({ id: id as LlamaServerId, unitName, config });
+    res.json({ server, config, preview, overridePath: result.overridePath });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || "Failed to apply service config" });
+  }
+});
+
+router.delete("/:id/config", async (req, res) => {
+  const id = req.params.id;
+  if (!getDefinition(id)) {
+    res.status(400).json({ error: `Unknown server: ${id}` });
+    return;
+  }
+  try {
+    const unitName = await resolveSlotUnitName(id);
+    const result = await clearModelOverride(unitName);
+    invalidateRouterCache();
+    const settings = await getSettings();
+    if (settings.llamaServiceConfigs) {
+      delete settings.llamaServiceConfigs[id];
+      await saveSettings(settings);
+    }
+    const server = await getLlamaServerStatus(id, settings);
+    res.json({ server, removed: result.removed });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || "Failed to reset service config" });
+  }
+});
+
+router.put("/:id/enabled", async (req, res) => {
+  const id = req.params.id;
+  if (!getDefinition(id)) {
+    res.status(400).json({ error: `Unknown server: ${id}` });
+    return;
+  }
+  try {
+    const enabled = Boolean(req.body?.enabled);
+    const result = await setLlamaUnitEnabled(id, enabled);
+    res.json(result);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || "Failed to update systemd enablement" });
   }
 });
 
@@ -328,4 +450,57 @@ function getDefinition(id: string): { id: string } | null {
     return { id };
   }
   return null;
+}
+
+async function hydrateDefaultConfig(id: LlamaServerId, settings: Awaited<ReturnType<typeof getSettings>>): Promise<LlamaServiceConfig> {
+  const saved = settings.llamaServiceConfigs?.[id] as Partial<LlamaServiceConfig> | undefined;
+  let config = mergeServiceConfig(id, settings, saved || {});
+  if (!saved) {
+    const unitName = await resolveSlotUnitName(id);
+    const override = await readOverride(unitName);
+    if (override.contents) {
+      config = parseManagedServiceConfig(id, override.contents, config);
+    }
+  }
+  if (config.mode === "single" && config.modelId && !config.modelPath) {
+    const model = await findLocalModel(config.modelId);
+    if (model) config.modelPath = model.ggufPath;
+  }
+  return config;
+}
+
+async function hydrateServiceConfig(id: LlamaServerId, settings: Awaited<ReturnType<typeof getSettings>>, patch: Partial<LlamaServiceConfig>): Promise<LlamaServiceConfig> {
+  const config = mergeServiceConfig(id, settings, patch);
+  if (config.mode === "single" && config.modelId && !config.modelPath) {
+    const model = await findLocalModel(config.modelId);
+    if (model) config.modelPath = model.ggufPath;
+  }
+  return config;
+}
+
+function persistServiceConfigToSettings(id: LlamaServerId, settings: Awaited<ReturnType<typeof getSettings>>, config: LlamaServiceConfig): void {
+  if (!settings.llamaServiceConfigs) settings.llamaServiceConfigs = {};
+  settings.llamaServiceConfigs[id] = config;
+
+  if (!settings.llamaServerBins) settings.llamaServerBins = {};
+  if (config.binaryPath) settings.llamaServerBins[id] = config.binaryPath;
+  if (config.binaryPath === getDefaultLlamaBin()) delete settings.llamaServerBins[id];
+
+  if (id === "inference") {
+    settings.llamacppUrl = `http://${config.host}:${config.port}`;
+    if (config.modelId) settings.defaultModelId = config.modelId;
+  } else if (id === "extraction") {
+    settings.extractionModelUrl = `http://${config.host}:${config.port}`;
+    settings.extractionCtxSize = config.ctxSize;
+    if (config.modelId) settings.extractionModelId = config.modelId;
+  } else if (id === "reranker") {
+    settings.rerankerUrl = `http://${config.host}:${config.port}`;
+    if (config.modelId) settings.rerankerModelId = config.modelId;
+  } else if (id === "embedding") {
+    settings.embeddingUrl = `http://${config.host}:${config.port}`;
+    if (config.modelId) settings.embeddingModel = config.modelId;
+  } else if (id === "title-generation") {
+    settings.titleGenerationUrl = `http://${config.host}:${config.port}`;
+    if (config.modelId) settings.titleGenerationModelId = config.modelId;
+  }
 }

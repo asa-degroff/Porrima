@@ -1855,6 +1855,107 @@ export async function updateLlamaServerSettings(id: LlamaServerId, updates: Llam
   return res.json();
 }
 
+export type LlamaServiceMode = "single" | "router";
+
+export interface LlamaServiceConfig {
+  mode: LlamaServiceMode;
+  binaryPath: string;
+  modelPath?: string;
+  modelId?: string;
+  modelsDir?: string;
+  host: string;
+  port: number;
+  gpuLayers: number | "auto";
+  ctxSize: number;
+  parallel?: number;
+  batchSize?: number;
+  ubatchSize?: number;
+  reasoningFormat?: string;
+  chatTemplateKwargs?: string;
+  extraArgs: string[];
+  environment: string[];
+}
+
+export interface LlamaServiceConfigResponse {
+  config: LlamaServiceConfig;
+  defaults: LlamaServiceConfig;
+  capabilities: {
+    routerMode: boolean;
+    singleMode: boolean;
+    embedding: boolean;
+    reranking: boolean;
+    pooling?: "mean" | "rank";
+  };
+  unit: {
+    unitName: string;
+    enabled: boolean;
+    enabledState: string;
+    cat: string;
+  };
+  preview: {
+    dropInPath: string;
+    contents: string;
+    execStart: string;
+  };
+}
+
+export async function getLlamaServiceConfig(id: LlamaServerId): Promise<LlamaServiceConfigResponse> {
+  const res = await apiFetch(`${BASE}/llama-servers/${id}/config`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to fetch service config");
+  }
+  return res.json();
+}
+
+export async function previewLlamaServiceConfig(id: LlamaServerId, config: Partial<LlamaServiceConfig>): Promise<{ config: LlamaServiceConfig; preview: LlamaServiceConfigResponse["preview"] }> {
+  const res = await apiFetch(`${BASE}/llama-servers/${id}/config/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to preview service config");
+  }
+  return res.json();
+}
+
+export async function applyLlamaServiceConfig(id: LlamaServerId, config: Partial<LlamaServiceConfig>): Promise<{ server: LlamaServerStatus; config: LlamaServiceConfig; preview: LlamaServiceConfigResponse["preview"]; overridePath: string }> {
+  const res = await apiFetch(`${BASE}/llama-servers/${id}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to apply service config");
+  }
+  return res.json();
+}
+
+export async function resetLlamaServiceConfig(id: LlamaServerId): Promise<{ server: LlamaServerStatus; removed: boolean }> {
+  const res = await apiFetch(`${BASE}/llama-servers/${id}/config`, { method: "DELETE" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to reset service config");
+  }
+  return res.json();
+}
+
+export async function setLlamaServiceEnabled(id: LlamaServerId, enabled: boolean): Promise<{ unitName: string; enabled: boolean; state: string }> {
+  const res = await apiFetch(`${BASE}/llama-servers/${id}/enabled`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to update service enablement");
+  }
+  return res.json();
+}
+
 // --- Embedding Migration ---
 
 export interface EmbeddingBackup {

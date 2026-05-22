@@ -18,8 +18,8 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
-import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
+import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getUserDocument, updateUserDocument, deleteUserDocument } from "../api/user";
 import type { AutomationRun, AutomationTask, OllamaModel, Settings, SystemPromptPreset, Theme, TTSBackendStatus, TTSSettings, BackgroundEffect, CornerShape, CornerRadius, ActivityShape, PersonaStore, UserDocument, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, SshConnection, SshKnownHostsMode } from "../types";
@@ -506,6 +506,24 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     loading: boolean;
     error?: string;
   } | null>(null);
+  const [llamaServiceExpanded, setLlamaServiceExpanded] = useState<LlamaServerId | null>(null);
+  const [llamaServiceState, setLlamaServiceState] = useState<Record<LlamaServerId, {
+    loading: boolean;
+    saving: boolean;
+    data?: LlamaServiceConfigResponse;
+    draft?: LlamaServiceConfig;
+    previewOpen?: boolean;
+    unitOpen?: boolean;
+    error?: string;
+  }>>({} as Record<LlamaServerId, {
+    loading: boolean;
+    saving: boolean;
+    data?: LlamaServiceConfigResponse;
+    draft?: LlamaServiceConfig;
+    previewOpen?: boolean;
+    unitOpen?: boolean;
+    error?: string;
+  }>);
   // Discovered binaries
   const [llamaBinaries, setLlamaBinaries] = useState<LlamaBinaryInfo[]>([]);
   const [llamaBinariesLoading, setLlamaBinariesLoading] = useState(false);
@@ -893,6 +911,111 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       setLlamaServerLogs({ id, unitName: server?.unitName || "", logs: "", loading: false, error: e?.message || "Failed to load logs" });
     }
   }, [llamaServers]);
+
+  const loadLlamaServiceConfig = useCallback(async (id: LlamaServerId) => {
+    setLlamaServiceState((prev) => ({
+      ...prev,
+      [id]: { ...(prev[id] || {}), loading: true, error: undefined },
+    }));
+    try {
+      const data = await getLlamaServiceConfig(id);
+      setLlamaServiceState((prev) => ({
+        ...prev,
+        [id]: { ...(prev[id] || {}), loading: false, saving: false, data, draft: data.config, previewOpen: false, unitOpen: false },
+      }));
+    } catch (e: any) {
+      setLlamaServiceState((prev) => ({
+        ...prev,
+        [id]: { ...(prev[id] || {}), loading: false, saving: false, error: e?.message || "Failed to load service config" },
+      }));
+    }
+  }, []);
+
+  const toggleLlamaServicePanel = useCallback((id: LlamaServerId) => {
+    setLlamaServiceExpanded((current) => {
+      const next = current === id ? null : id;
+      if (next && !llamaServiceState[next]?.data && !llamaServiceState[next]?.loading) {
+        void loadLlamaServiceConfig(next);
+      }
+      return next;
+    });
+  }, [llamaServiceState, loadLlamaServiceConfig]);
+
+  const updateLlamaServiceDraft = useCallback((id: LlamaServerId, patch: Partial<LlamaServiceConfig>) => {
+    setLlamaServiceState((prev) => {
+      const current = prev[id];
+      if (!current?.draft) return prev;
+      return {
+        ...prev,
+        [id]: { ...current, draft: { ...current.draft, ...patch } },
+      };
+    });
+  }, []);
+
+  const handlePreviewLlamaService = useCallback(async (id: LlamaServerId) => {
+    const draft = llamaServiceState[id]?.draft;
+    if (!draft) return;
+    setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: true, error: undefined } }));
+    try {
+      const result = await previewLlamaServiceConfig(id, draft);
+      setLlamaServiceState((prev) => {
+        const current = prev[id] || { loading: false, saving: false };
+        const data = current.data ? { ...current.data, config: result.config, preview: result.preview } : undefined;
+        return { ...prev, [id]: { ...current, saving: false, draft: result.config, data, previewOpen: true } };
+      });
+    } catch (e: any) {
+      setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: false, error: e?.message || "Failed to preview service config" } }));
+    }
+  }, [llamaServiceState]);
+
+  const handleApplyLlamaService = useCallback(async (id: LlamaServerId) => {
+    const draft = llamaServiceState[id]?.draft;
+    if (!draft) return;
+    setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: true, error: undefined } }));
+    setLlamaServerMessage(null);
+    try {
+      const result = await applyLlamaServiceConfig(id, draft);
+      setLlamaServers((prev) => prev.map((server) => server.id === id ? result.server : server));
+      setLlamaServiceState((prev) => {
+        const current = prev[id] || { loading: false, saving: false };
+        const data = current.data ? { ...current.data, config: result.config, preview: result.preview } : undefined;
+        return { ...prev, [id]: { ...current, saving: false, draft: result.config, data, previewOpen: true } };
+      });
+      setLlamaServerMessage({ type: "ok", text: `${result.server.label} service config applied and restarted.` });
+      await refreshLlamaServers();
+    } catch (e: any) {
+      setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: false, error: e?.message || "Failed to apply service config" } }));
+      setLlamaServerMessage({ type: "err", text: e?.message || "Failed to apply service config" });
+    }
+  }, [llamaServiceState, refreshLlamaServers]);
+
+  const handleResetLlamaService = useCallback(async (id: LlamaServerId) => {
+    setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: true, error: undefined } }));
+    setLlamaServerMessage(null);
+    try {
+      const result = await resetLlamaServiceConfig(id);
+      setLlamaServers((prev) => prev.map((server) => server.id === id ? result.server : server));
+      setLlamaServerMessage({ type: "ok", text: result.removed ? `${result.server.label} reset to base unit.` : `${result.server.label} had no managed override.` });
+      await loadLlamaServiceConfig(id);
+      await refreshLlamaServers();
+    } catch (e: any) {
+      setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: false, error: e?.message || "Failed to reset service config" } }));
+    }
+  }, [loadLlamaServiceConfig, refreshLlamaServers]);
+
+  const handleSetLlamaServiceEnabled = useCallback(async (id: LlamaServerId, enabled: boolean) => {
+    setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: true, error: undefined } }));
+    try {
+      const result = await setLlamaServiceEnabled(id, enabled);
+      setLlamaServiceState((prev) => {
+        const current = prev[id] || { loading: false, saving: false };
+        const data = current.data ? { ...current.data, unit: { ...current.data.unit, enabled: result.enabled, enabledState: result.state } } : undefined;
+        return { ...prev, [id]: { ...current, saving: false, data } };
+      });
+    } catch (e: any) {
+      setLlamaServiceState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), saving: false, error: e?.message || "Failed to update service enablement" } }));
+    }
+  }, []);
 
   // Track which server card has its config section expanded
   const [llamaConfigExpanded, setLlamaConfigExpanded] = useState<LlamaServerId | null>(null);
@@ -2379,6 +2502,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                  const missingUnit = server.systemd.loadState === "not-found";
 	                  const detailsExpanded = expandedLlamaServerId === server.id;
 	                  const configExpanded = llamaConfigExpanded === server.id;
+	                  const serviceExpanded = llamaServiceExpanded === server.id;
 	                  const modelsPreview = server.http.modelIds.length > 0
 	                    ? server.http.modelIds.slice(0, 3).join(", ") + (server.http.modelIds.length > 3 ? ` +${server.http.modelIds.length - 3}` : "")
 	                    : "none reported";
@@ -2453,6 +2577,13 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all"
 	                          >
 	                            {configExpanded ? "Hide config" : "Config"}
+	                          </button>
+	                          <button
+	                            type="button"
+	                            onClick={() => toggleLlamaServicePanel(server.id)}
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all"
+	                          >
+	                            {serviceExpanded ? "Hide service" : "Service"}
 	                          </button>
 	                          <button
 	                            type="button"
@@ -2961,6 +3092,186 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                              )}
 	                            </>
 	                          )}
+	                        </div>
+	                      )}
+
+	                      {/* Service section */}
+	                      {serviceExpanded && (
+	                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3 last:rounded-b-[7px]">
+	                          {(() => {
+	                            const state = llamaServiceState[server.id];
+	                            const draft = state?.draft;
+	                            const data = state?.data;
+	                            if (state?.loading || !draft) {
+	                              return <div className="text-xs text-white/35">{state?.error || "Loading service config..."}</div>;
+	                            }
+	                            const updateNumber = (key: keyof LlamaServiceConfig, value: string) => {
+	                              updateLlamaServiceDraft(server.id, { [key]: Number.parseInt(value, 10) || 0 } as Partial<LlamaServiceConfig>);
+	                            };
+	                            return (
+	                              <div className="space-y-3">
+	                                <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-2">
+	                                  <div className="min-w-0">
+	                                    <p className="text-xs text-white/70">Enabled at login</p>
+	                                    <p className="text-[11px] text-white/35 font-mono truncate">{data?.unit.enabledState || "unknown"}</p>
+	                                  </div>
+	                                  <ToggleSwitch
+	                                    checked={data?.unit.enabled === true}
+	                                    onChange={() => handleSetLlamaServiceEnabled(server.id, !(data?.unit.enabled))}
+	                                    accentColor="purple"
+	                                  />
+	                                </div>
+	                                {state?.error && (
+	                                  <div className="rounded-lg border border-red-400/20 bg-red-500/10 p-2 text-xs text-red-300/80">
+	                                    {state.error}
+	                                  </div>
+	                                )}
+	                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Mode</label>
+	                                    <select
+	                                      value={draft.mode}
+	                                      onChange={(e) => updateLlamaServiceDraft(server.id, { mode: e.target.value as "single" | "router" })}
+	                                      disabled={!data?.capabilities.routerMode}
+	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                    >
+	                                      <option value="single">Single model</option>
+	                                      <option value="router">Router mode</option>
+	                                    </select>
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Binary path</label>
+	                                    <input
+	                                      value={draft.binaryPath}
+	                                      onChange={(e) => updateLlamaServiceDraft(server.id, { binaryPath: e.target.value })}
+	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                    />
+	                                  </div>
+	                                  {draft.mode === "single" ? (
+	                                    <>
+	                                      <div>
+	                                        <label className="block text-xs text-white/50 mb-1">Model ID</label>
+	                                        <input
+	                                          value={draft.modelId || ""}
+	                                          onChange={(e) => updateLlamaServiceDraft(server.id, { modelId: e.target.value })}
+	                                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                        />
+	                                      </div>
+	                                      <div>
+	                                        <label className="block text-xs text-white/50 mb-1">Model path</label>
+	                                        <input
+	                                          value={draft.modelPath || ""}
+	                                          onChange={(e) => updateLlamaServiceDraft(server.id, { modelPath: e.target.value })}
+	                                          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                        />
+	                                      </div>
+	                                    </>
+	                                  ) : (
+	                                    <div className="sm:col-span-2">
+	                                      <label className="block text-xs text-white/50 mb-1">Models directory</label>
+	                                      <input
+	                                        value={draft.modelsDir || ""}
+	                                        onChange={(e) => updateLlamaServiceDraft(server.id, { modelsDir: e.target.value })}
+	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                      />
+	                                    </div>
+	                                  )}
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Host</label>
+	                                    <input value={draft.host} onChange={(e) => updateLlamaServiceDraft(server.id, { host: e.target.value })}
+	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Port</label>
+	                                    <input type="number" value={draft.port} onChange={(e) => updateNumber("port", e.target.value)}
+	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Context</label>
+	                                    <input type="number" value={draft.ctxSize} onChange={(e) => updateNumber("ctxSize", e.target.value)}
+	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">GPU layers</label>
+	                                    <input value={draft.gpuLayers} onChange={(e) => updateLlamaServiceDraft(server.id, { gpuLayers: e.target.value.trim() === "auto" ? "auto" : Number.parseInt(e.target.value, 10) || 0 })}
+	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Parallel</label>
+	                                    <input type="number" value={draft.parallel ?? ""} onChange={(e) => updateLlamaServiceDraft(server.id, { parallel: e.target.value ? Number.parseInt(e.target.value, 10) : undefined })}
+	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Batch / ubatch</label>
+	                                    <div className="grid grid-cols-2 gap-2">
+	                                      <input type="number" value={draft.batchSize ?? ""} onChange={(e) => updateLlamaServiceDraft(server.id, { batchSize: e.target.value ? Number.parseInt(e.target.value, 10) : undefined })}
+	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                      <input type="number" value={draft.ubatchSize ?? ""} onChange={(e) => updateLlamaServiceDraft(server.id, { ubatchSize: e.target.value ? Number.parseInt(e.target.value, 10) : undefined })}
+	                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                    </div>
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Reasoning format</label>
+	                                    <input value={draft.reasoningFormat || ""} onChange={(e) => updateLlamaServiceDraft(server.id, { reasoningFormat: e.target.value })}
+	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Template kwargs</label>
+	                                    <input value={draft.chatTemplateKwargs || ""} onChange={(e) => updateLlamaServiceDraft(server.id, { chatTemplateKwargs: e.target.value })}
+	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30" />
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Environment</label>
+	                                    <textarea value={draft.environment.join("\n")} onChange={(e) => updateLlamaServiceDraft(server.id, { environment: e.target.value.split("\n") })}
+	                                      rows={3} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30 resize-y" />
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Extra args</label>
+	                                    <textarea value={draft.extraArgs.join("\n")} onChange={(e) => updateLlamaServiceDraft(server.id, { extraArgs: e.target.value.split("\n") })}
+	                                      rows={3} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30 resize-y" />
+	                                  </div>
+	                                </div>
+	                                <div className="flex items-center gap-2 flex-wrap">
+	                                  <button type="button" onClick={() => handlePreviewLlamaService(server.id)} disabled={state?.saving}
+	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40">
+	                                    Preview
+	                                  </button>
+	                                  <button type="button" onClick={() => handleApplyLlamaService(server.id)} disabled={state?.saving}
+	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40">
+	                                    {state?.saving ? "Applying..." : "Apply and restart"}
+	                                  </button>
+	                                  <button type="button" onClick={() => handleResetLlamaService(server.id)} disabled={state?.saving}
+	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40">
+	                                    Reset managed override
+	                                  </button>
+	                                  <button type="button" onClick={() => setLlamaServiceState((prev) => ({ ...prev, [server.id]: { ...(prev[server.id] || {}), previewOpen: !(prev[server.id]?.previewOpen) } }))}
+	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all">
+	                                    {state?.previewOpen ? "Hide drop-in" : "Show drop-in"}
+	                                  </button>
+	                                  <button type="button" onClick={() => setLlamaServiceState((prev) => ({ ...prev, [server.id]: { ...(prev[server.id] || {}), unitOpen: !(prev[server.id]?.unitOpen) } }))}
+	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all">
+	                                    {state?.unitOpen ? "Hide unit" : "Show unit"}
+	                                  </button>
+	                                </div>
+	                                {state?.previewOpen && data?.preview && (
+	                                  <div>
+	                                    <p className="text-xs text-white/35 font-mono mb-1">{data.preview.dropInPath}</p>
+	                                    <pre className="max-h-56 overflow-auto rounded-md border border-white/10 bg-black/20 p-2 text-[10px] text-white/55 whitespace-pre-wrap break-words">
+	                                      {data.preview.contents}
+	                                    </pre>
+	                                  </div>
+	                                )}
+	                                {state?.unitOpen && data?.unit.cat && (
+	                                  <div>
+	                                    <p className="text-xs text-white/35 font-mono mb-1">systemctl --user cat {data.unit.unitName}</p>
+	                                    <pre className="max-h-56 overflow-auto rounded-md border border-white/10 bg-black/20 p-2 text-[10px] text-white/55 whitespace-pre-wrap break-words">
+	                                      {data.unit.cat}
+	                                    </pre>
+	                                  </div>
+	                                )}
+	                              </div>
+	                            );
+	                          })()}
 	                        </div>
 	                      )}
 

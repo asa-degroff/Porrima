@@ -426,6 +426,8 @@ export interface Settings {
   crossProjectScoreMultiplier?: number;
   // Project-scoped memory multiplier for global/system chats. Default 1.0.
   globalProjectScoreMultiplier?: number;
+  // Structured llama.cpp service-launch overrides written as managed systemd drop-ins.
+  llamaServiceConfigs?: Record<string, any>;
 }
 
 export interface LlamaPathInfo {

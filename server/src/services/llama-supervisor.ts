@@ -370,6 +370,45 @@ export async function resolveSlotUnitName(id: string): Promise<string> {
   return unit.unitName;
 }
 
+export async function getLlamaUnitCat(id: string): Promise<{ unitName: string; contents: string }> {
+  const def = getDefinition(id);
+  if (!def) throw new Error(`Unknown llama.cpp server: ${id}`);
+  const unit = await resolveSystemdUnit(def);
+  const { stdout } = await execFileAsync(SYSTEMCTL, ["--user", "cat", unit.unitName], {
+    timeout: 8000,
+    maxBuffer: 1024 * 1024,
+  });
+  return { unitName: unit.unitName, contents: stdout };
+}
+
+export async function getLlamaUnitEnabled(id: string): Promise<{ unitName: string; enabled: boolean; state: string }> {
+  const def = getDefinition(id);
+  if (!def) throw new Error(`Unknown llama.cpp server: ${id}`);
+  const unit = await resolveSystemdUnit(def);
+  try {
+    const { stdout } = await execFileAsync(SYSTEMCTL, ["--user", "is-enabled", unit.unitName], {
+      timeout: 5000,
+      maxBuffer: 1024 * 64,
+    });
+    const state = stdout.trim() || "unknown";
+    return { unitName: unit.unitName, enabled: state === "enabled", state };
+  } catch (e: any) {
+    const state = typeof e?.stdout === "string" && e.stdout.trim() ? e.stdout.trim() : "disabled";
+    return { unitName: unit.unitName, enabled: false, state };
+  }
+}
+
+export async function setLlamaUnitEnabled(id: string, enabled: boolean): Promise<{ unitName: string; enabled: boolean; state: string }> {
+  const def = getDefinition(id);
+  if (!def) throw new Error(`Unknown llama.cpp server: ${id}`);
+  const unit = await resolveSystemdUnit(def);
+  await execFileAsync(SYSTEMCTL, ["--user", enabled ? "enable" : "disable", unit.unitName], {
+    timeout: 10000,
+    maxBuffer: 1024 * 256,
+  });
+  return getLlamaUnitEnabled(id);
+}
+
 export async function runLlamaServerAction(id: string, action: LlamaServerAction, settings: Settings): Promise<LlamaServerStatus> {
   const def = getDefinition(id);
   if (!def) throw new Error(`Unknown llama.cpp server: ${id}`);

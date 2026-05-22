@@ -7,16 +7,18 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 
 const SYSTEMD_USER_DIR = path.join(os.homedir(), ".config", "systemd", "user");
-const OVERRIDE_FILENAME = "porrima-model.conf";
+const OVERRIDE_FILENAME = "zz-porrima-managed.conf";
+const OLD_MANAGED_OVERRIDE_FILENAME = "porrima-managed.conf";
+const LEGACY_OVERRIDE_FILENAME = "porrima-model.conf";
 
 const HEADER = [
-  "# Managed by Porrima — written by the Models settings UI.",
-  "# To change the model, use Settings → Models. To revert to the unit's",
-  "# default, delete this file or use the \"Reset to default\" action.",
+  "# Managed by Porrima — written by the llama.cpp service settings UI.",
+  "# To change this service, use Settings → Inference Servers.",
+  "# To revert to the unit's default, delete this file or use Reset managed override.",
 ].join("\n");
 
-function overridePath(unitName: string): string {
-  return path.join(SYSTEMD_USER_DIR, `${unitName}.d`, OVERRIDE_FILENAME);
+function overridePath(unitName: string, filename = OVERRIDE_FILENAME): string {
+  return path.join(SYSTEMD_USER_DIR, `${unitName}.d`, filename);
 }
 
 async function ensureDir(dirPath: string): Promise<void> {
@@ -30,13 +32,16 @@ export interface OverrideInfo {
 }
 
 export async function readOverride(unitName: string): Promise<OverrideInfo> {
-  const target = overridePath(unitName);
-  try {
-    const contents = await fs.readFile(target, "utf-8");
-    return { exists: true, path: target, contents };
-  } catch {
-    return { exists: false, path: target };
+  const managed = overridePath(unitName);
+  const oldManaged = overridePath(unitName, OLD_MANAGED_OVERRIDE_FILENAME);
+  const legacy = overridePath(unitName, LEGACY_OVERRIDE_FILENAME);
+  for (const target of [managed, oldManaged, legacy]) {
+    try {
+      const contents = await fs.readFile(target, "utf-8");
+      return { exists: true, path: target, contents };
+    } catch {}
   }
+  return { exists: false, path: managed };
 }
 
 /**
@@ -67,22 +72,26 @@ export async function writeOverride(unitName: string, execStart: string, options
   const envSection = envLines ? `${envLines}\n` : "";
   const body = `${HEADER}\n[Service]\nExecStart=\n${envSection}ExecStart=${execStart}\n`;
   await fs.writeFile(target, body, "utf-8");
+  await fs.unlink(overridePath(unitName, OLD_MANAGED_OVERRIDE_FILENAME)).catch(() => {});
+  await fs.unlink(overridePath(unitName, LEGACY_OVERRIDE_FILENAME)).catch(() => {});
   return target;
 }
 
 export async function deleteOverride(unitName: string): Promise<boolean> {
-  const target = overridePath(unitName);
-  try {
-    await fs.unlink(target);
-    // Best-effort cleanup of an empty .d directory.
+  let removed = false;
+  for (const target of [overridePath(unitName), overridePath(unitName, OLD_MANAGED_OVERRIDE_FILENAME), overridePath(unitName, LEGACY_OVERRIDE_FILENAME)]) {
     try {
-      await fs.rmdir(path.dirname(target));
-    } catch {}
-    return true;
-  } catch (e: any) {
-    if (e?.code === "ENOENT") return false;
-    throw e;
+      await fs.unlink(target);
+      removed = true;
+    } catch (e: any) {
+      if (e?.code !== "ENOENT") throw e;
+    }
   }
+  try {
+    // Best-effort cleanup of an empty .d directory.
+    await fs.rmdir(path.dirname(overridePath(unitName)));
+  } catch {}
+  return removed;
 }
 
 export async function daemonReload(): Promise<void> {
@@ -109,13 +118,20 @@ export async function restartUnit(unitName: string): Promise<void> {
  * unit reverts to its default on next manual restart. Re-throws the error.
  */
 export async function applyModelOverride(unitName: string, execStart: string, options: WriteOverrideOptions = {}): Promise<{ overridePath: string }> {
+  const previous = await readOverride(unitName);
   const target = await writeOverride(unitName, execStart, options);
   try {
     await daemonReload();
     await restartUnit(unitName);
   } catch (e) {
     try {
-      await deleteOverride(unitName);
+      if (previous.exists && previous.contents) {
+        await ensureDir(path.dirname(previous.path));
+        await fs.writeFile(previous.path, previous.contents, "utf-8");
+        if (previous.path !== target) await fs.unlink(target).catch(() => {});
+      } else {
+        await deleteOverride(unitName);
+      }
       await daemonReload();
     } catch {}
     throw e;

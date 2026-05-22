@@ -419,6 +419,8 @@ export interface Settings {
   // When set for a slot, that slot uses this binary instead of the global llama-current.
   // E.g. { "extraction": "/home/asa/bin/ik-llama/llama-server" }
   llamaServerBins?: Record<string, string>;
+  // Structured service-launch overrides written as managed systemd drop-ins.
+  llamaServiceConfigs?: Record<string, any>;
   // The default llama.cpp binary path (from llama-current symlink). Used by UI for display.
   llamaServerDefaultBin?: string;
 }
@@ -541,5 +543,4 @@ export interface NotebookIndex {
   entries: { id: string; createdAt: string; author: 'user' | 'agent'; preview: string }[];
   lastActivityDate: string | null;  // ISO date of most recent entry
 }
-
 
