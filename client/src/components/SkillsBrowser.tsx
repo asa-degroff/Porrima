@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { fetchSkills, installSkill, deleteSkill } from "../api/client";
 import type { SkillInfo } from "../api/client";
+import { Dropdown } from "./ui/Dropdown";
+import { useDropdown } from "../hooks/useDropdown";
 
 interface Props {
   onClose: () => void;
@@ -30,6 +32,7 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
+  const filterSourceDd = useDropdown();
   const urlInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -257,15 +260,20 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
             placeholder="Search skills..."
           />
         </div>
-        <select
-          value={filterSource}
-          onChange={(e) => setFilterSource(e.target.value as typeof filterSource)}
-          className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all cursor-pointer"
+        <Dropdown
+          state={filterSourceDd}
+          triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer"
+          trigger={<span className="truncate flex-1 text-left">{filterSource === "all" ? "All" : filterSource === "global" ? "Global" : "Project"}</span>}
         >
-          <option value="all">All</option>
-          <option value="global">Global</option>
-          <option value="project">Project</option>
-        </select>
+          {(["all", "global", "project"] as const).map((source) => (
+            <button key={source} onClick={() => {
+              filterSourceDd.close();
+              setFilterSource(source);
+            }} className={`w-full text-left px-3 py-2 text-sm transition-all ${source === filterSource ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+              {source === "all" ? "All" : source === "global" ? "Global" : "Project"}
+            </button>
+          ))}
+        </Dropdown>
       </div>
 
       {/* Skills list */}

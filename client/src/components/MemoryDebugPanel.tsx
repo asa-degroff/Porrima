@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi } from "../api/client";
 import type { MemorySummary, MemoryLineage, MemoryBlock } from "../types";
+import { Dropdown } from "./ui/Dropdown";
+import { useDropdown } from "../hooks/useDropdown";
 
 // ── Extraction types ──────────────────────────────────────────────────────
 // Kept aligned with server/src/services/memory-extraction-observability.ts.
@@ -694,6 +696,7 @@ function MemoriesTab({
   onToggleLineage: (id: string) => void;
   onCategoryFilterChange: (cat: string) => void;
 }) {
+  const sortDd = useDropdown();
   return (
     <div className="p-4 space-y-3">
       {/* Status summary */}
@@ -760,16 +763,29 @@ function MemoriesTab({
             </div>
           );
         })()}
-        <select
-          value={sortBy}
-          onChange={(e) => onSortChange(e.target.value)}
-          className="bg-white/5 border border-white/10 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none focus:ring-1 focus:ring-purple-400/30 shrink-0"
+        <Dropdown
+          state={sortDd}
+          triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none hover:bg-white/10 transition-all cursor-pointer shrink-0"
+          trigger={<span className="truncate flex-1 text-left">
+            {sortBy === "created_at_desc" ? "Newest" : sortBy === "created_at_asc" ? "Oldest" : sortBy === "last_accessed_desc" ? "Recently used" : "Importance"}
+          </span>}
         >
-          <option value="created_at_desc">Newest</option>
-          <option value="created_at_asc">Oldest</option>
-          <option value="last_accessed_desc">Recently used</option>
-          <option value="importance_desc">Importance</option>
-        </select>
+          {(
+            [
+              { value: "created_at_desc", label: "Newest" },
+              { value: "created_at_asc", label: "Oldest" },
+              { value: "last_accessed_desc", label: "Recently used" },
+              { value: "importance_desc", label: "Importance" },
+            ] as const
+          ).map(({ value, label }) => (
+            <button key={value} onClick={() => {
+              sortDd.close();
+              onSortChange(value);
+            }} className={`w-full text-left px-3 py-2 text-[10px] transition-all ${value === sortBy ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+              {label}
+            </button>
+          ))}
+        </Dropdown>
       </div>
 
       {/* Results */}

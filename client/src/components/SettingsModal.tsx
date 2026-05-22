@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { ToggleSwitch } from "./ui/ToggleSwitch";
 import { Dropdown } from "./ui/Dropdown";
 import { Chevron } from "./ui/Chevron";
-import { useDropdown } from "../hooks/useDropdown";
+import { useDropdown, type DropdownState } from "../hooks/useDropdown";
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -773,6 +773,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const rerankerBinaryDd = useDropdown();
   const embeddingBinaryDd = useDropdown();
   const titleGenBinaryDd = useDropdown();
+  const slotBindingModeDd = useDropdown();
+  // Per-server dropdown state for systemd service mode (inside .map())
+  const [serviceModeOpen, setServiceModeOpen] = useState<Record<string, boolean>>({});
+  const serviceModeRefs = useRef<Record<string, React.RefObject<HTMLDivElement | null>>>({});
 
   // Per-task dropdown state for automations (avoids hooks-in-map issues)
   const [scheduleOpen, setScheduleOpen] = useState<Record<string, boolean>>({});
@@ -793,6 +797,12 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
         const ref = activationRefMap.current[taskId];
         if (ref.current && !ref.current.contains(target)) {
           setActivationOpen(prev => ({ ...prev, [taskId]: false }));
+        }
+      }
+      for (const serverId in serviceModeRefs.current) {
+        const ref = serviceModeRefs.current[serverId];
+        if (ref.current && !ref.current.contains(target)) {
+          setServiceModeOpen(prev => ({ ...prev, [serverId]: false }));
         }
       }
     }
@@ -2652,14 +2662,20 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                  </div>
 	                                  <div className="flex items-center gap-2">
 	                                    <label className="block text-xs text-white/50 w-16">Slots</label>
-	                                    <select
-	                                      value={llamacppSlotBindingMode}
-	                                      onChange={(e) => setLlamacppSlotBindingMode(e.target.value as "auto" | "enforced")}
-	                                      className="bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30"
+	                                    <Dropdown
+	                                      state={slotBindingModeDd}
+	                                      triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer whitespace-nowrap"
+	                                      trigger={<span>{llamacppSlotBindingMode === "auto" ? "Auto (recommended)" : "Enforced id_slot"}</span>}
 	                                    >
-	                                      <option value="auto">Auto (recommended)</option>
-	                                      <option value="enforced">Enforced id_slot</option>
-	                                    </select>
+	                                      {(["auto", "enforced"] as const).map((mode) => (
+	                                        <button key={mode} onClick={() => {
+	                                          slotBindingModeDd.close();
+	                                          setLlamacppSlotBindingMode(mode);
+	                                        }} className={`w-full text-left px-3 py-2 text-xs transition-all ${mode === llamacppSlotBindingMode ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                          {mode === "auto" ? "Auto (recommended)" : "Enforced id_slot"}
+	                                        </button>
+	                                      ))}
+	                                    </Dropdown>
 	                                    <span className="text-xs text-white/30">Auto lets llama.cpp restore prompt cache.</span>
 	                                  </div>
 	                                </div>
@@ -3129,15 +3145,32 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Mode</label>
-	                                    <select
-	                                      value={draft.mode}
-	                                      onChange={(e) => updateLlamaServiceDraft(server.id, { mode: e.target.value as "single" | "router" })}
-	                                      disabled={!data?.capabilities.routerMode}
-	                                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30"
-	                                    >
-	                                      <option value="single">Single model</option>
-	                                      <option value="router">Router mode</option>
-	                                    </select>
+	                                    {(() => {
+	                                      const smRef = serviceModeRefs.current[server.id] || (serviceModeRefs.current[server.id] = { current: null });
+	                                      const smState: DropdownState = {
+	                                        open: serviceModeOpen[server.id] ?? false,
+	                                        setOpen: (v: boolean) => setServiceModeOpen(prev => ({ ...prev, [server.id]: v })),
+	                                        toggle: () => setServiceModeOpen(prev => ({ ...prev, [server.id]: !prev[server.id] })),
+	                                        close: () => setServiceModeOpen(prev => ({ ...prev, [server.id]: false })),
+	                                        ref: smRef,
+	                                      };
+	                                      return (
+	                                        <Dropdown
+	                                          state={smState}
+	                                          disabled={!data?.capabilities.routerMode}
+	                                          trigger={<span className="truncate flex-1 text-left">{draft.mode === "single" ? "Single model" : "Router mode"}</span>}
+	                                        >
+	                                          {(["single", "router"] as const).map((mode) => (
+	                                            <button key={mode} onClick={() => {
+	                                              smState.close();
+	                                              updateLlamaServiceDraft(server.id, { mode });
+	                                            }} className={`w-full text-left px-3 py-2 text-xs transition-all ${mode === draft.mode ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+	                                              {mode === "single" ? "Single model" : "Router mode"}
+	                                            </button>
+	                                          ))}
+	                                        </Dropdown>
+	                                      );
+	                                    })()}
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Binary path</label>
