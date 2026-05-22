@@ -306,12 +306,25 @@ URL: ${result.url}${warningText}` }], details: {} };
     },
   });
 
-  // update_artifact — uses effects.onArtifact callback
+  // update_artifact can update both artifacts and inline visuals. They share
+  // the same versioned on-disk layout, but live in separate data directories.
   tools.push({
     ...UPDATE_ARTIFACT_TOOL,
     label: "update_artifact",
     execute: async (_id, params) => {
       const args = params as Record<string, any>;
+
+      try {
+        const visualPath = join(VISUALS_DIR, args.artifactId, "metadata.json");
+        await access(visualPath);
+        const result = await updateVisual(args.artifactId, args.html, args.changeSummary);
+        const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
+        effects.onVisual({ id: args.artifactId, title: "Updated visual", html: args.html, url: result.url, version: result.version });
+        return { content: [{ type: "text", text: `Visual updated to version ${result.version} (${result.url})${warningText}` }], details: {} };
+      } catch {
+        // Not a visual; fall through to the artifact store.
+      }
+
       try {
         const result = await updateArtifact(args.artifactId, args.html, args.changeSummary);
         const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
@@ -319,7 +332,7 @@ URL: ${result.url}${warningText}` }], details: {} };
         effects.onArtifact({ id: args.artifactId, title: "Updated artifact", url: result.url, version: result.version });
         return { content: [{ type: "text", text: `Artifact updated to version ${result.version} (${result.url})${warningText}` }], details: {} };
       } catch (e: any) {
-        return { content: [{ type: "text", text: `Error updating artifact: ${e.message}` }], details: {}, isError: true };
+        return { content: [{ type: "text", text: `Error updating: ${e.message}. Make sure the ID is from a previously created artifact or visual.` }], details: {}, isError: true };
       }
     },
   });
@@ -337,36 +350,6 @@ URL: ${result.url}${warningText}` }], details: {} };
       return { content: [{ type: "text", text: `Visual created: "${args.title}"
 Canonical ID: ${id}
 URL: ${result.url}${warningText}` }], details: {} };
-    },
-  });
-
-  // update_artifact can also update visuals (they share the same versioning structure now)
-  // Check if it's a visual first, then fall back to artifact
-  tools.push({
-    ...UPDATE_ARTIFACT_TOOL,
-    label: "update_artifact",
-    execute: async (_id, params) => {
-      const args = params as Record<string, any>;
-      
-      // Try visual first
-      try {
-        const visualPath = join(VISUALS_DIR, args.artifactId, "metadata.json");
-        await access(visualPath);
-        const result = await updateVisual(args.artifactId, args.html, args.changeSummary);
-        const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
-        effects.onVisual({ id: args.artifactId, title: "Updated visual", html: args.html, url: result.url, version: result.version });
-        return { content: [{ type: "text", text: `Visual updated to version ${result.version} (${result.url})${warningText}` }], details: {} };
-      } catch (e: any) {
-        // Not a visual, try artifact
-        try {
-          const result = await updateArtifact(args.artifactId, args.html, args.changeSummary);
-          const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
-          effects.onArtifact({ id: args.artifactId, title: "Updated artifact", url: result.url, version: result.version });
-          return { content: [{ type: "text", text: `Artifact updated to version ${result.version} (${result.url})${warningText}` }], details: {} };
-        } catch (e2: any) {
-          return { content: [{ type: "text", text: `Error updating: ${e2.message}. Make sure the ID is from a previously created artifact or visual.` }], details: {}, isError: true };
-        }
-      }
     },
   });
 
