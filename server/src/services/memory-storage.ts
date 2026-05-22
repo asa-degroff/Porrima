@@ -157,6 +157,15 @@ export function getDb(): Database.Database {
     console.log("[memory] Added source_message_end_index column for source-span filtering");
   }
 
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at);
+    CREATE INDEX IF NOT EXISTS idx_memories_last_accessed ON memories(last_accessed);
+    CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance);
+    CREATE INDEX IF NOT EXISTS idx_memories_category_created_at ON memories(category, created_at);
+    CREATE INDEX IF NOT EXISTS idx_memories_category_last_accessed ON memories(category, last_accessed);
+    CREATE INDEX IF NOT EXISTS idx_memories_category_importance ON memories(category, importance);
+  `);
+
   // Create memory_supersession_history table for audit trail
   db.exec(`
     CREATE TABLE IF NOT EXISTS memory_supersession_history (
@@ -947,11 +956,11 @@ export async function getMemoryById(id: string): Promise<Memory | null> {
   };
 }
 
-export async function getMemoryCount(): Promise<number> {
+export async function getMemoryCount(options: { category?: string } = {}): Promise<number> {
   const db = getDb();
-  const row = db.prepare("SELECT COUNT(*) as cnt FROM memories").get() as {
-    cnt: number;
-  };
+  const row = options.category
+    ? db.prepare("SELECT COUNT(*) as cnt FROM memories WHERE category = ?").get(options.category) as { cnt: number }
+    : db.prepare("SELECT COUNT(*) as cnt FROM memories").get() as { cnt: number };
   return row.cnt;
 }
 
@@ -1003,15 +1012,23 @@ const SORT_CLAUSES: Record<MemorySortBy, string> = {
 };
 
 export async function getAllMemories(
-  sortBy: MemorySortBy = "created_at_desc"
+  sortBy: MemorySortBy = "created_at_desc",
+  options: { limit?: number; offset?: number; category?: string } = {}
 ): Promise<Omit<Memory, "embedding">[]> {
   const db = getDb();
   const orderClause = SORT_CLAUSES[sortBy] || SORT_CLAUSES.created_at_desc;
+  const limit = options.limit;
+  const offset = options.offset ?? 0;
+  const whereClause = options.category ? " WHERE category = ?" : "";
+  const pageClause = limit !== undefined ? " LIMIT ? OFFSET ?" : "";
+  const params: (string | number)[] = [];
+  if (options.category) params.push(options.category);
+  if (limit !== undefined) params.push(limit, offset);
   const rows = db
     .prepare(
-      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories ${orderClause}`
+      `SELECT id, text, category, importance, created_at, last_accessed, access_count, source_chat_id, project_id, source_type, source_id, superseded_by, supersedes FROM memories${whereClause} ${orderClause}${pageClause}`
     )
-    .all() as Array<{
+    .all(...params) as Array<{
     id: string;
     text: string;
     category: string;

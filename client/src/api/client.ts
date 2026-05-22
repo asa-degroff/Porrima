@@ -1069,6 +1069,31 @@ export async function fetchAllMemories(sortBy?: string): Promise<import("../type
   return res.json();
 }
 
+export interface MemoryPage {
+  items: import("../types").MemorySummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}
+
+export async function fetchMemoriesPage(options: {
+  sortBy?: string;
+  category?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<MemoryPage> {
+  const params = new URLSearchParams();
+  if (options.sortBy) params.set("sortBy", options.sortBy);
+  if (options.category && options.category !== "all") params.set("category", options.category);
+  params.set("limit", String(options.limit ?? 100));
+  params.set("offset", String(options.offset ?? 0));
+
+  const res = await apiFetch(`${BASE}/memory?${params.toString()}`);
+  if (!res.ok) throw new Error("Failed to fetch memories");
+  return res.json();
+}
+
 export async function deleteMemory(id: string): Promise<void> {
   const res = await apiFetch(`${BASE}/memory/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Failed to delete memory");

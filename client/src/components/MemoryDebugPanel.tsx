@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { searchMemories, fetchAllMemories, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi } from "../api/client";
+import { searchMemories, fetchMemoriesPage, deleteMemory, fetchMemoryLineage, fetchMemoryBlocks, updateMemoryBlockApi, deleteMemoryBlockApi } from "../api/client";
 import type { MemorySummary, MemoryLineage, MemoryBlock } from "../types";
 import { Dropdown } from "./ui/Dropdown";
 import { useDropdown } from "../hooks/useDropdown";
@@ -80,6 +80,8 @@ interface Props {
 }
 
 type TabKey = "extraction" | "memories" | "blocks";
+const MEMORY_PAGE_SIZE = 100;
+const MEMORY_CATEGORIES = ["preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"];
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function formatTime(iso: string): string {
@@ -130,6 +132,8 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
   const [memorySearchQuery, setMemorySearchQuery] = useState("");
   const [memoryResults, setMemoryResults] = useState<(MemorySummary & { score?: number })[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memoryLoadingMore, setMemoryLoadingMore] = useState(false);
+  const [memoryPage, setMemoryPage] = useState({ offset: 0, total: 0, hasMore: false });
   const [memoryDeleting, setMemoryDeleting] = useState<string | null>(null);
   const [memoryCategoryFilter, setMemoryCategoryFilter] = useState<string>("all");
   const [memorySortBy, setMemorySortBy] = useState<string>("created_at_desc");
@@ -137,6 +141,27 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
   const [lineageData, setLineageData] = useState<Record<string, MemoryLineage>>({});
   const [lineageLoading, setLineageLoading] = useState<string | null>(null);
   const memorySearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadMemoryPage = useCallback(async ({
+    sortBy = memorySortBy,
+    category = memoryCategoryFilter,
+    offset = 0,
+    append = false,
+  }: {
+    sortBy?: string;
+    category?: string;
+    offset?: number;
+    append?: boolean;
+  } = {}) => {
+    const page = await fetchMemoriesPage({
+      sortBy,
+      category,
+      limit: MEMORY_PAGE_SIZE,
+      offset,
+    });
+    setMemoryResults((prev) => append ? [...prev, ...page.items] : page.items);
+    setMemoryPage({ offset: page.offset + page.items.length, total: page.total, hasMore: page.hasMore });
+  }, [memoryCategoryFilter, memorySortBy]);
 
   // Blocks tab state
   const [blocks, setBlocks] = useState<MemoryBlock[]>([]);
@@ -197,12 +222,11 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
     if (activeTab !== "memories" || !isOpen) return;
     if (memoryResults.length === 0) {
       setMemoryLoading(true);
-      fetchAllMemories(memorySortBy)
-        .then(setMemoryResults)
+      loadMemoryPage({ offset: 0 })
         .catch(() => {})
         .finally(() => setMemoryLoading(false));
     }
-  }, [activeTab, isOpen]);
+  }, [activeTab, isOpen, loadMemoryPage, memoryResults.length]);
 
   // ── Load blocks on tab switch ─────────────────────────────────────────
   useEffect(() => {
@@ -234,19 +258,17 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
   const handleMemorySortChange = useCallback((sort: string) => {
     setMemorySortBy(sort);
     setMemoryLoading(true);
-    fetchAllMemories(sort)
-      .then(setMemoryResults)
+    loadMemoryPage({ sortBy: sort, offset: 0 })
       .catch(() => {})
       .finally(() => setMemoryLoading(false));
-  }, []);
+  }, [loadMemoryPage]);
 
   const handleMemorySearch = useCallback((query: string) => {
     setMemorySearchQuery(query);
     if (memorySearchTimer.current) clearTimeout(memorySearchTimer.current);
     if (!query.trim()) {
       setMemoryLoading(true);
-      fetchAllMemories(memorySortBy)
-        .then(setMemoryResults)
+      loadMemoryPage({ offset: 0 })
         .catch(() => {})
         .finally(() => setMemoryLoading(false));
       return;
@@ -256,10 +278,28 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
       try {
         const results = await searchMemories(query, 20);
         setMemoryResults(results);
+        setMemoryPage({ offset: results.length, total: results.length, hasMore: false });
       } catch {}
       setMemoryLoading(false);
     }, 300);
-  }, [memorySortBy]);
+  }, [loadMemoryPage]);
+
+  const handleMemoryCategoryFilterChange = useCallback((cat: string) => {
+    setMemoryCategoryFilter(cat);
+    if (memorySearchQuery.trim()) return;
+    setMemoryLoading(true);
+    loadMemoryPage({ category: cat, offset: 0 })
+      .catch(() => {})
+      .finally(() => setMemoryLoading(false));
+  }, [loadMemoryPage, memorySearchQuery]);
+
+  const handleLoadMoreMemories = useCallback(() => {
+    if (memoryLoadingMore || !memoryPage.hasMore || memorySearchQuery.trim()) return;
+    setMemoryLoadingMore(true);
+    loadMemoryPage({ offset: memoryPage.offset, append: true })
+      .catch(() => {})
+      .finally(() => setMemoryLoadingMore(false));
+  }, [loadMemoryPage, memoryLoadingMore, memoryPage.hasMore, memoryPage.offset, memorySearchQuery]);
 
   const handleDeleteMemory = useCallback(async (id: string) => {
     setMemoryDeleting(id);
@@ -407,6 +447,9 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
               results={memoryResults}
               loading={memoryLoading}
               deleting={memoryDeleting}
+              total={memoryPage.total}
+              hasMore={memoryPage.hasMore}
+              loadingMore={memoryLoadingMore}
               categoryFilter={memoryCategoryFilter}
               sortBy={memorySortBy}
               expandedLineage={expandedLineage}
@@ -417,7 +460,8 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
               onSortChange={handleMemorySortChange}
               onDeleteMemory={handleDeleteMemory}
               onToggleLineage={handleToggleLineage}
-              onCategoryFilterChange={setMemoryCategoryFilter}
+              onCategoryFilterChange={handleMemoryCategoryFilterChange}
+              onLoadMore={handleLoadMoreMemories}
             />
           )}
           {activeTab === "blocks" && (
@@ -665,6 +709,9 @@ function MemoriesTab({
   searchQuery,
   results,
   loading,
+  total,
+  hasMore,
+  loadingMore,
   deleting,
   categoryFilter,
   sortBy,
@@ -677,12 +724,16 @@ function MemoriesTab({
   onDeleteMemory,
   onToggleLineage,
   onCategoryFilterChange,
+  onLoadMore,
 }: {
   memoryStatus: { memoryCount: number; lastSynthesis: string | null; embeddingModelAvailable: boolean } | null;
   synthesisRunning: boolean;
   searchQuery: string;
   results: (MemorySummary & { score?: number })[];
   loading: boolean;
+  total: number;
+  hasMore: boolean;
+  loadingMore: boolean;
   deleting: string | null;
   categoryFilter: string;
   sortBy: string;
@@ -695,6 +746,7 @@ function MemoriesTab({
   onDeleteMemory: (id: string) => void;
   onToggleLineage: (id: string) => void;
   onCategoryFilterChange: (cat: string) => void;
+  onLoadMore: () => void;
 }) {
   const sortDd = useDropdown();
   return (
@@ -743,8 +795,7 @@ function MemoriesTab({
       {/* Category filter + sort */}
       <div className="flex items-center justify-between gap-2">
         {(() => {
-          const categories = [...new Set(results.map((m) => m.category))].sort();
-          if (categories.length <= 1) return <div />;
+          const categories = MEMORY_CATEGORIES;
           return (
             <div className="flex gap-1 flex-wrap">
               {["all", ...categories].map((cat) => (
@@ -901,6 +952,22 @@ function MemoriesTab({
                 </div>
               );
             })
+        )}
+        {!loading && !searchQuery.trim() && results.length > 0 && (
+          <div className="flex items-center justify-center gap-3 py-2">
+            <span className="text-[10px] text-white/30">
+              Showing {results.length} of {total || results.length}
+            </span>
+            {hasMore && (
+              <button
+                onClick={onLoadMore}
+                disabled={loadingMore}
+                className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-[10px] text-white/60 hover:bg-white/10 hover:text-white/80 transition-all disabled:opacity-50"
+              >
+                {loadingMore ? "Loading..." : "Load more"}
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
