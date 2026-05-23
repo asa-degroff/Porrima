@@ -1,0 +1,33 @@
+{
+  "id": "nvidia-single-gpu",
+  "label": "NVIDIA single GPU desktop",
+  "matches": { "vendor": "nvidia", "backend": "cuda", "minGpuCount": 1, "maxGpuCount": 1 },
+  "llama": {
+    "environment": [
+      "LD_LIBRARY_PATH=${LLAMA_BIN_DIR}",
+      "CUDA_VISIBLE_DEVICES=0"
+    ],
+    "chat": {
+      "mode": "router",
+      "port": 8080,
+      "host": "127.0.0.1",
+      "gpuLayers": "auto",
+      "ctxSize": 65536,
+      "parallel": 1,
+      "batchSize": 2048,
+      "ubatchSize": 512,
+      "extraArgs": [
+        "--flash-attn", "on",
+        "--cache-ram", "16384",
+        "--slot-prompt-similarity", "0.50",
+        "--reasoning-format", "deepseek",
+        "--sleep-idle-seconds", "172800",
+        "--timeout", "86400"
+      ]
+    },
+    "background": {
+      "gpuLayers": 0,
+      "reason": "Reserve GPU memory for interactive chat."
+    }
+  }
+}

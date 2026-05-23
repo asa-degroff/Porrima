@@ -1,0 +1,24 @@
+[Unit]
+Description=Porrima llama.cpp Chat Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${LLAMA_BIN_DIR}
+${ENVIRONMENT_LINES}
+ExecStart=${LLAMA_SERVER_BIN} \
+    --models-dir ${LLAMA_MODELS_DIR} \
+    --port ${PORT} \
+    --host ${HOST} \
+    --n-gpu-layers ${GPU_LAYERS} \
+    --ctx-size ${CTX_SIZE} \
+    --parallel ${PARALLEL} \
+    --batch-size ${BATCH_SIZE} \
+    --ubatch-size ${UBATCH_SIZE} \
+    ${EXTRA_ARGS}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

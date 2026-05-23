@@ -1,0 +1,16 @@
+[Unit]
+Description=Porrima
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${PORRIMA_DIR}/server
+Environment=NODE_ENV=production
+Environment=PORT=3002
+ExecStart=${NODE_BIN} dist/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

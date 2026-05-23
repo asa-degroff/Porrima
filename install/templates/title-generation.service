@@ -1,0 +1,24 @@
+[Unit]
+Description=Porrima llama.cpp Title Generation Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${LLAMA_BIN_DIR}
+${ENVIRONMENT_LINES}
+ExecStart=${LLAMA_SERVER_BIN} \
+    -m ${TITLE_MODEL_PATH} \
+    --alias ${TITLE_MODEL_ID} \
+    --port 8085 \
+    --host 127.0.0.1 \
+    --n-gpu-layers 0 \
+    --ctx-size 4096 \
+    --parallel 1 \
+    --reasoning-format deepseek \
+    --chat-template-kwargs '{"enable_thinking":false}'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,38 @@
+{
+  "id": "amd-dual-gpu",
+  "label": "AMD dual GPU desktop",
+  "matches": { "vendor": "amd", "backend": "rocm", "minGpuCount": 2 },
+  "llama": {
+    "environment": [
+      "LD_LIBRARY_PATH=${LLAMA_BIN_DIR}",
+      "ROCR_VISIBLE_DEVICES=0,1"
+    ],
+    "chat": {
+      "mode": "router",
+      "port": 8080,
+      "host": "127.0.0.1",
+      "gpuLayers": "auto",
+      "ctxSize": 110000,
+      "parallel": 1,
+      "batchSize": 4096,
+      "ubatchSize": 1024,
+      "extraArgs": [
+        "--flash-attn", "on",
+        "--cache-ram", "32768",
+        "--cache-idle-slots",
+        "--kv_unified",
+        "--split-mode", "tensor",
+        "--tensor-split", "1,1",
+        "--slot-prompt-similarity", "0.50",
+        "--ctx-checkpoints", "128",
+        "--reasoning-format", "deepseek",
+        "--sleep-idle-seconds", "172800",
+        "--timeout", "86400"
+      ]
+    },
+    "background": {
+      "gpuLayers": 0,
+      "reason": "Keep extraction, reranker, embedding, and title generation from competing with chat VRAM by default."
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "features": {
+    "core": {
+      "label": "Core Agent",
+      "required": true,
+      "description": "Porrima app, managed llama.cpp services, local storage, memory, and chat.",
+      "dependencies": ["linux", "systemd-user", "node", "npm", "native-build-tools", "llama.cpp", "desktop-gpu"],
+      "services": [
+        "porrima.service",
+        "llama-server.service",
+        "extraction-model.service",
+        "reranker.service",
+        "title-generation.service"
+      ]
+    },
+    "tts": {
+      "label": "Voice Pack",
+      "required": false,
+      "description": "Python TTS backends and audio tooling. Can be added after core setup.",
+      "dependencies": ["python3", "venv", "pip", "ffmpeg"],
+      "services": []
+    },
+    "images": {
+      "label": "Image Pack",
+      "required": false,
+      "description": "Optional image-generation backend such as ComfyUI or stable-diffusion.cpp.",
+      "dependencies": ["python3-or-native-image-backend", "ffmpeg", "gpu-vram-headroom"],
+      "services": ["comfyui.service", "sd-server.service"]
+    },
+    "automations": {
+      "label": "Automation Pack",
+      "required": false,
+      "description": "Scheduled routines, notifications, and background autonomy defaults.",
+      "dependencies": ["core"],
+      "services": []
+    }
+  },
+  "recommendedDefault": ["core"]
+}

@@ -1,0 +1,26 @@
+[Unit]
+Description=Porrima llama.cpp Reranker Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${LLAMA_BIN_DIR}
+${ENVIRONMENT_LINES}
+ExecStart=${LLAMA_SERVER_BIN} \
+    -m ${RERANKER_MODEL_PATH} \
+    --alias ${RERANKER_MODEL_ID} \
+    --embedding \
+    --pooling rank \
+    --reranking \
+    --port 8082 \
+    --host 127.0.0.1 \
+    --n-gpu-layers 0 \
+    --ctx-size 4096 \
+    --batch-size 4096 \
+    --ubatch-size 4096
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

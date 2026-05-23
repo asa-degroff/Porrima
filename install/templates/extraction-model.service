@@ -1,0 +1,24 @@
+[Unit]
+Description=Porrima llama.cpp Extraction Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${LLAMA_BIN_DIR}
+${ENVIRONMENT_LINES}
+ExecStart=${LLAMA_SERVER_BIN} \
+    -m ${EXTRACTION_MODEL_PATH} \
+    --alias ${EXTRACTION_MODEL_ID} \
+    --port 8083 \
+    --host 127.0.0.1 \
+    --n-gpu-layers 0 \
+    --ctx-size 16384 \
+    --parallel 1 \
+    --reasoning-format deepseek \
+    --chat-template-kwargs '{"enable_thinking":false}'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
