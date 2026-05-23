@@ -29,7 +29,6 @@ const MIN_QUERY_CHARS = 80;
 const RECENT_MESSAGE_COUNT = 12;
 const SEARCH_EVERY_ITERATIONS = 2;
 const MIN_CANDIDATES_BEFORE_RERANK = 3;
-const MAX_RERANK_DOCUMENT_CHARS = 1200;
 const MIN_RERANK_SCORE = 0.12;
 const MIN_ITERATIONS_BETWEEN_INJECTIONS = 3;
 
@@ -455,7 +454,7 @@ export class PassiveMemoryRecallController {
     if (rerankCandidates.length === 0) return;
 
     const instruction = RERANK_INSTRUCTIONS["passive-memory"];
-    const rerankDocuments = rerankCandidates.map((candidate) => clampText(candidate.memory.text, MAX_RERANK_DOCUMENT_CHARS));
+    const rerankDocuments = rerankCandidates.map((candidate) => clampText(candidate.memory.text, budget.passiveRecall.rerankDocumentChars));
     const formattedQuery = `Instruct: ${instruction}\nQuery: ${rerankQuery}`;
     const output = await rerank(
       rerankQuery,

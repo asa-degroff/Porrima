@@ -369,6 +369,7 @@ export interface Settings {
   passiveRecallCandidatePool?: number;
   passiveRecallDiverseCandidateLimit?: number;
   passiveRecallRerankDocumentLimit?: number;
+  passiveRecallRerankDocumentChars?: number;
   passiveRecallRerankTopN?: number;
   passiveRecallMemoriesPerInjection?: number;
   passiveRecallMemoriesPerTurn?: number;

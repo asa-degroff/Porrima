@@ -24,6 +24,7 @@ export interface RetrievalBudget {
     candidatePool: number;
     diverseCandidateLimit: number;
     rerankDocumentLimit: number;
+    rerankDocumentChars: number;
     rerankTopN: number;
     memoriesPerInjection: number;
     memoriesPerTurn: number;
@@ -49,6 +50,7 @@ const PRESET_BUDGETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrieval
       candidatePool: 18,
       diverseCandidateLimit: 12,
       rerankDocumentLimit: 8,
+      rerankDocumentChars: 1200,
       rerankTopN: 3,
       memoriesPerInjection: 1,
       memoriesPerTurn: 8,
@@ -72,6 +74,7 @@ const PRESET_BUDGETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrieval
       candidatePool: 24,
       diverseCandidateLimit: 16,
       rerankDocumentLimit: 12,
+      rerankDocumentChars: 1600,
       rerankTopN: 4,
       memoriesPerInjection: 2,
       memoriesPerTurn: 12,
@@ -95,6 +98,7 @@ const PRESET_BUDGETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrieval
       candidatePool: 36,
       diverseCandidateLimit: 24,
       rerankDocumentLimit: 20,
+      rerankDocumentChars: 2000,
       rerankTopN: 6,
       memoriesPerInjection: 3,
       memoriesPerTurn: 18,
@@ -159,6 +163,7 @@ export function resolveRetrievalBudget(settings: Settings): RetrievalBudget {
       candidatePool: clampInt(settings.passiveRecallCandidatePool, base.passiveRecall.candidatePool, passiveRecallRerankDocumentLimit, 96),
       diverseCandidateLimit: clampInt(settings.passiveRecallDiverseCandidateLimit, base.passiveRecall.diverseCandidateLimit, passiveRecallRerankDocumentLimit, 48),
       rerankDocumentLimit: passiveRecallRerankDocumentLimit,
+      rerankDocumentChars: clampInt(settings.passiveRecallRerankDocumentChars, base.passiveRecall.rerankDocumentChars, 400, 4000),
       rerankTopN: clampInt(settings.passiveRecallRerankTopN, base.passiveRecall.rerankTopN, 2, passiveRecallRerankDocumentLimit),
       memoriesPerInjection: clampInt(settings.passiveRecallMemoriesPerInjection, base.passiveRecall.memoriesPerInjection, 1, 5),
       memoriesPerTurn: clampInt(settings.passiveRecallMemoriesPerTurn, base.passiveRecall.memoriesPerTurn, 0, 30),
