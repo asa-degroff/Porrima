@@ -2,7 +2,7 @@
 
 ## Project
 
-**Porrima** — A feature-rich agent framework and user interface with persistent memory, project context, image generation, social media integration, and agentic tool execution. npm workspaces monorepo: `server/` (Express + TypeScript) and `client/` (React + Vite + Tailwind).
+**Porrima** — A feature-rich agent framework and user interface with persistent memory, project context, image generation, and agentic tool execution. npm workspaces monorepo: `server/` (Express + TypeScript) and `client/` (React + Vite + Tailwind).
 
 ## Quick Reference
 
