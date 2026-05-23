@@ -133,9 +133,12 @@ async function archiveChatForSynthesis(chatId: string): Promise<boolean> {
 
   const messages = JSON.parse(row.messages) as ChatMessage[];
 
-  // Filter: only substantive messages, exclude compaction summaries
+  // Filter: only substantive conversation messages, exclude metadata rows.
+  // Persisted system rows are passive-recall / memory-delta injections; they
+  // duplicate memory-store content and produce empty "Conversation context"
+  // archive blocks because index formatting intentionally ignores system text.
   const substantiveMessages = messages.filter(
-    (m) => !m._outOfContext && !m._isCompactionSummary
+    (m) => !m._outOfContext && !m._isCompactionSummary && m.role !== "system"
   );
 
   if (substantiveMessages.length <= 4) return false;
@@ -263,12 +266,18 @@ function groupIntoBlocks(messages: ChatMessage[]): ChatMessage[][] {
 /**
  * Format a block of messages into readable text for the index description.
  */
-function blockToText(block: ChatMessage[], maxPerMessage = 400): string {
+function blockToText(block: ChatMessage[], maxPerMessage = 600): string {
   const parts: string[] = [];
   for (const m of block) {
     if (m.role === "user") {
       parts.push(`user: ${truncateMiddle(m.content, maxPerMessage)}`);
     } else if (m.role === "assistant") {
+      // Thinking is the primary signal — it contains the agent's reasoning,
+      // analysis, and decisions. The final output is often terse ("Clean, here's
+      // what I changed") while the thinking has the substance.
+      if (m.thinking) {
+        parts.push(`thinking: ${truncateMiddle(m.thinking, maxPerMessage)}`);
+      }
       if (m.content) {
         parts.push(`assistant: ${truncateMiddle(m.content, maxPerMessage)}`);
       }
@@ -325,6 +334,7 @@ function summarizeArgs(args: Record<string, unknown>, maxLen: number): string {
  * Generate a readable fallback description when the LLM fails.
  */
 function generateFallbackDescription(block: ChatMessage[]): string {
+  let assistantThinking = "";
   let assistantAnalysis = "";
   let userQuestion = "";
   const toolNames: string[] = [];
@@ -332,10 +342,19 @@ function generateFallbackDescription(block: ChatMessage[]): string {
 
   for (const m of block) {
     if (m.role === "user" && !userQuestion) {
-      userQuestion = m.content.slice(0, 120).replace(/\n/g, " ");
+      userQuestion = m.content.slice(0, 150).replace(/\n/g, " ");
     }
     if (m.role === "assistant") {
-      if (m.content && m.content.length > 100) {
+      // Thinking is the primary signal for fallback too.
+      if (m.thinking && !assistantThinking) {
+        const thinking = m.thinking.replace(/\n/g, " ").trim();
+        if (thinking.length > 150) {
+          assistantThinking = thinking.slice(0, 100) + " ... " + thinking.slice(-50);
+        } else {
+          assistantThinking = thinking;
+        }
+      }
+      if (m.content && m.content.length > 100 && !assistantAnalysis) {
         const head = m.content.slice(0, 80).replace(/\n/g, " ");
         const tail =
           m.content.length > 200
@@ -355,6 +374,7 @@ function generateFallbackDescription(block: ChatMessage[]): string {
     }
   }
 
+  if (assistantThinking) return assistantThinking;
   if (assistantAnalysis) return assistantAnalysis;
   if (resultPreview) return resultPreview;
   if (userQuestion) return `Question: ${userQuestion}`;
@@ -390,8 +410,10 @@ async function generateIndexEntries(
   const settings = await getSettings();
   const extractionUrl = settings.extractionModelUrl;
 
-  // Budget per block — more chars for fewer blocks
-  const perBlockBudget = Math.min(1200, Math.max(500, Math.floor(6000 / blockDescriptions.length)));
+  // Budget per block — more chars for fewer blocks.
+  // Increased to 12000 total (from 6000) to accommodate thinking content
+  // and give the index model enough context to produce meaningful descriptions.
+  const perBlockBudget = Math.min(2000, Math.max(700, Math.floor(12000 / blockDescriptions.length)));
   const inputParts = blockDescriptions
     .map((b) => `[${b.id}]\n${b.text.slice(0, perBlockBudget)}`)
     .join("\n\n---\n\n");

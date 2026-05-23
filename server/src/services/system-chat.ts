@@ -382,13 +382,14 @@ async function buildSynthesisTriggerContent(
     const placeholders = digestChatIds.map(() => "?").join(",");
     const rows = db
       .prepare(
-        `SELECT a.chatId, a.indexEntry, a.sequenceNum, c.title, c.lastModified
+        `SELECT a.id, a.chatId, a.indexEntry, a.sequenceNum, c.title, c.lastModified
          FROM context_archives a
          LEFT JOIN chats c ON c.id = a.chatId
          WHERE a.chatId IN (${placeholders})
          ORDER BY c.lastModified DESC, a.chatId, a.sequenceNum ASC`,
       )
       .all(...digestChatIds) as Array<{
+        id: string;
         chatId: string;
         indexEntry: string;
         sequenceNum: number;
@@ -404,7 +405,7 @@ async function buildSynthesisTriggerContent(
           entries: [],
         });
       }
-      byChat.get(row.chatId)!.entries.push(row.indexEntry.trim());
+      byChat.get(row.chatId)!.entries.push(`- ${row.id} — ${row.indexEntry.trim()}`);
     }
 
     if (byChat.size > 0) {
@@ -415,7 +416,7 @@ async function buildSynthesisTriggerContent(
       parts.push(
         [
           `## Recent Conversations`,
-          `Archive index for chats touched this cycle — each line identifies one archive block. Call \`read_archived_context(archive_id)\` for a full transcript, or \`search_conversations\` to search across all archives.`,
+          `Archive index for chats touched this cycle — each line identifies one archive block. Call \`read_archived_context(archive_id)\` for a full transcript, or \`search_conversation\` to search across all archives.`,
           sections.join("\n\n"),
         ].join("\n\n"),
       );
