@@ -903,6 +903,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     });
   }, [activeView]);
   const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
+  const handleApplySettings = useCallback(
+    async (s: import("./types").Settings) => {
+      await updateSettings(s);
+    },
+    [updateSettings]
+  );
   const handleSaveSettings = useCallback(
     async (s: import("./types").Settings) => {
       await updateSettings(s);
@@ -1203,6 +1209,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <SettingsModal
           settings={settings}
           models={models}
+          onApply={handleApplySettings}
           onSave={handleSaveSettings}
           onClose={handleCloseSettings}
           onLogout={onLogout}

@@ -180,6 +180,7 @@ interface RetrievalPresetValues {
   passiveRecallCandidatePool: number;
   passiveRecallDiverseCandidateLimit: number;
   passiveRecallRerankDocumentLimit: number;
+  passiveRecallRerankDocumentChars: number;
   passiveRecallRerankTopN: number;
   passiveRecallMemoriesPerInjection: number;
   passiveRecallMemoriesPerTurn: number;
@@ -200,6 +201,7 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
     passiveRecallCandidatePool: 18,
     passiveRecallDiverseCandidateLimit: 12,
     passiveRecallRerankDocumentLimit: 8,
+    passiveRecallRerankDocumentChars: 1200,
     passiveRecallRerankTopN: 3,
     passiveRecallMemoriesPerInjection: 1,
     passiveRecallMemoriesPerTurn: 8,
@@ -218,6 +220,7 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
     passiveRecallCandidatePool: 24,
     passiveRecallDiverseCandidateLimit: 16,
     passiveRecallRerankDocumentLimit: 12,
+    passiveRecallRerankDocumentChars: 1600,
     passiveRecallRerankTopN: 4,
     passiveRecallMemoriesPerInjection: 2,
     passiveRecallMemoriesPerTurn: 12,
@@ -236,6 +239,7 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
     passiveRecallCandidatePool: 36,
     passiveRecallDiverseCandidateLimit: 24,
     passiveRecallRerankDocumentLimit: 20,
+    passiveRecallRerankDocumentChars: 2000,
     passiveRecallRerankTopN: 6,
     passiveRecallMemoriesPerInjection: 3,
     passiveRecallMemoriesPerTurn: 18,
@@ -382,6 +386,7 @@ function formatAutomationDuration(startedAt: string, finishedAt?: string): strin
 interface Props {
   settings: Settings;
   models: InferenceModel[];
+  onApply: (settings: Settings) => void;
   onSave: (settings: Settings) => void;
   onClose: () => void;
   onLogout: () => void;
@@ -393,7 +398,7 @@ function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
   return Array.from(new Set((ids ?? []).filter((id) => PCI_ADDRESS_RE.test(id))));
 }
 
-export function SettingsModal({ settings, models, onSave, onClose, onLogout }: Props) {
+export function SettingsModal({ settings, models, onApply, onSave, onClose, onLogout }: Props) {
   const visionModelOptions = (() => {
     const capable = models.filter(isVisionModel);
     return capable.length > 0 ? capable : models;
@@ -482,6 +487,8 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [confirmMigrate, setConfirmMigrate] = useState(false);
   const [confirmRestoreId, setConfirmRestoreId] = useState<string | null>(null);
   const migrationAbortRef = useRef<null | (() => void)>(null);
+  // Apply button feedback
+  const [appliedFeedback, setAppliedFeedback] = useState(false);
   // Agent snapshot state
   const [agentSnapshots, setAgentSnapshots] = useState<AgentSnapshot[]>([]);
   const [agentSnapshotsLoading, setAgentSnapshotsLoading] = useState(false);
@@ -637,6 +644,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
   const [passiveRecallCandidatePool, setPassiveRecallCandidatePool] = useState(settings.passiveRecallCandidatePool ?? 24);
   const [passiveRecallDiverseCandidateLimit, setPassiveRecallDiverseCandidateLimit] = useState(settings.passiveRecallDiverseCandidateLimit ?? 16);
   const [passiveRecallRerankDocumentLimit, setPassiveRecallRerankDocumentLimit] = useState(settings.passiveRecallRerankDocumentLimit ?? 12);
+  const [passiveRecallRerankDocumentChars, setPassiveRecallRerankDocumentChars] = useState(settings.passiveRecallRerankDocumentChars ?? 1600);
   const [passiveRecallRerankTopN, setPassiveRecallRerankTopN] = useState(settings.passiveRecallRerankTopN ?? 4);
   const [passiveRecallMemoriesPerInjection, setPassiveRecallMemoriesPerInjection] = useState(settings.passiveRecallMemoriesPerInjection ?? 2);
   const [passiveRecallMemoriesPerTurn, setPassiveRecallMemoriesPerTurn] = useState(settings.passiveRecallMemoriesPerTurn ?? 12);
@@ -655,6 +663,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     setPassiveRecallCandidatePool(preset.passiveRecallCandidatePool);
     setPassiveRecallDiverseCandidateLimit(preset.passiveRecallDiverseCandidateLimit);
     setPassiveRecallRerankDocumentLimit(preset.passiveRecallRerankDocumentLimit);
+    setPassiveRecallRerankDocumentChars(preset.passiveRecallRerankDocumentChars);
     setPassiveRecallRerankTopN(preset.passiveRecallRerankTopN);
     setPassiveRecallMemoriesPerInjection(preset.passiveRecallMemoriesPerInjection);
     setPassiveRecallMemoriesPerTurn(preset.passiveRecallMemoriesPerTurn);
@@ -680,6 +689,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       passiveRecallCandidatePool: settings.passiveRecallCandidatePool ?? 24,
       passiveRecallDiverseCandidateLimit: settings.passiveRecallDiverseCandidateLimit ?? 16,
       passiveRecallRerankDocumentLimit: settings.passiveRecallRerankDocumentLimit ?? 12,
+      passiveRecallRerankDocumentChars: settings.passiveRecallRerankDocumentChars ?? 1600,
       passiveRecallRerankTopN: settings.passiveRecallRerankTopN ?? 4,
       passiveRecallMemoriesPerInjection: settings.passiveRecallMemoriesPerInjection ?? 2,
       passiveRecallMemoriesPerTurn: settings.passiveRecallMemoriesPerTurn ?? 12,
@@ -1458,10 +1468,10 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
     }
   }, []);
 
-  const handleSave = () => {
+  const handleSave = (): Settings => {
     const defaultPreset = presets.find((p) => p.isDefault);
     const effectivePrompt = defaultPreset ? defaultPreset.content.trim() : defaultSystemPrompt.trim();
-    onSave({
+    const newSettings: Settings = {
       ...settings,
       agentName: agentName.trim() || undefined,
       defaultModelId,
@@ -1544,13 +1554,15 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
       passiveRecallRerankTopN,
       passiveRecallMemoriesPerInjection,
       passiveRecallMemoriesPerTurn,
-    });
+    };
     
     // Emit TTS settings update event for useTTS hook
     if (ttsSettings) {
       window.dispatchEvent(new CustomEvent('tts-settings-updated', { detail: ttsSettings }));
       console.log("[SettingsModal] Emitted tts-settings-updated:", ttsSettings);
     }
+    
+    return newSettings;
   };
 
   const replaceAutomation = (task: AutomationTask) => {
@@ -5392,6 +5404,7 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
 	                      <RetrievalRange label="Recall candidate pool" description="Adjusted-score candidates accumulated before reranking." value={passiveRecallCandidatePool} min={8} max={96} step={2} suffix="docs" onChange={setPassiveRecallCandidatePool} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Recall diverse candidates" description="MMR-selected candidates eligible for the passive reranker batch." value={passiveRecallDiverseCandidateLimit} min={8} max={48} step={1} suffix="docs" onChange={setPassiveRecallDiverseCandidateLimit} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Recall reranked documents" description="Documents scored by the reranker for passive recall." value={passiveRecallRerankDocumentLimit} min={8} max={32} step={1} suffix="docs" onChange={setPassiveRecallRerankDocumentLimit} onCommit={switchToCustom} />
+                      <RetrievalRange label="Recall document length" description="Maximum memory text sent to the reranker for scoring." value={passiveRecallRerankDocumentChars} min={400} max={4000} step={100} suffix="chars" onChange={setPassiveRecallRerankDocumentChars} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Recall returned results" description="Top passive reranker scores retained before precision filtering." value={passiveRecallRerankTopN} min={2} max={32} step={1} suffix="docs" onChange={setPassiveRecallRerankTopN} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Memories per injection" description="Maximum passive memories injected at once." value={passiveRecallMemoriesPerInjection} min={1} max={5} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerInjection} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Memories per turn" description="Maximum passive memories injected across one assistant turn." value={passiveRecallMemoriesPerTurn} min={0} max={30} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerTurn} onCommit={switchToCustom} />
@@ -6627,10 +6640,20 @@ export function SettingsModal({ settings, models, onSave, onClose, onLogout }: P
             Cancel
           </button>
           <button
-            onClick={handleSave}
+            onClick={async () => {
+              await onApply(handleSave());
+              setAppliedFeedback(true);
+              setTimeout(() => setAppliedFeedback(false), 2000);
+            }}
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 hover:text-white transition-all"
+          >
+            {appliedFeedback ? "Applied" : "Apply"}
+          </button>
+          <button
+            onClick={() => onSave(handleSave())}
             className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 border border-blue-400/25 text-blue-300 hover:bg-blue-500/30 transition-all"
           >
-            Save
+            Save and Close
           </button>
         </div>
       </div>
