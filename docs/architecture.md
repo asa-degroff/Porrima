@@ -44,7 +44,7 @@ Multi-provider system supporting multiple inference backends through pi-ai's pro
 
 ## llama.cpp Infrastructure
 
-- **Router mode** (`llama-server.service`): Serves models from `~/.local/share/llama-models/` with dynamic loading/unloading. Config: `--ctx-size 131072`, `--parallel 1`, `--n-gpu-layers auto`, `--reasoning-format deepseek`, `--sleep-idle-seconds 300`
+- **Router mode** (`llama-server.service`): Serves models from `~/.local/share/llama-models/` with dynamic loading/unloading. Config: `--ctx-size 131072`, `--parallel 1`, `--n-gpu-layers auto`, `--reasoning-format deepseek`, `--sleep-idle-seconds 172800`
 - **Model directory structure**: Each model in a subdirectory with the GGUF + optional mmproj file for vision. Router auto-detects `mmproj*` files.
 - **Auto-sync** (`sync-llama-models.sh` + `sync-llama-models.timer`): Every 5 min, scans `~/.cache/huggingface/` for new GGUF downloads, creates symlinked subdirectories, restarts llama-server if new models found. Excludes reranker/embedding models.
 - **Reranker service** (`reranker.service`): Dedicated Qwen3-Reranker-0.6B instance on port 8082, CPU-only, for memory retrieval reranking.
@@ -110,5 +110,5 @@ VRAM management across llama.cpp and ComfyUI:
 
 - **ComfyUI generation**: `waitForFreeVRAM()` checks `/system_stats` for free VRAM, unloads llama.cpp models via `/v1/models` if insufficient, polls every 3s until 6GB free
 - **llama.cpp model loading**: `ensureModelLoaded()` handles load/unload/reload cycles for model swaps
-- **Idle unloading**: llama.cpp `--sleep-idle-seconds 300` auto-unloads after 5 min of inactivity
+- **Idle unloading**: llama.cpp `--sleep-idle-seconds 172800` permits long-idle unloading without clearing the prompt cache between ordinary follow-up messages
 - **Tool result limits**: Dynamic truncation scaled to 15% of context window (min 8k chars)

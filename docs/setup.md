@@ -87,7 +87,7 @@ ExecStart=/path/to/llama-server \
     --ctx-size 131072 --parallel 1 \
     --n-gpu-layers auto \
     --reasoning-format deepseek \
-    --sleep-idle-seconds 300
+    --sleep-idle-seconds 172800
 Environment=LD_LIBRARY_PATH=/path/to/llama.cpp/build
 # For AMD GPUs:
 Environment=HSA_OVERRIDE_GFX_VERSION=11.0.0
