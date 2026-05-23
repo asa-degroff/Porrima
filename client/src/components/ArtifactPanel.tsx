@@ -3,6 +3,7 @@ import type { Artifact } from "../types";
 import type { ArtifactRuntimeErrorReport } from "../api/client";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { useIsDesktop } from "../hooks/useIsDesktop";
+import { injectArtifactErrorForwarder } from "../utils/artifactErrorForwarder";
 
 const MIN_HEIGHT = 100;
 const MAX_HEIGHT = 4000;
@@ -31,13 +32,6 @@ function getSourceExcerpt(source: string | null, lineNumber?: number, radius = 5
     .slice(start, end)
     .map((line, idx) => `${start + idx + 1}: ${line}`)
     .join("\n");
-}
-
-function injectArtifactErrorForwarder(html: string): string {
-  const script = `<script>window.addEventListener('error',function(e){window.parent.postMessage({type:'artifact-error',message:e.message||'Unknown runtime error',filename:e.filename,lineno:e.lineno,colno:e.colno,stack:e.error&&e.error.stack},'*');});window.addEventListener('unhandledrejection',function(e){window.parent.postMessage({type:'artifact-error',message:e.reason&&e.reason.message||String(e.reason),stack:e.reason&&e.reason.stack},'*');});<\/script>`;
-  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${script}</head>`);
-  if (/<body\b/i.test(html)) return html.replace(/<body\b/i, `${script}<body`);
-  return `${script}${html}`;
 }
 
 export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId, onArtifactRuntimeError }: Props) {

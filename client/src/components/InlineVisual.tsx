@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { InlineVisual as InlineVisualType } from "../types";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { useIsDesktop } from "../hooks/useIsDesktop";
+import { injectArtifactErrorForwarder } from "../utils/artifactErrorForwarder";
 
 const MIN_HEIGHT = 80;
 const MAX_HEIGHT = 4000;
@@ -17,6 +18,7 @@ export function InlineVisual({ visual, isPinnedView }: Props) {
   const isDesktop = useIsDesktop();
   const pinned = isPinned("visual", visual.id);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -78,12 +80,24 @@ html, body { background: transparent !important; }
 
   // Create blob URL from inline HTML with scrollbar styles injected
   useEffect(() => {
-    const styledHtml = injectScrollbarStyles(visual.html);
+    setRuntimeError(null);
+    const styledHtml = injectArtifactErrorForwarder(injectScrollbarStyles(visual.html));
     const blob = new Blob([styledHtml], { type: "text/html" });
     const url = URL.createObjectURL(blob);
     setBlobUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [visual.html]);
+
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      if (e.source !== iframeRef.current?.contentWindow) return;
+      if (e.data?.type === "artifact-error") {
+        setRuntimeError(e.data.message || "Unknown runtime error");
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([visual.html], { type: "text/html" });
@@ -153,7 +167,21 @@ html, body { background: transparent !important; }
 
       {/* Iframe content */}
       <div className={`transition-colors duration-150 ${iframeLoaded ? "bg-transparent" : "bg-black/10"} ${isPinnedView ? "flex-1 min-h-0 flex flex-col" : ""}`}>
-        {blobUrl ? (
+        {runtimeError ? (
+          <div className="p-4 space-y-2">
+            <div className="flex items-center gap-2 text-amber-400">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                <line x1="12" y1="9" x2="12" y2="13"/>
+                <line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              <span className="text-sm font-medium">Runtime Error</span>
+            </div>
+            <pre className="text-xs text-red-300/80 font-mono whitespace-pre-wrap bg-red-950/30 rounded-lg p-3 border border-red-500/20">
+              {runtimeError}
+            </pre>
+          </div>
+        ) : blobUrl ? (
           <iframe
             ref={iframeRef}
             src={blobUrl}
