@@ -398,6 +398,11 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
       gap: `${gap}px`,
     }
   containerStyle.contain = 'layout paint style'
+  // Promote to own compositing layer — prevents z-fighting when a full-screen
+  // background (e.g. scan-lines repeating-linear-gradient) creates a separate
+  // compositing surface. Without this, the paint containment boundary can cause
+  // faces to get incorrectly depth-tested and disappear.
+  containerStyle.transform = 'translate3d(0,0,0)'
 
   const ShapeComponent = shape === 'octahedron' ? OctahedronShape
     : shape === 'cube' ? CubeShape
