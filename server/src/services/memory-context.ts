@@ -35,17 +35,17 @@ export function setCachedAugmentedPrompt(chatId: string, prompt: string): void {
 // Cache the stable prefix (base prompt + persona + user doc + blocks + project context) per chat.
 const stablePrefixCache = new Map<string, { basePrompt: string; prefix: string; blocksSection: string }>();
 
-async function loadProjectContext(projectId?: string, projectPath?: string): Promise<{ label: string; agentsMd: string } | null> {
+async function loadProjectContext(projectId?: string, projectPath?: string): Promise<{ label: string; agentsMd: string | null } | null> {
   if (!projectId) return null;
   const project = await getProject(projectId);
   if (project) {
     const workspace = await getWorkspaceForProject(project);
     const agentsMd = await workspace.readAgentsMd();
-    return agentsMd ? { label: workspace.label, agentsMd } : null;
+    return { label: workspace.label, agentsMd };
   }
   if (projectPath) {
     const agentsMd = await readAgentsMd(projectPath);
-    return agentsMd ? { label: projectPath, agentsMd } : null;
+    return { label: projectPath, agentsMd };
   }
   return null;
 }
@@ -545,7 +545,10 @@ export async function buildStablePrefix(
     try {
       const projectContext = await loadProjectContext(projectId, projectPath);
       if (projectContext) {
-        projectSection = `\n\n## Project Context\nYour working directory is: ${projectContext.label}\nYou are working on the project with the following context from AGENTS.md:\n${projectContext.agentsMd}`;
+        const agentsSection = projectContext.agentsMd
+          ? `\n\nProject instructions from AGENTS.md:\n${projectContext.agentsMd}`
+          : "";
+        projectSection = `\n\n## Project Context\nCurrent working directory: ${projectContext.label}${agentsSection}`;
       }
     } catch (e) {
       console.error("[memory] Failed to load AGENTS.md:", e);
