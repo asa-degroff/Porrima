@@ -413,6 +413,7 @@ export async function executeMemoryTool(
       const id = chatId === NOTEBOOK_CYCLE_CHAT_ID
         ? generateNotebookBlockId("notebook")
         : `blk-${uuid()}`;
+      const blockType = chatId === NOTEBOOK_CYCLE_CHAT_ID ? "notebook" : "note";
       const now = new Date().toISOString();
       
       // Auto-assign projectId for project-scoped blocks when created in a project chat
@@ -436,6 +437,7 @@ export async function executeMemoryTool(
         createdAt: now,
         updatedAt: now,
         updatedBy: "agent",
+        blockType,
         supersededBy: undefined,
         supersedes: undefined,
       });
@@ -459,9 +461,9 @@ export async function executeMemoryTool(
         // same system-block exclusion as the original.
         const { v4: uuid } = await import("uuid");
         const { generateNotebookBlockId } = await import("./notebook-storage.js");
-        const newId = existing.id.startsWith("blk-notebook-")
+        const newId = existing.blockType === "notebook" || existing.id.startsWith("blk-notebook-")
           ? generateNotebookBlockId("notebook")
-          : existing.id.startsWith("blk-synth-")
+          : existing.blockType === "synthesis" || existing.id.startsWith("blk-synth-")
           ? generateNotebookBlockId("synthesis")
           : `blk-${uuid()}`;
         const now = new Date().toISOString();

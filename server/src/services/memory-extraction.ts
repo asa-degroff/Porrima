@@ -464,17 +464,9 @@ async function buildExtractionSystemPrompt(projectId?: string): Promise<string> 
   // Include loaded block summaries so extraction avoids redundant facts.
   let blockContext = "";
   try {
-    const { getMemoryBlocksByScope } = await import("./memory-storage.js");
-    const isSystemBlock = (b: { id: string; scope: string; blockType?: string }) =>
-      b.id === "blk-zeitgeist-continuity" ||
-      b.scope === "archived" ||
-      (b.blockType !== undefined && ["synthesis", "zeitgeist-archive", "notebook"].includes(b.blockType)) ||
-      b.id.startsWith("blk-archive-") ||
-      b.id.startsWith("blk-synth-") ||
-      b.id.startsWith("blk-notebook-");
-
-    const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemBlock(b));
-    const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemBlock(b)) : [];
+    const { getMemoryBlocksByScope, isSystemManagedMemoryBlock } = await import("./memory-storage.js");
+    const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemManagedMemoryBlock(b));
+    const projectBlocks = projectId ? getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemManagedMemoryBlock(b)) : [];
     const allBlocks = [...globalBlocks, ...projectBlocks];
     if (allBlocks.length > 0) {
       const staticChars =

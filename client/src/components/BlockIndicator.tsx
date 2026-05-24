@@ -11,6 +11,9 @@ interface Props {
 // stays visible. Archives, synthesis, and notebook-cycle blocks are only
 // reachable via search/read_memory_block and shouldn't appear here.
 function isUserBlock(b: MemoryBlock): boolean {
+  if (b.id === "blk-zeitgeist-continuity") return true;
+  if (b.scope === "archived") return false;
+  if (b.blockType && ["notebook", "synthesis", "zeitgeist-archive"].includes(b.blockType)) return false;
   if (b.id.startsWith("blk-archive-")) return false;
   if (b.id.startsWith("blk-synth-")) return false;
   if (b.id.startsWith("blk-notebook-")) return false;

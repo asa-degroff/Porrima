@@ -1,5 +1,5 @@
 import { embed, cosineSimilarity } from "./embeddings.js";
-import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, getAllMemoryBlocks, type MemoryBlock } from "./memory-storage.js";
+import { searchMemories, updateMemory, mmrRerank, getMemoryBlocksByScope, getAllMemoryBlocks, isSystemManagedMemoryBlock, type MemoryBlock } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";
 import { recordRerankerStats } from "./reranker-stats.js";
 import { loadPersona } from "./persona-store.js";
@@ -557,30 +557,11 @@ export async function buildStablePrefix(
 
   let blocksSection = "";
   try {
-    // System-managed blocks are excluded from both auto-loading and the
-    // "Available Memory Blocks" index — they have dedicated discovery paths
-    // and would otherwise grow unboundedly and bloat every chat's context:
-    // - Zeitgeist continuity block: loaded separately as "Continuity Context"
-    // - notebook / synthesis / zeitgeist-archive blockTypes: still
-    //   FTS-searchable via search_memory and discoverable via list_memory_blocks,
-    //   but not pinned into the system prompt.
-    //
-    // Primary check is blockType (reliable, set on every row via the
-    // migration backfill). Prefix fallback kept until step 5 for any
-    // unmigrated / externally-inserted rows that lack blockType.
-    const isSystemBlock = (b: MemoryBlock) =>
-      b.id === "blk-zeitgeist-continuity" ||
-      b.scope === "archived" ||
-      (b.blockType !== undefined && ["synthesis", "zeitgeist-archive", "notebook"].includes(b.blockType)) ||
-      b.id.startsWith("blk-archive-") ||
-      b.id.startsWith("blk-synth-") ||
-      b.id.startsWith("blk-notebook-");
-
     const loadedBlocks: MemoryBlock[] = [];
-    const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemBlock(b));
+    const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemManagedMemoryBlock(b));
     loadedBlocks.push(...globalBlocks);
     if (projectId) {
-      const projectBlocks = getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemBlock(b));
+      const projectBlocks = getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemManagedMemoryBlock(b));
       loadedBlocks.push(...projectBlocks);
     }
 
@@ -594,7 +575,7 @@ export async function buildStablePrefix(
     // Exclude system-managed blocks (handled separately or via dedicated tools)
     const indexedBlocks = allBlocks.filter((b) => {
       if (loadedIds.has(b.id)) return false; // Already loaded
-      if (isSystemBlock(b)) return false; // Dedicated handling / on-demand discovery
+      if (isSystemManagedMemoryBlock(b)) return false; // Dedicated handling / on-demand discovery
       if (b.scope === "global") return true; // Global blocks are always indexable
       if (b.scope === "project" && b.projectId === projectId) return true; // Current project blocks
       return false; // Other projects' blocks are excluded

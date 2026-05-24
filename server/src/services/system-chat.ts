@@ -609,21 +609,10 @@ async function buildMaintenancePhase2Trigger(
   phase2Instructions = SYNTHESIS_PHASE2_INSTRUCTIONS,
 ): Promise<string> {
   const { getDb } = await import("./chat-storage.js");
-  const { getMemoryBlocksByScope, getAllMemoryBlocks, getLastSynthesis, getMaxBlockChars } = await import("./memory-storage.js");
-
-  // System-managed blocks are excluded from the inventory — they have
-  // dedicated discovery paths and would otherwise bloat the context.
-  // Primary check is blockType; prefix fallback kept until step 5.
-  const isSystemBlock = (b: { id: string; scope: string; blockType?: string }) =>
-    b.id === "blk-zeitgeist-continuity" ||
-    b.scope === "archived" ||
-    (b.blockType !== undefined && ["synthesis", "zeitgeist-archive", "notebook"].includes(b.blockType)) ||
-    b.id.startsWith("blk-archive-") ||
-    b.id.startsWith("blk-synth-") ||
-    b.id.startsWith("blk-notebook-");
+  const { getMemoryBlocksByScope, getAllMemoryBlocks, getLastSynthesis, getMaxBlockChars, isSystemManagedMemoryBlock } = await import("./memory-storage.js");
 
   // 1. All non-system global blocks
-  const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemBlock(b));
+  const globalBlocks = getMemoryBlocksByScope("global").filter((b) => !isSystemManagedMemoryBlock(b));
 
   // 2. Active projects — agent chats modified since last synthesis.
   // Floor the cutoff at 24h ago so a very-recent lastSynthesis (e.g. a
@@ -648,7 +637,7 @@ async function buildMaintenancePhase2Trigger(
   // 3. Project-scoped blocks from active projects only
   const projectBlocks: Map<string, { name: string; blocks: typeof globalBlocks[number][] }> = new Map();
   for (const projectId of projectIdSet) {
-    const blocks = getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemBlock(b));
+    const blocks = getMemoryBlocksByScope("project", projectId).filter((b) => !isSystemManagedMemoryBlock(b));
     if (blocks.length > 0) {
       // Get project name from AGENTS.md or fall back to ID
       const projectName = projectId.slice(0, 8);

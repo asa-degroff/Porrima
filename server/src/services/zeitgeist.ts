@@ -1,6 +1,7 @@
 import {
   getMemoryBlock,
-  getDb as getMemoryDb,
+  getAllMemoryBlocks,
+  isHistoricalContextBlock,
 } from "./memory-storage.js";
 
 const ZEITGEIST_BLOCK_ID = "blk-zeitgeist-continuity";
@@ -21,31 +22,20 @@ export function getZeitgeistContent(): string | null {
  * ~250 tokens/conversation when there's nothing to find.
  */
 export function getZeitgeistArchiveInstruction(): string {
-  const db = getMemoryDb();
-
-  // Check for any historical context blocks. Primary check is blockType
-  // (set on every row via the step-1 migration backfill); prefix/name
-  // fallback covers rows that pre-date the migration or were inserted
-  // outside the normal code path. Fallback goes in step 5.
-  const hasArchives = db.prepare(
-    `SELECT 1 FROM memory_blocks
-     WHERE blockType = 'zeitgeist-archive'
-        OR id LIKE 'blk-archive-%'
-        OR name LIKE 'Zeitgeist Archive -%'
-     LIMIT 1`
-  ).get() as any;
-
-  const hasSynthesis = db.prepare(
-    `SELECT 1 FROM memory_blocks
-     WHERE blockType = 'synthesis' OR id LIKE 'blk-synth-%'
-     LIMIT 1`
-  ).get() as any;
-
-  const hasNotebook = db.prepare(
-    `SELECT 1 FROM memory_blocks
-     WHERE blockType = 'notebook' OR id LIKE 'blk-notebook-%'
-     LIMIT 1`
-  ).get() as any;
+  const historicalBlocks = getAllMemoryBlocks().filter(isHistoricalContextBlock);
+  const hasArchives = historicalBlocks.some((b) =>
+    b.blockType === "zeitgeist-archive" ||
+    b.id.startsWith("blk-archive-") ||
+    b.name.startsWith("Zeitgeist Archive -")
+  );
+  const hasSynthesis = historicalBlocks.some((b) =>
+    b.blockType === "synthesis" ||
+    b.id.startsWith("blk-synth-")
+  );
+  const hasNotebook = historicalBlocks.some((b) =>
+    b.blockType === "notebook" ||
+    b.id.startsWith("blk-notebook-")
+  );
 
   if (!hasArchives && !hasSynthesis && !hasNotebook) return ""; // No historical blocks yet
 

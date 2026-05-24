@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -46,6 +46,40 @@ describe("memory block storage", () => {
       const updated = getMemoryBlock("blk-global-test");
       expect(updated?.content).toBe("After");
       expect(updated?.projectId).toBe("");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renames stale memories.json when a newer memory database exists", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    try {
+      const storage = await loadMemoryStorage(homeDir);
+      const now = new Date("2026-05-24T00:00:00.000Z").toISOString();
+      await storage.addMemory({
+        id: "mem-current",
+        text: "Current memory in SQLite",
+        category: "fact",
+        importance: 3,
+        embedding: new Array(storage.DEFAULT_VEC_DIMENSION).fill(0),
+        createdAt: now,
+        lastAccessed: now,
+        accessCount: 0,
+      });
+      await storage.setLastSynthesis(now);
+      storage.closeMemoryDb();
+
+      const memoryDir = join(homeDir, ".porrima", "memory");
+      const jsonPath = join(memoryDir, "memories.json");
+      writeFileSync(jsonPath, JSON.stringify({
+        memories: [],
+        lastSynthesis: "2026-03-01T00:00:00.000Z",
+      }));
+
+      storage.getDb();
+
+      expect(existsSync(jsonPath)).toBe(false);
+      expect(readdirSync(memoryDir).some((file) => file.startsWith("memories.json.stale-"))).toBe(true);
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }

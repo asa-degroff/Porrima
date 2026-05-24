@@ -23,6 +23,7 @@ import {
   getHeaderImagePath,
   headerImageExists,
 } from "../services/header-image-storage.js";
+import { getStorageMigrationDiagnostics } from "../services/storage-diagnostics.js";
 import { access } from "fs/promises";
 import { createReadStream } from "fs";
 import type { Settings, SshConnection } from "../types.js";
@@ -47,6 +48,10 @@ function stripServerOwnedActivityFields(settings: Settings): Settings {
 router.get("/", async (_req, res) => {
   const settings = await getSettings();
   res.json(settings);
+});
+
+router.get("/storage-diagnostics", async (_req, res) => {
+  res.json(getStorageMigrationDiagnostics());
 });
 
 router.put("/", async (req, res) => {

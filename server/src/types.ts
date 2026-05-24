@@ -235,7 +235,7 @@ export interface ChatMessageWindow {
 
 export type InferenceProvider = "llamacpp";
 
-export type MemoryBlockScope = "global" | "project";
+export type MemoryBlockScope = "global" | "project" | "archived";
 
 export interface MemoryBlock {
   id: string;
@@ -248,6 +248,7 @@ export interface MemoryBlock {
   updatedAt: string;
   updatedBy: "agent" | "user";
   tokenEstimate: number;
+  blockType?: "note" | "notebook" | "synthesis" | "zeitgeist-archive";
   supersededBy?: string;
   supersedes?: string;
 }

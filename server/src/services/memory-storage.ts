@@ -289,6 +289,8 @@ export function getDb(): Database.Database {
   // Auto-migrate from JSON if needed
   if (needsMigration) {
     migrateFromJson(db);
+  } else {
+    neutralizeStaleMemoryJson(db);
   }
 
   // Migration: add projectId to history table if it was created without it.
@@ -352,6 +354,48 @@ function migrateFromJson(db: Database.Database): void {
     console.log("[memory] Renamed memories.json → memories.json.bak");
   } catch (e) {
     console.error("[memory] Migration from JSON failed:", e);
+  }
+}
+
+function nextStaleMemoryJsonPath(): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
+  let path = `${MEMORY_FILE}.stale-${stamp}`;
+  let i = 1;
+  while (existsSync(path)) {
+    path = `${MEMORY_FILE}.stale-${stamp}-${i}`;
+    i++;
+  }
+  return path;
+}
+
+function neutralizeStaleMemoryJson(db: Database.Database): void {
+  if (!existsSync(MEMORY_FILE) || !existsSync(MEMORY_DB)) return;
+
+  try {
+    const raw = readFileSync(MEMORY_FILE, "utf-8");
+    const store = JSON.parse(raw) as Partial<MemoryStore>;
+    const jsonCount = Array.isArray(store.memories) ? store.memories.length : 0;
+    const dbCount = (db.prepare("SELECT COUNT(*) as cnt FROM memories").get() as { cnt: number }).cnt;
+    const dbLast = (db.prepare("SELECT value FROM metadata WHERE key = 'lastSynthesis'").get() as { value: string } | undefined)?.value ?? null;
+    const jsonLastMs = store.lastSynthesis ? Date.parse(store.lastSynthesis) : NaN;
+    const dbLastMs = dbLast ? Date.parse(dbLast) : NaN;
+    const stale =
+      dbCount > 0 &&
+      (
+        jsonCount < dbCount ||
+        (Number.isFinite(jsonLastMs) && Number.isFinite(dbLastMs) && jsonLastMs < dbLastMs)
+      );
+
+    if (!stale) return;
+
+    const stalePath = nextStaleMemoryJsonPath();
+    renameSync(MEMORY_FILE, stalePath);
+    console.warn(
+      `[memory] Renamed stale memories.json to ${stalePath} ` +
+      `(${jsonCount} JSON memories vs ${dbCount} DB memories)`
+    );
+  } catch (e) {
+    console.warn("[memory] Could not inspect stale memories.json:", (e as Error).message);
   }
 }
 
@@ -1590,6 +1634,22 @@ export type BlockType = "note" | "notebook" | "synthesis" | "zeitgeist-archive";
 
 export function isArchivalBlockType(t: BlockType): boolean {
   return t !== "note";
+}
+
+export function isHistoricalContextBlock(block: { id: string; name?: string; blockType?: string }): boolean {
+  return block.blockType === "synthesis" ||
+    block.blockType === "zeitgeist-archive" ||
+    block.blockType === "notebook" ||
+    block.id.startsWith("blk-archive-") ||
+    block.id.startsWith("blk-synth-") ||
+    block.id.startsWith("blk-notebook-") ||
+    (block.name?.startsWith("Zeitgeist Archive -") ?? false);
+}
+
+export function isSystemManagedMemoryBlock(block: { id: string; scope?: string; name?: string; blockType?: string }): boolean {
+  return block.id === "blk-zeitgeist-continuity" ||
+    block.scope === "archived" ||
+    isHistoricalContextBlock(block);
 }
 
 // Attachments live in a JSON column — references only (image ids, artifact

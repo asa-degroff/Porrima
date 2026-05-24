@@ -487,12 +487,13 @@ export interface MemoryBlock {
   name: string;
   description: string;
   content: string;
-  scope: "global" | "project";
+  scope: "global" | "project" | "archived";
   projectId?: string;
   createdAt: string;
   updatedAt: string;
   updatedBy: "agent" | "user";
   tokenEstimate: number;
+  blockType?: "note" | "notebook" | "synthesis" | "zeitgeist-archive";
   supersededBy?: string;
   supersedes?: string;
 }

@@ -44,6 +44,7 @@ import { ensureAutomationDefaults } from "./services/automation-storage.js";
 import { migrateAgentNotebookToBlocks, migrateUserNotebookToDb } from "./services/notebook-storage.js";
 import { registerOpenAICompatProvider } from "./services/openai-compat-provider.js";
 import { initSshMux, destroyAllMasters } from "./services/workspace.js";
+import { logStorageMigrationDiagnostics } from "./services/storage-diagnostics.js";
 
 // Register API providers before any requests
 registerOpenAICompatProvider();
@@ -116,6 +117,8 @@ await migrateAgentNotebookToBlocks().catch((err) => {
 await migrateUserNotebookToDb().catch((err) => {
   console.error("[notebook] User notebook migration failed:", err);
 });
+
+logStorageMigrationDiagnostics();
 
 // Initialize SSH infrastructure: create mux directory, clean stale sockets.
 await initSshMux();
