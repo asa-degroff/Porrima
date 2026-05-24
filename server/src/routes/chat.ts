@@ -68,6 +68,21 @@ function isMemoryAugmentedChatType(type: Chat["type"] | undefined): boolean {
   return type === "agent" || type === "system";
 }
 
+function isChatDeleted(chatId: string): boolean {
+  const row = getDb().prepare("SELECT 1 FROM chats WHERE id = ?").get(chatId);
+  return !row;
+}
+
+function writeDeletedChatEvent(res: Response): void {
+  if (!res.headersSent) {
+    res.status(404).json({ error: "Chat deleted" });
+    return;
+  }
+  try {
+    res.write(`event: error\ndata: ${JSON.stringify({ error: "Chat deleted" })}\n\n`);
+  } catch {}
+}
+
 interface ArtifactRuntimeErrorReport {
   chatId: string;
   artifactId: string;
@@ -763,6 +778,11 @@ async function handleChatStream(
   res: Response,
   options: { hiddenUserMessage?: boolean } = {}
 ) {
+  if (isChatDeleted(chat.id)) {
+    writeDeletedChatEvent(res);
+    return;
+  }
+
   // Mark chat as active so the scheduler skips extraction for it —
   // compaction cycles already use the extraction server heavily.
   markChatActive(chat.id);
@@ -2750,9 +2770,20 @@ async function handleChatStream(
 
     // Check for queued follow-up messages even if loop exited early (e.g., due to abort)
     // This ensures messages aren't lost when agent-loop.js returns early on abort/error
+    if (isChatDeleted(chat.id)) {
+      await messageQueue.clear(chat.id);
+      writeDeletedChatEvent(res);
+      return;
+    }
+
     const queuedFollowUp = await messageQueue.drainOne(chat.id);
     if (queuedFollowUp && !askUserRef.current && !waitingForInput) {
       console.log(`[chat] post-loop: found queued follow-up message ${queuedFollowUp.id}, processing`);
+      if (isChatDeleted(chat.id)) {
+        await messageQueue.clear(chat.id);
+        writeDeletedChatEvent(res);
+        return;
+      }
 
       // Build current message first. Tool-use fragments may already be
       // committed; only persist an uncommitted final/partial row if present.

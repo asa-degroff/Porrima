@@ -701,6 +701,11 @@ export async function getChatWithWindow(
 export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean }): Promise<void> {
   await withChatWriteLock(chat.id, async () => {
     const db = getDb();
+    const existing = db.prepare("SELECT 1 FROM chats WHERE id = ?").get(chat.id);
+    if (!existing) {
+      throw new Error(`Cannot save deleted chat ${chat.id}`);
+    }
+
     chat.lastModified = new Date().toISOString();
     const preview = computeChatPreview(chat.messages);
 
@@ -768,15 +773,19 @@ export async function updateChatTitle(
 }
 
 export async function deleteChat(id: string): Promise<boolean> {
-  const db = getDb();
-  const del = db.transaction(() => {
-    const result = db.prepare("DELETE FROM chats WHERE id = ?").run(id);
-    db.prepare("DELETE FROM chat_message_rows WHERE chat_id = ?").run(id);
-    // Clean up denormalized messages (triggers handle FTS cleanup)
-    db.prepare("DELETE FROM chat_messages WHERE chat_id = ?").run(id);
-    return result.changes > 0;
+  return withChatWriteLock(id, async () => {
+    const db = getDb();
+    const del = db.transaction(() => {
+      const result = db.prepare("DELETE FROM chats WHERE id = ?").run(id);
+      db.prepare("DELETE FROM chat_message_rows WHERE chat_id = ?").run(id);
+      // Clean up denormalized messages (triggers handle FTS cleanup)
+      db.prepare("DELETE FROM chat_messages WHERE chat_id = ?").run(id);
+      db.prepare("DELETE FROM pending_states WHERE chatId = ?").run(id);
+      db.prepare("DELETE FROM context_archives WHERE chatId = ?").run(id);
+      return result.changes > 0;
+    });
+    return del();
   });
-  return del();
 }
 
 export async function createChat(chat: Chat): Promise<void> {

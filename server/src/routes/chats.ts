@@ -3,6 +3,7 @@ import { v4 as uuid } from "uuid";
 import { listChats, getChat, saveChat, deleteChat, getSettings, createChat, getProject, getChatMessageWindow, getChatWithWindow, getDb } from "../services/chat-storage.js";
 import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
+import { cancelDeletedChatWork } from "../services/chat-deletion.js";
 import type { Chat } from "../types.js";
 
 const router = Router();
@@ -202,6 +203,7 @@ router.get("/:id/rendered-prompt", async (req, res) => {
 
 // Delete a chat
 router.delete("/:id", async (req, res) => {
+  await cancelDeletedChatWork(req.params.id);
   const deleted = await deleteChat(req.params.id);
   if (!deleted) return res.status(404).json({ error: "Chat not found" });
   res.status(204).end();

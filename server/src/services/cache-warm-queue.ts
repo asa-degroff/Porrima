@@ -105,10 +105,10 @@ export function isChatWarming(chatId: string): boolean {
  * affected.
  */
 export function cancelQueuedWarms(chatId: string): void {
-  const idx = queue.findIndex((job) => job.chatId === chatId);
-  if (idx >= 0) {
-    const [removed] = queue.splice(idx, 1);
-    removed.reject(new Error("Cancelled (replaced by newer warm)"));
+  for (let i = queue.length - 1; i >= 0; i--) {
+    if (queue[i].chatId !== chatId) continue;
+    const [removed] = queue.splice(i, 1);
+    removed.reject(new Error("Cancelled"));
   }
 }
 
