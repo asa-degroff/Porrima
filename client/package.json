@@ -11,11 +11,14 @@
     "@simplewebauthn/browser": "^13.2.2",
     "@toolwind/corner-shape": "^0.0.8-3",
     "idb": "^8.0.3",
+    "katex": "^0.17.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.13.2",
+    "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "web-haptics": "^0.0.6"
   },
   "devDependencies": {

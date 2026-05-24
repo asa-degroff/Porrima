@@ -275,6 +275,43 @@ body::before {
   font-weight: 600;
 }
 
+/* KaTeX math rendering */
+.markdown-body .katex {
+  font-size: 1em;
+}
+
+.markdown-body .katex-display {
+  margin: 0.75em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5em 0;
+}
+
+.markdown-body .katex-display > .katex {
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Prevent KaTeX from causing horizontal scroll on narrow screens */
+.markdown-body .katex-display {
+  max-width: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.markdown-body .katex-display::-webkit-scrollbar {
+  height: 4px;
+}
+
+.markdown-body .katex-display::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.markdown-body .katex-display::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
 /* Streaming cursor animation */
 @keyframes blink {
   0%, 50% { opacity: 1; }
