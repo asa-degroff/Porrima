@@ -1330,7 +1330,7 @@ async function handleChatStream(
       // Override contextWindow with effective value so the context window size sent to llama.cpp
       // respects per-chat and per-model settings. Without this, llama.cpp receives
       // the full detected context window (e.g. 128k) and may overflow VRAM.
-      piModel.contextWindow = getEffectiveContextWindow(chat, inferenceModel, settings);
+      piModel.contextWindow = getEffectiveContextWindow(chat, inferenceModel);
       activeAssistantIdentity = replayIdentityFromPiModel(piModel);
       if (inferenceModel.provider === "llamacpp" && piModel.baseUrl) {
         llamaSlotLease = await acquireLlamaSlotLease({
@@ -1933,7 +1933,7 @@ async function handleChatStream(
           // single large one (e.g. read_file on a 50 KB source file) can push
           // past the hard context cap before the next iteration even starts.
           const { estimateContextTokens } = await import("../services/compaction.js");
-          const effectiveCWForCheck = getEffectiveContextWindow(chat, inferenceModel, settings);
+          const effectiveCWForCheck = getEffectiveContextWindow(chat, inferenceModel);
           const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
 
           // Send iteration event with usage AND estimate so client can update
@@ -2098,7 +2098,7 @@ async function handleChatStream(
       try {
         const model = allModels.find((m: InferenceModel) => m.id === chat.modelId);
         if (model) {
-          const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
+          const effectiveContextWindow = getEffectiveContextWindow(chat, model);
           const lastUsage = state.finalUsage?.totalTokens ?? 0;
           const usageRatio = lastUsage > 0 ? lastUsage / effectiveContextWindow : 0;
 
@@ -2486,7 +2486,7 @@ async function handleChatStream(
       await saveChat(chat);
 
       // 2. Run compaction to free context space
-      const effectiveCW = getEffectiveContextWindow(chat, inferenceModel, settings);
+      const effectiveCW = getEffectiveContextWindow(chat, inferenceModel);
       const emitCompacting = () => res.write(`event: compacting\ndata: {}\n\n`);
       const emitKeepalive = () => res.write(`: keepalive\n\n`);
       // Wrap all compaction work in a keepalive ping loop so the client's
@@ -2719,7 +2719,7 @@ async function handleChatStream(
             }
 
             // Check for overflow — if hit, set flag and break to trigger another compaction cycle
-            const resumeEffectiveCW = getEffectiveContextWindow(chat, inferenceModel, settings);
+            const resumeEffectiveCW = getEffectiveContextWindow(chat, inferenceModel);
             let resumeTokens = state.finalUsage?.totalTokens ?? 0;
             if (!resumeTokens) {
               const { estimateContextTokens } = await import("../services/compaction.js");
@@ -3165,7 +3165,7 @@ router.post("/", async (req, res) => {
       const { getEffectiveContextWindow, discoverAllModels } = await import("../services/models.js");
       const allModels = await discoverAllModels();
       const inferenceModel = allModels.find(m => m.id === chat.modelId);
-      contextWindow = getEffectiveContextWindow(chat, inferenceModel, settings);
+      contextWindow = getEffectiveContextWindow(chat, inferenceModel);
 
       let compactProject: Project | undefined;
       let compactProjectPath: string | undefined;
@@ -3462,7 +3462,7 @@ router.post("/", async (req, res) => {
       // embed/rerank steps.
       await withSSEKeepalive(res, async () => {
         try {
-          const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
+          const effectiveContextWindow = getEffectiveContextWindow(chat, model);
           const emitKeepalive = () => res.write(`: keepalive\n\n`);
           const compaction = await truncateBeforeSend(
             chat,
@@ -3652,7 +3652,7 @@ router.post("/", async (req, res) => {
       // embed/rerank steps.
       await withSSEKeepalive(res, async () => {
         try {
-          const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
+          const effectiveContextWindow = getEffectiveContextWindow(chat, model);
           const emitKeepalive = () => res.write(`: keepalive\n\n`);
           const compaction = await truncateBeforeSend(
             chat,
@@ -4286,7 +4286,7 @@ router.post("/edit", async (req, res) => {
     // embed/rerank steps.
     await withSSEKeepalive(res, async () => {
       try {
-        const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
+        const effectiveContextWindow = getEffectiveContextWindow(chat, model);
         const emitKeepalive = () => res.write(`: keepalive\n\n`);
         const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
         if (compaction && compaction.truncated) {

@@ -269,14 +269,13 @@ export async function buildOpenAICompatChatBody(
     body.chat_template_kwargs = { enable_thinking: true };
   }
 
-  // Per-model preserve_thinking (Qwen3.6+ feature). Retains reasoning
-  // traces from historical messages so the model can see its own prior
-  // thinking. Read from settings at request time — UI toggle lives in
-  // SettingsModal's per-model context window section.
+  // Global preserve_thinking toggle. llama.cpp forwards this as a chat
+  // template kwarg; templates that support it (notably Qwen3.6) retain
+  // historical reasoning traces in context.
   try {
     const { getSettings } = await import("./chat-storage.js");
     const settings = await getSettings();
-    if (settings.modelPreserveThinking?.[model.id]) {
+    if (settings.preserveThinking || settings.modelPreserveThinking?.[model.id]) {
       body.chat_template_kwargs = {
         ...(body.chat_template_kwargs ?? {}),
         preserve_thinking: true,

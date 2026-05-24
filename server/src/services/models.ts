@@ -220,20 +220,15 @@ function supportsReasoning(family: string): boolean {
  *
  * Priority order:
  * 1. Explicit chat override (chat.contextWindow) - user knows best
- * 2. Per-model setting (settings.modelContextWindows[modelId]) - user's persistent preference
- * 3. Model's detected context window (model.contextWindow) - from discovery
- * 4. Safe fallback (32768) - when detection fails
+ * 2. Model's detected context window (model.contextWindow) - from discovery
+ * 3. Safe fallback (32768) - when detection fails
  */
 export function getEffectiveContextWindow(
   chat: { contextWindow?: number; modelId?: string },
   model: InferenceModel | undefined,
-  settings?: { modelContextWindows?: Record<string, number> }
 ): number {
   if (chat.contextWindow) {
     return chat.contextWindow;
-  }
-  if (chat.modelId && settings?.modelContextWindows?.[chat.modelId]) {
-    return settings.modelContextWindows[chat.modelId];
   }
   if (model?.contextWindow) {
     return model.contextWindow;

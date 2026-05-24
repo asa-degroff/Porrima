@@ -290,7 +290,6 @@ export interface Settings {
   comfyuiUrl?: string;
   sdcppUrl?: string;            // default "http://127.0.0.1:1234" — stable-diffusion.cpp sd-server
   imageBackend?: "comfyui" | "sdcpp";  // default "comfyui"
-  modelContextWindows?: Record<string, number>;
   theme?: Theme;
   activityShape?: ActivityShape;
   activityHue?: number;
@@ -356,9 +355,11 @@ export interface Settings {
   // Model favorites
   favoriteModels?: string[];
   showOnlyFavorites?: boolean;
-  // Per-model llama.cpp chat_template_kwargs. When true, passes
-  // preserve_thinking:true so the model sees its own historical reasoning
-  // traces (Qwen3.6+ feature). Ignored by models that don't recognize the kwarg.
+  // Global llama.cpp chat_template_kwargs. When true, passes
+  // preserve_thinking:true so models/templates that support it can see
+  // historical reasoning traces (Qwen3.6+ feature).
+  preserveThinking?: boolean;
+  // Legacy per-model storage; read for backward compatibility only.
   modelPreserveThinking?: Record<string, boolean>;
   // Sleep mode — when the user clicked the sleep button to release the system
   // to autonomous mode. Acts as both: (a) immediate activation of the sleep cycle,
@@ -535,4 +536,3 @@ export interface NotebookIndex {
   entries: { id: string; createdAt: string; author: 'user' | 'agent'; preview: string }[];
   lastActivityDate: string | null;  // ISO date of most recent entry
 }
-

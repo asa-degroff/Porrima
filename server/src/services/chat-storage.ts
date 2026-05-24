@@ -1065,15 +1065,24 @@ const DEFAULT_SETTINGS: Settings = {
   llamacppSlotBindingMode: "auto",
 };
 
+function normalizeSettings(settings: Settings): Settings {
+  return {
+    ...settings,
+    preserveThinking:
+      settings.preserveThinking ??
+      Object.values(settings.modelPreserveThinking ?? {}).some(Boolean),
+  };
+}
+
 export async function getSettings(): Promise<Settings> {
   const db = getDb();
   const row = db.prepare("SELECT value FROM settings WHERE key = 'settings'").get() as
     | { value: string }
     | undefined;
 
-  if (!row) return { ...DEFAULT_SETTINGS };
+  if (!row) return normalizeSettings({ ...DEFAULT_SETTINGS });
 
-  return { ...DEFAULT_SETTINGS, ...JSON.parse(row.value) };
+  return normalizeSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(row.value) });
 }
 
 export async function saveSettings(settings: Settings): Promise<Settings> {
@@ -1091,8 +1100,8 @@ export async function saveSettings(settings: Settings): Promise<Settings> {
     | { value: string }
     | undefined;
   const existing: Settings = row
-    ? { ...DEFAULT_SETTINGS, ...JSON.parse(row.value) }
-    : { ...DEFAULT_SETTINGS };
+    ? normalizeSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(row.value) })
+    : normalizeSettings({ ...DEFAULT_SETTINGS });
 
   const safeIncoming: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(settings)) {
@@ -1108,7 +1117,7 @@ export async function saveSettings(settings: Settings): Promise<Settings> {
     safeIncoming[key] = val;
   }
 
-  const merged = { ...DEFAULT_SETTINGS, ...existing, ...safeIncoming } as Settings;
+  const merged = normalizeSettings({ ...DEFAULT_SETTINGS, ...existing, ...safeIncoming } as Settings);
 
   db.prepare(`
     INSERT OR REPLACE INTO settings (key, value)

@@ -37,7 +37,6 @@ const SECTIONS = [
   { id: 'inference', label: 'Inference Servers' },
   { id: 'favorites', label: 'Favorites' },
   { id: 'vision', label: 'Vision' },
-  { id: 'context', label: 'Context' },
   { id: 'theme', label: 'Appearance' },
   { id: 'background', label: 'Background' },
   { id: 'haptics', label: 'Haptics' },
@@ -544,6 +543,9 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
   const [llamaBinaryValidation, setLlamaBinaryValidation] = useState<{ valid: boolean; error?: string } | null>(null);
   const [favoriteModels, setFavoriteModels] = useState<Set<string>>(new Set(settings.favoriteModels || []));
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(settings.showOnlyFavorites ?? false);
+  const [preserveThinking, setPreserveThinking] = useState(
+    settings.preserveThinking ?? Object.values(settings.modelPreserveThinking ?? {}).some(Boolean)
+  );
   const [theme, setTheme] = useState<Theme>(settings.theme || "default");
   const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>(settings.backgroundEffect || "static");
   const [flatBackground, setFlatBackground] = useState(settings.flatBackground ?? false);
@@ -579,9 +581,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
     allowFileWrite: true,
     allowAbsolutePaths: false,
   });
-  const [modelContextWindows, setModelContextWindows] = useState<Record<string, number>>(settings.modelContextWindows || {});
-  const [modelPreserveThinking, setModelPreserveThinking] = useState<Record<string, boolean>>(settings.modelPreserveThinking || {});
-  const [ctxWindowsExpanded, setCtxWindowsExpanded] = useState(false);
+
   const [skillsBrowserOpen, setSkillsBrowserOpen] = useState(false);
   // Delayed extraction settings
   const [delayedExtractionEnabled, setDelayedExtractionEnabled] = useState(settings.delayedExtractionEnabled ?? true);
@@ -1515,8 +1515,9 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
       activitySaturation,
       systemPromptPresets: presets.length > 0 ? presets : undefined,
       hapticsEnabled,
-      modelContextWindows: Object.keys(modelContextWindows).length > 0 ? modelContextWindows : undefined,
-      modelPreserveThinking: Object.keys(modelPreserveThinking).length > 0 ? modelPreserveThinking : undefined,
+
+      preserveThinking,
+      modelPreserveThinking: undefined,
       delayedExtractionEnabled,
       delayedExtractionThresholdMinutes: delayedExtractionThreshold,
       delayedExtractionMessageCap: delayedExtractionCap,
@@ -2304,6 +2305,21 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
                 </button>
               ))}
             </Dropdown>
+          </div>
+
+          {/* Preserve Thinking */}
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 space-y-1">
+              <label className="block text-sm font-medium text-white/60">Preserve Thinking</label>
+              <p className="text-xs text-white/30">
+                Retain historical reasoning traces in context when the active llama.cpp model/template supports it.
+              </p>
+            </div>
+            <ToggleSwitch
+              checked={preserveThinking}
+              onChange={() => setPreserveThinking(!preserveThinking)}
+              accentColor="purple"
+            />
           </div>
 
           {/* Inference Servers */}
@@ -3461,121 +3477,6 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
               Model used for image analysis. Defaults to your chat model.
             </p>
           </div>
-
-          {/* Model Context Windows */}
-          {models.length > 0 && (
-            <div id="context" className="space-y-2">
-              <button
-                onClick={() => setCtxWindowsExpanded(!ctxWindowsExpanded)}
-                className="flex items-center gap-1.5 text-sm font-medium text-white/60 hover:text-white/80 transition-colors"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className={`transition-transform ${ctxWindowsExpanded ? "rotate-90" : ""}`}
-                >
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-                Model Context Windows
-                {(() => {
-                  const ctx = Object.keys(modelContextWindows).length;
-                  const pt = Object.values(modelPreserveThinking).filter(Boolean).length;
-                  const total = ctx + pt;
-                  return total > 0 ? (
-                    <span className="text-xs text-blue-300/60 font-normal">
-                      ({total} override{total !== 1 ? "s" : ""})
-                    </span>
-                  ) : null;
-                })()}
-              </button>
-              {ctxWindowsExpanded && (
-                <>
-                  <p className="text-white/30 text-xs">Override the default context window per model. Applies to new chats. Preserve Thinking (llama.cpp only) retains historical reasoning traces — Qwen3.6+ feature, ignored by other models.</p>
-                  <div className="space-y-1.5">
-                    {models.map((m) => {
-                      const override = modelContextWindows[m.id];
-                      const hasOverride = override !== undefined;
-                      const isLlamacpp = m.provider === "llamacpp";
-                      const preserveThinking = modelPreserveThinking[m.id] === true;
-                      return (
-                        <div key={m.id} className="flex items-center gap-2">
-                          <span className="text-xs text-white/50 truncate flex-1 min-w-0" title={m.id}>{m.name}</span>
-                          {isLlamacpp && (
-                            <button
-                              onClick={() =>
-                                setModelPreserveThinking((prev) => {
-                                  const next = { ...prev };
-                                  if (preserveThinking) delete next[m.id];
-                                  else next[m.id] = true;
-                                  return next;
-                                })
-                              }
-                              title={preserveThinking ? "Preserve thinking: on — historical reasoning traces retained in context" : "Preserve thinking: off"}
-                              className={`shrink-0 text-[10px] px-2 py-1 rounded border transition-all ${
-                                preserveThinking
-                                  ? "border-white/20 text-white/80"
-                                  : "border-white/10 text-white/30 hover:text-white/50"
-                              }`}
-                              style={preserveThinking ? {
-                                backgroundColor: `rgba(var(--theme-primary), 0.15)`,
-                                borderColor: `rgba(var(--theme-primary-border))`,
-                                color: `rgba(var(--theme-primary-text))`,
-                              } : undefined}
-                            >
-                              Preserve thinking
-                            </button>
-                          )}
-                          <input
-                            type="number"
-                            value={hasOverride ? override : ""}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val === "") {
-                                setModelContextWindows((prev) => {
-                                  const next = { ...prev };
-                                  delete next[m.id];
-                                  return next;
-                                });
-                              } else {
-                                setModelContextWindows((prev) => ({ ...prev, [m.id]: parseInt(val, 10) }));
-                              }
-                            }}
-                            placeholder={m.contextWindow.toLocaleString()}
-                            className="w-28 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-blue-400/30 transition-all text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                          />
-                          {hasOverride && (
-                            <button
-                              onClick={() =>
-                                setModelContextWindows((prev) => {
-                                  const next = { ...prev };
-                                  delete next[m.id];
-                                  return next;
-                                })
-                              }
-                              className="text-white/20 hover:text-white/50 transition-colors p-0.5"
-                              title="Reset to model default"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M18 6L6 18" />
-                                <path d="M6 6l12 12" />
-                              </svg>
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
 
           {/* Color Theme */}
           <div id="theme" className="space-y-2">

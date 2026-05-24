@@ -318,7 +318,6 @@ export interface Settings {
   comfyuiUrl?: string;
   sdcppUrl?: string;
   imageBackend?: "comfyui" | "sdcpp";
-  modelContextWindows?: Record<string, number>;
   theme?: Theme;
   backgroundEffect?: BackgroundEffect;
   flatBackground?: boolean;
@@ -385,9 +384,11 @@ export interface Settings {
   // Model favorites
   favoriteModels?: string[];
   showOnlyFavorites?: boolean;
-  // Per-model llama.cpp chat_template_kwargs. When true, passes
-  // preserve_thinking:true so the model sees its own historical reasoning
-  // traces (Qwen3.6+ feature). Ignored by models that don't recognize the kwarg.
+  // Global llama.cpp chat_template_kwargs. When true, passes
+  // preserve_thinking:true so models/templates that support it can see
+  // historical reasoning traces (Qwen3.6+ feature).
+  preserveThinking?: boolean;
+  // Legacy per-model storage; read for backward compatibility only.
   modelPreserveThinking?: Record<string, boolean>;
   // Last active chat ID (for warm cache indicator)
   lastActiveChatId?: string;

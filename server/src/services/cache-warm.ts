@@ -416,7 +416,7 @@ export async function warmChatCache(
     const { model, baseUrl } = modelInfo;
     const normalizedModelId = normalizeRouterModelId(chat.modelId);
     const settings = await getSettings();
-    const effectiveContextWindow = getEffectiveContextWindow(chat, model, settings);
+    const effectiveContextWindow = getEffectiveContextWindow(chat, model);
 
     // 3. Ensure model is loaded on the router
     const loadResult = await ensureRouterModelLoaded(baseUrl, normalizedModelId, {
