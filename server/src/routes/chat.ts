@@ -73,12 +73,28 @@ interface ArtifactRuntimeErrorReport {
   version: number;
   title?: string;
   url?: string;
+  diagnosticKind?: "js-error" | "promise-rejection" | "webgpu-shader" | "webgpu-validation";
   message: string;
   stack?: string;
   filename?: string;
   lineno?: number;
   colno?: number;
   sourceExcerpt?: string;
+  shaderLabel?: string;
+  shaderSource?: string;
+  shaderLine?: number;
+  shaderColumn?: number;
+  shaderExcerpt?: string;
+  pipelineLabel?: string;
+  entryPoint?: string;
+  compilationMessages?: Array<{
+    type?: string;
+    message?: string;
+    lineNum?: number;
+    linePos?: number;
+    offset?: number;
+    length?: number;
+  }>;
   stream?: boolean;
 }
 
@@ -126,10 +142,14 @@ function makeArtifactRepairDedupKey(report: ArtifactRuntimeErrorReport): string 
       report.chatId,
       report.artifactId,
       String(report.version),
+      report.diagnosticKind || "",
       report.message || "",
       report.stack || "",
       String(report.lineno ?? ""),
       String(report.colno ?? ""),
+      report.shaderLabel || "",
+      String(report.shaderLine ?? ""),
+      String(report.shaderColumn ?? ""),
     ].join("\n"))
     .digest("hex");
   return `${report.chatId}:${report.artifactId}:${report.version}:${hash}`;
@@ -148,16 +168,20 @@ function hasRecentArtifactRepairAttempt(key: string): boolean {
   return false;
 }
 
-function hasRecentArtifactAutoRepair(chatId: string, artifactId: string): boolean {
+function hasRecentArtifactAutoRepair(report: ArtifactRuntimeErrorReport, dedupKey: string): boolean {
   const now = Date.now();
   for (const [attemptKey, createdAt] of artifactAutoRepairAttempts) {
     if (now - createdAt > ARTIFACT_ERROR_REPAIR_TTL_MS) {
       artifactAutoRepairAttempts.delete(attemptKey);
     }
   }
-  const key = `${chatId}:${artifactId}`;
+  const scopedPrefix = `${report.chatId}:${report.artifactId}:`;
+  const recentForArtifact = Array.from(artifactAutoRepairAttempts.keys())
+    .filter((key) => key.startsWith(scopedPrefix)).length;
+  const key = `${report.chatId}:${report.artifactId}:${report.version}:${dedupKey.split(":").pop()}`;
   const existing = artifactAutoRepairAttempts.get(key);
   if (existing && now - existing < ARTIFACT_ERROR_REPAIR_TTL_MS) return true;
+  if (recentForArtifact >= 3) return true;
   artifactAutoRepairAttempts.set(key, now);
   return false;
 }
@@ -167,10 +191,31 @@ function buildArtifactRepairPrompt(report: ArtifactRuntimeErrorReport): string {
     typeof report.lineno === "number" ? `line ${report.lineno}` : "",
     typeof report.colno === "number" ? `column ${report.colno}` : "",
   ].filter(Boolean).join(", ");
+  const shaderLocation = [
+    typeof report.shaderLine === "number" ? `line ${report.shaderLine}` : "",
+    typeof report.shaderColumn === "number" ? `column ${report.shaderColumn}` : "",
+  ].filter(Boolean).join(", ");
+  const diagnosticLabel =
+    report.diagnosticKind === "webgpu-shader" ? "WebGPU shader compilation error" :
+    report.diagnosticKind === "webgpu-validation" ? "WebGPU validation error" :
+    report.diagnosticKind === "promise-rejection" ? "Promise rejection" :
+    "JavaScript runtime error";
+  const compilationMessages = report.compilationMessages?.length
+    ? report.compilationMessages
+      .slice(0, 12)
+      .map((message) => {
+        const msgLocation = [
+          typeof message.lineNum === "number" ? `line ${message.lineNum}` : "",
+          typeof message.linePos === "number" ? `column ${message.linePos}` : "",
+        ].filter(Boolean).join(", ");
+        return `- ${message.type || "message"}${msgLocation ? ` (${msgLocation})` : ""}: ${clampText(message.message, 500)}`;
+      })
+      .join("\n")
+    : "";
   const sourcePath = artifactSourcePath(report.artifactId, report.version);
   const parts = [
     "[System context - artifact runtime error]",
-    `The browser rendered artifact ${report.artifactId} version ${report.version} and reported a JavaScript runtime error.`,
+    `The browser rendered artifact ${report.artifactId} version ${report.version} and reported a ${diagnosticLabel}.`,
     report.title ? `Artifact title: ${report.title}` : "",
     report.url ? `Artifact URL: ${report.url}` : "",
     `Stored source path: ${sourcePath}`,
@@ -179,7 +224,14 @@ function buildArtifactRepairPrompt(report: ArtifactRuntimeErrorReport): string {
     `Message: ${clampText(report.message, 1000) || "Unknown runtime error"}`,
     location ? `Location: ${location}` : "",
     report.filename ? `Filename: ${clampText(report.filename, 500)}` : "",
+    report.pipelineLabel ? `WebGPU pipeline label: ${clampText(report.pipelineLabel, 200)}` : "",
+    report.shaderLabel ? `WebGPU shader label: ${clampText(report.shaderLabel, 200)}` : "",
+    report.entryPoint ? `WebGPU entry point: ${clampText(report.entryPoint, 200)}` : "",
+    shaderLocation ? `WebGPU shader location: ${shaderLocation}` : "",
+    compilationMessages ? `WebGPU compilation messages:\n${compilationMessages}` : "",
     report.stack ? `Stack:\n${clampText(report.stack, 3000)}` : "",
+    report.shaderExcerpt ? `Relevant WGSL source excerpt:\n${clampText(report.shaderExcerpt, 4000)}` : "",
+    report.shaderSource ? `Full WGSL shader source:\n${clampText(report.shaderSource, 12000)}` : "",
     report.sourceExcerpt ? `Relevant source excerpt:\n${clampText(report.sourceExcerpt, 4000)}` : "",
     "",
     "Please repair the existing artifact by calling update_artifact with the complete corrected HTML.",
@@ -244,7 +296,7 @@ function ensureSSEStream(res: Response, req: Request, chatId: string) {
   res.write(`: connected\n\n`);
 }
 
-function attachToLiveStreamResponse(req: Request, res: Response, stream: LiveStream, label: string) {
+function attachToLiveStreamResponse(req: Request, res: Response, stream: LiveStream, label: string, replay = true) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -258,8 +310,10 @@ function attachToLiveStreamResponse(req: Request, res: Response, stream: LiveStr
   // a push notification when that turn completes.
   stampStreamPresence(req);
 
-  for (const chunk of stream.buffer) {
-    try { res.write(chunk); } catch { return; }
+  if (replay) {
+    for (const chunk of stream.buffer) {
+      try { res.write(chunk); } catch { return; }
+    }
   }
 
   const subWrite = res.write.bind(res) as (chunk: string) => boolean;
@@ -3735,12 +3789,35 @@ router.post("/artifact-error", async (req, res) => {
     version: Number(body.version),
     title: typeof body.title === "string" ? body.title : undefined,
     url: typeof body.url === "string" ? body.url : undefined,
+    diagnosticKind: (
+      body.diagnosticKind === "js-error" ||
+      body.diagnosticKind === "promise-rejection" ||
+      body.diagnosticKind === "webgpu-shader" ||
+      body.diagnosticKind === "webgpu-validation"
+    ) ? body.diagnosticKind : undefined,
     message: typeof body.message === "string" ? body.message : "",
     stack: typeof body.stack === "string" ? body.stack : undefined,
     filename: typeof body.filename === "string" ? body.filename : undefined,
     lineno: typeof body.lineno === "number" ? body.lineno : undefined,
     colno: typeof body.colno === "number" ? body.colno : undefined,
     sourceExcerpt: typeof body.sourceExcerpt === "string" ? body.sourceExcerpt : undefined,
+    shaderLabel: typeof body.shaderLabel === "string" ? body.shaderLabel : undefined,
+    shaderSource: typeof body.shaderSource === "string" ? body.shaderSource : undefined,
+    shaderLine: typeof body.shaderLine === "number" ? body.shaderLine : undefined,
+    shaderColumn: typeof body.shaderColumn === "number" ? body.shaderColumn : undefined,
+    shaderExcerpt: typeof body.shaderExcerpt === "string" ? body.shaderExcerpt : undefined,
+    pipelineLabel: typeof body.pipelineLabel === "string" ? body.pipelineLabel : undefined,
+    entryPoint: typeof body.entryPoint === "string" ? body.entryPoint : undefined,
+    compilationMessages: Array.isArray(body.compilationMessages)
+      ? body.compilationMessages.slice(0, 24).map((message) => ({
+        type: typeof message?.type === "string" ? message.type : undefined,
+        message: typeof message?.message === "string" ? message.message : undefined,
+        lineNum: typeof message?.lineNum === "number" ? message.lineNum : undefined,
+        linePos: typeof message?.linePos === "number" ? message.linePos : undefined,
+        offset: typeof message?.offset === "number" ? message.offset : undefined,
+        length: typeof message?.length === "number" ? message.length : undefined,
+      }))
+      : undefined,
     stream: body.stream === true,
   };
 
@@ -3777,7 +3854,7 @@ router.post("/artifact-error", async (req, res) => {
     }
     return res.json({ accepted: false, duplicate: true });
   }
-  if (hasRecentArtifactAutoRepair(report.chatId, report.artifactId)) {
+  if (hasRecentArtifactAutoRepair(report, dedupKey)) {
     if (report.stream) {
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -3990,9 +4067,10 @@ router.get("/reconnect/:chatId", async (req, res) => {
     return res.status(404).json({ error: "no_active_stream" });
   }
 
-  attachToLiveStreamResponse(req, res, stream, "reconnected");
+  const replay = req.query.replay !== "0";
+  attachToLiveStreamResponse(req, res, stream, "reconnected", replay);
 
-  console.log(`[chat] reconnect: attached to live stream for ${chatId} (replayed ${stream.buffer.length} chunks)`);
+  console.log(`[chat] reconnect: attached to live stream for ${chatId} (replayed ${replay ? stream.buffer.length : 0} chunks)`);
 });
 
 // Edit message at index and regenerate response via SSE

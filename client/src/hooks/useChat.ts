@@ -501,12 +501,11 @@ export function useChat(chatId: string | null) {
         bg.modelProgress = null;
         bg.inferenceActivityPhase = null;
 
-        // If the server finalized with longer content than we streamed (e.g.
-        // reasoning model emitted thinking only and the server promoted it to
-        // content), trust the server's message over our local accumulator —
-        // otherwise the user has to refresh to see the response.
+        // The persisted server row is authoritative. This also corrects any
+        // live-only over-append caused by reconnect replay before the user has
+        // to refresh the page.
         const finalContent =
-          typeof serverContent === "string" && serverContent.length > bg.content.length
+          typeof serverContent === "string"
             ? serverContent
             : bg.content;
         if (finalContent !== bg.content) {
@@ -1038,8 +1037,9 @@ export function useChat(chatId: string | null) {
                 return;
               }
               // Reconnect to the live server stream
+              bg.abortController?.abort();
               const callbacks = makeStreamCallbacks(streamChatId);
-              bg.abortController = reconnectChat(streamChatId, callbacks);
+              bg.abortController = reconnectChat(streamChatId, callbacks, { replay: false });
               abortRef.current = bg.abortController;
               if (activeChatIdRef.current === streamChatId) {
                 setError(null);
@@ -1357,7 +1357,16 @@ export function useChat(chatId: string | null) {
     (report: ArtifactRuntimeErrorReport) => {
       const targetChatId = report.chatId || chatId;
       if (!targetChatId || targetChatId !== chatId) return;
-      const repairKey = `${targetChatId}:${report.artifactId}`;
+      const repairKey = [
+        targetChatId,
+        report.artifactId,
+        report.version,
+        report.diagnosticKind ?? "",
+        report.message,
+        report.shaderLabel ?? "",
+        report.shaderLine ?? report.lineno ?? "",
+        report.shaderColumn ?? report.colno ?? "",
+      ].join(":");
       if (reportedArtifactRepairRef.current.has(repairKey)) return;
       reportedArtifactRepairRef.current.add(repairKey);
 

@@ -181,12 +181,28 @@ export interface ArtifactRuntimeErrorReport {
   version: number;
   title?: string;
   url?: string;
+  diagnosticKind?: "js-error" | "promise-rejection" | "webgpu-shader" | "webgpu-validation";
   message: string;
   stack?: string;
   filename?: string;
   lineno?: number;
   colno?: number;
   sourceExcerpt?: string;
+  shaderLabel?: string;
+  shaderSource?: string;
+  shaderLine?: number;
+  shaderColumn?: number;
+  shaderExcerpt?: string;
+  pipelineLabel?: string;
+  entryPoint?: string;
+  compilationMessages?: Array<{
+    type?: string;
+    message?: string;
+    lineNum?: number;
+    linePos?: number;
+    offset?: number;
+    length?: number;
+  }>;
 }
 
 export interface StreamCallbacks {
@@ -431,10 +447,15 @@ export async function getChatStatus(
  * 404 responses (no active stream) are silent — the caller should check
  * getChatStatus first, but races are expected.
  */
-export function reconnectChat(chatId: string, callbacks: StreamCallbacks): AbortController {
+export function reconnectChat(
+  chatId: string,
+  callbacks: StreamCallbacks,
+  options?: { replay?: boolean }
+): AbortController {
   const controller = new AbortController();
+  const replayParam = options?.replay === false ? "?replay=0" : "";
 
-  fetch(appendDeviceIdQuery(`${BASE}/chat/reconnect/${encodeURIComponent(chatId)}`), {
+  fetch(appendDeviceIdQuery(`${BASE}/chat/reconnect/${encodeURIComponent(chatId)}${replayParam}`), {
     method: "GET",
     signal: controller.signal,
     credentials: "include",
