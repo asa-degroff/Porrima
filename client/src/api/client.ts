@@ -179,6 +179,7 @@ export interface ArtifactRuntimeErrorReport {
   chatId: string;
   artifactId: string;
   version: number;
+  objectKind?: "artifact" | "visual";
   title?: string;
   url?: string;
   diagnosticKind?: "js-error" | "promise-rejection" | "webgpu-shader" | "webgpu-validation";

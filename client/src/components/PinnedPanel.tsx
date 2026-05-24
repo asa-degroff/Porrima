@@ -23,7 +23,12 @@ export function PinnedPanel({
           onArtifactRuntimeError={onArtifactRuntimeError}
         />
       ) : (
-        <InlineVisual visual={pinnedItem.visual} isPinnedView />
+        <InlineVisual
+          visual={pinnedItem.visual}
+          isPinnedView
+          chatId={chatId}
+          onArtifactRuntimeError={onArtifactRuntimeError}
+        />
       )}
     </div>
   );

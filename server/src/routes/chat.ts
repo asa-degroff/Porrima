@@ -59,6 +59,7 @@ import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 import { appDataPath } from "../services/paths.js";
 
 const ARTIFACTS_DIR = appDataPath("artifacts");
+const VISUALS_DIR = appDataPath("visuals");
 const ARTIFACT_ERROR_REPAIR_TTL_MS = 30 * 60 * 1000;
 const artifactErrorRepairAttempts = new Map<string, number>();
 const artifactAutoRepairAttempts = new Map<string, number>();
@@ -71,6 +72,7 @@ interface ArtifactRuntimeErrorReport {
   chatId: string;
   artifactId: string;
   version: number;
+  objectKind?: "artifact" | "visual";
   title?: string;
   url?: string;
   diagnosticKind?: "js-error" | "promise-rejection" | "webgpu-shader" | "webgpu-validation";
@@ -111,14 +113,36 @@ function artifactSourcePath(artifactId: string, version: number): string {
   return join(ARTIFACTS_DIR, artifactId, "versions", String(version), "index.html");
 }
 
-async function getArtifactCurrentVersion(artifactId: string): Promise<number | null> {
-  try {
-    const metadataPath = join(ARTIFACTS_DIR, artifactId, "metadata.json");
-    const metadata = JSON.parse(await readFile(metadataPath, "utf-8"));
-    return typeof metadata.currentVersion === "number" ? metadata.currentVersion : null;
-  } catch {
-    return null;
+function visualSourcePath(visualId: string, version: number): string {
+  return join(VISUALS_DIR, visualId, "versions", String(version), "index.html");
+}
+
+function reportSourcePath(report: ArtifactRuntimeErrorReport): string {
+  return report.objectKind === "visual"
+    ? visualSourcePath(report.artifactId, report.version)
+    : artifactSourcePath(report.artifactId, report.version);
+}
+
+async function getVersionedObjectCurrentVersion(
+  id: string,
+  preferredKind?: "artifact" | "visual"
+): Promise<{ currentVersion: number; objectKind: "artifact" | "visual" } | null> {
+  const candidates = preferredKind === "visual"
+    ? [{ dir: VISUALS_DIR, objectKind: "visual" as const }, { dir: ARTIFACTS_DIR, objectKind: "artifact" as const }]
+    : [{ dir: ARTIFACTS_DIR, objectKind: "artifact" as const }, { dir: VISUALS_DIR, objectKind: "visual" as const }];
+
+  for (const candidate of candidates) {
+    try {
+      const metadataPath = join(candidate.dir, id, "metadata.json");
+      const metadata = JSON.parse(await readFile(metadataPath, "utf-8"));
+      if (typeof metadata.currentVersion === "number") {
+        return { currentVersion: metadata.currentVersion, objectKind: candidate.objectKind };
+      }
+    } catch {
+      // Try the other store.
+    }
   }
+  return null;
 }
 
 function messageReferencesArtifact(message: ChatMessage, artifactId: string, version: number): boolean {
@@ -132,8 +156,28 @@ function messageReferencesArtifact(message: ChatMessage, artifactId: string, ver
   );
 }
 
-function chatReferencesArtifact(chat: Chat, artifactId: string, version: number): boolean {
-  return chat.messages.some((message) => messageReferencesArtifact(message, artifactId, version));
+function messageReferencesVisual(message: ChatMessage, visualId: string, version: number): boolean {
+  const visuals = [
+    ...(message.visuals || []),
+    ...(message.segments?.flatMap((segment) => segment.visual ? [segment.visual] : []) || []),
+  ];
+  return visuals.some((visual) =>
+    visual.id === visualId &&
+    (visual.version == null || visual.version === version)
+  );
+}
+
+function chatReferencesVersionedObject(
+  chat: Chat,
+  id: string,
+  version: number,
+  objectKind: "artifact" | "visual"
+): boolean {
+  return chat.messages.some((message) =>
+    objectKind === "visual"
+      ? messageReferencesVisual(message, id, version)
+      : messageReferencesArtifact(message, id, version)
+  );
 }
 
 function makeArtifactRepairDedupKey(report: ArtifactRuntimeErrorReport): string {
@@ -212,10 +256,11 @@ function buildArtifactRepairPrompt(report: ArtifactRuntimeErrorReport): string {
       })
       .join("\n")
     : "";
-  const sourcePath = artifactSourcePath(report.artifactId, report.version);
+  const objectLabel = report.objectKind === "visual" ? "visual" : "artifact";
+  const sourcePath = reportSourcePath(report);
   const parts = [
     "[System context - artifact runtime error]",
-    `The browser rendered artifact ${report.artifactId} version ${report.version} and reported a ${diagnosticLabel}.`,
+    `The browser rendered ${objectLabel} ${report.artifactId} version ${report.version} and reported a ${diagnosticLabel}.`,
     report.title ? `Artifact title: ${report.title}` : "",
     report.url ? `Artifact URL: ${report.url}` : "",
     `Stored source path: ${sourcePath}`,
@@ -247,7 +292,7 @@ async function getArtifactSourceExcerpt(report: ArtifactRuntimeErrorReport): Pro
   if (provided) return provided;
   if (typeof report.lineno !== "number" || report.lineno < 1) return "";
   try {
-    const source = await readFile(artifactSourcePath(report.artifactId, report.version), "utf-8");
+    const source = await readFile(reportSourcePath(report), "utf-8");
     const lines = source.split("\n");
     const start = Math.max(0, report.lineno - 6);
     const end = Math.min(lines.length, report.lineno + 5);
@@ -3787,6 +3832,7 @@ router.post("/artifact-error", async (req, res) => {
     chatId: typeof body.chatId === "string" ? body.chatId : "",
     artifactId: typeof body.artifactId === "string" ? body.artifactId : "",
     version: Number(body.version),
+    objectKind: body.objectKind === "visual" ? "visual" : (body.objectKind === "artifact" ? "artifact" : undefined),
     title: typeof body.title === "string" ? body.title : undefined,
     url: typeof body.url === "string" ? body.url : undefined,
     diagnosticKind: (
@@ -3834,8 +3880,9 @@ router.post("/artifact-error", async (req, res) => {
     return res.status(400).json({ error: "Artifact repair requires a tool-capable chat" });
   }
 
-  const currentVersion = await getArtifactCurrentVersion(report.artifactId);
-  if (!currentVersion) return res.status(404).json({ error: "Artifact not found" });
+  const current = await getVersionedObjectCurrentVersion(report.artifactId, report.objectKind);
+  if (!current) return res.status(404).json({ error: "Artifact or visual not found" });
+  report.objectKind = current.objectKind;
 
   // Check dedup guards before version check — prevents spurious errors when a
   // previously-repaired artifact fires the same error on page reload.
@@ -3854,6 +3901,23 @@ router.post("/artifact-error", async (req, res) => {
     }
     return res.json({ accepted: false, duplicate: true });
   }
+
+  // If the reported version is older than current, a repair already produced
+  // a newer version — silently skip rather than surfacing a spurious error.
+  if (report.version < current.currentVersion) {
+    if (report.stream) {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      res.write(`event: done\ndata: ${JSON.stringify({ skipped: "superseded" })}\n\n`);
+      res.end();
+      return;
+    }
+    return res.json({ accepted: false, superseded: true });
+  }
   if (hasRecentArtifactAutoRepair(report, dedupKey)) {
     if (report.stream) {
       res.writeHead(200, {
@@ -3869,27 +3933,10 @@ router.post("/artifact-error", async (req, res) => {
     return res.json({ accepted: false, repairLimit: true });
   }
 
-  // If the reported version is older than current, a repair already produced
-  // a newer version — silently skip rather than surfacing a spurious error.
-  if (report.version < currentVersion) {
-    if (report.stream) {
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no",
-      });
-      res.write(`event: done\ndata: ${JSON.stringify({ skipped: "superseded" })}\n\n`);
-      res.end();
-      return;
-    }
-    return res.json({ accepted: false, superseded: true });
-  }
-
   const stream = liveStreams.get(report.chatId);
   const active = !!stream && !stream.ended && !stream.abort.signal.aborted;
-  if (!active && !chatReferencesArtifact(chat, report.artifactId, report.version)) {
-    return res.status(400).json({ error: "Artifact is not associated with this chat" });
+  if (!active && !chatReferencesVersionedObject(chat, report.artifactId, report.version, report.objectKind)) {
+    return res.status(400).json({ error: "Artifact or visual is not associated with this chat" });
   }
 
   report.sourceExcerpt = await getArtifactSourceExcerpt(report);

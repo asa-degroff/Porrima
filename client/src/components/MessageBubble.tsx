@@ -1137,10 +1137,27 @@ function SegmentRenderer({
     }
     case "visual": {
       if (!segment.visual) return null;
-      if (isDesktop && isPinned("visual", segment.visual.id)) {
-        return <PinnedPlaceholder title={segment.visual.title} onUnpin={unpin} />;
+      const currentVisual = segment.visual;
+      const hasNewerVisualSegment = allSegments
+        .slice(index + 1)
+        .some((later) =>
+          later.type === "visual" &&
+          later.visual != null &&
+          later.visual.id === currentVisual.id &&
+          (later.visual.version ?? 0) >= (currentVisual.version ?? 0)
+        );
+      if (hasNewerVisualSegment) return null;
+      if (isDesktop && isPinned("visual", currentVisual.id)) {
+        return <PinnedPlaceholder title={currentVisual.title} onUnpin={unpin} />;
       }
-      return <InlineVisual key={`visual-${segment.visual.id}`} visual={segment.visual} />;
+      return (
+        <InlineVisual
+          key={`visual-${currentVisual.id}`}
+          visual={currentVisual}
+          chatId={chatId}
+          onArtifactRuntimeError={onArtifactRuntimeError}
+        />
+      );
     }
     case "generated_image":
       return segment.generatedImage ? (

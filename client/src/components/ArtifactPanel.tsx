@@ -149,6 +149,10 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
       if (e.source !== iframeRef.current?.contentWindow) return;
       if (e.data?.type === "artifact-error") {
         const msg = e.data.message || "Unknown runtime error";
+        const diagnosticKind = typeof e.data.diagnosticKind === "string" ? e.data.diagnosticKind : undefined;
+        const stage = e.data.vertex || e.data.fragment || e.data.compute || {};
+        const shaderLine = typeof e.data.shaderLine === "number" ? e.data.shaderLine : undefined;
+        const shaderColumn = typeof e.data.shaderColumn === "number" ? e.data.shaderColumn : undefined;
         setRuntimeError(msg);
         runtimeErrorRef.current = msg;
         setIframeError(false);
@@ -156,9 +160,10 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
           const key = [
             artifact.id,
             selectedVersion,
+            diagnosticKind ?? "",
             msg,
-            e.data.lineno ?? "",
-            e.data.colno ?? "",
+            shaderLine ?? e.data.lineno ?? "",
+            shaderColumn ?? e.data.colno ?? "",
           ].join(":");
           if (reportedErrorKeyRef.current !== key) {
             reportedErrorKeyRef.current = key;
@@ -168,12 +173,23 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
               version: selectedVersion,
               title: artifact.title,
               url: `/api/artifacts/${artifact.id}/versions/${selectedVersion}`,
+              diagnosticKind: diagnosticKind as ArtifactRuntimeErrorReport["diagnosticKind"],
               message: msg,
               stack: typeof e.data.stack === "string" ? e.data.stack : undefined,
               filename: typeof e.data.filename === "string" ? e.data.filename : undefined,
-              lineno: typeof e.data.lineno === "number" ? e.data.lineno : undefined,
-              colno: typeof e.data.colno === "number" ? e.data.colno : undefined,
-              sourceExcerpt: getSourceExcerpt(sourceCode, typeof e.data.lineno === "number" ? e.data.lineno : undefined),
+              lineno: diagnosticKind?.startsWith("webgpu") ? undefined : (typeof e.data.lineno === "number" ? e.data.lineno : undefined),
+              colno: diagnosticKind?.startsWith("webgpu") ? undefined : (typeof e.data.colno === "number" ? e.data.colno : undefined),
+              sourceExcerpt: diagnosticKind?.startsWith("webgpu")
+                ? undefined
+                : getSourceExcerpt(sourceCode, typeof e.data.lineno === "number" ? e.data.lineno : undefined),
+              shaderLabel: typeof e.data.shaderLabel === "string" ? e.data.shaderLabel : (typeof stage.shaderLabel === "string" ? stage.shaderLabel : undefined),
+              shaderSource: typeof e.data.shaderSource === "string" ? e.data.shaderSource : (typeof stage.shaderSource === "string" ? stage.shaderSource : undefined),
+              shaderLine,
+              shaderColumn,
+              shaderExcerpt: typeof e.data.shaderExcerpt === "string" ? e.data.shaderExcerpt : undefined,
+              pipelineLabel: typeof e.data.pipelineLabel === "string" ? e.data.pipelineLabel : undefined,
+              entryPoint: typeof e.data.entryPoint === "string" ? e.data.entryPoint : (typeof stage.entryPoint === "string" ? stage.entryPoint : undefined),
+              compilationMessages: Array.isArray(e.data.compilationMessages) ? e.data.compilationMessages : undefined,
             });
           }
         }

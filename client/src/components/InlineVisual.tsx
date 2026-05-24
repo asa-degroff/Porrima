@@ -3,6 +3,7 @@ import type { InlineVisual as InlineVisualType } from "../types";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { useIsDesktop } from "../hooks/useIsDesktop";
 import { injectArtifactErrorForwarder } from "../utils/artifactErrorForwarder";
+import type { ArtifactRuntimeErrorReport } from "../api/client";
 
 const MIN_HEIGHT = 80;
 const MAX_HEIGHT = 4000;
@@ -11,9 +12,22 @@ const DEFAULT_HEIGHT = 450;
 interface Props {
   visual: InlineVisualType;
   isPinnedView?: boolean;
+  chatId?: string;
+  onArtifactRuntimeError?: (report: ArtifactRuntimeErrorReport) => void;
 }
 
-export function InlineVisual({ visual, isPinnedView }: Props) {
+function getSourceExcerpt(source: string | null, lineNumber?: number, radius = 5): string | undefined {
+  if (!source || !lineNumber || lineNumber < 1) return undefined;
+  const lines = source.split("\n");
+  const start = Math.max(0, lineNumber - radius - 1);
+  const end = Math.min(lines.length, lineNumber + radius);
+  return lines
+    .slice(start, end)
+    .map((line, idx) => `${start + idx + 1}: ${line}`)
+    .join("\n");
+}
+
+export function InlineVisual({ visual, isPinnedView, chatId, onArtifactRuntimeError }: Props) {
   const { pinVisual, unpin, isPinned } = usePinnedItem();
   const isDesktop = useIsDesktop();
   const pinned = isPinned("visual", visual.id);
@@ -22,6 +36,7 @@ export function InlineVisual({ visual, isPinnedView }: Props) {
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const reportedErrorKeyRef = useRef<string | null>(null);
 
   const updateHeight = useCallback(() => {
     try {
@@ -81,6 +96,7 @@ html, body { background: transparent !important; }
   // Create blob URL from inline HTML with scrollbar styles injected
   useEffect(() => {
     setRuntimeError(null);
+    reportedErrorKeyRef.current = null;
     const styledHtml = injectArtifactErrorForwarder(injectScrollbarStyles(visual.html));
     const blob = new Blob([styledHtml], { type: "text/html" });
     const url = URL.createObjectURL(blob);
@@ -92,12 +108,56 @@ html, body { background: transparent !important; }
     const handleMessage = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
       if (e.data?.type === "artifact-error") {
-        setRuntimeError(e.data.message || "Unknown runtime error");
+        const msg = e.data.message || "Unknown runtime error";
+        const diagnosticKind = typeof e.data.diagnosticKind === "string" ? e.data.diagnosticKind : undefined;
+        const stage = e.data.vertex || e.data.fragment || e.data.compute || {};
+        const shaderLine = typeof e.data.shaderLine === "number" ? e.data.shaderLine : undefined;
+        const shaderColumn = typeof e.data.shaderColumn === "number" ? e.data.shaderColumn : undefined;
+        setRuntimeError(msg);
+        if (chatId && onArtifactRuntimeError) {
+          const version = visual.version ?? 1;
+          const key = [
+            visual.id,
+            version,
+            diagnosticKind ?? "",
+            msg,
+            shaderLine ?? e.data.lineno ?? "",
+            shaderColumn ?? e.data.colno ?? "",
+          ].join(":");
+          if (reportedErrorKeyRef.current !== key) {
+            reportedErrorKeyRef.current = key;
+            onArtifactRuntimeError({
+              chatId,
+              artifactId: visual.id,
+              objectKind: "visual",
+              version,
+              title: visual.title,
+              url: visual.url,
+              diagnosticKind: diagnosticKind as ArtifactRuntimeErrorReport["diagnosticKind"],
+              message: msg,
+              stack: typeof e.data.stack === "string" ? e.data.stack : undefined,
+              filename: typeof e.data.filename === "string" ? e.data.filename : undefined,
+              lineno: diagnosticKind?.startsWith("webgpu") ? undefined : (typeof e.data.lineno === "number" ? e.data.lineno : undefined),
+              colno: diagnosticKind?.startsWith("webgpu") ? undefined : (typeof e.data.colno === "number" ? e.data.colno : undefined),
+              sourceExcerpt: diagnosticKind?.startsWith("webgpu")
+                ? undefined
+                : getSourceExcerpt(visual.html, typeof e.data.lineno === "number" ? e.data.lineno : undefined),
+              shaderLabel: typeof e.data.shaderLabel === "string" ? e.data.shaderLabel : (typeof stage.shaderLabel === "string" ? stage.shaderLabel : undefined),
+              shaderSource: typeof e.data.shaderSource === "string" ? e.data.shaderSource : (typeof stage.shaderSource === "string" ? stage.shaderSource : undefined),
+              shaderLine,
+              shaderColumn,
+              shaderExcerpt: typeof e.data.shaderExcerpt === "string" ? e.data.shaderExcerpt : undefined,
+              pipelineLabel: typeof e.data.pipelineLabel === "string" ? e.data.pipelineLabel : undefined,
+              entryPoint: typeof e.data.entryPoint === "string" ? e.data.entryPoint : (typeof stage.entryPoint === "string" ? stage.entryPoint : undefined),
+              compilationMessages: Array.isArray(e.data.compilationMessages) ? e.data.compilationMessages : undefined,
+            });
+          }
+        }
       }
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, []);
+  }, [chatId, onArtifactRuntimeError, visual.html, visual.id, visual.title, visual.url, visual.version]);
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([visual.html], { type: "text/html" });

@@ -53,6 +53,43 @@ describe("artifact guidance warnings", () => {
     expect(getArtifactGuidanceWarnings(html)).toEqual([]);
   });
 
+  it("warns for common WGSL mistakes in WebGPU artifacts", () => {
+    const html = `
+      <script>
+        navigator.gpu.requestAdapter();
+        const ctx = canvas.getContext("webgpu");
+        const pipeline = device.createRenderPipeline({
+          fragment: { targets: [{ format: ctx.format }] },
+        });
+        device.createShaderModule({ code: \`
+          struct VP { position: vec4f @builtin(position), uv: vec2f @location(0) }
+          @fragment
+          fn fs(inp: VP) -> vec4f @location(0) {
+            let color = vec3f(0.0);
+            color = color + 1.0;
+            return vec4f(color, 1.0);
+          }
+          @compute @workgroup_size(8, 8)
+          fn main() {
+            for(dx = -1; dx <= 1; dx++) {}
+            textureStore(outA, x, y, vec4f(1.0));
+          }
+        \`});
+      </script>
+    `;
+
+    const warnings = getArtifactGuidanceWarnings(html);
+
+    expect(warnings.some((warning) => warning.includes("shader modules should include labels"))).toBe(true);
+    expect(warnings.some((warning) => warning.includes("do not expose a `.format` property"))).toBe(true);
+    expect(warnings.some((warning) => warning.includes("must be configured before `getCurrentTexture()`"))).toBe(true);
+    expect(warnings.some((warning) => warning.includes("struct attributes appear after member types"))).toBe(true);
+    expect(warnings.some((warning) => warning.includes("return attributes appear after the return type"))).toBe(true);
+    expect(warnings.some((warning) => warning.includes("for-loop counters should be declared"))).toBe(true);
+    expect(warnings.some((warning) => warning.includes("let` bindings are immutable"))).toBe(true);
+    expect(warnings.some((warning) => warning.includes("textureStore` coordinates should be a vector"))).toBe(true);
+  });
+
   it("formats warnings for tool result feedback", () => {
     expect(formatArtifactGuidanceWarnings([])).toBe("");
     expect(formatArtifactGuidanceWarnings(["first", "second"])).toBe(
