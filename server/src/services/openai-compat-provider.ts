@@ -427,19 +427,21 @@ function isSlotProcessing(slot: any): boolean {
   return state.includes("process") || state.includes("busy") || state === "1";
 }
 
-function readProcessedTokens(slot: any): number | undefined {
+export function readProcessedTokens(slot: any): number | undefined {
   return readNumberByKeys(slot, [
-    "n_tokens",
-    "n_past",
     "n_prompt_tokens_processed",
     "prompt_tokens_processed",
     "processed_tokens",
     "n_prompt_processed",
-    "n_cache_tokens",
+  ]) ?? readNumberByKeys(slot?.progress, [
+    "prompt_tokens_processed",
+    "processed_tokens",
+    "n_prompt_tokens_processed",
+  ]) ?? readNumberByKeys(slot, [
+    "n_tokens",
+    "n_past",
   ]) ?? readNumberByKeys(slot?.progress, [
     "n_tokens",
-    "processed_tokens",
-    "prompt_tokens_processed",
   ]);
 }
 

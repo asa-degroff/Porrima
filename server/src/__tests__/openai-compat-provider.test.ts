@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimatePromptTokensForProgress } from "../services/openai-compat-provider.js";
+import { estimatePromptTokensForProgress, readProcessedTokens } from "../services/openai-compat-provider.js";
 
 describe("estimatePromptTokensForProgress", () => {
   it("does not count image base64 bytes as text prompt tokens", () => {
@@ -30,5 +30,27 @@ describe("estimatePromptTokensForProgress", () => {
     );
 
     expect(estimate).toBeGreaterThan(100);
+  });
+});
+
+describe("readProcessedTokens", () => {
+  it("prefers prompt-processed tokens over restored slot context tokens", () => {
+    const processed = readProcessedTokens({
+      n_tokens: 8192,
+      n_past: 8192,
+      n_prompt_tokens: 8192,
+      n_prompt_tokens_processed: 302,
+    });
+
+    expect(processed).toBe(302);
+  });
+
+  it("falls back to legacy slot token fields when processed fields are absent", () => {
+    const processed = readProcessedTokens({
+      n_tokens: 4096,
+      n_prompt_tokens: 8192,
+    });
+
+    expect(processed).toBe(4096);
   });
 });
