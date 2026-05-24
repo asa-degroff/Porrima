@@ -75,6 +75,7 @@ const LLAMACPP_STREAM_HEADERS_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_STREAM_H
 const LLAMACPP_PREFILL_POLL_INTERVAL_MS = readPositiveIntEnv("LLAMACPP_PREFILL_POLL_INTERVAL_MS", 10_000);
 const LLAMACPP_PREFILL_POLL_TIMEOUT_MS = readPositiveIntEnv("LLAMACPP_PREFILL_POLL_TIMEOUT_MS", 120_000);
 const LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS = readPositiveIntEnv("LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS", 8_192);
+const LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROCESSED_TOKENS = readPositiveIntEnv("LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROCESSED_TOKENS", 2_048);
 const LLAMACPP_PROMPT_DEBUG = process.env.LLAMACPP_PROMPT_DEBUG !== "0";
 
 const llamaStreamAgent = new UndiciAgent({
@@ -426,6 +427,7 @@ function readProcessedTokens(slot: any): number | undefined {
 
 function readPromptTokens(slot: any, fallback?: number): number | undefined {
   return readNumberByKeys(slot, [
+    "n_prompt_tokens",
     "task_n_tokens",
     "n_prompt_tokens_total",
     "prompt_tokens_total",
@@ -578,7 +580,15 @@ function shouldAutoShowPrefillIndicator(progress: Omit<ModelProgressEvent, "upda
   if (progress.cacheState !== "cold") return false;
   if (progress.confidence === "unknown") return false;
   const promptTokens = progress.promptTokens ?? 0;
-  return promptTokens >= LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS;
+  if (promptTokens < LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS) return false;
+
+  // In recent llama.cpp builds, n_prompt_tokens is the full rendered prompt
+  // while n_prompt_tokens_processed is only the newly evaluated suffix after
+  // cache reuse. A small processed/full ratio can therefore mean "good cache
+  // hit", not "cold prefill". Require some real prompt work before surfacing
+  // the non-first-turn auto indicator.
+  const processedTokens = progress.processedTokens ?? 0;
+  return processedTokens >= LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROCESSED_TOKENS;
 }
 
 function startLlamaPrefillMonitor(input: {
