@@ -359,7 +359,9 @@ export async function executeMemoryTool(
       const { archive_id } = toolCall.arguments;
       if (!archive_id) return { content: "Missing archive_id", isError: true };
 
-      const archive = getArchive(archive_id);
+      const archive = getArchive(archive_id) ?? (
+        archive_id.startsWith("archive:") ? null : getArchive(`archive:${archive_id}`)
+      );
       if (!archive) {
         return { content: `Archive block not found: ${archive_id}`, isError: false };
       }
