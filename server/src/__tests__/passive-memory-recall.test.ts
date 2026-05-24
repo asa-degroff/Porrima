@@ -116,6 +116,38 @@ describe("passive memory recall query building", () => {
     expect(query).not.toContain("/v1/rerank");
   });
 
+  it("does not backfill stale assistant output when the active fragment only has tool calls", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Can you summarize the notebook design?", timestamp: 1000 },
+      {
+        role: "assistant",
+        content: "The notebook design uses dual user and agent entries.",
+        timestamp: 2000,
+      },
+      { role: "user", content: "Now debug why passive recall follows the wrong topic.", timestamp: 3000 },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "call-1",
+            name: "read_file",
+            arguments: { path: "server/src/services/passive-memory-recall.ts" },
+          },
+        ],
+        timestamp: 4000,
+      },
+    ];
+
+    const query = buildPassiveRerankQuery(messages, 900);
+
+    expect(query).toContain("User request:");
+    expect(query).toContain("passive recall follows the wrong topic");
+    expect(query).not.toContain("Assistant output:");
+    expect(query).not.toContain("notebook design");
+    expect(query).not.toContain("dual user and agent entries");
+  });
+
   it("builds the same live message shape that persisted passive rows replay into", () => {
     const controller = new PassiveMemoryRecallController("chat-1");
     const content = [

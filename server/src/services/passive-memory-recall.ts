@@ -144,6 +144,14 @@ function formatToolObservations(message: ChatMessage, maxItems = 4): string {
   return parts.join("\n");
 }
 
+function activeRecallWindow(messages: ChatMessage[]): ChatMessage[] {
+  const latestUserIndex = messages.reduce(
+    (latest, message, index) => message.role === "user" ? index : latest,
+    -1,
+  );
+  return latestUserIndex >= 0 ? messages.slice(latestUserIndex) : messages;
+}
+
 export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = 6000): string {
   const recent = messages
     .filter((message) => !message._outOfContext && message.role !== "system")
@@ -181,30 +189,26 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = 900)
   const recent = messages
     .filter((message) => !message._outOfContext && message.role !== "system")
     .slice(-RECENT_MESSAGE_COUNT);
+  const active = activeRecallWindow(recent);
+  const latestAssistant = [...active].reverse().find((message) => message.role === "assistant");
 
   // --- Agent trajectory (primary signal) ---
   // The thinking block captures where the agent is heading — its reasoning
   // trajectory during the tool loop. This is the strongest signal for finding
   // context in territory the agent has excavated but the original user message
   // didn't cover.
-  const latestThinking = [...recent]
-    .reverse()
-    .find((message) => message.role === "assistant" && message.thinking?.trim())
-    ?.thinking;
+  const latestThinking = latestAssistant?.thinking;
   const agentThinking = latestThinking
     ? scrubOperationalNoise(latestThinking).replace(/\s+/g, " ")
     : "";
 
-  const assistantFocus = [...recent]
-    .reverse()
-    .filter((message) => message.role === "assistant" && message.content?.trim())
-    .slice(0, 2)
-    .map((message) => scrubOperationalNoise(clampText(message.content, 350)).replace(/\s+/g, " "))
-    .filter(Boolean)
-    .reverse();
+  const latestAssistantContent = latestAssistant?.content?.trim()
+    ? scrubOperationalNoise(clampText(latestAssistant.content, 350)).replace(/\s+/g, " ")
+    : "";
 
   const observations: string[] = [];
-  for (const message of recent) {
+  const observationMessages = latestAssistant ? [latestAssistant] : active;
+  for (const message of observationMessages) {
     const observation = formatToolObservations(message, 2).replace(/\s+/g, " ");
     if (observation) pushUnique(observations, observation, 3);
   }
@@ -216,7 +220,7 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = 900)
 
   const parts: string[] = [];
   if (agentThinking?.trim()) parts.push(`Agent thinking: ${clampText(agentThinking, 300)}`);
-  if (assistantFocus.length) parts.push(`Assistant output: ${assistantFocus.join(" / ")}`);
+  if (latestAssistantContent) parts.push(`Assistant output: ${latestAssistantContent}`);
   if (observations.length) parts.push(`Observed facts: ${observations.join(" / ")}`);
   if (latestUser?.trim()) parts.push(`User request: ${clampText(latestUser, 120).replace(/\s+/g, " ")}`);
 
