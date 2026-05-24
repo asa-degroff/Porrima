@@ -51,12 +51,13 @@ export async function getLlamaPathInfo(): Promise<LlamaPathInfo> {
 
     let version = "";
     try {
-      const { stdout } = await execFileAsync(binaryPath, ["--version"], {
+      const { stdout, stderr } = await execFileAsync(binaryPath, ["--version"], {
         timeout: 5000,
         env: { ...process.env, LD_LIBRARY_PATH: resolved },
       });
-      // Output looks like: "version: 8763 (ff5ef8278)"
-      const match = stdout.match(/version:\s*(\d+)/);
+      // llama-server --version writes to stderr, not stdout
+      const output = stderr || stdout;
+      const match = output.match(/version:\s*(\d+)/);
       if (match) version = match[1];
     } catch {
       // Binary might not respond to --version; that's okay
@@ -250,11 +251,13 @@ export async function listLlamaBinaries(): Promise<Array<{ path: string; version
       // Extract version
       let version = "";
       try {
-        const { stdout } = await execFileAsync(binaryPath, ["--version"], {
+        const { stdout, stderr } = await execFileAsync(binaryPath, ["--version"], {
           timeout: 5000,
           env: { ...process.env, LD_LIBRARY_PATH: dirPath },
         });
-        const match = stdout.match(/version:\s*(\d+)/);
+        // llama-server --version writes to stderr, not stdout
+        const output = stderr || stdout;
+        const match = output.match(/version:\s*(\d+)/);
         if (match) version = match[1];
       } catch { /* version optional */ }
 
