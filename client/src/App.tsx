@@ -1100,6 +1100,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           models={models}
           defaultModelId={activeChat?.modelId || settings.defaultModelId || models[0]?.id || ""}
           defaultVisionModelId={settings.defaultVisionModelId}
+          useChatModelForVision={settings.useChatModelForVision}
           onClose={handleCloseImageSandbox}
         />
       ) : activeView === 'notebooks' ? (

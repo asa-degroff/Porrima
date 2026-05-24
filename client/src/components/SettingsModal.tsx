@@ -403,6 +403,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
     return capable.length > 0 ? capable : models;
   })();
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
+  const [useChatModelForVision, setUseChatModelForVision] = useState(settings.useChatModelForVision !== false);
   const [defaultVisionModelId, setDefaultVisionModelId] = useState(settings.defaultVisionModelId || settings.defaultModelId);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [defaultSystemPromptExpanded, setDefaultSystemPromptExpanded] = useState(false);
@@ -1475,7 +1476,8 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
       ...settings,
       agentName: agentName.trim() || undefined,
       defaultModelId,
-      defaultVisionModelId: defaultVisionModelId || undefined,
+      defaultVisionModelId: useChatModelForVision ? undefined : (defaultVisionModelId || undefined),
+      useChatModelForVision: useChatModelForVision || undefined,
       defaultSystemPrompt: effectivePrompt,
       braveApiKey: braveApiKey.trim(),
       exaApiKey: exaApiKey.trim(),
@@ -3441,41 +3443,50 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
             </Dropdown>
           </div>
 
-         {/* Default Vision Model */}
-          <div id="vision" className="space-y-2">
-            <label className="block text-sm font-medium text-white/60">Default Vision Model</label>
-            <Dropdown
-              state={visionModelDd}
-              trigger={
-                <span className="truncate flex-1 text-left">
-                  {models.find((m) => m.id === defaultVisionModelId)?.name || defaultVisionModelId}
-                </span>
-              }
-            >
-              {visionModelOptions.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => { setDefaultVisionModelId(m.id); visionModelDd.close(); }}
-                  className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                    m.id === defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                  }`}
-                  style={{
-                    backgroundColor: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                    color: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
-                  }}
+         {/* Vision */}
+          <div id="vision" className="space-y-3">
+            <label className="block text-sm font-medium text-white/60">Vision</label>
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm text-white/80">Use chat model for vision</span>
+                <p className="text-xs text-white/30 mt-0.5">Image analysis uses the same model as your chat</p>
+              </div>
+              <ToggleSwitch checked={useChatModelForVision} onChange={() => setUseChatModelForVision(v => !v)} accentColor="purple" />
+            </div>
+            {!useChatModelForVision && (
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-white/60">Vision Model Override</label>
+                <Dropdown
+                  state={visionModelDd}
+                  trigger={
+                    <span className="truncate flex-1 text-left">
+                      {models.find((m) => m.id === defaultVisionModelId)?.name || defaultVisionModelId}
+                    </span>
+                  }
                 >
-                  <span className="truncate flex-1">{m.name}</span>
-                  <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
-                  <ProviderIcon
-                    provider={m.provider}
-                    className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
-                  />
-                </button>
-              ))}
-            </Dropdown>
-            <p className="text-white/30 text-xs">
-              Model used for image analysis. Defaults to your chat model.
-            </p>
+                  {visionModelOptions.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => { setDefaultVisionModelId(m.id); visionModelDd.close(); }}
+                      className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
+                        m.id === defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                      style={{
+                        backgroundColor: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                        color: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
+                      }}
+                    >
+                      <span className="truncate flex-1">{m.name}</span>
+                      <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
+                      <ProviderIcon
+                        provider={m.provider}
+                        className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                      />
+                    </button>
+                  ))}
+                </Dropdown>
+              </div>
+            )}
           </div>
 
           {/* Color Theme */}
@@ -5318,7 +5329,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
 	              <div className="flex items-center justify-between gap-3">
 	                <div>
 	                  <label className="block text-sm font-medium text-white/60">Cross-project memory relevance</label>
-	                  <p className="text-xs text-white/30 mt-0.5">At 0.00x, memories are strictly project-scoped. At 1.00x, memories are shared across projects equally. Default: 0.30x.</p>
+	                  <p className="text-xs text-white/30 mt-0.5">Scores memories from other projects while in a project chat. Global memories stay full-strength. Default: 0.30x.</p>
 	                </div>
 	                <span className="text-xs text-white/40 font-mono">{crossProjectScoreMultiplier.toFixed(2)}x</span>
 	              </div>
@@ -5340,7 +5351,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
 		              <div className="flex items-center justify-between gap-3">
 		                <div>
 		                  <label className="block text-sm font-medium text-white/60">Global chat project memory relevance</label>
-		                  <p className="text-xs text-white/30 mt-0.5">Controls project-scoped memories in global and system chats. At 1.00x, all projects compete equally. Default: 1.00x.</p>
+		                  <p className="text-xs text-white/30 mt-0.5">Scores project-scoped memories in global and system chats. Global memories stay full-strength. Default: 1.00x.</p>
 		                </div>
 		                <span className="text-xs text-white/40 font-mono">{globalProjectScoreMultiplier.toFixed(2)}x</span>
 		              </div>

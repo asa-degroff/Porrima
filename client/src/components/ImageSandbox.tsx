@@ -22,6 +22,7 @@ interface Props {
   models: InferenceModel[];
   defaultModelId: string;
   defaultVisionModelId?: string;
+  useChatModelForVision?: boolean;
   onClose: () => void;
 }
 
@@ -46,7 +47,7 @@ function isVisionCapable(model: InferenceModel): boolean {
     id.includes("pixtral");
 }
 
-export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionModelId, onClose }: Props) {
+export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionModelId, useChatModelForVision, onClose }: Props) {
   const activityShape = useActivityShape();
   const { settings } = useSettings();
   const backendLabel = settings.imageBackend === "sdcpp" ? "sd-server" : "ComfyUI";
@@ -195,6 +196,11 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
   }, [mode]);
 
   const [visionModel, setVisionModelRaw] = useState<string>(() => {
+    // 0. If configured to use chat model for vision, prefer that
+    if (useChatModelForVision) {
+      const chatDefault = allModels.find((m) => m.id === defaultModelId);
+      if (chatDefault && isVisionCapable(chatDefault)) return defaultModelId;
+    }
     // 1. Check localStorage for a previously selected vision model
     try {
       const saved = readStoredValue(VISION_MODEL_KEY, LEGACY_VISION_MODEL_KEY);
@@ -218,6 +224,15 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
     setVisionModelRaw(id);
     try { writeStoredValue(VISION_MODEL_KEY, id, LEGACY_VISION_MODEL_KEY); } catch {}
   }, []);
+
+  // Update vision model when useChatModelForVision setting changes
+  useEffect(() => {
+    if (!useChatModelForVision) return;
+    const chatDefault = allModels.find((m) => m.id === defaultModelId);
+    if (chatDefault && isVisionCapable(chatDefault) && visionModel !== defaultModelId) {
+      setVisionModelRaw(defaultModelId);
+    }
+  }, [useChatModelForVision, defaultModelId, allModels]);
 
   // Re-validate selection when models list arrives/changes
   useEffect(() => {

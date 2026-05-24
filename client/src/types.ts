@@ -307,6 +307,7 @@ export type RetrievalDepthProfile = "fast" | "balanced" | "thorough" | "custom";
 export interface Settings {
   defaultModelId: string;
   defaultVisionModelId?: string;
+  useChatModelForVision?: boolean;
   defaultSystemPrompt: string;
   braveApiKey: string;
   exaApiKey: string;
