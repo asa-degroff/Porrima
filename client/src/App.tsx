@@ -1035,7 +1035,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   return (
     <ActivityStyleProvider value={activityStyle}>
-    <div className="flex h-full overflow-hidden relative" style={totalBottomInset ? { paddingBottom: totalBottomInset } : undefined}>
+    <div className="flex h-full overflow-hidden relative isolate" style={totalBottomInset ? { paddingBottom: totalBottomInset } : undefined}>
       {settings.backgroundEffect === "ripple-grid" && (
         <Suspense fallback={null}>
           <RippleGridBackground />

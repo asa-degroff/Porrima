@@ -7,7 +7,7 @@ export function ScanLinesBackground() {
         right: 0,
         top: 0,
         bottom: 0,
-        zIndex: 0,
+        zIndex: -1,
         backgroundImage: `repeating-linear-gradient(
           to bottom,
           rgba(0, 0, 0, 0.1) 0px,

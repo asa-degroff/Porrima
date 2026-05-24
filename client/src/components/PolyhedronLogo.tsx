@@ -397,11 +397,11 @@ export const PolyhedronLogo = memo(function PolyhedronLogo({
       perspective: size * 10,
       gap: `${gap}px`,
     }
-  containerStyle.contain = 'layout paint style'
-  // Promote to own compositing layer — prevents z-fighting when a full-screen
-  // background (e.g. scan-lines repeating-linear-gradient) creates a separate
-  // compositing surface. Without this, the paint containment boundary can cause
-  // faces to get incorrectly depth-tested and disappear.
+  // Avoid paint containment here. Chrome can clip or flatten nested 3D faces
+  // when a fixed repeating-gradient background promotes nearby layers.
+  containerStyle.contain = 'layout style'
+  // Promote to own compositing layer so the tiny 3D scene is rasterized as a
+  // stable unit when full-screen background effects are active.
   containerStyle.transform = 'translate3d(0,0,0)'
 
   const ShapeComponent = shape === 'octahedron' ? OctahedronShape
