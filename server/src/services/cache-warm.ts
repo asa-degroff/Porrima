@@ -517,6 +517,7 @@ export async function warmChatCache(
         requestDigest: promptPayloadDigest,
         requestMessageCount: Array.isArray(body.messages) ? body.messages.length : 0,
         requestCharCount,
+        containsImages: false,
         reportedPromptTokens: totalTokens,
         promptEvalTokens: stats.tokensEvaluated,
         inferredCachedTokens: stats.tokensCached,

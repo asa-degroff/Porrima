@@ -136,6 +136,7 @@ export interface LlamaCacheMetadata {
   requestMessageCount: number;
   requestCharCount: number;
   estimatedPromptTokens?: number;
+  containsImages: boolean;
   slotId?: number;
   reportedPromptTokens?: number;
   promptEvalTokens?: number;
@@ -215,6 +216,23 @@ export function digestPromptPayload(body: any): string {
     .update(JSON.stringify(promptPayload))
     .digest("hex")
     .slice(0, 12);
+}
+
+function containsImagePromptPart(value: unknown): boolean {
+  if (typeof value === "string") {
+    return /^data:image\/[\w+.-]+;base64,/i.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsImagePromptPart);
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (record.type === "image_url" || record.type === "input_image" || record.type === "image") {
+      return true;
+    }
+    return Object.values(record).some(containsImagePromptPart);
+  }
+  return false;
 }
 
 export async function buildOpenAICompatChatBody(
@@ -300,6 +318,7 @@ function buildCacheMetadata(
     requestMessageCount: messages.length,
     requestCharCount: estimateRequestChars(messages, tools),
     estimatedPromptTokens: estimatePromptTokensForProgress(messages, tools),
+    containsImages: containsImagePromptPart(messages),
     slotId,
   };
 }
@@ -574,10 +593,16 @@ async function determineCacheState(
   return "unknown";
 }
 
-function shouldAutoShowPrefillIndicator(progress: Omit<ModelProgressEvent, "updatedAt" | "showIndicator">): boolean {
+function shouldAutoShowPrefillIndicator(
+  progress: Omit<ModelProgressEvent, "updatedAt" | "showIndicator">,
+  opts?: { containsImages?: boolean; initialCacheState?: ModelProgressEvent["cacheState"] },
+): boolean {
   if (progress.phase !== "prefill") return false;
   if (progress.cacheState !== "cold") return false;
   if (progress.confidence === "unknown") return false;
+  if (opts?.containsImages && opts.initialCacheState === "unknown") {
+    return false;
+  }
   const promptTokens = progress.promptTokens ?? 0;
   if (promptTokens < LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS) return false;
 
@@ -595,6 +620,7 @@ function startLlamaPrefillMonitor(input: {
   modelId: string;
   slotId?: number;
   estimatedPromptTokens?: number;
+  containsImages?: boolean;
   onProgress?: ModelProgressCallback;
   signal?: AbortSignal;
   showIndicator?: boolean;
@@ -603,7 +629,7 @@ function startLlamaPrefillMonitor(input: {
    *  When "unknown", falls back to progress ratio on first snapshot. */
   initialCacheState?: ModelProgressEvent["cacheState"];
 }): () => void {
-  const { baseUrl, modelId, slotId, estimatedPromptTokens, onProgress, signal, showIndicator, initialCacheState } = input;
+  const { baseUrl, modelId, slotId, estimatedPromptTokens, containsImages, onProgress, signal, showIndicator, initialCacheState } = input;
   if (!onProgress) return () => {};
 
   let stopped = false;
@@ -620,7 +646,10 @@ function startLlamaPrefillMonitor(input: {
   const emit = (progress: Omit<ModelProgressEvent, "updatedAt" | "showIndicator">) => {
     onProgress({
       ...progress,
-      showIndicator: showIndicator ?? shouldAutoShowPrefillIndicator(progress),
+      showIndicator: showIndicator ?? shouldAutoShowPrefillIndicator(progress, {
+        containsImages,
+        initialCacheState: initialCacheState ?? "unknown",
+      }),
       updatedAt: Date.now(),
     });
   };
@@ -1446,6 +1475,7 @@ export const streamOpenAICompat = (
         modelId: model.id,
         slotId: cacheMetadata.slotId,
         estimatedPromptTokens: cacheMetadata.estimatedPromptTokens,
+        containsImages: cacheMetadata.containsImages,
         onProgress: onModelProgress,
         signal: options?.signal,
         showIndicator,
