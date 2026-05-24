@@ -11,6 +11,7 @@
         "llama-server.service",
         "extraction-model.service",
         "reranker.service",
+        "embedding-model.service",
         "title-generation.service"
       ]
     },

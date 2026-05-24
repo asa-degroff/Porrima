@@ -11,7 +11,7 @@ function argValue(name, fallback) {
   return hit ? hit.slice(prefix.length) : fallback;
 }
 
-const repoUrl = argValue("repo", "https://github.com/YOUR_ORG/porrima.git");
+const repoUrl = argValue("repo", "https://github.com/asa-degroff/porrima.git");
 const ref = argValue("ref", "main");
 const featureArg = argValue("features", "core");
 const features = new Set(featureArg.split(",").map((item) => item.trim()).filter(Boolean));

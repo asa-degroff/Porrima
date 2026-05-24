@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=${PORRIMA_DIR}/server
 Environment=NODE_ENV=production
-Environment=PORT=3002
+Environment=PORT=3001
 ExecStart=${NODE_BIN} dist/index.js
 Restart=always
 RestartSec=5
