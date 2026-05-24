@@ -840,7 +840,7 @@ function MemoriesTab({
       </div>
 
       {/* Results */}
-      <div className="max-h-[360px] overflow-x-hidden overflow-y-auto space-y-1.5 pr-1">
+      <div className="min-h-[200px] max-h-[360px] overflow-x-hidden overflow-y-auto space-y-1.5 pr-1">
         {loading ? (
           <p className="text-white/30 text-xs text-center py-4">Searching...</p>
         ) : results.length === 0 ? (
