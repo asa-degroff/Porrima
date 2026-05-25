@@ -6,7 +6,7 @@ import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { AgentContext } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat, getDb, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
-import { chatMessagesToPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
+import { chatMessagesToPiMessages, hydrateChatMessageImagesForModel, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
 import { extractMemories, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
@@ -22,7 +22,7 @@ import type { Skill } from "../services/skills.js";
 import * as messageQueue from "../services/message-queue.js";
 import type { QueuedUserMessage } from "../services/message-queue.js";
 import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, ImageAttachment, InlineVisual, Project } from "../types.js";
-import { saveUserImage } from "../services/user-image-storage.js";
+import { hydrateUserImageAttachments, saveUserImage, stripImageAttachmentData } from "../services/user-image-storage.js";
 import { streamTTS, isStreamingCapable, TTS_FLUSH_SIGNAL, type StreamingTTSTextInput } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
 import { getCurrentTTSSettings } from "./tts.js";
@@ -542,6 +542,15 @@ function snapshotSentPrefix(
   });
 }
 
+async function chatMessagesToHydratedPiMessages(
+  chatMessages: ChatMessage[],
+  modelId: string,
+  fallbackIdentity?: ReplayModelIdentity,
+): Promise<Message[]> {
+  const hydratedMessages = await hydrateChatMessageImagesForModel(chatMessages);
+  return chatMessagesToPiMessages(hydratedMessages, modelId, fallbackIdentity);
+}
+
 /**
  * Run `fn` while periodically emitting SSE keepalive comments to prevent the
  * client's inactivity timeout from firing. Use this to wrap compaction work:
@@ -610,6 +619,7 @@ function buildUserPiMessage(
     const content: any[] = [];
     if (contentWithSystemContext) content.push({ type: "text", text: contentWithSystemContext });
     for (const img of images) {
+      if (!img.data) continue;
       content.push({ type: "image", data: img.data, mimeType: img.mimeType });
     }
     return { role: "user", content, timestamp: Date.now() };
@@ -660,12 +670,19 @@ function splitNextUserContext(opts: {
 async function persistImages(images: ImageAttachment[]): Promise<ImageAttachment[]> {
   return Promise.all(
     images.map(async (img) => {
-      if (img.id && img.url && img.thumbUrl) return img; // already persisted
+      if (img.id && img.url && img.thumbUrl) return stripImageAttachmentData(img); // already persisted
       try {
+        if (!img.data) return img;
         const buffer = Buffer.from(img.data, "base64");
-        const id = crypto.randomUUID();
+        const id = randomUUID();
         const record = await saveUserImage(id, buffer, img.mimeType, img.name);
-        return { ...img, id: record.id, url: record.url, thumbUrl: record.thumbUrl };
+        return {
+          mimeType: img.mimeType,
+          name: img.name,
+          id: record.id,
+          url: record.url,
+          thumbUrl: record.thumbUrl,
+        };
       } catch (e) {
         console.error("[user-images] Failed to persist image:", e);
         return img; // keep original base64-only attachment on failure
@@ -1765,7 +1782,7 @@ async function handleChatStream(
 
             if (images?.length) {
               console.log(`[chat] Extracted ${images.length} image(s) from tool result ${event.toolCallId} (${event.toolName})`);
-              console.log(`[chat] Image sizes: ${images.map(img => `${(img.data.length / 1024).toFixed(1)}KB`).join(", ")}`);
+              console.log(`[chat] Image sizes: ${images.map(img => `${((img.data?.length ?? 0) / 1024).toFixed(1)}KB`).join(", ")}`);
             }
 
             const toolResult: ChatToolResult = {
@@ -2414,7 +2431,7 @@ async function handleChatStream(
 
             try {
               await saveChat(chat);
-              const recoveryAgentMessages = chatMessagesToPiMessages(chat.messages, chat.modelId, activeAssistantIdentity);
+              const recoveryAgentMessages = await chatMessagesToHydratedPiMessages(chat.messages, chat.modelId, activeAssistantIdentity);
               await savePendingState(chat.id, {
                 agentMessages: recoveryAgentMessages as any[],
                 systemPrompt,
@@ -2616,7 +2633,7 @@ async function handleChatStream(
       }
 
       const messagesForResume = chat.messages.slice(0, resumeEndIndex);
-      const resumeMessages = chatMessagesToPiMessages(messagesForResume, chat.modelId, activeAssistantIdentity);
+      const resumeMessages = await chatMessagesToHydratedPiMessages(messagesForResume, chat.modelId, activeAssistantIdentity);
 
       // Append the handoff message so the resumed agent has continuity
       resumeMessages.push({ role: "user", content: handoffText, timestamp: Date.now() });
@@ -2830,7 +2847,7 @@ async function handleChatStream(
       lastUserMessage = queuedFollowUp.message;
 
       // Build new context for follow-up (all messages including the queued one)
-      const followUpContextMessages = chatMessagesToPiMessages(chat.messages, chat.modelId, activeAssistantIdentity);
+      const followUpContextMessages = await chatMessagesToHydratedPiMessages(chat.messages, chat.modelId, activeAssistantIdentity);
 
       // Safety check: ensure context is not empty
       if (followUpContextMessages.length === 0 && chat.messages.length > 1) {
@@ -3452,7 +3469,7 @@ router.post("/", async (req, res) => {
       } catch {
         resumeModel = undefined;
       }
-      const rebuiltContext = chatMessagesToPiMessages(
+      const rebuiltContext = await chatMessagesToHydratedPiMessages(
         chat.messages.slice(0, -1),
         chat.modelId,
         replayIdentityForModel(chat.modelId, resumeModel),
@@ -3475,7 +3492,7 @@ router.post("/", async (req, res) => {
     chat.messages.push({
       role: "user",
       content: message,
-      images: images?.length ? images : undefined,
+      images: persistedImages?.length ? persistedImages : undefined,
       timestamp: Date.now(),
     });
     await saveChat(chat);
@@ -3807,7 +3824,7 @@ router.post("/", async (req, res) => {
     const persistedHistoryEnd = nextUserContext.persistedHistoryEnd;
     const persistedHistory = chat.messages.slice(0, persistedHistoryEnd);
     const replayIdentity = replayIdentityForModel(chat.modelId, model);
-    const contextMessages = chatMessagesToPiMessages(persistedHistory, chat.modelId, replayIdentity);
+    const contextMessages = await chatMessagesToHydratedPiMessages(persistedHistory, chat.modelId, replayIdentity);
 
     // Safety check: warn if context is empty for non-first messages
     if (contextMessages.length === 0 && chat.messages.length > 1) {
@@ -3857,7 +3874,8 @@ router.post("/", async (req, res) => {
       shape: summarizeReplayShape(persistedHistory),
     });
 
-    const userPiMessage = buildUserPiMessage(message, images, nextUserContext.systemContexts);
+    const userImagesForModel = await hydrateUserImageAttachments(images?.length ? images : persistedImages);
+    const userPiMessage = buildUserPiMessage(message, userImagesForModel, nextUserContext.systemContexts);
 
     await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
   }
@@ -4063,7 +4081,7 @@ router.post("/artifact-error", async (req, res) => {
     repairModel = undefined;
   }
   const repairReplayIdentity = replayIdentityForModel(chat.modelId, repairModel);
-  const contextMessages = chatMessagesToPiMessages(
+  const contextMessages = await chatMessagesToHydratedPiMessages(
     chat.messages.slice(0, persistedHistoryEnd),
     chat.modelId,
     repairReplayIdentity,
@@ -4259,7 +4277,9 @@ router.post("/edit", async (req, res) => {
   chat.messages = chat.messages.slice(0, targetIndex);
 
   // Add edited user message — use new images if provided, otherwise preserve originals
-  const editImages = images?.length ? images : (originalMessage.images?.length ? originalMessage.images : undefined);
+  const editImages = images?.length
+    ? await persistImages(images)
+    : (originalMessage.images?.length ? originalMessage.images : undefined);
   const userMsg: ChatMessage = {
     role: "user",
     content: message,
@@ -4421,7 +4441,7 @@ router.post("/edit", async (req, res) => {
       : currentEditUserIndex;
   const editPersistedHistory = chat.messages.slice(0, editPersistedHistoryEnd);
   const editReplayIdentity = replayIdentityForModel(chat.modelId, model);
-  const contextMessages = chatMessagesToPiMessages(editPersistedHistory, chat.modelId, editReplayIdentity);
+  const contextMessages = await chatMessagesToHydratedPiMessages(editPersistedHistory, chat.modelId, editReplayIdentity);
 
   // Safety check: warn if context is empty for non-first messages
   if (contextMessages.length === 0 && chat.messages.length > 1) {
@@ -4446,7 +4466,8 @@ router.post("/edit", async (req, res) => {
     console.warn(`[chat] WARNING: edit chat has only ${chat.messages.length} messages after compaction - possible catastrophic context loss`);
   }
 
-  const userPiMessage = buildUserPiMessage(message, editImages, editMemoryDeltaContext);
+  const editImagesForModel = await hydrateUserImageAttachments(images?.length ? images : editImages);
+  const userPiMessage = buildUserPiMessage(message, editImagesForModel, editMemoryDeltaContext);
 
   await handleChatStream(chat, message, contextMessages, systemPrompt, userPiMessage, req, res);
 });

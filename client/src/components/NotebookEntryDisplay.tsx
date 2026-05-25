@@ -162,7 +162,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
             {entry.images.map((img, i) => (
               <img
                 key={i}
-                src={img.thumbUrl || img.url || `data:${img.mimeType};base64,${img.data}`}
+                src={img.thumbUrl || img.url || (img.data ? `data:${img.mimeType};base64,${img.data}` : "")}
                 alt={img.name}
                 className="max-h-40 max-w-full rounded-lg border border-white/10 object-cover cursor-pointer hover:opacity-90 transition-opacity"
                 onClick={() => setLightboxImage(img)}

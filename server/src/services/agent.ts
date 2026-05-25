@@ -12,7 +12,8 @@ import {
 import { createPiModelFromProvider, discoverAllModels, getExtractionRoute } from "./models.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import type { Model } from "@mariozechner/pi-ai";
-import type { ChatMessage, MessageUsage } from "../types.js";
+import type { ChatMessage, ImageAttachment, MessageUsage } from "../types.js";
+import { hydrateUserImageAttachments } from "./user-image-storage.js";
 
 export interface StreamChatResult {
   role: "assistant";
@@ -30,6 +31,32 @@ export interface ReplayModelIdentity {
   api: string;
   provider: string;
   model: string;
+}
+
+export async function hydrateChatMessageImagesForModel(messages: ChatMessage[]): Promise<ChatMessage[]> {
+  return Promise.all(messages.map(async (message) => {
+    let changed = false;
+    let images: ImageAttachment[] | undefined;
+    let toolResults = message.toolResults;
+
+    if (message.images?.length) {
+      images = await hydrateUserImageAttachments(message.images);
+      changed = images !== message.images;
+    }
+
+    if (message.toolResults?.some((result) => result.images?.some((image) => !image.data && image.id))) {
+      toolResults = await Promise.all(message.toolResults.map(async (result) => {
+        if (!result.images?.length) return result;
+        return {
+          ...result,
+          images: await hydrateUserImageAttachments(result.images),
+        };
+      }));
+      changed = true;
+    }
+
+    return changed ? { ...message, images, toolResults } : message;
+  }));
 }
 
 function isPlaceholderEllipsis(text: string | undefined): boolean {
@@ -197,8 +224,9 @@ export function chatMessagesToPiMessages(
             // Attach images if present (for generate_and_review tool)
             if (tr.images?.length) {
               console.log(`[agent] Attaching ${tr.images.length} image(s) to tool result ${tr.toolCallId} (${tr.toolName})`);
-              console.log(`[agent] Image sizes: ${tr.images.map(img => `${(img.data.length / 1024).toFixed(1)}KB ${img.mimeType}`).join(", ")}`);
+              console.log(`[agent] Image sizes: ${tr.images.map(img => `${(((img.data?.length ?? 0) / 1024).toFixed(1))}KB ${img.mimeType}`).join(", ")}`);
               for (const img of tr.images) {
+                if (!img.data) continue;
                 content.push({ type: "image" as const, data: img.data, mimeType: img.mimeType });
               }
             }
@@ -261,6 +289,7 @@ export function chatMessagesToPiMessages(
         const content: any[] = [];
         if (contentWithSystemContext) content.push({ type: "text", text: contentWithSystemContext });
         for (const img of m.images) {
+          if (!img.data) continue;
           content.push({ type: "image", data: img.data, mimeType: img.mimeType });
         }
         result.push({ role: "user" as const, content, timestamp: m.timestamp });

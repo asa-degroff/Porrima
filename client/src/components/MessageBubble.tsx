@@ -500,7 +500,7 @@ export const MessageBubble = memo(function MessageBubble({
                     {editImages.map((img, i) => (
                       <div key={i} className="relative group/thumb">
                         <img
-                          src={`data:${img.mimeType};base64,${img.data}`}
+                          src={img.thumbUrl || img.url || (img.data ? `data:${img.mimeType};base64,${img.data}` : "")}
                           alt={img.name}
                           className="h-16 w-16 object-cover rounded-lg border border-white/15"
                         />
@@ -1186,6 +1186,11 @@ function ImageLightbox({ image, onClose }: { image: ImageAttachment; onClose: ()
     // Use server URL for full image if available
     if (image.url) {
       setObjectUrl(image.url);
+      return;
+    }
+
+    if (!image.data) {
+      setObjectUrl(null);
       return;
     }
 

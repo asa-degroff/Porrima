@@ -231,7 +231,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
                 </div>
               ) : (
                 <img
-                  src={img.thumbUrl || `data:${img.mimeType};base64,${img.data}`}
+                  src={img.thumbUrl || img.url || (img.data ? `data:${img.mimeType};base64,${img.data}` : "")}
                   alt={img.name}
                   className="w-16 h-16 object-cover rounded-lg border border-white/10"
                 />

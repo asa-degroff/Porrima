@@ -62,6 +62,19 @@ export interface StorageMigrationDiagnostics {
       toolResultContentBytes: number;
       toolNames: string;
     }>;
+    inlineImageAttachments: {
+      count: number;
+      totalBase64Bytes: number;
+      largestRows: Array<{
+        chatId: string;
+        title: string;
+        type: string;
+        sequence: number;
+        timestamp: number | null;
+        attachmentCount: number;
+        base64Bytes: number;
+      }>;
+    };
     legacyCollapsedToolRows: number;
     canonicalToolLoopRows: number;
     canonicalToolLoopFragments: number;
@@ -247,6 +260,11 @@ export function getStorageMigrationDiagnostics(): StorageMigrationDiagnostics {
       ORDER BY toolResultContentBytes DESC
       LIMIT 10
     `).all() as StorageMigrationDiagnostics["chatStorage"]["largestToolResultRows"],
+    inlineImageAttachments: {
+      count: 0,
+      totalBase64Bytes: 0,
+      largestRows: [] as StorageMigrationDiagnostics["chatStorage"]["inlineImageAttachments"]["largestRows"],
+    },
     legacyCollapsedToolRows: readScalar(chatDb, `
       SELECT COUNT(*) AS value
       FROM chat_message_rows
@@ -341,6 +359,44 @@ export function getStorageMigrationDiagnostics(): StorageMigrationDiagnostics {
     ORDER BY sizeBytes DESC
     LIMIT 10
   `).all() as StorageMigrationDiagnostics["chatStorage"]["staleJsonSnapshots"]["largest"];
+
+  const inlineImageSummary = chatDb.prepare(`
+    SELECT
+      COUNT(img.key) AS count,
+      COALESCE(SUM(length(COALESCE(json_extract(img.value, '$.data'), ''))), 0) AS totalBase64Bytes
+    FROM (
+      SELECT payload_json
+      FROM chat_message_rows
+      WHERE json_valid(payload_json)
+        AND json_type(payload_json, '$.images') = 'array'
+    ) r
+    JOIN json_each(r.payload_json, '$.images') img
+    WHERE length(COALESCE(json_extract(img.value, '$.data'), '')) > 0
+  `).get() as { count: number; totalBase64Bytes: number };
+  chatStorage.inlineImageAttachments.count = inlineImageSummary.count;
+  chatStorage.inlineImageAttachments.totalBase64Bytes = inlineImageSummary.totalBase64Bytes;
+  chatStorage.inlineImageAttachments.largestRows = chatDb.prepare(`
+    SELECT
+      r.chat_id AS chatId,
+      r.title,
+      r.type,
+      r.sequence,
+      r.timestamp,
+      COUNT(img.key) AS attachmentCount,
+      COALESCE(SUM(length(COALESCE(json_extract(img.value, '$.data'), ''))), 0) AS base64Bytes
+    FROM (
+      SELECT rows.chat_id, c.title, c.type, rows.sequence, rows.timestamp, rows.payload_json
+      FROM chat_message_rows rows
+      JOIN chats c ON c.id = rows.chat_id
+      WHERE json_valid(rows.payload_json)
+        AND json_type(rows.payload_json, '$.images') = 'array'
+    ) r
+    JOIN json_each(r.payload_json, '$.images') img
+    WHERE length(COALESCE(json_extract(img.value, '$.data'), '')) > 0
+    GROUP BY r.chat_id, r.title, r.type, r.sequence, r.timestamp, r.payload_json
+    ORDER BY base64Bytes DESC
+    LIMIT 10
+  `).all() as StorageMigrationDiagnostics["chatStorage"]["inlineImageAttachments"]["largestRows"];
 
   const dbLastSynthesis = (memoryDb.prepare("SELECT value FROM metadata WHERE key = 'lastSynthesis'").get() as { value: string } | undefined)?.value ?? null;
   const dbMemoryCount = readScalar(memoryDb, "SELECT COUNT(*) AS value FROM memories");

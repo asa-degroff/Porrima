@@ -13,7 +13,7 @@
 
 import { randomUUID } from "crypto";
 import { getChat, getProject, getSettings } from "./chat-storage.js";
-import { chatMessagesToPiMessages } from "./agent.js";
+import { chatMessagesToPiMessages, hydrateChatMessageImagesForModel } from "./agent.js";
 import type { ReplayModelIdentity } from "./agent.js";
 import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
 import {
@@ -259,13 +259,14 @@ async function makeOneTokenShortPrompt(
   };
 }
 
-function buildReplayMessages(
+async function buildReplayMessages(
   chatMessages: any[],
   modelId: string,
   model: InferenceModel,
-): ReturnType<typeof chatMessagesToPiMessages> {
+): Promise<ReturnType<typeof chatMessagesToPiMessages>> {
   const replayIdentity = { api: "openai-compat", provider: "llamacpp", model: modelId };
-  return chatMessagesToPiMessages(chatMessages, modelId, replayIdentity as ReplayModelIdentity);
+  const hydratedMessages = await hydrateChatMessageImagesForModel(chatMessages);
+  return chatMessagesToPiMessages(hydratedMessages, modelId, replayIdentity as ReplayModelIdentity);
 }
 
 async function buildWarmSystemPrompt(chat: Awaited<ReturnType<typeof getChat>>, messages: any[]): Promise<string> {
@@ -433,7 +434,7 @@ export async function warmChatCache(
     piModel.contextWindow = effectiveContextWindow;
     piModel.id = normalizedModelId;
     piModel.reasoning = modelSupportsReasoning(model);
-    const piMessages = buildReplayMessages(allMessages, chat.modelId, model);
+    const piMessages = await buildReplayMessages(allMessages, chat.modelId, model);
     const tools = await buildWarmTools(chat, effectiveContextWindow);
     const context = {
       systemPrompt,

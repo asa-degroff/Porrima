@@ -22,18 +22,26 @@ export const UserImage = memo(function UserImage({
 }: UserImageProps) {
   const [displaySrc, setDisplaySrc] = useState<string | null>(
     // If we have a thumbUrl, use it immediately — no loading state needed
-    image.thumbUrl ?? null
+    image.thumbUrl ?? image.url ?? null
   );
-  const [loading, setLoading] = useState(!image.thumbUrl);
+  const [loading, setLoading] = useState(!image.thumbUrl && !image.url);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     // If server-side thumbnail is available, use it directly
-    if (image.thumbUrl) {
-      setDisplaySrc(image.thumbUrl);
+    if (image.thumbUrl || image.url) {
+      setDisplaySrc(image.thumbUrl || image.url || null);
       setLoading(false);
       return;
     }
+
+    if (typeof image.data !== "string" || !image.data) {
+      setError("Image data is unavailable");
+      setLoading(false);
+      setDisplaySrc(null);
+      return;
+    }
+    const imageData: string = image.data;
 
     // Fall back to client-side base64 → object URL conversion
     let cancelled = false;
@@ -41,7 +49,7 @@ export const UserImage = memo(function UserImage({
 
     async function loadImage() {
       try {
-        objectUrl = await base64ToRenderableUrl(image.data, image.mimeType, maxDimension, quality);
+        objectUrl = await base64ToRenderableUrl(imageData, image.mimeType, maxDimension, quality);
 
         if (!cancelled) {
           setDisplaySrc(objectUrl);
@@ -51,7 +59,7 @@ export const UserImage = memo(function UserImage({
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Failed to load image");
           setLoading(false);
-          setDisplaySrc(`data:${image.mimeType};base64,${image.data}`);
+          setDisplaySrc(`data:${image.mimeType};base64,${imageData}`);
         }
       }
     }
@@ -64,7 +72,7 @@ export const UserImage = memo(function UserImage({
         revokeObjectUrl(objectUrl);
       }
     };
-  }, [image.thumbUrl, image.data, image.mimeType, maxDimension, quality]);
+  }, [image.thumbUrl, image.url, image.data, image.mimeType, maxDimension, quality]);
 
   const handleClick = useCallback(() => {
     onClick?.();

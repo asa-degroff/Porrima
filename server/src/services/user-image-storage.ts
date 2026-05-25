@@ -1,6 +1,7 @@
-import { writeFile, mkdir, access, rm } from "fs/promises";
+import { writeFile, mkdir, access, rm, readFile } from "fs/promises";
 import { join } from "path";
 import sharp from "sharp";
+import type { ImageAttachment } from "../types.js";
 import { appDataPath } from "./paths.js";
 
 const USER_IMAGES_DIR = appDataPath("user-images");
@@ -64,6 +65,62 @@ function mimeTypeToExt(mimeType: string): string {
     "image/gif": "gif",
   };
   return map[mimeType] || "png";
+}
+
+function extToMimeType(ext: string): string {
+  const map: Record<string, string> = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    gif: "image/gif",
+  };
+  return map[ext.toLowerCase()] || "image/png";
+}
+
+function imageExtensionFromUrl(url?: string): string | undefined {
+  const match = url?.match(/\/image\.([a-zA-Z0-9]+)(?:[?#].*)?$/);
+  return match?.[1]?.toLowerCase();
+}
+
+export function stripImageAttachmentData(image: ImageAttachment): ImageAttachment {
+  const { data: _data, ...rest } = image;
+  return rest;
+}
+
+export async function hydrateUserImageAttachment(image: ImageAttachment): Promise<ImageAttachment> {
+  if (image.data || !image.id) return image;
+
+  const imageDir = getUserImageDir(image.id);
+  const candidates = [
+    imageExtensionFromUrl(image.url),
+    mimeTypeToExt(image.mimeType),
+    "png",
+    "jpg",
+    "jpeg",
+    "webp",
+    "gif",
+  ].filter((ext, index, all): ext is string => Boolean(ext) && all.indexOf(ext) === index);
+
+  for (const ext of candidates) {
+    try {
+      const buffer = await readFile(join(imageDir, `image.${ext}`));
+      return {
+        ...image,
+        data: buffer.toString("base64"),
+        mimeType: image.mimeType || extToMimeType(ext),
+      };
+    } catch {
+      // Try the next plausible persisted extension.
+    }
+  }
+
+  return image;
+}
+
+export async function hydrateUserImageAttachments(images?: ImageAttachment[]): Promise<ImageAttachment[] | undefined> {
+  if (!images?.length) return images;
+  return Promise.all(images.map((image) => hydrateUserImageAttachment(image)));
 }
 
 export function getUserImageDir(id: string): string {

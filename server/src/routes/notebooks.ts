@@ -13,7 +13,7 @@ import { streamChat, chatMessagesToPiMessages } from "../services/agent.js";
 import { getAgentTools, executeTool } from "../services/agent-tools.js";
 import { extractMemoriesFromText } from "../services/memory-extraction.js";
 import { getSettings } from "../services/chat-storage.js";
-import { saveUserImage } from "../services/user-image-storage.js";
+import { hydrateUserImageAttachments, saveUserImage, stripImageAttachmentData } from "../services/user-image-storage.js";
 import type { Artifact, ChatToolCall, ChatToolResult, ImageAttachment, NotebookEntry, InlineVisual } from "../types.js";
 
 const router = Router();
@@ -83,14 +83,24 @@ router.post("/user", async (req, res) => {
     const persistedImages: ImageAttachment[] = [];
     for (const img of images) {
       if (img.id && img.url && img.thumbUrl) {
-        persistedImages.push(img);
+        persistedImages.push(stripImageAttachmentData(img));
         continue;
       }
       try {
+        if (!img.data) {
+          persistedImages.push(img);
+          continue;
+        }
         const buffer = Buffer.from(img.data, "base64");
         const id = crypto.randomUUID();
         const record = await saveUserImage(id, buffer, img.mimeType, img.name);
-        persistedImages.push({ ...img, id: record.id, url: record.url, thumbUrl: record.thumbUrl });
+        persistedImages.push({
+          mimeType: img.mimeType,
+          name: img.name,
+          id: record.id,
+          url: record.url,
+          thumbUrl: record.thumbUrl,
+        });
       } catch (e) {
         console.error("[notebook] Failed to persist image:", e);
         persistedImages.push(img);
@@ -242,14 +252,14 @@ If the user's notes don't spark anything for you, it's fine to skip writing toda
 Current date: ${new Date().toLocaleDateString()}`;
 
   // Prepare messages for streamChat - multimodal if images present
-  const userImages = userEntries.flatMap(e => e.images || []);
+  const userImages = await hydrateUserImageAttachments(userEntries.flatMap(e => e.images || [])) ?? [];
   const messages = chatMessagesToPiMessages([], modelId);
   
-  if (userImages.length) {
+  if (userImages.some(img => img.data)) {
     // Build multimodal message with text + images
-    const imageContent = userImages.map(img => ({
+    const imageContent = userImages.filter(img => img.data).map(img => ({
       type: "image" as const,
-      data: img.data,
+      data: img.data!,
       mimeType: img.mimeType,
     }));
     messages.push({

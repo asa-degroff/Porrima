@@ -440,7 +440,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
                   </div>
                 ) : (
                   <img
-                    src={`data:${img.mimeType};base64,${img.data}`}
+                    src={img.data ? `data:${img.mimeType};base64,${img.data}` : ""}
                     alt={img.name}
                     className="h-16 w-16 object-cover rounded-lg border border-white/15"
                   />

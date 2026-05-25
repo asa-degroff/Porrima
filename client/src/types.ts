@@ -57,7 +57,8 @@ export interface MessageSegment {
 }
 
 export interface ImageAttachment {
-  data: string;      // base64-encoded (no data: prefix)
+  /** Base64-encoded image bytes. Present for new uploads and transient previews only. */
+  data?: string;
   mimeType: string;  // e.g. "image/png"
   name: string;      // original filename
   id?: string;       // server-stored image ID
