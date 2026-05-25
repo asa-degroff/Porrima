@@ -16,6 +16,7 @@ import { findLocalModel, listLocalModels, type LlamaModelKind } from "../service
 import { getDefaultLlamaBin, isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart, resolveSlotEnvironment, type OverridableSlotId } from "../services/llama-launch-templates.js";
 import { applyModelOverride, clearModelOverride, readOverride } from "../services/llama-overrides.js";
 import { ensureRouterModelLoaded, invalidateRouterCache, normalizeRouterModelId } from "../services/llama-router-client.js";
+import { invalidateModelCache } from "../services/models.js";
 import {
   getDefaultServiceConfig,
   getServiceCapabilities,
@@ -30,14 +31,19 @@ import {
 const router = Router();
 
 const SLOT_KIND: Record<string, LlamaModelKind> = {
+  inference: "chat",
   "title-generation": "chat",
   extraction: "chat",
   reranker: "rerank",
   embedding: "embedding",
 };
 
+function supportsRuntimeModelApply(id: string): id is LlamaServerId {
+  return id === "inference" || isOverridableSlot(id);
+}
+
 async function applySlotModelRuntime(
-  id: OverridableSlotId,
+  id: LlamaServerId,
   modelId: string,
   settings: Awaited<ReturnType<typeof getSettings>>
 ): Promise<{ modelId: string; overridePath: string | null; mode: "router-load" | "override-restart" }> {
@@ -55,7 +61,7 @@ async function applySlotModelRuntime(
 
   if (inRouterMode) {
     const ctxOverride = id === "extraction" ? settings.extractionCtxSize : undefined;
-    const result = await ensureRouterModelLoaded(preStatus.url, model.id, { contextWindow: ctxOverride });
+    const result = await ensureRouterModelLoaded(preStatus.url, model.id, { contextWindow: ctxOverride, force: true });
     if (result === "not-router") {
       throw new Error(`Slot reported router mode but /models/load returned 404. Try refreshing.`);
     }
@@ -63,6 +69,10 @@ async function applySlotModelRuntime(
       throw new Error(`Slot accepted but failed to load model ${normalizedModelId}. Check service logs.`);
     }
     return { modelId: model.id, overridePath: null, mode: "router-load" };
+  }
+
+  if (id === "inference") {
+    throw new Error("Chat inference model changes require router mode. Update the managed service config or restart with --models-dir.");
   }
 
   const execStart = renderExecStart(id, { ggufPath: model.ggufPath, modelId: model.id, settings });
@@ -74,11 +84,12 @@ async function applySlotModelRuntime(
 }
 
 function persistSlotModelId(
-  id: OverridableSlotId,
+  id: LlamaServerId,
   settings: Awaited<ReturnType<typeof getSettings>>,
   modelId: string
 ): void {
-  if (id === "title-generation") settings.titleGenerationModelId = modelId;
+  if (id === "inference") settings.defaultModelId = modelId;
+  else if (id === "title-generation") settings.titleGenerationModelId = modelId;
   else if (id === "extraction") settings.extractionModelId = modelId;
   else if (id === "reranker") settings.rerankerModelId = modelId;
   else if (id === "embedding") settings.embeddingModel = modelId;
@@ -253,14 +264,15 @@ router.put("/:id/enabled", async (req, res) => {
   }
 });
 
-// POST /:id/apply-model — Switch the model that a llama.cpp slot serves.
+// POST /:id/apply-model — Switch the model that a llama.cpp server serves.
 // Two paths:
-//   - Router mode (title-generation/extraction with --models-dir): hits
+//   - Router mode (inference/title-generation/extraction with --models-dir): hits
 //     /models/load on the slot's URL. No systemd write, no restart, no
 //     downtime — just persist the modelId in settings so consumers send the
 //     matching model name in chat-completion requests.
-//   - Single-model mode: writes a systemd drop-in override that swaps the
-//     ExecStart's -m and --alias, then daemon-reload + restart the unit.
+//   - Single-model mode for non-inference slots: writes a systemd drop-in
+//     override that swaps the ExecStart's -m and --alias, then daemon-reload
+//     + restart the unit.
 // Body: { modelId: string }.
 //
 // Must be declared BEFORE the generic POST /:id/:action route below — Express
@@ -268,8 +280,8 @@ router.put("/:id/enabled", async (req, res) => {
 // would otherwise shadow this and 400 with "action must be start/stop/restart".
 router.post("/:id/apply-model", async (req, res) => {
   const id = req.params.id;
-  if (!isOverridableSlot(id)) {
-    res.status(400).json({ error: `Slot does not support model override: ${id}` });
+  if (!supportsRuntimeModelApply(id)) {
+    res.status(400).json({ error: `Server does not support runtime model apply: ${id}` });
     return;
   }
   const modelId = typeof req.body?.modelId === "string" ? req.body.modelId.trim() : "";
@@ -283,6 +295,7 @@ router.post("/:id/apply-model", async (req, res) => {
     const applied = await applySlotModelRuntime(id, modelId, settings);
     persistSlotModelId(id, settings, applied.modelId);
     await saveSettings(settings);
+    if (id === "inference") invalidateModelCache();
 
     const server = await getLlamaServerStatus(id, settings);
     res.json({ server, overridePath: applied.overridePath, mode: applied.mode });

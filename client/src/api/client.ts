@@ -1800,6 +1800,7 @@ export interface LlamaServerStatus {
 }
 
 export type OverridableSlotId = Exclude<LlamaServerId, "inference">;
+export type RuntimeModelApplyId = LlamaServerId;
 
 export interface AvailableLlamaModel {
   id: string;
@@ -1820,7 +1821,7 @@ export async function listAvailableLlamaModels(slot?: OverridableSlotId): Promis
   return res.json();
 }
 
-export async function applyLlamaSlotModel(slot: OverridableSlotId, modelId: string): Promise<{ server: LlamaServerStatus; overridePath: string }> {
+export async function applyLlamaSlotModel(slot: RuntimeModelApplyId, modelId: string): Promise<{ server: LlamaServerStatus; overridePath: string | null; mode: "router-load" | "override-restart" }> {
   const res = await apiFetch(`${BASE}/llama-servers/${slot}/apply-model`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

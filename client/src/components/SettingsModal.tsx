@@ -385,8 +385,8 @@ function formatAutomationDuration(startedAt: string, finishedAt?: string): strin
 interface Props {
   settings: Settings;
   models: InferenceModel[];
-  onApply: (settings: Settings) => void;
-  onSave: (settings: Settings) => void;
+  onApply: (settings: Settings) => void | Promise<void>;
+  onSave: (settings: Settings) => void | Promise<void>;
   onClose: () => void;
   onLogout: () => void;
 }
@@ -1046,14 +1046,13 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
   // Track which server card has its config section expanded
   const [llamaConfigExpanded, setLlamaConfigExpanded] = useState<LlamaServerId | null>(null);
 
-  // Slot currently mid-apply (drop-in override write + daemon-reload + restart).
-  const [applyingSlot, setApplyingSlot] = useState<OverridableSlotId | null>(null);
+  // Server currently mid-apply (router load or drop-in override + restart).
+  const [applyingSlot, setApplyingSlot] = useState<LlamaServerId | null>(null);
 
-  // Apply a model to an overridable slot: writes the systemd drop-in, reloads,
-  // restarts the unit, and persists the modelId in settings. Replaces the
-  // previous "save modelId only" behavior so dropdown selection actually
-  // changes the running model. Optimistically updates the dropdown trigger so
-  // the selection feels immediate; reverts on error.
+  // Apply a model to a managed llama.cpp server: router-mode slots load via
+  // HTTP, while single-model slots write a drop-in and restart. Optimistically
+  // updates the dropdown trigger so the selection feels immediate; reverts on
+  // error.
   const handleApplySlotModel = useCallback(async (slot: OverridableSlotId, modelId: string) => {
     if (!modelId) return;
     setApplyingSlot(slot);
@@ -1071,7 +1070,12 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
       else if (s.id === "extraction" && s.expectedModel) setExtractionModelId(s.expectedModel);
       else if (s.id === "reranker" && s.expectedModel) setRerankerModelId(s.expectedModel);
       else if (s.id === "embedding" && s.expectedModel) setEmbeddingModel(s.expectedModel);
-      setLlamaServerMessage({ type: "ok", text: `Applied ${modelId} to ${s.label}; service restarted.` });
+      setLlamaServerMessage({
+        type: "ok",
+        text: result.mode === "router-load"
+          ? `Loaded ${modelId} on ${s.label} via router.`
+          : `Applied ${modelId} to ${s.label}; service restarted.`,
+      });
     } catch (e: any) {
       // Revert optimistic update so the trigger reflects the still-running model.
       if (previous !== null) {
@@ -1567,6 +1571,24 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
     
     return newSettings;
   };
+
+  const handleLoadDefaultModel = useCallback(async () => {
+    if (!defaultModelId) return;
+    setApplyingSlot("inference");
+    setLlamaServerMessage(null);
+    try {
+      const result = await applyLlamaSlotModel("inference", defaultModelId);
+      const appliedModelId = result.server.expectedModel || defaultModelId;
+      setDefaultModelId(appliedModelId);
+      setLlamaServers((prev) => prev.map((srv) => srv.id === "inference" ? result.server : srv));
+      await onApply({ ...handleSave(), defaultModelId: appliedModelId });
+      setLlamaServerMessage({ type: "ok", text: `Loaded ${appliedModelId} on the chat inference router.` });
+    } catch (e: any) {
+      setLlamaServerMessage({ type: "err", text: e?.message || "Failed to load default model" });
+    } finally {
+      setApplyingSlot(null);
+    }
+  }, [defaultModelId, onApply, handleSave]);
 
   const replaceAutomation = (task: AutomationTask) => {
     setAutomations((prev) => prev.map((item) => (item.id === task.id ? task : item)));
@@ -2148,6 +2170,9 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
   }, [isDesktop]);
 
   const activeSection = useActiveSection(SECTIONS.map(s => s.id), scrollRoot);
+  const inferenceServer = llamaServers.find((server) => server.id === "inference");
+  const defaultModelLoaded = Boolean(defaultModelId && inferenceServer?.http.loadedModelId === defaultModelId);
+  const canLoadDefaultModel = Boolean(defaultModelId && inferenceServer?.http.routerMode);
 
   const scrollToSection = (id: string) => {
     const el = document.getElementById(id);
@@ -2264,7 +2289,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
           <div id="models" className="space-y-2">
             <label className="block text-sm font-medium text-white/60">Default Chat Model</label>
             <p className="text-xs text-white/30 -mt-1">
-              Used for agent, project, and system chats. Quick chats let you pick a model per-chat.
+              Used for new chats and system/automation turns. Existing chats keep their own model until changed in the chat header.
             </p>
             <Dropdown
               state={modelDd}
@@ -2307,6 +2332,24 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
                 </button>
               ))}
             </Dropdown>
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2">
+              <div className="min-w-0">
+                <div className="text-xs text-white/55">Inference router</div>
+                <div className="text-[11px] text-white/30 truncate">
+                  {inferenceServer?.http.routerMode
+                    ? `Loaded: ${inferenceServer.http.loadedModelId || "none"}`
+                    : "Router mode unavailable"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleLoadDefaultModel}
+                disabled={!canLoadDefaultModel || defaultModelLoaded || applyingSlot === "inference"}
+                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/20 text-emerald-300 hover:bg-emerald-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+              >
+                {applyingSlot === "inference" ? "Loading..." : defaultModelLoaded ? "Loaded" : "Load Default Now"}
+              </button>
+            </div>
           </div>
 
           {/* Preserve Thinking */}
