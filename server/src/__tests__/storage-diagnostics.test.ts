@@ -53,6 +53,8 @@ describe("storage diagnostics", () => {
       };
 
       await storage.createChat(chat);
+      chat.messages.push({ role: "user", content: "A row-only follow-up", timestamp: 4 });
+      await storage.saveChat(chat);
       const db = storage.getDb();
       db.prepare(`
         INSERT INTO chat_message_rows (
@@ -64,15 +66,32 @@ describe("storage diagnostics", () => {
 
       const result = storage.getStorageMigrationDiagnostics();
 
-      expect(result.chatStorage.legacyCollapsedToolRows).toBe(1);
-      expect(result.chatStorage.rowsAuthoritative).toBe(true);
-      expect(result.chatStorage.corruptRowPayloads).toBe(1);
-      expect(result.chatStorage.totalJsonMessageBytes).toBeGreaterThan(0);
-      expect(result.chatStorage.largestJsonSnapshots[0]).toMatchObject({
-        id: "chat-diagnostics-test",
-        messageCount: 2,
-        rowMessageCount: 2,
-      });
+	      expect(result.chatStorage.legacyCollapsedToolRows).toBe(1);
+	      expect(result.chatStorage.rowsAuthoritative).toBe(true);
+	      expect(result.chatStorage.corruptRowPayloads).toBe(1);
+	      expect(result.chatStorage.staleJsonSnapshots).toMatchObject({
+	        count: 1,
+	        maxMessageDelta: 1,
+	      });
+	      expect(result.chatStorage.staleJsonSnapshots.largest[0]).toMatchObject({
+	        id: "chat-diagnostics-test",
+	        jsonMessageCount: 2,
+	        rowMessageCount: 3,
+	        messageDelta: 1,
+	      });
+	      expect(result.chatStorage.totalJsonMessageBytes).toBeGreaterThan(0);
+	      expect(result.chatStorage.totalRowPayloadBytes).toBeGreaterThan(0);
+	      expect(result.chatStorage.largestJsonSnapshots[0]).toMatchObject({
+	        id: "chat-diagnostics-test",
+	        messageCount: 2,
+	        rowMessageCount: 3,
+	      });
+	      expect(result.chatStorage.largestRowPayloads[0].sizeBytes).toBeGreaterThan(0);
+	      expect(result.chatStorage.largestToolResultRows[0]).toMatchObject({
+	        chatId: "chat-diagnostics-test",
+	        toolResultCount: 1,
+	        toolNames: "search_memory",
+	      });
       expect(result.warnings).toEqual(expect.arrayContaining([
         "chat_message_rows contains 1 invalid JSON payload(s)",
         "chat replay still depends on 1 legacy collapsed assistant tool row(s)",

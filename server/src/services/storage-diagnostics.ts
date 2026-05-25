@@ -11,6 +11,20 @@ export interface StorageMigrationDiagnostics {
     chatCount: number;
     jsonMessageCount: number;
     totalJsonMessageBytes: number;
+    staleJsonSnapshots: {
+      count: number;
+      totalSizeBytes: number;
+      maxMessageDelta: number;
+      largest: Array<{
+        id: string;
+        title: string;
+        type: string;
+        jsonMessageCount: number;
+        rowMessageCount: number;
+        messageDelta: number;
+        sizeBytes: number;
+      }>;
+    };
     largestJsonSnapshots: Array<{
       id: string;
       title: string;
@@ -26,6 +40,28 @@ export interface StorageMigrationDiagnostics {
     maxMismatch: number;
     corruptRowPayloads: number;
     rowGapChatCount: number;
+    totalRowPayloadBytes: number;
+    largestRowPayloads: Array<{
+      chatId: string;
+      title: string;
+      type: string;
+      sequence: number;
+      role: string;
+      timestamp: number | null;
+      sizeBytes: number;
+      toolResultCount: number;
+    }>;
+    largestToolResultRows: Array<{
+      chatId: string;
+      title: string;
+      type: string;
+      sequence: number;
+      timestamp: number | null;
+      payloadSizeBytes: number;
+      toolResultCount: number;
+      toolResultContentBytes: number;
+      toolNames: string;
+    }>;
     legacyCollapsedToolRows: number;
     canonicalToolLoopRows: number;
     canonicalToolLoopFragments: number;
@@ -123,6 +159,12 @@ export function getStorageMigrationDiagnostics(): StorageMigrationDiagnostics {
     chatCount: readScalar(chatDb, "SELECT COUNT(*) AS value FROM chats"),
     jsonMessageCount: readScalar(chatDb, "SELECT COALESCE(SUM(json_array_length(messages)), 0) AS value FROM chats"),
     totalJsonMessageBytes: readScalar(chatDb, "SELECT COALESCE(SUM(length(messages)), 0) AS value FROM chats"),
+    staleJsonSnapshots: {
+      count: 0,
+      totalSizeBytes: 0,
+      maxMessageDelta: 0,
+      largest: [] as StorageMigrationDiagnostics["chatStorage"]["staleJsonSnapshots"]["largest"],
+    },
     largestJsonSnapshots: chatDb.prepare(`
       SELECT
         c.id,
@@ -155,6 +197,56 @@ export function getStorageMigrationDiagnostics(): StorageMigrationDiagnostics {
         HAVING MIN(sequence) != 0 OR MAX(sequence) != COUNT(*) - 1
       )
     `),
+    totalRowPayloadBytes: readScalar(chatDb, "SELECT COALESCE(SUM(length(payload_json)), 0) AS value FROM chat_message_rows"),
+    largestRowPayloads: chatDb.prepare(`
+      SELECT
+        r.chat_id AS chatId,
+        c.title,
+        c.type,
+        r.sequence,
+        r.role,
+        r.timestamp,
+        length(r.payload_json) AS sizeBytes,
+        CASE
+          WHEN json_type(r.payload_json, '$.toolResults') = 'array'
+          THEN json_array_length(r.payload_json, '$.toolResults')
+          ELSE 0
+        END AS toolResultCount
+      FROM chat_message_rows r
+      JOIN chats c ON c.id = r.chat_id
+      WHERE json_valid(r.payload_json)
+      ORDER BY sizeBytes DESC
+      LIMIT 10
+    `).all() as StorageMigrationDiagnostics["chatStorage"]["largestRowPayloads"],
+    largestToolResultRows: chatDb.prepare(`
+      SELECT
+        r.chat_id AS chatId,
+        r.title,
+        r.type,
+        r.sequence,
+        r.timestamp,
+        length(r.payload_json) AS payloadSizeBytes,
+        COUNT(tr.key) AS toolResultCount,
+        COALESCE(SUM(length(COALESCE(json_extract(tr.value, '$.content'), ''))), 0) AS toolResultContentBytes,
+        GROUP_CONCAT(DISTINCT COALESCE(json_extract(tr.value, '$.toolName'), 'unknown')) AS toolNames
+      FROM (
+        SELECT
+          rows.chat_id,
+          c.title,
+          c.type,
+          rows.sequence,
+          rows.timestamp,
+          rows.payload_json
+        FROM chat_message_rows rows
+        JOIN chats c ON c.id = rows.chat_id
+        WHERE json_valid(rows.payload_json)
+          AND json_type(rows.payload_json, '$.toolResults') = 'array'
+      ) r
+      JOIN json_each(r.payload_json, '$.toolResults') tr
+      GROUP BY r.chat_id, r.title, r.type, r.sequence, r.timestamp, r.payload_json
+      ORDER BY toolResultContentBytes DESC
+      LIMIT 10
+    `).all() as StorageMigrationDiagnostics["chatStorage"]["largestToolResultRows"],
     legacyCollapsedToolRows: readScalar(chatDb, `
       SELECT COUNT(*) AS value
       FROM chat_message_rows
@@ -197,6 +289,58 @@ export function getStorageMigrationDiagnostics(): StorageMigrationDiagnostics {
   `).get() as { mismatchCount: number; maxMismatch: number };
   chatStorage.mismatchCount = mismatch.mismatchCount;
   chatStorage.maxMismatch = mismatch.maxMismatch;
+
+  const staleSnapshotSummary = chatDb.prepare(`
+    WITH j AS (
+      SELECT id, title, type, json_array_length(messages) AS jsonMessageCount, length(messages) AS sizeBytes
+      FROM chats
+    ), r AS (
+      SELECT chat_id AS id, COUNT(*) AS rowMessageCount
+      FROM chat_message_rows
+      GROUP BY chat_id
+    ), stale AS (
+      SELECT
+        j.id,
+        j.title,
+        j.type,
+        COALESCE(j.jsonMessageCount, 0) AS jsonMessageCount,
+        COALESCE(r.rowMessageCount, 0) AS rowMessageCount,
+        ABS(COALESCE(j.jsonMessageCount, 0) - COALESCE(r.rowMessageCount, 0)) AS messageDelta,
+        COALESCE(j.sizeBytes, 0) AS sizeBytes
+      FROM j LEFT JOIN r USING(id)
+      WHERE COALESCE(j.jsonMessageCount, 0) != COALESCE(r.rowMessageCount, 0)
+    )
+    SELECT
+      COUNT(*) AS count,
+      COALESCE(SUM(sizeBytes), 0) AS totalSizeBytes,
+      COALESCE(MAX(messageDelta), 0) AS maxMessageDelta
+    FROM stale
+  `).get() as { count: number; totalSizeBytes: number; maxMessageDelta: number };
+  chatStorage.staleJsonSnapshots.count = staleSnapshotSummary.count;
+  chatStorage.staleJsonSnapshots.totalSizeBytes = staleSnapshotSummary.totalSizeBytes;
+  chatStorage.staleJsonSnapshots.maxMessageDelta = staleSnapshotSummary.maxMessageDelta;
+  chatStorage.staleJsonSnapshots.largest = chatDb.prepare(`
+    WITH j AS (
+      SELECT id, title, type, json_array_length(messages) AS jsonMessageCount, length(messages) AS sizeBytes
+      FROM chats
+    ), r AS (
+      SELECT chat_id AS id, COUNT(*) AS rowMessageCount
+      FROM chat_message_rows
+      GROUP BY chat_id
+    )
+    SELECT
+      j.id,
+      j.title,
+      j.type,
+      COALESCE(j.jsonMessageCount, 0) AS jsonMessageCount,
+      COALESCE(r.rowMessageCount, 0) AS rowMessageCount,
+      ABS(COALESCE(j.jsonMessageCount, 0) - COALESCE(r.rowMessageCount, 0)) AS messageDelta,
+      COALESCE(j.sizeBytes, 0) AS sizeBytes
+    FROM j LEFT JOIN r USING(id)
+    WHERE COALESCE(j.jsonMessageCount, 0) != COALESCE(r.rowMessageCount, 0)
+    ORDER BY sizeBytes DESC
+    LIMIT 10
+  `).all() as StorageMigrationDiagnostics["chatStorage"]["staleJsonSnapshots"]["largest"];
 
   const dbLastSynthesis = (memoryDb.prepare("SELECT value FROM metadata WHERE key = 'lastSynthesis'").get() as { value: string } | undefined)?.value ?? null;
   const dbMemoryCount = readScalar(memoryDb, "SELECT COUNT(*) AS value FROM memories");
