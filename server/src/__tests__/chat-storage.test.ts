@@ -62,7 +62,7 @@ describe("chat storage", () => {
     }
   });
 
-  it("falls back to a larger JSON snapshot and repairs stale rows", async () => {
+  it("falls back to the JSON snapshot and repairs malformed rows", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-chat-storage-"));
     try {
       const storage = await loadChatStorage(homeDir);
@@ -70,7 +70,7 @@ describe("chat storage", () => {
         { role: "user", content: "first", timestamp: 1 },
         { role: "assistant", content: "second", timestamp: 2 },
       ]));
-      storage.getDb().prepare("DELETE FROM chat_message_rows WHERE chat_id = ? AND sequence = ?").run("json-repair", 1);
+      storage.getDb().prepare("DELETE FROM chat_message_rows WHERE chat_id = ? AND sequence = ?").run("json-repair", 0);
 
       const chat = await storage.getChat("json-repair");
       const repairedRows = storage.getDb().prepare(
@@ -160,6 +160,36 @@ describe("chat storage", () => {
       expect(afterJson).toBe(beforeJson);
       expect(afterRows).toEqual(beforeRows);
       expect(reloaded?.messages.map((message) => message.content)).toEqual(["keep me"]);
+      storage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("saves chats by updating rows without rewriting the legacy JSON mirror", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-chat-storage-"));
+    try {
+      const storage = await loadChatStorage(homeDir);
+      await storage.createChat(makeChat("row-primary-save", [
+        { role: "user", content: "first", timestamp: 1 },
+      ]));
+      const db = storage.getDb();
+      const beforeJson = (db.prepare("SELECT messages FROM chats WHERE id = ?").get("row-primary-save") as { messages: string }).messages;
+
+      const chat = await storage.getChat("row-primary-save");
+      expect(chat).not.toBeNull();
+      chat!.messages.push({ role: "assistant", content: "second", timestamp: 2 });
+      await storage.saveChat(chat!);
+
+      const afterJson = (db.prepare("SELECT messages FROM chats WHERE id = ?").get("row-primary-save") as { messages: string }).messages;
+      const rowCount = (db.prepare(
+        "SELECT COUNT(*) AS value FROM chat_message_rows WHERE chat_id = ?"
+      ).get("row-primary-save") as { value: number }).value;
+      const reloaded = await storage.getChat("row-primary-save");
+
+      expect(afterJson).toBe(beforeJson);
+      expect(rowCount).toBe(2);
+      expect(reloaded?.messages.map((message) => message.content)).toEqual(["first", "second"]);
       storage.closeChatDb();
     } finally {
       rmSync(homeDir, { recursive: true, force: true });

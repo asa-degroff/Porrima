@@ -78,6 +78,7 @@ export async function withChatWriteLock<T>(chatId: string, fn: () => Promise<T>)
 }
 const CHAT_SEARCH_REBUILD_MIGRATION = "chat_messages_search_from_rows_v1";
 const CHAT_SEARCH_TOOLLOOP_MERGE_MIGRATION = "chat_messages_search_toolloop_merge_v1";
+export const CHAT_ROWS_ARE_AUTHORITATIVE = true;
 
 interface ChatMetadataRow {
   id: string;
@@ -549,7 +550,9 @@ export async function getChat(id: string): Promise<Chat | null> {
   let rawMessages: ChatMessage[] | null = null;
 
   if (rowMessages) {
-    if (legacyMessageCount === null) {
+    if (CHAT_ROWS_ARE_AUTHORITATIVE) {
+      rawMessages = rowMessages;
+    } else if (legacyMessageCount === null) {
       if (rowMessages.length > 0) {
         console.warn(
           `[chat-storage] getChat ${row.id}: legacy JSON message snapshot is invalid; using row table (${rowMessages.length} messages)`
@@ -727,17 +730,24 @@ export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean })
       const firstChanged = syncChatMessageRows(db, chat.id, chat.messages, opts?.allowTruncation ?? false);
       syncChatMessages(db, chat.id, chat.messages, firstChanged);
 
-      // JSON column mirrors the now-synced row table.
+      // Row table is authoritative. Keep chats.messages as a stale fallback
+      // snapshot from the compatibility window; do not rewrite the full message
+      // blob on every streaming save.
       db.prepare(`
-        INSERT OR REPLACE INTO chats (
-          id, title, type, modelId, systemPrompt,
-          contextWindow, projectId, activeSkills, messages,
-          createdAt, lastModified, lastDelayedExtractionAt, lastDelayedExtractionMessageIndex,
-          preview
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        UPDATE chats
+        SET title = ?,
+            type = ?,
+            modelId = ?,
+            systemPrompt = ?,
+            contextWindow = ?,
+            projectId = ?,
+            activeSkills = ?,
+            lastModified = ?,
+            lastDelayedExtractionAt = ?,
+            lastDelayedExtractionMessageIndex = ?,
+            preview = ?
+        WHERE id = ?
       `).run(
-        chat.id,
         chat.title,
         chat.type,
         chat.modelId,
@@ -745,12 +755,11 @@ export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean })
         chat.contextWindow ?? null,
         chat.projectId ?? null,
         chat.activeSkills ? JSON.stringify(chat.activeSkills) : null,
-        JSON.stringify(chat.messages.map(withoutTransientMessageMetadata)),
-        chat.createdAt,
         chat.lastModified,
         chat.lastDelayedExtractionAt ?? null,
         chat.lastDelayedExtractionMessageIndex ?? null,
-        preview
+        preview,
+        chat.id
       );
     });
 

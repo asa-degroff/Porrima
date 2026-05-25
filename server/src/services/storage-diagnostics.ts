@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
 import { APP_DATA_DIR } from "./paths.js";
-import { getDb as getChatDb } from "./chat-storage.js";
+import { CHAT_ROWS_ARE_AUTHORITATIVE, getDb as getChatDb } from "./chat-storage.js";
 import { getDb as getMemoryDb } from "./memory-storage.js";
 
 export interface StorageMigrationDiagnostics {
@@ -21,6 +21,7 @@ export interface StorageMigrationDiagnostics {
     }>;
     rowMessageCount: number;
     rowChatCount: number;
+    rowsAuthoritative: boolean;
     mismatchCount: number;
     maxMismatch: number;
     corruptRowPayloads: number;
@@ -141,6 +142,7 @@ export function getStorageMigrationDiagnostics(): StorageMigrationDiagnostics {
     `).all() as StorageMigrationDiagnostics["chatStorage"]["largestJsonSnapshots"],
     rowMessageCount: readScalar(chatDb, "SELECT COUNT(*) AS value FROM chat_message_rows"),
     rowChatCount: readScalar(chatDb, "SELECT COUNT(DISTINCT chat_id) AS value FROM chat_message_rows"),
+    rowsAuthoritative: CHAT_ROWS_ARE_AUTHORITATIVE,
     mismatchCount: 0,
     maxMismatch: 0,
     corruptRowPayloads: readScalar(chatDb, "SELECT COUNT(*) AS value FROM chat_message_rows WHERE NOT json_valid(payload_json)"),
@@ -221,7 +223,7 @@ export function getStorageMigrationDiagnostics(): StorageMigrationDiagnostics {
   };
 
   const warnings: string[] = [];
-  if (chatStorage.mismatchCount > 0) {
+  if (chatStorage.mismatchCount > 0 && !chatStorage.rowsAuthoritative) {
     warnings.push(`chat JSON snapshot and row store differ for ${chatStorage.mismatchCount} chat(s); max difference ${chatStorage.maxMismatch} message(s)`);
   }
   if (chatStorage.corruptRowPayloads > 0) {

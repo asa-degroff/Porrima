@@ -65,6 +65,7 @@ describe("storage diagnostics", () => {
       const result = storage.getStorageMigrationDiagnostics();
 
       expect(result.chatStorage.legacyCollapsedToolRows).toBe(1);
+      expect(result.chatStorage.rowsAuthoritative).toBe(true);
       expect(result.chatStorage.corruptRowPayloads).toBe(1);
       expect(result.chatStorage.totalJsonMessageBytes).toBeGreaterThan(0);
       expect(result.chatStorage.largestJsonSnapshots[0]).toMatchObject({
