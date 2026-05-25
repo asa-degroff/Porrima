@@ -1106,15 +1106,16 @@ function SegmentRenderer({
       ) : null;
     }
     case "tool_call": {
-      const nextSegment = allSegments[index + 1];
-      const hasResult = nextSegment?.type === "tool_result" &&
-                       nextSegment.toolResult?.toolName === segment.toolCall?.name;
+      const matchingResult = allSegments.find((candidate) =>
+        candidate.type === "tool_result" &&
+        candidate.toolResult?.toolCallId === segment.toolCall?.id
+      );
 
       return segment.toolCall ? (
         <ToolCallDisplay
           key={`tool-${segment.toolCall.id}`}
           toolCall={segment.toolCall}
-          toolResult={hasResult ? nextSegment.toolResult : undefined}
+          toolResult={matchingResult?.toolResult}
           liveStatus={segment.liveStatus}
         />
       ) : null;

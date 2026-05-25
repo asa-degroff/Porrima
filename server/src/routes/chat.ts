@@ -2695,7 +2695,14 @@ async function handleChatStream(
               };
               state.allToolResults.push(toolResult);
               const resultSegment: OutputSegment = { seq: ++state.seqCounter, type: "tool_result", toolResult };
-              state.segments.push(resultSegment);
+              const callIdx = state.segments.findIndex(
+                s => s.type === "tool_call" && s.toolCall?.id === event.toolCallId
+              );
+              if (callIdx >= 0) {
+                state.segments.splice(callIdx + 1, 0, resultSegment);
+              } else {
+                state.segments.push(resultSegment);
+              }
               res.write(`event: segment\ndata: ${JSON.stringify(resultSegment)}\n\n`);
               res.write(`event: tool_status\ndata: ${JSON.stringify({ name: event.toolName, status: event.isError ? "error" : "done", result: resultText })}\n\n`);
             }
