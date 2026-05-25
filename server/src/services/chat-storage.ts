@@ -79,6 +79,26 @@ export async function withChatWriteLock<T>(chatId: string, fn: () => Promise<T>)
 const CHAT_SEARCH_REBUILD_MIGRATION = "chat_messages_search_from_rows_v1";
 const CHAT_SEARCH_TOOLLOOP_MERGE_MIGRATION = "chat_messages_search_toolloop_merge_v1";
 
+interface ChatMetadataRow {
+  id: string;
+  title: string;
+  type: string;
+  modelId: string;
+  systemPrompt: string | null;
+  contextWindow: number | null;
+  projectId: string | null;
+  activeSkills: string | null;
+  createdAt: string;
+  lastModified: string;
+  lastDelayedExtractionAt: string | null;
+  lastDelayedExtractionMessageIndex: number | null;
+  lastZeitgeistSynthesisAt: string | null;
+}
+
+interface ChatMetadataWithMessageCount extends ChatMetadataRow {
+  legacyMessageCount: number | null;
+}
+
 // ---------------------------------------------------------------------------
 // Lazy singleton database
 // ---------------------------------------------------------------------------
@@ -499,59 +519,78 @@ export function getChatDbPath(): string {
 
 export async function getChat(id: string): Promise<Chat | null> {
   const db = getDb();
-  const row = db.prepare("SELECT * FROM chats WHERE id = ?").get(id) as
-    | {
-        id: string;
-        title: string;
-        type: string;
-        modelId: string;
-        systemPrompt: string | null;
-        contextWindow: number | null;
-        projectId: string | null;
-        activeSkills: string | null;
-        messages: string;
-        createdAt: string;
-        lastModified: string;
-        lastDelayedExtractionAt: string | null;
-        lastDelayedExtractionMessageIndex: number | null;
-        lastZeitgeistSynthesisAt: string | null;
-      }
-    | undefined;
+  const row = db.prepare(`
+    SELECT
+      id, title, type, modelId, systemPrompt, contextWindow, projectId,
+      activeSkills, createdAt, lastModified,
+      lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastZeitgeistSynthesisAt,
+      CASE WHEN json_valid(messages) THEN json_array_length(messages) ELSE NULL END AS legacyMessageCount
+    FROM chats
+    WHERE id = ?
+  `).get(id) as ChatMetadataWithMessageCount | undefined;
 
   if (!row) return null;
 
-  const legacyMessages = parseMessagesJson(row.messages, row.id);
   let rowMessages = loadChatMessageRows(db, row.id);
+  const legacyMessageCount = row.legacyMessageCount;
+  let rawMessages: ChatMessage[] | null = null;
 
-  // Consistency check: detect divergence between row table and JSON column.
-  // When they disagree on message count, the source with more messages is
-  // authoritative — it preserves data that the other may have lost due to a
-  // partial write or a sync guard rejection. Log the discrepancy and
-  // reconcile on the spot so subsequent saves don't magnify the divergence.
-  //
-  // Previously, the row table was preferred unconditionally. But if the
-  // safety guard in syncChatMessageRows blocked a sync (the old v1 guard
-  // returned null, skipping both row and FTS updates), the JSON column could
-  // be newer than the rows. In that case, preferring the stale rows would
-  // silently drop messages that survived in the JSON column.
-  if (rowMessages && legacyMessages.length > 0 && rowMessages.length !== legacyMessages.length) {
-    const diff = Math.abs(rowMessages.length - legacyMessages.length);
-    if (rowMessages.length > legacyMessages.length) {
+  if (rowMessages) {
+    if (legacyMessageCount === null) {
+      if (rowMessages.length > 0) {
+        console.warn(
+          `[chat-storage] getChat ${row.id}: legacy JSON message snapshot is invalid; using row table (${rowMessages.length} messages)`
+        );
+        rawMessages = rowMessages;
+      }
+    } else if (rowMessages.length === legacyMessageCount) {
+      rawMessages = rowMessages;
+    } else if (rowMessages.length > legacyMessageCount) {
+      const diff = rowMessages.length - legacyMessageCount;
       console.warn(
         `[chat-storage] getChat inconsistency for ${row.id}: row table has ${rowMessages.length} messages, ` +
-        `JSON column has ${legacyMessages.length}. Using rows (larger source). ` +
+        `JSON column has ${legacyMessageCount}. Using rows (larger source). ` +
         `Difference: ${diff} messages.`
       );
-    } else {
+      rawMessages = rowMessages;
+    }
+  }
+
+  if (!rawMessages) {
+    const legacyMessages = loadLegacyChatMessages(db, row.id);
+    if (rowMessages && legacyMessages.length > 0 && rowMessages.length !== legacyMessages.length) {
+      const diff = Math.abs(rowMessages.length - legacyMessages.length);
+      if (rowMessages.length > legacyMessages.length) {
+        console.warn(
+          `[chat-storage] getChat inconsistency for ${row.id}: row table has ${rowMessages.length} messages, ` +
+          `JSON column has ${legacyMessages.length}. Using rows (larger source). ` +
+          `Difference: ${diff} messages.`
+        );
+        rawMessages = rowMessages;
+      } else {
+        console.warn(
+          `[chat-storage] getChat inconsistency for ${row.id}: JSON column has ${legacyMessages.length} messages, ` +
+          `row table has ${rowMessages.length}. Using JSON (larger source) — ` +
+          `rows may be stale from a prior sync guard rejection. Difference: ${diff} messages.`
+        );
+        rowMessages = legacyMessages;
+        try {
+          const firstChanged = syncChatMessageRows(db, row.id, legacyMessages, true);
+          if (firstChanged !== null) {
+            syncChatMessages(db, row.id, legacyMessages, firstChanged);
+            console.log(
+              `[chat-storage] Reconciled ${row.id}: re-synced ${legacyMessages.length} rows from JSON column (firstChanged=${firstChanged})`
+            );
+          }
+        } catch (err) {
+          console.error(`[chat-storage] Failed to reconcile ${row.id} from JSON column:`, err);
+        }
+        rawMessages = rowMessages;
+      }
+    } else if (!rowMessages && legacyMessages.length > 0) {
       console.warn(
-        `[chat-storage] getChat inconsistency for ${row.id}: JSON column has ${legacyMessages.length} messages, ` +
-        `row table has ${rowMessages.length}. Using JSON (larger source) — ` +
-        `rows may be stale from a prior sync guard rejection. Difference: ${diff} messages.`
+        `[chat-storage] getChat ${row.id}: row table is unavailable; using legacy JSON (${legacyMessages.length} messages)`
       );
-      // JSON column has more messages — likely the rows fell behind after a
-      // sync guard rejection. Override rowMessages so the caller gets the
-      // complete data, then immediately re-sync the row table to match.
-      rowMessages = legacyMessages;
       try {
         const firstChanged = syncChatMessageRows(db, row.id, legacyMessages, true);
         if (firstChanged !== null) {
@@ -563,34 +602,16 @@ export async function getChat(id: string): Promise<Chat | null> {
       } catch (err) {
         console.error(`[chat-storage] Failed to reconcile ${row.id} from JSON column:`, err);
       }
+      rawMessages = legacyMessages;
+    } else {
+      rawMessages = rowMessages ?? legacyMessages;
     }
   }
 
-  const rawMessages = rowMessages && (rowMessages.length > 0 || legacyMessages.length === 0)
-    ? rowMessages
-    : legacyMessages;
   const messages = rawMessages.map((message, index) =>
     message._rowSequence === undefined ? withRowSequence(message, index) : message
   );
-
-  const chat: Chat = {
-    id: row.id,
-    title: row.title,
-    type: (row.type as "agent" | "quick" | "system") || "quick",
-    modelId: row.modelId,
-    systemPrompt: row.systemPrompt || "You are a helpful assistant.",
-    ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
-    messages,
-    createdAt: row.createdAt,
-    lastModified: row.lastModified,
-    ...(row.projectId ? { projectId: row.projectId } : {}),
-    ...(row.activeSkills ? { activeSkills: JSON.parse(row.activeSkills) } : {}),
-    ...(row.lastDelayedExtractionAt ? { lastDelayedExtractionAt: row.lastDelayedExtractionAt } : {}),
-    ...(row.lastDelayedExtractionMessageIndex !== null && row.lastDelayedExtractionMessageIndex !== undefined ? { lastDelayedExtractionMessageIndex: row.lastDelayedExtractionMessageIndex } : {}),
-    ...(row.lastZeitgeistSynthesisAt ? { lastZeitgeistSynthesisAt: row.lastZeitgeistSynthesisAt } : {}),
-  };
-
-  return chat;
+  return hydrateChat(row, messages);
 }
 
 export function getChatMessageWindow(
@@ -656,17 +677,7 @@ export async function getChatWithWindow(
             activeSkills, createdAt, lastModified,
             lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastZeitgeistSynthesisAt
      FROM chats WHERE id = ?`
-  ).get(id) as
-    | {
-        id: string; title: string; type: string; modelId: string;
-        systemPrompt: string | null; contextWindow: number | null;
-        projectId: string | null; activeSkills: string | null;
-        createdAt: string; lastModified: string;
-        lastDelayedExtractionAt: string | null;
-        lastDelayedExtractionMessageIndex: number | null;
-        lastZeitgeistSynthesisAt: string | null;
-      }
-    | undefined;
+  ).get(id) as ChatMetadataRow | undefined;
 
   if (!row) return null;
 
@@ -676,23 +687,10 @@ export async function getChatWithWindow(
   });
 
   const chat: Chat = {
-    id: row.id,
-    title: row.title,
-    type: (row.type as "agent" | "quick" | "system") || "quick",
-    modelId: row.modelId,
-    systemPrompt: row.systemPrompt || "You are a helpful assistant.",
-    ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
-    messages: window.messages,
+    ...hydrateChat(row, window.messages),
     messageOffset: window.offset,
     messageTotal: window.total,
     hasMoreMessages: window.hasMoreBefore,
-    createdAt: row.createdAt,
-    lastModified: row.lastModified,
-    ...(row.projectId ? { projectId: row.projectId } : {}),
-    ...(row.activeSkills ? { activeSkills: JSON.parse(row.activeSkills) } : {}),
-    ...(row.lastDelayedExtractionAt ? { lastDelayedExtractionAt: row.lastDelayedExtractionAt } : {}),
-    ...(row.lastDelayedExtractionMessageIndex !== null && row.lastDelayedExtractionMessageIndex !== undefined ? { lastDelayedExtractionMessageIndex: row.lastDelayedExtractionMessageIndex } : {}),
-    ...(row.lastZeitgeistSynthesisAt ? { lastZeitgeistSynthesisAt: row.lastZeitgeistSynthesisAt } : {}),
   };
 
   return chat;
@@ -1245,6 +1243,11 @@ function parseMessagesJson(raw: string, chatId: string): ChatMessage[] {
   }
 }
 
+function loadLegacyChatMessages(db: Database.Database, chatId: string): ChatMessage[] {
+  const row = db.prepare("SELECT messages FROM chats WHERE id = ?").get(chatId) as { messages: string } | undefined;
+  return row ? parseMessagesJson(row.messages, chatId) : [];
+}
+
 function loadChatMessageRows(db: Database.Database, chatId: string): ChatMessage[] | null {
   const rows = db.prepare(`
     SELECT sequence, payload_json
@@ -1276,6 +1279,25 @@ function loadChatMessageRows(db: Database.Database, chatId: string): ChatMessage
 
 function withRowSequence(message: ChatMessage, sequence: number): ChatMessage {
   return { ...message, _rowSequence: sequence };
+}
+
+function hydrateChat(row: ChatMetadataRow, messages: ChatMessage[]): Chat {
+  return {
+    id: row.id,
+    title: row.title,
+    type: (row.type as "agent" | "quick" | "system") || "quick",
+    modelId: row.modelId,
+    systemPrompt: row.systemPrompt || "You are a helpful assistant.",
+    ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
+    messages,
+    createdAt: row.createdAt,
+    lastModified: row.lastModified,
+    ...(row.projectId ? { projectId: row.projectId } : {}),
+    ...(row.activeSkills ? { activeSkills: JSON.parse(row.activeSkills) } : {}),
+    ...(row.lastDelayedExtractionAt ? { lastDelayedExtractionAt: row.lastDelayedExtractionAt } : {}),
+    ...(row.lastDelayedExtractionMessageIndex !== null && row.lastDelayedExtractionMessageIndex !== undefined ? { lastDelayedExtractionMessageIndex: row.lastDelayedExtractionMessageIndex } : {}),
+    ...(row.lastZeitgeistSynthesisAt ? { lastZeitgeistSynthesisAt: row.lastZeitgeistSynthesisAt } : {}),
+  };
 }
 
 function withoutTransientMessageMetadata(message: ChatMessage): ChatMessage {
