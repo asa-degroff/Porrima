@@ -53,6 +53,38 @@ describe("passive memory recall query building", () => {
     expect(query).not.toContain("cache setting");
   });
 
+  it("excludes automation trigger prompts from passive recall queries", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content: "# Daily Synthesis\n\nWrite a daily synthesis and maintain your memory blocks.",
+        timestamp: 1000,
+        _isSystemMessage: true,
+        _isAutomationMessage: true,
+        _automationTaskId: "builtin:synthesis",
+      },
+      {
+        role: "assistant",
+        thinking: "I should inspect recent project work and summarize durable patterns.",
+        content: "I found several recurring memory retrieval themes.",
+        timestamp: 2000,
+      },
+    ];
+
+    const recallQuery = buildPassiveRecallQuery(messages);
+    const rerankQuery = buildPassiveRerankQuery(messages);
+
+    expect(recallQuery).not.toContain("Daily Synthesis");
+    expect(recallQuery).not.toContain("maintain your memory blocks");
+    expect(recallQuery).toContain("Assistant:");
+    expect(recallQuery).toContain("memory retrieval themes");
+
+    expect(rerankQuery).not.toContain("User request:");
+    expect(rerankQuery).not.toContain("Daily Synthesis");
+    expect(rerankQuery).toContain("Agent thinking:");
+    expect(rerankQuery).toContain("durable patterns");
+  });
+
   it("keeps the most recent context when the query is capped", () => {
     const older = "old topic ".repeat(200);
     const newer = "new topic ".repeat(200);

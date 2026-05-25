@@ -189,6 +189,7 @@ function clampText(text: string, maxChars: number): string {
 
 function isSyntheticUserContext(message: ChatMessage): boolean {
   if (message.role !== "user") return false;
+  if (message._isAutomationMessage) return true;
   const content = message.content.trim();
   return (
     content.startsWith("[System:") ||

@@ -45,6 +45,26 @@ describe("memory retrieval project scoping", () => {
     expect(query.length).toBeLessThanOrEqual(900);
   });
 
+  it("excludes automation trigger prompts from memory-context rerank queries", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "Earlier useful context about memory retrieval.", timestamp: 1000 },
+      {
+        role: "user",
+        content: "# Wake Cycle\n\nExplore something that interests you during your sleep cycle.",
+        timestamp: 2000,
+        _isSystemMessage: true,
+        _isAutomationMessage: true,
+        _automationTaskId: "builtin:wake",
+      },
+    ];
+
+    const query = buildMemoryRerankQuery(messages, 900);
+
+    expect(query).toContain("Earlier useful context");
+    expect(query).not.toContain("Wake Cycle");
+    expect(query).not.toContain("sleep cycle");
+  });
+
   it("keeps the latest memory-context rerank query within the configured budget", () => {
     const messages: ChatMessage[] = [
       { role: "user", content: "first " + "a".repeat(1000), timestamp: 1000 },

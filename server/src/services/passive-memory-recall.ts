@@ -152,6 +152,10 @@ function activeRecallWindow(messages: ChatMessage[]): ChatMessage[] {
   return latestUserIndex >= 0 ? messages.slice(latestUserIndex) : messages;
 }
 
+function isAutomationUserPrompt(message: ChatMessage): boolean {
+  return message.role === "user" && Boolean(message._isAutomationMessage);
+}
+
 export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = 6000): string {
   const recent = messages
     .filter((message) => !message._outOfContext && message.role !== "system")
@@ -160,6 +164,7 @@ export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = 6000
   const parts: string[] = [];
   for (const message of recent) {
     if (message.role === "user") {
+      if (isAutomationUserPrompt(message)) continue;
       const content = scrubOperationalNoise(clampText(message.content, 1200));
       if (content) parts.push(`User: ${content}`);
       continue;
@@ -216,7 +221,9 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = 900)
   // --- User context (secondary, for grounding) ---
   // Demoted: memory-context already retrieved memories for this query at turn start.
   // Kept as a grounding signal when agent trajectory is sparse.
-  const latestUser = scrubOperationalNoise([...recent].reverse().find((message) => message.role === "user")?.content);
+  const latestUser = scrubOperationalNoise(
+    [...recent].reverse().find((message) => message.role === "user" && !isAutomationUserPrompt(message))?.content,
+  );
 
   const parts: string[] = [];
   if (agentThinking?.trim()) parts.push(`Agent thinking: ${clampText(agentThinking, 300)}`);
