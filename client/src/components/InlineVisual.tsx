@@ -6,7 +6,7 @@ import { injectArtifactErrorForwarder } from "../utils/artifactErrorForwarder";
 import type { ArtifactRuntimeErrorReport } from "../api/client";
 
 const MIN_HEIGHT = 80;
-const MAX_HEIGHT = 4000;
+const MAX_HEIGHT = 1200;
 const DEFAULT_HEIGHT = 450;
 
 interface Props {
@@ -36,6 +36,7 @@ export function InlineVisual({ visual, isPinnedView, chatId, onArtifactRuntimeEr
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const iframeResizeObserverRef = useRef<ResizeObserver | null>(null);
   const reportedErrorKeyRef = useRef<string | null>(null);
 
   const updateHeight = useCallback(() => {
@@ -43,13 +44,24 @@ export function InlineVisual({ visual, isPinnedView, chatId, onArtifactRuntimeEr
       const doc = iframeRef.current?.contentDocument;
       if (doc) {
         // Temporarily force body to auto-height for accurate content measurement.
-        // Visuals may use body { height: 100vh } which in an iframe context can
-        // report the parent window height rather than the actual content height.
+        // Visuals may use body { height: 100vh } / min-height: 100vh which in
+        // an iframe context can report the parent window height rather than the
+        // actual content height.
         const body = doc.body;
-        const prevHeight = body.style.height;
+        const html = doc.documentElement;
+        const prevBodyHeight = body.style.height;
+        const prevBodyMinHeight = body.style.minHeight;
+        const prevHtmlHeight = html.style.height;
+        const prevHtmlMinHeight = html.style.minHeight;
         body.style.height = 'auto';
+        body.style.minHeight = '0';
+        html.style.height = 'auto';
+        html.style.minHeight = '0';
         const contentHeight = doc.documentElement.scrollHeight;
-        body.style.height = prevHeight;
+        body.style.height = prevBodyHeight;
+        body.style.minHeight = prevBodyMinHeight;
+        html.style.height = prevHtmlHeight;
+        html.style.minHeight = prevHtmlMinHeight;
         setHeight(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, contentHeight)));
       }
     } catch {
@@ -61,23 +73,32 @@ export function InlineVisual({ visual, isPinnedView, chatId, onArtifactRuntimeEr
     setIframeLoaded(true);
     updateHeight();
     
-    // Watch for content size changes with ResizeObserver
+    // Watch for content size changes with ResizeObserver.
+    // Debounce to avoid rapid re-measurements during animations or
+    // CSS transitions — these can fire every animation frame, causing
+    // layout thrashing and unnecessarily updating parent state.
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const observer = new ResizeObserver(() => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        updateHeight();
+        resizeTimer = null;
+      }, 150);
+    });
     const doc = iframeRef.current?.contentDocument;
     if (doc) {
-      const observer = new ResizeObserver(() => {
-        updateHeight();
-      });
       observer.observe(doc.documentElement);
-      
-      // Also observe body in case documentElement doesn't resize
       observer.observe(doc.body);
     }
+    // Store observer reference for cleanup
+    iframeResizeObserverRef.current = observer;
   }, [updateHeight]);
 
-  // Inject scrollbar styling into visual HTML to match app aesthetic
+  // Inject scrollbar styling and max-height guard into visual HTML to match app aesthetic
+  // and prevent visuals from expanding to extreme heights (100vh in an iframe can cause this).
   const injectScrollbarStyles = (html: string): string => {
     const scrollbarStyles = `<style>
-html, body { background: transparent !important; }
+html, body { background: transparent !important; max-height: 100% !important; }
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
@@ -97,11 +118,19 @@ html, body { background: transparent !important; }
   useEffect(() => {
     setRuntimeError(null);
     reportedErrorKeyRef.current = null;
+    setIframeLoaded(false);
+    // Disconnect previous resize observer before loading new content
+    iframeResizeObserverRef.current?.disconnect();
+    iframeResizeObserverRef.current = null;
     const styledHtml = injectArtifactErrorForwarder(injectScrollbarStyles(visual.html));
     const blob = new Blob([styledHtml], { type: "text/html" });
     const url = URL.createObjectURL(blob);
     setBlobUrl(url);
-    return () => URL.revokeObjectURL(url);
+    return () => {
+      URL.revokeObjectURL(url);
+      iframeResizeObserverRef.current?.disconnect();
+      iframeResizeObserverRef.current = null;
+    };
   }, [visual.html]);
 
   useEffect(() => {

@@ -6,7 +6,7 @@ import { useIsDesktop } from "../hooks/useIsDesktop";
 import { injectArtifactErrorForwarder } from "../utils/artifactErrorForwarder";
 
 const MIN_HEIGHT = 100;
-const MAX_HEIGHT = 4000;
+const MAX_HEIGHT = 1200;
 const DEFAULT_HEIGHT = 400;
 
 interface Props {
@@ -59,11 +59,27 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
   const handleIframeLoad = useCallback(() => {
     setIframeLoaded(true);
     setIsLoadingVersion(false);
-    // Auto-size to content since blob URLs are same-origin
+    // Auto-size to content since blob URLs are same-origin.
+    // Temporarily neutralise viewport-relative units so scrollHeight reflects
+    // the actual content size rather than the iframe's current viewport.
     try {
       const doc = iframeRef.current?.contentDocument;
       if (doc) {
+        const body = doc.body;
+        const html = doc.documentElement;
+        const prevBodyHeight = body.style.height;
+        const prevBodyMinHeight = body.style.minHeight;
+        const prevHtmlHeight = html.style.height;
+        const prevHtmlMinHeight = html.style.minHeight;
+        body.style.height = 'auto';
+        body.style.minHeight = '0';
+        html.style.height = 'auto';
+        html.style.minHeight = '0';
         const contentHeight = doc.documentElement.scrollHeight;
+        body.style.height = prevBodyHeight;
+        body.style.minHeight = prevBodyMinHeight;
+        html.style.height = prevHtmlHeight;
+        html.style.minHeight = prevHtmlMinHeight;
         const clamped = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, contentHeight));
         setHeight(clamped);
         heightRef.current = clamped;
