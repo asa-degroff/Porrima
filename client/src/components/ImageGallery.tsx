@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, memo, useMemo } from "react";
+import { useState, useEffect, memo, useMemo } from "react";
 import type { GeneratedImage, GenerationState, ActivityShape } from "../types";
 import { precacheImages } from "../utils/imageCache";
 import { PolyhedronLogo } from "./PolyhedronLogo";
@@ -13,8 +13,16 @@ interface Props {
   activeGenerations?: GenerationState[];
   searchResults?: GeneratedImage[];
   isSearching?: boolean;
-  showAgentOnly?: boolean;
   showFavoritesOnly?: boolean;
+}
+
+function getImageAspectRatio(image: GeneratedImage): string {
+  const width = image.params?.width;
+  const height = image.params?.height;
+  if (width && height && width > 0 && height > 0) {
+    return `${width} / ${height}`;
+  }
+  return "1 / 1";
 }
 
 /** A single image tile — memoized so it survives parent list changes. */
@@ -48,14 +56,14 @@ const ImageTile = memo(function ImageTile({
           ? "border-amber-400/60 ring-2 ring-amber-400/20"
           : "border-white/10 hover:border-white/20"
       }`}
-      style={{ contain: 'content' }}
+      style={{ contain: 'content', aspectRatio: getImageAspectRatio(image) }}
     >
       <img
         src={`${image.url}/thumb`}
         alt={image.params?.positivePrompt?.slice(0, 50) || image.description?.slice(0, 50) || "Image"}
         loading="lazy"
         decoding="async"
-        className="w-full h-auto block"
+        className="w-full h-full object-cover block"
       />
       {/* Hover overlay */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
@@ -159,11 +167,9 @@ const ImageGrid = memo(function ImageGrid({
     <div className="columns-2 md:columns-3 lg:columns-4 gap-3 space-y-3">
       {/* Active generations (queued/processing) */}
       {activeGenerations.map((gen) => {
-        // Calculate aspect ratio from generation params
-        const aspectRatio = gen.params.width && gen.params.height
-          ? (gen.params.width / gen.params.height) * 100
-          : 100; // fallback to square
         const minHeight = 160; // minimum height to fit octahedron + progress bar + text
+        const width = gen.params.width || 1;
+        const height = gen.params.height || 1;
         
         return (
           <div
@@ -171,7 +177,7 @@ const ImageGrid = memo(function ImageGrid({
             className="group relative w-full rounded-xl overflow-hidden border-2 border-purple-400/40 bg-purple-500/5 break-inside-avoid"
             style={{ 
               contain: 'content',
-              aspectRatio: `${gen.params.width}/${gen.params.height}`,
+              aspectRatio: `${width} / ${height}`,
               minHeight: minHeight
             }}
           >
@@ -228,7 +234,7 @@ const ImageGrid = memo(function ImageGrid({
   );
 });
 
-export function ImageGallery({ images, selectedImage, onSelect, onDelete, onToggleFavorite, activeGenerations = [], searchResults, isSearching, showAgentOnly = false, showFavoritesOnly = false }: Props) {
+export function ImageGallery({ images, selectedImage, onSelect, onDelete, onToggleFavorite, activeGenerations = [], searchResults, isSearching, showFavoritesOnly = false }: Props) {
   const activityShape = useActivityShape();
   const hasSearch = searchResults !== undefined;
   const selectedImageUrl = selectedImage?.url;
@@ -271,97 +277,34 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, onTogg
     </div>
   );
 
-  // Filter images for agent-only view and favorites
-  const allImages = images;
-  const agentImages = useMemo(() => images.filter(i => i.generatedBy === 'agent'), [images]);
-  const favoriteImages = useMemo(() => images.filter(i => i.isFavorite), [images]);
-  const filteredSearchResults = searchResults && showAgentOnly 
-    ? searchResults.filter(i => i.generatedBy === 'agent') 
-    : searchResults;
-  const filteredFavoriteSearchResults = searchResults && showFavoritesOnly
-    ? searchResults.filter(i => i.isFavorite)
-    : undefined;
+  const visibleImages = useMemo(() => {
+    const source = searchResults ?? images;
+    return showFavoritesOnly ? source.filter((i) => i.isFavorite) : source;
+  }, [images, searchResults, showFavoritesOnly]);
+
+  const emptyCopy = hasSearch
+    ? ["No images match your search", "Try different keywords"]
+    : showFavoritesOnly
+      ? ["No favorited images", "Tap the heart on images to add them to favorites"]
+      : ["No images generated yet", "Enter a prompt and click Generate"];
 
   return (
     <div className="flex-1 overflow-hidden relative">
-      {/* All images grid — always mounted */}
-      <div
-        className="absolute inset-0 overflow-y-auto p-4"
-        style={{ opacity: !showAgentOnly && !showFavoritesOnly && !hasSearch ? 1 : 0, pointerEvents: !showAgentOnly && !showFavoritesOnly && !hasSearch ? 'auto' : 'none', zIndex: !showAgentOnly && !showFavoritesOnly && !hasSearch ? 1 : 0 }}
-      >
-        {allImages.length === 0 ? (
-          emptyState(false, "No images generated yet", "Enter a prompt and click Generate")
+      <div className="absolute inset-0 overflow-y-auto p-4">
+        {visibleImages.length === 0 ? (
+          emptyState(Boolean(isSearching), emptyCopy[0], emptyCopy[1])
         ) : (
           <ImageGrid
-            images={allImages}
+            images={visibleImages}
             selectedImage={selectedImage}
             onSelect={onSelect}
             onDelete={onDelete}
             onToggleFavorite={onToggleFavorite}
-            activeGenerations={activeGenerations}
+            activeGenerations={hasSearch ? [] : activeGenerations}
             activityShape={activityShape}
           />
         )}
       </div>
-
-      {/* Agent-only grid — always mounted */}
-      <div
-        className="absolute inset-0 overflow-y-auto p-4"
-        style={{ opacity: showAgentOnly && !hasSearch && !showFavoritesOnly ? 1 : 0, pointerEvents: showAgentOnly && !hasSearch && !showFavoritesOnly ? 'auto' : 'none', zIndex: showAgentOnly && !hasSearch && !showFavoritesOnly ? 1 : 0 }}
-      >
-        {agentImages.length === 0 ? (
-          emptyState(false, "No agent images", "Generate images with the agent to see them here")
-        ) : (
-          <ImageGrid
-            images={agentImages}
-            selectedImage={selectedImage}
-            onSelect={onSelect}
-            onDelete={onDelete}
-            onToggleFavorite={onToggleFavorite}
-            activeGenerations={activeGenerations}
-            activityShape={activityShape}
-          />
-        )}
-      </div>
-
-      {/* Favorites-only grid — always mounted */}
-      <div
-        className="absolute inset-0 overflow-y-auto p-4"
-        style={{ opacity: showFavoritesOnly && !hasSearch ? 1 : 0, pointerEvents: showFavoritesOnly && !hasSearch ? 'auto' : 'none', zIndex: showFavoritesOnly && !hasSearch ? 1 : 0 }}
-      >
-        {favoriteImages.length === 0 ? (
-          emptyState(false, "No favorited images", "Tap the heart on images to add them to favorites")
-        ) : (
-          <ImageGrid
-            images={favoriteImages}
-            selectedImage={selectedImage}
-            onSelect={onSelect}
-            onDelete={onDelete}
-            onToggleFavorite={onToggleFavorite}
-            activeGenerations={activeGenerations}
-            activityShape={activityShape}
-          />
-        )}
-      </div>
-
-      {/* Search results layer — mounted only while searching */}
-      {hasSearch && (
-        <div className="absolute inset-0 overflow-y-auto p-4">
-          {(filteredSearchResults?.length ?? 0) === 0 ? (
-            emptyState(true, "No images match your search", "Try different keywords")
-          ) : (
-            <ImageGrid
-              images={filteredSearchResults!}
-              selectedImage={selectedImage}
-              onSelect={onSelect}
-              onDelete={onDelete}
-              onToggleFavorite={onToggleFavorite}
-              activeGenerations={[]}
-              activityShape={activityShape}
-            />
-          )}
-        </div>
-      )}
     </div>
   );
 }

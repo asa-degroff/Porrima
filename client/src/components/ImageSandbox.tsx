@@ -30,8 +30,6 @@ type SandboxMode = "generate" | "analyze" | "corpus" | "directions";
 type ViewMode = "gallery" | "detail";
 const SANDBOX_MODE_KEY = "porrima-sandbox-mode";
 const LEGACY_SANDBOX_MODE_KEY = "quje-sandbox-mode";
-const SANDBOX_AGENT_FILTER_KEY = "porrima-sandbox-agent-filter";
-const LEGACY_SANDBOX_AGENT_FILTER_KEY = "quje-sandbox-agent-filter";
 const VISION_MODEL_KEY = "porrima-vision-model";
 const LEGACY_VISION_MODEL_KEY = "quje-vision-model";
 
@@ -79,9 +77,6 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
 
   // View mode: gallery (grid) or detail (large image + carousel)
   const [viewMode, setViewMode] = useState<ViewMode>('gallery');
-  
-  // Filter: show all or agent generations only
-  const [showAgentOnly, setShowAgentOnly] = useState(false);
   
   // Filter: show favorites only
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
@@ -174,12 +169,6 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
     return "analyze";
   });
   
-  // Persist filter preference
-  useEffect(() => {
-    try {
-      writeStoredValue(SANDBOX_AGENT_FILTER_KEY, showAgentOnly ? "true" : "false", LEGACY_SANDBOX_AGENT_FILTER_KEY);
-    } catch {}
-  }, [showAgentOnly]);
   const [controlParams, setControlParams] = useState<Partial<ImageGenerationParams> | undefined>();
 
   // Persist mode to localStorage
@@ -521,11 +510,11 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
                     <span className="text-xs text-white/40">
                       {searchResults !== undefined
                         ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
-                        : showFavoritesOnly ? `${images.filter(i => i.isFavorite).length} favorited` : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'}
+                        : showFavoritesOnly ? `${images.filter(i => i.isFavorite).length} favorited` : 'Showing all generations'}
                     </span>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => { setShowFavoritesOnly(!showFavoritesOnly); setShowAgentOnly(false); }}
+                        onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}
                         className={`px-3 py-1 text-xs rounded transition-colors flex items-center gap-1.5 ${
                           showFavoritesOnly
                             ? 'bg-rose-500/80 text-white'
@@ -536,16 +525,6 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
                           <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
                         </svg>
                         Favorites
-                      </button>
-                      <button
-                        onClick={() => { setShowAgentOnly(!showAgentOnly); setShowFavoritesOnly(false); }}
-                        className={`px-3 py-1 text-xs rounded transition-colors ${
-                          showAgentOnly
-                            ? 'bg-purple-500/80 text-white'
-                            : 'bg-white/10 text-white/60 hover:text-white/90'
-                        }`}
-                      >
-                        Agent only
                       </button>
                     </div>
                   </div>
@@ -560,11 +539,11 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
                       <span className="text-xs text-white/40">
                         {searchResults !== undefined
                           ? `${searchResults.length} search result${searchResults.length !== 1 ? 's' : ''}`
-                          : showFavoritesOnly ? `${images.filter(i => i.isFavorite).length} favorited` : showAgentOnly ? 'Showing agent generations' : 'Showing all generations'}
+                          : showFavoritesOnly ? `${images.filter(i => i.isFavorite).length} favorited` : 'Showing all generations'}
                       </span>
                       <div className="flex items-center gap-1">
                         <button
-                          onClick={() => { setShowFavoritesOnly(!showFavoritesOnly); setShowAgentOnly(false); }}
+                          onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}
                           className={`p-1.5 rounded transition-colors ${
                             showFavoritesOnly
                               ? 'bg-rose-500/80 text-white'
@@ -575,16 +554,6 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
                           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill={showFavoritesOnly ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
                           </svg>
-                        </button>
-                        <button
-                          onClick={() => { setShowAgentOnly(!showAgentOnly); setShowFavoritesOnly(false); }}
-                          className={`px-2 py-1 text-xs rounded transition-colors ${
-                            showAgentOnly
-                              ? 'bg-purple-500/80 text-white'
-                              : 'bg-white/10 text-white/60 hover:text-white/90'
-                          }`}
-                        >
-                          Agent
                         </button>
                       </div>
                     </div>
@@ -599,7 +568,6 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
                   activeGenerations={activeGenerations}
                   searchResults={searchResults}
                   isSearching={isSearching}
-                  showAgentOnly={showAgentOnly}
                   showFavoritesOnly={showFavoritesOnly}
                 />
               </div>
