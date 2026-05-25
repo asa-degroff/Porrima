@@ -3,6 +3,7 @@ import { join } from "path";
 import { APP_DATA_DIR } from "./paths.js";
 import { CHAT_ROWS_ARE_AUTHORITATIVE, getDb as getChatDb } from "./chat-storage.js";
 import { getDb as getMemoryDb } from "./memory-storage.js";
+import { inlineToolResultImageSummary } from "./tool-result-image-payload-migration.js";
 
 export interface StorageMigrationDiagnostics {
   generatedAt: string;
@@ -74,6 +75,10 @@ export interface StorageMigrationDiagnostics {
         attachmentCount: number;
         base64Bytes: number;
       }>;
+    };
+    inlineToolResultImageAttachments: {
+      count: number;
+      totalBase64Bytes: number;
     };
     legacyCollapsedToolRows: number;
     canonicalToolLoopRows: number;
@@ -265,6 +270,7 @@ export function getStorageMigrationDiagnostics(): StorageMigrationDiagnostics {
       totalBase64Bytes: 0,
       largestRows: [] as StorageMigrationDiagnostics["chatStorage"]["inlineImageAttachments"]["largestRows"],
     },
+    inlineToolResultImageAttachments: inlineToolResultImageSummary(chatDb),
     legacyCollapsedToolRows: readScalar(chatDb, `
       SELECT COUNT(*) AS value
       FROM chat_message_rows

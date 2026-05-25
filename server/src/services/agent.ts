@@ -14,6 +14,7 @@ import { normalizeRouterModelId } from "./llama-router-client.js";
 import type { Model } from "@mariozechner/pi-ai";
 import type { ChatMessage, ImageAttachment, MessageUsage } from "../types.js";
 import { hydrateUserImageAttachments } from "./user-image-storage.js";
+import { hydrateToolResultImageAttachments } from "./tool-result-image-storage.js";
 
 export interface StreamChatResult {
   role: "assistant";
@@ -49,7 +50,7 @@ export async function hydrateChatMessageImagesForModel(messages: ChatMessage[]):
         if (!result.images?.length) return result;
         return {
           ...result,
-          images: await hydrateUserImageAttachments(result.images),
+          images: await hydrateToolResultImageAttachments(result.images),
         };
       }));
       changed = true;

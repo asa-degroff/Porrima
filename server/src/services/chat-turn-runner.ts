@@ -8,6 +8,7 @@ import type { SynthesisEmitter } from "./synthesis-stream.js";
 import { createSafeStreamFn } from "./llm-stream.js";
 import { createAgentLoopConfig, runAgentLoop } from "./agent-loop-runner.js";
 import { PassiveMemoryRecallController } from "./passive-memory-recall.js";
+import { saveToolResultImage, stripToolResultImageData } from "./tool-result-image-storage.js";
 
 const PASSIVE_RECALL_TRANSIENT_ASSISTANT_CHARS = 360;
 
@@ -120,7 +121,7 @@ function resultText(result: any): string {
     .join("\n");
 }
 
-function resultImages(result: any, toolCallId: string): ImageAttachment[] | undefined {
+async function resultImages(result: any, toolCallId: string): Promise<ImageAttachment[] | undefined> {
   const content = Array.isArray(result?.content) ? result.content : [];
   const images = content
     .filter((c: any) => c?.type === "image" && c.data && c.mimeType)
@@ -129,7 +130,29 @@ function resultImages(result: any, toolCallId: string): ImageAttachment[] | unde
       mimeType: c.mimeType,
       name: `generated-${toolCallId}.jxl`,
     }));
-  return images.length ? images : undefined;
+  if (!images.length) return undefined;
+
+  return Promise.all(images.map(async (image: ImageAttachment) => {
+    if (image.id && image.url) return stripToolResultImageData(image);
+    if (!image.data) return image;
+    try {
+      const record = await saveToolResultImage(
+        randomUUID(),
+        Buffer.from(image.data, "base64"),
+        image.mimeType,
+        image.name,
+      );
+      return {
+        mimeType: image.mimeType,
+        name: image.name,
+        id: record.id,
+        url: record.url,
+      };
+    } catch (error) {
+      console.warn("[tool-result-images] Failed to persist headless tool image:", error instanceof Error ? error.message : error);
+      return image;
+    }
+  }));
 }
 
 function defaultSummary(state: HeadlessTurnState): string {
@@ -552,7 +575,7 @@ export async function runHeadlessChatTurn(
             toolName: event.toolName,
             content,
             isError: event.isError,
-            images: resultImages(event.result, event.toolCallId),
+            images: await resultImages(event.result, event.toolCallId),
           };
           allToolResults.push(toolResult);
           emitter.emitToolResult(toolResult);

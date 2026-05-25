@@ -23,6 +23,7 @@ import * as messageQueue from "../services/message-queue.js";
 import type { QueuedUserMessage } from "../services/message-queue.js";
 import type { Artifact, Chat, ChatMessage, ChatToolCall, ChatToolResult, ImageAttachment, InlineVisual, Project } from "../types.js";
 import { hydrateUserImageAttachments, saveUserImage, stripImageAttachmentData } from "../services/user-image-storage.js";
+import { saveToolResultImage, stripToolResultImageData } from "../services/tool-result-image-storage.js";
 import { streamTTS, isStreamingCapable, TTS_FLUSH_SIGNAL, type StreamingTTSTextInput } from "../services/tts-streaming.js";
 import type { TTSSettings } from "../types/tts.js";
 import { getCurrentTTSSettings } from "./tts.js";
@@ -686,6 +687,32 @@ async function persistImages(images: ImageAttachment[]): Promise<ImageAttachment
       } catch (e) {
         console.error("[user-images] Failed to persist image:", e);
         return img; // keep original base64-only attachment on failure
+      }
+    })
+  );
+}
+
+async function persistToolResultImages(images: ImageAttachment[]): Promise<ImageAttachment[]> {
+  return Promise.all(
+    images.map(async (img) => {
+      if (img.id && img.url) return stripToolResultImageData(img);
+      try {
+        if (!img.data) return img;
+        const record = await saveToolResultImage(
+          randomUUID(),
+          Buffer.from(img.data, "base64"),
+          img.mimeType,
+          img.name,
+        );
+        return {
+          mimeType: img.mimeType,
+          name: img.name,
+          id: record.id,
+          url: record.url,
+        };
+      } catch (e) {
+        console.error("[tool-result-images] Failed to persist image:", e);
+        return img;
       }
     })
   );
@@ -1776,9 +1803,10 @@ async function handleChatStream(
           if (event.toolName !== "ask_user") {
             const resultText = event.result?.content?.[0]?.text || "";
 
-            const images: ImageAttachment[] | undefined = event.result?.content
+            const extractedImages: ImageAttachment[] | undefined = event.result?.content
                 ?.filter((c: any) => c.type === "image")
                 .map((c: any) => ({ data: c.data, mimeType: c.mimeType, name: `generated-${event.toolCallId}.jxl` }));
+            const images = extractedImages?.length ? await persistToolResultImages(extractedImages) : undefined;
 
             if (images?.length) {
               console.log(`[chat] Extracted ${images.length} image(s) from tool result ${event.toolCallId} (${event.toolName})`);
