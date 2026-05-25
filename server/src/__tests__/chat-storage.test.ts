@@ -103,4 +103,66 @@ describe("chat storage", () => {
       rmSync(homeDir, { recursive: true, force: true });
     }
   });
+
+  it("checks chat existence without loading messages", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-chat-storage-"));
+    try {
+      const storage = await loadChatStorage(homeDir);
+      await storage.createChat(makeChat("exists-test", [
+        { role: "user", content: "hello", timestamp: 1 },
+      ]));
+
+      expect(await storage.chatExists("exists-test")).toBe(true);
+      expect(await storage.chatExists("missing-test")).toBe(false);
+      storage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("updates metadata without rewriting message storage", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-chat-storage-"));
+    try {
+      const storage = await loadChatStorage(homeDir);
+      await storage.createChat(makeChat("metadata-only", [
+        { role: "user", content: "keep me", timestamp: 1 },
+      ]));
+      const db = storage.getDb();
+      const beforeJson = (db.prepare("SELECT messages FROM chats WHERE id = ?").get("metadata-only") as { messages: string }).messages;
+      const beforeRows = db.prepare(`
+        SELECT sequence, payload_json
+        FROM chat_message_rows
+        WHERE chat_id = ?
+        ORDER BY sequence ASC
+      `).all("metadata-only");
+
+      const updated = await storage.updateChatMetadata("metadata-only", {
+        title: "Renamed",
+        modelId: "new-model",
+        clearContextWindow: true,
+      });
+      const afterJson = (db.prepare("SELECT messages FROM chats WHERE id = ?").get("metadata-only") as { messages: string }).messages;
+      const afterRows = db.prepare(`
+        SELECT sequence, payload_json
+        FROM chat_message_rows
+        WHERE chat_id = ?
+        ORDER BY sequence ASC
+      `).all("metadata-only");
+      const reloaded = await storage.getChat("metadata-only");
+
+      expect(updated).toMatchObject({
+        id: "metadata-only",
+        title: "Renamed",
+        modelId: "new-model",
+        messages: [],
+      });
+      expect(updated?.contextWindow).toBeUndefined();
+      expect(afterJson).toBe(beforeJson);
+      expect(afterRows).toEqual(beforeRows);
+      expect(reloaded?.messages.map((message) => message.content)).toEqual(["keep me"]);
+      storage.closeChatDb();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
-import { listChats, getChat, saveChat, deleteChat, getSettings, createChat, getProject, getChatMessageWindow, getChatWithWindow, getDb } from "../services/chat-storage.js";
+import { listChats, getChat, deleteChat, getSettings, createChat, getProject, getChatMessageWindow, getChatWithWindow, getDb, chatExists, updateChatMetadata } from "../services/chat-storage.js";
 import { buildMemoryAugmentedPrompt, getCachedAugmentedPrompt } from "../services/memory-context.js";
 import { getAgentToolDefinitions } from "../services/agent-tools.js";
 import { cancelDeletedChatWork } from "../services/chat-deletion.js";
 import type { Chat } from "../types.js";
+import type { ChatMetadataUpdate } from "../services/chat-storage.js";
 
 const router = Router();
 const MAX_MESSAGE_WINDOW_LIMIT = 1000;
@@ -28,12 +29,13 @@ router.get("/", async (_req, res) => {
 
 // Get a page of messages before an absolute sequence index.
 router.get("/:id/messages", async (req, res) => {
-  const chat = await getChat(req.params.id);
-  if (!chat) return res.status(404).json({ error: "Chat not found" });
+  if (!(await chatExists(req.params.id))) {
+    return res.status(404).json({ error: "Chat not found" });
+  }
 
   const before = parsePositiveInt(req.query.before);
   const limit = parseMessageLimit(req.query.limit);
-  const window = getChatMessageWindow(chat.id, { before, limit });
+  const window = getChatMessageWindow(req.params.id, { before, limit });
   res.json(window);
 });
 
@@ -119,29 +121,27 @@ router.post("/", async (req, res) => {
 
 // Update chat metadata
 router.patch("/:id", async (req, res) => {
-  const chat = await getChat(req.params.id);
-  if (!chat) return res.status(404).json({ error: "Chat not found" });
-
-  if (req.body.title !== undefined) chat.title = req.body.title;
-  if (req.body.modelId !== undefined) {
-    chat.modelId = req.body.modelId;
-    // When the model changes, clear any per-model context window override
-    // so the new model's detected default is used (unless explicitly provided)
-    if (req.body.contextWindow === undefined) {
-      delete chat.contextWindow;
-    }
-  }
-  if (req.body.systemPrompt !== undefined) chat.systemPrompt = req.body.systemPrompt;
+  const updates: ChatMetadataUpdate = {
+    ...(req.body.title !== undefined ? { title: String(req.body.title) } : {}),
+    ...(req.body.modelId !== undefined ? { modelId: String(req.body.modelId) } : {}),
+    ...(req.body.systemPrompt !== undefined ? { systemPrompt: String(req.body.systemPrompt) } : {}),
+    clearContextWindow: req.body.modelId !== undefined && req.body.contextWindow === undefined,
+  };
   if (req.body.contextWindow !== undefined) {
     if (req.body.contextWindow === null) {
-      delete chat.contextWindow;
+      updates.contextWindow = null;
     } else {
-      chat.contextWindow = req.body.contextWindow;
+      const contextWindow = Number(req.body.contextWindow);
+      if (!Number.isFinite(contextWindow) || contextWindow <= 0) {
+        return res.status(400).json({ error: "contextWindow must be a positive number or null" });
+      }
+      updates.contextWindow = contextWindow;
     }
   }
 
-  await saveChat(chat);
-  res.json(chat);
+  const updated = await updateChatMetadata(req.params.id, updates);
+  if (!updated) return res.status(404).json({ error: "Chat not found" });
+  res.json(updated);
 });
 
 // Get the rendered system prompt and tools for debugging

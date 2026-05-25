@@ -99,6 +99,14 @@ interface ChatMetadataWithMessageCount extends ChatMetadataRow {
   legacyMessageCount: number | null;
 }
 
+export interface ChatMetadataUpdate {
+  title?: string;
+  modelId?: string;
+  systemPrompt?: string;
+  contextWindow?: number | null;
+  clearContextWindow?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Lazy singleton database
 // ---------------------------------------------------------------------------
@@ -498,6 +506,11 @@ export async function listChatIdsByProject(projectId: string): Promise<string[]>
   return rows.map((r) => r.id);
 }
 
+export async function chatExists(id: string): Promise<boolean> {
+  const db = getDb();
+  return db.prepare("SELECT 1 FROM chats WHERE id = ?").get(id) !== undefined;
+}
+
 export async function backupChatDb(destinationPath: string): Promise<void> {
   await getDb().backup(destinationPath);
 }
@@ -742,6 +755,54 @@ export async function saveChat(chat: Chat, opts?: { allowTruncation?: boolean })
     });
 
     save();
+  });
+}
+
+export async function updateChatMetadata(id: string, updates: ChatMetadataUpdate): Promise<Chat | null> {
+  return withChatWriteLock(id, async () => {
+    const db = getDb();
+    const assignments: string[] = [];
+    const params: unknown[] = [];
+
+    if (updates.title !== undefined) {
+      assignments.push("title = ?");
+      params.push(updates.title);
+    }
+    if (updates.modelId !== undefined) {
+      assignments.push("modelId = ?");
+      params.push(updates.modelId);
+    }
+    if (updates.systemPrompt !== undefined) {
+      assignments.push("systemPrompt = ?");
+      params.push(updates.systemPrompt);
+    }
+    if (updates.contextWindow !== undefined) {
+      assignments.push("contextWindow = ?");
+      params.push(updates.contextWindow);
+    } else if (updates.clearContextWindow) {
+      assignments.push("contextWindow = NULL");
+    }
+
+    if (assignments.length > 0) {
+      assignments.push("lastModified = ?");
+      params.push(new Date().toISOString());
+      params.push(id);
+      db.prepare(`
+        UPDATE chats
+        SET ${assignments.join(", ")}
+        WHERE id = ?
+      `).run(...params);
+    }
+
+    const row = db.prepare(`
+      SELECT id, title, type, modelId, systemPrompt, contextWindow, projectId,
+             activeSkills, createdAt, lastModified,
+             lastDelayedExtractionAt, lastDelayedExtractionMessageIndex, lastZeitgeistSynthesisAt
+      FROM chats
+      WHERE id = ?
+    `).get(id) as ChatMetadataRow | undefined;
+
+    return row ? hydrateChat(row, []) : null;
   });
 }
 
