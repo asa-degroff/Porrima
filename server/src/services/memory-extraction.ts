@@ -486,9 +486,9 @@ const DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS = `---
 
 ## Delayed Memory Extraction Task
 
-You are looking back at a full conversation thread you had. Your task is to extract patterns, decisions, and context that emerged across the entire conversation — write each memory in your own voice.
+You are looking back at a full conversation thread you had. Your task is to extract patterns, decisions, and context that emerged across the entire conversation — write each memory in your own voice, using first-person narrative language where applicable.
 
-The conversation is explicitly labeled by speaker. USER (human) messages are the user's words. ASSISTANT (agent/me) messages are my own prior responses and work.
+The conversation is explicitly labeled by speaker. USER (human) messages are the user's words. ASSISTANT (agent/my own) messages are my own prior responses and work.
 
 Previously captured memories will be provided alongside the conversation. Those memories are already saved — do NOT duplicate them. Instead, focus on:
 1. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
