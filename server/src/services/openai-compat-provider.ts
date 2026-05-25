@@ -407,6 +407,11 @@ function readNumberByKeys(obj: any, keys: string[]): number | undefined {
   return undefined;
 }
 
+function readPositiveNumberByKeys(obj: any, keys: string[]): number | undefined {
+  const value = readNumberByKeys(obj, keys);
+  return value !== undefined && value > 0 ? value : undefined;
+}
+
 function getSlotArray(payload: any): any[] {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.slots)) return payload.slots;
@@ -445,25 +450,46 @@ export function readProcessedTokens(slot: any): number | undefined {
   ]);
 }
 
-function readPromptTokens(slot: any, fallback?: number): number | undefined {
-  return readNumberByKeys(slot, [
+export function readPromptTokens(slot: any, fallback?: number): number | undefined {
+  return readPositiveNumberByKeys(slot, [
     "n_prompt_tokens",
     "task_n_tokens",
     "n_prompt_tokens_total",
     "prompt_tokens_total",
     "total_prompt_tokens",
     "n_tokens_prompt",
-  ]) ?? readNumberByKeys(slot?.task, [
+  ]) ?? readPositiveNumberByKeys(slot?.task, [
     "n_tokens",
     "prompt_tokens",
   ]) ?? fallback;
+}
+
+export function readPromptCacheTokens(slot: any): number | undefined {
+  return readNumberByKeys(slot, [
+    "n_prompt_tokens_cache",
+    "prompt_tokens_cache",
+    "cached_prompt_tokens",
+    "n_cached_prompt_tokens",
+  ]) ?? readNumberByKeys(slot?.progress, [
+    "n_prompt_tokens_cache",
+    "prompt_tokens_cache",
+    "cached_prompt_tokens",
+  ]);
 }
 
 interface SlotProgressSnapshot {
   slotId?: number;
   processedTokens?: number;
   promptTokens?: number;
+  fullPromptTokens?: number;
+  cachedPromptTokens?: number;
   confidence: ModelProgressEvent["confidence"];
+}
+
+export function promptWorkTokens(fullPromptTokens?: number, cachedPromptTokens?: number): number | undefined {
+  if (fullPromptTokens === undefined) return undefined;
+  if (cachedPromptTokens === undefined || cachedPromptTokens <= 0) return fullPromptTokens;
+  return Math.max(1, fullPromptTokens - Math.min(cachedPromptTokens, fullPromptTokens));
 }
 
 function extractSlotProgress(
@@ -479,7 +505,8 @@ function extractSlotProgress(
       slotId: getSlotId(slot),
       processing: isSlotProcessing(slot),
       processedTokens: readProcessedTokens(slot),
-      promptTokens: readPromptTokens(slot, fallbackPromptTokens),
+      fullPromptTokens: readPromptTokens(slot, fallbackPromptTokens),
+      cachedPromptTokens: readPromptCacheTokens(slot),
     }))
     .filter((candidate) => candidate.processing);
 
@@ -495,7 +522,9 @@ function extractSlotProgress(
   return {
     slotId: selected.slotId,
     processedTokens: selected.processedTokens,
-    promptTokens: selected.promptTokens,
+    promptTokens: promptWorkTokens(selected.fullPromptTokens, selected.cachedPromptTokens),
+    fullPromptTokens: selected.fullPromptTokens,
+    cachedPromptTokens: selected.cachedPromptTokens,
     confidence: preferredSlotId !== undefined && selected.slotId === preferredSlotId ? "matched-slot" : "inferred-active-slot",
   };
 }
@@ -525,7 +554,13 @@ function estimateRemainingMs(input: {
   return Math.max(0, Math.round(((promptTokens - processedTokens) / tokensPerSecond) * 1000));
 }
 
-function cacheStateFromProgress(processedTokens?: number, promptTokens?: number): ModelProgressEvent["cacheState"] {
+function cacheStateFromProgress(processedTokens?: number, promptTokens?: number, fullPromptTokens?: number, cachedPromptTokens?: number): ModelProgressEvent["cacheState"] {
+  if (cachedPromptTokens !== undefined && fullPromptTokens !== undefined && fullPromptTokens > 0) {
+    const ratio = cachedPromptTokens / fullPromptTokens;
+    if (ratio >= 0.9) return "hot";
+    if (ratio >= 0.5) return "partial";
+    return "cold";
+  }
   if (processedTokens === undefined || promptTokens === undefined || promptTokens <= 0) return "unknown";
   const ratio = processedTokens / promptTokens;
   if (ratio >= 0.9) return "hot";
@@ -691,7 +726,12 @@ function startLlamaPrefillMonitor(input: {
             // After the first snapshot, the progress ratio is no longer a
             // reliable indicator (it just measures how far into prefill we are).
             if (lockedCacheState === "unknown") {
-              lockedCacheState = cacheStateFromProgress(processedTokens, promptTokens);
+              lockedCacheState = cacheStateFromProgress(
+                processedTokens,
+                promptTokens,
+                snapshot.fullPromptTokens,
+                snapshot.cachedPromptTokens,
+              );
             }
             const progress = processedTokens !== undefined && promptTokens !== undefined && promptTokens > 0
               ? clampRatio(processedTokens / promptTokens)

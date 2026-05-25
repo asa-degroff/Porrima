@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { estimatePromptTokensForProgress, readProcessedTokens } from "../services/openai-compat-provider.js";
+import {
+  estimatePromptTokensForProgress,
+  promptWorkTokens,
+  readProcessedTokens,
+  readPromptCacheTokens,
+  readPromptTokens,
+} from "../services/openai-compat-provider.js";
 
 describe("estimatePromptTokensForProgress", () => {
   it("does not count image base64 bytes as text prompt tokens", () => {
@@ -52,5 +58,36 @@ describe("readProcessedTokens", () => {
     });
 
     expect(processed).toBe(4096);
+  });
+});
+
+describe("readPromptTokens", () => {
+  it("uses the fallback estimate when llama.cpp reports zero prompt tokens", () => {
+    const promptTokens = readPromptTokens({
+      n_prompt_tokens: 0,
+      n_prompt_tokens_processed: 5003,
+    }, 8123);
+
+    expect(promptTokens).toBe(8123);
+  });
+
+  it("reads cached prompt tokens from current llama.cpp slot fields", () => {
+    const cachedTokens = readPromptCacheTokens({
+      n_prompt_tokens: 24079,
+      n_prompt_tokens_processed: 937,
+      n_prompt_tokens_cache: 23142,
+    });
+
+    expect(cachedTokens).toBe(23142);
+  });
+});
+
+describe("promptWorkTokens", () => {
+  it("uses the uncached suffix as the prefill denominator when cache tokens are reported", () => {
+    expect(promptWorkTokens(24079, 23142)).toBe(937);
+  });
+
+  it("falls back to the full prompt when no cache token count is available", () => {
+    expect(promptWorkTokens(8192, undefined)).toBe(8192);
   });
 });
