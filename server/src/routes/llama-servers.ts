@@ -13,7 +13,7 @@ import {
   type LlamaServerId,
 } from "../services/llama-supervisor.js";
 import { findLocalModel, listLocalModels, type LlamaModelKind } from "../services/llama-models-disk.js";
-import { getDefaultLlamaBin, isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart, resolveSlotEnvironment } from "../services/llama-launch-templates.js";
+import { getDefaultLlamaBin, isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart, resolveSlotEnvironment, type OverridableSlotId } from "../services/llama-launch-templates.js";
 import { applyModelOverride, clearModelOverride, readOverride } from "../services/llama-overrides.js";
 import { ensureRouterModelLoaded, invalidateRouterCache, normalizeRouterModelId } from "../services/llama-router-client.js";
 import {
@@ -35,6 +35,54 @@ const SLOT_KIND: Record<string, LlamaModelKind> = {
   reranker: "rerank",
   embedding: "embedding",
 };
+
+async function applySlotModelRuntime(
+  id: OverridableSlotId,
+  modelId: string,
+  settings: Awaited<ReturnType<typeof getSettings>>
+): Promise<{ modelId: string; overridePath: string | null; mode: "router-load" | "override-restart" }> {
+  const normalizedModelId = normalizeRouterModelId(modelId.trim());
+  const model = await findLocalModel(normalizedModelId);
+  if (!model) {
+    throw new Error(`Model not found in local llama-models directory: ${normalizedModelId}`);
+  }
+  if (model.kind !== SLOT_KIND[id]) {
+    throw new Error(`Model ${normalizedModelId} is kind '${model.kind}', not '${SLOT_KIND[id]}' as required by ${id}`);
+  }
+
+  const preStatus = await getLlamaServerStatus(id, settings);
+  const inRouterMode = preStatus.http.routerMode;
+
+  if (inRouterMode) {
+    const ctxOverride = id === "extraction" ? settings.extractionCtxSize : undefined;
+    const result = await ensureRouterModelLoaded(preStatus.url, model.id, { contextWindow: ctxOverride });
+    if (result === "not-router") {
+      throw new Error(`Slot reported router mode but /models/load returned 404. Try refreshing.`);
+    }
+    if (result === "error") {
+      throw new Error(`Slot accepted but failed to load model ${normalizedModelId}. Check service logs.`);
+    }
+    return { modelId: model.id, overridePath: null, mode: "router-load" };
+  }
+
+  const execStart = renderExecStart(id, { ggufPath: model.ggufPath, modelId: model.id, settings });
+  const unitName = await resolveSlotUnitName(id);
+  const envLines = resolveSlotEnvironment(id, settings);
+  const result = await applyModelOverride(unitName, execStart, { environmentLines: envLines.length ? envLines : undefined });
+  invalidateRouterCache(preStatus.url);
+  return { modelId: model.id, overridePath: result.overridePath, mode: "override-restart" };
+}
+
+function persistSlotModelId(
+  id: OverridableSlotId,
+  settings: Awaited<ReturnType<typeof getSettings>>,
+  modelId: string
+): void {
+  if (id === "title-generation") settings.titleGenerationModelId = modelId;
+  else if (id === "extraction") settings.extractionModelId = modelId;
+  else if (id === "reranker") settings.rerankerModelId = modelId;
+  else if (id === "embedding") settings.embeddingModel = modelId;
+}
 
 router.get("/", async (_req, res) => {
   try {
@@ -231,57 +279,13 @@ router.post("/:id/apply-model", async (req, res) => {
   }
 
   try {
-    const model = await findLocalModel(modelId);
-    if (!model) {
-      res.status(404).json({ error: `Model not found in local llama-models directory: ${modelId}` });
-      return;
-    }
-    if (model.kind !== SLOT_KIND[id]) {
-      res.status(400).json({ error: `Model ${modelId} is kind '${model.kind}', not '${SLOT_KIND[id]}' as required by ${id}` });
-      return;
-    }
-
     const settings = await getSettings();
-    const preStatus = await getLlamaServerStatus(id, settings);
-    const inRouterMode = preStatus.http.routerMode;
-
-    let overridePath: string | null = null;
-    let mode: "router-load" | "override-restart";
-    if (inRouterMode) {
-      // Hot-swap via /models/load. Forwards extraction's per-slot ctx-size
-      // through the load args so larger contexts don't get clipped to the
-      // launch default. For title-gen we leave ctx at the launch default
-      // (4096) since titles are short.
-      const ctxOverride = id === "extraction" ? settings.extractionCtxSize : undefined;
-      const result = await ensureRouterModelLoaded(preStatus.url, model.id, { contextWindow: ctxOverride });
-      if (result === "not-router") {
-        res.status(409).json({ error: `Slot reported router mode but /models/load returned 404. Try refreshing.` });
-        return;
-      }
-      if (result === "error") {
-        res.status(502).json({ error: `Slot accepted but failed to load model ${modelId}. Check service logs.` });
-        return;
-      }
-      mode = "router-load";
-    } else {
-      const execStart = renderExecStart(id, { ggufPath: model.ggufPath, modelId: model.id, settings });
-      const unitName = await resolveSlotUnitName(id);
-      const envLines = resolveSlotEnvironment(id, settings);
-      const result = await applyModelOverride(unitName, execStart, { environmentLines: envLines.length ? envLines : undefined });
-      overridePath = result.overridePath;
-      // After a unit restart, our in-process /models/load cache is stale.
-      invalidateRouterCache(preStatus.url);
-      mode = "override-restart";
-    }
-
-    if (id === "title-generation") settings.titleGenerationModelId = model.id;
-    else if (id === "extraction") settings.extractionModelId = model.id;
-    else if (id === "reranker") settings.rerankerModelId = model.id;
-    else if (id === "embedding") settings.embeddingModel = model.id;
+    const applied = await applySlotModelRuntime(id, modelId, settings);
+    persistSlotModelId(id, settings, applied.modelId);
     await saveSettings(settings);
 
     const server = await getLlamaServerStatus(id, settings);
-    res.json({ server, overridePath, mode });
+    res.json({ server, overridePath: applied.overridePath, mode: applied.mode });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || "Failed to apply model" });
   }
@@ -361,6 +365,7 @@ router.patch("/:id", async (req, res) => {
   try {
     const settings = await getSettings();
     const body = req.body as Record<string, unknown>;
+    let pendingModelId: string | null = null;
 
     // Map request fields to settings keys per server role
     if (def.id === "inference") {
@@ -373,7 +378,7 @@ router.patch("/:id", async (req, res) => {
       if (body.url !== undefined) settings.extractionModelUrl = (body.url as string).trim() || undefined;
       if (body.modelId !== undefined) {
         const v = (body.modelId as string).trim();
-        settings.extractionModelId = v ? normalizeRouterModelId(v) : undefined;
+        pendingModelId = v || null;
       }
       if (body.ctxSize !== undefined) settings.extractionCtxSize = Number(body.ctxSize);
       if (body.fallbackEnabled !== undefined) settings.extractionFallbackEnabled = Boolean(body.fallbackEnabled);
@@ -389,7 +394,7 @@ router.patch("/:id", async (req, res) => {
       if (body.url !== undefined) settings.rerankerUrl = (body.url as string).trim() || undefined;
       if (body.modelId !== undefined) {
         const v = (body.modelId as string).trim();
-        settings.rerankerModelId = v ? normalizeRouterModelId(v) : undefined;
+        pendingModelId = v || null;
       }
       if (body.binaryPath !== undefined) {
         const v = (body.binaryPath as string)?.trim();
@@ -403,7 +408,7 @@ router.patch("/:id", async (req, res) => {
       if (body.url !== undefined) settings.embeddingUrl = (body.url as string).trim() || undefined;
       if (body.modelId !== undefined) {
         const v = (body.modelId as string).trim();
-        settings.embeddingModel = v ? normalizeRouterModelId(v) : undefined;
+        pendingModelId = v || null;
       }
       if (body.binaryPath !== undefined) {
         const v = (body.binaryPath as string)?.trim();
@@ -417,7 +422,7 @@ router.patch("/:id", async (req, res) => {
       if (body.url !== undefined) settings.titleGenerationUrl = (body.url as string).trim() || undefined;
       if (body.modelId !== undefined) {
         const v = (body.modelId as string).trim();
-        settings.titleGenerationModelId = v ? normalizeRouterModelId(v) : undefined;
+        pendingModelId = v || null;
       }
       if (body.binaryPath !== undefined) {
         const v = (body.binaryPath as string)?.trim();
@@ -425,6 +430,11 @@ router.patch("/:id", async (req, res) => {
         if (v) settings.llamaServerBins["title-generation"] = v;
         else delete settings.llamaServerBins["title-generation"];
       }
+    }
+
+    if (pendingModelId && isOverridableSlot(def.id)) {
+      const applied = await applySlotModelRuntime(def.id, pendingModelId, settings);
+      persistSlotModelId(def.id, settings, applied.modelId);
     }
 
     await saveSettings(settings);
