@@ -10,10 +10,24 @@ export interface StorageMigrationDiagnostics {
   chatStorage: {
     chatCount: number;
     jsonMessageCount: number;
+    totalJsonMessageBytes: number;
+    largestJsonSnapshots: Array<{
+      id: string;
+      title: string;
+      type: string;
+      messageCount: number;
+      sizeBytes: number;
+      rowMessageCount: number;
+    }>;
     rowMessageCount: number;
     rowChatCount: number;
     mismatchCount: number;
     maxMismatch: number;
+    corruptRowPayloads: number;
+    rowGapChatCount: number;
+    legacyCollapsedToolRows: number;
+    canonicalToolLoopRows: number;
+    canonicalToolLoopFragments: number;
     indexedMessageCount: number;
     ftsMessageCount: number;
     storageMigrations: Array<{ name: string; appliedAt: string }>;
@@ -107,10 +121,61 @@ export function getStorageMigrationDiagnostics(): StorageMigrationDiagnostics {
   const chatStorage = {
     chatCount: readScalar(chatDb, "SELECT COUNT(*) AS value FROM chats"),
     jsonMessageCount: readScalar(chatDb, "SELECT COALESCE(SUM(json_array_length(messages)), 0) AS value FROM chats"),
+    totalJsonMessageBytes: readScalar(chatDb, "SELECT COALESCE(SUM(length(messages)), 0) AS value FROM chats"),
+    largestJsonSnapshots: chatDb.prepare(`
+      SELECT
+        c.id,
+        c.title,
+        c.type,
+        json_array_length(c.messages) AS messageCount,
+        length(c.messages) AS sizeBytes,
+        COALESCE(r.rowMessageCount, 0) AS rowMessageCount
+      FROM chats c
+      LEFT JOIN (
+        SELECT chat_id, COUNT(*) AS rowMessageCount
+        FROM chat_message_rows
+        GROUP BY chat_id
+      ) r ON r.chat_id = c.id
+      ORDER BY sizeBytes DESC
+      LIMIT 10
+    `).all() as StorageMigrationDiagnostics["chatStorage"]["largestJsonSnapshots"],
     rowMessageCount: readScalar(chatDb, "SELECT COUNT(*) AS value FROM chat_message_rows"),
     rowChatCount: readScalar(chatDb, "SELECT COUNT(DISTINCT chat_id) AS value FROM chat_message_rows"),
     mismatchCount: 0,
     maxMismatch: 0,
+    corruptRowPayloads: readScalar(chatDb, "SELECT COUNT(*) AS value FROM chat_message_rows WHERE NOT json_valid(payload_json)"),
+    rowGapChatCount: readScalar(chatDb, `
+      SELECT COUNT(*) AS value
+      FROM (
+        SELECT chat_id
+        FROM chat_message_rows
+        GROUP BY chat_id
+        HAVING MIN(sequence) != 0 OR MAX(sequence) != COUNT(*) - 1
+      )
+    `),
+    legacyCollapsedToolRows: readScalar(chatDb, `
+      SELECT COUNT(*) AS value
+      FROM chat_message_rows
+      WHERE role = 'assistant'
+        AND json_valid(payload_json)
+        AND json_type(payload_json, '$.toolCalls') = 'array'
+        AND json_array_length(payload_json, '$.toolCalls') > 0
+        AND COALESCE(json_extract(payload_json, '$._toolLoopFragment'), 0) != 1
+    `),
+    canonicalToolLoopRows: readScalar(chatDb, `
+      SELECT COUNT(*) AS value
+      FROM chat_message_rows
+      WHERE role = 'assistant'
+        AND json_valid(payload_json)
+        AND json_extract(payload_json, '$._toolLoopId') IS NOT NULL
+    `),
+    canonicalToolLoopFragments: readScalar(chatDb, `
+      SELECT COUNT(*) AS value
+      FROM chat_message_rows
+      WHERE role = 'assistant'
+        AND json_valid(payload_json)
+        AND json_extract(payload_json, '$._toolLoopFragment') = 1
+    `),
     indexedMessageCount: readScalar(chatDb, "SELECT COUNT(*) AS value FROM chat_messages"),
     ftsMessageCount: readScalar(chatDb, "SELECT COUNT(*) AS value FROM chat_messages_fts"),
     storageMigrations: chatDb.prepare("SELECT name, appliedAt FROM storage_migrations ORDER BY appliedAt ASC").all() as Array<{ name: string; appliedAt: string }>,
@@ -158,6 +223,15 @@ export function getStorageMigrationDiagnostics(): StorageMigrationDiagnostics {
   const warnings: string[] = [];
   if (chatStorage.mismatchCount > 0) {
     warnings.push(`chat JSON snapshot and row store differ for ${chatStorage.mismatchCount} chat(s); max difference ${chatStorage.maxMismatch} message(s)`);
+  }
+  if (chatStorage.corruptRowPayloads > 0) {
+    warnings.push(`chat_message_rows contains ${chatStorage.corruptRowPayloads} invalid JSON payload(s)`);
+  }
+  if (chatStorage.rowGapChatCount > 0) {
+    warnings.push(`chat_message_rows has non-dense sequence numbers for ${chatStorage.rowGapChatCount} chat(s)`);
+  }
+  if (chatStorage.legacyCollapsedToolRows > 0) {
+    warnings.push(`chat replay still depends on ${chatStorage.legacyCollapsedToolRows} legacy collapsed assistant tool row(s)`);
   }
   if (chatStorage.indexedMessageCount !== chatStorage.ftsMessageCount) {
     warnings.push(`chat_messages and chat_messages_fts counts differ (${chatStorage.indexedMessageCount} vs ${chatStorage.ftsMessageCount})`);
