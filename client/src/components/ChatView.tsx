@@ -381,6 +381,8 @@ export function ChatView({
   const [inputRect, setInputRect] = useState<DOMRect | null>(null);
   const [scrollPaused, setScrollPaused] = useState(false);
   const [dismissedError, setDismissedError] = useState<string | null>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [tooltipOffsetX, setTooltipOffsetX] = useState(0);
   const displayMessages = useMemo(() => buildDisplayMessages(messages), [messages]);
   const availableSkillNames = useMemo(
     () => skills.length > 0 ? skills.map((skill) => skill.name) : emptySkills,
@@ -715,14 +717,31 @@ export function ChatView({
             />
           ) : headerImageEnabled ? (
             <div
-              className="hidden md:flex relative isolate w-[38px] h-[38px] shrink-0 rounded-lg overflow-hidden before:absolute before:inset-0 before:z-20 before:rounded-lg before:border before:border-black/[0.1] before:pointer-events-none after:absolute after:inset-px after:z-10 after:rounded-[calc(var(--radius-lg)-1px)] after:shadow-[inset_0_1px_5px_rgba(0,0,0,1.0)] after:pointer-events-none"
-              title="Header image"
+              className="hidden md:flex relative group"
+              onMouseEnter={() => {
+                if (!tooltipRef.current) return;
+                const rect = tooltipRef.current.getBoundingClientRect();
+                const edgeMargin = 8;
+                const overflowRight = rect.right + edgeMargin - window.innerWidth;
+                setTooltipOffsetX(overflowRight > 0 ? -overflowRight : 0);
+              }}
             >
-              <img
-                src="/api/settings/header-image/thumb"
-                alt=""
-                className="absolute inset-px z-0 w-[calc(100%-2px)] h-[calc(100%-2px)] rounded-[calc(var(--radius-lg)-1px)] object-cover"
-              />
+              <div
+                className="relative isolate w-[38px] h-[38px] shrink-0 rounded-lg overflow-hidden before:absolute before:inset-0 before:z-20 before:rounded-lg before:border before:border-black/[0.1] before:pointer-events-none after:absolute after:inset-px after:z-10 after:rounded-[calc(var(--radius-lg)-1px)] after:shadow-[inset_0_1px_5px_rgba(0,0,0,1.0)] after:pointer-events-none"
+              >
+                <img
+                  src="/api/settings/header-image/thumb"
+                  alt=""
+                  className="absolute inset-px z-0 w-[calc(100%-2px)] h-[calc(100%-2px)] rounded-[calc(var(--radius-lg)-1px)] object-cover"
+                />
+              </div>
+              <div
+                ref={tooltipRef}
+                className="absolute -bottom-7 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-all duration-150 pointer-events-none whitespace-nowrap px-2 py-0.5 rounded text-[11px] text-white/70"
+                style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(8px)", transform: `translateX(calc(-50% + ${tooltipOffsetX}px))` }}
+              >
+                {models.find((m) => m.id === selectedModelId)?.name || selectedModelId}
+              </div>
             </div>
           ) : (
             <span className="hidden md:inline-flex items-center h-7 text-[11px] text-white/25 select-none" title="Uses your default model">
