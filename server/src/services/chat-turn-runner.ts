@@ -1,5 +1,6 @@
 import type { AgentContext, AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Message, Model, StopReason, ToolCall } from "@mariozechner/pi-ai";
+import { randomUUID } from "crypto";
 import type { Chat, ChatMessage, ChatToolResult, ImageAttachment } from "../types.js";
 import { chatMessagesToPiMessages, type ReplayModelIdentity } from "./agent.js";
 import { estimateContextTokens } from "./compaction.js";
@@ -144,6 +145,61 @@ function clampTransientAssistantText(text: string): string {
   const trimmed = text.trim();
   if (trimmed.length <= PASSIVE_RECALL_TRANSIENT_ASSISTANT_CHARS) return trimmed;
   return `${trimmed.slice(0, PASSIVE_RECALL_TRANSIENT_ASSISTANT_CHARS)}\n[truncated]`;
+}
+
+export function splitAssistantMessageIntoCanonicalToolLoopRows(
+  message: ChatMessage,
+  toolLoopId: string = randomUUID(),
+): ChatMessage[] {
+  if (!message.toolCalls?.length) return [message];
+
+  const {
+    content,
+    thinking,
+    thinkingDurationMs,
+    toolCalls,
+    toolResults,
+    usage,
+    artifacts,
+    visuals,
+    generatedImages,
+    segments,
+    ...base
+  } = message;
+
+  const fragment: ChatMessage = {
+    ...base,
+    role: "assistant",
+    content: "",
+    ...(thinking ? { thinking } : {}),
+    ...(thinkingDurationMs ? { thinkingDurationMs } : {}),
+    toolCalls,
+    ...(toolResults?.length ? { toolResults } : {}),
+    ...(artifacts?.length ? { artifacts } : {}),
+    ...(visuals?.length ? { visuals } : {}),
+    ...(generatedImages?.length ? { generatedImages } : {}),
+    timestamp: message.timestamp,
+    _toolLoopId: toolLoopId,
+    _toolLoopFragment: true,
+  };
+
+  const hasFinalContent = Boolean(content.trim() || segments?.length);
+  if (!hasFinalContent) {
+    return [fragment];
+  }
+
+  const finalRow: ChatMessage = {
+    ...base,
+    role: "assistant",
+    content,
+    ...(usage ? { usage } : {}),
+    ...(segments?.length ? { segments } : {}),
+    timestamp: message.timestamp,
+    _toolLoopId: toolLoopId,
+  };
+  delete finalRow._toolLoopFragment;
+
+  return [fragment, finalRow];
 }
 
 export async function runHeadlessChatTurn(
@@ -356,14 +412,14 @@ export async function runHeadlessChatTurn(
       return null;
     }
 
-    const message = buildAssistantMessageForState(state, toolResults, output);
-    chat.messages.push(message);
-    persistedAssistantBoundaries.push(message);
+    const rows = splitAssistantMessageIntoCanonicalToolLoopRows(buildAssistantMessageForState(state, toolResults, output));
+    chat.messages.push(...rows);
+    persistedAssistantBoundaries.push(...rows);
     await saveChat(chat);
     assistantMessageIndex = chat.messages.length - 1;
-    finalAssistantMessage = message;
+    finalAssistantMessage = rows[rows.length - 1];
     advancePersistedAssistantBoundary();
-    return message;
+    return finalAssistantMessage;
   };
 
   const discardPersistedAssistantBoundaries = () => {
@@ -616,13 +672,15 @@ export async function runHeadlessChatTurn(
     // call. Single-phase callers still want one durable final assistant row,
     // so collapse those temporary rows before saving the complete message.
     discardPersistedAssistantBoundaries();
-    assistantMessage = options.decorateAssistantMessage
+    const aggregateAssistantMessage = options.decorateAssistantMessage
       ? options.decorateAssistantMessage(emitter.buildAssistantMessage(state.thinking, summary), state)
       : emitter.buildAssistantMessage(state.thinking, summary);
-    assistantMessage._api = replayIdentity.api;
-    assistantMessage._provider = replayIdentity.provider;
-    assistantMessage._model = replayIdentity.model;
-    chat.messages.push(assistantMessage);
+    aggregateAssistantMessage._api = replayIdentity.api;
+    aggregateAssistantMessage._provider = replayIdentity.provider;
+    aggregateAssistantMessage._model = replayIdentity.model;
+    const assistantRows = splitAssistantMessageIntoCanonicalToolLoopRows(aggregateAssistantMessage);
+    chat.messages.push(...assistantRows);
+    assistantMessage = assistantRows[assistantRows.length - 1];
     await saveChat(chat);
     assistantMessageIndex = chat.messages.length - 1;
 
@@ -639,7 +697,7 @@ export async function runHeadlessChatTurn(
       });
     }
 
-    emitter.emitDone(assistantMessage, iterations);
+    emitter.emitDone(aggregateAssistantMessage, iterations);
   }
 
   const stopReasonText = String(stopReason);
