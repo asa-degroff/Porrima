@@ -909,8 +909,10 @@ export async function runSystemSynthesis(options?: {
 
     // Compose the synthesis prompt through the normal memory augmentation path.
     // Phase instructions live in user-role tail messages; resetting here lets
-    // each scheduled run retrieve memories against the current trigger instead
-    // of reusing a stale frozen set from a previous cycle.
+    // each scheduled run start with a clean context state instead of reusing
+    // a stale frozen set from a previous cycle. Memory retrieval is skipped —
+    // synthesis doesn't need a conversational search query, and passive recall
+    // during the run will supply relevant memories based on the agent's output.
     const { buildSplitAugmentedPrompt, invalidateAllStablePrefixCaches, resetMemoryContext } = await import("./memory-context.js");
     resetMemoryContext(SYSTEM_CHAT_ID);
     const splitPrompt = await buildSplitAugmentedPrompt(
@@ -919,6 +921,8 @@ export async function runSystemSynthesis(options?: {
       SYSTEM_CHAT_ID,
       chat.projectId,
       "system",
+      undefined,
+      { skipMemoryRetrieval: true },
     );
     const synthesisPrompt = splitPrompt.systemPrompt;
 
@@ -1219,6 +1223,9 @@ export async function runWakeCycle(options?: {
 
     // Build prompt through the normal memory augmentation path. Reset per wake
     // cycle so retrieval follows the current trigger and recent system context.
+    // Skip memory retrieval — the wake trigger is not a conversational query,
+    // and passive recall during the run will supply relevant memories based
+    // on the agent's own output.
     const { buildSplitAugmentedPrompt, resetMemoryContext } = await import("./memory-context.js");
     resetMemoryContext(SYSTEM_CHAT_ID);
     const splitPrompt = await buildSplitAugmentedPrompt(
@@ -1227,6 +1234,8 @@ export async function runWakeCycle(options?: {
       SYSTEM_CHAT_ID,
       chat.projectId,
       "system",
+      undefined,
+      { skipMemoryRetrieval: true },
     );
     const wakePrompt = splitPrompt.systemPrompt; // No addendum needed — the trigger message is self-contained
 

@@ -633,13 +633,24 @@ export async function buildStablePrefix(
  * Legacy single-string prompt builder. Used by pre-send compaction rebuild.
  * Always does a full retrieval (no delta logic).
  */
+export interface MemoryAugmentationOptions {
+  /** When true, skip memory retrieval entirely — the stable prefix (persona,
+   * user doc, memory blocks, project context, zeitgeist) is still built, but
+   * no memories are searched or injected. Use this for automation starts where
+   * the trigger message has no meaningful conversational context to search
+   * against; passive recall during the agent run will supply memories as
+   * needed based on the agent's own output. */
+  skipMemoryRetrieval?: boolean;
+}
+
 export async function buildMemoryAugmentedPrompt(
   baseSystemPrompt: string,
   recentMessages: ChatMessage[],
   chatId?: string,
   projectId?: string,
   chatType?: string,
-  projectPath?: string
+  projectPath?: string,
+  options?: MemoryAugmentationOptions
 ): Promise<string> {
   let stablePrefix: string;
   try {
@@ -649,6 +660,16 @@ export async function buildMemoryAugmentedPrompt(
   } catch (e) {
     console.error("[memory] buildStablePrefix failed, falling back to base prompt:", e);
     return baseSystemPrompt;
+  }
+
+  // When skipMemoryRetrieval is set (automation starts), there's no meaningful
+  // user query to search against — the trigger message is synthetic and any
+  // prior user messages in the chat are from a different conversational context.
+  // Passive recall during the agent run will supply relevant memories based
+  // on the agent's own output trajectory.
+  if (options?.skipMemoryRetrieval) {
+    log(`[memory-context] chat=${chatId} skipping retrieval (automation start)`);
+    return stablePrefix;
   }
 
   // Retrieval failures (e.g. embedding 500s on long inputs) must not discard
@@ -698,7 +719,8 @@ export async function buildSplitAugmentedPrompt(
   chatId?: string,
   projectId?: string,
   chatType?: string,
-  projectPath?: string
+  projectPath?: string,
+  options?: MemoryAugmentationOptions
 ): Promise<AugmentedPromptResult> {
   const cacheKey = chatId || "_default";
 
@@ -727,6 +749,18 @@ export async function buildSplitAugmentedPrompt(
     const { getZeitgeistArchiveInstruction } = await import("./zeitgeist.js");
     zeitgeistHint = getZeitgeistArchiveInstruction();
   } catch { /* zeitgeist not available */ }
+
+  // When skipMemoryRetrieval is set (automation starts), there's no meaningful
+  // user query to search against — the trigger message is synthetic and any
+  // prior user messages in the chat are from a different conversational context.
+  // Passive recall during the agent run will supply relevant memories based
+  // on the agent's own output trajectory.
+  if (options?.skipMemoryRetrieval) {
+    log(`[memory-context] chat=${chatId} skipping retrieval (automation start)`);
+    // Don't establish any state — the next real user turn should do a full
+    // retrieval with an actual conversational query.
+    return { systemPrompt: stablePrefix, memoriesMessage: "", combined: stablePrefix };
+  }
 
   const state = chatId ? contextState.get(chatId) : undefined;
 

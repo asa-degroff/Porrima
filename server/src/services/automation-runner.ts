@@ -196,6 +196,8 @@ async function runPromptAutomation(task: AutomationTask, run: AutomationRun): Pr
       task.chatId,
       chat.projectId,
       "system",
+      undefined,
+      { skipMemoryRetrieval: true },
     );
     const systemPrompt = splitPrompt.systemPrompt;
 
