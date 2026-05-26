@@ -153,9 +153,9 @@ const DEFAULT_AUTOMATION_INTERVAL_MINUTES = 24 * 60;
 const DEFAULT_AUTOMATION_DAILY_TIME = "09:00";
 
 const WEB_SEARCH_PROVIDER_OPTIONS: Array<{ id: WebSearchProvider; label: string; description: string }> = [
-  { id: "brave", label: "Brave Search", description: "Fast snippets from Brave Search API." },
-  { id: "exa", label: "Exa", description: "Richer search with highlights, summaries, and deep modes." },
-  { id: "tavily", label: "Tavily", description: "Ranked web results with optional answers and date filters." },
+  { id: "brave", label: "Brave Search", description: "Results from the Brave Search API." },
+  { id: "exa", label: "Exa", description: "Results from the Exa search API." },
+  { id: "tavily", label: "Tavily", description: "Results from the Tavily search API." },
 ];
 
 const RETRIEVAL_DEPTH_OPTIONS: Array<{ id: RetrievalDepthProfile; label: string; description: string }> = [
@@ -4550,7 +4550,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
                   autoComplete="off"
                 />
                 <p className="text-white/30 text-xs">
-                  Required for the web_search agent tool. Get a key at{" "}
+                  Required for Brave Search. Get a key at{" "}
                   <a href="https://brave.com/search/api/" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
                     brave.com/search/api
                   </a>
@@ -4570,7 +4570,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
                   autoComplete="off"
                 />
                 <p className="text-white/30 text-xs">
-                  Required for Exa-powered web search. Provides rich results with highlights, summaries, and deep reasoning. Get a key at{" "}
+                  Required for Exa-powered web search. Get a key at{" "}
                   <a href="https://exa.ai" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
                     exa.ai
                   </a>
@@ -4590,7 +4590,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
                   autoComplete="off"
                 />
                 <p className="text-white/30 text-xs">
-                  Required for Tavily-powered web search. Supports ranked results, optional generated answers, and date/domain filters. Get a key at{" "}
+                  Required for Tavily-powered web search. Get a key at{" "}
                   <a href="https://app.tavily.com" target="_blank" rel="noopener noreferrer" className="text-blue-400/60 hover:text-blue-400/80">
                     app.tavily.com
                   </a>
