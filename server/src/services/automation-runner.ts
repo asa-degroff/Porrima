@@ -329,6 +329,7 @@ async function executeAutomation(task: AutomationTask, run: AutomationRun): Prom
   if (task.id === SYNTHESIS_AUTOMATION_ID || task.kind === "synthesis") {
     const result = await runSystemSynthesis({
       promptSteps: task.promptSteps,
+      timeoutMs: task.timeoutMs,
       automationTaskId: task.id,
       automationRunId: run.id,
     });

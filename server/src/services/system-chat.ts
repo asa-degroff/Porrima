@@ -820,6 +820,7 @@ export async function runSystemSynthesis(options?: {
   modelId?: string;
   skipArchive?: boolean;
   promptSteps?: AutomationPromptStep[];
+  timeoutMs?: number;
   automationTaskId?: string;
   automationRunId?: string;
 }): Promise<SynthesisResult> {
@@ -967,6 +968,7 @@ export async function runSystemSynthesis(options?: {
     // row before saving the next trigger, preserving durable replay shape.
     // -------------------------------------------------------------------
     const MAX_ITERATIONS_PER_PHASE = 12;
+    const synthesisTimeoutMs = Math.max(60_000, Math.floor(options?.timeoutMs ?? 30 * 60 * 1000));
     let nextPhaseIndex = 1;
 
     const turn = await runHeadlessChatTurn({
@@ -978,8 +980,8 @@ export async function runSystemSynthesis(options?: {
       emitter,
       maxIterations: MAX_ITERATIONS_PER_PHASE * PHASE_ORDER.length,
       maxIterationsPerAssistantSegment: MAX_ITERATIONS_PER_PHASE,
-      timeoutMs: 30 * 60 * 1000,
-      keepAlive: "90m",
+      timeoutMs: synthesisTimeoutMs,
+      keepAlive: `${Math.max(1, Math.ceil(synthesisTimeoutMs / 60_000))}m`,
       logPrefix: "system-chat:synthesis",
       saveChat,
       persistIntermediateAssistantMessages: true,
