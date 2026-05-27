@@ -810,19 +810,19 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   );
 
   const handleEditMessage = useCallback(
-    (index: number, newText: string, images?: import("./types").ImageAttachment[]) => {
+    (index: number, newText: string, images?: import("./types").ImageAttachment[], messageSequence?: number) => {
       if (activeChatId) setLastActiveChatId(activeChatId);
       autoReadPendingTurnRef.current = true;
-      editMessage(index, newText, images);
+      editMessage(index, newText, images, messageSequence);
     },
     [activeChatId, editMessage]
   );
 
   const handleRetryMessage = useCallback(
-    (index: number) => {
+    (index: number, messageSequence?: number) => {
       if (activeChatId) setLastActiveChatId(activeChatId);
       autoReadPendingTurnRef.current = true;
-      retryMessage(index);
+      retryMessage(index, messageSequence);
     },
     [activeChatId, retryMessage]
   );

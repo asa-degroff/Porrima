@@ -3033,16 +3033,31 @@ async function handleChatStream(
     // should not reset the user-idle window.
     await stampAssistantCompletion(chat);
 
+    const assistantSequence = hasContent ? chat.messages.length - 1 : undefined;
+    let userMessageSequence: number | undefined;
+    if (assistantSequence !== undefined) {
+      for (let i = assistantSequence - 1; i >= 0; i--) {
+        if (chat.messages[i]?.role === "user") {
+          userMessageSequence = i;
+          break;
+        }
+      }
+    }
+    const doneAssistantMsg =
+      assistantSequence === undefined
+        ? assistantMsg
+        : { ...assistantMsg, _rowSequence: assistantSequence };
+
     if (waitingForInput) {
       res.write(
-        `event: done\ndata: ${JSON.stringify({ message: assistantMsg, waitingForInput: true, iterations })}\n\n`
+        `event: done\ndata: ${JSON.stringify({ message: doneAssistantMsg, userMessageSequence, waitingForInput: true, iterations })}\n\n`
       );
     } else {
       // Clean up pending state — turn completed normally, no need for crash recovery
       await clearPendingState(chat.id);
 
       res.write(
-        `event: done\ndata: ${JSON.stringify({ message: assistantMsg, iterations })}\n\n`
+        `event: done\ndata: ${JSON.stringify({ message: doneAssistantMsg, userMessageSequence, iterations })}\n\n`
       );
 
       // Generate LLM title after the first exchange (2 messages = 1 user + 1 assistant).

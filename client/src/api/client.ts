@@ -209,7 +209,7 @@ export interface ArtifactRuntimeErrorReport {
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onThinkingDelta: (delta: string) => void;
-  onDone: (message: { content?: string; thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number; thinkingPromoted?: boolean; recap?: string; toolLoopId?: string; toolLoopFragment?: boolean }) => void;
+  onDone: (message: { content?: string; thinking?: string; thinkingDurationMs?: number; usage?: MessageUsage; artifacts?: Artifact[]; generatedImages?: GeneratedImage[]; visuals?: InlineVisual[]; toolCalls?: ChatToolCall[]; toolResults?: ChatToolResult[]; segments?: import("../types").MessageSegment[]; waitingForInput?: boolean; iterations?: number; thinkingPromoted?: boolean; recap?: string; toolLoopId?: string; toolLoopFragment?: boolean; messageSequence?: number; userMessageSequence?: number }) => void;
   onError: (error: string) => void;
   onToolStatus?: (status: ToolStatus) => void;
   onArtifact?: (artifact: Artifact) => void;
@@ -563,6 +563,8 @@ function processSSEEvent(
         recap: data.message?.recap,
         toolLoopId: data.message?._toolLoopId,
         toolLoopFragment: data.message?._toolLoopFragment,
+        messageSequence: data.message?._rowSequence,
+        userMessageSequence: data.userMessageSequence,
       });
       break;
     case "tool_status":
@@ -1696,9 +1698,13 @@ export async function validateLlamaPathApi(candidatePath: string): Promise<{ val
   return res.json();
 }
 
-export async function listLlamaBinaries(): Promise<LlamaBinaryInfo[]> {
-  const res = await apiFetch(`${BASE}/settings/llama-binaries`);
-  if (!res.ok) throw new Error("Failed to list binaries");
+export async function listLlamaBinaries(scanDir?: string): Promise<LlamaBinaryInfo[]> {
+  const qs = scanDir ? `?${new URLSearchParams({ dir: scanDir }).toString()}` : "";
+  const res = await apiFetch(`${BASE}/settings/llama-binaries${qs}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as any).error || "Failed to list binaries");
+  }
   return res.json();
 }
 

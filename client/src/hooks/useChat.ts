@@ -493,7 +493,7 @@ export function useChat(chatId: string | null) {
           }
         }
       },
-      onDone: ({ content: serverContent, thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi, thinkingPromoted, recap, toolLoopId, toolLoopFragment }) => {
+      onDone: ({ content: serverContent, thinking, thinkingDurationMs, usage, artifacts: doneArtifacts, generatedImages: doneImages, visuals: doneVisuals, toolCalls, toolResults, segments, waitingForInput: wfi, thinkingPromoted, recap, toolLoopId, toolLoopFragment, messageSequence, userMessageSequence }) => {
         const bg = bgStreams.get(streamChatId);
         if (!bg || bg.doneCalled) return;
         bg.doneCalled = true;
@@ -535,7 +535,19 @@ export function useChat(chatId: string | null) {
             recap: recap || undefined,
             _toolLoopId: toolLoopId || last._toolLoopId,
             _toolLoopFragment: toolLoopFragment || undefined,
+            _rowSequence: messageSequence ?? last._rowSequence,
           };
+        }
+        if (userMessageSequence != null) {
+          for (let i = bg.messages.length - 2; i >= 0; i--) {
+            if (bg.messages[i]?.role === "user") {
+              bg.messages[i] = {
+                ...bg.messages[i],
+                _rowSequence: userMessageSequence,
+              };
+              break;
+            }
+          }
         }
 
         if (wfi) bg.waitingForInput = true;
