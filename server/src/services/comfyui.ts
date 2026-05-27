@@ -4,13 +4,14 @@ import type { ImageGenerationParams, ComfyUIStatus } from "../types.js";
 import type { ImageBackend } from "./image-backend.js";
 import { acquireResources, type CoordinatorStatus } from "./resource-coordinator.js";
 
-async function getBaseUrl(): Promise<string> {
+async function getBaseUrl(overrideUrl?: string): Promise<string> {
+  if (overrideUrl) return overrideUrl.replace(/\/+$/, "");
   const settings = await getSettings();
-  return settings.comfyuiUrl || "http://127.0.0.1:8188";
+  return (settings.comfyuiUrl || "http://127.0.0.1:8188").replace(/\/+$/, "");
 }
 
-export async function getComfyUIStatus(): Promise<ComfyUIStatus> {
-  const baseUrl = await getBaseUrl();
+export async function getComfyUIStatus(overrideUrl?: string): Promise<ComfyUIStatus> {
+  const baseUrl = await getBaseUrl(overrideUrl);
   try {
     const [statsRes, queueRes] = await Promise.all([
       fetch(`${baseUrl}/system_stats`, { signal: AbortSignal.timeout(3000) }),
@@ -33,8 +34,8 @@ export async function getComfyUIStatus(): Promise<ComfyUIStatus> {
   }
 }
 
-export async function getComfyUIModels(): Promise<string[]> {
-  const baseUrl = await getBaseUrl();
+export async function getComfyUIModels(overrideUrl?: string): Promise<string[]> {
+  const baseUrl = await getBaseUrl(overrideUrl);
   const models = new Set<string>();
 
   // Fetch from both UNETLoader (safetensors) and UnetLoaderGGUF (gguf)

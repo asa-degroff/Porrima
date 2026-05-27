@@ -12,8 +12,8 @@ export interface GenerateProgress {
 
 export interface ImageBackend {
   name: string;
-  getStatus(): Promise<ImageBackendStatus>;
-  getModels(): Promise<string[]>;
+  getStatus(overrideUrl?: string): Promise<ImageBackendStatus>;
+  getModels(overrideUrl?: string): Promise<string[]>;
   generate(
     generationId: string,
     clientId: string,

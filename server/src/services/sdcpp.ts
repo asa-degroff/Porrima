@@ -141,13 +141,14 @@ function scheduleIdleStop(): void {
   }, IDLE_STOP_DELAY_MS);
 }
 
-async function getBaseUrl(): Promise<string> {
+async function getBaseUrl(overrideUrl?: string): Promise<string> {
+  if (overrideUrl) return overrideUrl.replace(/\/+$/, "");
   const settings = await getSettings();
-  return settings.sdcppUrl || "http://127.0.0.1:1234";
+  return (settings.sdcppUrl || "http://127.0.0.1:1234").replace(/\/+$/, "");
 }
 
-async function getStatus(): Promise<ImageBackendStatus> {
-  const baseUrl = await getBaseUrl();
+async function getStatus(overrideUrl?: string): Promise<ImageBackendStatus> {
+  const baseUrl = await getBaseUrl(overrideUrl);
   try {
     const res = await fetch(`${baseUrl}/sdapi/v1/options`, {
       signal: AbortSignal.timeout(3000),
@@ -160,8 +161,8 @@ async function getStatus(): Promise<ImageBackendStatus> {
   }
 }
 
-async function getModels(): Promise<string[]> {
-  const baseUrl = await getBaseUrl();
+async function getModels(overrideUrl?: string): Promise<string[]> {
+  const baseUrl = await getBaseUrl(overrideUrl);
   try {
     const res = await fetch(`${baseUrl}/sdapi/v1/sd-models`, {
       signal: AbortSignal.timeout(5000),

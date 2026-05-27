@@ -28,10 +28,11 @@ loadGenerations().then(() => cleanupOldGenerations());
 router.get("/status", async (req, res) => {
   try {
     const backendParam = typeof req.query.backend === "string" ? req.query.backend : undefined;
+    const overrideUrl = typeof req.query.url === "string" ? req.query.url : undefined;
     const backend = backendParam
       ? await getImageBackendByName(backendParam)
       : await getImageBackend();
-    const status = await backend.getStatus();
+    const status = await backend.getStatus(overrideUrl);
     res.json(status);
   } catch (e: any) {
     res.json({ available: false, queueSize: 0, models: [] });
@@ -101,10 +102,11 @@ router.post("/search", async (req, res) => {
   }
 });
 
-router.get("/models", async (_req, res) => {
+router.get("/models", async (req, res) => {
   try {
     const backend = await getImageBackend();
-    const models = await backend.getModels();
+    const overrideUrl = typeof req.query.url === "string" ? req.query.url : undefined;
+    const models = await backend.getModels(overrideUrl);
     res.json(models);
   } catch {
     res.json([]);

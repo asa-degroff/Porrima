@@ -1835,7 +1835,8 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
   const handleTestComfyUI = useCallback(async () => {
     setComfyuiStatus("checking");
     try {
-      const res = await fetch("/api/images/status?backend=comfyui", { credentials: "include" });
+      const url = encodeURIComponent(comfyuiUrl.trim());
+      const res = await fetch(`/api/images/status?backend=comfyui&url=${url}`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setComfyuiStatus(data.available ? "connected" : "unavailable");
@@ -1845,12 +1846,13 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
     } catch {
       setComfyuiStatus("unavailable");
     }
-  }, []);
+  }, [comfyuiUrl]);
 
   const handleTestSdcpp = useCallback(async () => {
     setSdcppStatus("checking");
     try {
-      const res = await fetch("/api/images/status?backend=sdcpp", { credentials: "include" });
+      const url = encodeURIComponent(sdcppUrl.trim());
+      const res = await fetch(`/api/images/status?backend=sdcpp&url=${url}`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setSdcppStatus(data.available ? "connected" : "unavailable");
@@ -1860,7 +1862,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
     } catch {
       setSdcppStatus("unavailable");
     }
-  }, []);
+  }, [sdcppUrl]);
 
   const handleTestLlamaCpp = useCallback(async () => {
     setLlamacppStatus("checking");

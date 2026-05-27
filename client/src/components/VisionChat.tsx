@@ -187,10 +187,7 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
                   title="Send to generate"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M8 3 4 8.6725 8 10.344 12 8.6725 8 3Z" />
-                    <path d="M12 13.3275 16 15 20 13.3275 12 3v10.3275Z" />
-                    <path d="M8 14 4 19.553 8 21.224 12 19.553 8 14Z" />
-                    <path d="M12 24.224 16 22.553 20 24.224 12 14v10.224Z" />
+                    <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.532a.5.5 0 0 1 0-.962L8.5 8.936A2 2 0 0 0 9.937 7.5l1.532-6.135a.5.5 0 0 1 .963 0L13.963 7.5A2 2 0 0 0 15.4 8.936l6.135 1.532a.5.5 0 0 1 0 .962L15.4 13.963a2 2 0 0 0-1.437 1.437l-1.532 6.135a.5.5 0 0 1-.963 0z" />
                   </svg>
                   Send to Generate
                 </button>
@@ -255,10 +252,7 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
                         title="Send to generate"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M8 3 4 8.6725 8 10.344 12 8.6725 8 3Z" />
-                          <path d="M12 13.3275 16 15 20 13.3275 12 3v10.3275Z" />
-                          <path d="M8 14 4 19.553 8 21.224 12 19.553 8 14Z" />
-                          <path d="M12 24.224 16 22.553 20 24.224 12 14v10.224Z" />
+                          <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.532a.5.5 0 0 1 0-.962L8.5 8.936A2 2 0 0 0 9.937 7.5l1.532-6.135a.5.5 0 0 1 .963 0L13.963 7.5A2 2 0 0 0 15.4 8.936l6.135 1.532a.5.5 0 0 1 0 .962L15.4 13.963a2 2 0 0 0-1.437 1.437l-1.532 6.135a.5.5 0 0 1-.963 0z" />
                         </svg>
                         Send to Generate
                       </button>
