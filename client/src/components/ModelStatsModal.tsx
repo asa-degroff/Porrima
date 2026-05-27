@@ -602,46 +602,6 @@ function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
         </div>
       </div>
 
-      {/* Latency bar */}
-      <Section title="Latency" defaultOpen>
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-white/40 w-14 shrink-0">model</span>
-            <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-300 ${latencyColor(summary.avgModelLatencyMs ?? 0, timeoutMs)}`}
-                style={{ width: summary.avgModelLatencyMs != null ? `${Math.min(summary.avgModelLatencyMs / timeoutMs * 100, 100)}%` : "0%" }}
-              />
-            </div>
-            <span className={`text-[10px] w-20 text-right shrink-0 font-mono ${latencyColor(summary.avgModelLatencyMs ?? 0, timeoutMs)}`}>
-              {formatDuration(summary.avgModelLatencyMs ?? 0)}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-white/40 w-14 shrink-0">fallback</span>
-            <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-300 ${latencyColor(summary.avgFallbackLatencyMs ?? 0, timeoutMs)}`}
-                style={{ width: summary.avgFallbackLatencyMs != null ? `${Math.min(summary.avgFallbackLatencyMs / timeoutMs * 100, 100)}%` : "0%" }}
-              />
-            </div>
-            <span className={`text-[10px] w-20 text-right shrink-0 font-mono ${latencyColor(summary.avgFallbackLatencyMs ?? 0, timeoutMs)}`}>
-              {formatDuration(summary.avgFallbackLatencyMs ?? 0)}
-            </span>
-          </div>
-          {/* Timeout threshold marker */}
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-white/40 w-14 shrink-0">timeout</span>
-            <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
-              <div className="h-full rounded-full bg-red-400/40" style={{ width: "100%" }} />
-            </div>
-            <span className="text-[10px] w-20 text-right shrink-0 font-mono text-red-300/60">
-              {Math.round(timeoutMs / 1000)}s
-            </span>
-          </div>
-        </div>
-      </Section>
-
       {/* Throughput & scores */}
       <Section title="Per-Run Metrics" defaultOpen>
         <div className="space-y-1.5">
@@ -784,7 +744,7 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
       >
         <header className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
           <div className="flex items-center flex-wrap gap-2">
-            <h2 className="text-sm font-medium text-white/90">Model Stats & Cache</h2>
+            <h2 className="text-sm font-medium text-white/90">Model Stats</h2>
             <div className="flex items-center bg-white/5 rounded-lg p-0.5">
               <button
                 onClick={() => { setActiveTab("chat"); setDetailModelId(null); }}
