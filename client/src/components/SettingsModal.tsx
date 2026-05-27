@@ -18,7 +18,7 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, validateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
 import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
@@ -500,9 +500,6 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
   const [llamaPathInfo, setLlamaPathInfo] = useState<LlamaPathInfo | null>(null);
   // Aggregate HTTP-ping health for all five configured servers
   const [serverHealth, setServerHealth] = useState<ServerHealthMap | null>(null);
-  const [llamaPathInput, setLlamaPathInput] = useState("");
-  const [llamaPathValidation, setLlamaPathValidation] = useState<{ valid: boolean; error?: string } | null>(null);
-  const [llamaPathValidating, setLlamaPathValidating] = useState(false);
   const [llamaPathUpdating, setLlamaPathUpdating] = useState(false);
   const [llamaPathMessage, setLlamaPathMessage] = useState<{ type: "ok" | "err" | "warn"; text: string } | null>(null);
   const [llamaPathUpdateResult, setLlamaPathUpdateResult] = useState<LlamaPathUpdateResult | null>(null);
@@ -539,9 +536,8 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
   // Discovered binaries
   const [llamaBinaries, setLlamaBinaries] = useState<LlamaBinaryInfo[]>([]);
   const [llamaBinariesLoading, setLlamaBinariesLoading] = useState(false);
-  const [llamaBinaryInput, setLlamaBinaryInput] = useState("");
-  const [llamaBinaryValidating, setLlamaBinaryValidating] = useState(false);
-  const [llamaBinaryValidation, setLlamaBinaryValidation] = useState<{ valid: boolean; error?: string } | null>(null);
+  const [llamaBinaryScanDir, setLlamaBinaryScanDir] = useState(settings.llamaBinaryScanDir || "~/bin");
+  const [llamaBinaryScanMessage, setLlamaBinaryScanMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [favoriteModels, setFavoriteModels] = useState<Set<string>>(new Set(settings.favoriteModels || []));
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(settings.showOnlyFavorites ?? false);
   const [preserveThinking, setPreserveThinking] = useState(
@@ -785,6 +781,8 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
   const sshKnownHostsDd = useDropdown();
   const tocDd = useDropdown();
   // Binary selectors
+  const defaultBinaryDd = useDropdown();
+  const inferenceBinaryDd = useDropdown();
   const extractionBinaryDd = useDropdown();
   const rerankerBinaryDd = useDropdown();
   const embeddingBinaryDd = useDropdown();
@@ -1153,7 +1151,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
   }, [refreshLlamaServers]);
 
   // Assign a binary to a specific server slot
-  const handleAssignBinary = useCallback(async (slotId: OverridableSlotId, binaryDir: string) => {
+  const handleAssignBinary = useCallback(async (slotId: LlamaServerId, binaryDir: string) => {
     setLlamaServerMessage(null);
     try {
       const binaryPath = binaryDir ? `${binaryDir}/llama-server` : "";
@@ -1168,27 +1166,6 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
       setLlamaServerMessage({ type: "err", text: e?.message || "Failed to assign binary" });
     }
   }, []);
-
-  // Validate a candidate binary path for registration
-  const handleValidateBinaryPath = useCallback(async () => {
-    const path = llamaBinaryInput.trim();
-    if (!path) return;
-    setLlamaBinaryValidating(true);
-    setLlamaBinaryValidation(null);
-    try {
-      const result = await validateLlamaPathApi(path);
-      setLlamaBinaryValidation(result);
-      if (result.valid) {
-        // Add to the binaries list (optimistic update)
-        const binName = path.split("/").pop() || "";
-        setLlamaBinaries((prev) => [...prev, { path, version: "", isDefault: false }]);
-        setLlamaBinaryInput("");
-      }
-    } catch {
-      setLlamaBinaryValidation({ valid: false, error: "Failed to validate path" });
-    }
-    setLlamaBinaryValidating(false);
-  }, [llamaBinaryInput]);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -1307,20 +1284,40 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
   useEffect(() => {
     let cancelled = false;
     setLlamaBinariesLoading(true);
-    listLlamaBinaries()
-      .then((bins) => { if (!cancelled) setLlamaBinaries(bins); })
-      .catch(() => { if (!cancelled) setLlamaBinaries([]); })
+    listLlamaBinaries(llamaBinaryScanDir)
+      .then((bins) => {
+        if (!cancelled) {
+          setLlamaBinaries(bins);
+          setLlamaBinaryScanMessage(null);
+        }
+      })
+      .catch((err: any) => {
+        if (!cancelled) {
+          setLlamaBinaries([]);
+          setLlamaBinaryScanMessage({ type: "err", text: err?.message || "Failed to scan for llama.cpp binaries" });
+        }
+      })
       .finally(() => { if (!cancelled) setLlamaBinariesLoading(false); });
     return () => { cancelled = true; };
   }, []);
 
   // Refresh binaries when path is updated (Apply & Restart changes the default)
   const refreshLlamaBinaries = useCallback(async () => {
+    const scanDir = llamaBinaryScanDir.trim() || "~/bin";
+    setLlamaBinariesLoading(true);
+    setLlamaBinaryScanMessage(null);
     try {
-      const bins = await listLlamaBinaries();
+      const bins = await listLlamaBinaries(scanDir);
       setLlamaBinaries(bins);
-    } catch { /* already have cached list */ }
-  }, []);
+      setLlamaBinaryScanDir(scanDir);
+      setLlamaBinaryScanMessage({ type: "ok", text: bins.length === 1 ? "Found 1 llama.cpp build." : `Found ${bins.length} llama.cpp builds.` });
+    } catch (err: any) {
+      setLlamaBinaries([]);
+      setLlamaBinaryScanMessage({ type: "err", text: err?.message || "Failed to scan for llama.cpp binaries" });
+    } finally {
+      setLlamaBinariesLoading(false);
+    }
+  }, [llamaBinaryScanDir]);
 
   useEffect(() => {
     refreshLlamaServers(true);
@@ -1544,6 +1541,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
       maxBlockChars,
       crossProjectScoreMultiplier,
       globalProjectScoreMultiplier,
+      llamaBinaryScanDir: llamaBinaryScanDir.trim() || undefined,
       retrievalDepthProfile,
       rerankerTimeoutMs,
       memoryContextSearchQueryChars,
@@ -2046,22 +2044,8 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
     };
   }, []);
 
-  const handleValidateLlamaPath = useCallback(async () => {
-    const path = llamaPathInput.trim();
-    if (!path) return;
-    setLlamaPathValidating(true);
-    setLlamaPathValidation(null);
-    try {
-      const result = await validateLlamaPathApi(path);
-      setLlamaPathValidation(result);
-    } catch (err: any) {
-      setLlamaPathValidation({ valid: false, error: err.message });
-    }
-    setLlamaPathValidating(false);
-  }, [llamaPathInput]);
-
-  const handleUpdateLlamaPath = useCallback(async () => {
-    const path = llamaPathInput.trim();
+  const handleUpdateLlamaPath = useCallback(async (selectedPath: string) => {
+    const path = selectedPath.trim();
     if (!path) return;
     setLlamaPathUpdating(true);
     setLlamaPathMessage(null);
@@ -2074,8 +2058,6 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
       } else {
         setLlamaPathMessage({ type: "ok", text: `Updated to build v${result.version}. All services restarted.` });
       }
-      setLlamaPathInput("");
-      setLlamaPathValidation(null);
       // Refresh the path info and binaries list
       getLlamaPath().then(setLlamaPathInfo).catch(() => {});
       refreshLlamaBinaries();
@@ -2083,7 +2065,52 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
       setLlamaPathMessage({ type: "err", text: err.message || "Failed to update binary path" });
     }
     setLlamaPathUpdating(false);
-  }, [llamaPathInput]);
+  }, [refreshLlamaBinaries]);
+
+  const getBinaryDirForServer = (server: LlamaServerStatus): string => {
+    if (!server.resolvedBinary || server.resolvedBinary === server.defaultBinary) return "";
+    const slash = server.resolvedBinary.lastIndexOf("/");
+    return slash > 0 ? server.resolvedBinary.substring(0, slash) : "";
+  };
+
+  const getBinaryLabel = (binaryDir: string): string => {
+    if (!binaryDir) return "default (llama-current)";
+    return llamaBinaries.find((b) => b.path === binaryDir)?.path.split("/").pop() || binaryDir.split("/").pop() || binaryDir;
+  };
+
+  const renderServerBinaryDropdown = (server: LlamaServerStatus, state: DropdownState) => {
+    const selected = getBinaryDirForServer(server);
+    return (
+      <Dropdown
+        state={state}
+        triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono"
+        panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+        trigger={<span className="truncate flex-1 text-left">{getBinaryLabel(selected)}</span>}
+      >
+        <button
+          onClick={() => {
+            state.close();
+            handleAssignBinary(server.id, "");
+          }}
+          className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${!selected ? "text-white" : "text-white/60 hover:bg-white/10"}`}
+        >
+          default (llama-current)
+        </button>
+        {llamaBinaries.map((b) => (
+          <button
+            key={b.path}
+            onClick={() => {
+              state.close();
+              handleAssignBinary(server.id, b.path);
+            }}
+            className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${selected === b.path ? "text-white" : "text-white/60 hover:bg-white/10"}`}
+          >
+            {b.path.split("/").pop()} (v{b.version || "?"}){b.isDefault ? " default" : ""}
+          </button>
+        ))}
+      </Dropdown>
+    );
+  };
 
   const handleSavePersona = useCallback(async () => {
     setPersonaSaving(true);
@@ -2402,24 +2429,42 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
             </div>
             {/* Binaries — discovered llama.cpp builds + global symlink management */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
                   <h4 className="text-sm text-white/80">Binaries</h4>
                   <p className="text-xs text-white/30 mt-0.5">
                     Discovered llama.cpp builds. Servers use <code className="text-white/50">llama-current</code> by default unless overridden per-slot.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={refreshLlamaBinaries}
-                  disabled={llamaBinariesLoading}
-                  className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0"
-                >
-                  {llamaBinariesLoading ? "Scanning..." : "Scan"}
-                </button>
               </div>
 
               <div className="space-y-2 ml-2">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={llamaBinaryScanDir}
+                    onChange={(e) => {
+                      setLlamaBinaryScanDir(e.target.value);
+                      setLlamaBinaryScanMessage(null);
+                    }}
+                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+                    placeholder="~/bin"
+                    disabled={llamaBinariesLoading}
+                  />
+                  <button
+                    type="button"
+                    onClick={refreshLlamaBinaries}
+                    disabled={llamaBinariesLoading || !llamaBinaryScanDir.trim()}
+                    className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0"
+                  >
+                    {llamaBinariesLoading ? "Scanning..." : "Scan"}
+                  </button>
+                </div>
+                {llamaBinaryScanMessage && (
+                  <div className={`p-2 rounded-lg text-xs ${llamaBinaryScanMessage.type === "ok" ? "bg-green-500/10 border border-green-400/15 text-green-400/80" : "bg-red-500/10 border border-red-400/15 text-red-400/80"}`}>
+                    {llamaBinaryScanMessage.text}
+                  </div>
+                )}
                 {/* Default symlink display */}
                 {llamaPathInfo && llamaPathInfo.valid && (
                   <div className="flex items-center gap-2 text-xs">
@@ -2458,68 +2503,36 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
                   </div>
                 )}
 
-                {/* Register new binary */}
-                <div className="flex gap-2 pt-1">
-                  <input
-                    type="text"
-                    value={llamaBinaryInput}
-                    onChange={(e) => { setLlamaBinaryInput(e.target.value); setLlamaBinaryValidation(null); }}
-                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-                    placeholder="/home/asa/bin/llama-b8790"
-                    disabled={llamaBinaryValidating}
-                  />
-                  <button
-                    onClick={handleValidateBinaryPath}
-                    disabled={!llamaBinaryInput.trim() || llamaBinaryValidating}
-                    className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0"
-                  >
-                    {llamaBinaryValidating ? "Checking..." : "Register"}
-                  </button>
-                </div>
-                {llamaBinaryValidation && (
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-2 h-2 rounded-full ${llamaBinaryValidation.valid ? "bg-green-400" : "bg-red-400"}`} />
-                    <span className={`text-xs ${llamaBinaryValidation.valid ? "text-green-400/80" : "text-red-400/80"}`}>
-                      {llamaBinaryValidation.valid ? "Valid — added to registry" : llamaBinaryValidation.error || "Invalid path"}
-                    </span>
-                  </div>
-                )}
               </div>
 
               {/* Global symlink update */}
               <div className="space-y-2 ml-2 border-t border-white/5 pt-2 mt-1">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={llamaPathInput}
-                    onChange={(e) => { setLlamaPathInput(e.target.value); setLlamaPathValidation(null); setLlamaPathMessage(null); }}
-                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-                    placeholder="/home/asa/bin/llama-b8790"
-                    disabled={llamaPathUpdating}
-                  />
-                  <button
-                    onClick={handleValidateLlamaPath}
-                    disabled={!llamaPathInput.trim() || llamaPathValidating}
-                    className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0"
-                  >
-                    {llamaPathValidating ? "Checking..." : "Validate"}
-                  </button>
-                  <button
-                    onClick={handleUpdateLlamaPath}
-                    disabled={!llamaPathInput.trim() || llamaPathUpdating || (llamaPathValidation !== null && !llamaPathValidation.valid)}
-                    className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 shrink-0"
-                  >
-                    {llamaPathUpdating ? "Applying..." : "Set Default"}
-                  </button>
-                </div>
-                {llamaPathValidation && (
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-2 h-2 rounded-full ${llamaPathValidation.valid ? "bg-green-400" : "bg-red-400"}`} />
-                    <span className={`text-xs ${llamaPathValidation.valid ? "text-green-400/80" : "text-red-400/80"}`}>
-                      {llamaPathValidation.valid ? "Valid" : llamaPathValidation.error || "Invalid path"}
+                <label className="block text-xs text-white/50 mb-1">Default binary</label>
+                <Dropdown
+                  state={defaultBinaryDd}
+                  disabled={llamaPathUpdating || llamaBinaries.length === 0}
+                  triggerClassName="w-full flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-3 py-1.5 text-xs text-white/80 outline-none hover:bg-white/10 transition-all cursor-pointer font-mono disabled:opacity-40"
+                  panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
+                  trigger={
+                    <span className="truncate flex-1 text-left">
+                      {llamaPathInfo?.valid ? getBinaryLabel(llamaPathInfo.currentPath) : "Select discovered binary"}
                     </span>
-                  </div>
-                )}
+                  }
+                >
+                  {llamaBinaries.map((bin) => (
+                    <button
+                      key={bin.path}
+                      onClick={() => {
+                        defaultBinaryDd.close();
+                        setLlamaPathMessage(null);
+                        handleUpdateLlamaPath(bin.path);
+                      }}
+                      className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${bin.isDefault ? "text-white" : "text-white/60 hover:bg-white/10"}`}
+                    >
+                      {bin.path.split("/").pop()} (v{bin.version || "?"}){bin.isDefault ? " default" : ""}
+                    </button>
+                  ))}
+                </Dropdown>
                 {llamaPathMessage && (
                   <div className={`p-2 rounded-lg text-xs ${llamaPathMessage.type === "ok" ? "bg-green-500/10 border border-green-400/15 text-green-400/80" : llamaPathMessage.type === "warn" ? "bg-amber-500/10 border border-amber-400/15 text-amber-400/80" : "bg-red-500/10 border border-red-400/15 text-red-400/80"}`}>
                     <p>{llamaPathMessage.text}</p>
@@ -2750,6 +2763,10 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
 	                                      ))}
 	                                    </Dropdown>
 	                                    <span className="text-xs text-white/30">Auto lets llama.cpp restore prompt cache.</span>
+	                                  </div>
+	                                  <div>
+	                                    <label className="block text-xs text-white/50 mb-1">Binary</label>
+	                                    {renderServerBinaryDropdown(server, inferenceBinaryDd)}
 	                                  </div>
 	                                </div>
 	                              )}

@@ -386,6 +386,12 @@ router.patch("/:id", async (req, res) => {
       if (body.modelId !== undefined) settings.defaultModelId = (body.modelId as string).trim() || settings.defaultModelId;
       if (body.enabled !== undefined) settings.llamacppEnabled = Boolean(body.enabled);
       if (body.sharesGpu !== undefined) settings.llamacppSharesGpu = Boolean(body.sharesGpu);
+      if (body.binaryPath !== undefined) {
+        const v = (body.binaryPath as string)?.trim();
+        if (!settings.llamaServerBins) settings.llamaServerBins = {};
+        if (v) settings.llamaServerBins["inference"] = v;
+        else delete settings.llamaServerBins["inference"];
+      }
     }
     if (def.id === "extraction") {
       if (body.url !== undefined) settings.extractionModelUrl = (body.url as string).trim() || undefined;

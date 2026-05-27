@@ -12,7 +12,7 @@ import {
   saveSettings,
   updateSshConnection,
 } from "../services/chat-storage.js";
-import { getLlamaPathInfo, updateLlamaPath, validateLlamaPath, getLlamaServicesStatus, listLlamaBinaries } from "../services/llama-path.js";
+import { getDefaultLlamaScanDir, getLlamaPathInfo, updateLlamaPath, validateLlamaPath, getLlamaServicesStatus, listLlamaBinaries } from "../services/llama-path.js";
 import { getSlotAssignments } from "../services/llama-slot-leases.js";
 import { listLlamaCacheResidency } from "../services/llama-cache-residency.js";
 import { testSshConnection } from "../services/workspace.js";
@@ -184,10 +184,13 @@ router.post("/llama-path/validate", async (req, res) => {
 // GET /api/settings/llama-binaries — List discovered llama-server binaries
 router.get("/llama-binaries", async (_req, res) => {
   try {
-    const binaries = await listLlamaBinaries();
+    const queryDir = typeof _req.query.dir === "string" ? _req.query.dir : "";
+    const settings = await getSettings();
+    const scanDir = queryDir.trim() || settings.llamaBinaryScanDir || getDefaultLlamaScanDir();
+    const binaries = await listLlamaBinaries(scanDir);
     res.json(binaries);
   } catch (e: any) {
-    res.status(500).json({ error: e.message });
+    res.status(400).json({ error: e.message });
   }
 });
 

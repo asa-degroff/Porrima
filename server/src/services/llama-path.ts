@@ -7,6 +7,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 
 const LLAMA_CURRENT_LINK = join(process.env.HOME || "/home/asa", "bin", "llama-current");
+const DEFAULT_LLAMA_SCAN_DIR = join(process.env.HOME || "/home/asa", "bin");
 const SYSTEMCTL = "systemctl";
 const SERVICE_NAMES = ["llama-server.service", "reranker.service", "extraction-model.service", "title-generation.service"];
 
@@ -29,6 +30,17 @@ export interface LlamaPathUpdateResult {
   version: string;
   services: Record<string, "active" | "failed" | "unknown">;
   rolledBack: boolean;
+}
+
+export function getDefaultLlamaScanDir(): string {
+  return DEFAULT_LLAMA_SCAN_DIR;
+}
+
+function resolveUserPath(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed === "~") return process.env.HOME || "/home/asa";
+  if (trimmed.startsWith("~/")) return join(process.env.HOME || "/home/asa", trimmed.slice(2));
+  return trimmed;
 }
 
 /**
@@ -224,11 +236,18 @@ export async function updateLlamaPath(newPath: string): Promise<LlamaPathUpdateR
 }
 
 /**
- * Scan ~/bin/ for directories containing a llama-server binary.
+ * Scan a directory for child directories containing a llama-server binary.
  * Returns path, version, and whether it's the default (llama-current symlink target).
  */
-export async function listLlamaBinaries(): Promise<Array<{ path: string; version: string; isDefault: boolean }>> {
-  const binDir = join(process.env.HOME || "/home/asa", "bin");
+export async function listLlamaBinaries(scanDir?: string): Promise<Array<{ path: string; version: string; isDefault: boolean }>> {
+  const binDir = resolveUserPath(scanDir || DEFAULT_LLAMA_SCAN_DIR);
+  if (!binDir.startsWith("/")) {
+    throw new Error("scanDir must be an absolute path");
+  }
+  const binDirStat = await stat(binDir).catch(() => null);
+  if (!binDirStat?.isDirectory()) {
+    throw new Error("scanDir must be an existing directory");
+  }
   const results: Array<{ path: string; version: string; isDefault: boolean }> = [];
 
   // Get the current default target
@@ -242,7 +261,7 @@ export async function listLlamaBinaries(): Promise<Array<{ path: string; version
     const entries = await readdir(binDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      const dirPath = join(binDir, entry.name);
+      const dirPath = resolve(join(binDir, entry.name));
       // Skip the symlink itself — we already have its target
       if (entry.name === "llama-current") continue;
       const binaryPath = join(dirPath, "llama-server");

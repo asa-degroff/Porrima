@@ -426,8 +426,12 @@ export interface Settings {
   crossProjectScoreMultiplier?: number;
   // Project-scoped memory multiplier for global/system chats. Default 1.0.
   globalProjectScoreMultiplier?: number;
+  // Per-slot llama.cpp binary overrides. Maps slot id to absolute llama-server binary path.
+  llamaServerBins?: Record<string, string>;
   // Structured llama.cpp service-launch overrides written as managed systemd drop-ins.
   llamaServiceConfigs?: Record<string, any>;
+  // Parent directory scanned for child llama.cpp build directories containing llama-server.
+  llamaBinaryScanDir?: string;
 }
 
 export interface LlamaPathInfo {

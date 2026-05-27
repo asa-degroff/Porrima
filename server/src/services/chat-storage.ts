@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { readdirSync, readFileSync, existsSync, renameSync } from "fs";
+import os from "os";
 import { join } from "path";
 import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, Project, Settings, SshConnection } from "../types.js";
 import { APP_DATA_DIR } from "./paths.js";
@@ -1140,6 +1141,7 @@ const DEFAULT_SETTINGS: Settings = {
   retrievalDepthProfile: "balanced",
   rerankerTimeoutMs: 25_000,
   llamacppSlotBindingMode: "auto",
+  llamaBinaryScanDir: `${os.homedir()}/bin`,
 };
 
 function normalizeSettings(settings: Settings): Settings {

@@ -418,6 +418,8 @@ export interface Settings {
   llamaServiceConfigs?: Record<string, any>;
   // The default llama.cpp binary path (from llama-current symlink). Used by UI for display.
   llamaServerDefaultBin?: string;
+  // Parent directory scanned for child llama.cpp build directories containing llama-server.
+  llamaBinaryScanDir?: string;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
