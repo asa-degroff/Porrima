@@ -27,6 +27,7 @@ import {
   validateServiceConfig,
   type LlamaServiceConfig,
 } from "../services/llama-service-config.js";
+import { normalizeExtractionRequestSettings } from "../services/extraction-settings.js";
 
 const router = Router();
 
@@ -400,6 +401,14 @@ router.patch("/:id", async (req, res) => {
         pendingModelId = v || null;
       }
       if (body.ctxSize !== undefined) settings.extractionCtxSize = Number(body.ctxSize);
+      if (body.maxTokens !== undefined) settings.extractionMaxTokens = Number(body.maxTokens);
+      if (body.timeoutMs !== undefined) settings.extractionTimeoutMs = Number(body.timeoutMs);
+      if (body.ctxSize !== undefined || body.maxTokens !== undefined || body.timeoutMs !== undefined) {
+        const normalized = normalizeExtractionRequestSettings(settings);
+        settings.extractionCtxSize = normalized.ctxSize;
+        settings.extractionMaxTokens = normalized.maxTokens;
+        settings.extractionTimeoutMs = normalized.timeoutMs;
+      }
       if (body.fallbackEnabled !== undefined) settings.extractionFallbackEnabled = Boolean(body.fallbackEnabled);
       if (body.binaryPath !== undefined) {
         const v = (body.binaryPath as string)?.trim();

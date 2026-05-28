@@ -1890,6 +1890,8 @@ export interface LlamaServerUpdate {
   enabled?: boolean;
   sharesGpu?: boolean;
   ctxSize?: number;
+  maxTokens?: number;
+  timeoutMs?: number;
   fallbackEnabled?: boolean;
   provider?: "llamacpp";
   binaryPath?: string;

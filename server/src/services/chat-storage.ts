@@ -4,6 +4,7 @@ import os from "os";
 import { join } from "path";
 import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, Project, Settings, SshConnection } from "../types.js";
 import { APP_DATA_DIR } from "./paths.js";
+import { normalizeExtractionRequestSettings } from "./extraction-settings.js";
 
 const PROJECT_COLORS = ["emerald", "purple", "blue", "amber", "rose", "cyan", "violet", "orange", "pink", "teal"];
 
@@ -1145,8 +1146,12 @@ const DEFAULT_SETTINGS: Settings = {
 };
 
 function normalizeSettings(settings: Settings): Settings {
+  const extraction = normalizeExtractionRequestSettings(settings);
   return {
     ...settings,
+    extractionCtxSize: extraction.ctxSize,
+    extractionMaxTokens: extraction.maxTokens,
+    extractionTimeoutMs: extraction.timeoutMs,
     preserveThinking:
       settings.preserveThinking ??
       Object.values(settings.modelPreserveThinking ?? {}).some(Boolean),

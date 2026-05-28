@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../types.js";
 import { getDb, getSettings, type ContextArchive, getNextArchiveSequence, saveArchives } from "./chat-storage.js";
+import { normalizeExtractionRequestSettings } from "./extraction-settings.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -442,7 +443,16 @@ Output ONLY the formatted lines, nothing else.`;
   let outputText = "";
 
   if (extractionUrl) {
-    outputText = await callExtractionModel(extractionUrl, modelId, systemPrompt, inputParts, settings.extractionModelId || "index-gen");
+    const extractionSettings = normalizeExtractionRequestSettings(settings);
+    outputText = await callExtractionModel(
+      extractionUrl,
+      modelId,
+      systemPrompt,
+      inputParts,
+      settings.extractionModelId || "index-gen",
+      extractionSettings.maxTokens,
+      extractionSettings.timeoutMs,
+    );
   }
 
   if (!outputText) {
@@ -491,6 +501,8 @@ async function callExtractionModel(
   systemPrompt: string,
   userContent: string,
   extractionModelId: string,
+  maxTokens: number,
+  timeoutMs: number,
 ): Promise<string> {
   const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
     method: "POST",
@@ -501,11 +513,11 @@ async function callExtractionModel(
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent },
       ],
-      max_tokens: 1000,
+      max_tokens: maxTokens,
       temperature: 0.3,
       stream: false,
     }),
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (res.ok) {
     const data = await res.json();

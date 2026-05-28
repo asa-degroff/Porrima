@@ -4,6 +4,7 @@ import { regenerateTitle } from "./title-generation.js";
 import { readOpenAIContentStream, withExtractionMutex } from "./memory-extraction.js";
 import { recordModelStats } from "./model-stats.js";
 import { ensureRouterModelLoaded, normalizeRouterModelId } from "./llama-router-client.js";
+import { normalizeExtractionRequestSettings } from "./extraction-settings.js";
 
 export interface CompactionResult {
   truncated: boolean;
@@ -947,6 +948,7 @@ async function runIndexGeneration(
   const { getSettings } = await import("./chat-storage.js");
   const settings = await getSettings();
   const extractionUrl = settings.extractionModelUrl;
+  const extractionSettings = normalizeExtractionRequestSettings(settings);
   const { systemPrompt, inputParts } = buildIndexPrompt(blockDescriptions);
 
   const keepaliveInterval = onKeepalive ? setInterval(onKeepalive, 10_000) : null;
@@ -960,9 +962,9 @@ async function runIndexGeneration(
         // active one before issuing the chat completion. Single-model mode
         // returns "not-router" and we proceed with whatever the slot launched.
         await ensureRouterModelLoaded(extractionUrl, extractionModelId, {
-          contextWindow: settings.extractionCtxSize ?? 16384,
+          contextWindow: extractionSettings.ctxSize,
         });
-        const requestSignal = AbortSignal.timeout(300_000);
+        const requestSignal = AbortSignal.timeout(extractionSettings.timeoutMs);
         const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -972,7 +974,7 @@ async function runIndexGeneration(
               { role: "system", content: systemPrompt },
               { role: "user", content: inputParts },
             ],
-            max_tokens: 1000,
+            max_tokens: extractionSettings.maxTokens,
             temperature: 0.3,
             stream: true,
           }),

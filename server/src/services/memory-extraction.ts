@@ -20,6 +20,7 @@ import { recordModelStats } from "./model-stats.js";
 import type { LlamaTimings } from "./model-stats.js";
 import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat, Settings } from "../types.js";
 import { appDataPath } from "./paths.js";
+import { DEFAULT_EXTRACTION_MAX_TOKENS, normalizeExtractionRequestSettings } from "./extraction-settings.js";
 
 const LOG_DIR = appDataPath("logs");
 
@@ -118,10 +119,10 @@ function estimateTokensConservative(text: string): number {
 export function computeExtractionInputBudget(
   systemPrompt: string,
   ctxSize: number,
-  opts?: { chunkOverheadChars?: number },
+  opts?: { chunkOverheadChars?: number; maxTokens?: number },
 ): { maxInputChars: number; sysPromptTokens: number; inputBudgetTokens: number } {
   const sysPromptTokens = estimateTokensConservative(systemPrompt);
-  const outputTokens = 4000;   // matches max_tokens in the request body
+  const outputTokens = opts?.maxTokens ?? DEFAULT_EXTRACTION_MAX_TOKENS;
   const safetyMargin = 512;    // absorbs small under-estimation
   const overheadChars = opts?.chunkOverheadChars ?? 0;
   const overheadTokens = Math.ceil(overheadChars / 3);
@@ -213,14 +214,15 @@ async function callExtractionLLM(
 ): Promise<string> {
   const settings = await getSettings();
   const extractionUrl = settings.extractionModelUrl;
+  const extractionSettings = normalizeExtractionRequestSettings(settings);
 
   if (extractionUrl) {
     // Serialize through the mutex — the dedicated extraction server is
     // --parallel 1, so concurrent requests just pile up in Node.js memory.
     return withExtractionMutex(async () => {
-      const ctxSize = settings.extractionCtxSize ?? 16384;
+      const { ctxSize, maxTokens, timeoutMs } = extractionSettings;
       const { maxInputChars, sysPromptTokens, inputBudgetTokens } =
-        computeExtractionInputBudget(systemPrompt, ctxSize);
+        computeExtractionInputBudget(systemPrompt, ctxSize, { maxTokens });
 
       if (inputBudgetTokens < 1000) {
         console.warn(
@@ -240,7 +242,7 @@ async function callExtractionLLM(
       const extractionModelId = resolveEffectiveExtractionModelId(modelId, settings);
       await ensureRouterModelLoaded(extractionUrl, extractionModelId, { contextWindow: ctxSize });
 
-      const requestSignal = signal ?? AbortSignal.timeout(600_000);
+      const requestSignal = signal ?? AbortSignal.timeout(timeoutMs);
       const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -250,7 +252,7 @@ async function callExtractionLLM(
             { role: "system", content: systemPrompt },
             { role: "user", content: truncatedContent },
           ],
-          max_tokens: 4000,
+          max_tokens: maxTokens,
           temperature: 0.6,
           stream: true,
         }),
@@ -292,7 +294,7 @@ async function callExtractionLLM(
     (event) => {
       if (event.type === "text_delta") responseText += event.delta;
     },
-    { signal: signal ?? AbortSignal.timeout(600_000) }
+    { signal: signal ?? AbortSignal.timeout(extractionSettings.timeoutMs) }
   );
   return responseText;
 }
@@ -912,7 +914,7 @@ async function extractInChunks(
     };
   }
 
-  const ctxSize = settings.extractionCtxSize ?? 16384;
+  const { ctxSize, maxTokens } = normalizeExtractionRequestSettings(settings);
 
   // Up-front fit check against the *no-overhead* budget. When the content fits
   // as a single call, skip chunking entirely — avoids splitting just because
@@ -920,6 +922,7 @@ async function extractInChunks(
   const { maxInputChars: singleBudget } = computeExtractionInputBudget(
     opts.systemPrompt,
     ctxSize,
+    { maxTokens },
   );
   const body = opts.segments.map(renderSegment).join("\n\n");
   const combined = header ? `${header}\n\n${body}` : body;
@@ -945,7 +948,7 @@ async function extractInChunks(
   const { maxInputChars: chunkedBudget } = computeExtractionInputBudget(
     opts.systemPrompt,
     ctxSize,
-    { chunkOverheadChars: CHUNK_OVERHEAD_CHARS },
+    { chunkOverheadChars: CHUNK_OVERHEAD_CHARS, maxTokens },
   );
   // Subtract header chars since the header is repeated in every chunk.
   const maxChunkChars = Math.max(1000, chunkedBudget - header.length);
@@ -1150,8 +1153,7 @@ Respond with a JSON array:
     const responseText = await callExtractionLLM(
       modelId,
       prompt,
-      "You are a careful analyzer that determines whether new memories update existing memories or are distinct. Only mark as supersede when you are confident the new memory replaces the old one.",
-      AbortSignal.timeout(120_000)
+      "You are a careful analyzer that determines whether new memories update existing memories or are distinct. Only mark as supersede when you are confident the new memory replaces the old one."
     );
 
     // Parse the response

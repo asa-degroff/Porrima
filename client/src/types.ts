@@ -351,7 +351,9 @@ export interface Settings {
   // "enforced" sends app-managed id_slot leases.
   llamacppSlotBindingMode?: "auto" | "enforced";
   // Extraction server (CPU-only llama.cpp instance)
-  extractionCtxSize?: number;   // default 16384 — context window for extraction server
+  extractionCtxSize?: number;       // default 16384 — context window for extraction server
+  extractionMaxTokens?: number;     // default 4000 — max output tokens for extraction calls
+  extractionTimeoutMs?: number;     // default 600000 — abort extraction requests after this many ms
   // Reranker server (CPU-only llama.cpp instance)
   rerankerEnabled?: boolean;    // default true
   rerankerUrl?: string;         // default "http://localhost:8082"

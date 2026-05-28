@@ -59,6 +59,26 @@ const SECTIONS = [
   { id: 'passkeys', label: 'Security' },
 ] as const;
 
+const DEFAULT_EXTRACTION_CTX_SIZE = 16384;
+const MIN_EXTRACTION_CTX_SIZE = 2048;
+const MAX_EXTRACTION_CTX_SIZE = 131072;
+const DEFAULT_EXTRACTION_MAX_TOKENS = 4000;
+const MIN_EXTRACTION_MAX_TOKENS = 100;
+const MAX_EXTRACTION_MAX_TOKENS = 32768;
+const DEFAULT_EXTRACTION_TIMEOUT_MS = 600000;
+const MIN_EXTRACTION_TIMEOUT_MINUTES = 1;
+const MAX_EXTRACTION_TIMEOUT_MINUTES = 1440;
+
+function clampIntegerDraft(value: string, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function timeoutMsToMinutes(value: number): number {
+  return Math.round(value / 60000);
+}
+
 const SUPERTONIC_LANGUAGES = [
   { code: "en", label: "English" },
   { code: "ko", label: "Korean" },
@@ -443,7 +463,12 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
   const [llamacppSlotBindingMode, setLlamacppSlotBindingMode] = useState<"auto" | "enforced">(settings.llamacppSlotBindingMode ?? "auto");
   const [llamacppStatus, setLlamacppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   // Extraction server settings
-  const [extractionCtxSize, setExtractionCtxSize] = useState(settings.extractionCtxSize ?? 16384);
+  const [extractionCtxSize, setExtractionCtxSize] = useState(settings.extractionCtxSize ?? DEFAULT_EXTRACTION_CTX_SIZE);
+  const [extractionCtxSizeDraft, setExtractionCtxSizeDraft] = useState(String(settings.extractionCtxSize ?? DEFAULT_EXTRACTION_CTX_SIZE));
+  const [extractionMaxTokens, setExtractionMaxTokens] = useState(settings.extractionMaxTokens ?? DEFAULT_EXTRACTION_MAX_TOKENS);
+  const [extractionMaxTokensDraft, setExtractionMaxTokensDraft] = useState(String(settings.extractionMaxTokens ?? DEFAULT_EXTRACTION_MAX_TOKENS));
+  const [extractionTimeoutMs, setExtractionTimeoutMs] = useState(settings.extractionTimeoutMs ?? DEFAULT_EXTRACTION_TIMEOUT_MS);
+  const [extractionTimeoutMinutesDraft, setExtractionTimeoutMinutesDraft] = useState(String(timeoutMsToMinutes(settings.extractionTimeoutMs ?? DEFAULT_EXTRACTION_TIMEOUT_MS)));
   // Reranker server settings
   const [rerankerEnabled, setRerankerEnabled] = useState(settings.rerankerEnabled ?? true);
   const [rerankerUrl, setRerankerUrl] = useState(settings.rerankerUrl || "http://localhost:8082");
@@ -1150,6 +1175,43 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
     }
   }, [refreshLlamaServers]);
 
+  const applyExtractionCtxSizeDraft = useCallback(() => {
+    const next = clampIntegerDraft(
+      extractionCtxSizeDraft,
+      extractionCtxSize,
+      MIN_EXTRACTION_CTX_SIZE,
+      MAX_EXTRACTION_CTX_SIZE,
+    );
+    setExtractionCtxSize(next);
+    setExtractionCtxSizeDraft(String(next));
+    handleLlamaServerSettings("extraction", { ctxSize: next });
+  }, [extractionCtxSize, extractionCtxSizeDraft, handleLlamaServerSettings]);
+
+  const applyExtractionMaxTokensDraft = useCallback(() => {
+    const next = clampIntegerDraft(
+      extractionMaxTokensDraft,
+      extractionMaxTokens,
+      MIN_EXTRACTION_MAX_TOKENS,
+      MAX_EXTRACTION_MAX_TOKENS,
+    );
+    setExtractionMaxTokens(next);
+    setExtractionMaxTokensDraft(String(next));
+    handleLlamaServerSettings("extraction", { maxTokens: next });
+  }, [extractionMaxTokens, extractionMaxTokensDraft, handleLlamaServerSettings]);
+
+  const applyExtractionTimeoutDraft = useCallback(() => {
+    const minutes = clampIntegerDraft(
+      extractionTimeoutMinutesDraft,
+      timeoutMsToMinutes(extractionTimeoutMs),
+      MIN_EXTRACTION_TIMEOUT_MINUTES,
+      MAX_EXTRACTION_TIMEOUT_MINUTES,
+    );
+    const next = minutes * 60000;
+    setExtractionTimeoutMs(next);
+    setExtractionTimeoutMinutesDraft(String(minutes));
+    handleLlamaServerSettings("extraction", { timeoutMs: next });
+  }, [extractionTimeoutMinutesDraft, extractionTimeoutMs, handleLlamaServerSettings]);
+
   // Assign a binary to a specific server slot
   const handleAssignBinary = useCallback(async (slotId: LlamaServerId, binaryDir: string) => {
     setLlamaServerMessage(null);
@@ -1473,6 +1535,25 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
   const handleSave = (): Settings => {
     const defaultPreset = presets.find((p) => p.isDefault);
     const effectivePrompt = defaultPreset ? defaultPreset.content.trim() : defaultSystemPrompt.trim();
+    const savedExtractionCtxSize = clampIntegerDraft(
+      extractionCtxSizeDraft,
+      extractionCtxSize,
+      MIN_EXTRACTION_CTX_SIZE,
+      MAX_EXTRACTION_CTX_SIZE,
+    );
+    const savedExtractionMaxTokens = clampIntegerDraft(
+      extractionMaxTokensDraft,
+      extractionMaxTokens,
+      MIN_EXTRACTION_MAX_TOKENS,
+      MAX_EXTRACTION_MAX_TOKENS,
+    );
+    const savedExtractionTimeoutMs =
+      clampIntegerDraft(
+        extractionTimeoutMinutesDraft,
+        timeoutMsToMinutes(extractionTimeoutMs),
+        MIN_EXTRACTION_TIMEOUT_MINUTES,
+        MAX_EXTRACTION_TIMEOUT_MINUTES,
+      ) * 60000;
     const newSettings: Settings = {
       ...settings,
       agentName: agentName.trim() || undefined,
@@ -1494,7 +1575,9 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
       llamacppUrl: llamacppUrl.trim() || undefined,
       llamacppSharesGpu,
       llamacppSlotBindingMode,
-      extractionCtxSize,
+      extractionCtxSize: savedExtractionCtxSize,
+      extractionMaxTokens: savedExtractionMaxTokens,
+      extractionTimeoutMs: savedExtractionTimeoutMs,
       rerankerEnabled,
       rerankerUrl: rerankerUrl.trim() || undefined,
       rerankerModelId: rerankerModelId.trim() || undefined,
@@ -2793,14 +2876,14 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
 	                                  <label className="block text-xs text-white/50 mb-1">Ctx size</label>
 	                                  <input
 	                                    type="number"
-	                                    value={extractionCtxSize}
-	                                    onChange={(e) => setExtractionCtxSize(Math.max(2048, parseInt(e.target.value) || 16384))}
-	                                    onBlur={() => handleLlamaServerSettings("extraction", { ctxSize: extractionCtxSize })}
-	                                    min={2048} max={131072} step={1024}
+	                                    value={extractionCtxSizeDraft}
+	                                    onChange={(e) => setExtractionCtxSizeDraft(e.target.value)}
+	                                    onBlur={applyExtractionCtxSizeDraft}
+	                                    min={MIN_EXTRACTION_CTX_SIZE} max={MAX_EXTRACTION_CTX_SIZE} step={1024}
 	                                    className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30"
 	                                  />
 	                                  <span className="text-xs text-white/30 ml-2">tokens</span>
-	                                </div>
+		                                </div>
 	                                <div className="flex-1">
 	                                  <label className="block text-xs text-white/50 mb-1">Model</label>
 	                                  {extractionServerModels.length > 0 && !extractionUseCustom ? (
@@ -3145,7 +3228,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
                                   );
                                 })()}
                               </div>
-                              <p className="text-xs text-white/30">Tiny CPU-only instance for generating short chat titles.</p>
+                              <p className="text-xs text-white/30">Tiny model for generating short chat titles.</p>
 	                            </div>
 	                          )}
 	                          {(server.id === "title-generation" || server.id === "extraction" || server.id === "reranker" || server.id === "embedding") && (
@@ -4848,6 +4931,45 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
 	            </div>
 	          </div>
 
+	          {/* Extraction Server Settings */}
+	          <div className="border-t border-white/10 pt-6">
+	            <h3 className="text-sm font-semibold text-white/80 mb-4">Server Settings</h3>
+
+	            <div className="space-y-4">
+	              <div>
+	                <label className="block text-sm font-medium text-white/60">Max output tokens</label>
+	                <div className="flex items-center gap-3 mt-1">
+	                  <input
+	                    type="number"
+	                    value={extractionMaxTokensDraft}
+	                    onChange={(e) => setExtractionMaxTokensDraft(e.target.value)}
+	                    onBlur={applyExtractionMaxTokensDraft}
+	                    min={MIN_EXTRACTION_MAX_TOKENS} max={MAX_EXTRACTION_MAX_TOKENS} step={100}
+	                    className="w-32 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                  />
+	                  <span className="text-xs text-white/30">tokens</span>
+	                </div>
+	                <p className="text-xs text-white/30 mt-1">Maximum output tokens per extraction call. Higher values allow more memories per call but increase cost.</p>
+	              </div>
+
+	              <div>
+	                <label className="block text-sm font-medium text-white/60">Timeout</label>
+	                <div className="flex items-center gap-3 mt-1">
+	                  <input
+	                    type="number"
+	                    value={extractionTimeoutMinutesDraft}
+	                    onChange={(e) => setExtractionTimeoutMinutesDraft(e.target.value)}
+	                    onBlur={applyExtractionTimeoutDraft}
+	                    min={MIN_EXTRACTION_TIMEOUT_MINUTES} max={MAX_EXTRACTION_TIMEOUT_MINUTES} step={1}
+	                    className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                  />
+	                  <span className="text-xs text-white/30">minutes</span>
+	                </div>
+	                <p className="text-xs text-white/30 mt-1">Abort extraction requests that take longer than this. Prevents stuck requests on large contexts.</p>
+	              </div>
+	            </div>
+	          </div>
+
 	          {/* Extraction Prompt */}
 	          <div id="extraction-prompt" className="border-t border-white/10 pt-6 space-y-3">
 	            <h3 className="text-sm font-semibold text-white/80 mb-1">Extraction Prompt</h3>
@@ -6022,7 +6144,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
                         color: ttsSettings.backend === "supertonic-3" ? `rgba(var(--theme-secondary-text))` : '',
                       }}
                     >
-                      Supertonic 3 (CPU)
+                      Supertonic 3
                     </button>
                   </Dropdown>
                   <p className="text-white/30 text-xs">
@@ -6030,7 +6152,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
                       ? "Lightweight (~100MB), mature ecosystem"
                       : ttsSettings.backend === "qwen3-tts"
                         ? "Advanced model with streaming support (~2GB)"
-                        : "Fast local CPU inference with multilingual Supertonic voices"}
+                        : "Fast inference with multilingual Supertonic voices"}
                   </p>
                   <div className={`rounded-lg border px-3 py-2 text-xs ${
                     ttsBackendStatusLoading
