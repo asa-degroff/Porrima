@@ -71,7 +71,7 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     role: "Router / chat completions",
     unitName: "llama-server.service",
     defaultUrl: "http://localhost:8080",
-    description: "Main llama.cpp router used by chat, vision, and model discovery.",
+    description: "Main llama.cpp router used by chat, vision, and model discovery",
     settingsModelKey: "defaultModelId",
   },
   extraction: {
@@ -81,7 +81,7 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     unitName: "extraction-model.service",
     unitNameCandidates: ["extraction-model.service", "llama-extraction.service"],
     defaultUrl: "http://localhost:8083",
-    description: "Dedicated llama.cpp instance for memory extraction and background enrichment.",
+    description: "Memory extraction model",
     settingsModelKey: "extractionModelId",
   },
   reranker: {
@@ -90,7 +90,7 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     role: "Cross-encoder rerank",
     unitName: "reranker.service",
     defaultUrl: "http://localhost:8082",
-    description: "CPU-oriented llama.cpp reranker used by memory retrieval.",
+    description: "Cross-encoder reranker for memory retrieval",
     settingsModelKey: "rerankerModelId",
   },
   embedding: {
@@ -100,7 +100,7 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     unitName: "embedding-model.service",
     unitNameCandidates: ["embedding-model.service", "embedding-server.service", "llama-embedding.service", "llama-embedding-server.service"],
     defaultUrl: "http://localhost:8084",
-    description: "Optional llama.cpp embedding server for memories and image corpus vectors.",
+    description: "Embedding server for vectorizing memories",
     settingsModelKey: "embeddingModel",
   },
   "title-generation": {
@@ -109,7 +109,7 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     role: "Chat titles",
     unitName: "title-generation.service",
     defaultUrl: "http://localhost:8085",
-    description: "Tiny CPU-only llama.cpp instance for generating short chat titles.",
+    description: "Generates titles for the chat list and message summaries for notifications",
     settingsModelKey: "titleGenerationModelId",
   },
 };
