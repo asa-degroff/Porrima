@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isSubstantiveForPreCompactionExtraction,
   parseExtractionResponse,
+  resolveEffectiveExtractionModelId,
 } from "../services/memory-extraction.js";
 import type { ChatMessage } from "../types.js";
 
@@ -107,5 +108,18 @@ describe("isSubstantiveForPreCompactionExtraction", () => {
     expect(isSubstantiveForPreCompactionExtraction(base({ _isCompactionSummary: true }))).toBe(false);
     expect(isSubstantiveForPreCompactionExtraction(base({ _outOfContext: true }))).toBe(false);
     expect(isSubstantiveForPreCompactionExtraction(base({ role: "system" }))).toBe(false);
+  });
+});
+
+describe("resolveEffectiveExtractionModelId", () => {
+  it("uses the dedicated extraction model when an extraction URL is configured", () => {
+    expect(resolveEffectiveExtractionModelId("Qwen3.6-27B-Q5_K_M", {
+      extractionModelUrl: "http://127.0.0.1:8083",
+      extractionModelId: "Qwen3.5-4B-IQ4_NL.gguf",
+    })).toBe("Qwen3.5-4B-IQ4_NL");
+  });
+
+  it("falls back to the caller model when no dedicated extraction URL is configured", () => {
+    expect(resolveEffectiveExtractionModelId("Qwen3.6-27B-Q5_K_M", {})).toBe("Qwen3.6-27B-Q5_K_M");
   });
 });

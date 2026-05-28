@@ -18,7 +18,7 @@ import { invalidateMemoriesCache } from "./memory-context.js";
 import { startExtractionRun, type ExtractionSupersessionResolution } from "./memory-extraction-observability.js";
 import { recordModelStats } from "./model-stats.js";
 import type { LlamaTimings } from "./model-stats.js";
-import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat } from "../types.js";
+import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat, Settings } from "../types.js";
 import { appDataPath } from "./paths.js";
 
 const LOG_DIR = appDataPath("logs");
@@ -78,6 +78,20 @@ export function isChatActive(chatId: string): boolean {
   return _activeChats.has(chatId);
 }
 
+export function resolveEffectiveExtractionModelId(
+  requestedModelId: string,
+  settings: Pick<Settings, "extractionModelId" | "extractionModelUrl">,
+): string {
+  if (settings.extractionModelUrl) {
+    return normalizeRouterModelId(settings.extractionModelId || "extraction");
+  }
+  return requestedModelId;
+}
+
+async function getEffectiveExtractionModelId(requestedModelId: string): Promise<string> {
+  return resolveEffectiveExtractionModelId(requestedModelId, await getSettings());
+}
+
 export function hasActiveChats(): boolean {
   return _activeChats.size > 0;
 }
@@ -107,7 +121,7 @@ export function computeExtractionInputBudget(
   opts?: { chunkOverheadChars?: number },
 ): { maxInputChars: number; sysPromptTokens: number; inputBudgetTokens: number } {
   const sysPromptTokens = estimateTokensConservative(systemPrompt);
-  const outputTokens = 2000;   // matches max_tokens in the request body
+  const outputTokens = 4000;   // matches max_tokens in the request body
   const safetyMargin = 512;    // absorbs small under-estimation
   const overheadChars = opts?.chunkOverheadChars ?? 0;
   const overheadTokens = Math.ceil(overheadChars / 3);
@@ -223,10 +237,9 @@ async function callExtractionLLM(
       // extraction model and ctx-size. Single-model mode returns "not-router" and
       // we fall through to the chat completion as before. normalizeRouterModelId
       // strips legacy `.gguf` suffixes that single-model launches used to carry.
-      const extractionModelId = normalizeRouterModelId(settings.extractionModelId || "extraction");
+      const extractionModelId = resolveEffectiveExtractionModelId(modelId, settings);
       await ensureRouterModelLoaded(extractionUrl, extractionModelId, { contextWindow: ctxSize });
 
-      // Direct call to dedicated extraction endpoint (CPU-only, no provider pipeline)
       const requestSignal = signal ?? AbortSignal.timeout(600_000);
       const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
         method: "POST",
@@ -237,8 +250,8 @@ async function callExtractionLLM(
             { role: "system", content: systemPrompt },
             { role: "user", content: truncatedContent },
           ],
-          max_tokens: 2000,
-          temperature: 0.3,
+          max_tokens: 4000,
+          temperature: 0.6,
           stream: true,
         }),
         signal: requestSignal,
@@ -1398,11 +1411,12 @@ export async function extractMemories(
   const extractionPrompt = `User message: ${userMsg}\n\nAssistant response: ${assistantMsg}`;
   const systemPrompt = await buildExtractionSystemPrompt(projectId);
   const chat = await getChat(chatId).catch(() => null);
+  const effectiveModelId = await getEffectiveExtractionModelId(modelId);
   const runHandle = startExtractionRun({
     trigger: "immediate",
     chatId,
     chatTitle: chat?.title,
-    model: modelId,
+    model: effectiveModelId,
     priorMemoryCount: 0,
     messages: [
       { role: "user", content: userMsg },
@@ -1566,11 +1580,12 @@ export async function preCompactionFlush(
 
   const systemPrompt = await buildPreCompactionSystemPrompt();
   const chat = await getChat(chatId).catch(() => null);
+  const effectiveModelId = await getEffectiveExtractionModelId(modelId);
   const runHandle = startExtractionRun({
     trigger: "pre-compaction",
     chatId,
     chatTitle: chat?.title,
-    model: modelId,
+    model: effectiveModelId,
     priorMemoryCount: 0,
     messages: substantiveMessages.map((m) => ({ role: m.role, content: m.content })),
     systemPrompt,
@@ -1866,12 +1881,13 @@ export async function extractDelayedMemories(
     .map(({ message, index }) => formatMessageForExtraction(message, index))
     .join("\n\n---\n\n")}`;
   const systemPrompt = await buildDelayedExtractionSystemPrompt();
+  const effectiveModelId = await getEffectiveExtractionModelId(modelId);
 
   const runHandle = startExtractionRun({
     trigger: "delayed",
     chatId,
     chatTitle: chat.title,
-    model: modelId,
+    model: effectiveModelId,
     priorMemoryCount: context.previousMemories.length,
     messages: context.messages.map(({ message }) => ({
       role: message.role,
