@@ -5,6 +5,9 @@ import {
   listBackups,
   migrate,
   restoreBackup,
+  getMigrationProgress,
+  clearMigrationProgress,
+  persistMigrationError,
 } from "../services/embedding-migration.js";
 
 const router = Router();
@@ -46,6 +49,24 @@ router.post("/restore/:id", async (req, res) => {
   }
 });
 
+router.get("/progress", async (_req, res) => {
+  try {
+    const progress = await getMigrationProgress();
+    res.json({ progress });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+router.post("/progress/clear", async (_req, res) => {
+  try {
+    await clearMigrationProgress();
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
 router.post("/migrate", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -62,6 +83,8 @@ router.post("/migrate", async (req, res) => {
     send("complete", result);
   } catch (e: any) {
     send("error", { message: e?.message || String(e) });
+    // Persist error state so client can see it on reconnect.
+    await persistMigrationError(e?.message || String(e));
   } finally {
     res.end();
   }

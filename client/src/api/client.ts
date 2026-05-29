@@ -2214,6 +2214,22 @@ export function runEmbeddingMigration(cb: EmbeddingMigrationCallbacks): () => vo
   return () => controller.abort();
 }
 
+export interface EmbeddingMigrationProgressState {
+  startedAt: string;
+  progress: MigrationProgressEvent;
+}
+
+export async function getEmbeddingMigrationProgress(): Promise<EmbeddingMigrationProgressState | null> {
+  const res = await apiFetch(`${BASE}/embedding/migration/progress`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.progress ?? null;
+}
+
+export async function clearEmbeddingMigrationProgress(): Promise<void> {
+  await apiFetch(`${BASE}/embedding/migration/progress/clear`, { method: "POST" });
+}
+
 export interface AgentSnapshot {
   id: string;
   kind: "agent-snapshot";

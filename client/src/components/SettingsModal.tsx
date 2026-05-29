@@ -18,8 +18,8 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, ModelsDirConflictError, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, getLlamaScanPaths, previewLlamaScanPath, addLlamaScanPath, removeLlamaScanPath, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId, type RuntimeModelApplyId } from "../api/client";
-import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, getEmbeddingMigrationProgress, clearEmbeddingMigrationProgress, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, ModelsDirConflictError, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, getLlamaScanPaths, previewLlamaScanPath, addLlamaScanPath, removeLlamaScanPath, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId, type RuntimeModelApplyId } from "../api/client";
+import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, EmbeddingMigrationProgressState, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
 import type { ExtractionPromptStore } from "../api/extraction-prompt";
@@ -2268,8 +2268,10 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     }
   }, [refreshAgentSnapshots]);
 
-  const handleRunMigration = useCallback(() => {
+  const handleRunMigration = useCallback(async () => {
     setConfirmMigrate(false);
+    // Clear any stale server-side progress before starting fresh.
+    await clearEmbeddingMigrationProgress();
     setMigrationRunning(true);
     setMigrationError(null);
     setMigrationResult(null);
@@ -2295,9 +2297,76 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     setMigrationError("Cancelled");
   }, []);
 
+  const handleDismissMigrationError = useCallback(async () => {
+    await clearEmbeddingMigrationProgress();
+    setMigrationError(null);
+  }, []);
+
   useEffect(() => {
     return () => {
       migrationAbortRef.current?.();
+    };
+  }, []);
+
+  // Restore migration progress from server on mount, poll if in-flight.
+  useEffect(() => {
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    const restoreProgress = async () => {
+      try {
+        const state = await getEmbeddingMigrationProgress();
+        if (!state) {
+          // No persisted state — nothing to restore.
+          return;
+        }
+
+        if (state.progress.phase === "error") {
+          // Show stale error, allow user to clear.
+          setMigrationError(state.progress.message ?? "Migration failed");
+          setMigrationRunning(false);
+          setMigrationProgress(null);
+        } else if (state.progress.phase === "done") {
+          // Shouldn't happen (server clears on done), but handle gracefully.
+          setMigrationProgress(state.progress);
+          setMigrationRunning(false);
+        } else {
+          // In-progress — restore state and start polling.
+          setMigrationProgress(state.progress);
+          setMigrationRunning(true);
+          setMigrationError(null);
+          setMigrationResult(null);
+
+          pollTimer = setInterval(async () => {
+            try {
+              const updated = await getEmbeddingMigrationProgress();
+              if (!updated) {
+                // Server cleared progress — migration completed while we were away.
+                if (pollTimer) clearInterval(pollTimer);
+                pollTimer = null;
+                setMigrationRunning(false);
+                setMigrationProgress({ phase: "done", message: "Completed" });
+              } else if (updated.progress.phase === "error") {
+                if (pollTimer) clearInterval(pollTimer);
+                pollTimer = null;
+                setMigrationRunning(false);
+                setMigrationError(updated.progress.message ?? "Migration failed");
+              } else {
+                setMigrationProgress(updated.progress);
+              }
+            } catch {
+              // Ignore poll errors — network blip.
+            }
+          }, 1000);
+        }
+      } catch {
+        // Ignore fetch errors on mount.
+      }
+    };
+
+    restoreProgress();
+
+    return () => {
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, []);
 
@@ -5671,8 +5740,16 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 
 	                {migrationError && (
 	                  <div className="text-xs p-2 rounded bg-red-500/10 border border-red-400/20 text-red-300/90">
-	                    {migrationError}
-	                  </div>
+                    <div className="flex justify-between items-start gap-2">
+                      <span>{migrationError}</span>
+                      <button
+                        onClick={handleDismissMigrationError}
+                        className="text-[11px] text-red-400/70 hover:text-red-400 shrink-0"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
 	                )}
 
 	                {migrationResult && !migrationRunning && (

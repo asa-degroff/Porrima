@@ -39,6 +39,61 @@ import { appDataPath } from "./paths.js";
 const BACKUPS_DIR = appDataPath("backups");
 const EMBED_BATCH_SIZE = 16;
 
+// Persistent migration progress — survives client reconnects.
+// Stored as JSON file so a new process can pick it up, plus in-memory for speed.
+const MIGRATION_PROGRESS_FILE = join(BACKUPS_DIR, "migration-progress.json");
+
+interface MigrationProgressState {
+  startedAt: string;
+  progress: MigrationProgress;
+}
+
+let inMemoryProgress: MigrationProgressState | null = null;
+
+async function persistProgress(state: MigrationProgressState | null): Promise<void> {
+  try {
+    inMemoryProgress = state;
+    if (state) {
+      await writeFile(MIGRATION_PROGRESS_FILE, JSON.stringify(state), "utf-8");
+    } else {
+      if (existsSync(MIGRATION_PROGRESS_FILE)) {
+        await rm(MIGRATION_PROGRESS_FILE, { force: true });
+      }
+    }
+  } catch (e) {
+    console.warn("[migration] persistProgress failed:", e);
+  }
+}
+
+export async function getMigrationProgress(): Promise<MigrationProgressState | null> {
+  // Return in-memory if available
+  if (inMemoryProgress) return inMemoryProgress;
+  // Otherwise load from disk
+  try {
+    if (existsSync(MIGRATION_PROGRESS_FILE)) {
+      const raw = await readFile(MIGRATION_PROGRESS_FILE, "utf-8");
+      const state = JSON.parse(raw) as MigrationProgressState;
+      inMemoryProgress = state;
+      return state;
+    }
+  } catch (e) {
+    console.warn("[migration] getMigrationProgress load failed:", e);
+  }
+  return null;
+}
+
+export async function clearMigrationProgress(): Promise<void> {
+  await persistProgress(null);
+}
+
+export async function persistMigrationError(message: string): Promise<void> {
+  const state = inMemoryProgress || { startedAt: new Date().toISOString(), progress: { phase: "error" as const } };
+  await persistProgress({
+    ...state,
+    progress: { ...state.progress, phase: "error", message },
+  });
+}
+
 export interface BackupManifest {
   id: string;
   createdAt: string;
@@ -198,7 +253,14 @@ export async function migrate(
 ): Promise<{ memories: number; corpus: number; dimension: number }> {
   const cfg = await getEmbeddingConfig();
 
-  onProgress({ phase: "probe", message: `Probing ${cfg.model}` });
+  const startedAt = new Date().toISOString();
+
+  const wrapProgress = (p: MigrationProgress) => {
+    persistProgress({ startedAt, progress: p });
+    onProgress(p);
+  };
+
+  wrapProgress({ phase: "probe", message: `Probing ${cfg.model}` });
   const probe = await embedBatchWithConfig(cfg, ["migration probe"]);
   if (!probe.length || !probe[0].length) {
     throw new Error("Embedding probe returned no vector");
@@ -215,7 +277,7 @@ export async function migrate(
     cfg,
     memRows.map((r) => r.text),
     (processed) =>
-      onProgress({ phase: "memories", processed, total: memRows.length })
+      wrapProgress({ phase: "memories", processed, total: memRows.length })
   );
 
   // Gather corpus entries that have prompt text
@@ -230,10 +292,10 @@ export async function migrate(
     cfg,
     corpusRows.map((r) => r.prompt),
     (processed) =>
-      onProgress({ phase: "corpus", processed, total: corpusRows.length })
+      wrapProgress({ phase: "corpus", processed, total: corpusRows.length })
   );
 
-  onProgress({ phase: "commit", message: "Rebuilding vector tables" });
+  wrapProgress({ phase: "commit", message: "Rebuilding vector tables" });
 
   rebuildVecMemoriesTable(dimension);
   rebuildCorpusVecTable(dimension);
@@ -263,7 +325,12 @@ export async function migrate(
   const settings = await getSettings();
   await saveSettings({ ...settings, embeddingDimension: dimension });
 
-  onProgress({ phase: "done", message: `Re-embedded ${memRows.length} memories + ${corpusRows.length} corpus entries at dim ${dimension}` });
+  const doneMsg = `Re-embedded ${memRows.length} memories + ${corpusRows.length} corpus entries at dim ${dimension}`;
+  wrapProgress({ phase: "done", message: doneMsg });
+
+  // Clear persisted progress on success so a fresh open shows clean state.
+  await persistProgress(null);
+
   return { memories: memRows.length, corpus: corpusRows.length, dimension };
 }
 
