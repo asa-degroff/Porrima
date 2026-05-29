@@ -48,6 +48,7 @@ export function useStreamingTTS() {
   const firstChunkRef = useRef(true);
   const isStreamEndedRef = useRef(false);
   const isPausedRef = useRef(false);
+  const onEndedRef = useRef<(() => void) | null>(null);
 
   const prepareChunk = useCallback((base64Wav: string): Uint8Array<ArrayBuffer> => {
     const bytes = decodeBase64(base64Wav);
@@ -179,6 +180,7 @@ export function useStreamingTTS() {
     });
     audio.addEventListener("ended", () => {
       setState((prev) => ({ ...prev, isPlaying: false, isPaused: false }));
+      onEndedRef.current?.();
     });
   }, [flushPending]);
 
@@ -232,11 +234,16 @@ export function useStreamingTTS() {
     flushPending();
   }, [flushPending]);
 
+  const setOnEnded = useCallback((cb: (() => void) | null) => {
+    onEndedRef.current = cb;
+  }, []);
+
   const reset = useCallback(() => {
     pendingChunksRef.current = [];
     firstChunkRef.current = true;
     isStreamEndedRef.current = false;
     isPausedRef.current = false;
+    onEndedRef.current = null;
     disposeCurrentStream();
     setState({
       isReady: false,
@@ -254,6 +261,7 @@ export function useStreamingTTS() {
     resume,
     endStream,
     reset,
+    setOnEnded,
     audio: audioRef.current,
   };
 }

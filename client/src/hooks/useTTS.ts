@@ -108,6 +108,11 @@ export function useTTS() {
   const onPlaybackEndRef = useRef<(() => void) | undefined>(undefined);
   // While snapshot playback is active, don't re-init the live queue
   const snapshotPlayingRef = useRef(false);
+  // Tracks whether the live agent stream ended while snapshot playback was active
+  const liveStreamDoneDuringSnapshotRef = useRef(false);
+  // Buffers live audio chunks that arrive during snapshot playback, so they can
+  // be played after the snapshot finishes instead of being dropped.
+  const pendingLiveChunksRef = useRef<TTSQueueItem[]>([]);
 
   // Fetch TTS settings from server on mount
   useEffect(() => {
@@ -152,10 +157,6 @@ export function useTTS() {
 
     audio.addEventListener("ended", () => {
       onAudioEndedRef.current();
-      // Fire the playback-end callback for single-mode
-      const cb = onPlaybackEndRef.current;
-      onPlaybackEndRef.current = undefined;
-      if (cb) cb();
     });
 
     audio.addEventListener("timeupdate", () => {
@@ -238,11 +239,13 @@ export function useTTS() {
     objectAudioUrlsRef.current.clear();
 
     chunkQueueRef.current = [];
+    pendingLiveChunksRef.current = [];
     chunkStreamDoneRef.current = true;
     liveAgentAudioActiveRef.current = false;
     liveAgentChunkIndexRef.current = 0;
     chunkAudioActiveRef.current = false;
     chunkModeRef.current = null;
+    liveStreamDoneDuringSnapshotRef.current = false;
     loadingRef.current = false;
   }, []);
 
@@ -252,9 +255,11 @@ export function useTTS() {
     cleanupLiveAudio();
     onPlaybackEndRef.current = undefined;
     snapshotPlayingRef.current = false;
+    liveStreamDoneDuringSnapshotRef.current = false;
     onAudioEndedRef.current = () => {
       setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false, isLoading: false }));
     };
+    streamingTTS.setOnEnded(null);
     streamingTTS.reset();
   }, [cleanupLiveAudio, streamingTTS]);
 
@@ -280,6 +285,13 @@ export function useTTS() {
           isLoading: false,
           currentTime: 0,
         }));
+        // URL-mode playback finished — fire onPlaybackEnd if set (snapshot→live handoff)
+        if (onPlaybackEndRef.current) {
+          snapshotPlayingRef.current = false;
+          const cb = onPlaybackEndRef.current;
+          onPlaybackEndRef.current = undefined;
+          if (cb) cb();
+        }
       } else {
         setPlaybackState((prev) => ({
           ...prev,
@@ -510,17 +522,20 @@ export function useTTS() {
           if (chunkModeRef.current === "data") {
             streamingTTS.endStream();
             setPlaybackState((prev) => ({ ...prev, isLoading: false }));
+            // Data-mode audio finishes asynchronously after endStream.
+            // Fire onPlaybackEnd only when playback actually completes.
+            streamingTTS.setOnEnded(() => {
+              snapshotPlayingRef.current = false;
+              const cb = onPlaybackEndRef.current;
+              onPlaybackEndRef.current = undefined;
+              streamingTTS.setOnEnded(null);
+              if (cb) cb();
+            });
           } else {
             if (!chunkAudioActiveRef.current && chunkQueueRef.current.length === 0) {
               void playQueuedChunk(playId);
             }
           }
-
-          // Fire onPlaybackEnd for chunked-stream mode when done
-          const cb = onPlaybackEndRef.current;
-          onPlaybackEndRef.current = undefined;
-          snapshotPlayingRef.current = false;
-          if (cb) cb();
 
           return;
         }
@@ -578,6 +593,20 @@ export function useTTS() {
         // Store the callback on the ref
         onPlaybackEndRef.current = options?.onPlaybackEnd;
         snapshotPlayingRef.current = true;
+
+        // Single-mode playback ends via the audio element 'ended' event.
+        // Hook onPlaybackEnd into onAudioEndedRef so it fires when playback
+        // actually completes (not sooner), and snapshotPlayingRef is cleared
+        // at the exact right moment.
+        const singlePlayId = playId;
+        onAudioEndedRef.current = () => {
+          if (singlePlayId !== playIdRef.current) return;
+          setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false, isLoading: false }));
+          snapshotPlayingRef.current = false;
+          const cb = onPlaybackEndRef.current;
+          onPlaybackEndRef.current = undefined;
+          if (cb) cb();
+        };
 
         loadingRef.current = true;
         setPlaybackState((prev) => ({
@@ -734,28 +763,40 @@ export function useTTS() {
   }, [settings.backend]);
 
   /**
-   * Flush the live chunk queue and kick off playback of whatever is queued.
-   * Used after a "read now" snapshot finishes, to hand off to live streaming audio.
+   * Hand off from snapshot ("read now") playback to live streaming audio.
+   * Called when snapshot playback naturally ends while the agent is still streaming.
+   * Transfers any buffered live chunks to the active queue and starts playback.
    */
   const resumeLivePlayback = useCallback(() => {
-    // Flush any chunks that accumulated during snapshot playback
-    for (const item of chunkQueueRef.current) {
-      if (item.audioUrl.startsWith("blob:")) {
-        URL.revokeObjectURL(item.audioUrl);
-        objectAudioUrlsRef.current.delete(item.audioUrl);
-      }
+    snapshotPlayingRef.current = false;
+
+    // Transfer live audio chunks that were buffered during snapshot playback
+    // so they can be played instead of being lost.
+    chunkQueueRef.current.push(...pendingLiveChunksRef.current);
+    pendingLiveChunksRef.current = [];
+
+    // If the agent stream ended during snapshot playback, mark the stream as
+    // done and don't expect more chunks.
+    if (liveStreamDoneDuringSnapshotRef.current) {
+      liveStreamDoneDuringSnapshotRef.current = false;
+      chunkStreamDoneRef.current = true;
+      liveAgentAudioActiveRef.current = false;
+    } else {
+      // Agent is still streaming — expect more live chunks.
+      chunkStreamDoneRef.current = false;
+      liveAgentAudioActiveRef.current = true;
     }
-    chunkQueueRef.current = [];
-    chunkStreamDoneRef.current = false;
-    liveAgentAudioActiveRef.current = true;
+
     liveAgentChunkIndexRef.current = 0;
     chunkModeRef.current = "url";
+    chunkAudioActiveRef.current = false;
 
+    const hasChunks = chunkQueueRef.current.length > 0;
     setPlaybackState((prev) => ({
       ...prev,
       isPlaying: false,
       isPaused: false,
-      isLoading: true,
+      isLoading: hasChunks || !chunkStreamDoneRef.current,
       currentTime: 0,
       duration: 0,
       audioUrl: null,
@@ -763,7 +804,15 @@ export function useTTS() {
       totalChunks: 0,
       mode: "chunked-url" as const,
     }));
-  }, []);
+
+    // Kick off playback of any buffered live chunks
+    if (hasChunks && !chunkAudioActiveRef.current) {
+      void playQueuedChunk(playIdRef.current);
+    } else if (!hasChunks && chunkStreamDoneRef.current) {
+      // No chunks to play and the agent stream is already done
+      setPlaybackState((prev) => ({ ...prev, isPlaying: false, isLoading: false }));
+    }
+  }, [playQueuedChunk]);
 
   /**
    * Handle an incoming live audio chunk from agent streaming.
@@ -780,8 +829,19 @@ export function useTTS() {
     sampleRate: number;
     duration?: number;
   }) => {
-    // Don't re-init the live queue while snapshot playback is active
-    if (snapshotPlayingRef.current) return;
+    // Buffer live chunks during snapshot playback instead of dropping them,
+    // so they can be played after the snapshot-to-live handoff.
+    if (snapshotPlayingRef.current) {
+      const audioUrl = audioBlobUrlFromBase64(chunk.data, chunk.mimeType || "audio/wav");
+      objectAudioUrlsRef.current.add(audioUrl);
+      pendingLiveChunksRef.current.push({
+        audioUrl,
+        duration: chunk.duration ?? 0,
+        index: chunk.index ?? liveAgentChunkIndexRef.current++,
+        totalChunks: chunk.totalChunks ?? 0,
+      });
+      return;
+    }
 
     if (!liveAgentAudioActiveRef.current) {
       playIdRef.current++;
@@ -820,6 +880,13 @@ export function useTTS() {
   }, [playQueuedChunk, resetPlayback]);
 
   const handleAgentAudioDone = useCallback(() => {
+    // If snapshot playback is active, defer the done signal.
+    // resumeLivePlayback will check this flag and mark the stream as done.
+    if (snapshotPlayingRef.current) {
+      liveStreamDoneDuringSnapshotRef.current = true;
+      return;
+    }
+
     chunkStreamDoneRef.current = true;
     liveAgentAudioActiveRef.current = false;
     setPlaybackState((prev) => ({ ...prev, isLoading: false }));
