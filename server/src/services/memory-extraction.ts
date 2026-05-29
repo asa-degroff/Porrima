@@ -226,8 +226,8 @@ async function callExtractionLLM(
 
       if (inputBudgetTokens < 1000) {
         console.warn(
-          `[memory] Extraction input budget very small (${inputBudgetTokens} tok, sysPrompt=${sysPromptTokens} tok, ctx=${ctxSize}). ` +
-          `System prompt may be too large — consider trimming memory blocks.`,
+          `[memory] Extraction input budget very small (${inputBudgetTokens} tok, sysPrompt=${sysPromptTokens} tok, ctx=${ctxSize}, maxTokens=${maxTokens}). ` +
+          `System prompt may be too large — consider trimming memory blocks, or reducing extraction max output tokens.`,
         );
       }
 
@@ -449,20 +449,45 @@ IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
  */
 const SYS_PROMPT_CTX_RATIO = 0.40;
 
+/** Minimum input tokens reserved for user content when capping the system
+ * prompt budget. If the output-token reservation + system prompt would leave
+ * less than this for user content, blocks are trimmed more aggressively. */
+const MIN_INPUT_TOKENS = 1000;
+
 /**
- * Compute per-block char allotment that keeps the system prompt under
- * SYS_PROMPT_CTX_RATIO of the extraction context window. Static prefix/
- * instructions are fixed; blocks are the only variable part we can trim.
+ * Compute per-block char allotment that keeps the system prompt within budget.
+ *
+ * The system prompt budget is the lesser of:
+ *   - SYS_PROMPT_CTX_RATIO of the context window (40%), and
+ *   - What remains after reserving output tokens, safety margin, and a
+ *     MIN_INPUT_TOKENS floor for user content.
+ *
+ * When maxTokens is small (e.g. default 4K on a 16K context), the ratio cap
+ * (40%) binds. When maxTokens is raised, the output reservation tightens the
+ * block budget so blocks don't crowd out user content.
+ *
+ * Static prefix/instructions are fixed; blocks are the only variable part we
+ * can trim.
  */
 async function computeBlockCharBudget(
   blockCount: number,
   staticChars: number,
   ctxSize: number,
+  maxTokens: number = DEFAULT_EXTRACTION_MAX_TOKENS,
 ): Promise<number> {
   if (blockCount === 0) return 0;
   const maxBlockChars = await getMaxBlockChars();
-  // sysPrompt target tokens = ctxSize * ratio; × 3 chars/token (conservative).
-  const sysPromptCharBudget = Math.floor(ctxSize * SYS_PROMPT_CTX_RATIO * 3);
+  const safetyMarginTokens = 512;
+
+  // Token budget for the entire system prompt (blocks + static prefix/instructions).
+  // Capped both by the ratio and by what remains after output + safety + min input.
+  const sysPromptTokenBudget = Math.min(
+    ctxSize * SYS_PROMPT_CTX_RATIO,
+    ctxSize - maxTokens - safetyMarginTokens - MIN_INPUT_TOKENS,
+  );
+  // Convert to chars using our conservative 3 chars/token estimate.
+  const sysPromptCharBudget = Math.max(0, Math.floor(sysPromptTokenBudget * 3));
+
   const remaining = Math.max(0, sysPromptCharBudget - staticChars);
   const perBlock = Math.floor(remaining / blockCount);
   // Never let per-block drop below a useful minimum, and never exceed the
@@ -474,6 +499,7 @@ async function computeBlockCharBudget(
 async function buildExtractionSystemPrompt(projectId?: string): Promise<string> {
   const settings = await getSettings();
   const ctxSize = settings.extractionCtxSize ?? 16384;
+  const { maxTokens } = normalizeExtractionRequestSettings(settings);
   const prefix = await loadExtractionPrefix();
 
   // Include loaded block summaries so extraction avoids redundant facts.
@@ -486,7 +512,7 @@ async function buildExtractionSystemPrompt(projectId?: string): Promise<string> 
     if (allBlocks.length > 0) {
       const staticChars =
         prefix.length + EXTRACTION_INSTRUCTIONS.length + 400;
-      const perBlockChars = await computeBlockCharBudget(allBlocks.length, staticChars, ctxSize);
+      const perBlockChars = await computeBlockCharBudget(allBlocks.length, staticChars, ctxSize, maxTokens);
       const summaries = allBlocks
         .map((b) => `- ${b.name}: ${b.content.slice(0, perBlockChars)}`)
         .join("\n");
