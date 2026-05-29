@@ -454,9 +454,10 @@ export function NotebookView({
           <h2 className="text-sm font-medium text-white/80 truncate">Notebooks</h2>
         </div>
 
-        {/* Center: inline search bar (desktop only) */}
-        <div className="hidden md:flex items-center gap-2 flex-1 min-w-0">
-          <div className="relative w-full max-w-xs">
+        {/* Right: search + actions */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Inline search bar (desktop only) */}
+          <div className="hidden md:block relative w-[200px]">
             <input
               ref={searchInputRef}
               type="text"
@@ -484,10 +485,6 @@ export function NotebookView({
               </button>
             )}
           </div>
-        </div>
-
-        {/* Right: actions */}
-        <div className="flex items-center gap-2 shrink-0">
           {/* Search toggle - mobile only */}
           <button
             onClick={toggleSearch}
