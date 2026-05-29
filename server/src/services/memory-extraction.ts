@@ -19,6 +19,7 @@ import { startExtractionRun, type ExtractionSupersessionResolution } from "./mem
 import { recordModelStats } from "./model-stats.js";
 import type { LlamaTimings } from "./model-stats.js";
 import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat, Settings } from "../types.js";
+import { VALID_MEMORY_CATEGORIES, FALLBACK_MEMORY_CATEGORY } from "../types.js";
 import { appDataPath } from "./paths.js";
 import { DEFAULT_EXTRACTION_MAX_TOKENS, normalizeExtractionRequestSettings } from "./extraction-settings.js";
 
@@ -592,12 +593,20 @@ export function parseExtractionResponse(text: string): ExtractedFact[] {
       return null;
     }
     if (!Array.isArray(arr)) return [];
-    return arr.filter(
-      (f: any) =>
+    return arr
+      .filter((f: any) =>
         typeof f.text === "string" &&
-        f.text.length > 0 &&
-        ["preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"].includes(f.category)
-    );
+        f.text.length > 0
+      )
+      .map((f: any) => {
+        const category = VALID_MEMORY_CATEGORIES.includes(f.category)
+          ? f.category as MemoryCategory
+          : FALLBACK_MEMORY_CATEGORY;
+        if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
+          console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
+        }
+        return { text: f.text, category, importance: f.importance };
+      });
   };
 
   // Prefer the last valid array. The final answer is usually after any

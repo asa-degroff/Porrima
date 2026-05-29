@@ -17,6 +17,7 @@ import { searchChatMessages, getChatMessageRange, getChatTitle, getArchive, sear
 import { dedupAndSave } from "./memory-extraction.js";
 import type { Tool, ToolCall } from "@mariozechner/pi-ai";
 import type { MemoryCategory } from "../types.js";
+import { VALID_MEMORY_CATEGORIES } from "../types.js";
 import { StringEnum } from "@mariozechner/pi-ai";
 
 export const MEMORY_TOOLS: Tool[] = [
@@ -27,7 +28,7 @@ export const MEMORY_TOOLS: Tool[] = [
     parameters: Type.Object({
       text: Type.String({ description: "The fact to remember" }),
       category: StringEnum(
-        ["preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"] as const,
+        VALID_MEMORY_CATEGORIES as unknown as readonly [string, ...string[]],
         { description: "Category of the memory" }
       ),
       importance: Type.Number({

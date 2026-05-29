@@ -431,6 +431,16 @@ export interface Settings {
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
 
+/** Canonical list of valid memory categories. Use this for validation instead of
+ *  hardcoding the list — it ensures the extraction parser, runtime tools, and type
+ *  definitions stay in sync. */
+export const VALID_MEMORY_CATEGORIES: readonly MemoryCategory[] = [
+  "preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection",
+];
+
+/** Fallback category assigned when the extraction model produces an invalid category. */
+export const FALLBACK_MEMORY_CATEGORY: MemoryCategory = "note";
+
 export type MemorySourceType = 'chat' | 'chat_delayed' | 'chat_immediate' | 'notebook' | 'explicit' | 'synthesis';
 
 export interface Memory {
