@@ -48,6 +48,14 @@ interface TTSQueueItem {
   totalChunks: number;
 }
 
+interface PlayOptions {
+  voice?: string;
+  speed?: number;
+  pitch?: number;
+  /** Called when playback naturally ends (not on abort/reset). */
+  onPlaybackEnd?: () => void;
+}
+
 function audioBlobUrlFromBase64(base64Audio: string, mimeType = "audio/wav"): string {
   const binary = atob(base64Audio);
   const bytes = new Uint8Array(binary.length);
@@ -96,6 +104,10 @@ export function useTTS() {
   const onAudioEndedRef = useRef<() => void>(() => {
     setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false, isLoading: false }));
   });
+  // Ref for the onPlaybackEnd callback — always points to the latest one
+  const onPlaybackEndRef = useRef<(() => void) | undefined>(undefined);
+  // While snapshot playback is active, don't re-init the live queue
+  const snapshotPlayingRef = useRef(false);
 
   // Fetch TTS settings from server on mount
   useEffect(() => {
@@ -140,6 +152,10 @@ export function useTTS() {
 
     audio.addEventListener("ended", () => {
       onAudioEndedRef.current();
+      // Fire the playback-end callback for single-mode
+      const cb = onPlaybackEndRef.current;
+      onPlaybackEndRef.current = undefined;
+      if (cb) cb();
     });
 
     audio.addEventListener("timeupdate", () => {
@@ -234,6 +250,8 @@ export function useTTS() {
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
     cleanupLiveAudio();
+    onPlaybackEndRef.current = undefined;
+    snapshotPlayingRef.current = false;
     onAudioEndedRef.current = () => {
       setPlaybackState((prev) => ({ ...prev, isPlaying: false, isPaused: false, isLoading: false }));
     };
@@ -385,11 +403,15 @@ export function useTTS() {
    */
   const playChunked = useCallback(async (
     text: string,
-    options?: { voice?: string; speed?: number; pitch?: number },
+    options?: PlayOptions,
   ) => {
     const playId = ++playIdRef.current;
     resetPlayback();
     setError(null);
+
+    // Store the callback on the ref so the audio 'ended' handler can access the latest one
+    onPlaybackEndRef.current = options?.onPlaybackEnd;
+    snapshotPlayingRef.current = true;
 
     const controller = new AbortController();
     streamAbortRef.current = controller;
@@ -493,6 +515,13 @@ export function useTTS() {
               void playQueuedChunk(playId);
             }
           }
+
+          // Fire onPlaybackEnd for chunked-stream mode when done
+          const cb = onPlaybackEndRef.current;
+          onPlaybackEndRef.current = undefined;
+          snapshotPlayingRef.current = false;
+          if (cb) cb();
+
           return;
         }
 
@@ -532,7 +561,7 @@ export function useTTS() {
    * Play text aloud
    */
   const play = useCallback(
-    async (text: string, options?: { voice?: string; speed?: number; pitch?: number }) => {
+    async (text: string, options?: PlayOptions) => {
       if (!text.trim()) return;
 
       if (shouldUseChunkedPlayback(text)) {
@@ -545,6 +574,10 @@ export function useTTS() {
       try {
         const playId = ++playIdRef.current;
         resetPlayback();
+
+        // Store the callback on the ref
+        onPlaybackEndRef.current = options?.onPlaybackEnd;
+        snapshotPlayingRef.current = true;
 
         loadingRef.current = true;
         setPlaybackState((prev) => ({
@@ -701,6 +734,38 @@ export function useTTS() {
   }, [settings.backend]);
 
   /**
+   * Flush the live chunk queue and kick off playback of whatever is queued.
+   * Used after a "read now" snapshot finishes, to hand off to live streaming audio.
+   */
+  const resumeLivePlayback = useCallback(() => {
+    // Flush any chunks that accumulated during snapshot playback
+    for (const item of chunkQueueRef.current) {
+      if (item.audioUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(item.audioUrl);
+        objectAudioUrlsRef.current.delete(item.audioUrl);
+      }
+    }
+    chunkQueueRef.current = [];
+    chunkStreamDoneRef.current = false;
+    liveAgentAudioActiveRef.current = true;
+    liveAgentChunkIndexRef.current = 0;
+    chunkModeRef.current = "url";
+
+    setPlaybackState((prev) => ({
+      ...prev,
+      isPlaying: false,
+      isPaused: false,
+      isLoading: true,
+      currentTime: 0,
+      duration: 0,
+      audioUrl: null,
+      currentChunk: 0,
+      totalChunks: 0,
+      mode: "chunked-url" as const,
+    }));
+  }, []);
+
+  /**
    * Handle an incoming live audio chunk from agent streaming.
    * Called by the chat SSE handler when the agent emits audio_chunk events.
    * Live agent chunks are complete WAV files. Play them as a small URL queue;
@@ -715,6 +780,9 @@ export function useTTS() {
     sampleRate: number;
     duration?: number;
   }) => {
+    // Don't re-init the live queue while snapshot playback is active
+    if (snapshotPlayingRef.current) return;
+
     if (!liveAgentAudioActiveRef.current) {
       playIdRef.current++;
       resetPlayback();
@@ -774,6 +842,7 @@ export function useTTS() {
     checkAvailability,
     handleAgentAudioChunk,
     handleAgentAudioDone,
+    resumeLivePlayback,
     cleanupLiveAudio,
   };
 }

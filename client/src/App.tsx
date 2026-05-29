@@ -92,7 +92,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const keyboardInset = useKeyboardInset();
   const prevOnlineRef = useRef(isOnline);
   const selectChatRef = useRef<((id: string) => Promise<void>) | null>(null);
-  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio } = useTTS();
+  const streamingRef = useRef(false);
+  const tts = useTTS();
+  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, handleAgentAudioChunk, handleAgentAudioDone, resumeLivePlayback, cleanupLiveAudio } = tts;
   const {
     userNotebooks,
     agentNotebooks,
@@ -443,6 +445,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const autoReadPendingTurnRef = useRef(false);
   const autoReadSawStreamingRef = useRef(false);
   const autoReadStreamingCompletedRef = useRef(false);
+
+  // Keep streamingRef in sync so async callbacks (TTS onPlaybackEnd) read the live value
+  useEffect(() => {
+    streamingRef.current = streaming;
+  }, [streaming]);
 
   const getAutoReadMessageId = useCallback((message: typeof messages[number]) => {
     let hash = 0;
@@ -1175,7 +1182,16 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             stopTts();
           }
         }}
-        onReadAloud={playTts}
+        onReadAloud={(text: string) => {
+          playTts(text, {
+            onPlaybackEnd: () => {
+              // Use ref to read live streaming state (closure would be stale)
+              if (streamingRef.current) {
+                resumeLivePlayback();
+              }
+            },
+          });
+        }}
         onSend={handleSend}
         onEditMessage={handleEditMessage}
         onRetryMessage={handleRetryMessage}
