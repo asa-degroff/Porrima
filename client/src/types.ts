@@ -432,6 +432,9 @@ export interface Settings {
   llamaServerBins?: Record<string, string>;
   // Structured llama.cpp service-launch overrides written as managed systemd drop-ins.
   llamaServiceConfigs?: Record<string, any>;
+  // Directories scanned for GGUF model files. Each subdirectory containing a .gguf
+  // is presented as a discoverable model. Defaults to [~/.local/share/llama-models].
+  llamaModelsDirs?: string[];
   // Parent directory scanned for child llama.cpp build directories containing llama-server.
   llamaBinaryScanDir?: string;
 }

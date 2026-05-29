@@ -420,6 +420,10 @@ export interface Settings {
   llamaServiceConfigs?: Record<string, any>;
   // The default llama.cpp binary path (from llama-current symlink). Used by UI for display.
   llamaServerDefaultBin?: string;
+  // Directories scanned for GGUF model files. Each top-level subdirectory
+  // containing a .gguf is presented as a discoverable model. Defaults to
+  // [LLAMA_MODELS_DIR || ~/.local/share/llama-models].
+  llamaModelsDirs?: string[];
   // Parent directory scanned for child llama.cpp build directories containing llama-server.
   llamaBinaryScanDir?: string;
 }

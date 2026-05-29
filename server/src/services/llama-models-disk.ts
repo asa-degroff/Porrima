@@ -11,12 +11,35 @@ export interface DiskLlamaModel {
   sizeBytes: number;   // Size of the primary .gguf file
   hasMmproj: boolean;  // Vision projector sibling present
   kind: LlamaModelKind;
+  scanDir: string;     // Absolute path of the scan directory this model was found in
 }
 
 const DEFAULT_MODELS_DIR = path.join(os.homedir(), ".local", "share", "llama-models");
 
-function getModelsDir(): string {
-  return process.env.LLAMA_MODELS_DIR?.trim() || DEFAULT_MODELS_DIR;
+/**
+ * Resolve the list of directories to scan for GGUF models.
+ *
+ * Priority:
+ *  1. Explicit `llamaModelsDirs` array (from Settings)
+ *  2. `LLAMA_MODELS_DIR` environment variable (single directory)
+ *  3. Default: ~/.local/share/llama-models
+ */
+export function resolveModelsDirs(explicit?: string[]): string[] {
+  if (Array.isArray(explicit) && explicit.length > 0) {
+    const dirs = explicit.map((d) => d.trim()).filter(Boolean);
+    if (dirs.length > 0) return [...new Set(dirs)];
+  }
+  const env = process.env.LLAMA_MODELS_DIR?.trim();
+  if (env) return [env];
+  return [DEFAULT_MODELS_DIR];
+}
+
+/**
+ * @deprecated Use resolveModelsDirs() instead. Kept for backward compatibility
+ * with callers that only need the first (primary) directory.
+ */
+export function getLlamaModelsDir(): string {
+  return resolveModelsDirs()[0];
 }
 
 function classifyKind(idLower: string): LlamaModelKind {
@@ -39,22 +62,27 @@ function pickPrimaryGguf(dirName: string, files: string[]): string | null {
 }
 
 /**
- * Scan the configured llama-models directory for available GGUFs. Each
- * top-level subdirectory containing a .gguf is treated as a single model;
- * mmproj-*.gguf siblings are detected but never returned as standalone entries.
+ * Scan a single directory for GGUF models. Each top-level subdirectory
+ * containing a .gguf file is treated as one model; mmproj siblings are
+ * detected but never returned as standalone entries.
+ * Exported for use by the scan-paths preview endpoint.
  */
-export async function listLocalModels(): Promise<DiskLlamaModel[]> {
-  const dir = getModelsDir();
+export async function scanDirectory(scanDir: string, options: { requireReadable?: boolean } = {}): Promise<DiskLlamaModel[]> {
   let entries: string[];
   try {
-    entries = await fs.readdir(dir);
-  } catch {
+    const stat = await fs.stat(scanDir);
+    if (!stat.isDirectory()) throw new Error("Path is not a directory");
+    entries = await fs.readdir(scanDir);
+  } catch (e: any) {
+    if (options.requireReadable) {
+      throw new Error(e?.message || "Directory not found or not readable");
+    }
     return [];
   }
 
   const results: DiskLlamaModel[] = [];
   for (const entry of entries) {
-    const subdir = path.join(dir, entry);
+    const subdir = path.join(scanDir, entry);
     let stat;
     try {
       stat = await fs.stat(subdir);
@@ -88,18 +116,45 @@ export async function listLocalModels(): Promise<DiskLlamaModel[]> {
       sizeBytes,
       hasMmproj,
       kind: classifyKind(entry.toLowerCase()),
+      scanDir,
     });
   }
 
-  results.sort((a, b) => a.id.localeCompare(b.id));
   return results;
 }
 
-export async function findLocalModel(id: string): Promise<DiskLlamaModel | null> {
-  const all = await listLocalModels();
-  return all.find((m) => m.id === id) ?? null;
+/**
+ * Scan all configured llama-models directories for available GGUFs.
+ *
+ * When the same model ID (directory name) appears in multiple scan
+ * directories, both entries are included. The caller can disambiguate
+ * using the `scanDir` field or display the directory alongside the model
+ * name.
+ */
+export async function listLocalModels(explicitDirs?: string[]): Promise<DiskLlamaModel[]> {
+  const dirs = resolveModelsDirs(explicitDirs);
+  const all: DiskLlamaModel[] = [];
+
+  for (const dir of dirs) {
+    const models = await scanDirectory(dir);
+    all.push(...models);
+  }
+
+  // Sort by id, then by scanDir for determinism when the same id appears
+  // in multiple directories.
+  all.sort((a, b) => {
+    const idCmp = a.id.localeCompare(b.id);
+    if (idCmp !== 0) return idCmp;
+    return a.scanDir.localeCompare(b.scanDir);
+  });
+  return all;
 }
 
-export function getLlamaModelsDir(): string {
-  return getModelsDir();
+export async function findLocalModel(id: string, explicitDirs?: string[], scanDir?: string): Promise<DiskLlamaModel | null> {
+  const all = await listLocalModels(explicitDirs);
+  if (scanDir) {
+    const exact = all.find((m) => m.id === id && m.scanDir === scanDir);
+    if (exact) return exact;
+  }
+  return all.find((m) => m.id === id) ?? null;
 }

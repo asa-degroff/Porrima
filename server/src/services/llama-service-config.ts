@@ -2,7 +2,7 @@ import path from "path";
 import { access } from "fs/promises";
 import type { Settings } from "../types.js";
 import type { LlamaServerId } from "./llama-supervisor.js";
-import { getLlamaModelsDir } from "./llama-models-disk.js";
+import { getLlamaModelsDir, resolveModelsDirs } from "./llama-models-disk.js";
 import { getDefaultLlamaBin, resolveBin, resolveSlotEnvironment } from "./llama-launch-templates.js";
 
 export type LlamaServiceMode = "single" | "router";
@@ -152,7 +152,7 @@ export function getDefaultServiceConfig(id: LlamaServerId, settings: Settings): 
     mode: base.mode,
     binaryPath,
     modelId,
-    modelsDir: canUseRouterMode(id) ? getLlamaModelsDir() : undefined,
+    modelsDir: canUseRouterMode(id) ? resolveModelsDirs(settings.llamaModelsDirs)[0] : undefined,
     host: base.host,
     port: base.port,
     gpuLayers: base.gpuLayers,
@@ -189,7 +189,7 @@ export function mergeServiceConfig(id: LlamaServerId, settings: Settings, patch:
   };
   if (!canUseRouterMode(id)) next.mode = "single";
   if (next.mode === "router") {
-    next.modelsDir = (next.modelsDir || defaults.modelsDir || getLlamaModelsDir()).trim();
+    next.modelsDir = (next.modelsDir || defaults.modelsDir || resolveModelsDirs(settings.llamaModelsDirs)[0]).trim();
     next.modelPath = undefined;
     next.modelId = undefined;
   }

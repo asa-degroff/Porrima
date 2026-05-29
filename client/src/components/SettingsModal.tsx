@@ -18,7 +18,7 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, ModelsDirConflictError, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, getLlamaScanPaths, previewLlamaScanPath, addLlamaScanPath, removeLlamaScanPath, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId, type RuntimeModelApplyId } from "../api/client";
 import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
@@ -495,6 +495,9 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [embeddingModel, setEmbeddingModel] = useState(savedEmbeddingModel);
   const [embeddingModels, setEmbeddingModels] = useState<DiscoveredModel[]>([]);
   const [embeddingModelsLoading, setEmbeddingModelsLoading] = useState(false);
+  const [chatDiskModels, setChatDiskModels] = useState<DiscoveredModel[]>([]);
+  const [chatDiskModelsLoading, setChatDiskModelsLoading] = useState(false);
+  const [defaultModelScanDir, setDefaultModelScanDir] = useState<string | undefined>(undefined);
   const [embeddingUseCustom, setEmbeddingUseCustom] = useState(false);
   const storedEmbeddingDimension = settings.embeddingDimension;
   const embeddingConfigChanged =
@@ -564,6 +567,16 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [llamaBinariesLoading, setLlamaBinariesLoading] = useState(false);
   const [llamaBinaryScanDir, setLlamaBinaryScanDir] = useState(settings.llamaBinaryScanDir || "~/bin");
   const [llamaBinaryScanMessage, setLlamaBinaryScanMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  // Model scan paths
+  const [scanPaths, setScanPaths] = useState<Array<{ path: string; modelCount: number; valid: boolean; error?: string }>>([]);
+  const [scanPathsLoading, setScanPathsLoading] = useState(false);
+  const [scanPathsVersion, setScanPathsVersion] = useState(0);
+  const [scanPathDraft, setScanPathDraft] = useState("");
+  const [scanPathPreview, setScanPathPreview] = useState<{ path: string; modelCount: number; models: Array<{ id: string; kind: string; hasMmproj: boolean }>; valid: boolean; error?: string } | null>(null);
+  const [scanPathPreviewLoading, setScanPathPreviewLoading] = useState(false);
+  const [scanPathAdding, setScanPathAdding] = useState(false);
+  const [scanPathRemoving, setScanPathRemoving] = useState<string | null>(null);
+  const [scanPathMessage, setScanPathMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [favoriteModels, setFavoriteModels] = useState<Set<string>>(new Set(settings.favoriteModels || []));
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(settings.showOnlyFavorites ?? false);
   const [preserveThinking, setPreserveThinking] = useState(
@@ -962,6 +975,82 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     }
   }, [llamaServers]);
 
+  // Model scan paths helpers
+  const inferredHomePrefix = scanPaths
+    .map((sp) => sp.path.match(/^(.*)\/\.local\/share\/llama-models$/)?.[1])
+    .find(Boolean);
+  const osHomePrefix = inferredHomePrefix || (typeof process !== "undefined" && process.env?.HOME) || "/home";
+  const defaultModelsDir = `${osHomePrefix}/.local/share/llama-models`;
+  const displayPath = useCallback((p: string) => p.replace(osHomePrefix, "~"), [osHomePrefix]);
+  const modelOptionKey = useCallback((m: { id: string; scanDir?: string; source?: string }) => (
+    `${m.id}::${m.scanDir || m.source || "unknown"}`
+  ), []);
+  const modelOptionLabel = useCallback((m: { name: string; scanDir?: string }) => (
+    m.scanDir ? `${m.name} (${displayPath(m.scanDir)})` : m.name
+  ), [displayPath]);
+
+  const refreshScanPaths = useCallback(async () => {
+    setScanPathsLoading(true);
+    setScanPathMessage(null);
+    try {
+      const data = await getLlamaScanPaths();
+      setScanPaths(data.dirs);
+      setScanPathsVersion((v) => v + 1);
+    } catch (e: any) {
+      setScanPathMessage({ type: "err", text: e?.message || "Failed to load scan paths" });
+    } finally {
+      setScanPathsLoading(false);
+    }
+  }, []);
+
+  const handlePreviewScanPath = useCallback(async () => {
+    if (!scanPathDraft.trim()) return;
+    setScanPathPreviewLoading(true);
+    setScanPathPreview(null);
+    setScanPathMessage(null);
+    try {
+      const result = await previewLlamaScanPath(scanPathDraft.trim());
+      setScanPathPreview(result);
+    } catch (e: any) {
+      setScanPathPreview({ path: scanPathDraft.trim(), modelCount: 0, models: [], valid: false, error: e?.message || "Preview failed" });
+    } finally {
+      setScanPathPreviewLoading(false);
+    }
+  }, [scanPathDraft]);
+
+  const handleAddScanPath = useCallback(async () => {
+    if (!scanPathPreview?.valid) return;
+    setScanPathAdding(true);
+    setScanPathMessage(null);
+    try {
+      await addLlamaScanPath(scanPathPreview.path);
+      setScanPathDraft("");
+      setScanPathPreview(null);
+      setScanPathMessage({ type: "ok", text: `Added ${scanPathPreview.path.replace(osHomePrefix, "~")} — ${scanPathPreview.modelCount} model${scanPathPreview.modelCount !== 1 ? "s" : ""} found` });
+      await refreshScanPaths();
+      refreshModels();
+    } catch (e: any) {
+      setScanPathMessage({ type: "err", text: e?.message || "Failed to add scan path" });
+    } finally {
+      setScanPathAdding(false);
+    }
+  }, [scanPathPreview, osHomePrefix, refreshScanPaths, refreshModels]);
+
+  const handleRemoveScanPath = useCallback(async (dirPath: string) => {
+    setScanPathRemoving(dirPath);
+    setScanPathMessage(null);
+    try {
+      await removeLlamaScanPath(dirPath);
+      setScanPathMessage({ type: "ok", text: `Removed ${dirPath.replace(osHomePrefix, "~")}` });
+      await refreshScanPaths();
+      refreshModels();
+    } catch (e: any) {
+      setScanPathMessage({ type: "err", text: e?.message || "Failed to remove scan path" });
+    } finally {
+      setScanPathRemoving(null);
+    }
+  }, [osHomePrefix, refreshScanPaths, refreshModels]);
+
   const loadLlamaServiceConfig = useCallback(async (id: LlamaServerId) => {
     setLlamaServiceState((prev) => ({
       ...prev,
@@ -1072,12 +1161,20 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 
   // Server currently mid-apply (router load or drop-in override + restart).
   const [applyingSlot, setApplyingSlot] = useState<LlamaServerId | null>(null);
+  // Models-dir conflict dialog state — shown when a user tries to load a model
+  // whose scan directory differs from the server's --models-dir.
+  const [modelsDirConflict, setModelsDirConflict] = useState<{
+    slot: LlamaServerId;
+    modelId: string;
+    modelScanDir: string;
+    currentModelsDir: string;
+  } | null>(null);
 
   // Apply a model to a managed llama.cpp server: router-mode slots load via
   // HTTP, while single-model slots write a drop-in and restart. Optimistically
   // updates the dropdown trigger so the selection feels immediate; reverts on
   // error.
-  const handleApplySlotModel = useCallback(async (slot: OverridableSlotId, modelId: string) => {
+  const handleApplySlotModel = useCallback(async (slot: OverridableSlotId, modelId: string, scanDir?: string) => {
     if (!modelId) return;
     setApplyingSlot(slot);
     setLlamaServerMessage(null);
@@ -1087,7 +1184,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     else if (slot === "reranker") { previous = rerankerModelId; setRerankerModelId(modelId); }
     else if (slot === "embedding") { previous = embeddingModel; setEmbeddingModel(modelId); }
     try {
-      const result = await applyLlamaSlotModel(slot, modelId);
+      const result = await applyLlamaSlotModel(slot, modelId, { scanDir });
       const s = result.server;
       setLlamaServers((prev) => prev.map((srv) => srv.id === slot ? s : srv));
       if (s.id === "title-generation" && s.expectedModel) setTitleGenerationModelId(s.expectedModel);
@@ -1096,23 +1193,42 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       else if (s.id === "embedding" && s.expectedModel) setEmbeddingModel(s.expectedModel);
       setLlamaServerMessage({
         type: "ok",
-        text: result.mode === "router-load"
-          ? `Loaded ${modelId} on ${s.label} via router.`
-          : `Applied ${modelId} to ${s.label}; service restarted.`,
+        text: result.reconfiguredModelsDir
+          ? `Reconfigured server to ${result.reconfiguredModelsDir.replace(osHomePrefix, "~")} and loaded ${modelId}.`
+          : result.mode === "router-load"
+            ? `Loaded ${modelId} on ${s.label} via router.`
+            : `Applied ${modelId} to ${s.label}; service restarted.`,
       });
     } catch (e: any) {
-      // Revert optimistic update so the trigger reflects the still-running model.
-      if (previous !== null) {
-        if (slot === "title-generation") setTitleGenerationModelId(previous);
-        else if (slot === "extraction") setExtractionModelId(previous);
-        else if (slot === "reranker") setRerankerModelId(previous);
-        else if (slot === "embedding") setEmbeddingModel(previous);
+      // Detect models-dir conflict — show confirmation dialog instead of error
+      if (e instanceof ModelsDirConflictError) {
+        setModelsDirConflict({
+          slot,
+          modelId: e.conflict.modelId,
+          modelScanDir: e.conflict.modelScanDir,
+          currentModelsDir: e.conflict.currentModelsDir,
+        });
+        // Revert optimistic update so the trigger reflects the still-running model
+        if (previous !== null) {
+          if (slot === "title-generation") setTitleGenerationModelId(previous);
+          else if (slot === "extraction") setExtractionModelId(previous);
+          else if (slot === "reranker") setRerankerModelId(previous);
+          else if (slot === "embedding") setEmbeddingModel(previous);
+        }
+      } else {
+        // Revert optimistic update so the trigger reflects the still-running model.
+        if (previous !== null) {
+          if (slot === "title-generation") setTitleGenerationModelId(previous);
+          else if (slot === "extraction") setExtractionModelId(previous);
+          else if (slot === "reranker") setRerankerModelId(previous);
+          else if (slot === "embedding") setEmbeddingModel(previous);
+        }
+        setLlamaServerMessage({ type: "err", text: e?.message || "Failed to apply model" });
       }
-      setLlamaServerMessage({ type: "err", text: e?.message || "Failed to apply model" });
     } finally {
       setApplyingSlot(null);
     }
-  }, [titleGenerationModelId, extractionModelId, rerankerModelId, embeddingModel]);
+  }, [titleGenerationModelId, extractionModelId, rerankerModelId, embeddingModel, osHomePrefix]);
 
   const handleConvertToRouter = useCallback(async (slot: RouterCapableSlotId) => {
     setApplyingSlot(slot);
@@ -1141,6 +1257,33 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       setApplyingSlot(null);
     }
   }, []);
+
+  // Confirm a models-dir conflict — retries the apply with reconfigureModelsDir.
+  const handleConfirmModelsDirConflict = useCallback(async () => {
+    if (!modelsDirConflict) return;
+    const { slot, modelId, modelScanDir } = modelsDirConflict;
+    setModelsDirConflict(null);
+    setApplyingSlot(slot);
+    setLlamaServerMessage(null);
+    try {
+      const result = await applyLlamaSlotModel(slot, modelId, { reconfigureModelsDir: true, scanDir: modelScanDir });
+      const s = result.server;
+      setLlamaServers((prev) => prev.map((srv) => srv.id === slot ? s : srv));
+      if (slot === "inference" && s.expectedModel) { setDefaultModelId(s.expectedModel); setDefaultModelScanDir(modelScanDir); }
+      else if (slot === "title-generation" && s.expectedModel) setTitleGenerationModelId(s.expectedModel);
+      else if (slot === "extraction" && s.expectedModel) setExtractionModelId(s.expectedModel);
+      else if (slot === "reranker" && s.expectedModel) setRerankerModelId(s.expectedModel);
+      else if (slot === "embedding" && s.expectedModel) setEmbeddingModel(s.expectedModel);
+      setLlamaServerMessage({
+        type: "ok",
+        text: `Reconfigured ${s.label} to serve from ${modelsDirConflict.modelScanDir.replace(osHomePrefix, "~")} and loaded ${modelId}. Restart required — server is coming back up.`,
+      });
+    } catch (e: any) {
+      setLlamaServerMessage({ type: "err", text: e?.message || "Failed to reconfigure server" });
+    } finally {
+      setApplyingSlot(null);
+    }
+  }, [modelsDirConflict, osHomePrefix]);
 
   // Inline setting update for a specific server — saves immediately via PATCH
   const handleLlamaServerSettings = useCallback(async (id: LlamaServerId, updates: Record<string, unknown>) => {
@@ -1388,6 +1531,11 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     return () => window.clearInterval(interval);
   }, [refreshLlamaServers]);
 
+  // Load model scan paths on mount
+  useEffect(() => {
+    refreshScanPaths();
+  }, [refreshScanPaths]);
+
   // Aggregate health pings for all five configured servers. Re-runs when URL
   // fields change so the dots update as the user edits settings.
   useEffect(() => {
@@ -1403,20 +1551,28 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   // returns kind-filtered entries; we map to the {id,name} shape the dropdowns
   // already expect.
   const loadDiskModels = useCallback(async (
-    slot: OverridableSlotId,
+    slot: RuntimeModelApplyId,
     setModels: (m: DiscoveredModel[]) => void,
     setLoading: (b: boolean) => void
   ) => {
     setLoading(true);
     try {
       const r = await listAvailableLlamaModels(slot);
-      setModels(r.models.map((m) => ({ id: m.id, name: m.name, source: m.source })));
+      setModels(r.models.map((m) => ({ id: m.id, name: m.name, source: m.source, scanDir: m.scanDir })));
     } catch {
       setModels([]);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadDiskModels("inference",
+      (m) => { if (!cancelled) setChatDiskModels(m); },
+      (b) => { if (!cancelled) setChatDiskModelsLoading(b); });
+    return () => { cancelled = true; };
+  }, [loadDiskModels, scanPathsVersion]);
 
   // Embedding model discovery from llama.cpp server.
   // For provider=llamacpp, source from local llama-models dir so swaps go
@@ -1427,7 +1583,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       (m) => { if (!cancelled) setEmbeddingModels(m); },
       (b) => { if (!cancelled) setEmbeddingModelsLoading(b); });
     return () => { cancelled = true; };
-  }, [embeddingUrl, loadDiskModels]);
+  }, [embeddingUrl, loadDiskModels, scanPathsVersion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1435,7 +1591,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       (m) => { if (!cancelled) setExtractionServerModels(m); },
       (b) => { if (!cancelled) setExtractionServerModelsLoading(b); });
     return () => { cancelled = true; };
-  }, [loadDiskModels]);
+  }, [loadDiskModels, scanPathsVersion]);
 
   useEffect(() => {
     if (!rerankerEnabled) return;
@@ -1444,7 +1600,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       (m) => { if (!cancelled) setRerankerModels(m); },
       (b) => { if (!cancelled) setRerankerModelsLoading(b); });
     return () => { cancelled = true; };
-  }, [rerankerEnabled, loadDiskModels]);
+  }, [rerankerEnabled, loadDiskModels, scanPathsVersion]);
 
   useEffect(() => {
     if (!titleGenerationEnabled) return;
@@ -1453,7 +1609,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       (m) => { if (!cancelled) setTitleGenerationModels(m); },
       (b) => { if (!cancelled) setTitleGenerationModelsLoading(b); });
     return () => { cancelled = true; };
-  }, [titleGenerationEnabled, loadDiskModels]);
+  }, [titleGenerationEnabled, loadDiskModels, scanPathsVersion]);
 
   const refreshSshConnections = useCallback(async () => {
     setSshLoading(true);
@@ -1626,6 +1782,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       crossProjectScoreMultiplier,
       globalProjectScoreMultiplier,
       llamaBinaryScanDir: llamaBinaryScanDir.trim() || undefined,
+      llamaModelsDirs: scanPaths.length > 0 ? scanPaths.map((sp) => sp.path) : settings.llamaModelsDirs,
       retrievalDepthProfile,
       rerankerTimeoutMs,
       memoryContextSearchQueryChars,
@@ -1659,18 +1816,32 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     setApplyingSlot("inference");
     setLlamaServerMessage(null);
     try {
-      const result = await applyLlamaSlotModel("inference", defaultModelId);
+      const result = await applyLlamaSlotModel("inference", defaultModelId, { scanDir: defaultModelScanDir });
       const appliedModelId = result.server.expectedModel || defaultModelId;
       setDefaultModelId(appliedModelId);
       setLlamaServers((prev) => prev.map((srv) => srv.id === "inference" ? result.server : srv));
       await onApply({ ...handleSave(), defaultModelId: appliedModelId });
-      setLlamaServerMessage({ type: "ok", text: `Loaded ${appliedModelId} on the chat inference router.` });
+      setLlamaServerMessage({
+        type: "ok",
+        text: result.reconfiguredModelsDir
+          ? `Reconfigured inference server to ${result.reconfiguredModelsDir.replace(osHomePrefix, "~")} and loaded ${appliedModelId}.`
+          : `Loaded ${appliedModelId} on the chat inference router.`,
+      });
     } catch (e: any) {
-      setLlamaServerMessage({ type: "err", text: e?.message || "Failed to load default model" });
+      if (e instanceof ModelsDirConflictError) {
+        setModelsDirConflict({
+          slot: "inference",
+          modelId: e.conflict.modelId,
+          modelScanDir: e.conflict.modelScanDir,
+          currentModelsDir: e.conflict.currentModelsDir,
+        });
+      } else {
+        setLlamaServerMessage({ type: "err", text: e?.message || "Failed to load default model" });
+      }
     } finally {
       setApplyingSlot(null);
     }
-  }, [defaultModelId, onApply, handleSave]);
+  }, [defaultModelId, defaultModelScanDir, onApply, handleSave, osHomePrefix]);
 
   const replaceAutomation = (task: AutomationTask) => {
     setAutomations((prev) => prev.map((item) => (item.id === task.id ? task : item)));
@@ -2286,6 +2457,13 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const inferenceServer = llamaServers.find((server) => server.id === "inference");
   const defaultModelLoaded = Boolean(defaultModelId && inferenceServer?.http.loadedModelId === defaultModelId);
   const canLoadDefaultModel = Boolean(defaultModelId && inferenceServer?.http.routerMode);
+  const defaultChatModelOptions: Array<DiscoveredModel & { parameterSize?: string }> = chatDiskModels.length > 0
+    ? chatDiskModels
+    : models.map((m) => ({ id: m.id, name: m.name, source: "server" as const, parameterSize: m.parameterSize, scanDir: undefined }));
+  const selectedDefaultChatModel = defaultModelId
+    ? defaultChatModelOptions.find((m) => m.id === defaultModelId && (!defaultModelScanDir || m.scanDir === defaultModelScanDir))
+      || defaultChatModelOptions.find((m) => m.id === defaultModelId)
+    : undefined;
 
   const scrollToSection = (id: string) => {
     const el = document.getElementById(id);
@@ -2404,7 +2582,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               <label className="text-sm font-medium text-white/60">Default Chat Model</label>
               <button
                 type="button"
-                onClick={refreshModels}
+	                onClick={() => { refreshModels(); refreshScanPaths(); }}
                 className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/80 hover:bg-white/10 transition-all"
                 title="Refresh model list"
               >
@@ -2418,12 +2596,12 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               state={modelDd}
               trigger={
                 <span className="truncate flex-1 text-left">
-                  {defaultModelId ? (models.find((m) => m.id === defaultModelId)?.name || defaultModelId) : "Auto (first available)"}
+                  {defaultModelId ? (selectedDefaultChatModel ? modelOptionLabel(selectedDefaultChatModel) : defaultModelId) : "Auto (first available)"}
                 </span>
               }
             >
               <button
-                onClick={() => { setDefaultModelId(""); modelDd.close(); }}
+	                onClick={() => { setDefaultModelId(""); setDefaultModelScanDir(undefined); modelDd.close(); }}
                 className={`w-full text-left px-3 py-2 text-xs transition-all ${
                   !defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                 }`}
@@ -2434,23 +2612,30 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               >
                 Auto (first available)
               </button>
-              {models.map((m) => (
+              {chatDiskModelsLoading && (
+                <div className="px-3 py-2 text-xs text-white/35">Scanning disk models...</div>
+              )}
+              {defaultChatModelOptions.map((m) => (
                 <button
-                  key={m.id}
-                  onClick={() => { setDefaultModelId(m.id); modelDd.close(); }}
+                  key={modelOptionKey(m)}
+                  onClick={() => { setDefaultModelId(m.id); setDefaultModelScanDir(m.scanDir); modelDd.close(); }}
                   className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                    m.id === defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
+                    m.id === defaultModelId && (!defaultModelScanDir || defaultModelScanDir === m.scanDir) ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
                   }`}
                   style={{
-                    backgroundColor: m.id === defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                    color: m.id === defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
+                    backgroundColor: m.id === defaultModelId && (!defaultModelScanDir || defaultModelScanDir === m.scanDir) ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
+                    color: m.id === defaultModelId && (!defaultModelScanDir || defaultModelScanDir === m.scanDir) ? `rgba(var(--theme-secondary-text))` : '',
                   }}
                 >
                   <span className="truncate flex-1">{m.name}</span>
-                  <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
+                  {m.scanDir ? (
+                    <span className="text-[10px] text-white/30 shrink-0 max-w-[160px] truncate">{displayPath(m.scanDir)}</span>
+                  ) : (
+                    <span className="text-[10px] text-white/30 shrink-0">{(m as any).parameterSize}</span>
+                  )}
                   <ProviderIcon
-                    provider={m.provider}
-                    className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
+                    provider="llamacpp"
+                    className="text-[#ff8236] shrink-0"
                   />
                 </button>
               ))}
@@ -2683,6 +2868,144 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                </div>
 	              )}
 
+	              {/* Models-dir conflict dialog */}
+	              {modelsDirConflict && (
+	                <div className="p-3 rounded-lg text-xs border border-amber-400/25 bg-amber-500/10 space-y-2">
+	                  <div className="flex items-start gap-2">
+	                    <span className="text-amber-300/90 text-sm shrink-0 mt-0.5">\u26A0\uFE0F</span>
+	                    <div className="space-y-1">
+	                      <p className="text-amber-200/90 font-medium">Model directory mismatch</p>
+	                      <p className="text-white/55">
+	                        <code className="text-amber-300/80">{modelsDirConflict.modelId}</code> is in <code className="text-white/70 font-mono">{modelsDirConflict.modelScanDir.replace(osHomePrefix, "~")}</code>,
+	                        but the {modelsDirConflict.slot === "inference" ? "inference" : modelsDirConflict.slot} server currently serves from <code className="text-white/70 font-mono">{modelsDirConflict.currentModelsDir.replace(osHomePrefix, "~")}</code>.
+	                      </p>
+	                      <p className="text-amber-400/70">
+	                        Switching will reconfigure the server’s <code className="text-white/50">--models-dir</code> and restart it.
+	                        Models in the current directory will be unavailable until switched back.
+	                      </p>
+	                    </div>
+	                  </div>
+	                  <div className="flex items-center gap-2">
+	                    <button
+	                      type="button"
+	                      onClick={handleConfirmModelsDirConflict}
+	                      disabled={applyingSlot !== null}
+	                      className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-amber-500/15 border border-amber-400/25 text-amber-300 hover:bg-amber-500/25 transition-all disabled:opacity-40"
+	                    >
+	                      Switch & Restart
+	                    </button>
+	                    <button
+	                      type="button"
+	                      onClick={() => setModelsDirConflict(null)}
+	                      className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all"
+	                    >
+	                      Cancel
+	                    </button>
+	                  </div>
+	                </div>
+	              )}
+
+	              {/* Model Scan Paths */}
+	              <div className="space-y-2">
+	                <div className="flex items-start justify-between gap-3">
+	                  <div className="min-w-0">
+	                    <h4 className="text-sm text-white/80">Model Scan Paths</h4>
+	                    <p className="text-xs text-white/30 mt-0.5">
+	                      Directories scanned for GGUF models. Each subdirectory containing a <code className="text-white/50">.gguf</code> file appears as a selectable model across all server dropdowns.
+	                    </p>
+	                  </div>
+	                </div>
+
+	                <div className="space-y-1.5 ml-2">
+	                  {scanPaths.map((sp) => {
+	                    const isDefault = sp.path === defaultModelsDir;
+	                    return (
+	                      <div key={sp.path} className="flex items-center gap-2 text-xs rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+	                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${sp.valid ? "bg-green-400" : "bg-red-400"}`} title={sp.valid ? "Accessible" : sp.error || "Not found"} />
+	                        <span className="text-white/70 font-mono truncate flex-1" title={sp.path}>{sp.path.replace(osHomePrefix, "~")}</span>
+	                        {sp.valid ? (
+	                          <span className="text-[10px] text-white/35 shrink-0">{sp.modelCount} model{sp.modelCount !== 1 ? "s" : ""}</span>
+	                        ) : (
+	                          <span className="text-[10px] text-red-400/70 shrink-0">not found</span>
+	                        )}
+	                        {isDefault && (
+	                          <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-400/20 text-[10px] font-medium shrink-0">default</span>
+	                        )}
+	                        {!isDefault && (
+	                          <button
+	                            type="button"
+	                            onClick={() => handleRemoveScanPath(sp.path)}
+	                            disabled={scanPathRemoving === sp.path}
+	                            className="px-1.5 py-0.5 rounded text-[10px] text-red-400/60 hover:text-red-400 hover:bg-red-500/10 transition-all shrink-0"
+	                            title="Remove from scan paths"
+	                          >
+	                            {scanPathRemoving === sp.path ? "..." : "remove"}
+	                          </button>
+	                        )}
+	                      </div>
+	                    );
+	                  })}
+
+	                  {/* Add directory input */}
+	                  <div className="flex gap-2">
+	                    <input
+	                      type="text"
+	                      value={scanPathDraft}
+	                      onChange={(e) => {
+	                        setScanPathDraft(e.target.value);
+	                        setScanPathPreview(null);
+	                      }}
+	                      onKeyDown={(e) => { if (e.key === "Enter") handlePreviewScanPath(); }}
+	                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
+	                      placeholder="/path/to/models or ~/models"
+	                      disabled={scanPathPreviewLoading || scanPathAdding}
+	                    />
+	                    <button
+	                      type="button"
+	                      onClick={handlePreviewScanPath}
+	                      disabled={scanPathPreviewLoading || !scanPathDraft.trim()}
+	                      className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0"
+	                    >
+	                      {scanPathPreviewLoading ? "Scanning..." : "Preview"}
+	                    </button>
+	                  </div>
+
+	                  {scanPathPreview && (
+	                    <div className={`p-2 rounded-lg text-xs ${scanPathPreview.valid ? "bg-white/[0.025] border border-white/10" : "bg-red-500/10 border border-red-400/15 text-red-400/80"}`}>
+	                      {scanPathPreview.valid ? (
+	                        <div className="flex items-center justify-between gap-2">
+	                          <div>
+	                            <span className="text-white/70 font-mono">{scanPathPreview.path.replace(osHomePrefix, "~")}</span>
+	                            <span className="text-white/35 ml-2">{scanPathPreview.modelCount} model{scanPathPreview.modelCount !== 1 ? "s" : ""} found</span>
+	                          </div>
+	                          {scanPathPreview.models.length > 0 && (
+	                            <span className="text-[10px] text-white/30 truncate max-w-[200px]">
+	                              {scanPathPreview.models.map(m => m.id).join(", ")}
+	                            </span>
+	                          )}
+	                          <button
+	                            type="button"
+	                            onClick={handleAddScanPath}
+	                            disabled={scanPathAdding}
+	                            className="px-2 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/20 text-emerald-300 hover:bg-emerald-500/25 transition-all disabled:opacity-40 shrink-0"
+	                          >
+	                            {scanPathAdding ? "Adding..." : "Add"}
+	                          </button>
+	                        </div>
+	                      ) : (
+	                        <span>{scanPathPreview.error || "Directory not found or not readable"}</span>
+	                      )}
+	                    </div>
+	                  )}
+
+	                  {scanPathMessage && (
+	                    <div className={`p-2 rounded-lg text-xs ${scanPathMessage.type === "ok" ? "bg-green-500/10 border border-green-400/15 text-green-400/80" : "bg-red-500/10 border border-red-400/15 text-red-400/80"}`}>
+	                      {scanPathMessage.text}
+	                    </div>
+	                  )}
+	                </div>
+	              </div>
+
 	              <div className="space-y-2">
 	                {llamaServers.length === 0 && (
 	                  <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 text-xs text-white/35">
@@ -2904,14 +3227,15 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                      panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
 	                                      trigger={<span className="truncate flex-1 text-left">{extractionModelId || "Select…"}</span>}
 	                                    >
-	                                      {extractionServerModels.map((m) => (
-	                                        <button key={m.id} onClick={() => {
-	                                          extractionModelDd.close();
-	                                          handleApplySlotModel("extraction", m.id);
-	                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === extractionModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-	                                          {m.name}
-	                                        </button>
-	                                      ))}
+		                                      {extractionServerModels.map((m) => (
+		                                        <button key={modelOptionKey(m)} onClick={() => {
+		                                          extractionModelDd.close();
+		                                          handleApplySlotModel("extraction", m.id, m.scanDir);
+		                                        }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === extractionModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+		                                          <span className="block truncate">{m.name}</span>
+		                                          {m.scanDir && <span className="block text-[10px] text-white/35 truncate">{displayPath(m.scanDir)}</span>}
+		                                        </button>
+		                                      ))}
 	                                      <button onClick={() => setExtractionUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
 	                                    </Dropdown>
 	                                  ) : (
@@ -3001,19 +3325,20 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                        panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
 	                                        trigger={<span className="truncate flex-1 text-left">{rerankerModelId || "Select…"}</span>}
 	                                      >
-	                                        {rerankerModels.map((m) => (
-	                                          <button key={m.id} onClick={() => {
-	                                            rerankerModelDd.close();
-	                                            if (m.source === "disk") handleApplySlotModel("reranker", m.id);
-	                                            else {
-	                                              setRerankerModelId(m.id);
-	                                              handleLlamaServerSettings("reranker", { modelId: m.id });
+		                                        {rerankerModels.map((m) => (
+		                                          <button key={modelOptionKey(m)} onClick={() => {
+		                                            rerankerModelDd.close();
+		                                            if (m.source === "disk") handleApplySlotModel("reranker", m.id, m.scanDir);
+		                                            else {
+		                                              setRerankerModelId(m.id);
+		                                              handleLlamaServerSettings("reranker", { modelId: m.id });
 	                                            }
-	                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === rerankerModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-	                                            <span className="block truncate">{m.name}</span>
-	                                            {m.source && m.source !== "disk" && <span className="block text-[10px] text-white/35">{m.source === "server" ? "running service" : "saved alias"}</span>}
-	                                          </button>
-	                                        ))}
+		                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === rerankerModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+		                                            <span className="block truncate">{m.name}</span>
+		                                            {m.scanDir && <span className="block text-[10px] text-white/35 truncate">{displayPath(m.scanDir)}</span>}
+		                                            {m.source && m.source !== "disk" && <span className="block text-[10px] text-white/35">{m.source === "server" ? "running service" : "saved alias"}</span>}
+		                                          </button>
+		                                        ))}
 	                                        <button onClick={() => setRerankerUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
 	                                      </Dropdown>
 	                                    ) : (
@@ -3087,20 +3412,21 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                    panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
 	                                    trigger={<span className="truncate flex-1 text-left">{embeddingModel || "Select…"}</span>}
 	                                  >
-	                                    {embeddingModels.map((m) => (
-	                                      <button key={m.id} onClick={() => {
-	                                        embeddingModelDd.close();
-	                                        if (embeddingProvider === "llamacpp" && m.source === "disk") {
-	                                          handleApplySlotModel("embedding", m.id);
-	                                        } else {
-	                                          setEmbeddingModel(m.id);
-	                                          handleLlamaServerSettings("embedding", { modelId: m.id });
+		                                    {embeddingModels.map((m) => (
+		                                      <button key={modelOptionKey(m)} onClick={() => {
+		                                        embeddingModelDd.close();
+		                                        if (embeddingProvider === "llamacpp" && m.source === "disk") {
+		                                          handleApplySlotModel("embedding", m.id, m.scanDir);
+		                                        } else {
+		                                          setEmbeddingModel(m.id);
+		                                          handleLlamaServerSettings("embedding", { modelId: m.id });
 	                                        }
-	                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === embeddingModel ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-	                                        <span className="block truncate">{m.name}</span>
-	                                        {m.source && m.source !== "disk" && <span className="block text-[10px] text-white/35">{m.source === "server" ? "running service" : "saved alias"}</span>}
-	                                      </button>
-	                                    ))}
+		                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === embeddingModel ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+		                                        <span className="block truncate">{m.name}</span>
+		                                        {m.scanDir && <span className="block text-[10px] text-white/35 truncate">{displayPath(m.scanDir)}</span>}
+		                                        {m.source && m.source !== "disk" && <span className="block text-[10px] text-white/35">{m.source === "server" ? "running service" : "saved alias"}</span>}
+		                                      </button>
+		                                    ))}
 	                                    <button onClick={() => setEmbeddingUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
 	                                  </Dropdown>
 	                                ) : (
@@ -3189,14 +3515,15 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                        panelClassName="left-0 right-0 top-full mt-1 max-h-[240px] overflow-y-auto"
 	                                        trigger={<span className="truncate flex-1 text-left">{titleGenerationModelId || "Select…"}</span>}
 	                                      >
-	                                        {titleGenerationModels.map((m) => (
-	                                          <button key={m.id} onClick={() => {
-	                                            titleGenerationModelDd.close();
-	                                            handleApplySlotModel("title-generation", m.id);
-	                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === titleGenerationModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-	                                            {m.name}
-	                                          </button>
-	                                        ))}
+		                                        {titleGenerationModels.map((m) => (
+		                                          <button key={modelOptionKey(m)} onClick={() => {
+		                                            titleGenerationModelDd.close();
+		                                            handleApplySlotModel("title-generation", m.id, m.scanDir);
+		                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === titleGenerationModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+		                                            <span className="block truncate">{m.name}</span>
+		                                            {m.scanDir && <span className="block text-[10px] text-white/35 truncate">{displayPath(m.scanDir)}</span>}
+		                                          </button>
+		                                        ))}
 	                                        <button onClick={() => setTitleGenerationUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
 	                                      </Dropdown>
 	                                    ) : (
@@ -3563,11 +3890,11 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 </span>
               }
             >
-              {models.map((m) => {
-                const isFav = favoriteModels.has(m.id);
-                return (
-                  <button
-                    key={`${m.provider}-${m.id}`}
+	              {defaultChatModelOptions.map((m) => {
+	                const isFav = favoriteModels.has(m.id);
+	                return (
+	                  <button
+	                    key={modelOptionKey(m)}
                     onClick={() => {
                       setFavoriteModels((prev) => {
                         const next = new Set(prev);
@@ -3593,13 +3920,17 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     >
                       <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                     </svg>
-                    <span className="truncate flex-1 text-white/70">{m.name}</span>
-                    {m.parameterSize && <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>}
-                    <ProviderIcon
-                      provider={m.provider}
-                      className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
-                    />
-                  </button>
+	                    <span className="truncate flex-1 text-white/70">{m.name}</span>
+	                    {m.scanDir ? (
+	                      <span className="text-[10px] text-white/30 shrink-0 max-w-[160px] truncate">{displayPath(m.scanDir)}</span>
+	                    ) : (
+	                      (m as any).parameterSize && <span className="text-[10px] text-white/30 shrink-0">{(m as any).parameterSize}</span>
+	                    )}
+	                    <ProviderIcon
+	                      provider="llamacpp"
+	                      className="text-[#ff8236] shrink-0"
+	                    />
+	                  </button>
                 );
               })}
             </Dropdown>

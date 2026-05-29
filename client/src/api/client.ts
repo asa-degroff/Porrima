@@ -58,6 +58,7 @@ export interface DiscoveredModel {
   id: string;
   name: string;
   source?: "disk" | "server" | "settings";
+  scanDir?: string;
 }
 
 export async function discoverModels(params: {
@@ -1822,10 +1823,11 @@ export interface AvailableLlamaModel {
   sizeBytes: number;
   kind: "chat" | "embedding" | "rerank";
   hasMmproj: boolean;
+  scanDir?: string;
   source: "disk" | "server" | "settings";
 }
 
-export async function listAvailableLlamaModels(slot?: OverridableSlotId): Promise<{ models: AvailableLlamaModel[] }> {
+export async function listAvailableLlamaModels(slot?: RuntimeModelApplyId): Promise<{ models: AvailableLlamaModel[] }> {
   const qs = slot ? `?slot=${encodeURIComponent(slot)}` : "";
   const res = await apiFetch(`${BASE}/llama-servers/available-models${qs}`);
   if (!res.ok) {
@@ -1835,14 +1837,94 @@ export async function listAvailableLlamaModels(slot?: OverridableSlotId): Promis
   return res.json();
 }
 
-export async function applyLlamaSlotModel(slot: RuntimeModelApplyId, modelId: string): Promise<{ server: LlamaServerStatus; overridePath: string | null; mode: "router-load" | "override-restart" }> {
-  const res = await apiFetch(`${BASE}/llama-servers/${slot}/apply-model`, {
+// --- Model Scan Paths ---
+
+export interface ScanPathInfo {
+  path: string;
+  modelCount: number;
+  valid: boolean;
+  error?: string;
+}
+
+export interface ScanPathPreview {
+  path: string;
+  modelCount: number;
+  models: Array<{ id: string; kind: string; hasMmproj: boolean }>;
+  valid: boolean;
+  error?: string;
+}
+
+export async function getLlamaScanPaths(): Promise<{ dirs: ScanPathInfo[] }> {
+  const res = await apiFetch(`${BASE}/llama-servers/scan-paths`);
+  if (!res.ok) throw new Error("Failed to fetch scan paths");
+  return res.json();
+}
+
+export async function previewLlamaScanPath(dirPath: string): Promise<ScanPathPreview> {
+  const res = await apiFetch(`${BASE}/llama-servers/scan-paths/preview`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ modelId }),
+    body: JSON.stringify({ path: dirPath }),
+  });
+  // Returns 200 with valid:false + error on bad paths
+  return res.json();
+}
+
+export async function addLlamaScanPath(dirPath: string): Promise<{ dirs: ScanPathInfo[] }> {
+  const res = await apiFetch(`${BASE}/llama-servers/scan-paths`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: dirPath }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
+    throw new Error((data as any).error || "Failed to add scan path");
+  }
+  return res.json();
+}
+
+export async function removeLlamaScanPath(dirPath: string): Promise<{ removed: string }> {
+  const res = await apiFetch(`${BASE}/llama-servers/scan-paths?path=${encodeURIComponent(dirPath)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as any).error || "Failed to remove scan path");
+  }
+  return res.json();
+}
+
+export interface ModelsDirConflict {
+  modelScanDir: string;
+  currentModelsDir: string;
+  modelId: string;
+}
+
+export class ModelsDirConflictError extends Error {
+  conflict: ModelsDirConflict;
+  constructor(conflict: ModelsDirConflict) {
+    super("model directory mismatch");
+    this.name = "ModelsDirConflictError";
+    this.conflict = conflict;
+  }
+}
+
+export async function applyLlamaSlotModel(
+  slot: RuntimeModelApplyId,
+  modelId: string,
+  options: { reconfigureModelsDir?: boolean; scanDir?: string } = {}
+): Promise<{ server: LlamaServerStatus; overridePath: string | null; mode: "router-load" | "override-restart"; reconfiguredModelsDir?: string }> {
+  const res = await apiFetch(`${BASE}/llama-servers/${slot}/apply-model`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ modelId, reconfigureModelsDir: options.reconfigureModelsDir || false, scanDir: options.scanDir }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({})) as any;
+    // Detect conflict (HTTP 409 with conflict field)
+    if (res.status === 409 && data.conflict) {
+      throw new ModelsDirConflictError(data.conflict);
+    }
     throw new Error(data.error || "Failed to apply model to slot");
   }
   return res.json();

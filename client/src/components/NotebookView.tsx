@@ -437,7 +437,8 @@ export function NotebookView({
   return (
     <div className="flex-1 flex flex-col min-h-0 min-w-0">
       {/* Header */}
-      <div className="px-3 md:px-6 py-3 border-b border-white/10 flex items-center justify-between gap-3 backdrop-blur-sm bg-white/[0.03]">
+      <div className="px-3 md:px-6 py-3 border-b border-white/10 flex items-center gap-2 md:gap-3 backdrop-blur-sm bg-white/[0.03]">
+        {/* Left: hamburger + title */}
         <div className="flex items-center gap-2 min-w-0">
           {/* Hamburger menu - mobile only */}
           <button
@@ -452,11 +453,45 @@ export function NotebookView({
           </button>
           <h2 className="text-sm font-medium text-white/80 truncate">Notebooks</h2>
         </div>
+
+        {/* Center: inline search bar (desktop only) */}
+        <div className="hidden md:flex items-center gap-2 flex-1 min-w-0">
+          <div className="relative w-full max-w-xs">
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchInput}
+              onChange={(e) => handleSearchInput(e.target.value)}
+              placeholder="Search notebooks..."
+              className="w-full pl-8 pr-8 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white/90 text-sm focus:outline-none focus:border-purple-400/40 focus:bg-white/10 transition-all placeholder:text-white/30"
+            />
+            {/* Search icon */}
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/30 pointer-events-none">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            {/* Clear button */}
+            {searchInput && (
+              <button
+                onClick={() => { setSearchInput(''); onClearSearch?.(); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-white/40 hover:text-white/70 transition-colors"
+                title="Clear search"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Right: actions */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Search toggle */}
+          {/* Search toggle - mobile only */}
           <button
             onClick={toggleSearch}
-            className={`p-1.5 rounded-lg transition-colors ${showSearch ? 'bg-white/10 text-white' : 'text-white/50 hover:text-white/80 hover:bg-white/5'}`}
+            className={`md:hidden p-1.5 rounded-lg transition-colors ${showSearch ? 'bg-white/10 text-white' : 'text-white/50 hover:text-white/80 hover:bg-white/5'}`}
             title={showSearch ? 'Close search' : 'Search notebooks'}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -477,9 +512,46 @@ export function NotebookView({
         </div>
       </div>
 
-      {/* Search bar */}
+      {/* Desktop search results — inline below header, shown when there's a query */}
+      {searchInput.trim().length >= 2 && (
+        <div className="hidden md:block px-6 py-2 border-b border-white/10 bg-white/[0.02]">
+          {isSearching && (
+            <div className="text-center text-white/30 text-xs py-2">Searching...</div>
+          )}
+          {!isSearching && searchResults.length > 0 && (
+            <div className="max-h-64 overflow-y-auto space-y-1">
+              {searchResults.map((result) => (
+                <button
+                  key={result.id}
+                  onClick={() => handleSearchResultClick(result)}
+                  className="w-full text-left px-3 py-2 hover:bg-white/5 rounded-lg transition-colors border border-transparent hover:border-white/5"
+                >
+                  <div className="flex items-start gap-2">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${result.author === 'agent' ? 'bg-purple-500/15 text-purple-300' : 'bg-blue-500/15 text-blue-300'}`}>
+                      {result.author === 'agent' ? 'Agent' : 'You'}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-white/40">
+                        {new Date(result.createdAt).toLocaleDateString()}
+                      </div>
+                      <div className="text-sm text-white/80 line-clamp-2">
+                        {result.excerpt || result.preview}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+          {!isSearching && searchResults.length === 0 && searchQuery && (
+            <div className="text-center text-white/30 text-xs py-2">No matches found</div>
+          )}
+        </div>
+      )}
+
+      {/* Mobile search bar — expanded below header */}
       {showSearch && (
-        <div className="px-3 md:px-6 py-2 border-b border-white/10 bg-white/[0.02]">
+        <div className="md:hidden px-3 py-2 border-b border-white/10 bg-white/[0.02]">
           <div className="flex items-center gap-2">
             <input
               ref={searchInputRef}

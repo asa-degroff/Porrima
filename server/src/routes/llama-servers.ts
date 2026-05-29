@@ -1,4 +1,6 @@
 import { Router } from "express";
+import path from "path";
+import os from "os";
 import { getSettings, saveSettings } from "../services/chat-storage.js";
 import {
   getLlamaServerLogs,
@@ -12,7 +14,7 @@ import {
   type LlamaServerAction,
   type LlamaServerId,
 } from "../services/llama-supervisor.js";
-import { findLocalModel, listLocalModels, type LlamaModelKind } from "../services/llama-models-disk.js";
+import { findLocalModel, listLocalModels, scanDirectory, resolveModelsDirs, type LlamaModelKind } from "../services/llama-models-disk.js";
 import { getDefaultLlamaBin, isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart, resolveSlotEnvironment, type OverridableSlotId } from "../services/llama-launch-templates.js";
 import { applyModelOverride, clearModelOverride, readOverride } from "../services/llama-overrides.js";
 import { ensureRouterModelLoaded, invalidateRouterCache, normalizeRouterModelId } from "../services/llama-router-client.js";
@@ -25,6 +27,7 @@ import {
   renderManagedDropIn,
   renderServiceExecStart,
   validateServiceConfig,
+  canUseRouterMode,
   type LlamaServiceConfig,
 } from "../services/llama-service-config.js";
 import { normalizeExtractionRequestSettings } from "../services/extraction-settings.js";
@@ -43,33 +46,72 @@ function supportsRuntimeModelApply(id: string): id is LlamaServerId {
   return id === "inference" || isOverridableSlot(id);
 }
 
+export interface RouterDirConflict {
+  modelScanDir: string;
+  currentModelsDir: string;
+  modelId: string;
+}
+
 async function applySlotModelRuntime(
   id: LlamaServerId,
   modelId: string,
-  settings: Awaited<ReturnType<typeof getSettings>>
-): Promise<{ modelId: string; overridePath: string | null; mode: "router-load" | "override-restart" }> {
+  settings: Awaited<ReturnType<typeof getSettings>>,
+  options: { reconfigureModelsDir?: boolean; scanDir?: string } = {}
+): Promise<{ modelId: string; overridePath: string | null; mode: "router-load" | "override-restart"; reconfiguredModelsDir?: string }> {
   const normalizedModelId = normalizeRouterModelId(modelId.trim());
-  const model = await findLocalModel(normalizedModelId);
+  const preStatus = await getLlamaServerStatus(id, settings);
+  const inRouterMode = preStatus.http.routerMode;
+  const currentModelsDir = inRouterMode ? await resolveSlotModelsDir(id, settings) : undefined;
+  const preferredScanDir = options.scanDir || currentModelsDir;
+  const model = await findLocalModel(normalizedModelId, settings.llamaModelsDirs, preferredScanDir);
   if (!model) {
-    throw new Error(`Model not found in local llama-models directory: ${normalizedModelId}`);
+    throw new Error(`Model not found in any configured models directory: ${normalizedModelId}`);
+  }
+  if (options.scanDir && model.scanDir !== options.scanDir) {
+    throw new Error(`Model ${normalizedModelId} was not found in selected directory: ${options.scanDir}`);
   }
   if (model.kind !== SLOT_KIND[id]) {
     throw new Error(`Model ${normalizedModelId} is kind '${model.kind}', not '${SLOT_KIND[id]}' as required by ${id}`);
   }
 
-  const preStatus = await getLlamaServerStatus(id, settings);
-  const inRouterMode = preStatus.http.routerMode;
-
   if (inRouterMode) {
+    // Check if the model is already available in the router's --models-dir.
+    // If the model's scanDir differs from the service's modelsDir, the router
+    // won't be able to load it without a --models-dir reconfiguration.
+    if (currentModelsDir && model.scanDir !== currentModelsDir) {
+      if (!options.reconfigureModelsDir) {
+        // Signal conflict — the client should ask the user to confirm.
+        const conflict: RouterDirConflict = {
+          modelScanDir: model.scanDir,
+          currentModelsDir,
+          modelId: model.id,
+        };
+        const err: any = new Error("model directory mismatch");
+        err.conflict = conflict;
+        err.status = 409;
+        throw err;
+      }
+      // User confirmed — reconfigure the service's --models-dir and restart.
+      await reconfigureSlotModelsDir(id, model.scanDir, settings);
+      // Wait for the server to come back up
+      await waitForServerHealthy(id, settings, 15_000);
+    }
+
+    const freshStatus = await getLlamaServerStatus(id, settings);
     const ctxOverride = id === "extraction" ? settings.extractionCtxSize : undefined;
-    const result = await ensureRouterModelLoaded(preStatus.url, model.id, { contextWindow: ctxOverride, force: true });
+    const result = await ensureRouterModelLoaded(freshStatus.url, model.id, { contextWindow: ctxOverride, force: true });
     if (result === "not-router") {
       throw new Error(`Slot reported router mode but /models/load returned 404. Try refreshing.`);
     }
     if (result === "error") {
       throw new Error(`Slot accepted but failed to load model ${normalizedModelId}. Check service logs.`);
     }
-    return { modelId: model.id, overridePath: null, mode: "router-load" };
+    return {
+      modelId: model.id,
+      overridePath: null,
+      mode: "router-load",
+      reconfiguredModelsDir: options.reconfigureModelsDir ? model.scanDir : undefined,
+    };
   }
 
   if (id === "inference") {
@@ -82,6 +124,65 @@ async function applySlotModelRuntime(
   const result = await applyModelOverride(unitName, execStart, { environmentLines: envLines.length ? envLines : undefined });
   invalidateRouterCache(preStatus.url);
   return { modelId: model.id, overridePath: result.overridePath, mode: "override-restart" };
+}
+
+/**
+ * Resolve the current --models-dir for a slot by reading its deployed
+ * service config (managed drop-in if present, otherwise defaults).
+ */
+async function resolveSlotModelsDir(id: LlamaServerId, settings: Awaited<ReturnType<typeof getSettings>>): Promise<string | undefined> {
+  if (!canUseRouterMode(id)) return undefined;
+  try {
+    const unitName = await resolveSlotUnitName(id);
+    const config = getDefaultServiceConfig(id, settings);
+    const override = await readOverride(unitName);
+    if (override.contents) {
+      const parsed = parseManagedServiceConfig(id, override.contents, config);
+      return parsed.modelsDir;
+    }
+    return config.modelsDir;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Reconfigure a slot's --models-dir by writing a managed systemd drop-in
+ * and restarting the service. Uses the slot's current config with only
+ * the modelsDir and mode changed.
+ */
+async function reconfigureSlotModelsDir(id: LlamaServerId, newModelsDir: string, settings: Awaited<ReturnType<typeof getSettings>>): Promise<void> {
+  const unitName = await resolveSlotUnitName(id);
+  const baseConfig = getDefaultServiceConfig(id, settings);
+  const override = await readOverride(unitName);
+  const currentConfig = override.contents ? parseManagedServiceConfig(id, override.contents, baseConfig) : baseConfig;
+  // Override the modelsDir and ensure router mode
+  const config: LlamaServiceConfig = {
+    ...currentConfig,
+    mode: "router",
+    modelsDir: newModelsDir,
+    modelPath: undefined,
+    modelId: undefined,
+  };
+  const execStart = renderServiceExecStart(id, config);
+  const envLines = config.environment.length ? config.environment : resolveSlotEnvironment(id, settings);
+  await applyModelOverride(unitName, execStart, { environmentLines: envLines.length ? envLines : undefined });
+  invalidateRouterCache();
+}
+
+/**
+ * Poll a llama.cpp server until it becomes healthy or the timeout is reached.
+ * Used after a --models-dir reconfiguration which requires a service restart.
+ */
+async function waitForServerHealthy(id: LlamaServerId, settings: Awaited<ReturnType<typeof getSettings>>, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const status = await getLlamaServerStatus(id, settings);
+      if (status.http.status === "ok") return;
+    } catch { /* ignore */ }
+    await new Promise((r) => setTimeout(r, 500));
+  }
 }
 
 function persistSlotModelId(
@@ -121,7 +222,7 @@ router.get("/available-models", async (req, res) => {
     }
 
     const settings = await getSettings();
-    const all = await listLocalModels();
+    const all = await listLocalModels(settings.llamaModelsDirs);
     const filtered = kindFilter ? all.filter((m) => m.kind === kindFilter) : all;
     const models = new Map<string, {
       id: string;
@@ -130,17 +231,22 @@ router.get("/available-models", async (req, res) => {
       sizeBytes: number;
       kind: LlamaModelKind;
       hasMmproj: boolean;
+      scanDir?: string;
       source: "disk" | "server" | "settings";
     }>();
 
     for (const m of filtered) {
-      models.set(m.id, {
+      // Use a compound key when the same id appears in multiple scan dirs.
+      // This ensures both entries are visible in the dropdown.
+      const mapKey = models.has(m.id) ? `${m.id}::${m.scanDir}` : m.id;
+      models.set(mapKey, {
         id: m.id,
         name: m.name,
         ggufPath: m.ggufPath,
         sizeBytes: m.sizeBytes,
         kind: m.kind,
         hasMmproj: m.hasMmproj,
+        scanDir: m.scanDir,
         source: "disk",
       });
     }
@@ -177,6 +283,106 @@ router.get("/available-models", async (req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: e?.message || "Failed to list local llama.cpp models" });
   }
+});
+
+// Model scan paths — list, add, remove directories scanned for GGUF models.
+router.get("/scan-paths", async (_req, res) => {
+  const settings = await getSettings();
+  const dirs = resolveModelsDirs(settings.llamaModelsDirs);
+  const results = await Promise.all(
+    dirs.map(async (dir) => {
+      try {
+        const models = await scanDirectory(dir, { requireReadable: true });
+        return { path: dir, modelCount: models.length, valid: true };
+      } catch (e: any) {
+        return { path: dir, modelCount: 0, valid: false, error: e?.message || "Directory not found or not readable" };
+      }
+    })
+  );
+  res.json({ dirs: results });
+});
+
+// Preview a candidate scan directory — returns model count and first few
+// model names without persisting anything.
+router.post("/scan-paths/preview", async (req, res) => {
+  const candidate = typeof req.body?.path === "string" ? req.body.path.trim() : "";
+  if (!candidate) {
+    res.status(400).json({ error: "path is required" });
+    return;
+  }
+  try {
+    // Expand ~ to home directory
+    const expanded = candidate.startsWith("~/")
+      ? path.join(os.homedir(), candidate.slice(2))
+      : candidate;
+    const models = await scanDirectory(expanded, { requireReadable: true });
+    res.json({
+      path: expanded,
+      modelCount: models.length,
+      models: models.slice(0, 10).map((m) => ({ id: m.id, kind: m.kind, hasMmproj: m.hasMmproj })),
+      valid: true,
+    });
+  } catch (e: any) {
+    res.json({
+      path: candidate,
+      modelCount: 0,
+      models: [],
+      valid: false,
+      error: e?.message || "Directory not found or not readable",
+    });
+  }
+});
+
+// Add a scan path to settings.
+router.post("/scan-paths", async (req, res) => {
+  const candidate = typeof req.body?.path === "string" ? req.body.path.trim() : "";
+  if (!candidate) {
+    res.status(400).json({ error: "path is required" });
+    return;
+  }
+  // Expand ~
+  const expanded = candidate.startsWith("~/")
+    ? path.join(os.homedir(), candidate.slice(2))
+    : candidate;
+  const settings = await getSettings();
+  const dirs = resolveModelsDirs(settings.llamaModelsDirs);
+  if (dirs.includes(expanded)) {
+    res.status(409).json({ error: "Directory already in scan paths" });
+    return;
+  }
+  let models;
+  try {
+    models = await scanDirectory(expanded, { requireReadable: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || "Directory not found or not readable" });
+    return;
+  }
+  dirs.push(expanded);
+  settings.llamaModelsDirs = dirs;
+  await saveSettings(settings);
+  res.json({ dirs: [{ path: expanded, modelCount: models.length, valid: true }] });
+});
+
+// Remove a scan path from settings.
+router.delete("/scan-paths", async (req, res) => {
+  const target = typeof req.query.path === "string" ? req.query.path.trim() : "";
+  if (!target) {
+    res.status(400).json({ error: "path query parameter is required" });
+    return;
+  }
+  const expanded = target.startsWith("~/")
+    ? path.join(os.homedir(), target.slice(2))
+    : target;
+  const settings = await getSettings();
+  const dirs = resolveModelsDirs(settings.llamaModelsDirs);
+  const filtered = dirs.filter((d) => d !== expanded);
+  if (filtered.length === dirs.length) {
+    res.status(404).json({ error: "Directory not found in scan paths" });
+    return;
+  }
+  settings.llamaModelsDirs = filtered;
+  await saveSettings(settings);
+  res.json({ removed: expanded });
 });
 
 router.get("/:id", async (req, res) => {
@@ -332,17 +538,28 @@ router.post("/:id/apply-model", async (req, res) => {
     res.status(400).json({ error: "modelId is required" });
     return;
   }
+  const reconfigureModelsDir = Boolean(req.body?.reconfigureModelsDir);
+  const scanDir = typeof req.body?.scanDir === "string" && req.body.scanDir.trim()
+    ? req.body.scanDir.trim()
+    : undefined;
 
   try {
     const settings = await getSettings();
-    const applied = await applySlotModelRuntime(id, modelId, settings);
+    const applied = await applySlotModelRuntime(id, modelId, settings, { reconfigureModelsDir, scanDir });
     persistSlotModelId(id, settings, applied.modelId);
     await saveSettings(settings);
     if (id === "inference") invalidateModelCache();
 
     const server = await getLlamaServerStatus(id, settings);
-    res.json({ server, overridePath: applied.overridePath, mode: applied.mode });
+    res.json({ server, overridePath: applied.overridePath, mode: applied.mode, reconfiguredModelsDir: applied.reconfiguredModelsDir });
   } catch (e: any) {
+    if (e.conflict) {
+      res.status(e.status || 409).json({
+        error: e.message,
+        conflict: e.conflict,
+      });
+      return;
+    }
     res.status(500).json({ error: e?.message || "Failed to apply model" });
   }
 });
@@ -503,7 +720,7 @@ router.patch("/:id", async (req, res) => {
     }
 
     if (pendingModelId && isOverridableSlot(def.id)) {
-      const localModel = await findLocalModel(normalizeRouterModelId(pendingModelId));
+      const localModel = await findLocalModel(normalizeRouterModelId(pendingModelId), settings.llamaModelsDirs);
       if (localModel) {
         const applied = await applySlotModelRuntime(def.id, pendingModelId, settings);
         persistSlotModelId(def.id, settings, applied.modelId);
@@ -554,7 +771,7 @@ async function hydrateDefaultConfig(id: LlamaServerId, settings: Awaited<ReturnT
     config = parseManagedServiceConfig(id, override.contents, config);
   }
   if (config.mode === "single" && config.modelId && !config.modelPath) {
-    const model = await findLocalModel(config.modelId);
+    const model = await findLocalModel(config.modelId, settings.llamaModelsDirs);
     if (model) config.modelPath = model.ggufPath;
   }
   return config;
@@ -563,7 +780,7 @@ async function hydrateDefaultConfig(id: LlamaServerId, settings: Awaited<ReturnT
 async function hydrateServiceConfig(id: LlamaServerId, settings: Awaited<ReturnType<typeof getSettings>>, patch: Partial<LlamaServiceConfig>): Promise<LlamaServiceConfig> {
   const config = mergeServiceConfig(id, settings, patch);
   if (config.mode === "single" && config.modelId && !config.modelPath) {
-    const model = await findLocalModel(config.modelId);
+    const model = await findLocalModel(config.modelId, settings.llamaModelsDirs);
     if (model) config.modelPath = model.ggufPath;
   }
   return config;
