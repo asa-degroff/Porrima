@@ -54,14 +54,17 @@ describe("parseExtractionResponse", () => {
     expect(parseExtractionResponse("{not an array}")).toEqual([]);
   });
 
-  it("filters out facts with invalid categories", () => {
+  it("remaps facts with invalid categories to \"note\"", () => {
     const input = `[
       {"text": "Valid", "category": "fact", "importance": 5},
       {"text": "Invalid", "category": "opinion", "importance": 3}
     ]`;
     const result = parseExtractionResponse(input);
-    expect(result).toHaveLength(1);
+    expect(result).toHaveLength(2);
     expect(result[0].text).toBe("Valid");
+    expect(result[0].category).toBe("fact");
+    expect(result[1].text).toBe("Invalid");
+    expect(result[1].category).toBe("note");
   });
 
   it("filters out facts with missing text", () => {
