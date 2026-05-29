@@ -1409,7 +1409,7 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
     setLoading(true);
     try {
       const r = await listAvailableLlamaModels(slot);
-      setModels(r.models.map((m) => ({ id: m.id, name: m.name })));
+      setModels(r.models.map((m) => ({ id: m.id, name: m.name, source: m.source })));
     } catch {
       setModels([]);
     } finally {
@@ -2993,9 +2993,14 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
 	                                        {rerankerModels.map((m) => (
 	                                          <button key={m.id} onClick={() => {
 	                                            rerankerModelDd.close();
-	                                            handleApplySlotModel("reranker", m.id);
+	                                            if (m.source === "disk") handleApplySlotModel("reranker", m.id);
+	                                            else {
+	                                              setRerankerModelId(m.id);
+	                                              handleLlamaServerSettings("reranker", { modelId: m.id });
+	                                            }
 	                                          }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === rerankerModelId ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-	                                            {m.name}
+	                                            <span className="block truncate">{m.name}</span>
+	                                            {m.source && m.source !== "disk" && <span className="block text-[10px] text-white/35">{m.source === "server" ? "running service" : "saved alias"}</span>}
 	                                          </button>
 	                                        ))}
 	                                        <button onClick={() => setRerankerUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>
@@ -3074,14 +3079,15 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
 	                                    {embeddingModels.map((m) => (
 	                                      <button key={m.id} onClick={() => {
 	                                        embeddingModelDd.close();
-	                                        if (embeddingProvider === "llamacpp") {
+	                                        if (embeddingProvider === "llamacpp" && m.source === "disk") {
 	                                          handleApplySlotModel("embedding", m.id);
 	                                        } else {
 	                                          setEmbeddingModel(m.id);
 	                                          handleLlamaServerSettings("embedding", { modelId: m.id });
 	                                        }
 	                                      }} className={`w-full text-left px-3 py-2 text-xs font-mono transition-all ${m.id === embeddingModel ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
-	                                        {m.name}
+	                                        <span className="block truncate">{m.name}</span>
+	                                        {m.source && m.source !== "disk" && <span className="block text-[10px] text-white/35">{m.source === "server" ? "running service" : "saved alias"}</span>}
 	                                      </button>
 	                                    ))}
 	                                    <button onClick={() => setEmbeddingUseCustom(true)} className="w-full text-left px-3 py-2 text-xs italic text-white/50 hover:bg-white/10 border-t border-white/5 mt-1">Custom…</button>

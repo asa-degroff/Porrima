@@ -51,6 +51,7 @@ export async function fetchModels(): Promise<InferenceModel[]> {
 export interface DiscoveredModel {
   id: string;
   name: string;
+  source?: "disk" | "server" | "settings";
 }
 
 export async function discoverModels(params: {
@@ -1811,10 +1812,11 @@ export type RuntimeModelApplyId = LlamaServerId;
 export interface AvailableLlamaModel {
   id: string;
   name: string;
-  ggufPath: string;
+  ggufPath?: string;
   sizeBytes: number;
   kind: "chat" | "embedding" | "rerank";
   hasMmproj: boolean;
+  source: "disk" | "server" | "settings";
 }
 
 export async function listAvailableLlamaModels(slot?: OverridableSlotId): Promise<{ models: AvailableLlamaModel[] }> {

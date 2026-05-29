@@ -120,17 +120,59 @@ router.get("/available-models", async (req, res) => {
       kindFilter = kind;
     }
 
+    const settings = await getSettings();
     const all = await listLocalModels();
     const filtered = kindFilter ? all.filter((m) => m.kind === kindFilter) : all;
-    res.json({
-      models: filtered.map((m) => ({
+    const models = new Map<string, {
+      id: string;
+      name: string;
+      ggufPath?: string;
+      sizeBytes: number;
+      kind: LlamaModelKind;
+      hasMmproj: boolean;
+      source: "disk" | "server" | "settings";
+    }>();
+
+    for (const m of filtered) {
+      models.set(m.id, {
         id: m.id,
         name: m.name,
         ggufPath: m.ggufPath,
         sizeBytes: m.sizeBytes,
         kind: m.kind,
         hasMmproj: m.hasMmproj,
-      })),
+        source: "disk",
+      });
+    }
+
+    if (slot && kindFilter) {
+      const server = await getLlamaServerStatus(slot, settings).catch(() => null);
+      const expectedModel = server?.expectedModel;
+      if (expectedModel && !models.has(expectedModel)) {
+        models.set(expectedModel, {
+          id: expectedModel,
+          name: expectedModel,
+          sizeBytes: 0,
+          kind: kindFilter,
+          hasMmproj: false,
+          source: "settings",
+        });
+      }
+      for (const id of server?.http.modelIds || []) {
+        if (!id || models.has(id)) continue;
+        models.set(id, {
+          id,
+          name: id,
+          sizeBytes: 0,
+          kind: kindFilter,
+          hasMmproj: false,
+          source: "server",
+        });
+      }
+    }
+
+    res.json({
+      models: [...models.values()].sort((a, b) => a.name.localeCompare(b.name)),
     });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || "Failed to list local llama.cpp models" });
@@ -461,8 +503,21 @@ router.patch("/:id", async (req, res) => {
     }
 
     if (pendingModelId && isOverridableSlot(def.id)) {
-      const applied = await applySlotModelRuntime(def.id, pendingModelId, settings);
-      persistSlotModelId(def.id, settings, applied.modelId);
+      const localModel = await findLocalModel(normalizeRouterModelId(pendingModelId));
+      if (localModel) {
+        const applied = await applySlotModelRuntime(def.id, pendingModelId, settings);
+        persistSlotModelId(def.id, settings, applied.modelId);
+      } else if (def.id === "reranker" || def.id === "embedding") {
+        // These are single-model services and may be launched directly from an
+        // absolute GGUF path outside ~/.local/share/llama-models. In that case
+        // changing the request model name is still valid because llama.cpp
+        // accepts aliases for the currently served model, but there is no local
+        // disk entry to use for rewriting ExecStart.
+        persistSlotModelId(def.id, settings, pendingModelId);
+      } else {
+        const applied = await applySlotModelRuntime(def.id, pendingModelId, settings);
+        persistSlotModelId(def.id, settings, applied.modelId);
+      }
     }
 
     await saveSettings(settings);
