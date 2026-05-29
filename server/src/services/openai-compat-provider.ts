@@ -745,7 +745,16 @@ function startLlamaPrefillMonitor(input: {
             // and denominator track the same value and always show 100%.
             // The estimate is computed before the request starts and doesn't
             // change during prefill, giving a correct progress ratio.
-            const effectivePromptTokens = estimatedPromptTokens ?? rawPromptTokens;
+            // When cached token count is available, subtract it from the
+            // estimate so the denominator represents actual work remaining
+            // (the uncached suffix), not total prompt size. Otherwise the
+            // delta numerator (only newly processed tokens) divides by a
+            // too-large denominator and the bar caps below 100% on warm caches.
+            const effectivePromptTokens = estimatedPromptTokens != null
+              ? (snapshot.cachedPromptTokens != null
+                  ? Math.max(1, estimatedPromptTokens - snapshot.cachedPromptTokens)
+                  : estimatedPromptTokens)
+              : rawPromptTokens;
 
             // Compute effective processed tokens as a delta from the first
             // observed value. This correctly handles both:

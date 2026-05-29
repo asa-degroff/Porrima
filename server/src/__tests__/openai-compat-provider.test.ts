@@ -102,20 +102,27 @@ describe("prefill progress computation", () => {
   // and always show 100%.
 
   function simulateProgressPolls(
-    slotData: { processedTokens: number; promptTokens: number }[],
+    slotData: { processedTokens: number; promptTokens: number; cachedPromptTokens?: number }[],
     estimatedPromptTokens: number | undefined,
   ): { processedTokens: number | undefined; promptTokens: number | undefined; progress: number | undefined }[] {
     const results: { processedTokens: number | undefined; promptTokens: number | undefined; progress: number | undefined }[] = [];
     let firstProcessedTokens: number | undefined;
 
-    for (const { processedTokens: raw, promptTokens: rawPrompt } of slotData) {
+    for (const { processedTokens: raw, promptTokens: rawPrompt, cachedPromptTokens } of slotData) {
       // Mimics startLlamaPrefillMonitor: firstProcessedTokens is set BEFORE
       // computing effective delta, so first poll gives delta = 0.
       if (firstProcessedTokens === undefined) {
         firstProcessedTokens = raw;
       }
 
-      const effectivePromptTokens = estimatedPromptTokens ?? rawPrompt;
+      // Denominator: stable estimate, adjusted by cached tokens when available
+      // so it represents actual work remaining (uncached suffix).
+      const effectivePromptTokens = estimatedPromptTokens != null
+        ? (cachedPromptTokens != null
+            ? Math.max(1, estimatedPromptTokens - cachedPromptTokens)
+            : estimatedPromptTokens)
+        : rawPrompt;
+
       // Delta from first observed value (mimics startLlamaPrefillMonitor baseline tracking)
       const effectiveProcessedTokens = raw !== undefined && firstProcessedTokens !== undefined
         ? Math.max(0, raw - firstProcessedTokens)
@@ -165,29 +172,31 @@ describe("prefill progress computation", () => {
   });
 
   it("handles warm cache with n_tokens fallback correctly", () => {
-    // When n_tokens fallback includes cached context (e.g., 4000 tokens cached)
-    // and new tokens are being prefiled, delta subtraction correctly
-    // extracts only the new work.
+    // Total prompt: ~10000 tokens. Cache holds ~4000. New work: ~6000.
+    // n_tokens fallback starts at cached context (4000) and grows to total (10000).
+    // Delta extracts only new work. Denominator = estimate - cached = 10000 - 4000 = 6000.
+    // Progress should reach ~100% when prefill completes.
     const polls = simulateProgressPolls(
       [
-        { processedTokens: 4200, promptTokens: 10000 },  // n_tokens starts at cached context
-        { processedTokens: 5400, promptTokens: 10000 },
-        { processedTokens: 7000, promptTokens: 10000 },
+        { processedTokens: 4000, promptTokens: 10000, cachedPromptTokens: 4000 },
+        { processedTokens: 6000, promptTokens: 10000, cachedPromptTokens: 4000 },
+        { processedTokens: 10000, promptTokens: 10000, cachedPromptTokens: 4000 },
       ],
-      6000, // Estimated prompt tokens (new work, excluding cache)
+      10000, // Estimated total prompt tokens
     );
 
-    // First poll: delta = 4200 - 4200 = 0
+    // First poll: delta = 4000 - 4000 = 0, denominator = 10000 - 4000 = 6000
     expect(polls[0].processedTokens).toBe(0);
+    expect(polls[0].promptTokens).toBe(6000);
     expect(polls[0].progress).toBeCloseTo(0);
 
-    // Second poll: delta = 5400 - 4200 = 1200
-    expect(polls[1].processedTokens).toBe(1200);
-    expect(polls[1].progress).toBeCloseTo(1200 / 6000, 2);
+    // Second poll: delta = 6000 - 4000 = 2000
+    expect(polls[1].processedTokens).toBe(2000);
+    expect(polls[1].progress).toBeCloseTo(2000 / 6000, 2);
 
-    // Third poll: delta = 7000 - 4200 = 2800
-    expect(polls[2].processedTokens).toBe(2800);
-    expect(polls[2].progress).toBeCloseTo(2800 / 6000, 2);
+    // Third poll: delta = 10000 - 4000 = 6000, reaches 100%
+    expect(polls[2].processedTokens).toBe(6000);
+    expect(polls[2].progress).toBeCloseTo(1.0);
   });
 
   it("works correctly when slot data provides distinct processed/prompt values", () => {
@@ -229,6 +238,31 @@ describe("prefill progress computation", () => {
     // In practice, estimates are always available since they're pre-computed.
     expect(polls[0].promptTokens).toBe(4100);
     expect(polls[1].promptTokens).toBe(7000);
+  });
+
+  it("warm cache progress reaches 100% when denominator subtracts cached tokens", () => {
+    // Regression test: without subtracting cachedPromptTokens from the estimate,
+    // the denominator (total estimate) would be larger than the numerator (delta =
+    // only uncached work), capping the progress bar well below 100%.
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 5000, promptTokens: 10000, cachedPromptTokens: 5000 },
+        { processedTokens: 7500, promptTokens: 10000, cachedPromptTokens: 5000 },
+        { processedTokens: 10000, promptTokens: 10000, cachedPromptTokens: 5000 },
+      ],
+      10000, // Estimate = total prompt size, NOT just uncached work
+    );
+
+    // Denominator = 10000 - 5000 = 5000 (actual work remaining)
+    expect(polls[0].promptTokens).toBe(5000);
+    expect(polls[0].progress).toBeCloseTo(0);
+
+    expect(polls[1].processedTokens).toBe(2500); // 7500 - 5000
+    expect(polls[1].progress).toBeCloseTo(0.5);
+
+    // Reaches 100% — not capped at 50% like it would be without cache subtraction
+    expect(polls[2].processedTokens).toBe(5000); // 10000 - 5000
+    expect(polls[2].progress).toBeCloseTo(1.0);
   });
 
   it("estimates with some inaccuracy still produce useful progress", () => {
