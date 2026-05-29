@@ -80,7 +80,7 @@ export const MEMORY_TOOLS: Tool[] = [
   {
     name: "create_memory_block",
     description:
-      "Create a structured memory block — a named, editable document for organizing knowledge about a topic, project, or domain. Use this to consolidate related facts into a coherent document. Blocks are indexed and searchable across all chats.",
+      "Create a structured memory block — a named, editable document for organizing knowledge about a topic, project, or domain. Use this to consolidate related facts into a coherent document. Blocks are indexed and searchable.",
     parameters: Type.Object({
       name: Type.String({ description: "Block name (e.g. 'Tech Stack', 'User Preferences', 'Architecture', 'Topic Details')" }),
       description: Type.String({ description: "One-line summary of what this block covers — used for retrieval and indexing" }),
@@ -127,7 +127,7 @@ export const MEMORY_TOOLS: Tool[] = [
       "Write a notebook entry — a narrative reflection, daily synthesis, or longer-form note in your own voice. " +
       "Notebook entries are preserved verbatim (no character cap), remain fully searchable via search_memory and " +
       "list_memory_blocks, and are excluded from active context so they don't crowd the system prompt. " +
-      "Use this instead of save_memory when writing prose — save_memory is for atomic facts, notebook entries are for narrative.",
+      "Use this when writing prose — save_memory is for atomic facts, notebook entries are for narrative.",
     parameters: Type.Object({
       content: Type.String({
         description: "The full notebook entry content (markdown allowed, no length cap)",

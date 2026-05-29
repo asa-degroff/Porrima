@@ -23,7 +23,7 @@ const VISUALS_DIR = appDataPath("visuals");
 
 const READ_FILE_TOOL: Tool = {
   name: "read_file",
-  description: "Read the contents of a file. Returns content with line numbers. When `limit` is omitted, returns up to a configurable default number of lines (1000 by default) and appends a truncation marker indicating how to read the rest with `offset`. For large files, paginate with `offset`/`limit` instead of issuing repeated full reads.",
+  description: "Read the contents of a file. Returns content with line numbers. When `limit` is omitted, returns up to the maximum number of lines. For large files, paginate with `offset`/`limit` instead of issuing repeated full reads.",
   parameters: Type.Object({
     path: Type.String({ description: "File path (relative to working directory or absolute)" }),
     offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-based)" })),
@@ -70,7 +70,7 @@ const BASH_TOOL: Tool = {
 
 const RUN_PYTHON_TOOL: Tool = {
   name: "run_python",
-  description: "Execute Python code and return the output. Runs in a clean workspace directory with full system access (filesystem, network, environment) and a 30s timeout. Use for data processing, computation, and any Python task — no restrictions.",
+  description: "Execute Python code and return the output. Runs in a clean workspace directory with full system access (filesystem, network, environment) and a 30s timeout. Use for data processing, computation, and any Python task.",
   parameters: Type.Object({
     code: Type.String({ description: "Python code to execute" }),
   }),
@@ -98,7 +98,7 @@ const CREATE_ARTIFACT_TOOL: Tool = {
 
 const UPDATE_ARTIFACT_TOOL: Tool = {
   name: "update_artifact",
-  description: `Update an existing artifact with new HTML content. Use when the user asks to modify or improve a previously created artifact. The artifact ID should reference a previously created artifact. ${P5_INSTANCE_MODE_GUIDANCE}`,
+  description: `Update an existing artifact or visual with new HTML content. Use when the user asks to modify or improve a previously created artifact. The artifact ID should reference a previously created artifact. ${P5_INSTANCE_MODE_GUIDANCE}`,
   parameters: Type.Object({
     artifactId: Type.String({ description: "The canonical ID of the artifact to update (from a previous create_artifact call)" }),
     html: Type.String({ description: `Complete HTML document with the updated content. ${P5_INSTANCE_MODE_GUIDANCE}` }),
@@ -368,7 +368,7 @@ URL: ${result.url}${warningText}` }], details: {} };
   // Skill management tools
   tools.push({
     name: "install_skill",
-    description: "Install a new skill from a URL (GitHub or direct SKILL.md link). The agent can use this to extend its capabilities by fetching skills from external sources. Returns the installed skill name and path.",
+    description: "Install a new skill from a URL (GitHub or direct SKILL.md link). Use this to extend your capabilities by fetching skills from external sources. Returns the installed skill name and path.",
     parameters: Type.Object({
       url: Type.String({ description: "URL to the skill (GitHub blob/tree URL or direct URL to SKILL.md file)" }),
       name: Type.Optional(Type.String({ description: "Custom name for the skill folder (optional, defaults to name from frontmatter)" })),

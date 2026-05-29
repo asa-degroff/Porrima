@@ -157,7 +157,7 @@ function findChromePath(): string | null {
 const WEB_SEARCH_TOOL: Tool = {
   name: "web_search",
   description:
-    "Search the web. Uses the configured default provider unless provider is supplied as an override. Supports Brave Search, Exa, and Tavily. Brave returns simple snippets; Exa supports rich content extraction and deep reasoning search; Tavily supports concise ranked web results, optional generated answers, and date/domain filters.",
+    "Search the web. Uses the configured default provider unless provider is supplied as an override. Supports Brave Search, Exa, and Tavily.",
   parameters: Type.Object({
     query: Type.String({ description: "Search query" }),
     count: Type.Optional(
@@ -211,7 +211,7 @@ const WEB_SEARCH_TOOL: Tool = {
 const WEB_FETCH_TOOL: Tool = {
   name: "web_fetch",
   description:
-    "Fetch a web page, save its full content to a cached file, and return a preview (first ~10K chars) with the file path and total size. For large pages, use read_file(path, offset, limit) to read the rest progressively, or grep to search the cached content. Uses a headless browser to render JavaScript. By default, extracts the main article content; set raw=true to get the full page.",
+    "Fetch a web page, save its full content to a cached file, and return a preview (first ~10K chars) with the file path and total size. Uses a headless browser to render JavaScript. By default, extracts the main article content; set raw=true to get the full page.",
   parameters: Type.Object({
     url: Type.String({ description: "URL to fetch (http or https)" }),
     timeout: Type.Optional(
