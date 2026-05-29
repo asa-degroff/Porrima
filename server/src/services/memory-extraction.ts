@@ -498,8 +498,7 @@ async function computeBlockCharBudget(
 
 async function buildExtractionSystemPrompt(projectId?: string): Promise<string> {
   const settings = await getSettings();
-  const ctxSize = settings.extractionCtxSize ?? 16384;
-  const { maxTokens } = normalizeExtractionRequestSettings(settings);
+  const { ctxSize, maxTokens } = normalizeExtractionRequestSettings(settings);
   const prefix = await loadExtractionPrefix();
 
   // Include loaded block summaries so extraction avoids redundant facts.
