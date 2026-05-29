@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { fetchModels } from "../api/client";
+import { useState, useEffect, useCallback } from "react";
+import { fetchModels, refreshModels } from "../api/client";
 import type { InferenceModel } from "../types";
 
 export function useModels() {
@@ -7,12 +7,20 @@ export function useModels() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchModels()
+  const load = useCallback((source: "init" | "refresh") => {
+    const fn = source === "init" ? fetchModels : refreshModels;
+    if (source === "refresh") setLoading(true);
+    fn()
       .then(setModels)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
 
-  return { models, loading, error };
+  useEffect(() => {
+    load("init");
+  }, [load]);
+
+  const refresh = useCallback(() => load("refresh"), [load]);
+
+  return { models, loading, error, refresh };
 }

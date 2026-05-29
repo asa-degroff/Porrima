@@ -48,6 +48,12 @@ export async function fetchModels(): Promise<InferenceModel[]> {
   return res.json();
 }
 
+export async function refreshModels(): Promise<InferenceModel[]> {
+  const res = await apiFetch(`${BASE}/models/refresh`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to refresh models");
+  return res.json();
+}
+
 export interface DiscoveredModel {
   id: string;
   name: string;

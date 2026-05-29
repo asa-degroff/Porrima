@@ -84,7 +84,7 @@ if (typeof document !== "undefined") {
 }
 
 function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
-  const { models } = useModels();
+  const { models, refresh: refreshModels } = useModels();
   const { chats, createChat, removeChat, updateChatTitle, refresh, refreshImmediate } = useChats();
   const { projects, createProject, removeProject } = useProjects();
   const { settings, updateSettings, loading: settingsLoading } = useSettings();
@@ -1200,6 +1200,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <SettingsModal
           settings={settings}
           models={models}
+          refreshModels={refreshModels}
           onApply={handleApplySettings}
           onSave={handleSaveSettings}
           onClose={handleCloseSettings}

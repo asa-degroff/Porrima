@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { discoverAllModels } from "../services/models.js";
+import { discoverAllModels, invalidateModelCache } from "../services/models.js";
 import { getSettings } from "../services/chat-storage.js";
 
 const router = Router();
@@ -15,6 +15,18 @@ router.get("/", async (req, res) => {
   } catch (e: any) {
     console.error("[models] discovery failed:", e.message);
     res.status(503).json({ error: "Cannot connect to inference server. Is llama.cpp running?", details: e.message });
+  }
+});
+
+// Manual refresh — invalidate cache and re-discover immediately.
+router.post("/refresh", async (req, res) => {
+  try {
+    invalidateModelCache();
+    const models = await discoverAllModels();
+    res.json(models);
+  } catch (e: any) {
+    console.error("[models] refresh failed:", e.message);
+    res.status(503).json({ error: "Model refresh failed", details: e.message });
   }
 });
 

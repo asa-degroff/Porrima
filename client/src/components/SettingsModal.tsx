@@ -405,6 +405,7 @@ function formatAutomationDuration(startedAt: string, finishedAt?: string): strin
 interface Props {
   settings: Settings;
   models: InferenceModel[];
+  refreshModels: () => void;
   onApply: (settings: Settings) => void | Promise<void>;
   onSave: (settings: Settings) => void | Promise<void>;
   onClose: () => void;
@@ -417,7 +418,7 @@ function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
   return Array.from(new Set((ids ?? []).filter((id) => PCI_ADDRESS_RE.test(id))));
 }
 
-export function SettingsModal({ settings, models, onApply, onSave, onClose, onLogout }: Props) {
+export function SettingsModal({ settings, models, refreshModels, onApply, onSave, onClose, onLogout }: Props) {
   const visionModelOptions = (() => {
     const capable = models.filter(isVisionModel);
     return capable.length > 0 ? capable : models;
@@ -2399,7 +2400,17 @@ export function SettingsModal({ settings, models, onApply, onSave, onClose, onLo
             >
           {/* Default Model */}
           <div id="models" className="space-y-2">
-            <label className="block text-sm font-medium text-white/60">Default Chat Model</label>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-white/60">Default Chat Model</label>
+              <button
+                type="button"
+                onClick={refreshModels}
+                className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/80 hover:bg-white/10 transition-all"
+                title="Refresh model list"
+              >
+                Refresh
+              </button>
+            </div>
             <p className="text-xs text-white/30 -mt-1">
               Used for new chats and system/automation turns. Existing chats keep their own model until changed in the chat header.
             </p>
