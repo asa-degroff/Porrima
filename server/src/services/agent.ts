@@ -214,12 +214,27 @@ export function chatMessagesToPiMessages(
           for (const tr of m.toolResults) {
             // For tool results, the content should be the text + images array
             // This matches how pi-ai expects ToolResultMessage content
-            // Safety truncation: cap tool result text to prevent oversized results
-            // from persisted messages blowing up the context on replay.
-            const MAX_TOOL_RESULT_CHARS = 60_000;
-            let trText = tr.content || "";
-            if (trText.length > MAX_TOOL_RESULT_CHARS) {
-              trText = trText.slice(0, MAX_TOOL_RESULT_CHARS) + `\n[Truncated from ${(trText.length / 1024).toFixed(0)}KB]`;
+            //
+            // IMPORTANT: Do NOT truncate tool results here during replay.
+            // If a tool result was sent at full length on the original turn, the
+            // KV cache already contains its tokens. Truncating on replay creates
+            // a token-level divergence at the truncation point, breaking the LCP
+            // prefix match and forcing full re-evaluation of all tokens after the
+            // truncated result (potentially tens of thousands of tokens across
+            // multiple checkpoints). This caused a ~180-second prompt eval penalty
+            // in practice when a 65KB read_file result was truncated to 60KB.
+            //
+            // Context budget management is handled by compaction (compaction.ts),
+            // which truncates tool results in the DB when the conversation needs
+            // to be compacted. After compaction, the DB version is already
+            // truncated, so this code path sees the shorter version naturally.
+            //
+            // Log oversized results for monitoring — if context overflow occurs,
+            // the pre-send compaction will handle it.
+            const LOG_TOOL_RESULT_CHARS = 60_000;
+            const trText = tr.content || "";
+            if (trText.length > LOG_TOOL_RESULT_CHARS) {
+              console.log(`[agent] Oversized tool result in replay: ${tr.toolName} ${(trText.length / 1024).toFixed(0)}KB (threshold: ${(LOG_TOOL_RESULT_CHARS / 1024).toFixed(0)}KB). Not truncating to preserve KV cache prefix.`);
             }
             const content: any[] = [{ type: "text" as const, text: trText }];
             // Attach images if present (for generate_and_review tool)

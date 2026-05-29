@@ -520,6 +520,19 @@ function logKvCacheState(opts: {
     prefixState =
       `diverged(prev_msgs=${prev.piMsgCount},now_msgs=${opts.contextPiMessages.length},` +
       `prev_digest=${prev.digest},now_digest=${digest})`;
+    // Warn on divergence — this usually means the KV cache prefix won't match,
+    // causing full re-evaluation of tokens after the divergence point. Common causes:
+    // - Tool result truncation on replay (MAX_TOOL_RESULT_CHARS in agent.ts)
+    // - Thinking promotion changing assistant response structure
+    // - Memory insertions or edits between turns
+    // - Image hydration differences between turns
+    const toolResultChars = opts.contextPiMessages
+      .filter((m): m is ToolResultMessage => m.role === 'toolResult')
+      .reduce((sum, m) => sum + m.content.reduce((s: number, c: any) => s + (c.type === 'text' ? c.text?.length ?? 0 : 0), 0), 0);
+    if (toolResultChars > 30_000) {
+      console.warn(`[kv-cache] Divergence with large tool results (${(toolResultChars / 1024).toFixed(0)}KB). ` +
+        `If KV cache hit rate drops, check for tool result truncation in agent.ts chatMessagesToPiMessages.`);
+    }
   }
   log(
     `[kv-cache] chat=${opts.chatId} src=${opts.source} ` +
