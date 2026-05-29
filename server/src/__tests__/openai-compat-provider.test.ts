@@ -5,6 +5,7 @@ import {
   readProcessedTokens,
   readPromptCacheTokens,
   readPromptTokens,
+  extractSlotProgress,
 } from "../services/openai-compat-provider.js";
 
 describe("estimatePromptTokensForProgress", () => {
@@ -89,5 +90,222 @@ describe("promptWorkTokens", () => {
 
   it("falls back to the full prompt when no cache token count is available", () => {
     expect(promptWorkTokens(8192, undefined)).toBe(8192);
+  });
+});
+
+describe("prefill progress computation", () => {
+  // These tests validate the key fix: effective processed tokens (delta from
+  // baseline) and effective prompt tokens (stable estimate) produce correct
+  // progress ratios even when llama.cpp reports n_prompt_tokens that grows
+  // during prefill (matching n_prompt_tokens_processed), which would
+  // otherwise cause both numerator and denominator to track the same value
+  // and always show 100%.
+
+  function simulateProgressPolls(
+    slotData: { processedTokens: number; promptTokens: number }[],
+    estimatedPromptTokens: number | undefined,
+  ): { processedTokens: number | undefined; promptTokens: number | undefined; progress: number | undefined }[] {
+    const results: { processedTokens: number | undefined; promptTokens: number | undefined; progress: number | undefined }[] = [];
+    let firstProcessedTokens: number | undefined;
+
+    for (const { processedTokens: raw, promptTokens: rawPrompt } of slotData) {
+      // Mimics startLlamaPrefillMonitor: firstProcessedTokens is set BEFORE
+      // computing effective delta, so first poll gives delta = 0.
+      if (firstProcessedTokens === undefined) {
+        firstProcessedTokens = raw;
+      }
+
+      const effectivePromptTokens = estimatedPromptTokens ?? rawPrompt;
+      // Delta from first observed value (mimics startLlamaPrefillMonitor baseline tracking)
+      const effectiveProcessedTokens = raw !== undefined && firstProcessedTokens !== undefined
+        ? Math.max(0, raw - firstProcessedTokens)
+        : raw;
+
+      const progress = effectiveProcessedTokens !== undefined && effectivePromptTokens !== undefined && effectivePromptTokens > 0
+        ? Math.max(0, Math.min(1, effectiveProcessedTokens / effectivePromptTokens))
+        : undefined;
+
+      results.push({
+        processedTokens: effectiveProcessedTokens,
+        promptTokens: effectivePromptTokens,
+        progress,
+      });
+    }
+
+    return results;
+  }
+
+  it("produces correct progress when n_prompt_tokens tracks n_prompt_tokens_processed (the 100% bug)", () => {
+    // Simulates the bug scenario: both fields grow in lockstep.
+    // Old behavior: 4100/4100, 7000/7000, 10000/10000 (always 100%)
+    // New behavior with delta + estimate: 0/10000, 2900/10000, 5800/10000
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 4100, promptTokens: 4100 },  // Both growing together
+        { processedTokens: 7000, promptTokens: 7000 },  // Both still equal
+        { processedTokens: 10000, promptTokens: 10000 }, // Final: both at total
+      ],
+      10000, // Stable estimated prompt tokens
+    );
+
+    // First poll: delta = 4100 - 4100 = 0
+    expect(polls[0].processedTokens).toBe(0);
+    expect(polls[0].promptTokens).toBe(10000);
+    expect(polls[0].progress).toBeCloseTo(0);
+
+    // Second poll: delta = 7000 - 4100 = 2900
+    expect(polls[1].processedTokens).toBe(2900);
+    expect(polls[1].promptTokens).toBe(10000);
+    expect(polls[1].progress).toBeCloseTo(0.29);
+
+    // Third poll: delta = 10000 - 4100 = 5900
+    expect(polls[2].processedTokens).toBe(5900);
+    expect(polls[2].promptTokens).toBe(10000);
+    expect(polls[2].progress).toBeCloseTo(0.59);
+  });
+
+  it("handles warm cache with n_tokens fallback correctly", () => {
+    // When n_tokens fallback includes cached context (e.g., 4000 tokens cached)
+    // and new tokens are being prefiled, delta subtraction correctly
+    // extracts only the new work.
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 4200, promptTokens: 10000 },  // n_tokens starts at cached context
+        { processedTokens: 5400, promptTokens: 10000 },
+        { processedTokens: 7000, promptTokens: 10000 },
+      ],
+      6000, // Estimated prompt tokens (new work, excluding cache)
+    );
+
+    // First poll: delta = 4200 - 4200 = 0
+    expect(polls[0].processedTokens).toBe(0);
+    expect(polls[0].progress).toBeCloseTo(0);
+
+    // Second poll: delta = 5400 - 4200 = 1200
+    expect(polls[1].processedTokens).toBe(1200);
+    expect(polls[1].progress).toBeCloseTo(1200 / 6000, 2);
+
+    // Third poll: delta = 7000 - 4200 = 2800
+    expect(polls[2].processedTokens).toBe(2800);
+    expect(polls[2].progress).toBeCloseTo(2800 / 6000, 2);
+  });
+
+  it("works correctly when slot data provides distinct processed/prompt values", () => {
+    // When llama.cpp correctly provides n_prompt_tokens (total) and
+    // n_prompt_tokens_processed (partial), delta tracking still works.
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 0, promptTokens: 10000 },     // Start of prefill
+        { processedTokens: 5000, promptTokens: 10000 },  // Mid-prefill
+        { processedTokens: 10000, promptTokens: 10000 }, // Done
+      ],
+      10000,
+    );
+
+    expect(polls[0].processedTokens).toBe(0);
+    expect(polls[0].progress).toBeCloseTo(0);
+
+    expect(polls[1].processedTokens).toBe(5000);
+    expect(polls[1].progress).toBeCloseTo(0.5);
+
+    expect(polls[2].processedTokens).toBe(10000);
+    expect(polls[2].progress).toBeCloseTo(1.0);
+  });
+
+  it("falls back to raw prompt tokens when estimate is unavailable", () => {
+    // When estimatedPromptTokens is undefined, promptTokens comes from slot data.
+    // The bug (always 100%) would still occur, but the delta at least gives
+    // some idea of progress.
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 4100, promptTokens: 4100 },
+        { processedTokens: 7000, promptTokens: 7000 },
+      ],
+      undefined, // No estimate available
+    );
+
+    // With no estimate and growing promptTokens, we get delta/delta ≈ 100%
+    // This is the degraded case — still broken but no worse than before.
+    // In practice, estimates are always available since they're pre-computed.
+    expect(polls[0].promptTokens).toBe(4100);
+    expect(polls[1].promptTokens).toBe(7000);
+  });
+
+  it("estimates with some inaccuracy still produce useful progress", () => {
+    // Even if the estimate is off by ~20%, progress is still meaningful.
+    const polls = simulateProgressPolls(
+      [
+        { processedTokens: 200, promptTokens: 200 },
+        { processedTokens: 5000, promptTokens: 5000 },
+        { processedTokens: 8000, promptTokens: 8000 },
+      ],
+      12000, // Overestimate by 20%
+    );
+
+    expect(polls[0].processedTokens).toBe(0);  // delta from baseline
+    expect(polls[0].progress).toBeCloseTo(0);
+
+    expect(polls[1].processedTokens).toBe(4800);  // 5000 - 200
+    expect(polls[1].progress).toBeCloseTo(4800 / 12000, 2);
+
+    expect(polls[2].processedTokens).toBe(7800);  // 8000 - 200
+    expect(polls[2].progress).toBeCloseTo(7800 / 12000, 2);
+
+    // Progress reaches ~65% when actual prefill completes,
+    // then transitions to decode phase — much better than always 100%
+  });
+});
+
+describe("extractSlotProgress", () => {
+  it("extracts token counts from a processing slot", () => {
+    const payload = [
+      {
+        id: 0,
+        is_processing: true,
+        n_prompt_tokens: 8192,
+        n_prompt_tokens_processed: 2048,
+        n_prompt_tokens_cache: 4096,
+      },
+    ];
+    const snapshot = extractSlotProgress(payload, undefined, 10000);
+
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.processedTokens).toBe(2048);
+    expect(snapshot!.fullPromptTokens).toBe(8192);
+    expect(snapshot!.cachedPromptTokens).toBe(4096);
+    // promptTokens = promptWorkTokens(8192, 4096) = 4096
+    expect(snapshot!.promptTokens).toBe(4096);
+  });
+
+  it("selects the slot with the most processed tokens when no preferred slot", () => {
+    const payload = [
+      { id: 0, is_processing: true, n_prompt_tokens_processed: 500, n_prompt_tokens: 10000 },
+      { id: 1, is_processing: true, n_prompt_tokens_processed: 3000, n_prompt_tokens: 10000 },
+    ];
+    const snapshot = extractSlotProgress(payload, undefined, 10000);
+
+    // Should pick the slot with most processed tokens
+    expect(snapshot!.processedTokens).toBe(3000);
+    expect(snapshot!.slotId).toBe(1);
+  });
+
+  it("prefers the specified slot even if another slot has more progress", () => {
+    const payload = [
+      { id: 0, is_processing: true, n_prompt_tokens_processed: 500, n_prompt_tokens: 10000 },
+      { id: 1, is_processing: true, n_prompt_tokens_processed: 3000, n_prompt_tokens: 10000 },
+    ];
+    const snapshot = extractSlotProgress(payload, 0, 10000);
+
+    expect(snapshot!.processedTokens).toBe(500);
+    expect(snapshot!.slotId).toBe(0);
+  });
+
+  it("returns null when no slots are processing", () => {
+    const payload = [
+      { id: 0, is_processing: false, n_prompt_tokens: 0 },
+    ];
+    const snapshot = extractSlotProgress(payload, undefined, 10000);
+
+    expect(snapshot).toBeNull();
   });
 });

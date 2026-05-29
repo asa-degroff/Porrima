@@ -492,7 +492,7 @@ export function promptWorkTokens(fullPromptTokens?: number, cachedPromptTokens?:
   return Math.max(1, fullPromptTokens - Math.min(cachedPromptTokens, fullPromptTokens));
 }
 
-function extractSlotProgress(
+export function extractSlotProgress(
   payload: any,
   preferredSlotId: number | undefined,
   fallbackPromptTokens: number | undefined,
@@ -643,11 +643,10 @@ function shouldAutoShowPrefillIndicator(
   const promptTokens = progress.promptTokens ?? 0;
   if (promptTokens < LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROMPT_TOKENS) return false;
 
-  // In recent llama.cpp builds, n_prompt_tokens is the full rendered prompt
-  // while n_prompt_tokens_processed is only the newly evaluated suffix after
-  // cache reuse. A small processed/full ratio can therefore mean "good cache
-  // hit", not "cold prefill". Require some real prompt work before surfacing
-  // the non-first-turn auto indicator.
+  // processedTokens is the delta from the first poll (new tokens processed
+  // this turn), not the raw slot value. This correctly excludes previously
+  // cached context and gives an accurate measure of actual prefill work.
+  // Require enough new tokens before surfacing the auto-show indicator.
   const processedTokens = progress.processedTokens ?? 0;
   return processedTokens >= LLAMACPP_PREFILL_AUTO_INDICATOR_MIN_PROCESSED_TOKENS;
 }
@@ -709,49 +708,78 @@ function startLlamaPrefillMonitor(input: {
         const snapshot = extractSlotProgress(payload, slotId, estimatedPromptTokens);
         if (snapshot) {
           const now = Date.now();
-          const processedTokens = snapshot.processedTokens;
-          const promptTokens = snapshot.promptTokens;
-          const progressed = processedTokens !== undefined &&
-            (lastProcessedTokens === undefined || processedTokens > lastProcessedTokens);
+          // Raw token counts from llama.cpp slot status. These may include
+          // previously cached context tokens (n_tokens/n_past fallback) or
+          // may track the same growing value during prefill
+          // (n_prompt_tokens ≈ n_prompt_tokens_processed). Using them
+          // directly as numerator/denominator produces a static 100% ratio.
+          const rawProcessedTokens = snapshot.processedTokens;
+          const rawPromptTokens = snapshot.promptTokens;
+          const progressed = rawProcessedTokens !== undefined &&
+            (lastProcessedTokens === undefined || rawProcessedTokens > lastProcessedTokens);
 
           if (progressed || lastProcessedTokens === undefined) {
-            if (processedTokens !== undefined) {
-              lastProcessedTokens = processedTokens;
+            if (rawProcessedTokens !== undefined) {
+              lastProcessedTokens = rawProcessedTokens;
               if (firstProcessedTokens === undefined) {
-                firstProcessedTokens = processedTokens;
+                firstProcessedTokens = rawProcessedTokens;
                 firstProgressAt = now;
               }
             }
             // Lock cache state on first snapshot if not pre-determined.
-            // After the first snapshot, the progress ratio is no longer a
-            // reliable indicator (it just measures how far into prefill we are).
+            // Uses raw slot values because cache state depends on the ratio
+            // between cached and total prompt tokens, not on progress.
             if (lockedCacheState === "unknown") {
               lockedCacheState = cacheStateFromProgress(
-                processedTokens,
-                promptTokens,
+                rawProcessedTokens,
+                rawPromptTokens,
                 snapshot.fullPromptTokens,
                 snapshot.cachedPromptTokens,
               );
             }
-            const progress = processedTokens !== undefined && promptTokens !== undefined && promptTokens > 0
-              ? clampRatio(processedTokens / promptTokens)
+
+            // Use the pre-computed estimated prompt tokens as the STABLE
+            // denominator for progress. llama.cpp's /slots endpoint may report
+            // n_prompt_tokens that grows during prefill (matching
+            // n_prompt_tokens_processed), which makes both raw numerator
+            // and denominator track the same value and always show 100%.
+            // The estimate is computed before the request starts and doesn't
+            // change during prefill, giving a correct progress ratio.
+            const effectivePromptTokens = estimatedPromptTokens ?? rawPromptTokens;
+
+            // Compute effective processed tokens as a delta from the first
+            // observed value. This correctly handles both:
+            // - n_prompt_tokens_processed: starts at ~0 and grows to total
+            // - n_tokens/n_past fallback: starts at cached context size
+            // Without baseline subtraction, the n_tokens fallback would
+            // include previously cached tokens and overcount progress.
+            const effectiveProcessedTokens = rawProcessedTokens !== undefined && firstProcessedTokens !== undefined
+              ? Math.max(0, rawProcessedTokens - firstProcessedTokens)
+              : rawProcessedTokens;
+
+            const progress = effectiveProcessedTokens !== undefined && effectivePromptTokens !== undefined && effectivePromptTokens > 0
+              ? clampRatio(effectiveProcessedTokens / effectivePromptTokens)
               : undefined;
             emit({
               phase: "prefill",
               modelId,
               baseUrl: normalizeBaseUrl(baseUrl),
               slotId: snapshot.slotId,
-              processedTokens,
-              promptTokens,
+              processedTokens: effectiveProcessedTokens,
+              promptTokens: effectivePromptTokens,
               progress,
               elapsedMs: now - startedAt,
-              estimatedRemainingMs: estimateRemainingMs({
-                processedTokens,
-                promptTokens,
-                firstProcessedTokens,
-                firstProgressAt,
-                now,
-              }),
+              estimatedRemainingMs: effectiveProcessedTokens !== undefined && firstProgressAt !== undefined
+                ? estimateRemainingMs({
+                    processedTokens: effectiveProcessedTokens,
+                    promptTokens: effectivePromptTokens,
+                    // Baseline is already subtracted from effectiveProcessedTokens,
+                    // so firstProcessedTokens for ETA calculation is 0.
+                    firstProcessedTokens: 0,
+                    firstProgressAt,
+                    now,
+                  })
+                : undefined,
               cacheState: lockedCacheState,
               confidence: snapshot.confidence,
             });
