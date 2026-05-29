@@ -356,6 +356,7 @@ export interface Settings {
   embeddingUrl?: string;        // default "http://localhost:8084"
   embeddingModel?: string;      // default "qwen3-embedding:0.6b"
   embeddingDimension?: number;  // dimension of currently stored vectors; set by migration
+  embeddedByModel?: string;     // model that actually produced the current vectors; set by migration/restore
   // Model favorites
   favoriteModels?: string[];
   showOnlyFavorites?: boolean;

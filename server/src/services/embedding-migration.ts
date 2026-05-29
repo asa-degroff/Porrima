@@ -195,7 +195,7 @@ export async function createBackup(label?: string): Promise<BackupManifest> {
     embedding: {
       provider: settings.embeddingProvider ?? "llamacpp",
       url: settings.embeddingUrl ?? "",
-      model: settings.embeddingModel ?? "qwen3-embedding:0.6b",
+      model: settings.embeddedByModel ?? settings.embeddingModel ?? "qwen3-embedding:0.6b",
       dimension: settings.embeddingDimension,
     },
     counts: { memories: memoryCount, corpus: corpusCount },
@@ -245,6 +245,7 @@ export async function restoreBackup(id: string): Promise<void> {
     embeddingUrl: manifest.embedding.url || undefined,
     embeddingModel: manifest.embedding.model || undefined,
     embeddingDimension: manifest.embedding.dimension,
+    embeddedByModel: manifest.embedding.model || undefined,
   });
 }
 
@@ -320,10 +321,15 @@ export async function migrate(
   });
   insertCorpus();
 
-  // Record the new dimension in user settings so the UI can warn if config
-  // drifts without a migration.
+  // Record the new dimension and source model in user settings so the UI can
+  // warn if config drifts without a migration, and so createBackup() records
+  // the correct model name for the vectors that actually live in the DB.
   const settings = await getSettings();
-  await saveSettings({ ...settings, embeddingDimension: dimension });
+  await saveSettings({
+    ...settings,
+    embeddingDimension: dimension,
+    embeddedByModel: cfg.model,
+  });
 
   const doneMsg = `Re-embedded ${memRows.length} memories + ${corpusRows.length} corpus entries at dim ${dimension}`;
   wrapProgress({ phase: "done", message: doneMsg });

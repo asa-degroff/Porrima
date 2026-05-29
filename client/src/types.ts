@@ -385,6 +385,7 @@ export interface Settings {
   embeddingUrl?: string;
   embeddingModel?: string;
   embeddingDimension?: number;
+  embeddedByModel?: string;     // model that produced the current vectors; set by migration/restore
   // Model favorites
   favoriteModels?: string[];
   showOnlyFavorites?: boolean;
