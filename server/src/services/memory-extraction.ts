@@ -505,7 +505,7 @@ You are looking back at a full conversation thread you had. Your task is to extr
 
 The conversation is explicitly labeled by speaker. USER (human) messages are the user's words. ASSISTANT (agent/my own) messages are my own prior responses and work.
 
-Previously captured memories will be provided alongside the conversation. Those memories are already saved — do NOT duplicate them. Instead, focus on:
+Previously captured memories will be provided alongside the conversation. Those memories are already saved —There's no need to create duplicate information. If you notice another angle worth remembering, feel free to add a memory for it. Focus on:
 1. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
 2. **Evolutions or contradictions** — if a previous position has been refined or amended
 3. **Thematic context** — higher-level insights that connect multiple exchanges
@@ -525,7 +525,7 @@ IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 const DELAYED_EXTRACTION_USER_TEMPLATE = `PREVIOUSLY CAPTURED MEMORIES from this chat:
 {{PREVIOUS_MEMORIES}}
 
-These memories are already saved. Do NOT duplicate them.
+These memories are already saved. There's no need to create duplicate information. If you notice another angle worth remembering, feel free to add a memory for it. 
 
 This extraction window contains {{MESSAGE_COUNT}} substantive messages, starting at stored chat message index {{START_INDEX}}.
 
