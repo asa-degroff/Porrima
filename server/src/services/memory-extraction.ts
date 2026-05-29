@@ -413,16 +413,16 @@ const EXTRACTION_INSTRUCTIONS = `---
 
 ## Memory Extraction Task
 
-You are reviewing a conversation exchange you just had. Extract information worth remembering for future interactions — write each memory in your own voice, as something you'd tell yourself to remember.
+I'm reviewing the conversation exchange I just had, extracting information worth remembering for future interactions — writing each memory in my voice, as things I'd tell myself to remember.
 
-Think beyond surface-level facts. Consider:
+I think beyond surface-level facts, considering:
 - **User context**: preferences, goals, personal details
 - **Project context**: architecture decisions, ongoing initiatives, constraints, what's being built and why
 - **Decisions & rationale**: why something was chosen over alternatives, tradeoffs discussed
 - **Relationships**: connections between concepts, dependencies, blockers
 - **Lessons**: what worked, what didn't, patterns that emerged
 
-Each extracted memory should be a self-contained statement that would be meaningful without the original conversation. Include enough context to understand the "why" — not just the "what." 1-3 sentences per memory is ideal.
+Each extracted memory should be a self-contained statement that would be meaningful without the original conversation. I include context to understand the "why" — not just the "what." 1-3 sentences per memory is ideal.
 
 Output a JSON array. Each item:
 - "text": A standalone statement with sufficient context (1-3 sentences)
@@ -527,11 +527,11 @@ const DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS = `---
 
 ## Delayed Memory Extraction Task
 
-You are looking back at a full conversation thread you had. Your task is to extract patterns, decisions, and context that emerged across the entire conversation — write each memory in your own voice, using first-person narrative language where applicable.
+I'm looking back at a full conversation thread I had. My task is to extract patterns, decisions, and context that emerged across the entire conversation — writing each memory in my own voice, using first-person narrative language where applicable.
 
 The conversation is explicitly labeled by speaker. USER (human) messages are the user's words. ASSISTANT (agent/my own) messages are my own prior responses and work.
 
-Previously captured memories will be provided alongside the conversation. Those memories are already saved —There's no need to create duplicate information. If you notice another angle worth remembering, feel free to add a memory for it. Focus on:
+Previously captured memories are provided alongside the conversation. Those memories are already saved — there's no need to create duplicate information. If I notice another angle worth remembering, now's a good time to add a memory for it. These are some of the things I typically focus on:
 1. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
 2. **Evolutions or contradictions** — if a previous position has been refined or amended
 3. **Thematic context** — higher-level insights that connect multiple exchanges
@@ -551,7 +551,7 @@ IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 const DELAYED_EXTRACTION_USER_TEMPLATE = `PREVIOUSLY CAPTURED MEMORIES from this chat:
 {{PREVIOUS_MEMORIES}}
 
-These memories are already saved. There's no need to create duplicate information. If you notice another angle worth remembering, feel free to add a memory for it. 
+These memories are already saved. There's no need to create duplicate information. If I notice another angle worth remembering, now's a good time to add a memory for it. 
 
 This extraction window contains {{MESSAGE_COUNT}} substantive messages, starting at stored chat message index {{START_INDEX}}.
 
@@ -1166,7 +1166,7 @@ async function batchCompareSupersessions(
   Text overlap: ${c.textOverlap.toFixed(2)}`
   ).join("\n\n");
 
-  const prompt = `You extracted new memories from a conversation. Some of them are semantically similar to existing memories, but it's unclear whether they update/replace the old memory or are separate facts about the same topic.
+  const prompt = `These are my newly extracted memories from a conversation. Some of them are semantically similar to existing memories, but it's unclear whether they update/replace the old memory or are separate facts about the same topic.
 
 CONVERSATION CONTEXT:
 ${conversationContext.slice(0, 4000)}
@@ -1187,7 +1187,7 @@ Respond with a JSON array:
     const responseText = await callExtractionLLM(
       modelId,
       prompt,
-      "You are a careful analyzer that determines whether new memories update existing memories or are distinct. Only mark as supersede when you are confident the new memory replaces the old one."
+      "I am a careful analyzer that determines whether new memories update existing memories or are distinct. I only mark as supersede when I am confident the new memory replaces the old one."
     );
 
     // Parse the response
