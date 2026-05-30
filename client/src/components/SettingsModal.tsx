@@ -3091,54 +3091,56 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                    {llamaServersLoading ? "Loading llama.cpp server status..." : "No llama.cpp server status available."}
 	                  </div>
 	                )}
-	                {llamaServers.map((server) => {
-	                  const busy = Boolean(llamaServerActionInFlight?.startsWith(`${server.id}:`));
-		                  const missingUnit = server.systemd.loadState === "not-found";
-		                  const detailsExpanded = expandedLlamaServerId === server.id;
-		                  const configExpanded = llamaConfigExpanded === server.id;
-		                  const serviceExpanded = llamaServiceExpanded === server.id;
-		                  const hideExtractionCtxSize = server.id === "extraction" && server.override.active;
-		                  const modelsPreview = server.http.modelIds.length > 0
-		                    ? server.http.modelIds.slice(0, 3).join(", ") + (server.http.modelIds.length > 3 ? ` +${server.http.modelIds.length - 3}` : "")
-		                    : "none reported";
-	                  return (
-	                    <div key={server.id} className="rounded-lg border border-white/10 bg-white/[0.025]">
-	                      {/* Card header */}
-	                      <div className="p-3 space-y-3">
-	                        <div className="flex items-start justify-between gap-3">
-	                          <div className="min-w-0">
-	                            <div className="flex items-center gap-2 flex-wrap">
-	                              <span className="text-sm text-white/80 font-medium">{server.label}</span>
-	                              <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/45 font-mono">
-	                                {server.unitName}
-	                              </span>
-	                              {!server.appEnabled && (
-	                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/35">
-	                                  not selected by app
-	                                </span>
-	                              )}
-	                              {server.override.active && (
-	                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-purple-400/30 bg-purple-500/15 text-purple-200" title={server.override.modelPath || server.override.path}>
-	                                  model override
-	                                </span>
-	                              )}
-	                              {server.http.routerMode && (
-	                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/15 text-emerald-200" title="Slot multiplexes models via /v1/models — swaps go through /models/load (no restart)">
-	                                  router mode
-	                                </span>
-	                              )}
-	                            </div>
-	                            <p className="text-xs text-white/35 mt-1">{server.description}</p>
-	                          </div>
-	                          <div className="flex items-center gap-1.5 shrink-0">
-	                            <span className={`px-2 py-1 rounded-full border text-[10px] font-medium ${llamaSystemdTone(server.systemd.activeState)}`}>
-	                              {missingUnit ? "missing unit" : server.systemd.activeState}
-	                            </span>
-	                            <span className={`px-2 py-1 rounded-full border text-[10px] font-medium ${llamaHealthTone(server.http.status)}`} title={server.http.error}>
-	                              HTTP {server.http.status}
-	                            </span>
-	                          </div>
-	                        </div>
+		                {llamaServers.map((server) => {
+		                  const busy = Boolean(llamaServerActionInFlight?.startsWith(`${server.id}:`));
+			                  const missingUnit = server.systemd.loadState === "not-found";
+			                  const detailsExpanded = expandedLlamaServerId === server.id;
+			                  const configExpanded = llamaConfigExpanded === server.id;
+			                  const serviceExpanded = llamaServiceExpanded === server.id;
+			                  const hideExtractionCtxSize = server.id === "extraction" && server.override.active;
+			                  const activeLogs = llamaServerLogs?.id === server.id ? llamaServerLogs : null;
+			                  const modelsPreview = server.http.modelIds.length > 0
+			                    ? server.http.modelIds.slice(0, 3).join(", ") + (server.http.modelIds.length > 3 ? ` +${server.http.modelIds.length - 3}` : "")
+			                    : "none reported";
+		                  return (
+		                    <div key={server.id} className="space-y-1.5">
+		                      <div className="rounded-lg border border-white/10 bg-white/[0.025]">
+		                        {/* Card header */}
+		                        <div className="p-3 space-y-3">
+		                          <div className="flex items-start justify-between gap-3">
+		                            <div className="min-w-0">
+		                              <div className="flex items-center gap-2 flex-wrap">
+		                                <span className="text-sm text-white/80 font-medium">{server.label}</span>
+		                                <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/45 font-mono">
+		                                  {server.unitName}
+		                                </span>
+		                                {!server.appEnabled && (
+		                                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-white/35">
+		                                    not selected by app
+		                                  </span>
+		                                )}
+		                                {server.override.active && (
+		                                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-purple-400/30 bg-purple-500/15 text-purple-200" title={server.override.modelPath || server.override.path}>
+		                                    model override
+		                                  </span>
+		                                )}
+		                                {server.http.routerMode && (
+		                                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/30 bg-emerald-500/15 text-emerald-200" title="Slot multiplexes models via /v1/models — swaps go through /models/load (no restart)">
+		                                    router mode
+		                                  </span>
+		                                )}
+		                              </div>
+		                              <p className="text-xs text-white/35 mt-1">{server.description}</p>
+		                            </div>
+		                            <div className="flex items-center gap-1.5 shrink-0">
+		                              <span className={`px-2 py-1 rounded-full border text-[10px] font-medium ${llamaSystemdTone(server.systemd.activeState)}`}>
+		                                {missingUnit ? "missing unit" : server.systemd.activeState}
+		                              </span>
+		                              <span className={`px-2 py-1 rounded-full border text-[10px] font-medium ${llamaHealthTone(server.http.status)}`} title={server.http.error}>
+		                                HTTP {server.http.status}
+		                              </span>
+		                            </div>
+		                          </div>
 
 	                        {/* Action buttons */}
 	                        <div className="flex items-center gap-2 flex-wrap">
@@ -3922,31 +3924,31 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            </pre>
 	                          </div>
 	                        </div>
-	                      )}
-	                    </div>
-	                  );
-	                })}
-	              </div>
-
-	              {llamaServerLogs && (
-	                <div className="rounded-lg border border-white/10 bg-black/20 overflow-hidden">
-	                  <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/5">
-	                    <div className="min-w-0">
-	                      <p className="text-xs text-white/70">Recent logs</p>
-	                      <p className="text-[11px] text-white/35 font-mono truncate">{llamaServerLogs.unitName || llamaServerLogs.id}</p>
-	                    </div>
-	                    <button type="button" onClick={() => setLlamaServerLogs(null)}
-	                      className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 hover:bg-white/10 transition-all">
-	                      Close
-	                    </button>
-	                  </div>
-	                  <pre className="max-h-64 overflow-auto p-3 text-[10px] leading-relaxed text-white/55 whitespace-pre-wrap break-words">
-	                    {llamaServerLogs.loading ? "Loading logs..." : llamaServerLogs.error || llamaServerLogs.logs}
-	                  </pre>
-	                </div>
-	              )}
-	            </div>
-	          </div>
+		                        )}
+		                      </div>
+		                      {activeLogs && (
+		                        <div className="rounded-lg border border-white/10 bg-black/20 overflow-hidden">
+		                          <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/5">
+		                            <div className="min-w-0">
+		                              <p className="text-xs text-white/70">Recent logs</p>
+		                              <p className="text-[11px] text-white/35 font-mono truncate">{activeLogs.unitName || activeLogs.id}</p>
+		                            </div>
+		                            <button type="button" onClick={() => setLlamaServerLogs(null)}
+		                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 hover:bg-white/10 transition-all">
+		                              Close
+		                            </button>
+		                          </div>
+		                          <pre className="max-h-64 overflow-auto p-3 text-[10px] leading-relaxed text-white/55 whitespace-pre-wrap break-words">
+		                            {activeLogs.loading ? "Loading logs..." : activeLogs.error || activeLogs.logs}
+		                          </pre>
+		                        </div>
+		                      )}
+		                    </div>
+		                  );
+		                })}
+		              </div>
+		            </div>
+		          </div>
 
           {/* Model Favorites */}
           <div id="favorites" className="space-y-2 pt-2 border-t border-white/10">
