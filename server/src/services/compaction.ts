@@ -5,6 +5,11 @@ import { readOpenAIContentStream, withExtractionMutex } from "./memory-extractio
 import { recordModelStats } from "./model-stats.js";
 import { ensureRouterModelLoaded, normalizeRouterModelId } from "./llama-router-client.js";
 import { resolveExtractionRequestSettings } from "./extraction-settings.js";
+import {
+  countLlamaTextTokens,
+  estimateTextTokens,
+  shouldExactCountText,
+} from "./token-count.js";
 
 export interface CompactionResult {
   truncated: boolean;
@@ -17,6 +22,7 @@ export interface CompactionResult {
 export const COMPACTION_TRIGGER_RATIO = 0.85;
 export const COMPACTION_TARGET_RATIO = 0.30;
 export const COMPACTION_HARD_CAP_RATIO = 0.95;
+const ARCHIVE_INDEX_MAX_TOKENS = 768;
 
 /**
  * Detect tool-call-like syntax in thinking text.
@@ -40,11 +46,12 @@ export function hasStrandedToolCall(thinkingText: string): boolean {
 }
 
 /**
- * Estimate token count from character count.
- * English text averages ~4 chars/token. This is a rough proxy but fast.
+ * Estimate token count from character count and content shape. English prose
+ * averages ~4 chars/token, but dense SVG/JSON/code/log text can be closer to
+ * 1.5 chars/token.
  */
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+function estimateTokens(text: string, kind: "default" | "structured" | "tool_result" = "default"): number {
+  return estimateTextTokens(text, kind);
 }
 
 /**
@@ -67,7 +74,7 @@ function estimateToolSchemaTokens(tools: unknown): number {
   const arr = Array.isArray(tools) ? tools : [tools];
   if (arr.length === 0) return 0;
   try {
-    return estimateTokens(JSON.stringify(arr));
+    return estimateTokens(JSON.stringify(arr), "structured");
   } catch {
     return 0;
   }
@@ -76,11 +83,19 @@ function estimateToolSchemaTokens(tools: unknown): number {
 function estimateToolCallTokens(toolCall: NonNullable<ChatMessage["toolCalls"]>[number]): number {
   let tokens = 50;
   try {
-    tokens += estimateTokens(JSON.stringify(toolCall.arguments ?? {}));
+    tokens += estimateTokens(JSON.stringify(toolCall.arguments ?? {}), "structured");
   } catch {
     // Keep the fixed call overhead if arguments are not serializable.
   }
   return tokens;
+}
+
+function estimateToolResultContentTokens(content: string): number {
+  return estimateTokens(content, "tool_result");
+}
+
+function estimateToolResultPromptTokens(content: string): number {
+  return estimateToolResultContentTokens(content) + 20 + MESSAGE_FRAMING_TOKENS;
 }
 
 /**
@@ -109,9 +124,7 @@ function charEstimateContextSize(
       }
       if (m.toolResults) {
         // Each tool result is its own framed pi-ai message at send time.
-        for (const r of m.toolResults) {
-          total += estimateTokens(r.content) + 20 + MESSAGE_FRAMING_TOKENS;
-        }
+        for (const r of m.toolResults) total += estimateToolResultPromptTokens(r.content);
       }
     } else if (m.role === "system") {
       // Persisted system-delta messages (memory injections) take real space
@@ -167,6 +180,14 @@ function estimateContextSize(
   }
 
   let additionalTokens = 0;
+  // The usage anchor is captured when the assistant turn completes, before
+  // tool results are appended and sent back as input to the next iteration.
+  // Count same-row tool results as post-usage additions or a large read_file
+  // result can be invisible to Path A.
+  const usageAnchor = messages[lastUsageIndex];
+  if (usageAnchor.role === "assistant" && usageAnchor.toolResults?.length) {
+    for (const r of usageAnchor.toolResults) additionalTokens += estimateToolResultPromptTokens(r.content);
+  }
   for (let i = lastUsageIndex + 1; i < messages.length; i++) {
     const m = messages[i];
     if (m._outOfContext) continue;
@@ -180,7 +201,7 @@ function estimateContextSize(
       }
       if (m.toolResults) {
         for (const r of m.toolResults) {
-          additionalTokens += estimateTokens(r.content) + 20 + MESSAGE_FRAMING_TOKENS;
+          additionalTokens += estimateToolResultPromptTokens(r.content);
         }
       }
     }
@@ -188,6 +209,123 @@ function estimateContextSize(
   const pathATokens = lastKnownUsage + additionalTokens;
 
   return Math.max(pathATokens, pathBTokens);
+}
+
+export interface ExactContextTokenEstimate {
+  estimatedTokens: number;
+  approximateTokens: number;
+  exactToolResultCount: number;
+  exactDelta: number;
+  exactElapsedMs: number;
+  errors: string[];
+}
+
+function findLastUsageIndex(messages: Chat["messages"]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]._outOfContext) continue;
+    if (messages[i].role === "assistant" && messages[i].usage?.totalTokens) return i;
+  }
+  return -1;
+}
+
+function collectPostUsageToolResults(messages: Chat["messages"]): Array<{
+  label: string;
+  content: string;
+  approximateTokens: number;
+}> {
+  const lastUsageIndex = findLastUsageIndex(messages);
+  const candidates: Array<{ label: string; content: string; approximateTokens: number }> = [];
+
+  const addResult = (messageIndex: number, resultIndex: number, content: string) => {
+    if (!content) return;
+    candidates.push({
+      label: `m${messageIndex}.toolResult${resultIndex}`,
+      content,
+      approximateTokens: estimateToolResultContentTokens(content),
+    });
+  };
+
+  if (lastUsageIndex < 0) {
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (m._outOfContext || m.role !== "assistant" || !m.toolResults?.length) continue;
+      m.toolResults.forEach((r, idx) => addResult(i, idx, r.content));
+    }
+    return candidates;
+  }
+
+  const anchor = messages[lastUsageIndex];
+  if (anchor.role === "assistant" && anchor.toolResults?.length) {
+    anchor.toolResults.forEach((r, idx) => addResult(lastUsageIndex, idx, r.content));
+  }
+
+  for (let i = lastUsageIndex + 1; i < messages.length; i++) {
+    const m = messages[i];
+    if (m._outOfContext || m.role !== "assistant" || !m.toolResults?.length) continue;
+    m.toolResults.forEach((r, idx) => addResult(i, idx, r.content));
+  }
+
+  return candidates;
+}
+
+export async function estimateContextTokensWithExactToolResults(
+  messages: Chat["messages"],
+  systemPrompt: string,
+  tools: unknown,
+  options: {
+    baseUrl?: string;
+    modelId?: string;
+    contextWindow?: number;
+    timeoutMs?: number;
+    minToolResultChars?: number;
+  } = {},
+): Promise<ExactContextTokenEstimate> {
+  const approximateTokens = estimateContextSize(messages, systemPrompt, tools);
+  const base: ExactContextTokenEstimate = {
+    estimatedTokens: approximateTokens,
+    approximateTokens,
+    exactToolResultCount: 0,
+    exactDelta: 0,
+    exactElapsedMs: 0,
+    errors: [],
+  };
+
+  if (!options.baseUrl || !options.modelId) return base;
+
+  const candidates = collectPostUsageToolResults(messages);
+  if (candidates.length === 0) return base;
+
+  const nearContextLimit = options.contextWindow
+    ? approximateTokens / options.contextWindow >= 0.70
+    : false;
+  const minChars = options.minToolResultChars ?? 16_000;
+  const selected = candidates
+    .filter((c) => nearContextLimit || shouldExactCountText(c.content, "tool_result", minChars))
+    .sort((a, b) => b.approximateTokens - a.approximateTokens)
+    .slice(0, 12);
+  if (selected.length === 0) return base;
+
+  let positiveDelta = 0;
+  for (const candidate of selected) {
+    try {
+      const exact = await countLlamaTextTokens(
+        options.baseUrl,
+        options.modelId,
+        candidate.content,
+        { timeoutMs: options.timeoutMs },
+      );
+      base.exactElapsedMs += exact.elapsedMs;
+      base.exactToolResultCount++;
+      const delta = exact.tokens - candidate.approximateTokens;
+      if (delta > 0) positiveDelta += delta;
+    } catch (err) {
+      base.errors.push(`${candidate.label}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  base.exactDelta = positiveDelta;
+  base.estimatedTokens = approximateTokens + positiveDelta;
+  return base;
 }
 
 /**
@@ -231,7 +369,7 @@ function trySplitAssistantMessage(
   const pairEstimates = toolCalls.map((tc) => {
     const tr = toolResults.find((r) => r.toolCallId === tc.id);
     let tokens = estimateToolCallTokens(tc);
-    if (tr) tokens += estimateTokens(tr.content) + 20 + MESSAGE_FRAMING_TOKENS;
+    if (tr) tokens += estimateToolResultPromptTokens(tr.content);
     return Math.ceil(tokens * scaleFactor);
   });
 
@@ -278,7 +416,7 @@ function trySplitAssistantMessage(
   const archivedTokens = archivedCalls.reduce((sum, tc) => {
     const tr = archivedResults.find((r) => r.toolCallId === tc.id);
     let t = estimateToolCallTokens(tc);
-    if (tr) t += estimateTokens(tr.content) + 20;
+    if (tr) t += estimateToolResultContentTokens(tr.content) + 20;
     return sum + t;
   }, 0) + (head.thinking ? estimateTokens(head.thinking) : 0);
 
@@ -310,12 +448,25 @@ export async function truncateBeforeSend(
   onCompacting?: () => void,
   onKeepalive?: () => void,
   tools?: unknown,
+  exactTokenOptions?: { baseUrl?: string; modelId?: string; timeoutMs?: number },
 ): Promise<CompactionResult | null> {
   const noOp = null;
   const messages = chat.messages;
   if (messages.length <= 2) return noOp;
 
-  const estimatedTokens = estimateContextSize(messages, systemPrompt, tools);
+  const exactEstimate = await estimateContextTokensWithExactToolResults(messages, systemPrompt, tools, {
+    ...exactTokenOptions,
+    contextWindow,
+  });
+  const estimatedTokens = exactEstimate.estimatedTokens;
+  if (exactEstimate.exactToolResultCount > 0 || exactEstimate.errors.length > 0) {
+    console.log(
+      `[token-estimate] chat=${chat.id} phase=pre-send approx=${exactEstimate.approximateTokens} ` +
+      `estimated=${estimatedTokens} exactToolResults=${exactEstimate.exactToolResultCount} ` +
+      `delta=${exactEstimate.exactDelta} elapsedMs=${exactEstimate.exactElapsedMs}` +
+      (exactEstimate.errors.length ? ` errors=${exactEstimate.errors.length}` : ""),
+    );
+  }
   const charEstimate = charEstimateContextSize(messages, systemPrompt, tools);
   // Trigger and target are decoupled: we only compact when well into the
   // danger zone (85%), but when we do, we compact down to 30% — the same
@@ -384,7 +535,7 @@ export async function truncateBeforeSend(
         for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
       }
       if (m.toolResults) {
-        for (const r of m.toolResults) tokens += estimateTokens(r.content) + 20;
+        for (const r of m.toolResults) tokens += estimateToolResultContentTokens(r.content) + 20;
       }
     }
     return tokens;
@@ -588,7 +739,7 @@ export async function truncateBeforeSend(
         for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
       }
       if (m.toolResults) {
-        for (const r of m.toolResults) tokens += estimateTokens(r.content) + 20;
+        for (const r of m.toolResults) tokens += estimateToolResultContentTokens(r.content) + 20;
       }
     }
     return sum + tokens;
@@ -626,7 +777,7 @@ export async function truncateBeforeSend(
   // payload fits. Handles cases where the budget planning used a scale factor
   // that under-counted (e.g., tool schemas bloat the real payload beyond
   // what char estimation sees).
-  const additional = await hardCapSafetyPass(chat, contextWindow, systemPrompt, undefined, onKeepalive);
+  const additional = await hardCapSafetyPass(chat, contextWindow, systemPrompt, undefined, onKeepalive, tools);
   if (additional && additional.truncated) {
     return {
       truncated: true,
@@ -941,8 +1092,9 @@ Output ONLY the formatted lines, nothing else.`;
 }
 
 /**
- * Call the extraction model (or fallback to main chat model) to produce index
- * descriptions. Returns the raw LLM output text. Empty string on failure.
+ * Call the extraction model to produce index descriptions. If no dedicated
+ * extraction URL is configured, fall back to the main chat model. Empty string
+ * means callers should use mechanical fallback descriptions.
  */
 async function runIndexGeneration(
   blockDescriptions: Array<{ id: string; text: string }>,
@@ -978,7 +1130,7 @@ async function runIndexGeneration(
               { role: "system", content: systemPrompt },
               { role: "user", content: inputParts },
             ],
-            max_tokens: extractionSettings.maxTokens,
+            max_tokens: Math.min(extractionSettings.maxTokens, ARCHIVE_INDEX_MAX_TOKENS),
             temperature: 0.3,
             stream: true,
           }),
@@ -997,6 +1149,14 @@ async function runIndexGeneration(
         }
         return "";
       });
+
+      // A configured extraction server is intentional isolation from the main
+      // chat model. If it fails or emits no content, use mechanical archive
+      // descriptions instead of evicting warm main-model slots.
+      if (!outputText.trim()) {
+        console.warn("[compaction] Extraction index generation produced no output; using fallback archive descriptions");
+        return "";
+      }
     }
 
     if (!outputText) {
@@ -1083,7 +1243,7 @@ async function archiveAndIndex(
     const text = blockToText(block);
     const tokens = block.reduce((sum, m) => {
       let t = estimateTokens(m.content);
-      if (m.toolResults) for (const r of m.toolResults) t += estimateTokens(r.content);
+      if (m.toolResults) for (const r of m.toolResults) t += estimateToolResultContentTokens(r.content);
       if (m.thinking) t += estimateTokens(m.thinking);
       return sum + t;
     }, 0);
@@ -1298,7 +1458,7 @@ export async function truncateChatHistory(
       }
       if (m.toolResults) {
         for (const r of m.toolResults) {
-          tokens += estimateTokens(r.content) + 20;
+          tokens += estimateToolResultContentTokens(r.content) + 20;
         }
       }
     }
@@ -1516,7 +1676,7 @@ export async function truncateChatHistory(
         for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
       }
       if (m.toolResults) {
-        for (const r of m.toolResults) tokens += estimateTokens(r.content) + 20;
+        for (const r of m.toolResults) tokens += estimateToolResultContentTokens(r.content) + 20;
       }
     }
     return sum + tokens;

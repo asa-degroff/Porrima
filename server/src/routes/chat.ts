@@ -14,6 +14,7 @@ import { generateTitle, generateRecap, RECAP_THRESHOLD } from "../services/title
 import {
   COMPACTION_TRIGGER_RATIO,
   estimateContextTokens,
+  estimateContextTokensWithExactToolResults,
   truncateChatHistory,
   truncateBeforeSend,
   triggerCompaction,
@@ -66,6 +67,7 @@ import {
 import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 import { appDataPath } from "../services/paths.js";
 
+const DEFAULT_LLAMACPP_URL = "http://localhost:8080";
 const ARTIFACTS_DIR = appDataPath("artifacts");
 const VISUALS_DIR = appDataPath("visuals");
 const ARTIFACT_ERROR_REPAIR_TTL_MS = 30 * 60 * 1000;
@@ -2008,9 +2010,30 @@ async function handleChatStream(
           // iter=N+1 — that tool result is part of iter=N+1's input, and a
           // single large one (e.g. read_file on a 50 KB source file) can push
           // past the hard context cap before the next iteration even starts.
-          const { estimateContextTokens } = await import("../services/compaction.js");
           const effectiveCWForCheck = getEffectiveContextWindow(chat, inferenceModel);
-          const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
+          let estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
+          const approximateTokens = estimatedTokens;
+          if (stopReason === "toolUse" && inferenceModel?.provider === "llamacpp" && piModel.baseUrl) {
+            const exactEstimate = await estimateContextTokensWithExactToolResults(
+              chat.messages,
+              systemPrompt,
+              agentTools,
+              {
+                baseUrl: piModel.baseUrl,
+                modelId: piModel.id,
+                contextWindow: effectiveCWForCheck,
+              },
+            );
+            estimatedTokens = exactEstimate.estimatedTokens;
+            if (exactEstimate.exactToolResultCount > 0 || exactEstimate.errors.length > 0) {
+              console.log(
+                `[token-estimate] chat=${chat.id} iter=${iterations} approx=${approximateTokens} ` +
+                `estimated=${estimatedTokens} exactToolResults=${exactEstimate.exactToolResultCount} ` +
+                `delta=${exactEstimate.exactDelta} elapsedMs=${exactEstimate.exactElapsedMs}` +
+                (exactEstimate.errors.length ? ` errors=${exactEstimate.errors.length}` : ""),
+              );
+            }
+          }
 
           // Send iteration event with usage AND estimate so client can update
           // token indicators mid-loop with a number that reflects next-call size.
@@ -3577,6 +3600,7 @@ router.post("/", async (req, res) => {
             () => res.write(`event: compacting\ndata: {}\n\n`),
             emitKeepalive,
             toolsForEstimate(chat, effectiveContextWindow),
+            { baseUrl: settings.llamacppUrl?.trim() || DEFAULT_LLAMACPP_URL, modelId: chat.modelId },
           );
           if (compaction && compaction.truncated) {
             // Extract memories from removed messages and await completion so they're
@@ -3767,6 +3791,7 @@ router.post("/", async (req, res) => {
             () => res.write(`event: compacting\ndata: {}\n\n`),
             emitKeepalive,
             toolsForEstimate(chat, effectiveContextWindow),
+            { baseUrl: settings.llamacppUrl?.trim() || DEFAULT_LLAMACPP_URL, modelId: chat.modelId },
           );
           if (compaction && compaction.truncated) {
             // Extract memories from removed messages and await completion so they're
@@ -4397,7 +4422,15 @@ router.post("/edit", async (req, res) => {
       try {
         const effectiveContextWindow = getEffectiveContextWindow(chat, model);
         const emitKeepalive = () => res.write(`: keepalive\n\n`);
-        const compaction = await truncateBeforeSend(chat, effectiveContextWindow, systemPrompt, () => res.write(`event: compacting\ndata: {}\n\n`), emitKeepalive);
+        const compaction = await truncateBeforeSend(
+          chat,
+          effectiveContextWindow,
+          systemPrompt,
+          () => res.write(`event: compacting\ndata: {}\n\n`),
+          emitKeepalive,
+          undefined,
+          { baseUrl: settings.llamacppUrl?.trim() || DEFAULT_LLAMACPP_URL, modelId: chat.modelId },
+        );
         if (compaction && compaction.truncated) {
           // Extract memories from removed messages and await completion so they're
           // available for the system prompt rebuild below.
