@@ -33,6 +33,7 @@ import {
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "./models.js";
 import {
   buildSplitAugmentedPrompt,
+  invalidateMemoriesCache,
   resetMemoryContext,
   setCachedAugmentedPrompt,
 } from "./memory-context.js";
@@ -289,6 +290,11 @@ async function buildWarmSystemPrompt(chat: Awaited<ReturnType<typeof getChat>>, 
       project?.path,
     );
     systemPrompt = split.systemPrompt;
+    // Warming has to freeze the current prompt prefix for KV reuse, but it
+    // runs before the next user message exists. Mark the state dirty so the
+    // next real turn still retrieves memories for that new prompt and injects
+    // only the delta after the warmed prefix.
+    invalidateMemoriesCache(chat.id);
   }
 
   if (chat.activeSkills?.length) {
