@@ -1,4 +1,5 @@
 import { v4 as uuid } from "uuid";
+import { createHash } from "crypto";
 import { appendFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { streamChat } from "./agent.js";
@@ -99,13 +100,12 @@ export function hasActiveChats(): boolean {
 }
 
 /**
- * Conservative char→token estimate (3 chars/token). Overestimates token count
- * vs. the more common 4 chars/token, which is the safer direction when
- * budgeting against a hard context limit: we'd rather truncate slightly more
- * than blow the context window.
+ * Conservative char->token estimate. Natural language is often closer to
+ * 4 chars/token, but code/HTML/JSON can be much denser. Use 2 chars/token for
+ * extraction budgeting so large structured payloads fail closed.
  */
 function estimateTokensConservative(text: string): number {
-  return Math.ceil(text.length / 3);
+  return Math.ceil(text.length / 2);
 }
 
 /**
@@ -126,12 +126,12 @@ export function computeExtractionInputBudget(
   const outputTokens = opts?.maxTokens ?? DEFAULT_EXTRACTION_MAX_TOKENS;
   const safetyMargin = 512;    // absorbs small under-estimation
   const overheadChars = opts?.chunkOverheadChars ?? 0;
-  const overheadTokens = Math.ceil(overheadChars / 3);
+  const overheadTokens = Math.ceil(overheadChars / 2);
   const inputBudgetTokens = Math.max(
     0,
     ctxSize - sysPromptTokens - outputTokens - safetyMargin - overheadTokens,
   );
-  const maxInputChars = Math.max(1000, inputBudgetTokens * 3);
+  const maxInputChars = Math.max(1000, inputBudgetTokens * 2);
   return { maxInputChars, sysPromptTokens, inputBudgetTokens };
 }
 
@@ -329,7 +329,8 @@ async function logExtractionError(context: string, error: unknown): Promise<void
 async function withRetry<T>(
   fn: () => Promise<T>,
   context: string,
-  maxRetries: number = 2
+  maxRetries: number = 2,
+  shouldRetry: (err: unknown) => boolean = () => true
 ): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -337,6 +338,10 @@ async function withRetry<T>(
       return await fn();
     } catch (err) {
       lastError = err;
+      if (!shouldRetry(err)) {
+        await logExtractionError(context, lastError);
+        throw lastError;
+      }
       if (attempt < maxRetries) {
         const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
         console.warn(`[memory] ${context} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms`);
@@ -346,6 +351,15 @@ async function withRetry<T>(
   }
   await logExtractionError(context, lastError);
   throw lastError;
+}
+
+function isExtractionContextOverflowError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("exceed_context_size_error") ||
+    message.includes("Context size has been exceeded") ||
+    message.includes("exceeds the available context size")
+  );
 }
 
 /**
@@ -708,6 +722,148 @@ const BULK_TOOL_NAMES = new Set([
   "list_files",
 ]);
 
+const EXTRACT_TOOL_ARG_STRING_MAX = 900;
+const EXTRACT_TOOL_ARG_TOTAL_MAX = 3000;
+const EXTRACT_TOOL_ARG_MAX_DEPTH = 4;
+const EXTRACT_TOOL_ARG_MAX_ARRAY_ITEMS = 12;
+const EXTRACT_TOOL_ARG_MAX_OBJECT_KEYS = 40;
+
+const OMIT_LARGE_ARG_KEYS = new Set([
+  "html",
+  "data",
+  "base64",
+  "image",
+  "image_data",
+  "imagedata",
+  "audio",
+  "video",
+  "blob",
+  "file_contents",
+  "filecontents",
+  "payload",
+]);
+
+const PREVIEW_LARGE_ARG_KEYS = new Set([
+  "code",
+  "script",
+  "css",
+  "svg",
+  "json",
+  "content",
+  "text",
+  "body",
+]);
+
+function shortHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 12);
+}
+
+function normalizeArgKey(key: string): string {
+  return key.toLowerCase().replace(/[\s.-]/g, "_");
+}
+
+function shouldOmitLargeArg(key: string): boolean {
+  const normalized = normalizeArgKey(key);
+  return (
+    OMIT_LARGE_ARG_KEYS.has(normalized) ||
+    normalized.endsWith("_html") ||
+    normalized.endsWith("_data") ||
+    normalized.endsWith("_base64")
+  );
+}
+
+function shouldPreviewLargeArg(key: string): boolean {
+  const normalized = normalizeArgKey(key);
+  return (
+    PREVIEW_LARGE_ARG_KEYS.has(normalized) ||
+    normalized.endsWith("_code") ||
+    normalized.endsWith("_content") ||
+    normalized.endsWith("_text")
+  );
+}
+
+function truncateMiddleForExtraction(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const headLen = Math.ceil(maxChars * 0.65);
+  const tailLen = Math.max(0, maxChars - headLen - 20);
+  return `${text.slice(0, headLen)}\n...[truncated]...\n${text.slice(-tailLen)}`;
+}
+
+function formatLargeStringArg(value: string, key: string): string {
+  const hash = shortHash(value);
+  if (shouldOmitLargeArg(key)) {
+    return `[omitted large ${key} argument: ${value.length.toLocaleString()} chars, sha256=${hash}; full value remains in stored tool call/archive]`;
+  }
+
+  const preview = shouldPreviewLargeArg(key)
+    ? truncateMiddleForExtraction(value, EXTRACT_TOOL_ARG_STRING_MAX)
+    : value.slice(0, EXTRACT_TOOL_ARG_STRING_MAX);
+  return `${preview}\n[truncated ${key || "string"} argument: ${value.length.toLocaleString()} chars, sha256=${hash}; full value remains in stored tool call/archive]`;
+}
+
+function formatToolArgValueForExtraction(
+  value: unknown,
+  key: string,
+  depth: number,
+  seen: WeakSet<object>,
+): string {
+  if (typeof value === "string") {
+    const rendered = value.length > EXTRACT_TOOL_ARG_STRING_MAX
+      ? formatLargeStringArg(value, key)
+      : value;
+    return JSON.stringify(rendered);
+  }
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (value === undefined) {
+    return "\"[undefined]\"";
+  }
+  if (typeof value !== "object") {
+    return JSON.stringify(String(value));
+  }
+  if (seen.has(value)) {
+    return "\"[circular reference omitted]\"";
+  }
+  if (depth >= EXTRACT_TOOL_ARG_MAX_DEPTH) {
+    return "\"[nested value omitted for extraction]\"";
+  }
+
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const items = value
+        .slice(0, EXTRACT_TOOL_ARG_MAX_ARRAY_ITEMS)
+        .map((item) => formatToolArgValueForExtraction(item, key, depth + 1, seen));
+      if (value.length > EXTRACT_TOOL_ARG_MAX_ARRAY_ITEMS) {
+        items.push(JSON.stringify(`[${value.length - EXTRACT_TOOL_ARG_MAX_ARRAY_ITEMS} array item(s) omitted for extraction]`));
+      }
+      return `[${items.join(", ")}]`;
+    }
+
+    const entries = Object.entries(value as Record<string, unknown>);
+    const renderedEntries = entries
+      .slice(0, EXTRACT_TOOL_ARG_MAX_OBJECT_KEYS)
+      .map(([entryKey, entryValue]) =>
+        `${JSON.stringify(entryKey)}: ${formatToolArgValueForExtraction(entryValue, entryKey, depth + 1, seen)}`
+      );
+    if (entries.length > EXTRACT_TOOL_ARG_MAX_OBJECT_KEYS) {
+      renderedEntries.push(`${JSON.stringify("_omitted")}: ${JSON.stringify(`${entries.length - EXTRACT_TOOL_ARG_MAX_OBJECT_KEYS} object key(s) omitted for extraction`)}`);
+    }
+    return `{${renderedEntries.join(", ")}}`;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+export function formatToolArgumentsForExtraction(args: Record<string, any> | undefined): string {
+  if (!args || Object.keys(args).length === 0) return "{}";
+  const rendered = formatToolArgValueForExtraction(args, "arguments", 0, new WeakSet<object>());
+  if (rendered.length <= EXTRACT_TOOL_ARG_TOTAL_MAX) return rendered;
+  const hash = shortHash(rendered);
+  return `${truncateMiddleForExtraction(rendered, EXTRACT_TOOL_ARG_TOTAL_MAX)}\n[tool arguments display truncated for extraction: ${rendered.length.toLocaleString()} chars, sha256=${hash}]`;
+}
+
 function formatToolResultForExtraction(tr: { toolName: string; content: string; isError: boolean }): string {
   let content = tr.content;
 
@@ -720,13 +876,13 @@ function formatToolResultForExtraction(tr: { toolName: string; content: string; 
   return `- ${tr.toolName}${tr.isError ? " (error)" : ""}: ${content}`;
 }
 
-function formatMessageContentForExtraction(message: ChatMessage): string {
+export function formatMessageContentForExtraction(message: ChatMessage): string {
   const parts: string[] = [];
   if (message.content?.trim()) parts.push(message.content.trim());
 
   if (message.toolCalls?.length) {
     const calls = message.toolCalls
-      .map((tc) => `- ${tc.name}: ${JSON.stringify(tc.arguments)}`)
+      .map((tc) => `- ${tc.name}: ${formatToolArgumentsForExtraction(tc.arguments)}`)
       .join("\n");
     parts.push(`Tool calls made by ASSISTANT:\n${calls}`);
   }
@@ -914,7 +1070,7 @@ async function callExtractionLLMWithRetry(
   let result = "";
   await withRetry(async () => {
     result = await callExtractionLLM(modelId, userContent, systemPrompt, signal);
-  }, retryContext);
+  }, retryContext, 2, (err) => !isExtractionContextOverflowError(err));
   return result;
 }
 

@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  formatMessageContentForExtraction,
+  formatToolArgumentsForExtraction,
   isSubstantiveForPreCompactionExtraction,
   parseExtractionResponse,
   resolveEffectiveExtractionModelId,
@@ -111,6 +113,56 @@ describe("isSubstantiveForPreCompactionExtraction", () => {
     expect(isSubstantiveForPreCompactionExtraction(base({ _isCompactionSummary: true }))).toBe(false);
     expect(isSubstantiveForPreCompactionExtraction(base({ _outOfContext: true }))).toBe(false);
     expect(isSubstantiveForPreCompactionExtraction(base({ role: "system" }))).toBe(false);
+  });
+});
+
+describe("formatToolArgumentsForExtraction", () => {
+  it("omits exceptionally large payload arguments while preserving small metadata", () => {
+    const html = `<!DOCTYPE html>${"<polygon />".repeat(5000)}`;
+    const rendered = formatToolArgumentsForExtraction({
+      title: "Inverted Corner Perspective",
+      html,
+      width: 500,
+      height: 500,
+    });
+
+    expect(rendered).toContain("Inverted Corner Perspective");
+    expect(rendered).toContain("\"width\": 500");
+    expect(rendered).toContain("omitted large html argument");
+    expect(rendered).toMatch(/sha256=[a-f0-9]{12}/);
+    expect(rendered).not.toContain("<polygon />");
+    expect(rendered.length).toBeLessThan(1000);
+  });
+
+  it("bounds formatted tool calls in extraction message content", () => {
+    const message: ChatMessage = {
+      role: "assistant",
+      content: "Created the visual after adjusting the apex.",
+      timestamp: 1,
+      toolCalls: [{
+        id: "tool-1",
+        name: "create_visual",
+        arguments: {
+          title: "Wall spread visual",
+          html: "<svg>" + "x".repeat(50_000) + "</svg>",
+        },
+      }],
+      toolResults: [{
+        toolCallId: "tool-1",
+        toolName: "create_visual",
+        content: "Visual created: Wall spread visual",
+        isError: false,
+      }],
+    };
+
+    const rendered = formatMessageContentForExtraction(message);
+
+    expect(rendered).toContain("Created the visual");
+    expect(rendered).toContain("Wall spread visual");
+    expect(rendered).toContain("omitted large html argument");
+    expect(rendered).toContain("Visual created");
+    expect(rendered).not.toContain("x".repeat(1000));
+    expect(rendered.length).toBeLessThan(2000);
   });
 });
 
