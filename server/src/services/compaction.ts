@@ -14,6 +14,10 @@ export interface CompactionResult {
   estimatedTokenCount?: number;
 }
 
+export const COMPACTION_TRIGGER_RATIO = 0.85;
+export const COMPACTION_TARGET_RATIO = 0.30;
+export const COMPACTION_HARD_CAP_RATIO = 0.95;
+
 /**
  * Detect tool-call-like syntax in thinking text.
  *
@@ -289,10 +293,10 @@ function trySplitAssistantMessage(
 
 /**
  * Proactively truncate chat history BEFORE sending to the LLM if context
- * would exceed the safe threshold (~80% of context window).
+ * would exceed the safe threshold (~85% of context window).
  *
  * This prevents broken responses from hitting the context limit mid-generation.
- * Trigger is at 80%, but the budget target is 30% — matching post-response
+ * Trigger is at 85%, but the budget target is 30% — matching post-response
  * compaction. Targeting the same level the next turn would compact to anyway
  * avoids a second cache-invalidating compaction later in the turn, and gives
  * subsequent turns headroom before the next trigger.
@@ -314,12 +318,12 @@ export async function truncateBeforeSend(
   const estimatedTokens = estimateContextSize(messages, systemPrompt, tools);
   const charEstimate = charEstimateContextSize(messages, systemPrompt, tools);
   // Trigger and target are decoupled: we only compact when well into the
-  // danger zone (80%), but when we do, we compact down to 30% — the same
-  // level post-response targets. Compacting to 80% would leave us one turn
+  // danger zone (85%), but when we do, we compact down to 30% — the same
+  // level post-response targets. Compacting to 85% would leave us one turn
   // away from re-triggering and would also guarantee a second compaction
   // from the post-response path in the same turn.
-  const trigger = contextWindow * 0.80;
-  const target = contextWindow * 0.30;
+  const trigger = contextWindow * COMPACTION_TRIGGER_RATIO;
+  const target = contextWindow * COMPACTION_TARGET_RATIO;
 
   // Fallthrough: if the primary estimator says we're safe, we still enforce
   // a hard-cap check at the bottom (see "Hard-cap safety pass"). This catches
@@ -394,7 +398,7 @@ export async function truncateBeforeSend(
   const overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
 
   // Iterate backwards over in-context messages to find budget boundary.
-  // Fills up to the 30% target, not the 80% trigger, so the post-compaction
+  // Fills up to the 30% target, not the 85% trigger, so the post-compaction
   // payload has room to grow before the next trigger fires.
   // The first in-context message is no longer pinned: anchoring the original
   // user prompt across compaction cycles derails conversations whose topic has
@@ -659,7 +663,7 @@ async function hardCapSafetyPass(
   tools?: unknown,
 ): Promise<CompactionResult | null> {
   const charEstimate = charEstimateContextSize(chat.messages, systemPrompt, tools);
-  const hardCap = contextWindow * 0.95;
+  const hardCap = contextWindow * COMPACTION_HARD_CAP_RATIO;
   if (charEstimate <= hardCap) return null;
 
   const icCount = chat.messages.filter((m) => !m._outOfContext).length;
@@ -920,7 +924,7 @@ Descriptions should capture the SIGNIFICANCE of each block — what was learned,
 Good descriptions:
 - archive:abc:001 — Identified P0 bug in memory reset during compaction; /compact path skipped resetMemoryContext
 - archive:abc:002 — Reviewed indexed summary architecture; concluded lossless archival beats narrative summarization
-- archive:abc:003 — Read compaction.ts to understand truncation thresholds (80% trigger,30% target for both pre-send and post-response)
+- archive:abc:003 — Read compaction.ts to understand truncation thresholds (85% trigger,30% target for both pre-send and post-response)
 - archive:abc:004 — User prefers systems that preserve full-fidelity message storage with indexed access rather than lossy summarization
 
 Bad descriptions (too vague or action-focused):
@@ -1235,7 +1239,7 @@ export async function truncateChatHistory(
   const messages = chat.messages;
   if (messages.length <= 1) return noOp;  // Need at least 2 total messages
 
-  const targetTokens = contextWindow * 0.3;
+  const targetTokens = contextWindow * COMPACTION_TARGET_RATIO;
 
   if (!forceCompact) {
     // Use caller-provided usage if available, otherwise search messages

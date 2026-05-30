@@ -88,10 +88,10 @@ Memory augmentation has two cache-preserving paths. Normal turn-start retrieval 
 
 Compaction replaces narrative LLM summaries with **indexed archives** (inspired by Memex and Letta):
 
-1. **Pre-send compaction** (80% trigger → 50% target): Proactively truncates before LLM call. Decoupling the trigger from the target prevents a second compaction from firing immediately at end-of-turn in the same exchange.
-2. **Post-response compaction** (50% target): Triggered after response if usage is high
+1. **Pre-send compaction** (85% trigger → 30% target): Proactively truncates before LLM call. Decoupling the trigger from the target prevents a second compaction from firing immediately at end-of-turn in the same exchange.
+2. **Post-response compaction** (85% trigger → 30% target): Triggered after response if usage is high
 3. **Mid-turn compaction** (85% threshold): Detects overflow during tool loops, breaks the agent loop, compacts, and resumes with a handoff message. Multi-cycle (up to 5 cycles) for very long tasks.
-4. **Hard-cap safety pass** (95% char-estimate): Defensive net that runs after the pre-send path. If the pure char-based estimate alone exceeds 95% of the window (e.g., the usage anchor went stale because the system prompt grew), forces aggressive compaction via `truncateChatHistory(forceCompact=true)` targeting 50%.
+4. **Hard-cap safety pass** (95% char-estimate): Defensive net that runs after the pre-send path. If the pure char-based estimate alone exceeds 95% of the window (e.g., the usage anchor went stale because the system prompt grew), forces aggressive compaction via `truncateChatHistory(forceCompact=true)` targeting 30%.
 
 When compaction runs, it follows a strict sequence: **archive** → **flush** → **reset** → **rebuild**:
 

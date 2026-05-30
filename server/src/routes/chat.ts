@@ -11,7 +11,14 @@ import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow
 import type { InferenceModel } from "../types.js";
 import { extractMemories, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
 import { generateTitle, generateRecap, RECAP_THRESHOLD } from "../services/title-generation.js";
-import { truncateChatHistory, truncateBeforeSend, triggerCompaction, hasStrandedToolCall } from "../services/compaction.js";
+import {
+  COMPACTION_TRIGGER_RATIO,
+  estimateContextTokens,
+  truncateChatHistory,
+  truncateBeforeSend,
+  triggerCompaction,
+  hasStrandedToolCall,
+} from "../services/compaction.js";
 import { buildMemoryAugmentedPrompt, buildSplitAugmentedPrompt, setCachedAugmentedPrompt, invalidateMemoriesCache, resetMemoryContext } from "../services/memory-context.js";
 import { getAgentTools } from "../services/agent-tools.js";
 import { getSynthesisLock } from "../services/system-chat.js";
@@ -2030,7 +2037,7 @@ async function handleChatStream(
           if (!hitContextLimit && !msg.usage && (stopReason as string) !== "stop" && (stopReason as string) !== "toolUse" && (stopReason as string) !== "length") {
             // Check if the last known usage was already high
             const lastKnown = state.finalUsage?.totalTokens ?? 0;
-            if (effectiveCWForCheck > 0 && (lastKnown / effectiveCWForCheck > 0.8 || iterations > 3)) {
+            if (effectiveCWForCheck > 0 && (lastKnown / effectiveCWForCheck > COMPACTION_TRIGGER_RATIO || iterations > 3)) {
               hitContextLimit = true;
               console.warn(`[chat] model error with no usage data at iteration ${iterations} (last known: ${lastKnown}/${effectiveCWForCheck}) — treating as context overflow`);
               res.write(`event: warning\ndata: ${JSON.stringify({
@@ -2042,12 +2049,12 @@ async function handleChatStream(
 
           // Mid-turn context protection. Uses the estimator (not raw usage) so
           // tool results added since the last usage anchor are counted. Trigger
-          // at 80% to match truncateBeforeSend and leave room for compaction
+          // at the same ratio as truncateBeforeSend and leave room for compaction
           // instead of tipping over the hard cap on the next iteration.
           if (stopReason === "toolUse" && !hitContextLimit) {
             if (effectiveCWForCheck > 0 && estimatedTokens > 0) {
               const usageRatio = estimatedTokens / effectiveCWForCheck;
-              if (usageRatio > 0.80) {
+              if (usageRatio > COMPACTION_TRIGGER_RATIO) {
                 const rawUsage = state.finalUsage?.totalTokens ?? 0;
                 console.warn(`[chat] Mid-turn context overflow: est ${estimatedTokens}/${effectiveCWForCheck} (${(usageRatio * 100).toFixed(0)}%) at iteration ${iterations} [rawUsage=${rawUsage}] — breaking for compaction`);
                 turnAbortController.abort();
@@ -2157,10 +2164,10 @@ async function handleChatStream(
       await saveChat(chat);
     }
 
-    // End-of-turn compaction: if we crossed the 80% threshold during this turn,
+    // End-of-turn compaction: if we crossed the compaction threshold during this turn,
     // compact NOW before building the final message. This prevents the user from
     // waiting on compaction after their response appears complete.
-    // Mid-turn compaction (95% during tool loops) is handled separately above.
+    // Mid-turn compaction during tool loops is handled separately above.
     // Skip if we have a stranded tool call — we need to continue the turn first,
     // not compact away the context the model was working with.
     if (!state.needsMidTurnCompaction && !askUserRef.current && !waitingForInput && !state.strandedToolCall) {
@@ -2171,15 +2178,14 @@ async function handleChatStream(
           const lastUsage = state.finalUsage?.totalTokens ?? 0;
           const usageRatio = lastUsage > 0 ? lastUsage / effectiveContextWindow : 0;
 
-          // Check if we crossed the 80% threshold
-          let needsCompaction = hitContextLimit || usageRatio > 0.80;
+          // Check if we crossed the compaction threshold
+          let needsCompaction = hitContextLimit || usageRatio > COMPACTION_TRIGGER_RATIO;
 
           // Fallback to character estimation if usage is missing
           if (!needsCompaction && lastUsage === 0 && chat.messages.length > 4) {
-            const { estimateContextTokens } = await import("../services/compaction.js");
             const estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
             const estimatedRatio = estimatedTokens / effectiveContextWindow;
-            if (estimatedRatio > 0.80) {
+            if (estimatedRatio > COMPACTION_TRIGGER_RATIO) {
               console.log(`[compaction] End-of-turn: usage missing but estimation shows ${estimatedTokens} tokens (${(estimatedRatio * 100).toFixed(0)}%) — forcing compaction`);
               needsCompaction = true;
             }
@@ -2564,10 +2570,22 @@ async function handleChatStream(
       let compaction: Awaited<ReturnType<typeof truncateChatHistory>> | undefined;
       await withSSEKeepalive(res, async () => {
         try {
-          compaction = await truncateChatHistory(chat, effectiveCW, true, emitCompacting, emitKeepalive, undefined, systemPrompt, agentTools);
+          const preCompactionEstimate = estimateContextTokens(chat.messages, systemPrompt, agentTools);
+          compaction = await truncateChatHistory(
+            chat,
+            effectiveCW,
+            true,
+            emitCompacting,
+            emitKeepalive,
+            preCompactionEstimate,
+            systemPrompt,
+            agentTools,
+          );
           if (compaction?.truncated) {
-            await saveChat(chat, { allowTruncation: true });
-            console.log(`[chat] Mid-turn compaction cycle ${compactionCycle}: removed ${compaction.removedCount} messages, estimated ${compaction.estimatedTokenCount} tokens remaining`);
+            console.log(
+              `[chat] Mid-turn compaction cycle ${compactionCycle}: removed ${compaction.removedCount} messages, ` +
+              `estimated ${compaction.estimatedTokenCount} tokens removed`
+            );
 
             // Extract memories from removed messages and await completion so they're
             // available for the system prompt rebuild below. Without awaiting, the
@@ -2580,20 +2598,7 @@ async function handleChatStream(
               }
             }
 
-            // Emit compaction completion event AFTER all compaction work is done
-            // (memory extraction, save) so the client can safely sync state.
-            const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
-            const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
-            res.write(`event: compaction\ndata: ${JSON.stringify({
-              removedCount: compaction.removedCount,
-              remainingCount: chat.messages.filter(m => !m._outOfContext).length,
-              summaryMessage: summaryMsg || null,
-              phase: "mid_turn",
-              continues: true,
-              midTurn: true,
-              cycle: compactionCycle,
-              estimatedTokens,
-            })}\n\n`);
+            await saveChat(chat, { allowTruncation: true });
           }
         } catch (compErr) {
           console.error(`[chat] Mid-turn compaction cycle ${compactionCycle} failed:`, compErr);
@@ -2607,7 +2612,7 @@ async function handleChatStream(
         // ones from preCompactionFlush) frozen into the new system prompt.
         // Using buildSplitAugmentedPrompt (not legacy buildMemoryAugmentedPrompt) so that
         // the frozen context state is set up properly for subsequent turns.
-        if (isAgent) {
+        if (compaction?.truncated && isAgent) {
           resetMemoryContext(chat.id);
           const split = await buildSplitAugmentedPrompt(
             chat.systemPrompt || "You are a helpful assistant.",
@@ -2642,27 +2647,11 @@ async function handleChatStream(
       handoffParts.push("You're now ready to pick up where you left off.");
       const handoffText = handoffParts.join("\n\n");
 
-      // Strip trailing assistant messages (in-progress + compaction summaries).
-      // agentLoopContinue requires the last message to be user or toolResult.
-      let resumeEndIndex = chat.messages.length;
-      while (resumeEndIndex > 0 && chat.messages[resumeEndIndex - 1].role === "assistant") {
-        resumeEndIndex--;
-      }
-      // Ensure we have at least one message
-      if (resumeEndIndex === 0 && chat.messages.length > 0) {
-        resumeEndIndex = 1; // Keep at least the first user message
-      }
-
-      // Mark compaction summaries out-of-context BEFORE reconstructing the
-      // live resume prompt. Otherwise the active llama.cpp slot is filled with
-      // a prompt containing the summary, while persisted replay skips it on the
-      // next user turn. That post-compaction replay drift causes a large LCP
-      // miss even though the slot was never evicted.
-      for (const m of chat.messages) {
-        if (m._isCompactionSummary && !m._outOfContext) {
-          m._outOfContext = true;
-        }
-      }
+      // Keep the same tail selected by truncateChatHistory. The handoff user
+      // message appended below satisfies agentLoopContinue's "last message is
+      // not assistant" requirement, so stripping trailing assistant/tool rows
+      // here would discard exactly the recent context compaction preserved.
+      const resumeEndIndex = chat.messages.length;
 
       const messagesForResume = chat.messages.slice(0, resumeEndIndex);
       const resumeMessages = await chatMessagesToHydratedPiMessages(messagesForResume, chat.modelId, activeAssistantIdentity);
@@ -2672,9 +2661,8 @@ async function handleChatStream(
 
       // Persist the handoff as a hidden message so future turns reconstruct
       // the same token sequence that llama.cpp caches during this continuation.
-      // Without this, reconstruction places compaction summaries at a position
-      // where the cache has the transient handoff, breaking KV cache prefix
-      // matching and forcing a 66K+ token reprocess on the next turn.
+      // Without this, future replay lacks the transient handoff at this
+      // boundary, breaking KV cache prefix matching on the next turn.
       chat.messages.splice(resumeEndIndex, 0, {
         role: "user",
         content: handoffText,
@@ -2685,6 +2673,23 @@ async function handleChatStream(
         _compactionCycle: compactionCycle,
       });
       await saveChat(chat);
+
+      if (compaction?.truncated) {
+        // Emit after prompt rebuild and handoff persistence so the estimated
+        // token count reflects the actual prompt used for the resumed call.
+        const summaryMsg = chat.messages.find(m => m._isCompactionSummary && !m._outOfContext);
+        const estimatedTokens = await estimatePostCompactionTokens(chat, systemPrompt, agentTools);
+        res.write(`event: compaction\ndata: ${JSON.stringify({
+          removedCount: compaction.removedCount,
+          remainingCount: chat.messages.filter(m => !m._outOfContext).length,
+          summaryMessage: summaryMsg || null,
+          phase: "mid_turn",
+          continues: true,
+          midTurn: true,
+          cycle: compactionCycle,
+          estimatedTokens,
+        })}\n\n`);
+      }
 
       // 4. Resume the agent loop with compacted context
       const resumeContext: AgentContext = {
@@ -2798,10 +2803,9 @@ async function handleChatStream(
             const resumeEffectiveCW = getEffectiveContextWindow(chat, inferenceModel);
             let resumeTokens = state.finalUsage?.totalTokens ?? 0;
             if (!resumeTokens) {
-              const { estimateContextTokens } = await import("../services/compaction.js");
               resumeTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
             }
-            if (resumeEffectiveCW > 0 && resumeTokens > 0 && resumeTokens / resumeEffectiveCW > 0.85) {
+            if (resumeEffectiveCW > 0 && resumeTokens > 0 && resumeTokens / resumeEffectiveCW > COMPACTION_TRIGGER_RATIO) {
               console.warn(`[chat] Resume loop overflow (cycle ${compactionCycle}): ${resumeTokens}/${resumeEffectiveCW} (${((resumeTokens / resumeEffectiveCW) * 100).toFixed(0)}%) — triggering another compaction cycle`);
               state.needsMidTurnCompaction = true;
               resumeAbortController.abort();

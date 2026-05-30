@@ -487,8 +487,16 @@ router.delete("/:id/config", async (req, res) => {
     const result = await clearModelOverride(unitName);
     invalidateRouterCache();
     const settings = await getSettings();
+    let changed = false;
     if (settings.llamaServiceConfigs) {
+      changed = Object.prototype.hasOwnProperty.call(settings.llamaServiceConfigs, id) || changed;
       delete settings.llamaServiceConfigs[id];
+    }
+    if (settings.llamaServerBins) {
+      changed = Object.prototype.hasOwnProperty.call(settings.llamaServerBins, id) || changed;
+      delete settings.llamaServerBins[id];
+    }
+    if (changed) {
       await saveSettings(settings);
     }
     const server = await getLlamaServerStatus(id, settings);
