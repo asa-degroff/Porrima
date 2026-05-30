@@ -1058,6 +1058,10 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     }));
     try {
       const data = await getLlamaServiceConfig(id);
+      if (id === "extraction") {
+        setExtractionCtxSize(data.config.ctxSize);
+        setExtractionCtxSizeDraft(String(data.config.ctxSize));
+      }
       setLlamaServiceState((prev) => ({
         ...prev,
         [id]: { ...(prev[id] || {}), loading: false, saving: false, data, draft: data.config, previewOpen: false, unitOpen: false },
@@ -1120,6 +1124,12 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
         const data = current.data ? { ...current.data, config: result.config, preview: result.preview } : undefined;
         return { ...prev, [id]: { ...current, saving: false, draft: result.config, data, previewOpen: true } };
       });
+      if (id === "extraction") {
+        setExtractionModelUrl(result.server.url);
+        if (result.server.expectedModel) setExtractionModelId(result.server.expectedModel);
+        setExtractionCtxSize(result.config.ctxSize);
+        setExtractionCtxSizeDraft(String(result.config.ctxSize));
+      }
       setLlamaServerMessage({ type: "ok", text: `${result.server.label} service config applied and restarted.` });
       await refreshLlamaServers();
     } catch (e: any) {
@@ -3083,13 +3093,14 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                )}
 	                {llamaServers.map((server) => {
 	                  const busy = Boolean(llamaServerActionInFlight?.startsWith(`${server.id}:`));
-	                  const missingUnit = server.systemd.loadState === "not-found";
-	                  const detailsExpanded = expandedLlamaServerId === server.id;
-	                  const configExpanded = llamaConfigExpanded === server.id;
-	                  const serviceExpanded = llamaServiceExpanded === server.id;
-	                  const modelsPreview = server.http.modelIds.length > 0
-	                    ? server.http.modelIds.slice(0, 3).join(", ") + (server.http.modelIds.length > 3 ? ` +${server.http.modelIds.length - 3}` : "")
-	                    : "none reported";
+		                  const missingUnit = server.systemd.loadState === "not-found";
+		                  const detailsExpanded = expandedLlamaServerId === server.id;
+		                  const configExpanded = llamaConfigExpanded === server.id;
+		                  const serviceExpanded = llamaServiceExpanded === server.id;
+		                  const hideExtractionCtxSize = server.id === "extraction" && server.override.active;
+		                  const modelsPreview = server.http.modelIds.length > 0
+		                    ? server.http.modelIds.slice(0, 3).join(", ") + (server.http.modelIds.length > 3 ? ` +${server.http.modelIds.length - 3}` : "")
+		                    : "none reported";
 	                  return (
 	                    <div key={server.id} className="rounded-lg border border-white/10 bg-white/[0.025]">
 	                      {/* Card header */}
@@ -3273,21 +3284,23 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                  placeholder="http://localhost:8083"
 	                                />
-	                              </div>
-	                              <div className="flex gap-2 items-end">
-	                                <div>
-	                                  <label className="block text-xs text-white/50 mb-1">Ctx size</label>
-	                                  <input
-	                                    type="number"
-	                                    value={extractionCtxSizeDraft}
-	                                    onChange={(e) => setExtractionCtxSizeDraft(e.target.value)}
-	                                    onBlur={applyExtractionCtxSizeDraft}
-	                                    min={MIN_EXTRACTION_CTX_SIZE} max={MAX_EXTRACTION_CTX_SIZE} step={1024}
-	                                    className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30"
-	                                  />
-	                                  <span className="text-xs text-white/30 ml-2">tokens</span>
-		                                </div>
-	                                <div className="flex-1">
+		                              </div>
+		                              <div className="flex gap-2 items-end">
+		                                {!hideExtractionCtxSize && (
+		                                  <div>
+		                                    <label className="block text-xs text-white/50 mb-1">Ctx size</label>
+		                                    <input
+		                                      type="number"
+		                                      value={extractionCtxSizeDraft}
+		                                      onChange={(e) => setExtractionCtxSizeDraft(e.target.value)}
+		                                      onBlur={applyExtractionCtxSizeDraft}
+		                                      min={MIN_EXTRACTION_CTX_SIZE} max={MAX_EXTRACTION_CTX_SIZE} step={1024}
+		                                      className="w-28 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 outline-none focus:ring-1 focus:ring-purple-400/30"
+		                                    />
+		                                    <span className="text-xs text-white/30 ml-2">tokens</span>
+		                                  </div>
+		                                )}
+		                                <div className="flex-1">
 	                                  <label className="block text-xs text-white/50 mb-1">Model</label>
 	                                  {extractionServerModels.length > 0 && !extractionUseCustom ? (
 	                                    <Dropdown
