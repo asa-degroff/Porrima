@@ -388,7 +388,7 @@ Source attribution:
 
 What I capture: things worth remembering for future interactions — written in my own voice, as something I'd tell myself to remember. Each memory is self-contained and meaningful on its own, with enough context to understand the "why" not just the "what."
 
-What I skip: my own identity traits, broad preferences, anything already in existing knowledge blocks, operational overhead, tool interactions, and generic observations without specific context.`;
+What I skip: my own identity traits, broad preferences, operational overhead, tool interactions, temporary project states, and generic observations without specific context.`;
 
 // Cached prefix — loaded from disk once, falls back to hardcoded default.
 let _extractionPrefixCache: string | null = null;
@@ -453,7 +453,7 @@ Categories:
 - "note" — general observations, curiosities, personal details, or anything worth remembering that doesn't fit the above categories
 - "reflection" — higher-order insights, meta-observations, patterns, contradictions, openings, shifts in understanding
 
-If nothing is genuinely novel or significant, output: []
+If nothing is novel or significant, output: []
 
 IMPORTANT: Output ONLY the JSON array, no explanation or markdown fences.`;
 
