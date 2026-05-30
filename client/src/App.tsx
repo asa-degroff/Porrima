@@ -94,7 +94,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const selectChatRef = useRef<((id: string) => Promise<void>) | null>(null);
   const streamingRef = useRef(false);
   const tts = useTTS();
-  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, handleAgentAudioChunk, handleAgentAudioDone, resumeLivePlayback, cleanupLiveAudio } = tts;
+  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, setContinuationWaiting: setTtsContinuationWaiting, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio } = tts;
   const {
     userNotebooks,
     agentNotebooks,
@@ -445,11 +445,145 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const autoReadPendingTurnRef = useRef(false);
   const autoReadSawStreamingRef = useRef(false);
   const autoReadStreamingCompletedRef = useRef(false);
+  const latestMessagesRef = useRef(messages);
+  const latestActiveChatIdRef = useRef(activeChatId);
+  const manualReadAloudFollowRef = useRef<{
+    id: number;
+    chatId: string | null;
+    cursor: number;
+    timer: number | null;
+  } | null>(null);
+  const manualReadAloudFollowIdRef = useRef(0);
+  const continueManualReadAloudFollowRef = useRef<(id: number) => void>(() => {});
 
   // Keep streamingRef in sync so async callbacks (TTS onPlaybackEnd) read the live value
   useEffect(() => {
     streamingRef.current = streaming;
   }, [streaming]);
+
+  useEffect(() => {
+    latestMessagesRef.current = messages;
+    const follow = manualReadAloudFollowRef.current;
+    if (follow?.timer != null && follow.chatId === latestActiveChatIdRef.current) {
+      window.clearTimeout(follow.timer);
+      follow.timer = null;
+      continueManualReadAloudFollowRef.current(follow.id);
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    latestActiveChatIdRef.current = activeChatId;
+  }, [activeChatId]);
+
+  const clearManualReadAloudFollow = useCallback(() => {
+    const follow = manualReadAloudFollowRef.current;
+    if (follow?.timer != null) {
+      window.clearTimeout(follow.timer);
+    }
+    manualReadAloudFollowRef.current = null;
+    manualReadAloudFollowIdRef.current += 1;
+    setTtsContinuationWaiting(false);
+  }, [setTtsContinuationWaiting]);
+
+  const continueManualReadAloudFollow = useCallback((id: number) => {
+    const follow = manualReadAloudFollowRef.current;
+    if (!follow || follow.id !== id || follow.chatId !== latestActiveChatIdRef.current) return;
+    const streamStillActive = streamingRef.current && follow.chatId === latestActiveChatIdRef.current;
+
+    if (follow.timer != null) {
+      window.clearTimeout(follow.timer);
+      follow.timer = null;
+    }
+
+    const latestMessages = latestMessagesRef.current;
+    const lastMessage = latestMessages[latestMessages.length - 1];
+    const latestText = lastMessage?.role === "assistant" ? lastMessage.content || "" : "";
+
+    if (latestText.length < follow.cursor) {
+      if (!streamStillActive) {
+        clearManualReadAloudFollow();
+        return;
+      }
+      follow.cursor = 0;
+    }
+
+    const unreadText = latestText.slice(follow.cursor);
+    follow.cursor = latestText.length;
+
+    if (unreadText.trim()) {
+      setTtsContinuationWaiting(false);
+      void playTts(unreadText, {
+        onPlaybackEnd: () => continueManualReadAloudFollowRef.current(id),
+      });
+      return;
+    }
+
+    if (streamStillActive) {
+      setTtsContinuationWaiting(true);
+      follow.timer = window.setTimeout(() => {
+        const current = manualReadAloudFollowRef.current;
+        if (current?.id === id) {
+          current.timer = null;
+        }
+        continueManualReadAloudFollowRef.current(id);
+      }, 300);
+      return;
+    }
+
+    clearManualReadAloudFollow();
+  }, [clearManualReadAloudFollow, playTts, setTtsContinuationWaiting]);
+
+  useEffect(() => {
+    continueManualReadAloudFollowRef.current = continueManualReadAloudFollow;
+  }, [continueManualReadAloudFollow]);
+
+  useEffect(() => {
+    clearManualReadAloudFollow();
+  }, [activeChatId, clearManualReadAloudFollow]);
+
+  useEffect(() => {
+    return () => clearManualReadAloudFollow();
+  }, [clearManualReadAloudFollow]);
+
+  const handleReadAloud = useCallback((text: string) => {
+    clearManualReadAloudFollow();
+
+    const latestMessages = latestMessagesRef.current;
+    const lastMessage = latestMessages[latestMessages.length - 1];
+    const shouldFollowStreamingMessage =
+      streamingRef.current &&
+      latestActiveChatIdRef.current != null &&
+      lastMessage?.role === "assistant" &&
+      (lastMessage.content || "") === text;
+
+    if (!shouldFollowStreamingMessage) {
+      void playTts(text);
+      return;
+    }
+
+    const id = manualReadAloudFollowIdRef.current + 1;
+    manualReadAloudFollowIdRef.current = id;
+    manualReadAloudFollowRef.current = {
+      id,
+      chatId: latestActiveChatIdRef.current,
+      cursor: text.length,
+      timer: null,
+    };
+
+    void playTts(text, {
+      onPlaybackEnd: () => continueManualReadAloudFollowRef.current(id),
+    });
+  }, [clearManualReadAloudFollow, playTts]);
+
+  const handleStandaloneReadAloud = useCallback((text: string) => {
+    clearManualReadAloudFollow();
+    void playTts(text);
+  }, [clearManualReadAloudFollow, playTts]);
+
+  const handleStopTts = useCallback(() => {
+    clearManualReadAloudFollow();
+    stopTts();
+  }, [clearManualReadAloudFollow, stopTts]);
 
   const getAutoReadMessageId = useCallback((message: typeof messages[number]) => {
     let hash = 0;
@@ -559,16 +693,16 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
     autoReadPendingTurnRef.current = false;
     autoReadStreamingCompletedRef.current = false;
-    void playTts(lastMsg.content);
+    handleStandaloneReadAloud(lastMsg.content);
   }, [
     activeChatId,
     hasAutoReadMessage,
+    handleStandaloneReadAloud,
     markAutoReadMessage,
     messages,
     playbackState.isLoading,
     playbackState.isPaused,
     playbackState.isPlaying,
-    playTts,
     streaming,
     ttsSettings.autoReadEnabled,
     ttsSettings.enabled,
@@ -1120,7 +1254,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           onCreateAgentEntry={async (content) => { await createAgentEntry(content); }}
           onUpdateEntry={async (author, id, updates) => { await updateEntry(author, id, updates); }}
           onDeleteEntry={async (author, id) => { await removeEntry(author, id); }}
-          onReadAloud={ttsSettings.enabled ? playTts : undefined}
+          onReadAloud={ttsSettings.enabled ? handleStandaloneReadAloud : undefined}
           onTriggerAgentReview={async () => { return await triggerAgentReview(); }}
           chats={chats}
           onChatSelect={(chatId) => { selectChat(chatId); setActiveView('chats'); setImageSandboxOpen(false); }}
@@ -1176,22 +1310,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           if (enabled) {
             const lastAssistantMsg = [...messages].reverse().find(m => m.role === "assistant" && m.content);
             if (lastAssistantMsg) {
-              playTts(lastAssistantMsg.content);
+              handleStandaloneReadAloud(lastAssistantMsg.content);
             }
           } else {
-            stopTts();
+            handleStopTts();
           }
         }}
-        onReadAloud={(text: string) => {
-          playTts(text, {
-            onPlaybackEnd: () => {
-              // Use ref to read live streaming state (closure would be stale)
-              if (streamingRef.current) {
-                resumeLivePlayback();
-              }
-            },
-          });
-        }}
+        onReadAloud={ttsSettings.enabled ? handleReadAloud : undefined}
         onSend={handleSend}
         onEditMessage={handleEditMessage}
         onRetryMessage={handleRetryMessage}
@@ -1239,7 +1364,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             playbackState={playbackState}
             onPause={() => pauseTts()}
             onResume={() => resumeTts()}
-            onStop={() => stopTts()}
+            onStop={handleStopTts}
           />
         </div>
       )}

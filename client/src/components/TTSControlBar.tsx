@@ -42,7 +42,7 @@ export const TTSControlBar = memo(function TTSControlBar({
 }: Props) {
   const { light } = useHaptics();
 
-  const { isPlaying, isPaused, isLoading, currentTime, duration } = playbackState;
+  const { isPlaying, isPaused, isLoading, currentTime, duration, waitingForContinuation } = playbackState;
   const isChunked = playbackState.mode === "chunked-url" || playbackState.mode === "chunked-stream";
   const chunkLabel = isChunked && playbackState.totalChunks
     ? `Chunk ${playbackState.currentChunk || 0}/${playbackState.totalChunks}`
@@ -61,7 +61,7 @@ export const TTSControlBar = memo(function TTSControlBar({
         {isLoading ? (
           <button
             className="w-9 h-9 rounded-full theme-accent-bg border theme-accent-border theme-accent-text flex items-center justify-center shrink-0 cursor-wait"
-            title="Generating audio..."
+            title={waitingForContinuation ? "Waiting for more text..." : "Generating audio..."}
             disabled
           >
             {loadingIcon}
@@ -95,7 +95,7 @@ export const TTSControlBar = memo(function TTSControlBar({
           )}
           <div className="flex justify-between mt-1 text-[10px] theme-primary-text opacity-60">
             {isLoading ? (
-              <span>{chunkLabel ? `Generating next audio... ${chunkLabel}` : "Generating audio..."}</span>
+              <span>{waitingForContinuation ? "Waiting for more text..." : chunkLabel ? `Generating next audio... ${chunkLabel}` : "Generating audio..."}</span>
             ) : (
               <>
                 <span>{chunkLabel || formatTime(currentTime)}</span>
@@ -106,7 +106,7 @@ export const TTSControlBar = memo(function TTSControlBar({
         </div>
 
         {/* Stop button */}
-        {!isLoading && (
+        {(!isLoading || waitingForContinuation) && (
           <button
             onClick={() => {
               light();

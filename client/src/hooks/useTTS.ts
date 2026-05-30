@@ -39,6 +39,7 @@ export interface PlaybackState {
   currentChunk?: number;
   totalChunks?: number;
   mode?: "single" | "chunked-url" | "chunked-stream";
+  waitingForContinuation?: boolean;
 }
 
 interface TTSQueueItem {
@@ -615,6 +616,7 @@ export function useTTS() {
           mode: "single",
           currentChunk: 0,
           totalChunks: 0,
+          waitingForContinuation: false,
         }));
 
         if (audioRef.current) {
@@ -752,6 +754,34 @@ export function useTTS() {
       isLoading: false,
     }));
   }, [resetPlayback]);
+
+  const setContinuationWaiting = useCallback((waiting: boolean) => {
+    setPlaybackState((prev) => {
+      if (waiting) {
+        if (prev.isPlaying || prev.isPaused || prev.isLoading) return prev;
+        return {
+          ...prev,
+          isLoading: true,
+          currentTime: 0,
+          duration: 0,
+          audioUrl: null,
+          currentChunk: 0,
+          totalChunks: 0,
+          mode: "chunked-url",
+          waitingForContinuation: true,
+        };
+      }
+
+      if (prev.isPlaying || prev.isPaused || !prev.isLoading) return prev;
+      return {
+        ...prev,
+        isLoading: false,
+        currentTime: 0,
+        duration: 0,
+        waitingForContinuation: false,
+      };
+    });
+  }, []);
 
   const checkAvailability = useCallback(async (): Promise<boolean> => {
     try {
@@ -906,6 +936,7 @@ export function useTTS() {
     pause,
     resume,
     stop,
+    setContinuationWaiting,
     checkAvailability,
     handleAgentAudioChunk,
     handleAgentAudioDone,
