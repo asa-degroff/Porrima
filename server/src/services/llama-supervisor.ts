@@ -1,7 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import type { Settings } from "../types.js";
-import { extractOverrideModelPath, readOverride } from "./llama-overrides.js";
+import { extractOverrideBinaryPath, extractOverrideModelPath, readOverride, type OverrideInfo } from "./llama-overrides.js";
 import { getDefaultLlamaBin, resolveBin } from "./llama-launch-templates.js";
 
 const execFileAsync = promisify(execFile);
@@ -285,13 +285,39 @@ async function getHttpStatus(baseUrl: string): Promise<LlamaServerStatus["http"]
   }
 }
 
-async function getOverrideInfo(unitName: string): Promise<LlamaServerStatus["override"]> {
-  const info = await readOverride(unitName);
+function formatOverrideInfo(info: OverrideInfo): LlamaServerStatus["override"] {
   return {
     active: info.exists,
     path: info.path,
     modelPath: extractOverrideModelPath(info.contents) ?? undefined,
   };
+}
+
+function extractSystemdExecBinary(execStart: string | undefined): string | null {
+  if (!execStart) return null;
+  const pathMatch = execStart.match(/(?:^|[{\s;])path=([^;\s}]+)/);
+  if (pathMatch?.[1]) return pathMatch[1];
+
+  const trimmed = execStart.trim();
+  if (!trimmed || trimmed === "{}") return null;
+  const value = trimmed.startsWith("ExecStart=")
+    ? trimmed.replace(/^ExecStart=/, "").trim()
+    : trimmed;
+  const shellMatch = value.match(/^'([^']*)'|"([^"]*)"|(\S+)/);
+  return shellMatch?.[1] || shellMatch?.[2] || shellMatch?.[3] || null;
+}
+
+function resolveStatusBinary(
+  id: LlamaServerId,
+  settings: Settings,
+  systemd: LlamaServerStatus["systemd"],
+  override: OverrideInfo
+): string {
+  return (
+    extractOverrideBinaryPath(override.contents) ||
+    extractSystemdExecBinary(systemd.execStart) ||
+    resolveBin(id, settings)
+  );
 }
 
 export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaServerStatus[]> {
@@ -313,7 +339,8 @@ export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaS
           // Non-fatal — residency tracking will self-correct over time
         }
       }
-      const override = await getOverrideInfo(unit.unitName);
+      const overrideInfo = await readOverride(unit.unitName);
+      const override = formatOverrideInfo(overrideInfo);
       return {
         id: def.id,
         label: def.label,
@@ -326,7 +353,7 @@ export async function getLlamaServerStatuses(settings: Settings): Promise<LlamaS
         systemd: unit.systemd,
         http,
         override,
-        resolvedBinary: resolveBin(def.id, settings),
+        resolvedBinary: resolveStatusBinary(def.id, settings, unit.systemd, overrideInfo),
         defaultBinary: defaultBin,
       };
     })
@@ -341,7 +368,8 @@ export async function getLlamaServerStatus(id: string, settings: Settings): Prom
     resolveSystemdUnit(def),
     getHttpStatus(url),
   ]);
-  const override = await getOverrideInfo(unit.unitName);
+  const overrideInfo = await readOverride(unit.unitName);
+  const override = formatOverrideInfo(overrideInfo);
   return {
     id: def.id,
     label: def.label,
@@ -354,7 +382,7 @@ export async function getLlamaServerStatus(id: string, settings: Settings): Prom
     systemd: unit.systemd,
     http,
     override,
-    resolvedBinary: resolveBin(def.id, settings),
+    resolvedBinary: resolveStatusBinary(def.id, settings, unit.systemd, overrideInfo),
     defaultBinary: getDefaultLlamaBin(),
   };
 }

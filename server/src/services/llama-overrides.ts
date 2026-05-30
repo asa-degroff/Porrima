@@ -59,6 +59,25 @@ export function extractOverrideModelPath(contents: string | undefined): string |
   return match[1] || match[2] || match[3] || null;
 }
 
+/**
+ * Extract the llama-server binary from an override's ExecStart. Managed
+ * service config writes a complete ExecStart, so this is the effective binary
+ * for that slot even if the older per-slot settings override is stale.
+ */
+export function extractOverrideBinaryPath(contents: string | undefined): string | null {
+  if (!contents) return null;
+  const flat = contents.replace(/\\\n\s*/g, " ");
+  for (const line of flat.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("ExecStart=")) continue;
+    const value = trimmed.replace(/^ExecStart=/, "").trim();
+    if (!value) continue;
+    const match = value.match(/^'([^']*)'|"([^"]*)"|(\S+)/);
+    return match?.[1] || match?.[2] || match?.[3] || null;
+  }
+  return null;
+}
+
 export interface WriteOverrideOptions {
   /** Additional Environment= lines to include in the drop-in. */
   environmentLines?: string[];

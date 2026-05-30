@@ -15,7 +15,7 @@ import {
   type LlamaServerId,
 } from "../services/llama-supervisor.js";
 import { findLocalModel, listLocalModels, scanDirectory, resolveModelsDirs, type LlamaModelKind } from "../services/llama-models-disk.js";
-import { getDefaultLlamaBin, isOverridableSlot, isRouterCapableSlot, renderExecStart, renderRouterExecStart, resolveSlotEnvironment, type OverridableSlotId } from "../services/llama-launch-templates.js";
+import { getDefaultLlamaBin, isOverridableSlot, isRouterCapableSlot, renderRouterExecStart, resolveSlotEnvironment } from "../services/llama-launch-templates.js";
 import { applyModelOverride, clearModelOverride, readOverride } from "../services/llama-overrides.js";
 import { ensureRouterModelLoaded, invalidateRouterCache, normalizeRouterModelId } from "../services/llama-router-client.js";
 import { invalidateModelCache } from "../services/models.js";
@@ -118,10 +118,18 @@ async function applySlotModelRuntime(
     throw new Error("Chat inference model changes require router mode. Update the managed service config or restart with --models-dir.");
   }
 
-  const execStart = renderExecStart(id, { ggufPath: model.ggufPath, modelId: model.id, settings });
+  const currentConfig = await hydrateDefaultConfig(id, settings);
+  const nextConfig = mergeServiceConfig(id, settings, {
+    ...currentConfig,
+    mode: "single",
+    modelPath: model.ggufPath,
+    modelId: model.id,
+  });
+  const execStart = renderServiceExecStart(id, nextConfig);
   const unitName = await resolveSlotUnitName(id);
-  const envLines = resolveSlotEnvironment(id, settings);
+  const envLines = nextConfig.environment.length ? nextConfig.environment : [];
   const result = await applyModelOverride(unitName, execStart, { environmentLines: envLines.length ? envLines : undefined });
+  persistServiceConfigToSettings(id, settings, nextConfig);
   invalidateRouterCache(preStatus.url);
   return { modelId: model.id, overridePath: result.overridePath, mode: "override-restart" };
 }
@@ -647,6 +655,7 @@ router.patch("/:id", async (req, res) => {
     const settings = await getSettings();
     const body = req.body as Record<string, unknown>;
     let pendingModelId: string | null = null;
+    let pendingBinaryPath: string | undefined;
 
     // Map request fields to settings keys per server role
     if (def.id === "inference") {
@@ -656,6 +665,7 @@ router.patch("/:id", async (req, res) => {
       if (body.sharesGpu !== undefined) settings.llamacppSharesGpu = Boolean(body.sharesGpu);
       if (body.binaryPath !== undefined) {
         const v = (body.binaryPath as string)?.trim();
+        pendingBinaryPath = v || "";
         if (!settings.llamaServerBins) settings.llamaServerBins = {};
         if (v) settings.llamaServerBins["inference"] = v;
         else delete settings.llamaServerBins["inference"];
@@ -679,6 +689,7 @@ router.patch("/:id", async (req, res) => {
       if (body.fallbackEnabled !== undefined) settings.extractionFallbackEnabled = Boolean(body.fallbackEnabled);
       if (body.binaryPath !== undefined) {
         const v = (body.binaryPath as string)?.trim();
+        pendingBinaryPath = v || "";
         if (!settings.llamaServerBins) settings.llamaServerBins = {};
         if (v) settings.llamaServerBins["extraction"] = v;
         else delete settings.llamaServerBins["extraction"];
@@ -693,6 +704,7 @@ router.patch("/:id", async (req, res) => {
       }
       if (body.binaryPath !== undefined) {
         const v = (body.binaryPath as string)?.trim();
+        pendingBinaryPath = v || "";
         if (!settings.llamaServerBins) settings.llamaServerBins = {};
         if (v) settings.llamaServerBins["reranker"] = v;
         else delete settings.llamaServerBins["reranker"];
@@ -707,6 +719,7 @@ router.patch("/:id", async (req, res) => {
       }
       if (body.binaryPath !== undefined) {
         const v = (body.binaryPath as string)?.trim();
+        pendingBinaryPath = v || "";
         if (!settings.llamaServerBins) settings.llamaServerBins = {};
         if (v) settings.llamaServerBins["embedding"] = v;
         else delete settings.llamaServerBins["embedding"];
@@ -721,10 +734,30 @@ router.patch("/:id", async (req, res) => {
       }
       if (body.binaryPath !== undefined) {
         const v = (body.binaryPath as string)?.trim();
+        pendingBinaryPath = v || "";
         if (!settings.llamaServerBins) settings.llamaServerBins = {};
         if (v) settings.llamaServerBins["title-generation"] = v;
         else delete settings.llamaServerBins["title-generation"];
       }
+    }
+
+    if (pendingBinaryPath !== undefined && isOverridableSlot(def.id)) {
+      const unitName = await resolveSlotUnitName(def.id);
+      const currentConfig = await hydrateDefaultConfig(def.id, settings);
+      const binaryPath = pendingBinaryPath || getDefaultLlamaBin();
+      const nextConfig = mergeServiceConfig(def.id, settings, {
+        ...currentConfig,
+        binaryPath,
+        environment: updateBinaryEnvironment(currentConfig.environment, binaryPath),
+      });
+      await validateServiceConfig(def.id, nextConfig);
+      const execStart = renderServiceExecStart(def.id, nextConfig);
+      await applyModelOverride(
+        unitName,
+        execStart,
+        { environmentLines: nextConfig.environment.length ? nextConfig.environment : undefined }
+      );
+      persistServiceConfigToSettings(def.id, settings, nextConfig);
     }
 
     if (pendingModelId && isOverridableSlot(def.id)) {
@@ -792,6 +825,12 @@ async function hydrateServiceConfig(id: LlamaServerId, settings: Awaited<ReturnT
     if (model) config.modelPath = model.ggufPath;
   }
   return config;
+}
+
+function updateBinaryEnvironment(environment: string[], binaryPath: string): string[] {
+  const withoutLdLibraryPath = environment.filter((line) => !line.startsWith("LD_LIBRARY_PATH="));
+  if (binaryPath === getDefaultLlamaBin()) return withoutLdLibraryPath;
+  return [`LD_LIBRARY_PATH=${path.dirname(binaryPath)}`, ...withoutLdLibraryPath];
 }
 
 function persistServiceConfigToSettings(id: LlamaServerId, settings: Awaited<ReturnType<typeof getSettings>>, config: LlamaServiceConfig): void {
