@@ -21,7 +21,7 @@ import type { LlamaTimings } from "./model-stats.js";
 import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat, Settings } from "../types.js";
 import { VALID_MEMORY_CATEGORIES, FALLBACK_MEMORY_CATEGORY } from "../types.js";
 import { appDataPath } from "./paths.js";
-import { DEFAULT_EXTRACTION_MAX_TOKENS, normalizeExtractionRequestSettings } from "./extraction-settings.js";
+import { DEFAULT_EXTRACTION_MAX_TOKENS, resolveExtractionRequestSettings } from "./extraction-settings.js";
 
 const LOG_DIR = appDataPath("logs");
 
@@ -215,7 +215,7 @@ async function callExtractionLLM(
 ): Promise<string> {
   const settings = await getSettings();
   const extractionUrl = settings.extractionModelUrl;
-  const extractionSettings = normalizeExtractionRequestSettings(settings);
+  const extractionSettings = await resolveExtractionRequestSettings(settings);
 
   if (extractionUrl) {
     // Serialize through the mutex — the dedicated extraction server is
@@ -499,7 +499,7 @@ async function computeBlockCharBudget(
 
 async function buildExtractionSystemPrompt(projectId?: string): Promise<string> {
   const settings = await getSettings();
-  const { ctxSize, maxTokens } = normalizeExtractionRequestSettings(settings);
+  const { ctxSize, maxTokens } = await resolveExtractionRequestSettings(settings);
   const prefix = await loadExtractionPrefix();
 
   // Include loaded block summaries so extraction avoids redundant facts.
@@ -948,7 +948,7 @@ async function extractInChunks(
     };
   }
 
-  const { ctxSize, maxTokens } = normalizeExtractionRequestSettings(settings);
+  const { ctxSize, maxTokens } = await resolveExtractionRequestSettings(settings);
 
   // Up-front fit check against the *no-overhead* budget. When the content fits
   // as a single call, skip chunking entirely — avoids splitting just because

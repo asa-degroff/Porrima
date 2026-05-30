@@ -4,7 +4,7 @@ import { regenerateTitle } from "./title-generation.js";
 import { readOpenAIContentStream, withExtractionMutex } from "./memory-extraction.js";
 import { recordModelStats } from "./model-stats.js";
 import { ensureRouterModelLoaded, normalizeRouterModelId } from "./llama-router-client.js";
-import { normalizeExtractionRequestSettings } from "./extraction-settings.js";
+import { resolveExtractionRequestSettings } from "./extraction-settings.js";
 
 export interface CompactionResult {
   truncated: boolean;
@@ -948,7 +948,7 @@ async function runIndexGeneration(
   const { getSettings } = await import("./chat-storage.js");
   const settings = await getSettings();
   const extractionUrl = settings.extractionModelUrl;
-  const extractionSettings = normalizeExtractionRequestSettings(settings);
+  const extractionSettings = await resolveExtractionRequestSettings(settings);
   const { systemPrompt, inputParts } = buildIndexPrompt(blockDescriptions);
 
   const keepaliveInterval = onKeepalive ? setInterval(onKeepalive, 10_000) : null;
