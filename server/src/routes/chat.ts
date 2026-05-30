@@ -6,7 +6,7 @@ import { join } from "path";
 import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { AgentContext } from "@mariozechner/pi-agent-core";
 import { getChat, saveChat, getDb, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
-import { chatMessagesToPiMessages, hydrateChatMessageImagesForModel, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
+import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
 import { extractMemories, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
@@ -543,26 +543,17 @@ function logKvCacheState(opts: {
   );
 }
 
-function snapshotSentPrefix(
+async function snapshotSentPrefix(
   chatId: string,
   chatMessages: ChatMessage[],
   modelId: string,
   fallbackIdentity?: ReplayModelIdentity,
-): void {
-  const piMessages = chatMessagesToPiMessages(chatMessages, modelId, fallbackIdentity);
+): Promise<void> {
+  const piMessages = await chatMessagesToHydratedPiMessages(chatMessages, modelId, fallbackIdentity);
   lastSentPrefixSnapshot.set(chatId, {
     digest: digestPiMessages(piMessages),
     piMsgCount: piMessages.length,
   });
-}
-
-async function chatMessagesToHydratedPiMessages(
-  chatMessages: ChatMessage[],
-  modelId: string,
-  fallbackIdentity?: ReplayModelIdentity,
-): Promise<Message[]> {
-  const hydratedMessages = await hydrateChatMessageImagesForModel(chatMessages);
-  return chatMessagesToPiMessages(hydratedMessages, modelId, fallbackIdentity);
 }
 
 /**
@@ -2970,7 +2961,7 @@ async function handleChatStream(
       // Capture what we just sent + got back so the next turn's kv-cache log
       // can detect prefix divergence. Recap/title mutations after this point
       // don't affect pi messages, so this snapshot stays accurate.
-      snapshotSentPrefix(chat.id, chat.messages, chat.modelId, activeAssistantIdentity);
+      await snapshotSentPrefix(chat.id, chat.messages, chat.modelId, activeAssistantIdentity);
       console.log(`[chat] finished: iterations=${iterations} waitingForInput=${waitingForInput} content=${assistantMsg.content.length}ch`);
 
       // Generate a brief recap for long assistant messages (agent/project/system chats only)

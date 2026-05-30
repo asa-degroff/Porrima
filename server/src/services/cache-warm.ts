@@ -13,7 +13,7 @@
 
 import { randomUUID } from "crypto";
 import { getChat, getProject, getSettings } from "./chat-storage.js";
-import { chatMessagesToPiMessages, hydrateChatMessageImagesForModel } from "./agent.js";
+import { chatMessagesToHydratedPiMessages } from "./agent.js";
 import type { ReplayModelIdentity } from "./agent.js";
 import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
 import {
@@ -263,10 +263,9 @@ async function buildReplayMessages(
   chatMessages: any[],
   modelId: string,
   model: InferenceModel,
-): Promise<ReturnType<typeof chatMessagesToPiMessages>> {
+): ReturnType<typeof chatMessagesToHydratedPiMessages> {
   const replayIdentity = { api: "openai-compat", provider: "llamacpp", model: modelId };
-  const hydratedMessages = await hydrateChatMessageImagesForModel(chatMessages);
-  return chatMessagesToPiMessages(hydratedMessages, modelId, replayIdentity as ReplayModelIdentity);
+  return chatMessagesToHydratedPiMessages(chatMessages, modelId, replayIdentity as ReplayModelIdentity);
 }
 
 async function buildWarmSystemPrompt(chat: Awaited<ReturnType<typeof getChat>>, messages: any[]): Promise<string> {

@@ -60,6 +60,17 @@ export async function hydrateChatMessageImagesForModel(messages: ChatMessage[]):
   }));
 }
 
+export async function chatMessagesToHydratedPiMessages(
+  messages: ChatMessage[],
+  modelId: string,
+  fallbackIdentity?: Partial<ReplayModelIdentity>
+): Promise<Message[]> {
+  // Persisted rows store image metadata only; hydrate before LLM replay so
+  // cache warm, active chat sends, and prefix snapshots use the same prompt.
+  const hydratedMessages = await hydrateChatMessageImagesForModel(messages);
+  return chatMessagesToPiMessages(hydratedMessages, modelId, fallbackIdentity);
+}
+
 function isPlaceholderEllipsis(text: string | undefined): boolean {
   if (!text) return false;
   const normalized = text.replace(/\s/g, "").replace(/…/g, "...");

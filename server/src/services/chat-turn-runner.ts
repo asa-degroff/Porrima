@@ -2,7 +2,7 @@ import type { AgentContext, AgentMessage, AgentTool } from "@mariozechner/pi-age
 import type { AssistantMessage, Message, Model, StopReason, ToolCall } from "@mariozechner/pi-ai";
 import { randomUUID } from "crypto";
 import type { Chat, ChatMessage, ChatToolResult, ImageAttachment } from "../types.js";
-import { chatMessagesToPiMessages, hydrateChatMessageImagesForModel, type ReplayModelIdentity } from "./agent.js";
+import { chatMessagesToHydratedPiMessages, type ReplayModelIdentity } from "./agent.js";
 import { estimateContextTokens } from "./compaction.js";
 import type { SynthesisEmitter } from "./synthesis-stream.js";
 import { createSafeStreamFn } from "./llm-stream.js";
@@ -247,8 +247,7 @@ export async function runHeadlessChatTurn(
     provider: String(model.provider),
     model: model.id,
   };
-  const hydratedMessages = await hydrateChatMessageImagesForModel(chat.messages);
-  const contextMessages = chatMessagesToPiMessages(hydratedMessages, modelId, replayIdentity);
+  const contextMessages = await chatMessagesToHydratedPiMessages(chat.messages, modelId, replayIdentity);
   const context: AgentContext = {
     systemPrompt,
     messages: [...contextMessages],
