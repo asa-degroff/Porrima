@@ -31,6 +31,7 @@ import {
   type LlamaServiceConfig,
 } from "../services/llama-service-config.js";
 import { normalizeExtractionRequestSettings } from "../services/extraction-settings.js";
+import { canExposeNonDiskLlamaModel } from "../services/llama-model-aliases.js";
 
 const router = Router();
 
@@ -259,7 +260,7 @@ router.get("/available-models", async (req, res) => {
       });
     }
 
-    if (slot && kindFilter) {
+    if (slot && kindFilter && canExposeNonDiskLlamaModel(slot)) {
       const server = await getLlamaServerStatus(slot, settings).catch(() => null);
       const expectedModel = server?.expectedModel;
       if (expectedModel && !models.has(expectedModel)) {
