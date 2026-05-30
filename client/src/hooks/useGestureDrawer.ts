@@ -15,11 +15,13 @@ interface GestureDrawerReturn {
     onTouchStart: (e: React.TouchEvent) => void;
     onTouchMove: (e: React.TouchEvent) => void;
     onTouchEnd: (e: React.TouchEvent) => void;
+    onTouchCancel: (e: React.TouchEvent) => void;
   };
   edgeHandlers: {
     onTouchStart: (e: React.TouchEvent) => void;
     onTouchMove: (e: React.TouchEvent) => void;
     onTouchEnd: (e: React.TouchEvent) => void;
+    onTouchCancel: (e: React.TouchEvent) => void;
   };
   containerRef: (el: HTMLElement | null) => void;
   style: React.CSSProperties;
@@ -33,6 +35,8 @@ const DEFAULT_THRESHOLD = 0.3; // 30% of max offset to snap open/closed
 const DAMPING = 0.85; // velocity damping per frame
 const EDGE_RESISTANCE = 0.3; // resistance factor at boundaries
 const MD_BREAKPOINT = 768; // px — matches Tailwind's md: breakpoint
+const INTENT_THRESHOLD = 8; // px before a touch becomes a drawer gesture
+const AXIS_LOCK_RATIO = 1.15; // vertical intent wins slightly ambiguous gestures
 
 export function useGestureDrawer({
   isOpen,
@@ -49,7 +53,9 @@ export function useGestureDrawer({
   const [containerSize, setContainerSize] = useState(0);
 
   const isDraggingRef = useRef(false);
-  const touchStartRef = useRef<number>(0);
+  const isTrackingTouchRef = useRef(false);
+  const touchStartRef = useRef<{ primary: number; cross: number } | null>(null);
+  const dragStartOffsetRef = useRef(0);
   const velocityRef = useRef<number>(0);
   const lastTouchRef = useRef<{ pos: number; time: number } | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -119,6 +125,10 @@ export function useGestureDrawer({
     return direction === "up" ? e.touches[0].clientY : e.touches[0].clientX;
   }, [direction]);
 
+  const getCrossTouchPos = useCallback((e: React.TouchEvent) => {
+    return direction === "up" ? e.touches[0].clientX : e.touches[0].clientY;
+  }, [direction]);
+
   const getTranslate = useCallback((offset: number) => {
     if (direction === "up") {
       // Bottom sheet: offset=0 → hidden below (100%), offset=max → visible (0%)
@@ -171,12 +181,25 @@ export function useGestureDrawer({
     rafRef.current = requestAnimationFrame(animate);
   }, [onClose, onOpen]);
 
-  const startDrag = useCallback((pos: number) => {
-    touchStartRef.current = pos;
-    lastTouchRef.current = { pos, time: performance.now() };
+  const startTrackingTouch = useCallback((e: React.TouchEvent, startOffset: number) => {
+    const primary = getTouchPos(e);
+    const cross = getCrossTouchPos(e);
+    touchStartRef.current = { primary, cross };
+    dragStartOffsetRef.current = startOffset;
+    lastTouchRef.current = { pos: primary, time: performance.now() };
     velocityRef.current = 0;
-    isDraggingRef.current = true;
-    setIsDragging(true);
+    isTrackingTouchRef.current = true;
+    isDraggingRef.current = false;
+    setIsDragging(false);
+  }, [getCrossTouchPos, getTouchPos]);
+
+  const resetTouchTracking = useCallback(() => {
+    isTrackingTouchRef.current = false;
+    isDraggingRef.current = false;
+    touchStartRef.current = null;
+    lastTouchRef.current = null;
+    velocityRef.current = 0;
+    setIsDragging(false);
   }, []);
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
@@ -192,9 +215,9 @@ export function useGestureDrawer({
     isAnimatingRef.current = false;
     setIsAnimating(false);
 
-    startDrag(getTouchPos(e));
-    e.preventDefault();
-  }, [getTouchPos, startDrag]);
+    const startOffset = isOpenRef.current ? containerSizeRef.current : currentOffsetRef.current;
+    startTrackingTouch(e, startOffset);
+  }, [startTrackingTouch]);
 
   // Edge swipe: starts drag from closed state (offset 0)
   const onEdgeTouchStart = useCallback((e: React.TouchEvent) => {
@@ -211,15 +234,44 @@ export function useGestureDrawer({
     setIsAnimating(false);
 
     setOffsetSync(0);
-    startDrag(getTouchPos(e));
-    e.preventDefault();
-  }, [getTouchPos, startDrag, setOffsetSync]);
+    startTrackingTouch(e, 0);
+  }, [setOffsetSync, startTrackingTouch]);
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
-    if (!isDraggingRef.current) return;
+    if (!isTrackingTouchRef.current) return;
     if (e.touches.length !== 1) return;
 
     const pos = getTouchPos(e);
+    const crossPos = getCrossTouchPos(e);
+    const start = touchStartRef.current;
+    if (!start) return;
+
+    const touchDelta = direction === "up" ? start.primary - pos : pos - start.primary;
+    const crossDelta = crossPos - start.cross;
+
+    if (!isDraggingRef.current) {
+      const absPrimary = Math.abs(touchDelta);
+      const absCross = Math.abs(crossDelta);
+
+      if (absPrimary < INTENT_THRESHOLD && absCross < INTENT_THRESHOLD) return;
+
+      if (absCross > absPrimary * AXIS_LOCK_RATIO) {
+        resetTouchTracking();
+        return;
+      }
+
+      const hasOpenOffset = dragStartOffsetRef.current > 0 || isOpenRef.current;
+      const movesDrawer = hasOpenOffset ? touchDelta < 0 : touchDelta > 0;
+
+      if (!movesDrawer) {
+        resetTouchTracking();
+        return;
+      }
+
+      isDraggingRef.current = true;
+      setIsDragging(true);
+    }
+
     const now = performance.now();
     const lastTouch = lastTouchRef.current;
 
@@ -227,7 +279,8 @@ export function useGestureDrawer({
     if (lastTouch) {
       const dt = now - lastTouch.time;
       if (dt > 0) {
-        const dv = (pos - lastTouch.pos) / dt;
+        const rawDv = (pos - lastTouch.pos) / dt;
+        const dv = direction === "up" ? -rawDv : rawDv;
         // Exponential moving average for smoother velocity
         velocityRef.current = velocityRef.current * DAMPING + dv * (1 - DAMPING);
       }
@@ -235,14 +288,10 @@ export function useGestureDrawer({
 
     lastTouchRef.current = { pos, time: now };
 
-    // Calculate offset with edge resistance
-    // Invert the touch delta so dragging "toward open" increases offset
-    // For "up" direction: dragging up (pos decreases) should increase offset
-    // For "right" direction: dragging right (pos increases) should increase offset
-    // Read isOpen and containerSize from refs to avoid stale closures.
-    const touchDelta = direction === "up" ? touchStartRef.current - pos : pos - touchStartRef.current;
+    // Calculate offset with edge resistance. touchDelta is positive in the
+    // opening direction and negative in the closing direction.
     const cs = containerSizeRef.current;
-    let rawOffset = touchDelta + (isOpenRef.current ? cs : 0);
+    let rawOffset = dragStartOffsetRef.current + touchDelta;
 
     // Apply resistance at boundaries
     if (rawOffset < 0) {
@@ -255,15 +304,21 @@ export function useGestureDrawer({
     const clampedOffset = Math.max(0, Math.min(cs, rawOffset));
     setOffsetSync(clampedOffset);
 
-    e.preventDefault();
-  }, [getTouchPos, direction, setOffsetSync]);
+    if (e.cancelable) e.preventDefault();
+  }, [getCrossTouchPos, getTouchPos, direction, resetTouchTracking, setOffsetSync]);
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (!isDraggingRef.current) return;
+    if (!isTrackingTouchRef.current) return;
 
+    const wasDragging = isDraggingRef.current;
     isDraggingRef.current = false;
+    isTrackingTouchRef.current = false;
     setIsDragging(false);
     lastTouchRef.current = null;
+    touchStartRef.current = null;
+
+    if (!wasDragging) return;
+    if (e.cancelable) e.preventDefault();
 
     // Read from refs so we always use the latest values, even if
     // multiple touchmove events fired between renders and the
@@ -286,6 +341,17 @@ export function useGestureDrawer({
 
     snapToState(shouldOpen);
   }, [threshold, snapToState]);
+
+  const onTouchCancel = useCallback((e: React.TouchEvent) => {
+    if (!isTrackingTouchRef.current) return;
+
+    const wasDragging = isDraggingRef.current;
+    resetTouchTracking();
+
+    if (!wasDragging) return;
+    if (e.cancelable) e.preventDefault();
+    snapToState(isOpenRef.current);
+  }, [resetTouchTracking, snapToState]);
 
   // Clean up RAF on unmount
   useEffect(() => {
@@ -317,8 +383,8 @@ export function useGestureDrawer({
   } : {};
 
   return {
-    handlers: { onTouchStart, onTouchMove, onTouchEnd },
-    edgeHandlers: { onTouchStart: onEdgeTouchStart, onTouchMove, onTouchEnd },
+    handlers: { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel },
+    edgeHandlers: { onTouchStart: onEdgeTouchStart, onTouchMove, onTouchEnd, onTouchCancel },
     containerRef: containerCallback,
     style,
     isDragging,

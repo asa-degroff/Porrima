@@ -1109,6 +1109,7 @@ export function Sidebar({
           onTouchStart={edgeHandlers.onTouchStart}
           onTouchMove={edgeHandlers.onTouchMove}
           onTouchEnd={edgeHandlers.onTouchEnd}
+          onTouchCancel={edgeHandlers.onTouchCancel}
         />
       )}
       {/* Backdrop for mobile — opacity tracks drag progress */}
@@ -1126,6 +1127,7 @@ export function Sidebar({
         onTouchStart={gestureHandlers.onTouchStart}
         onTouchMove={gestureHandlers.onTouchMove}
         onTouchEnd={gestureHandlers.onTouchEnd}
+        onTouchCancel={gestureHandlers.onTouchCancel}
         style={gestureStyle}
       >
         {/* Header */}
@@ -1159,7 +1161,10 @@ export function Sidebar({
                   </h1>
                 </div>
                 {/* Background activity indicator — octahedron for memory extraction, synthesis, creative directions */}
-                <div className={`absolute inset-0 flex items-center transition-opacity duration-300 ${sidebarActivityActive ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                <div
+                  className={`pointer-events-none absolute inset-0 flex items-center transition-opacity duration-300 ${sidebarActivityActive ? 'opacity-100' : 'opacity-0'}`}
+                  aria-hidden="true"
+                >
                   <PolyhedronLogo isActive={sidebarActivityActive} shape={activityShape} />
                 </div>
               </div>
