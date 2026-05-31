@@ -543,7 +543,7 @@ const DELAYED_EXTRACTION_SYSTEM_INSTRUCTIONS = `---
 
 I'm looking back at a full conversation thread I had. My task is to extract patterns, decisions, and context that emerged across the entire conversation — writing each memory in my own voice, using first-person narrative language where applicable.
 
-The conversation is explicitly labeled by speaker. USER (human) messages are the user's words. ASSISTANT (agent/my own) messages are my own prior responses and work.
+The conversation is explicitly labeled by speaker. USER (human) messages are the user's words. ASSISTANT (agent/my own) messages are my own prior responses and work and are referred to in first person.
 
 Previously captured memories are provided alongside the conversation. Those memories are already saved — there's no need to create duplicate information. If I notice another angle worth remembering, now's a good time to add a memory for it. These are some of the things I typically focus on:
 1. **New developments** — patterns, decisions, or facts that emerged after the previous extraction
@@ -571,9 +571,7 @@ This extraction window contains {{MESSAGE_COUNT}} substantive messages, starting
 
 The conversation below uses this format:
 - Message N - USER (human): content authored by the user
-- Message N - ASSISTANT (agent/me): content authored by me, including my proposals, summaries, and completed work
-
-Attribution rule: only create user facts/preferences/instructions from USER messages or from ASSISTANT content that a later USER message explicitly confirms.`;
+- Message N - ASSISTANT (agent/me): content authored by me, including my proposals, summaries, and completed work`;
 
 async function buildDelayedExtractionSystemPrompt(): Promise<string> {
   const prefix = await loadExtractionPrefix();
