@@ -53,4 +53,41 @@ describe("memory tools", () => {
       rmSync(homeDir, { recursive: true, force: true });
     }
   });
+
+  it("suggests matching blocks when update_memory_block receives a missing id", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-tools-"));
+    try {
+      const { memoryTools, memoryStorage } = await loadMemoryTools(homeDir);
+      const now = new Date().toISOString();
+
+      memoryStorage.createMemoryBlock({
+        id: "blk-real-website",
+        name: "porrima.cc Website",
+        description: "porrima.cc website — Astro, magenta theme, percolation shader",
+        content: "Header uses an inverted corner perspective SVG.",
+        scope: "project",
+        projectId: "project-1",
+        createdAt: now,
+        updatedAt: now,
+        updatedBy: "agent",
+        supersededBy: undefined,
+        supersedes: undefined,
+      });
+
+      const result = await memoryTools.executeMemoryTool({
+        name: "update_memory_block",
+        arguments: {
+          block_id: "blk-missing",
+          description: "porrima website inverted corner header",
+        },
+      } as any, "chat-1");
+
+      expect(result.isError).toBe(false);
+      expect(result.content).toContain("Block not found: blk-missing");
+      expect(result.content).toContain("Similar active blocks:");
+      expect(result.content).toContain("[blk-real-website] porrima.cc Website");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
 });

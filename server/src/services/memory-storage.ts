@@ -1923,10 +1923,20 @@ export function listMemoryBlocks(opts: { scope?: "global" | "project" | "archive
     params.push(opts.projectId);
   }
 
-  if (opts.query) {
-    querySQL += " AND (name LIKE ? OR description LIKE ?)";
-    const searchPattern = `%${opts.query}%`;
-    params.push(searchPattern, searchPattern);
+  const queryTerms = opts.query
+    ?.toLowerCase()
+    .split(/[^a-z0-9_:-]+/i)
+    .map((term) => term.trim())
+    .filter(Boolean);
+
+  if (queryTerms?.length) {
+    // Match each query token independently so punctuation and word order do
+    // not hide blocks like "porrima.cc Website" from "porrima website".
+    for (const term of queryTerms) {
+      querySQL += " AND (LOWER(name) LIKE ? OR LOWER(description) LIKE ? OR LOWER(content) LIKE ?)";
+      const searchPattern = `%${term}%`;
+      params.push(searchPattern, searchPattern, searchPattern);
+    }
   }
 
   // Exclude internal block types (synthesis, zeitgeist-archive, notebook) unless

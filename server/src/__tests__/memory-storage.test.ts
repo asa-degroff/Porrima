@@ -51,6 +51,33 @@ describe("memory block storage", () => {
     }
   });
 
+  it("lists blocks by query tokens across punctuation and content", async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
+    try {
+      const { createMemoryBlock, listMemoryBlocks } = await loadMemoryStorage(homeDir);
+      const now = new Date().toISOString();
+
+      createMemoryBlock({
+        id: "blk-website-test",
+        name: "porrima.cc Website",
+        description: "Astro project documentation",
+        content: "Header uses an inverted corner SVG.",
+        scope: "project",
+        projectId: "project-1",
+        createdAt: now,
+        updatedAt: now,
+        updatedBy: "agent",
+        supersededBy: undefined,
+        supersedes: undefined,
+      });
+
+      expect(listMemoryBlocks({ query: "porrima website" }).map((b) => b.id)).toContain("blk-website-test");
+      expect(listMemoryBlocks({ query: "inverted corner" }).map((b) => b.id)).toContain("blk-website-test");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("renames stale memories.json when a newer memory database exists", async () => {
     const homeDir = mkdtempSync(join(tmpdir(), "porrima-memory-storage-"));
     try {

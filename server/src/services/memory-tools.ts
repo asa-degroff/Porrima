@@ -144,6 +144,15 @@ export interface ToolResult {
   isError: boolean;
 }
 
+function suggestSimilarBlocks(query: string): string {
+  const trimmed = query.trim();
+  if (!trimmed) return "";
+  const blocks = listMemoryBlocks({ query: trimmed, includeInternal: true }).slice(0, 5);
+  return blocks
+    .map((b) => `- [${b.id}] ${b.name} (${b.scope}${b.projectId ? `, project: ${b.projectId}` : ""}) — ${b.description} [updated ${b.updatedAt.slice(0, 10)}]`)
+    .join("\n");
+}
+
 export async function executeMemoryTool(
   toolCall: ToolCall,
   chatId: string
@@ -450,7 +459,13 @@ export async function executeMemoryTool(
       if (!block_id) return { content: "Missing block_id", isError: true };
 
       const existing = getMemoryBlock(block_id);
-      if (!existing) return { content: `Block not found: ${block_id}`, isError: false };
+      if (!existing) {
+        const similar = suggestSimilarBlocks([newDesc, newContent].filter(Boolean).join(" "));
+        const hint = similar.length
+          ? `\n\nSimilar active blocks:\n${similar}`
+          : "\n\nUse list_memory_blocks with a short topic query to find the current block ID, then retry the update.";
+        return { content: `Block not found: ${block_id}${hint}`, isError: false };
+      }
 
       const scopeChanged = newScope !== undefined && newScope !== existing.scope;
       const projectIdVal = project_id !== undefined ? (project_id === "" ? null : project_id) : undefined;
@@ -505,7 +520,12 @@ export async function executeMemoryTool(
       if (!block_id) return { content: "Missing block_id", isError: true };
 
       const block = getMemoryBlock(block_id);
-      if (!block) return { content: `Block not found: ${block_id}`, isError: false };
+      if (!block) {
+        return {
+          content: `Block not found: ${block_id}\n\nUse list_memory_blocks with a short topic query to find the current block ID.`,
+          isError: false,
+        };
+      }
 
       const lines = [
         `Memory Block: ${block.name} [${block.id}]`,
