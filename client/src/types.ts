@@ -464,7 +464,7 @@ export interface LlamaBinaryInfo {
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";
 
-export type MemorySourceType = "chat" | "chat_delayed" | "chat_immediate" | "notebook" | "explicit";
+export type MemorySourceType = "chat" | "chat_delayed" | "chat_immediate" | "notebook" | "explicit" | "synthesis";
 
 export interface MemorySummary {
   id: string;
@@ -491,6 +491,47 @@ export interface MemoryLineageEntry {
 export interface MemoryLineage {
   older: MemoryLineageEntry[];
   newer: MemoryLineageEntry[];
+}
+
+export type MemoryGraphScope = "all" | "global" | "project";
+
+export interface MemoryGraphNode extends MemorySummary {
+  hasEmbedding: boolean;
+  clusterId: string;
+}
+
+export interface MemoryGraphLink {
+  source: string;
+  target: string;
+  similarity: number;
+  type: "semantic" | "lineage";
+}
+
+export interface MemoryGraphCluster {
+  id: string;
+  size: number;
+  representativeMemoryId: string;
+  categoryMix: Array<{ category: MemoryCategory; count: number }>;
+}
+
+export interface MemoryGraphData {
+  nodes: MemoryGraphNode[];
+  links: MemoryGraphLink[];
+  clusters: MemoryGraphCluster[];
+  stats: {
+    total: number;
+    shown: number;
+    embedded: number;
+    links: number;
+    semanticLinks: number;
+    lineageLinks: number;
+    minSimilarity: number;
+    neighbors: number;
+    limit: number;
+    capped: boolean;
+    mode: "overview" | "focused";
+    query?: string;
+  };
 }
 
 export interface MemoryBlock {

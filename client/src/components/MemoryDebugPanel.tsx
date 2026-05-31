@@ -3,6 +3,7 @@ import { searchMemories, fetchMemoriesPage, deleteMemory, fetchMemoryLineage, fe
 import type { MemorySummary, MemoryLineage, MemoryBlock } from "../types";
 import { Dropdown } from "./ui/Dropdown";
 import { useDropdown } from "../hooks/useDropdown";
+import MemoryGraphView from "./MemoryGraphView";
 
 // ── Extraction types ──────────────────────────────────────────────────────
 // Kept aligned with server/src/services/memory-extraction-observability.ts.
@@ -79,7 +80,7 @@ interface Props {
   onClose: () => void;
 }
 
-type TabKey = "extraction" | "memories" | "blocks";
+type TabKey = "extraction" | "memories" | "blocks" | "graph";
 const MEMORY_PAGE_SIZE = 100;
 const MEMORY_CATEGORIES = ["preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"];
 
@@ -372,6 +373,19 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
       ),
     },
     {
+      key: "graph",
+      label: "Graph",
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="6" cy="6" r="2"/>
+          <circle cx="18" cy="7" r="2"/>
+          <circle cx="8" cy="18" r="2"/>
+          <circle cx="18" cy="17" r="2"/>
+          <path d="M8 7l8 1M7 8l1 8M10 17h6M17 9l1 6"/>
+        </svg>
+      ),
+    },
+    {
       key: "extraction",
       label: "Extraction",
       icon: (
@@ -388,7 +402,7 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
       onClick={onClose}
     >
       <div
-        className="bg-zinc-900/95 border border-white/10 rounded-xl w-full max-w-4xl min-h-[400px] max-h-[85vh] flex flex-col shadow-2xl"
+        className="bg-zinc-900/95 border border-white/10 rounded-xl w-full max-w-6xl min-h-[400px] max-h-[85vh] flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -439,6 +453,7 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
         {/* Tab content */}
         <div className="flex-1 overflow-y-auto">
           {activeTab === "extraction" && <ExtractionTab runs={runs} expandedId={expandedRunId} onToggle={setExpandedRunId} />}
+          {activeTab === "graph" && <MemoryGraphView />}
           {activeTab === "memories" && (
             <MemoriesTab
               memoryStatus={memoryStatus}

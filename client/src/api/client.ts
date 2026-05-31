@@ -1130,6 +1130,30 @@ export async function fetchMemoriesPage(options: {
   return res.json();
 }
 
+export async function fetchMemoryGraph(options: {
+  category?: string;
+  includeSuperseded?: boolean;
+  minSimilarity?: number;
+  neighbors?: number;
+  limit?: number;
+  scope?: import("../types").MemoryGraphScope;
+  q?: string;
+} = {}): Promise<import("../types").MemoryGraphData> {
+  const params = new URLSearchParams();
+  if (options.category && options.category !== "all") params.set("category", options.category);
+  if (options.includeSuperseded) params.set("includeSuperseded", "true");
+  if (options.minSimilarity !== undefined) params.set("minSimilarity", String(options.minSimilarity));
+  if (options.neighbors !== undefined) params.set("neighbors", String(options.neighbors));
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  if (options.scope && options.scope !== "all") params.set("scope", options.scope);
+  if (options.q?.trim()) params.set("q", options.q.trim());
+
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const res = await apiFetch(`${BASE}/memory/graph${suffix}`);
+  if (!res.ok) throw new Error("Failed to fetch memory graph");
+  return res.json();
+}
+
 export async function deleteMemory(id: string): Promise<void> {
   const res = await apiFetch(`${BASE}/memory/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Failed to delete memory");

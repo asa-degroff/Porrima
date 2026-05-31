@@ -28,13 +28,44 @@ import { isSleepCycleActive as computeSleepCycleActive } from "../services/sleep
 import { getActiveAutomationTaskId, isAutomationActive } from "../services/automation-lock.js";
 import { runAutomationTask } from "../services/automation-runner.js";
 import { getAutomationTask, SYNTHESIS_AUTOMATION_ID, WAKE_AUTOMATION_ID } from "../services/automation-storage.js";
-import type { Memory, MemorySummary } from "../types.js";
+import { getMemoryGraph, type MemoryGraphScope } from "../services/memory-graph.js";
+import type { Memory, MemoryCategory, MemorySummary } from "../types.js";
+import { VALID_MEMORY_CATEGORIES } from "../types.js";
 
 const router = Router();
 
 function stripEmbedding(memory: Memory): MemorySummary {
   const { embedding, ...rest } = memory;
   return rest;
+}
+
+function parseNumber(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseInteger(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseMemoryCategory(value: unknown): MemoryCategory | undefined {
+  if (typeof value !== "string" || value === "all") return undefined;
+  return (VALID_MEMORY_CATEGORIES as readonly string[]).includes(value)
+    ? value as MemoryCategory
+    : undefined;
+}
+
+function parseGraphScope(value: unknown): MemoryGraphScope {
+  return value === "global" || value === "project" ? value : "all";
+}
+
+function parseGraphQuery(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 // Check embedding model availability and extraction health
@@ -306,6 +337,43 @@ router.post("/search", async (req, res) => {
       score: r.score,
     }))
   );
+});
+
+// Semantic graph for the memory viewer (must be before /:id)
+router.get("/graph", async (req, res) => {
+  try {
+    const category = parseMemoryCategory(req.query.category);
+    const includeSuperseded = req.query.includeSuperseded === "true";
+    const minSimilarity = parseNumber(req.query.minSimilarity);
+    const neighbors = parseInteger(req.query.neighbors);
+    const limit = parseInteger(req.query.limit);
+    const scope = parseGraphScope(req.query.scope);
+    const query = parseGraphQuery(req.query.q);
+    let queryEmbedding: number[] | undefined;
+
+    if (query) {
+      try {
+        queryEmbedding = await embed(query);
+      } catch (e: any) {
+        return res.status(503).json({ error: `Embedding unavailable: ${e.message}` });
+      }
+    }
+
+    const graph = await getMemoryGraph({
+      ...(category ? { category } : {}),
+      includeSuperseded,
+      ...(minSimilarity !== undefined ? { minSimilarity } : {}),
+      ...(neighbors !== undefined ? { neighbors } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+      scope,
+      ...(query ? { query } : {}),
+      ...(queryEmbedding ? { queryEmbedding } : {}),
+    });
+    res.json(graph);
+  } catch (e: any) {
+    console.error("[memory] graph error:", e);
+    res.status(500).json({ error: e.message || "Failed to build memory graph" });
+  }
 });
 
 // List all memories (without embeddings)
