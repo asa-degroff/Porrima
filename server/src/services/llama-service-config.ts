@@ -4,6 +4,7 @@ import type { Settings } from "../types.js";
 import type { LlamaServerId } from "./llama-supervisor.js";
 import { getLlamaModelsDir, resolveModelsDirs } from "./llama-models-disk.js";
 import { getDefaultLlamaBin, resolveBin, resolveSlotEnvironment } from "./llama-launch-templates.js";
+import { LLAMA_SERVER_HOST, LLAMA_SERVER_PORTS } from "./llama-ports.js";
 
 export type LlamaServiceMode = "single" | "router";
 
@@ -64,8 +65,8 @@ const ROLE_DEFAULTS: Record<LlamaServerId, Omit<LlamaServiceConfig, "binaryPath"
   inference: {
     mode: "router",
     modelId: (settings) => settings.defaultModelId,
-    host: "127.0.0.1",
-    port: 8080,
+    host: LLAMA_SERVER_HOST,
+    port: LLAMA_SERVER_PORTS.inference,
     gpuLayers: "auto",
     ctxSize: 131072,
     parallel: 1,
@@ -90,8 +91,8 @@ const ROLE_DEFAULTS: Record<LlamaServerId, Omit<LlamaServiceConfig, "binaryPath"
   extraction: {
     mode: "single",
     modelId: (settings) => settings.extractionModelId || settings.defaultModelId,
-    host: "127.0.0.1",
-    port: 8083,
+    host: LLAMA_SERVER_HOST,
+    port: LLAMA_SERVER_PORTS.extraction,
     gpuLayers: 0,
     ctxSize: 16384,
     parallel: 1,
@@ -102,8 +103,8 @@ const ROLE_DEFAULTS: Record<LlamaServerId, Omit<LlamaServiceConfig, "binaryPath"
   reranker: {
     mode: "single",
     modelId: (settings) => settings.rerankerModelId,
-    host: "127.0.0.1",
-    port: 8082,
+    host: LLAMA_SERVER_HOST,
+    port: LLAMA_SERVER_PORTS.reranker,
     gpuLayers: 0,
     ctxSize: 4096,
     batchSize: 4096,
@@ -116,8 +117,8 @@ const ROLE_DEFAULTS: Record<LlamaServerId, Omit<LlamaServiceConfig, "binaryPath"
   embedding: {
     mode: "single",
     modelId: (settings) => settings.embeddingModel,
-    host: "127.0.0.1",
-    port: 8084,
+    host: LLAMA_SERVER_HOST,
+    port: LLAMA_SERVER_PORTS.embedding,
     gpuLayers: 0,
     ctxSize: 8192,
     batchSize: 8192,
@@ -129,8 +130,8 @@ const ROLE_DEFAULTS: Record<LlamaServerId, Omit<LlamaServiceConfig, "binaryPath"
   "title-generation": {
     mode: "single",
     modelId: (settings) => settings.titleGenerationModelId,
-    host: "127.0.0.1",
-    port: 8085,
+    host: LLAMA_SERVER_HOST,
+    port: LLAMA_SERVER_PORTS["title-generation"],
     gpuLayers: 0,
     ctxSize: 4096,
     parallel: 1,
@@ -203,7 +204,7 @@ function normalizeServiceConfig(config: LlamaServiceConfig): LlamaServiceConfig 
     modelPath: config.modelPath?.trim() || undefined,
     modelId: config.modelId?.trim() || undefined,
     modelsDir: config.modelsDir?.trim() || undefined,
-    host: config.host.trim() || "127.0.0.1",
+    host: config.host.trim() || LLAMA_SERVER_HOST,
     port: clampInt(config.port, 1, 65535),
     gpuLayers: config.gpuLayers === "auto" ? "auto" : clampInt(config.gpuLayers, -1, 999),
     ctxSize: clampInt(config.ctxSize, 512, 262144),

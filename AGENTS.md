@@ -15,8 +15,11 @@
 - **Models dir**: `~/.local/share/llama-models/` (symlinked GGUFs for llama.cpp router)
 - **systemd services**:
   - `porrima.service` — main server (auto-starts on boot)
-  - `llama-server.service` — llama.cpp router (port 8080, GPU inference)
-  - `reranker.service` — Qwen3-Reranker-0.6B (port 8082, CPU-only, memory retrieval)
+  - `llama-server.service` — llama.cpp router (port 32100, GPU inference)
+  - `extraction-model.service` — memory extraction server (port 32101, CPU-only)
+  - `reranker.service` — Qwen3-Reranker-0.6B (port 32102, CPU-only, memory retrieval)
+  - `embedding-model.service` — embedding server (port 32103, CPU-only)
+  - `title-generation.service` — title/recap server (port 32104, CPU-only)
   - `sync-llama-models.timer` — auto-syncs HuggingFace GGUF downloads every 5 min
 
 ## Architecture

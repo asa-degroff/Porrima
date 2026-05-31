@@ -55,11 +55,11 @@ Core install tasks:
 - Create `~/.local/share/llama-models` for GGUF models.
 - Create user systemd services for:
   - `porrima.service`
-  - `llama-server.service` on port 8080
-  - `extraction-model.service` on port 8083
-  - `reranker.service` on port 8082
-  - `embedding-model.service` on port 8084
-  - `title-generation.service` on port 8085
+  - `llama-server.service` on port 32100
+  - `extraction-model.service` on port 32101
+  - `reranker.service` on port 32102
+  - `embedding-model.service` on port 32103
+  - `title-generation.service` on port 32104
 - Use CPU-only defaults for extraction, reranker, embedding, and title generation unless spare VRAM is explicitly available.
 - In production, build both workspaces and run the Node server with `NODE_ENV=production` on the configured app port. The production server serves `client/dist` itself.
 - For dual equal GPUs, use tensor split for chat inference.

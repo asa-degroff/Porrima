@@ -3,6 +3,7 @@ import { promisify } from "util";
 import type { Settings } from "../types.js";
 import { extractOverrideBinaryPath, extractOverrideModelPath, readOverride, type OverrideInfo } from "./llama-overrides.js";
 import { getDefaultLlamaBin, resolveBin } from "./llama-launch-templates.js";
+import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 
 const execFileAsync = promisify(execFile);
 const SYSTEMCTL = "systemctl";
@@ -70,7 +71,7 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     label: "Chat inference",
     role: "Router / chat completions",
     unitName: "llama-server.service",
-    defaultUrl: "http://localhost:8080",
+    defaultUrl: getDefaultLlamaServerUrl("inference"),
     description: "Main llama.cpp router used by chat, vision, and model discovery",
     settingsModelKey: "defaultModelId",
   },
@@ -80,7 +81,7 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     role: "Background extraction",
     unitName: "extraction-model.service",
     unitNameCandidates: ["extraction-model.service", "llama-extraction.service"],
-    defaultUrl: "http://localhost:8083",
+    defaultUrl: getDefaultLlamaServerUrl("extraction"),
     description: "Memory extraction model",
     settingsModelKey: "extractionModelId",
   },
@@ -89,7 +90,7 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     label: "Reranker",
     role: "Cross-encoder rerank",
     unitName: "reranker.service",
-    defaultUrl: "http://localhost:8082",
+    defaultUrl: getDefaultLlamaServerUrl("reranker"),
     description: "Cross-encoder reranker for memory retrieval",
     settingsModelKey: "rerankerModelId",
   },
@@ -99,7 +100,7 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     role: "Vector embeddings",
     unitName: "embedding-model.service",
     unitNameCandidates: ["embedding-model.service", "embedding-server.service", "llama-embedding.service", "llama-embedding-server.service"],
-    defaultUrl: "http://localhost:8084",
+    defaultUrl: getDefaultLlamaServerUrl("embedding"),
     description: "Embedding server for vectorizing memories",
     settingsModelKey: "embeddingModel",
   },
@@ -108,7 +109,7 @@ const DEFINITIONS: Record<LlamaServerId, LlamaServerDefinition> = {
     label: "Title generation",
     role: "Chat titles",
     unitName: "title-generation.service",
-    defaultUrl: "http://localhost:8085",
+    defaultUrl: getDefaultLlamaServerUrl("title-generation"),
     description: "Generates titles for the chat list and message summaries for notifications",
     settingsModelKey: "titleGenerationModelId",
   },

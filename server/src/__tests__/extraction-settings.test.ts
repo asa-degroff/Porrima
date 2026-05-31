@@ -28,7 +28,7 @@ describe("resolveExtractionRequestSettings", () => {
     })) as any;
 
     const result = await resolveExtractionRequestSettings({
-      extractionModelUrl: "http://127.0.0.1:8083",
+      extractionModelUrl: "http://127.0.0.1:32101",
       extractionModelId: "Qwen3.5-9B.gguf",
       extractionCtxSize: 131072,
       extractionMaxTokens: 4000,
@@ -46,7 +46,7 @@ describe("resolveExtractionRequestSettings", () => {
     })) as any;
 
     const result = await resolveExtractionRequestSettings({
-      extractionModelUrl: "http://127.0.0.1:8083",
+      extractionModelUrl: "http://127.0.0.1:32101",
       extractionCtxSize: 16384,
       extractionMaxTokens: 4000,
       extractionTimeoutMs: 600000,
@@ -71,7 +71,7 @@ describe("resolveExtractionRequestSettings", () => {
     }) as any;
 
     const result = await resolveExtractionRequestSettings({
-      extractionModelUrl: "http://127.0.0.1:8083",
+      extractionModelUrl: "http://127.0.0.1:32101",
       extractionModelId: "Qwen3.5-9B.gguf",
       extractionCtxSize: 131072,
       extractionMaxTokens: 4000,
@@ -86,7 +86,7 @@ describe("resolveExtractionRequestSettings", () => {
     globalThis.fetch = vi.fn(async () => ({ ok: false, json: async () => ({}) } as Response)) as any;
 
     const result = await resolveExtractionRequestSettings({
-      extractionModelUrl: "http://127.0.0.1:8083",
+      extractionModelUrl: "http://127.0.0.1:32101",
       extractionCtxSize: 999999,
       extractionMaxTokens: 4000,
       extractionTimeoutMs: 600000,

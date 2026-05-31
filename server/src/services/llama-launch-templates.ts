@@ -3,6 +3,7 @@ import os from "os";
 import type { Settings } from "../types.js";
 import type { LlamaServerId } from "./llama-supervisor.js";
 import { getLlamaModelsDir } from "./llama-models-disk.js";
+import { LLAMA_SERVER_HOST, LLAMA_SERVER_PORTS } from "./llama-ports.js";
 
 /**
  * Per-slot launch templates. Each template renders a complete ExecStart line
@@ -65,8 +66,8 @@ function buildTitleGenerationExecStart(input: TemplateInput): string {
     resolveBin("title-generation", input.settings),
     "-m", shellQuote(input.ggufPath),
     "--alias", shellQuote(input.modelId),
-    "--port", "8085",
-    "--host", "127.0.0.1",
+    "--port", String(LLAMA_SERVER_PORTS["title-generation"]),
+    "--host", LLAMA_SERVER_HOST,
     ...commonGpuOff(),
     "--ctx-size", "4096",
     "--parallel", "1",
@@ -82,8 +83,8 @@ function buildExtractionExecStart(input: TemplateInput): string {
     resolveBin("extraction", input.settings),
     "-m", shellQuote(input.ggufPath),
     "--alias", shellQuote(input.modelId),
-    "--port", "8083",
-    "--host", "127.0.0.1",
+    "--port", String(LLAMA_SERVER_PORTS.extraction),
+    "--host", LLAMA_SERVER_HOST,
     ...commonGpuOff(),
     "--ctx-size", String(ctx),
     "--parallel", "1",
@@ -101,8 +102,8 @@ function buildRerankerExecStart(input: TemplateInput): string {
     "--embedding",
     "--pooling", "rank",
     "--reranking",
-    "--port", "8082",
-    "--host", "127.0.0.1",
+    "--port", String(LLAMA_SERVER_PORTS.reranker),
+    "--host", LLAMA_SERVER_HOST,
     ...commonGpuOff(),
     "--ctx-size", "4096",
     "--batch-size", "4096",
@@ -118,8 +119,8 @@ function buildEmbeddingExecStart(input: TemplateInput): string {
     "--alias", shellQuote(input.modelId),
     "--embedding",
     "--pooling", "mean",
-    "--port", "8084",
-    "--host", "127.0.0.1",
+    "--port", String(LLAMA_SERVER_PORTS.embedding),
+    "--host", LLAMA_SERVER_HOST,
     ...commonGpuOff(),
     "--ctx-size", "8192",
     "--batch-size", "8192",
@@ -166,8 +167,8 @@ export function renderRouterExecStart(slotId: RouterCapableSlotId, settings: Set
     const args = [
       resolveBin("title-generation", settings),
       "--models-dir", shellQuote(modelsDir),
-      "--port", "8085",
-      "--host", "127.0.0.1",
+      "--port", String(LLAMA_SERVER_PORTS["title-generation"]),
+      "--host", LLAMA_SERVER_HOST,
       ...commonGpuOff(),
       "--ctx-size", "4096",
       "--parallel", "1",
@@ -181,8 +182,8 @@ export function renderRouterExecStart(slotId: RouterCapableSlotId, settings: Set
   const args = [
     resolveBin("extraction", settings),
     "--models-dir", shellQuote(modelsDir),
-    "--port", "8083",
-    "--host", "127.0.0.1",
+    "--port", String(LLAMA_SERVER_PORTS.extraction),
+    "--host", LLAMA_SERVER_HOST,
     ...commonGpuOff(),
     "--ctx-size", String(ctx),
     "--parallel", "1",

@@ -1,8 +1,9 @@
 import type { ChatMessage } from "../types.js";
 import { getSettings } from "./chat-storage.js";
 import { ensureRouterModelLoaded, normalizeRouterModelId } from "./llama-router-client.js";
+import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 
-const DEFAULT_URL = "http://localhost:8085";
+const DEFAULT_URL = getDefaultLlamaServerUrl("title-generation");
 const DEFAULT_MODEL = "qwen3.5-0.8b";
 
 interface ServerConfig {

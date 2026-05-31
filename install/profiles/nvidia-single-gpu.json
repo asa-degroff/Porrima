@@ -9,7 +9,7 @@
     ],
     "chat": {
       "mode": "router",
-      "port": 8080,
+      "port": 32100,
       "host": "127.0.0.1",
       "gpuLayers": "auto",
       "ctxSize": 65536,

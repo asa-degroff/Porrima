@@ -39,6 +39,7 @@ import {
 } from "./memory-context.js";
 import { getAgentTools, type ToolSideEffects } from "./agent-tools.js";
 import { digestPromptText, recordWarmPromptSnapshot } from "./llama-prompt-debug.js";
+import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 import { buildSkillAugmentedPrompt, discoverSkills, type Skill } from "./skills.js";
 import type { InferenceModel } from "../types.js";
 
@@ -125,7 +126,7 @@ async function findModelInfo(modelId: string): Promise<{ model: InferenceModel; 
 
   // Derive the baseUrl from the model's provider
   const settings = await getSettings();
-  return { model, baseUrl: settings.llamacppUrl || "http://localhost:8080" };
+  return { model, baseUrl: settings.llamacppUrl || getDefaultLlamaServerUrl("inference") };
 }
 
 /**

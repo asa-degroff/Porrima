@@ -10,7 +10,7 @@ ${ENVIRONMENT_LINES}
 ExecStart=${LLAMA_SERVER_BIN} \
     -m ${TITLE_MODEL_PATH} \
     --alias ${TITLE_MODEL_ID} \
-    --port 8085 \
+    --port 32104 \
     --host 127.0.0.1 \
     --n-gpu-layers 0 \
     --ctx-size 4096 \

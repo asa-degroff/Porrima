@@ -47,7 +47,7 @@ Multi-provider system supporting multiple inference backends through pi-ai's pro
 - **Router mode** (`llama-server.service`): Serves models from `~/.local/share/llama-models/` with dynamic loading/unloading. Config: `--ctx-size 131072`, `--parallel 1`, `--n-gpu-layers auto`, `--reasoning-format deepseek`, `--sleep-idle-seconds 172800`
 - **Model directory structure**: Each model in a subdirectory with the GGUF + optional mmproj file for vision. Router auto-detects `mmproj*` files.
 - **Auto-sync** (`sync-llama-models.sh` + `sync-llama-models.timer`): Every 5 min, scans `~/.cache/huggingface/` for new GGUF downloads, creates symlinked subdirectories, restarts llama-server if new models found. Excludes reranker/embedding models.
-- **Reranker service** (`reranker.service`): Dedicated Qwen3-Reranker-0.6B instance on port 8082, CPU-only, for memory retrieval reranking.
+- **Reranker service** (`reranker.service`): Dedicated Qwen3-Reranker-0.6B instance on port 32102, CPU-only, for memory retrieval reranking.
 - **Title generation**: Uses a dedicated CPU-only llama.cpp instance with `keep_alive: "0s"` to avoid VRAM contention with larger models.
 
 ## Memory Services

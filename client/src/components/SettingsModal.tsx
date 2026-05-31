@@ -31,6 +31,7 @@ import { PolyhedronLogo } from "./PolyhedronLogo";
 import { ProviderIcon } from "./ProviderIcon";
 import { usePushNotifications } from "../hooks/usePushNotifications";
 import { sendPushTest } from "../api/push";
+import { getDefaultLlamaServerUrl } from "../utils/llamaPorts";
 
 const SECTIONS = [
   { id: 'models', label: 'Models' },
@@ -67,6 +68,11 @@ const MAX_EXTRACTION_MAX_TOKENS = 32768;
 const DEFAULT_EXTRACTION_TIMEOUT_MS = 600000;
 const MIN_EXTRACTION_TIMEOUT_MINUTES = 1;
 const MAX_EXTRACTION_TIMEOUT_MINUTES = 1440;
+const DEFAULT_INFERENCE_URL = getDefaultLlamaServerUrl("inference");
+const DEFAULT_EXTRACTION_URL = getDefaultLlamaServerUrl("extraction");
+const DEFAULT_RERANKER_URL = getDefaultLlamaServerUrl("reranker");
+const DEFAULT_EMBEDDING_URL = getDefaultLlamaServerUrl("embedding");
+const DEFAULT_TITLE_GENERATION_URL = getDefaultLlamaServerUrl("title-generation");
 
 function clampIntegerDraft(value: string, fallback: number, min: number, max: number): number {
   const parsed = Number.parseInt(value, 10);
@@ -440,7 +446,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [sdcppStatus, setSdcppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   // llama.cpp server settings
   const [llamacppEnabled, setLlamacppEnabled] = useState(settings.llamacppEnabled ?? false);
-  const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || "http://localhost:8080");
+  const [llamacppUrl, setLlamacppUrl] = useState(settings.llamacppUrl || DEFAULT_INFERENCE_URL);
   const [llamacppSharesGpu, setLlamacppSharesGpu] = useState(settings.llamacppSharesGpu ?? true);
   const [llamacppSlotBindingMode, setLlamacppSlotBindingMode] = useState<"auto" | "enforced">(settings.llamacppSlotBindingMode ?? "auto");
   const [llamacppStatus, setLlamacppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
@@ -453,7 +459,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [extractionTimeoutMinutesDraft, setExtractionTimeoutMinutesDraft] = useState(String(timeoutMsToMinutes(settings.extractionTimeoutMs ?? DEFAULT_EXTRACTION_TIMEOUT_MS)));
   // Reranker server settings
   const [rerankerEnabled, setRerankerEnabled] = useState(settings.rerankerEnabled ?? true);
-  const [rerankerUrl, setRerankerUrl] = useState(settings.rerankerUrl || "http://localhost:8082");
+  const [rerankerUrl, setRerankerUrl] = useState(settings.rerankerUrl || DEFAULT_RERANKER_URL);
   const [rerankerModelId, setRerankerModelId] = useState(settings.rerankerModelId || "qwen3-reranker");
   const [rerankerStatus, setRerankerStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [rerankerModels, setRerankerModels] = useState<DiscoveredModel[]>([]);
@@ -461,7 +467,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [rerankerUseCustom, setRerankerUseCustom] = useState(false);
   // Title generation server settings
   const [titleGenerationEnabled, setTitleGenerationEnabled] = useState(settings.titleGenerationEnabled !== false);
-  const [titleGenerationUrl, setTitleGenerationUrl] = useState(settings.titleGenerationUrl || "http://localhost:8085");
+  const [titleGenerationUrl, setTitleGenerationUrl] = useState(settings.titleGenerationUrl || DEFAULT_TITLE_GENERATION_URL);
   const [titleGenerationModelId, setTitleGenerationModelId] = useState(settings.titleGenerationModelId || "qwen3.5-0.8b");
   const [titleGenerationModels, setTitleGenerationModels] = useState<DiscoveredModel[]>([]);
   const [titleGenerationModelsLoading, setTitleGenerationModelsLoading] = useState(false);
@@ -469,7 +475,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   // Embedding server settings
   const savedEmbeddingProvider = settings.embeddingProvider ?? "llamacpp";
   const savedEmbeddingUrl =
-    settings.embeddingUrl || "http://localhost:8084";
+    settings.embeddingUrl || DEFAULT_EMBEDDING_URL;
   const savedEmbeddingModel = settings.embeddingModel || "qwen3-embedding:0.6b";
   const [embeddingProvider, setEmbeddingProvider] = useState(savedEmbeddingProvider);
   const [embeddingUrl, setEmbeddingUrl] = useState(savedEmbeddingUrl);
@@ -3212,7 +3218,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                      onChange={(e) => setLlamacppUrl(e.target.value)}
 	                                      onBlur={() => handleLlamaServerSettings("inference", { url: llamacppUrl })}
 	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-	                                      placeholder="http://localhost:8080"
+	                                      placeholder={DEFAULT_INFERENCE_URL}
 	                                    />
 	                                  </div>
 	                                  <div className="flex items-center gap-2">
@@ -3267,7 +3273,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                  onChange={(e) => setExtractionModelUrl(e.target.value)}
 	                                  onBlur={() => handleLlamaServerSettings("extraction", { url: extractionModelUrl })}
 	                                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-	                                  placeholder="http://localhost:8083"
+	                                  placeholder={DEFAULT_EXTRACTION_URL}
 	                                />
 		                              </div>
 		                              <div className="flex gap-2 items-end">
@@ -3381,7 +3387,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                    <input type="text" value={rerankerUrl} onChange={(e) => setRerankerUrl(e.target.value)}
 	                                      onBlur={() => handleLlamaServerSettings("reranker", { url: rerankerUrl })}
 	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-	                                      placeholder="http://localhost:8082" />
+	                                      placeholder={DEFAULT_RERANKER_URL} />
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Model</label>
@@ -3468,7 +3474,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                <input type="text" value={embeddingUrl} onChange={(e) => setEmbeddingUrl(e.target.value)}
 	                                  onBlur={() => handleLlamaServerSettings("embedding", { url: embeddingUrl })}
 	                                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-	                                  placeholder="http://localhost:8084" />
+	                                  placeholder={DEFAULT_EMBEDDING_URL} />
 	                              </div>
 	                              <div>
 	                                <label className="block text-xs text-white/50 mb-1">Model</label>
@@ -3571,7 +3577,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                    <input type="text" value={titleGenerationUrl} onChange={(e) => setTitleGenerationUrl(e.target.value)}
 	                                      onBlur={() => handleLlamaServerSettings("title-generation", { url: titleGenerationUrl })}
 	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
-	                                      placeholder="http://localhost:8085" />
+	                                      placeholder={DEFAULT_TITLE_GENERATION_URL} />
 	                                  </div>
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Model</label>

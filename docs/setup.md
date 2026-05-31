@@ -3,9 +3,9 @@
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) v22+
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) server running locally (default port 8080)
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) server running locally (default port 32100)
 - A chat model loaded in llama.cpp (e.g., a Qwen3 GGUF model in the models directory)
-- An embedding model served by llama.cpp (default: `qwen3-embedding:0.6b` on port 8084). Configurable in Settings → Inference Servers → Embedding server.
+- An embedding model served by llama.cpp (default: `qwen3-embedding:0.6b` on port 32103). Configurable in Settings → Inference Servers → Embedding server.
 - (Optional) ComfyUI for image generation
 - (Optional) Kokoro TTS voices, Qwen3-TTS, or Supertonic 3 (`./scripts/install-supertonic-tts.sh`)
 
@@ -47,6 +47,16 @@ The compiled server serves on port 3001. Serve the client build (`client/dist/`)
 
 ## systemd Services
 
+Porrima reserves a contiguous local llama.cpp port block by role:
+
+| Service | Role | Port |
+| --- | --- | --- |
+| `llama-server.service` | Chat router / GPU inference | 32100 |
+| `extraction-model.service` | Memory extraction | 32101 |
+| `reranker.service` | Cross-encoder reranking | 32102 |
+| `embedding-model.service` | Vector embeddings | 32103 |
+| `title-generation.service` | Titles and recaps | 32104 |
+
 ### Main Server
 
 Create `~/.config/systemd/user/porrima.service`:
@@ -83,7 +93,7 @@ Type=simple
 WorkingDirectory=/path/to/llama.cpp/build
 ExecStart=/path/to/llama-server \
     --models-dir ~/.local/share/llama-models \
-    --port 8080 --host 127.0.0.1 \
+    --port 32100 --host 127.0.0.1 \
     --ctx-size 131072 --parallel 1 \
     --n-gpu-layers auto \
     --reasoning-format deepseek \
@@ -130,7 +140,7 @@ ExecStart=/path/to/llama-server \
     -m /path/to/qwen3-reranker-0.6b-q8_0.gguf \
     --alias qwen3-reranker \
     --embedding --pooling rank --reranking \
-    --port 8082 --host 127.0.0.1 \
+    --port 32102 --host 127.0.0.1 \
     --n-gpu-layers 0 --ctx-size 4096
 Restart=always
 RestartSec=5
@@ -156,7 +166,7 @@ ExecStart=/path/to/llama-server \
     -m /path/to/qwen3-embedding-0.6b.gguf \
     --alias qwen3-embedding \
     --embeddings --pooling cls \
-    --port 8084 --host 127.0.0.1 \
+    --port 32103 --host 127.0.0.1 \
     --n-gpu-layers 0 --ctx-size 8192
 Restart=always
 RestartSec=5
@@ -165,7 +175,7 @@ RestartSec=5
 WantedBy=default.target
 ```
 
-Then in Settings → Inference Servers → Embedding server, switch the provider toggle to **llama.cpp**, point the URL at `http://localhost:8084`, and set the model name to match `--alias`.
+Then in Settings → Inference Servers → Embedding server, switch the provider toggle to **llama.cpp**, point the URL at `http://localhost:32103`, and set the model name to match `--alias`.
 
 ### Changing the embedding model
 

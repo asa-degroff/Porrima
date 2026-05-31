@@ -66,8 +66,9 @@ import {
 } from "../services/live-streams.js";
 import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 import { appDataPath } from "../services/paths.js";
+import { getDefaultLlamaServerUrl } from "../services/llama-ports.js";
 
-const DEFAULT_LLAMACPP_URL = "http://localhost:8080";
+const DEFAULT_LLAMACPP_URL = getDefaultLlamaServerUrl("inference");
 const ARTIFACTS_DIR = appDataPath("artifacts");
 const VISUALS_DIR = appDataPath("visuals");
 const ARTIFACT_ERROR_REPAIR_TTL_MS = 30 * 60 * 1000;

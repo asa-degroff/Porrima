@@ -341,11 +341,11 @@ export interface Settings {
   enrichmentBatchSize?: number;
   // Extraction model configuration
   extractionModelId?: string;
-  extractionModelUrl?: string;      // Direct URL for dedicated extraction model (e.g., http://localhost:8083)
+  extractionModelUrl?: string;      // Direct URL for dedicated extraction model (e.g., http://localhost:32101)
   extractionFallbackEnabled?: boolean;
   // llama.cpp server settings
   llamacppEnabled?: boolean;
-  llamacppUrl?: string;         // default "http://localhost:8080"
+  llamacppUrl?: string;         // default "http://localhost:32100"
   llamacppSharesGpu?: boolean;  // default true
   // "auto" lets llama.cpp select physical slots and restore prompt cache;
   // "enforced" sends app-managed id_slot leases.
@@ -356,7 +356,7 @@ export interface Settings {
   extractionTimeoutMs?: number;     // default 600000 — abort extraction requests after this many ms
   // Reranker server (CPU-only llama.cpp instance)
   rerankerEnabled?: boolean;    // default true
-  rerankerUrl?: string;         // default "http://localhost:8082"
+  rerankerUrl?: string;         // default "http://localhost:32102"
   rerankerModelId?: string;     // default "qwen3-reranker"
   rerankerTimeoutMs?: number;
   retrievalDepthProfile?: RetrievalDepthProfile;
@@ -378,7 +378,7 @@ export interface Settings {
   passiveRecallMemoriesPerTurn?: number;
   // Title generation server (CPU-only llama.cpp instance, tiny model)
   titleGenerationEnabled?: boolean;  // default true
-  titleGenerationUrl?: string;       // default "http://localhost:8085"
+  titleGenerationUrl?: string;       // default "http://localhost:32104"
   titleGenerationModelId?: string;   // default "qwen3.5-0.8b"
   // Embedding server (llama.cpp)
   embeddingProvider?: "llamacpp";

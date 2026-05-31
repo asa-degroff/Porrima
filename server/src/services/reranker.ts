@@ -5,9 +5,10 @@
  */
 
 import { getSettings } from "./chat-storage.js";
+import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 import { DEFAULT_RERANKER_TIMEOUT_MS, resolveRetrievalBudget } from "./retrieval-settings.js";
 
-const DEFAULT_RERANKER_URL = "http://localhost:8082";
+const DEFAULT_RERANKER_URL = getDefaultLlamaServerUrl("reranker");
 const DEFAULT_RERANKER_MODEL = "qwen3-reranker";
 
 /**

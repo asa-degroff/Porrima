@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { discoverAllModels, invalidateModelCache } from "../services/models.js";
 import { getSettings } from "../services/chat-storage.js";
+import { getDefaultLlamaServerUrl } from "../services/llama-ports.js";
 
 const router = Router();
 
-const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
+const LLAMACPP_DEFAULT_URL = getDefaultLlamaServerUrl("inference");
 
 router.get("/", async (req, res) => {
   try {
@@ -110,10 +111,10 @@ router.get("/discover", async (req, res) => {
 router.get("/health-all", async (_req, res) => {
   const settings = await getSettings();
   const inferenceUrl = settings.llamacppUrl?.trim() || LLAMACPP_DEFAULT_URL;
-  const extractionUrl = settings.extractionModelUrl?.trim() || "http://localhost:8083";
-  const rerankerUrl = settings.rerankerUrl?.trim() || "http://localhost:8082";
-  const titleGenerationUrl = settings.titleGenerationUrl?.trim() || "http://localhost:8085";
-  const embeddingUrl = settings.embeddingUrl?.trim() || "http://localhost:8084";
+  const extractionUrl = settings.extractionModelUrl?.trim() || getDefaultLlamaServerUrl("extraction");
+  const rerankerUrl = settings.rerankerUrl?.trim() || getDefaultLlamaServerUrl("reranker");
+  const titleGenerationUrl = settings.titleGenerationUrl?.trim() || getDefaultLlamaServerUrl("title-generation");
+  const embeddingUrl = settings.embeddingUrl?.trim() || getDefaultLlamaServerUrl("embedding");
 
   const pingLlamaCpp = async (url: string) => {
     try {

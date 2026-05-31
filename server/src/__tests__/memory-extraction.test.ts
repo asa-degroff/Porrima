@@ -169,7 +169,7 @@ describe("formatToolArgumentsForExtraction", () => {
 describe("resolveEffectiveExtractionModelId", () => {
   it("uses the dedicated extraction model when an extraction URL is configured", () => {
     expect(resolveEffectiveExtractionModelId("Qwen3.6-27B-Q5_K_M", {
-      extractionModelUrl: "http://127.0.0.1:8083",
+      extractionModelUrl: "http://127.0.0.1:32101",
       extractionModelId: "Qwen3.5-4B-IQ4_NL.gguf",
     })).toBe("Qwen3.5-4B-IQ4_NL");
   });

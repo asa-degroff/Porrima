@@ -10,7 +10,7 @@ ${ENVIRONMENT_LINES}
 ExecStart=${LLAMA_SERVER_BIN} \
     -m ${EXTRACTION_MODEL_PATH} \
     --alias ${EXTRACTION_MODEL_ID} \
-    --port 8083 \
+    --port 32101 \
     --host 127.0.0.1 \
     --n-gpu-layers 0 \
     --ctx-size 16384 \

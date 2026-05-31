@@ -309,11 +309,11 @@ export interface Settings {
   enrichmentBatchSize?: number;
   // Extraction model configuration
   extractionModelId?: string;
-  extractionModelUrl?: string;  // Direct URL for dedicated extraction model (e.g., http://localhost:8083)
+  extractionModelUrl?: string;  // Direct URL for dedicated extraction model (e.g., http://localhost:32101)
   extractionFallbackEnabled?: boolean;
 // llama.cpp server settings
   llamacppEnabled?: boolean;
-  llamacppUrl?: string;         // default "http://localhost:8080"
+  llamacppUrl?: string;         // default "http://localhost:32100"
   llamacppSharesGpu?: boolean;  // default true — unload idle models before image generation
   // App-level behavior for llama.cpp physical slot routing. "auto" lets
   // llama.cpp choose slots and use its RAM prompt cache; "enforced" sends
@@ -325,7 +325,7 @@ export interface Settings {
   extractionTimeoutMs?: number;     // default 600000 — abort extraction requests after this many ms
   // Reranker server (CPU-only llama.cpp instance)
   rerankerEnabled?: boolean;    // default true
-  rerankerUrl?: string;         // default "http://localhost:8082"
+  rerankerUrl?: string;         // default "http://localhost:32102"
   rerankerModelId?: string;     // default "qwen3-reranker" — model name sent to the reranker server
   rerankerTimeoutMs?: number;   // default 25000 — abort rerank requests after this many milliseconds
   // Retrieval pipeline budget. Presets control both turn-start memory retrieval
@@ -349,11 +349,11 @@ export interface Settings {
   passiveRecallMemoriesPerTurn?: number;
   // Title generation server (CPU-only llama.cpp instance, tiny model)
   titleGenerationEnabled?: boolean;  // default true
-  titleGenerationUrl?: string;       // default "http://localhost:8085"
+  titleGenerationUrl?: string;       // default "http://localhost:32104"
   titleGenerationModelId?: string;   // default "qwen3.5-0.8b" — model name sent to the title-generation server
 // Embedding server (llama.cpp)
   embeddingProvider?: "llamacpp";
-  embeddingUrl?: string;        // default "http://localhost:8084"
+  embeddingUrl?: string;        // default "http://localhost:32103"
   embeddingModel?: string;      // default "qwen3-embedding:0.6b"
   embeddingDimension?: number;  // dimension of currently stored vectors; set by migration
   embeddedByModel?: string;     // model that actually produced the current vectors; set by migration/restore

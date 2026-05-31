@@ -12,7 +12,7 @@ ExecStart=${LLAMA_SERVER_BIN} \
     --alias ${EMBEDDING_MODEL_ID} \
     --embedding \
     --pooling mean \
-    --port 8084 \
+    --port 32103 \
     --host 127.0.0.1 \
     --n-gpu-layers 0 \
     --ctx-size 8192 \

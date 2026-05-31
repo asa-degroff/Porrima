@@ -35,7 +35,7 @@ Memory retrieval uses a multi-stage pipeline for high-relevance results:
 
 1. **Hybrid search** (`memory-storage.ts`): Vector search (qwen3-embedding:0.6b, 45 candidates) + FTS5 full-text search, fused via RRF (Reciprocal Rank Fusion, K=60). Post-scoring applies recency decay (30-day half-life), importance weight, and supersession penalty.
 
-2. **Cross-encoder reranking** (`reranker.ts`): Top 30 candidates are reranked by Qwen3-Reranker-0.6B (dedicated CPU instance on port 8082) using chat-type-specific instructions:
+2. **Cross-encoder reranking** (`reranker.ts`): Top 30 candidates are reranked by Qwen3-Reranker-0.6B (dedicated CPU instance on port 32102) using chat-type-specific instructions:
    - **Agent**: "judge whether this memory is relevant to the user's current task, question, or topic of discussion"
    - **Quick**: "judge whether this memory contains information useful for responding"
    - Graceful fallback to RRF-only scoring if reranker is unavailable

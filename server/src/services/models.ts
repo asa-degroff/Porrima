@@ -1,9 +1,10 @@
 import type { Model } from "@mariozechner/pi-ai";
 import type { InferenceModel, Settings } from "../types.js";
 import { getSettings } from "./chat-storage.js";
+import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 
-const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
+const LLAMACPP_DEFAULT_URL = getDefaultLlamaServerUrl("inference");
 
 // ---------------------------------------------------------------------------
 // llama.cpp model discovery

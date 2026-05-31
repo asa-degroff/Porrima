@@ -98,7 +98,7 @@ describe("token estimation for dense tool results", () => {
       "System prompt",
       [],
       {
-        baseUrl: "http://localhost:8080",
+        baseUrl: "http://localhost:32100",
         modelId: "test-model",
         minToolResultChars: 1,
       },

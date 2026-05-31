@@ -13,10 +13,11 @@ import {
 import { discoverAllModels } from "./models.js";
 import type { InferenceModel } from "../types.js";
 import { beginStream, endStream } from "./llm-activity.js";
+import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 import { appDataPath } from "./paths.js";
 
 const VISION_DIR = appDataPath("vision");
-const LLAMACPP_DEFAULT_URL = "http://localhost:8080";
+const LLAMACPP_DEFAULT_URL = getDefaultLlamaServerUrl("inference");
 
 type VisionBackend = { provider: "llamacpp"; baseUrl: string; contextWindow?: number };
 

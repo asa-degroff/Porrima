@@ -1,6 +1,7 @@
 import { getSettings } from "./chat-storage.js";
+import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 
-const LLAMACPP_DEFAULT_URL = "http://localhost:8084";
+const LLAMACPP_DEFAULT_URL = getDefaultLlamaServerUrl("embedding");
 const DEFAULT_EMBEDDING_MODEL = "qwen3-embedding:0.6b";
 
 interface EmbeddingConfig {

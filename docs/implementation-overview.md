@@ -2,7 +2,7 @@
 
 ## Core Architecture
 npm workspaces monorepo. `server/`: Express + TS (3001). `client/`: React + Vite + Tailwind v4 (5173).
-Services: llama.cpp (8080, GPU 0), reranker (Qwen3-Reranker-0.6B, 8082, CPU).
+Services: llama.cpp chat router (32100, GPU), extraction (32101, CPU), reranker (32102, CPU), embedding (32103, CPU), title generation (32104, CPU).
 Model: Qwen 3.6 27B (dense, 1M context via YaRN). User prioritizes intelligence over raw speed.
 **Speculative decoding**: n-gram decoding gives 10x speedup on dense model (13→137 tok/s) but zero benefit on MoE variants (expert slice pull cost exceeds batching benefit). Workload-dependent — code generation gains enormous, open-ended conversation minimal.
 Synthesis: four-phase cycle, pre-synthesis archiving, synthesis lock. `SynthesisEmitter` wraps headless LiveStream for SSE streaming.

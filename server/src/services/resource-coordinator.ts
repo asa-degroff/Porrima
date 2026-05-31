@@ -7,6 +7,7 @@
 import { execFile } from "child_process";
 import { readFile } from "node:fs/promises";
 import { isActive, activeStreamCount, waitForIdle } from "./llm-activity.js";
+import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 
 // Minimum free VRAM (in bytes) required before starting generation.
 // Image generation typically needs 6-10GB depending on resolution and model.
@@ -112,7 +113,7 @@ async function collectLoadedModels(): Promise<UnloadableModel[]> {
   // llama.cpp: /v1/models lists all configured models; filter to loaded.
   if (settings.llamacppEnabled) {
     try {
-      const lcUrl = settings.llamacppUrl || "http://localhost:8080";
+      const lcUrl = settings.llamacppUrl || getDefaultLlamaServerUrl("inference");
       const modelsRes = await fetch(`${lcUrl}/v1/models`, { signal: AbortSignal.timeout(3000) });
       if (modelsRes.ok) {
         const modelsData = await modelsRes.json();
