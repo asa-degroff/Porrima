@@ -639,6 +639,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   );
   // Header image
   const [headerImageEnabled, setHeaderImageEnabled] = useState(settings.headerImageEnabled ?? false);
+  const [headerImageId, setHeaderImageId] = useState(settings.headerImageId);
   const [headerImageUrl, setHeaderImageUrl] = useState<string | null>(null);
   const [headerImageExists, setHeaderImageExists] = useState(false);
   const [headerImageUploading, setHeaderImageUploading] = useState(false);
@@ -895,6 +896,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
         if (info.exists) {
           setHeaderImageExists(true);
           setHeaderImageUrl(info.thumbUrl || info.url || null);
+          setHeaderImageId(info.version);
         }
       } catch {
         // non-critical
@@ -916,6 +918,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       const info = await getHeaderImageInfo();
       setHeaderImageExists(true);
       setHeaderImageUrl(info.thumbUrl || info.url || null);
+      setHeaderImageId(info.version || String(Date.now()));
       // Auto-enable on upload
       setHeaderImageEnabled(true);
     } catch (e: any) {
@@ -931,6 +934,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       await deleteHeaderImageApi();
       setHeaderImageExists(false);
       setHeaderImageUrl(null);
+      setHeaderImageId(undefined);
       setHeaderImageEnabled(false);
     } catch (e: any) {
       console.error("Failed to remove header image:", e);
@@ -1783,6 +1787,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       systemStatsBufferSeconds,
       systemStatsHiddenGpus: normalizeSystemStatsHiddenGpus(Array.from(hiddenGpus)),
       headerImageEnabled,
+      headerImageId,
       extractionModelId,
       extractionModelUrl: extractionModelUrl.trim() || undefined,
       extractionFallbackEnabled,

@@ -126,6 +126,7 @@ export interface HeaderImageInfo {
   thumbUrl: string;
   mimeType: string;
   exists: boolean;
+  version?: string;
 }
 
 /** Upload or replace the header image */

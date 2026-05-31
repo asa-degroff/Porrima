@@ -1335,6 +1335,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         streamingSegmentIndex={streamingSegmentIndex}
         onArtifactRuntimeError={reportArtifactRuntimeError}
         headerImageEnabled={settings.headerImageEnabled}
+        headerImageId={settings.headerImageId}
       />
       )}
       {settingsOpen && !settingsLoading && (

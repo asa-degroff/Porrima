@@ -1,4 +1,4 @@
-import { writeFile, mkdir, access, rm } from "fs/promises";
+import { writeFile, mkdir, access, rm, stat } from "fs/promises";
 import { join } from "path";
 import sharp from "sharp";
 import { appDataPath } from "./paths.js";
@@ -13,6 +13,8 @@ function mimeTypeToExt(mimeType: string): string {
     "image/png": "png",
     "image/webp": "webp",
     "image/gif": "gif",
+    "image/avif": "avif",
+    "image/jxl": "jxl",
   };
   return map[mimeType] || "png";
 }
@@ -22,6 +24,19 @@ export interface HeaderImageInfo {
   thumbUrl: string;
   mimeType: string;
   exists: boolean;
+  version?: string;
+}
+
+const IMAGE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "avif", "jxl"] as const;
+
+function appendVersion(url: string, version: string): string {
+  return `${url}?v=${encodeURIComponent(version)}`;
+}
+
+async function getHeaderImageVersion(): Promise<string> {
+  const thumbPath = join(HEADER_IMAGE_DIR, "thumb.webp");
+  const stats = await stat(thumbPath);
+  return String(Math.trunc(stats.mtimeMs));
 }
 
 /**
@@ -34,6 +49,10 @@ export async function saveHeaderImage(
   await mkdir(HEADER_IMAGE_DIR, { recursive: true });
 
   const ext = mimeTypeToExt(mimeType);
+
+  await Promise.all(
+    IMAGE_EXTS.map((existingExt) => rm(join(HEADER_IMAGE_DIR, `image.${existingExt}`), { force: true })),
+  );
 
   // Save original
   const originalPath = join(HEADER_IMAGE_DIR, `image.${ext}`);
@@ -55,12 +74,14 @@ export async function saveHeaderImage(
 
   const thumbPath = join(HEADER_IMAGE_DIR, "thumb.webp");
   await writeFile(thumbPath, thumbBuffer);
+  const version = await getHeaderImageVersion();
 
   return {
-    url: `/api/settings/header-image/image.${ext}`,
-    thumbUrl: `/api/settings/header-image/thumb`,
+    url: appendVersion(`/api/settings/header-image/image.${ext}`, version),
+    thumbUrl: appendVersion(`/api/settings/header-image/thumb`, version),
     mimeType,
     exists: true,
+    version,
   };
 }
 
@@ -87,23 +108,30 @@ export async function getHeaderImageInfo(): Promise<HeaderImageInfo> {
   }
 
   // Find the original image extension
-  const exts = ["jpg", "png", "webp", "gif"];
-  for (const ext of exts) {
+  const version = await getHeaderImageVersion();
+  for (const ext of IMAGE_EXTS) {
     try {
       await access(join(HEADER_IMAGE_DIR, `image.${ext}`));
       const contentType = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
       return {
-        url: `/api/settings/header-image/image.${ext}`,
-        thumbUrl: `/api/settings/header-image/thumb`,
+        url: appendVersion(`/api/settings/header-image/image.${ext}`, version),
+        thumbUrl: appendVersion(`/api/settings/header-image/thumb`, version),
         mimeType: contentType,
         exists: true,
+        version,
       };
     } catch {
       // try next
     }
   }
 
-  return { url: "", thumbUrl: `/api/settings/header-image/thumb`, mimeType: "image/webp", exists: true };
+  return {
+    url: "",
+    thumbUrl: appendVersion(`/api/settings/header-image/thumb`, version),
+    mimeType: "image/webp",
+    exists: true,
+    version,
+  };
 }
 
 /**
