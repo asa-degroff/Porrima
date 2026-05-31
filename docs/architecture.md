@@ -106,9 +106,8 @@ See [docs/compaction.md](compaction.md) for full details.
 
 ## GPU Coordination
 
-VRAM management across llama.cpp and ComfyUI:
+VRAM management:
 
-- **ComfyUI generation**: `waitForFreeVRAM()` checks `/system_stats` for free VRAM, unloads llama.cpp models via `/v1/models` if insufficient, polls every 3s until 6GB free
 - **llama.cpp model loading**: `ensureModelLoaded()` handles load/unload/reload cycles for model swaps
 - **Idle unloading**: llama.cpp `--sleep-idle-seconds 172800` permits long-idle unloading without clearing the prompt cache between ordinary follow-up messages
 - **Tool result limits**: Dynamic truncation scaled to 15% of context window (min 8k chars)
