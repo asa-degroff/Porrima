@@ -54,6 +54,13 @@ function clampText(text: string | undefined, maxChars: number): string {
   return `${trimmed.slice(0, maxChars)}\n[truncated]`;
 }
 
+function clampSignal(text: string | undefined, maxChars: number): string {
+  if (!text) return "";
+  const trimmed = text.replace(/\s+/g, " ").trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  return trimmed.slice(0, maxChars).trimEnd();
+}
+
 function hashText(text: string): string {
   return createHash("sha1").update(text).digest("hex").slice(0, 12);
 }
@@ -69,6 +76,9 @@ const OPERATIONAL_FILE_EXTENSIONS =
 
 const TOOL_OR_COMMAND_NAMES = new RegExp(
   "\\b(?:" + [
+    "ask_user",
+    "apply_patch",
+    "exec_command",
     "read_file",
     "write_file",
     "edit_file",
@@ -128,7 +138,7 @@ function scrubOperationalNoise(text: string | undefined): string {
     .replace(/\b(?:path|command|cmd|file|filename)=\S+/gi, " ")
     .replace(/"(?:path|command|cmd|file|filename)"\s*:\s*"[^"]*"/gi, " ")
     .replace(TOOL_OR_COMMAND_NAMES, " ")
-    .replace(/[{}[\]"']/g, " ")
+    .replace(/[{}[\]"]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -208,7 +218,7 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = 900)
     : "";
 
   const latestAssistantContent = latestAssistant?.content?.trim()
-    ? scrubOperationalNoise(clampText(latestAssistant.content, 350)).replace(/\s+/g, " ")
+    ? scrubOperationalNoise(clampSignal(latestAssistant.content, 350)).replace(/\s+/g, " ")
     : "";
 
   const observations: string[] = [];
@@ -218,18 +228,25 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = 900)
     if (observation) pushUnique(observations, observation, 3);
   }
 
-  // --- User context (secondary, for grounding) ---
-  // Demoted: memory-context already retrieved memories for this query at turn start.
-  // Kept as a grounding signal when agent trajectory is sparse.
+  // Keep the current user request in the compact rerank query. Passive recall
+  // adds trajectory from later tool-loop reasoning, but the task itself is the
+  // best grounding signal when the reranker has a tight input window.
   const latestUser = scrubOperationalNoise(
-    [...recent].reverse().find((message) => message.role === "user" && !isAutomationUserPrompt(message))?.content,
+    [...active].reverse().find((message) => message.role === "user" && !isAutomationUserPrompt(message))?.content,
   );
 
+  const hasTrajectory = Boolean(agentThinking?.trim() || latestAssistantContent || observations.length);
+  const userBudget = hasTrajectory
+    ? Math.max(260, Math.floor(maxChars * 0.45))
+    : Math.max(0, maxChars - "User request: ".length);
+  const thinkingBudget = Math.max(160, Math.floor(maxChars * 0.35));
+  const contentBudget = Math.max(120, Math.floor(maxChars * 0.25));
+
   const parts: string[] = [];
-  if (agentThinking?.trim()) parts.push(`Agent thinking: ${clampText(agentThinking, 300)}`);
-  if (latestAssistantContent) parts.push(`Assistant output: ${latestAssistantContent}`);
-  if (observations.length) parts.push(`Observed facts: ${observations.join(" / ")}`);
-  if (latestUser?.trim()) parts.push(`User request: ${clampText(latestUser, 120).replace(/\s+/g, " ")}`);
+  if (latestUser?.trim()) parts.push(`User request: ${clampSignal(latestUser, userBudget)}`);
+  if (agentThinking?.trim()) parts.push(`Agent thinking: ${clampSignal(agentThinking, thinkingBudget)}`);
+  if (latestAssistantContent) parts.push(`Assistant output: ${clampSignal(latestAssistantContent, contentBudget)}`);
+  if (observations.length) parts.push(`Observed facts: ${clampSignal(observations.join(" / "), contentBudget)}`);
 
   const query = parts.join("\n").trim();
   if (!query) return "";

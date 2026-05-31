@@ -85,6 +85,42 @@ describe("passive memory recall query building", () => {
     expect(rerankQuery).toContain("durable patterns");
   });
 
+  it("does not use a stale user request from before the active turn", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content: "Can you summarize the notebook design?",
+        timestamp: 1000,
+      },
+      {
+        role: "assistant",
+        content: "The notebook design uses dual user and agent entries.",
+        timestamp: 2000,
+      },
+      {
+        role: "user",
+        content: "# Daily Synthesis\n\nWrite a daily synthesis and maintain your memory blocks.",
+        timestamp: 3000,
+        _isSystemMessage: true,
+        _isAutomationMessage: true,
+        _automationTaskId: "builtin:synthesis",
+      },
+      {
+        role: "assistant",
+        thinking: "I should inspect recent project work and summarize durable patterns.",
+        content: "",
+        timestamp: 4000,
+      },
+    ];
+
+    const query = buildPassiveRerankQuery(messages);
+
+    expect(query).toContain("Agent thinking:");
+    expect(query).toContain("durable patterns");
+    expect(query).not.toContain("User request:");
+    expect(query).not.toContain("notebook design");
+  });
+
   it("keeps the most recent context when the query is capped", () => {
     const older = "old topic ".repeat(200);
     const newer = "new topic ".repeat(200);
@@ -146,6 +182,27 @@ describe("passive memory recall query building", () => {
     expect(query).not.toContain("passive-memory-recall.ts");
     expect(query).not.toContain("reranker.service");
     expect(query).not.toContain("/v1/rerank");
+  });
+
+  it("uses the user request budget when there is no agent trajectory yet", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content: [
+          "I've been working on user documentation for the site, as well as AI documentation for other agents that are going to edit the project.",
+          "Please check whether the reranker query construction is crowding out the current task details before matching memories.",
+        ].join(" "),
+        timestamp: 1000,
+      },
+    ];
+
+    const query = buildPassiveRerankQuery(messages, 900);
+
+    expect(query).toContain("I've been working");
+    expect(query).toContain("AI documentation for other agents");
+    expect(query).toContain("crowding out the current task details");
+    expect(query).not.toContain("I ve");
+    expect(query).not.toContain("[truncated]");
   });
 
   it("does not backfill stale assistant output when the active fragment only has tool calls", () => {
