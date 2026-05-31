@@ -28,6 +28,7 @@ export interface PromptCluster {
 export interface ClusterMap {
   clusters: PromptCluster[];
   similarityThreshold: number;
+  algorithmVersion?: number;
   lastRebuilt: number;
   corpusSize: number;
 }
@@ -141,7 +142,7 @@ export function extractDominantElements(members: ImageCorpusEntry[]): PromptClus
     const elements = member.elements || {};
     for (const [category, items] of Object.entries(elements)) {
       if (counters[category] && Array.isArray(items)) {
-        for (const item of items) {
+        for (const item of new Set(items)) {
           const key = item.toLowerCase();
           counters[category][key] = (counters[category][key] || 0) + 1;
         }
@@ -186,16 +187,95 @@ export function computeVariance(members: ImageCorpusEntry[]): number {
 }
 
 export function generateClusterName(members: ImageCorpusEntry[]): string {
-  const dominant = extractDominantElements(members);
-  
-  // Use top theme + top setting as name
-  const theme = dominant.themes[0] || "unknown";
-  const setting = dominant.settings[0] || "scene";
-  
-  // Capitalize
-  const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-  
-  return `${capitalize(theme)} ${capitalize(setting)}`;
+  if (members.length === 0) return "Empty Cluster";
+
+  const theme = getDominantElement(members, "themes");
+  const alternateTheme = getDominantElement(members, "themes", theme?.value);
+
+  const themeSupportRequired = members.length <= 4 ? 1 / members.length : 0.3;
+  const subjectSupportRequired = members.length <= 4 ? 1 / members.length : 0.25;
+  const subject = getSupportedDominantElement(
+    members,
+    ["settings", "characters", "concepts", "styles"],
+    subjectSupportRequired
+  );
+
+  if (theme && theme.support >= themeSupportRequired) {
+    if (subject) {
+      if (normalizeLabel(subject.value).includes(normalizeLabel(theme.value))) {
+        return titleCase(subject.value);
+      }
+      return `${titleCase(theme.value)} ${titleCase(subject.value)}`;
+    }
+
+    if (alternateTheme && alternateTheme.support >= themeSupportRequired) {
+      return `${titleCase(theme.value)} / ${titleCase(alternateTheme.value)}`;
+    }
+
+    return members.length > 8 ? `Mixed ${titleCase(theme.value)}` : titleCase(theme.value);
+  }
+
+  if (subject) {
+    return members.length > 8 ? `Mixed ${titleCase(subject.value)}` : titleCase(subject.value);
+  }
+
+  return members.length === 1 ? "Image" : `Mixed ${members.length} Images`;
+}
+
+function getDominantElement(
+  members: ImageCorpusEntry[],
+  category: string,
+  exceptValue?: string
+): { value: string; count: number; support: number } | null {
+  const counter: Record<string, number> = {};
+  const excluded = exceptValue?.toLowerCase();
+
+  for (const member of members) {
+    const values = member.elements?.[category];
+    if (!Array.isArray(values)) continue;
+
+    for (const raw of new Set(values)) {
+      const value = raw.toLowerCase().trim();
+      if (!value || value === excluded) continue;
+      counter[value] = (counter[value] || 0) + 1;
+    }
+  }
+
+  const [value, count] = Object.entries(counter).sort((a, b) => b[1] - a[1])[0] || [];
+  if (!value || !count) return null;
+
+  return {
+    value,
+    count,
+    support: count / Math.max(members.length, 1),
+  };
+}
+
+function getSupportedDominantElement(
+  members: ImageCorpusEntry[],
+  categories: string[],
+  minimumSupport: number
+): { value: string; count: number; support: number } | null {
+  for (const category of categories) {
+    const candidate = getDominantElement(members, category);
+    if (candidate && candidate.support >= minimumSupport) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function titleCase(value: string): string {
+  return value
+    .trim()
+    .split(/\s+/)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function normalizeLabel(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {

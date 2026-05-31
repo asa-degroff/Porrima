@@ -12,7 +12,8 @@ import {
   setClusters,
 } from "./cluster-storage.js";
 
-const SIMILARITY_THRESHOLD = 0.85;
+export const SIMILARITY_THRESHOLD = 0.97;
+export const CLUSTER_ALGORITHM_VERSION = 2;
 
 export interface ClusterEngineOptions {
   threshold?: number;
@@ -20,11 +21,11 @@ export interface ClusterEngineOptions {
 }
 
 /**
- * Build clusters from corpus using density-based clustering with cosine similarity.
+ * Build clusters from corpus using exemplar clustering with cosine similarity.
  * 
  * Algorithm:
- * 1. Compute pairwise similarity matrix (O(n²) but fast for 252 images)
- * 2. Group images where similarity > threshold (density-based)
+ * 1. Compute pairwise similarity matrix (O(n²), acceptable for local corpora)
+ * 2. Group images around the densest remaining exemplar above threshold
  * 3. Compute cluster properties (centroid, dominant elements, variance)
  * 4. Persist and return cluster map
  */
@@ -45,6 +46,7 @@ export async function buildClusters(
     const emptyMap: ClusterMap = {
       clusters: [],
       similarityThreshold: threshold,
+      algorithmVersion: CLUSTER_ALGORITHM_VERSION,
       lastRebuilt: Date.now(),
       corpusSize: 0,
     };
@@ -58,7 +60,7 @@ export async function buildClusters(
   const matrixTime = Date.now() - startTime;
   console.log(`[cluster-engine] similarity matrix computed in ${matrixTime}ms`);
   
-  // 2. Density-based clustering
+  // 2. Exemplar clustering
   const clusters = densityCluster(validCorpus, similarityMatrix, threshold, minSize);
   
   // 3. Build cluster objects with full metadata
@@ -105,6 +107,7 @@ export async function buildClusters(
   const clusterMap: ClusterMap = {
     clusters: clusterObjects,
     similarityThreshold: threshold,
+    algorithmVersion: CLUSTER_ALGORITHM_VERSION,
     lastRebuilt: Date.now(),
     corpusSize: validCorpus.length,
   };
@@ -120,9 +123,13 @@ export async function buildClusters(
 
 export function clusterMapNeedsRebuild(
   clusterMap: ClusterMap | null,
-  corpus: ImageCorpusEntry[]
+  corpus: ImageCorpusEntry[],
+  expectedThreshold = SIMILARITY_THRESHOLD,
+  expectedAlgorithmVersion = CLUSTER_ALGORITHM_VERSION
 ): boolean {
   if (!clusterMap) return true;
+  if (Math.abs(clusterMap.similarityThreshold - expectedThreshold) > 0.000001) return true;
+  if (clusterMap.algorithmVersion !== expectedAlgorithmVersion) return true;
 
   const embeddedIds = new Set(
     corpus
@@ -146,7 +153,8 @@ export async function ensureClustersFresh(
   options: ClusterEngineOptions = {}
 ): Promise<ClusterMap> {
   const clusterMap = await getClusters();
-  if (!clusterMap || clusterMapNeedsRebuild(clusterMap, corpus)) {
+  const threshold = options.threshold ?? SIMILARITY_THRESHOLD;
+  if (!clusterMap || clusterMapNeedsRebuild(clusterMap, corpus, threshold)) {
     console.log("[cluster-engine] cluster map is stale; rebuilding");
     return buildClusters(corpus, options);
   }
@@ -155,7 +163,7 @@ export async function ensureClustersFresh(
 
 /**
  * Compute pairwise cosine similarity matrix.
- * O(n²) complexity but acceptable for n=252 (63,504 comparisons).
+ * O(n²) complexity but acceptable for the local corpus sizes this feature targets.
  */
 export function computeSimilarityMatrix(corpus: ImageCorpusEntry[]): number[][] {
   const n = corpus.length;
@@ -182,12 +190,11 @@ export function computeSimilarityMatrix(corpus: ImageCorpusEntry[]): number[][] 
 }
 
 /**
- * Density-based clustering: group images where similarity > threshold.
- * Uses a simple greedy approach:
- * 1. Start with unassigned images
- * 2. For each unassigned image, find all neighbors above threshold
- * 3. Create cluster from image + neighbors
- * 4. Repeat until all images assigned
+ * Exemplar clustering: repeatedly choose the unassigned image with the most
+ * unassigned neighbors above the threshold, then assign that local neighborhood.
+ *
+ * This keeps the algorithm deterministic while avoiding the old creation-order
+ * behavior where a broad recent prompt could absorb most of the corpus.
  */
 export function densityCluster(
   corpus: ImageCorpusEntry[],
@@ -199,26 +206,37 @@ export function densityCluster(
   const assigned = new Set<number>();
   const clusters: string[][] = [];
   
-  for (let i = 0; i < n; i++) {
-    if (assigned.has(i)) continue;
-    
-    // Find neighbors above threshold
-    const neighbors: number[] = [];
-    for (let j = 0; j < n; j++) {
-      if (!assigned.has(j) && similarityMatrix[i][j] >= threshold) {
-        neighbors.push(j);
+  while (assigned.size < n) {
+    let bestSeed = -1;
+    let bestNeighbors: number[] = [];
+
+    for (let i = 0; i < n; i++) {
+      if (assigned.has(i)) continue;
+
+      const neighbors: number[] = [];
+      for (let j = 0; j < n; j++) {
+        if (!assigned.has(j) && similarityMatrix[i][j] >= threshold) {
+          neighbors.push(j);
+        }
+      }
+
+      if (neighbors.length > bestNeighbors.length) {
+        bestSeed = i;
+        bestNeighbors = neighbors;
       }
     }
-    
-    if (neighbors.length >= minSize) {
-      // Create cluster
-      const clusterIds = neighbors.map(idx => corpus[idx].id);
+
+    if (bestSeed === -1) break;
+
+    if (bestNeighbors.length >= minSize) {
+      const clusterIds = bestNeighbors.map(idx => corpus[idx].id);
       clusters.push(clusterIds);
-      
-      // Mark as assigned
-      for (const idx of neighbors) {
+
+      for (const idx of bestNeighbors) {
         assigned.add(idx);
       }
+    } else {
+      assigned.add(bestSeed);
     }
   }
   

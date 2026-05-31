@@ -65,8 +65,8 @@ Minimal pattern:
 - **Novelty scoring**: `computeNovelty(embedding)` returns 1.0 - maxSimilarity against corpus
 
 **Clustering** (`server/src/services/cluster-engine.ts`, `cluster-storage.ts`):
-- Density-based clustering using pairwise cosine similarity matrix
-- Threshold: 0.85 similarity (configurable); images above threshold grouped together
+- Exemplar clustering using pairwise cosine similarity matrix
+- Threshold: 0.97 similarity (configurable); images above threshold are grouped around the densest remaining exemplar
 - **Cluster properties**: centroid (average embedding), dominantElements (top 5 themes/settings/etc.), variance, size
 - **Singletons**: unclustered images become single-member clusters
 - **Persistence**: clusters saved to `~/.porrima/clusters/clusters.json`
