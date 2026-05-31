@@ -36,7 +36,6 @@ const SECTIONS = [
   { id: 'models', label: 'Models' },
   { id: 'inference', label: 'Inference Servers' },
   { id: 'favorites', label: 'Favorites' },
-  { id: 'vision', label: 'Vision' },
   { id: 'theme', label: 'Appearance' },
   { id: 'background', label: 'Background' },
   { id: 'haptics', label: 'Haptics' },
@@ -325,18 +324,6 @@ function coerceWebSearchProvider(provider: Settings["defaultWebSearchProvider"])
   return WEB_SEARCH_PROVIDER_OPTIONS.some((option) => option.id === provider) ? provider! : "brave";
 }
 
-function isVisionModel(model: InferenceModel): boolean {
-  const family = model.family.toLowerCase();
-  const id = model.id.toLowerCase();
-  return Boolean(model.supportsImages) ||
-    family.includes("vl") ||
-    family.startsWith("qwen35") ||
-    id.includes("-vl") ||
-    id.includes("vision") ||
-    id.includes("llava") ||
-    id.includes("pixtral");
-}
-
 function llamaSystemdTone(status: LlamaServerStatus["systemd"]["activeState"]): string {
   if (status === "active") return "bg-green-500/15 text-green-300 border-green-400/25";
   if (status === "activating" || status === "deactivating") return "bg-amber-500/15 text-amber-300 border-amber-400/25";
@@ -419,13 +406,7 @@ function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
 }
 
 export function SettingsModal({ settings, models, refreshModels, onApply, onSave, onClose, onLogout }: Props) {
-  const visionModelOptions = (() => {
-    const capable = models.filter(isVisionModel);
-    return capable.length > 0 ? capable : models;
-  })();
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
-  const [useChatModelForVision, setUseChatModelForVision] = useState(settings.useChatModelForVision !== false);
-  const [defaultVisionModelId, setDefaultVisionModelId] = useState(settings.defaultVisionModelId || settings.defaultModelId);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [defaultSystemPromptExpanded, setDefaultSystemPromptExpanded] = useState(false);
   const [agentName, setAgentName] = useState(settings.agentName || "");
@@ -743,7 +724,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const ttsSliderSaveTimersRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
   const ttsSliderSaveSeqRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
   const modelDd = useDropdown();
-  const visionModelDd = useDropdown();
   const voiceDd = useDropdown();
   const backendDd = useDropdown();
   const boundaryTierDd = useDropdown();
@@ -1729,8 +1709,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       ...settings,
       agentName: agentName.trim() || undefined,
       defaultModelId,
-      defaultVisionModelId: useChatModelForVision ? undefined : (defaultVisionModelId || undefined),
-      useChatModelForVision: useChatModelForVision || undefined,
       defaultSystemPrompt: effectivePrompt,
       braveApiKey: braveApiKey.trim(),
       exaApiKey: exaApiKey.trim(),
@@ -4023,52 +4001,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 );
               })}
             </Dropdown>
-          </div>
-
-         {/* Vision */}
-          <div id="vision" className="space-y-3">
-            <label className="block text-sm font-medium text-white/60">Vision</label>
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="text-sm text-white/80">Use chat model for vision</span>
-                <p className="text-xs text-white/30 mt-0.5">Image analysis uses the same model as your chat</p>
-              </div>
-              <ToggleSwitch checked={useChatModelForVision} onChange={() => setUseChatModelForVision(v => !v)} accentColor="purple" />
-            </div>
-            {!useChatModelForVision && (
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-white/60">Vision Model Override</label>
-                <Dropdown
-                  state={visionModelDd}
-                  trigger={
-                    <span className="truncate flex-1 text-left">
-                      {models.find((m) => m.id === defaultVisionModelId)?.name || defaultVisionModelId}
-                    </span>
-                  }
-                >
-                  {visionModelOptions.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => { setDefaultVisionModelId(m.id); visionModelDd.close(); }}
-                      className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                        m.id === defaultVisionModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                      }`}
-                      style={{
-                        backgroundColor: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                        color: m.id === defaultVisionModelId ? `rgba(var(--theme-secondary-text))` : '',
-                      }}
-                    >
-                      <span className="truncate flex-1">{m.name}</span>
-                      <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
-                      <ProviderIcon
-                        provider={m.provider}
-                        className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
-                      />
-                    </button>
-                  ))}
-                </Dropdown>
-              </div>
-            )}
           </div>
 
           {/* Color Theme */}

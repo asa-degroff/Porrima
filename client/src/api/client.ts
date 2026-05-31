@@ -1022,12 +1022,13 @@ export function streamAnalyzeImage(
 
 export async function chatAboutImage(
   id: string,
-  message: string
+  message: string,
+  model?: string
 ): Promise<{ response: string }> {
   const res = await apiFetch(`${BASE}/vision/images/${id}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, model }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -1038,12 +1039,13 @@ export async function chatAboutImage(
 
 export async function reanalyzeImage(
   id: string,
-  preset: string
+  preset: string,
+  model?: string
 ): Promise<AnalyzedImage> {
   const res = await apiFetch(`${BASE}/vision/images/${id}/reanalyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ preset }),
+    body: JSON.stringify({ preset, model }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -1061,9 +1063,10 @@ export interface ReanalyzeCallbacks {
 export function streamReanalyzeImage(
   id: string,
   preset: string,
+  model: string | undefined,
   callbacks: ReanalyzeCallbacks
 ): AbortController {
-  return streamSSE(`${BASE}/vision/images/${id}/reanalyze`, { preset, stream: true }, {
+  return streamSSE(`${BASE}/vision/images/${id}/reanalyze`, { preset, model, stream: true }, {
     onDelta: callbacks.onDelta,
     onThinkingDelta: () => {},
     onDone: (msg) => {

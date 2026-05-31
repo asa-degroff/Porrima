@@ -15,14 +15,11 @@ import { useActivityShape } from "../hooks/useActivityStyle";
 import { DragHandle } from "./ui/DragHandle";
 import { ImageSearch } from "./ImageSearch";
 import CorpusView from "./CorpusView";
-import type { GeneratedImage, ImageGenerationParams, InferenceModel } from "../types";
+import type { GeneratedImage, ImageGenerationParams } from "../types";
 import { readStoredValue, writeStoredValue } from "../lib/storage";
 
 interface Props {
-  models: InferenceModel[];
   defaultModelId: string;
-  defaultVisionModelId?: string;
-  useChatModelForVision?: boolean;
   onClose: () => void;
 }
 
@@ -30,29 +27,11 @@ type SandboxMode = "generate" | "analyze" | "corpus" | "directions";
 type ViewMode = "gallery" | "detail";
 const SANDBOX_MODE_KEY = "porrima-sandbox-mode";
 const LEGACY_SANDBOX_MODE_KEY = "quje-sandbox-mode";
-const VISION_MODEL_KEY = "porrima-vision-model";
-const LEGACY_VISION_MODEL_KEY = "quje-vision-model";
 
-function isVisionCapable(model: InferenceModel): boolean {
-  const family = model.family.toLowerCase();
-  const id = model.id.toLowerCase();
-  return Boolean(model.supportsImages) ||
-    family.includes("vl") ||
-    family.startsWith("qwen35") ||
-    id.includes("-vl") ||
-    id.includes("vision") ||
-    id.includes("llava") ||
-    id.includes("pixtral");
-}
-
-export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionModelId, useChatModelForVision, onClose }: Props) {
+export function ImageSandbox({ defaultModelId, onClose }: Props) {
   const activityShape = useActivityShape();
   const { settings } = useSettings();
   const backendLabel = settings.imageBackend === "sdcpp" ? "sd-server" : "ComfyUI";
-  const visionModels = useMemo(() => {
-    const capable = allModels.filter(isVisionCapable);
-    return capable.length > 0 ? capable : allModels;
-  }, [allModels]);
 
   const {
     images,
@@ -159,7 +138,7 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
     selectImage,
     setSelectedImage: setSelectedAnalyzedImage,
     setSelectedPreset,
-  } = useVisionSandbox();
+  } = useVisionSandbox(defaultModelId);
 
   const [mode, setMode] = useState<SandboxMode>(() => {
     try {
@@ -183,63 +162,6 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
     setControlsOpen(false);
     setDetailsOpen(false);
   }, [mode]);
-
-  const [visionModel, setVisionModelRaw] = useState<string>(() => {
-    // 0. If configured to use chat model for vision, prefer that
-    if (useChatModelForVision) {
-      const chatDefault = allModels.find((m) => m.id === defaultModelId);
-      if (chatDefault && isVisionCapable(chatDefault)) return defaultModelId;
-    }
-    // 1. Check localStorage for a previously selected vision model
-    try {
-      const saved = readStoredValue(VISION_MODEL_KEY, LEGACY_VISION_MODEL_KEY);
-      const savedModel = allModels.find((m) => m.id === saved);
-      if (saved && savedModel && isVisionCapable(savedModel)) return saved;
-    } catch {}
-    // 2. Use explicit vision model setting if set
-    if (defaultVisionModelId) {
-      const configured = allModels.find((m) => m.id === defaultVisionModelId);
-      if (configured && isVisionCapable(configured)) return defaultVisionModelId;
-    }
-    // 3. Use chat default if it's vision-capable
-    const chatDefault = allModels.find((m) => m.id === defaultModelId);
-    if (chatDefault && isVisionCapable(chatDefault)) return defaultModelId;
-    // 4. Fall back to first vision model
-    const visionDefault = allModels.find(isVisionCapable);
-    return visionDefault?.id || defaultModelId;
-  });
-
-  const setVisionModel = useCallback((id: string) => {
-    setVisionModelRaw(id);
-    try { writeStoredValue(VISION_MODEL_KEY, id, LEGACY_VISION_MODEL_KEY); } catch {}
-  }, []);
-
-  // Update vision model when useChatModelForVision setting changes
-  useEffect(() => {
-    if (!useChatModelForVision) return;
-    const chatDefault = allModels.find((m) => m.id === defaultModelId);
-    if (chatDefault && isVisionCapable(chatDefault) && visionModel !== defaultModelId) {
-      setVisionModelRaw(defaultModelId);
-    }
-  }, [useChatModelForVision, defaultModelId, allModels]);
-
-  // Re-validate selection when models list arrives/changes
-  useEffect(() => {
-    if (allModels.length === 0) return;
-    // Current selection is valid — keep it
-    if (allModels.some((m) => m.id === visionModel && isVisionCapable(m))) return;
-    // Try localStorage
-    try {
-      const saved = readStoredValue(VISION_MODEL_KEY, LEGACY_VISION_MODEL_KEY);
-      if (saved && allModels.some((m) => m.id === saved && isVisionCapable(m))) {
-        setVisionModelRaw(saved);
-        return;
-      }
-    } catch {}
-    // Fall back to best vision model
-    const visionDefault = allModels.find(isVisionCapable);
-    setVisionModelRaw(visionDefault?.id || allModels[0].id);
-  }, [allModels]);
 
   const error = mode === "generate" ? imageError : visionError;
 
@@ -267,8 +189,8 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
   }, [mode]);
 
   const handleAnalyze = useCallback(async (imageData: string, preset: string) => {
-    await analyzeImage(imageData, preset, visionModel);
-  }, [analyzeImage, visionModel]);
+    await analyzeImage(imageData, preset);
+  }, [analyzeImage]);
 
   const handleChat = useCallback(async (message: string) => {
     if (!selectedAnalyzedImage) throw new Error("No image selected");
@@ -858,9 +780,6 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
             <div className="hidden lg:block w-80 shrink-0 border-r border-white/10 backdrop-blur-xl bg-white/[0.03]">
               <VisionControls
                 presets={presets}
-                models={visionModels}
-                selectedModel={visionModel}
-                onModelChange={setVisionModel}
                 analyzing={analyzing}
                 streamingDescription={streamingDescription}
                 onAnalyze={handleAnalyze}
@@ -990,9 +909,6 @@ export function ImageSandbox({ models: allModels, defaultModelId, defaultVisionM
                   <div className="flex-1 overflow-y-auto p-4">
                     <VisionControls
                       presets={presets}
-                      models={visionModels}
-                      selectedModel={visionModel}
-                      onModelChange={setVisionModel}
                       analyzing={analyzing}
                       streamingDescription={streamingDescription}
                       onAnalyze={handleAnalyze}

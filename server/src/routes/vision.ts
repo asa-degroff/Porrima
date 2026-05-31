@@ -148,7 +148,7 @@ router.post("/save", async (req, res) => {
 // Chat about an image
 router.post("/images/:id/chat", async (req, res) => {
   try {
-    const { message } = req.body as { message: string };
+    const { message, model } = req.body as { message: string; model?: string };
     const image = await getAnalyzedImage(req.params.id);
 
     if (!image) {
@@ -165,7 +165,7 @@ router.post("/images/:id/chat", async (req, res) => {
       message,
       image.preset,
       image.description,
-      image.model
+      model || image.model
     );
 
     // Add to conversation history
@@ -206,7 +206,7 @@ router.delete("/images/:id", async (req, res) => {
 // Re-analyze with different preset (streaming)
 router.post("/images/:id/reanalyze", async (req, res) => {
   try {
-    const { preset, stream } = req.body as { preset: string; stream?: boolean };
+    const { preset, stream, model } = req.body as { preset: string; stream?: boolean; model?: string };
     const image = await getAnalyzedImage(req.params.id);
 
     if (!image) {
@@ -222,7 +222,7 @@ router.post("/images/:id/reanalyze", async (req, res) => {
       const result = await analyzeImageStream(
         image.imageData,
         preset || "detailed",
-        image.model,
+        model || image.model,
         (event) => {
           res.write(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
         }
@@ -240,7 +240,7 @@ router.post("/images/:id/reanalyze", async (req, res) => {
       (res as any).flush?.();
       res.end();
     } else {
-      const result = await analyzeImage(image.imageData, preset || "detailed", image.model);
+      const result = await analyzeImage(image.imageData, preset || "detailed", model || image.model);
 
       const updated = await updateAnalyzedImage(req.params.id, {
         description: result.description,

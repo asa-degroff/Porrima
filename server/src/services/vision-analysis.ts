@@ -275,8 +275,11 @@ export async function ensureVisionThumbnail(id: string): Promise<boolean> {
   }
 }
 
-function getVLMModel(): string {
-  return process.env.VLM_MODEL_NAME || "qwen3-vl:4b";
+async function resolveVisionModelId(model?: string): Promise<string> {
+  const requested = model?.trim();
+  if (requested) return requested;
+  const settings = await getSettings();
+  return settings.defaultModelId?.trim() || process.env.VLM_MODEL_NAME || "qwen3-vl:4b";
 }
 
 function base64ToBuffer(base64: string): Buffer {
@@ -308,7 +311,7 @@ export async function analyzeImage(
     await ensureVisionDir();
 
     const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
-    const modelName = model || getVLMModel();
+    const modelName = await resolveVisionModelId(model);
     const backend = await resolveVisionBackend(modelName);
     console.log(
       `[vision] analyze model=${modelName} backend=llama.cpp${
@@ -340,7 +343,7 @@ export async function analyzeImageStream(
     await ensureVisionDir();
 
     const preset = VISION_PRESETS[presetKey] || VISION_PRESETS.detailed;
-    const modelName = model || getVLMModel();
+    const modelName = await resolveVisionModelId(model);
     const backend = await resolveVisionBackend(modelName);
     console.log(
       `[vision] analyze-stream model=${modelName} backend=llama.cpp${
@@ -375,7 +378,7 @@ export async function chatAboutImage(
   model?: string,
   maxHistoryTurns = 10
 ): Promise<string> {
-  const modelName = model || getVLMModel();
+  const modelName = await resolveVisionModelId(model);
   const backend = await resolveVisionBackend(modelName);
   const systemPrompt = buildChatSystemPrompt(presetKey, currentDescription);
 

@@ -1238,10 +1238,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}
       {imageSandboxOpen ? (
         <ImageSandbox
-          models={models}
           defaultModelId={activeChat?.modelId || settings.defaultModelId || models[0]?.id || ""}
-          defaultVisionModelId={settings.defaultVisionModelId}
-          useChatModelForVision={settings.useChatModelForVision}
           onClose={handleCloseImageSandbox}
         />
       ) : activeView === 'notebooks' ? (

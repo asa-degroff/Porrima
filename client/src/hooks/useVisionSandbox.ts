@@ -3,11 +3,9 @@ import {
   fetchVisionPresets,
   fetchAnalyzedImages,
   fetchAnalyzedImage,
-  analyzeImage as apiAnalyzeImage,
   saveAnalyzedImage as apiSaveAnalyzedImage,
   streamAnalyzeImage,
   chatAboutImage as apiChatAboutImage,
-  reanalyzeImage as apiReanalyzeImage,
   streamReanalyzeImage,
   deleteAnalyzedImage as apiDeleteAnalyzedImage,
   fetchSettings,
@@ -17,7 +15,7 @@ import {
   type VisionMessage,
 } from "../api/client";
 
-export function useVisionSandbox() {
+export function useVisionSandbox(mainModelId?: string) {
   const [presets, setPresets] = useState<VisionPreset[]>([]);
   const [analyzedImages, setAnalyzedImages] = useState<AnalyzedImage[]>([]);
   const [selectedImage, setSelectedImage] = useState<AnalyzedImage | null>(null);
@@ -30,6 +28,7 @@ export function useVisionSandbox() {
 
   // Cache fetched images so switching back is instant
   const imageCacheRef = useRef(new Map<string, AnalyzedImage>());
+  const currentModelId = mainModelId?.trim() || undefined;
 
   // Load presets, images, and settings on mount
   useEffect(() => {
@@ -52,14 +51,14 @@ export function useVisionSandbox() {
     load();
   }, []);
 
-  const analyzeImage = useCallback(async (imageData: string, preset: string, model?: string) => {
+  const analyzeImage = useCallback(async (imageData: string, preset: string) => {
     setAnalyzing(true);
     setStreamingDescription("");
     setPendingImageData(imageData);
     setError(null);
     try {
       return await new Promise<AnalyzedImage>((resolve, reject) => {
-        const controller = streamAnalyzeImage(imageData, preset, model, {
+        streamAnalyzeImage(imageData, preset, currentModelId, {
           onDelta: (delta) => {
             setStreamingDescription((prev) => (prev ?? "") + delta);
           },
@@ -88,7 +87,7 @@ export function useVisionSandbox() {
       setAnalyzing(false);
       throw e;
     }
-  }, []);
+  }, [currentModelId]);
 
   const updateSelectedPreset = useCallback(async (preset: string) => {
     setSelectedPreset(preset);
@@ -104,7 +103,7 @@ export function useVisionSandbox() {
     setChatting(true);
     setError(null);
     try {
-      const result = await apiChatAboutImage(id, message);
+      const result = await apiChatAboutImage(id, message, currentModelId);
       
       // Update local state with new message
       setAnalyzedImages((prev) =>
@@ -141,7 +140,7 @@ export function useVisionSandbox() {
     } finally {
       setChatting(false);
     }
-  }, []);
+  }, [currentModelId]);
 
   const reanalyzeImage = useCallback(async (id: string, preset: string) => {
     setAnalyzing(true);
@@ -149,7 +148,7 @@ export function useVisionSandbox() {
     setError(null);
     try {
       return await new Promise<AnalyzedImage>((resolve, reject) => {
-        streamReanalyzeImage(id, preset, {
+        streamReanalyzeImage(id, preset, currentModelId, {
           onDelta: (delta) => {
             setStreamingDescription((prev) => (prev ?? "") + delta);
           },
@@ -176,7 +175,7 @@ export function useVisionSandbox() {
       setAnalyzing(false);
       throw e;
     }
-  }, []);
+  }, [currentModelId]);
 
   const deleteImage = useCallback(async (id: string) => {
     setError(null);

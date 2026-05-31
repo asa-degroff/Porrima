@@ -1,7 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { VisionPreset, AnalyzedImage } from "../api/client";
-import type { InferenceModel } from "../types";
-import { ProviderIcon } from "./ProviderIcon";
 import { Dropdown } from "./ui/Dropdown";
 import { useDropdown } from "../hooks/useDropdown";
 
@@ -45,9 +43,6 @@ function compressImage(file: File): Promise<string> {
 
 interface Props {
   presets: VisionPreset[];
-  models: InferenceModel[];
-  selectedModel: string;
-  onModelChange: (modelId: string) => void;
   analyzing: boolean;
   streamingDescription: string | null;
   onAnalyze: (imageData: string, preset: string) => Promise<void>;
@@ -61,9 +56,6 @@ interface Props {
 
 export function VisionControls({
   presets,
-  models,
-  selectedModel,
-  onModelChange,
   analyzing,
   streamingDescription,
   onAnalyze,
@@ -74,12 +66,10 @@ export function VisionControls({
   selectedPreset,
   setSelectedPreset,
 }: Props) {
-  const modelDd = useDropdown();
   const presetDd = useDropdown();
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const selectedModelObj = models.find((m) => m.id === selectedModel);
   const selectedPresetObj = presets.find((p) => p.key === selectedPreset);
 
   const handleFileSelect = useCallback(async (file: File) => {
@@ -123,40 +113,6 @@ export function VisionControls({
     <div className="flex flex-col h-full">
       {/* Controls */}
       <div className="shrink-0 space-y-3 p-4 border-b border-white/10">
-        {/* Model */}
-        <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-white/50">Model</label>
-          <Dropdown
-            state={modelDd}
-            disabled={analyzing}
-            panelClassName="left-0 right-0 top-full mt-1 max-h-[320px] overflow-y-auto"
-            trigger={<span className="truncate flex-1 text-left">{selectedModelObj?.name || selectedModel}</span>}
-          >
-            {models.map((m) => (
-              <button
-                key={m.id}
-                onClick={() => { onModelChange(m.id); modelDd.close(); }}
-                className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
-                  m.id === selectedModel
-                    ? "text-white"
-                    : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                }`}
-                style={{
-                  backgroundColor: m.id === selectedModel ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
-                  color: m.id === selectedModel ? `rgba(var(--theme-secondary-text))` : '',
-                }}
-              >
-                <span className="truncate flex-1">{m.name}</span>
-                <span className="text-[10px] text-white/30 shrink-0">{m.parameterSize}</span>
-                <ProviderIcon
-                  provider={m.provider}
-                  className={m.provider === "llamacpp" ? "text-[#ff8236] shrink-0" : "text-white/40 shrink-0"}
-                />
-              </button>
-            ))}
-          </Dropdown>
-        </div>
-
         {/* Preset */}
         <div className="space-y-1.5">
           <label className="block text-xs font-medium text-white/50">Description Style</label>
