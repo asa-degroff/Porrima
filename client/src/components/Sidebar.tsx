@@ -803,6 +803,15 @@ function ProjectSection({
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(project.name);
   const [expandedCloseHeight, setExpandedCloseHeight] = useState<number | null>(null);
+  const [showAllChats, setShowAllChats] = useState(false);
+
+  const SIDEBAR_CHAT_PAGE_SIZE = 30;
+
+  useEffect(() => {
+    if (!expanded) {
+      setShowAllChats(false);
+    }
+  }, [expanded]);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const collapsedPreviewMeasureRef = useRef<HTMLDivElement>(null);
   const expandedContentId = useId();
@@ -1053,23 +1062,33 @@ function ProjectSection({
             New Chat
           </button>
           {chats.length > 0 ? (
-            <div className="space-y-0.5">
-              {chats.map((chat) => (
-                <ChatListItem
-                  key={chat.id}
-                  chat={chat}
-                  active={chat.id === activeChatId}
-                  lastActive={chat.id === lastActiveChatId}
-                  cacheResidency={cacheResidency?.get(chat.id) ?? null}
-                  onSelect={() => onSelectChat(chat.id)}
-                  onDelete={() => onDeleteChat(chat.id)}
-                  onSendToNotebook={onSendToNotebook}
-                  onWarmCache={onWarmCache}
-                  cacheWarming={cacheWarmingChatIds?.has(chat.id) ?? false}
-                  cacheWarmError={cacheWarmErrors?.get(chat.id)}
-                />
-              ))}
-            </div>
+            <>
+              <div className="space-y-0.5">
+                {(showAllChats ? chats : chats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
+                  <ChatListItem
+                    key={chat.id}
+                    chat={chat}
+                    active={chat.id === activeChatId}
+                    lastActive={chat.id === lastActiveChatId}
+                    cacheResidency={cacheResidency?.get(chat.id) ?? null}
+                    onSelect={() => onSelectChat(chat.id)}
+                    onDelete={() => onDeleteChat(chat.id)}
+                    onSendToNotebook={onSendToNotebook}
+                    onWarmCache={onWarmCache}
+                    cacheWarming={cacheWarmingChatIds?.has(chat.id) ?? false}
+                    cacheWarmError={cacheWarmErrors?.get(chat.id)}
+                  />
+                ))}
+              </div>
+              {!showAllChats && chats.length > SIDEBAR_CHAT_PAGE_SIZE && (
+                <button
+                  onClick={() => setShowAllChats(true)}
+                  className={`w-full px-2 py-1.5 mt-1 rounded-xl text-xs font-medium border transition-all ${colors.bg} ${colors.border} ${colors.text} ${colors.hover}`}
+                >
+                  Show {chats.length - SIDEBAR_CHAT_PAGE_SIZE} more
+                </button>
+              )}
+            </>
           ) : (
             <p className="text-center text-white/20 text-[10px] py-2">
               No chats yet
@@ -1173,9 +1192,12 @@ export function Sidebar({
   const [quickCloseHeight, setQuickCloseHeight] = useState<number | null>(null);
   const [agentScrolled, setAgentScrolled] = useState(false);
   const [quickScrolled, setQuickScrolled] = useState(false);
+  const [agentShowAll, setAgentShowAll] = useState(false);
+  const [quickShowAll, setQuickShowAll] = useState(false);
+  const SIDEBAR_CHAT_PAGE_SIZE = 30;
 
   useEffect(() => {
-    if (!agentExpanded) { setAgentScrolled(false); return; }
+    if (!agentExpanded) { setAgentScrolled(false); setAgentShowAll(false); return; }
     const el = agentScrollRef.current;
     if (!el) return;
     const onScroll = () => setAgentScrolled(el.scrollTop > 0);
@@ -1185,7 +1207,7 @@ export function Sidebar({
   }, [agentExpanded]);
 
   useEffect(() => {
-    if (!quickExpanded) { setQuickScrolled(false); return; }
+    if (!quickExpanded) { setQuickScrolled(false); setQuickShowAll(false); return; }
     const el = quickScrollRef.current;
     if (!el) return;
     const onScroll = () => setQuickScrolled(el.scrollTop > 0);
@@ -1631,8 +1653,8 @@ export function Sidebar({
                 </button>
               )}
             </div>
-            <AnimatedCollapse open={projectsExpanded} id={projectsContentId} closeFromHeight={projectsCloseHeight} className="flex-1 min-h-0" innerClassName="flex min-h-0">
-              <div className="sidebar-scroll-pane flex-1 overflow-y-auto pb-1">
+            <AnimatedCollapse open={projectsExpanded} id={projectsContentId} closeFromHeight={projectsCloseHeight} className="flex-1 min-h-0" innerClassName="flex h-full min-h-0">
+              <div className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto pb-1">
                 <div className="space-y-1 pl-3 pr-2">
                   {projects.map((project) => (
                     <ProjectSection
@@ -1750,8 +1772,8 @@ export function Sidebar({
             </button>
           </div>
            {/* Scrollable chat list */}
-          <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex min-h-0">
-            <div ref={agentScrollRef} className="sidebar-scroll-pane flex-1 overflow-y-auto overflow-x-hidden pb-1">
+          <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex h-full min-h-0">
+            <div ref={agentScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-1">
               <div className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("agent"); onClose(); }}
@@ -1763,7 +1785,7 @@ export function Sidebar({
                   </svg>
                   New Agent Chat
                 </button>
-                {agentChats.map((chat) => (
+                {(agentShowAll ? agentChats : agentChats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
                   <ChatListItem
                     key={chat.id}
                     chat={chat}
@@ -1778,6 +1800,14 @@ export function Sidebar({
                     cacheWarmError={cacheWarmErrors.get(chat.id)}
                   />
                 ))}
+                {!agentShowAll && agentChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
+                  <button
+                    onClick={() => setAgentShowAll(true)}
+                    className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-xs font-medium hover:bg-purple-500/25 transition-all"
+                  >
+                    Show {agentChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
+                  </button>
+                )}
                 {agentChats.length === 0 && (
                   <p className="text-center text-white/20 text-xs py-3 px-2">
                     Agent chats have persistent memory
@@ -1857,8 +1887,8 @@ export function Sidebar({
             </button>
           </div>
           {/* Scrollable chat list */}
-          <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex min-h-0">
-            <div ref={quickScrollRef} className="sidebar-scroll-pane flex-1 overflow-y-auto overflow-x-hidden pb-2">
+          <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex h-full min-h-0">
+            <div ref={quickScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-2">
               <div className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("quick"); onClose(); }}
@@ -1870,7 +1900,7 @@ export function Sidebar({
                   </svg>
                   New Quick Chat
                 </button>
-                {quickChats.map((chat) => (
+                {(quickShowAll ? quickChats : quickChats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
                   <ChatListItem
                     key={chat.id}
                     chat={chat}
@@ -1885,6 +1915,14 @@ export function Sidebar({
                     cacheWarmError={cacheWarmErrors.get(chat.id)}
                   />
                 ))}
+                {!quickShowAll && quickChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
+                  <button
+                    onClick={() => setQuickShowAll(true)}
+                    className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-xs font-medium hover:bg-blue-500/25 transition-all"
+                  >
+                    Show {quickChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
+                  </button>
+                )}
                 {quickChats.length === 0 && (
                   <p className="text-center text-white/20 text-xs py-3 px-2">
                     Standalone one-off conversations
