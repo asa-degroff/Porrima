@@ -73,8 +73,8 @@ const SIGMA_SETTINGS: Partial<Settings<MemorySigmaNodeAttributes, MemorySigmaEdg
 };
 
 const SIGMA_CONTAINER_STYLE = {
-  "--sigma-background-color": "#18181b",
-  backgroundColor: "#18181b",
+  "--sigma-background-color": "#000",
+  backgroundColor: "#000",
   height: "100%",
   width: "100%",
 } as CSSProperties;
@@ -317,8 +317,8 @@ export default function MemoryGraphView() {
     ? "grid min-h-0 flex-1 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_320px]"
     : "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3";
   const graphPanelClassName = isFullscreen
-    ? "relative h-full min-h-0 rounded-lg border border-white/10 bg-zinc-900 overflow-hidden"
-    : "relative min-h-[520px] rounded-lg border border-white/10 bg-zinc-900 overflow-hidden";
+    ? "relative h-full min-h-0 rounded-lg border border-white/10 bg-black overflow-hidden"
+    : "relative min-h-[520px] rounded-lg border border-white/10 bg-black overflow-hidden";
 
   useEffect(() => {
     if (!isFullscreen) return;
