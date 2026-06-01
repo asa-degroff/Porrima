@@ -1611,18 +1611,23 @@ export const streamOpenAICompat = (
         throw new Error("No response body from llama.cpp");
       }
 
-      stopPrefillMonitor?.();
-      stopPrefillMonitor = null;
-      onModelProgress?.({
-        phase: "generating",
-        modelId: model.id,
-        baseUrl: normalizeBaseUrl(model.baseUrl),
-        slotId: cacheMetadata.slotId,
-        elapsedMs: 0,
-        cacheState: "unknown",
-        confidence: cacheMetadata.slotId !== undefined ? "matched-slot" : "unknown",
-        updatedAt: Date.now(),
-      });
+      let announcedGenerating = false;
+      const announceGenerating = () => {
+        if (announcedGenerating) return;
+        announcedGenerating = true;
+        stopPrefillMonitor?.();
+        stopPrefillMonitor = null;
+        onModelProgress?.({
+          phase: "generating",
+          modelId: model.id,
+          baseUrl: normalizeBaseUrl(model.baseUrl),
+          slotId: cacheMetadata.slotId,
+          elapsedMs: 0,
+          cacheState: "unknown",
+          confidence: cacheMetadata.slotId !== undefined ? "matched-slot" : "unknown",
+          updatedAt: Date.now(),
+        });
+      };
 
       stream.push({ type: "start", partial: output } as AssistantMessageEvent);
 
@@ -1746,6 +1751,11 @@ export const streamOpenAICompat = (
       let llamaTimings: OpenAIChatChunk["timings"] | undefined;
 
       for await (const chunk of parseSSE(response.body, options?.signal)) {
+        // llama.cpp can return HTTP headers before prompt prefill completes.
+        // The first parsed SSE chunk is the reliable boundary where decoding has
+        // actually started, so keep prefill progress active until then.
+        announceGenerating();
+
         // Extract usage from final chunk
         if (chunk.usage) {
           cacheMetadata.reportedPromptTokens = chunk.usage.prompt_tokens || 0;

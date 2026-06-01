@@ -107,5 +107,48 @@ describe("token estimation for dense tool results", () => {
     expect(refined.approximateTokens).toBe(approximate);
     expect(refined.exactToolResultCount).toBe(1);
     expect(refined.estimatedTokens).toBeGreaterThan(approximate);
+    expect(refined.refinedTokens).toBe(refined.estimatedTokens);
+  });
+
+  it("keeps compaction estimates conservative while exposing lower refined display counts", async () => {
+    const content = "Plain tool output with ordinary words and spacing. ".repeat(300);
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "",
+        usage: { input: 4_000, output: 50, totalTokens: 4_050 },
+        toolResults: [{
+          toolCallId: "call_1",
+          toolName: "read_file",
+          content,
+          isError: false,
+        }],
+        timestamp: 1,
+      },
+    ];
+    const approximate = estimateContextTokens(messages, "System prompt", []);
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ n_tokens: 900 }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )));
+
+    const refined = await estimateContextTokensWithExactToolResults(
+      messages,
+      "System prompt",
+      [],
+      {
+        baseUrl: "http://localhost:32100",
+        modelId: "test-model",
+        minToolResultChars: 1,
+      },
+    );
+
+    expect(refined.approximateTokens).toBe(approximate);
+    expect(refined.exactToolResultCount).toBe(1);
+    expect(refined.exactDelta).toBe(0);
+    expect(refined.signedExactDelta).toBeLessThan(0);
+    expect(refined.estimatedTokens).toBe(approximate);
+    expect(refined.refinedTokens).toBeLessThan(approximate);
   });
 });

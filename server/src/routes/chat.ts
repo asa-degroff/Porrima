@@ -2013,6 +2013,7 @@ async function handleChatStream(
           // past the hard context cap before the next iteration even starts.
           const effectiveCWForCheck = getEffectiveContextWindow(chat, inferenceModel);
           let estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
+          let displayEstimatedTokens = estimatedTokens;
           const approximateTokens = estimatedTokens;
           if (stopReason === "toolUse" && inferenceModel?.provider === "llamacpp" && piModel.baseUrl) {
             const exactEstimate = await estimateContextTokensWithExactToolResults(
@@ -2026,11 +2027,13 @@ async function handleChatStream(
               },
             );
             estimatedTokens = exactEstimate.estimatedTokens;
+            displayEstimatedTokens = exactEstimate.refinedTokens;
             if (exactEstimate.exactToolResultCount > 0 || exactEstimate.errors.length > 0) {
               console.log(
                 `[token-estimate] chat=${chat.id} iter=${iterations} approx=${approximateTokens} ` +
                 `estimated=${estimatedTokens} exactToolResults=${exactEstimate.exactToolResultCount} ` +
-                `delta=${exactEstimate.exactDelta} elapsedMs=${exactEstimate.exactElapsedMs}` +
+                `delta=${exactEstimate.exactDelta} signedDelta=${exactEstimate.signedExactDelta} ` +
+                `display=${displayEstimatedTokens} elapsedMs=${exactEstimate.exactElapsedMs}` +
                 (exactEstimate.errors.length ? ` errors=${exactEstimate.errors.length}` : ""),
               );
             }
@@ -2044,6 +2047,7 @@ async function handleChatStream(
             toolCount: event.toolResults?.length || 0,
             usage: state.finalUsage || undefined,
             estimatedTokens,
+            displayEstimatedTokens,
           })}\n\n`);
 
           if (stopReason === "length") {

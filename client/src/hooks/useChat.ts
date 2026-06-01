@@ -200,11 +200,10 @@ export function useChat(chatId: string | null) {
   const [titleUpdate, setTitleUpdate] = useState<{ chatId: string; title: string } | null>(null);
   const [streamingSegmentIndex, setStreamingSegmentIndex] = useState<number | null>(null);
   const [streamingUsage, setStreamingUsage] = useState<MessageUsage | null>(null);
-  // Separate from streamingUsage because the server-side estimate reflects the
-  // NEXT call's input (includes accumulated tool results), not the last call's
-  // reported usage. When the estimate exceeds reported usage, we show it as a
-  // provisional ~N / max in the indicator so the user sees the payload the
-  // next iteration will actually send.
+  // Separate from streamingUsage because the server-side display estimate
+  // reflects the NEXT call's input (includes accumulated tool results), not the
+  // last call's reported usage. When it exceeds reported usage, we show it as a
+  // provisional ~N / max in the indicator.
   const [streamingEstimate, setStreamingEstimate] = useState<number | null>(null);
   const [hasBackgroundActivity, setHasBackgroundActivity] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -708,11 +707,14 @@ export function useChat(chatId: string | null) {
         }
       },
       onIteration: (info) => {
-        console.log(`[chat] iteration ${info.iteration}: stopReason=${info.stopReason} tools=${info.toolCount} est=${info.estimatedTokens ?? "?"}`);
+        console.log(`[chat] iteration ${info.iteration}: stopReason=${info.stopReason} tools=${info.toolCount} est=${info.estimatedTokens ?? "?"} displayEst=${info.displayEstimatedTokens ?? "?"}`);
         // Update live usage from iteration events so token indicator stays current during tool loops
         if (activeChatIdRef.current === streamChatId) {
           if (info.usage) setStreamingUsage(info.usage);
-          if (typeof info.estimatedTokens === "number") setStreamingEstimate(info.estimatedTokens);
+          const displayEstimate = typeof info.displayEstimatedTokens === "number"
+            ? info.displayEstimatedTokens
+            : info.estimatedTokens;
+          if (typeof displayEstimate === "number") setStreamingEstimate(displayEstimate);
         }
       },
       onModelProgress: (progress) => {

@@ -228,10 +228,16 @@ function estimateContextSize(
 }
 
 export interface ExactContextTokenEstimate {
+  /** Conservative estimate used for compaction decisions. Exact tokenization only raises this value. */
   estimatedTokens: number;
+  /** Exact-adjusted estimate for UI display. This may move down when a tool-result heuristic overcounted. */
+  refinedTokens: number;
   approximateTokens: number;
   exactToolResultCount: number;
+  /** Positive-only exact-token delta applied to `estimatedTokens`. */
   exactDelta: number;
+  /** Signed exact-token delta applied to `refinedTokens`. */
+  signedExactDelta: number;
   exactElapsedMs: number;
   errors: string[];
 }
@@ -299,9 +305,11 @@ export async function estimateContextTokensWithExactToolResults(
   const approximateTokens = estimateContextSize(messages, systemPrompt, tools);
   const base: ExactContextTokenEstimate = {
     estimatedTokens: approximateTokens,
+    refinedTokens: approximateTokens,
     approximateTokens,
     exactToolResultCount: 0,
     exactDelta: 0,
+    signedExactDelta: 0,
     exactElapsedMs: 0,
     errors: [],
   };
@@ -322,6 +330,7 @@ export async function estimateContextTokensWithExactToolResults(
   if (selected.length === 0) return base;
 
   let positiveDelta = 0;
+  let signedDelta = 0;
   for (const candidate of selected) {
     try {
       const exact = await countLlamaTextTokens(
@@ -334,13 +343,16 @@ export async function estimateContextTokensWithExactToolResults(
       base.exactToolResultCount++;
       const delta = exact.tokens - candidate.approximateTokens;
       if (delta > 0) positiveDelta += delta;
+      signedDelta += delta;
     } catch (err) {
       base.errors.push(`${candidate.label}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   base.exactDelta = positiveDelta;
+  base.signedExactDelta = signedDelta;
   base.estimatedTokens = approximateTokens + positiveDelta;
+  base.refinedTokens = Math.max(0, approximateTokens + signedDelta);
   return base;
 }
 
