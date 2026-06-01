@@ -422,32 +422,36 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
         </header>
 
         {/* Tab bar */}
-        <div className="flex items-center gap-1 px-4 py-2 border-b border-white/5 shrink-0">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                activeTab === tab.key
-                  ? "bg-purple-500/20 text-purple-200 border border-purple-400/25"
-                  : "text-white/35 hover:text-white/60 hover:bg-white/5 border border-transparent"
-              }`}
-            >
-              {tab.icon}
-              {tab.label}
-              {tab.key === "extraction" && (
-                <span className={`ml-1 ${connected ? "text-emerald-400/60" : "text-white/20"}`}>
-                  {connected ? "●" : "○"}
-                </span>
-              )}
-              {tab.key === "memories" && memoryStatus && (
-                <span className="ml-1 text-white/25">{memoryStatus.memoryCount}</span>
-              )}
-              {tab.key === "blocks" && blocks.length > 0 && (
-                <span className="ml-1 text-white/25">{blocks.length}</span>
-              )}
-            </button>
-          ))}
+        <div className="border-b border-white/5 shrink-0">
+          <div className="overflow-x-auto px-4 py-2 custom-scrollbar">
+            <div className="flex w-max items-center gap-1">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveTab(tab.key)}
+                  className={`flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                    activeTab === tab.key
+                      ? "bg-purple-500/20 text-purple-200 border border-purple-400/25"
+                      : "text-white/35 hover:text-white/60 hover:bg-white/5 border border-transparent"
+                  }`}
+                >
+                  {tab.icon}
+                  {tab.label}
+                  {tab.key === "extraction" && (
+                    <span className={`ml-1 ${connected ? "text-emerald-400/60" : "text-white/20"}`}>
+                      {connected ? "●" : "○"}
+                    </span>
+                  )}
+                  {tab.key === "memories" && memoryStatus && (
+                    <span className="ml-1 text-white/25">{memoryStatus.memoryCount}</span>
+                  )}
+                  {tab.key === "blocks" && blocks.length > 0 && (
+                    <span className="ml-1 text-white/25">{blocks.length}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* Tab content */}

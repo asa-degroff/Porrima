@@ -336,23 +336,25 @@ export default function MemoryGraphView() {
 
   return (
     <div className={rootClassName}>
-      <div className="flex flex-wrap items-center gap-2 shrink-0">
-        <div className="flex gap-1 flex-wrap">
-          {MEMORY_GRAPH_CATEGORIES.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => updateGraphSettings({ category: cat })}
-              className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-all ${
-                category === cat
-                  ? "bg-purple-500/30 text-purple-200 border border-purple-400/30"
-                  : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
-              }`}
-            >
-              {cat === "all" ? "All" : cat}
-            </button>
-          ))}
+      <div className="flex min-w-0 shrink-0 flex-col gap-2 sm:flex-row sm:items-start">
+        <div className="-mx-4 min-w-0 overflow-x-auto px-4 pb-1 custom-scrollbar sm:mx-0 sm:flex-1 sm:px-0">
+          <div className="flex w-max gap-1 sm:w-auto sm:flex-wrap">
+            {MEMORY_GRAPH_CATEGORIES.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => updateGraphSettings({ category: cat })}
+                className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium transition-all ${
+                  category === cat
+                    ? "bg-purple-500/30 text-purple-200 border border-purple-400/30"
+                    : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
+                }`}
+              >
+                {cat === "all" ? "All" : cat}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 sm:ml-auto sm:justify-end">
           <Dropdown
             state={scopeDd}
             triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none hover:bg-white/10 transition-all cursor-pointer shrink-0"
@@ -365,7 +367,7 @@ export default function MemoryGraphView() {
               </button>
             ))}
           </Dropdown>
-          <label className="flex items-center gap-1.5 text-[10px] text-white/50">
+          <label className="flex shrink-0 items-center gap-1.5 text-[10px] text-white/50">
             <input
               type="checkbox"
               checked={includeSuperseded}
@@ -377,7 +379,7 @@ export default function MemoryGraphView() {
           <button
             onClick={loadGraph}
             disabled={loading}
-            className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-[10px] text-white/60 hover:bg-white/10 hover:text-white/80 transition-all disabled:opacity-50"
+            className="shrink-0 px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-[10px] text-white/60 hover:bg-white/10 hover:text-white/80 transition-all disabled:opacity-50"
           >
             Refresh
           </button>
@@ -386,7 +388,7 @@ export default function MemoryGraphView() {
             onClick={() => setIsFullscreen((value) => !value)}
             aria-label={isFullscreen ? "Exit fullscreen memory graph" : "Open fullscreen memory graph"}
             title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-            className="w-7 h-7 flex items-center justify-center rounded-lg bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 hover:text-white/85 transition-all"
+            className="w-7 h-7 flex shrink-0 items-center justify-center rounded-lg bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 hover:text-white/85 transition-all"
           >
             {isFullscreen ? <ExitFullscreenIcon /> : <FullscreenIcon />}
           </button>
@@ -437,7 +439,7 @@ export default function MemoryGraphView() {
             ))}
           </Dropdown>
         </label>
-        <div className="relative ml-auto min-w-[220px]">
+        <div className="relative w-full min-w-0 sm:ml-auto sm:w-auto sm:min-w-[220px]">
           <input
             type="text"
             value={searchQuery}
