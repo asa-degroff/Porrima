@@ -73,8 +73,8 @@ const SIGMA_SETTINGS: Partial<Settings<MemorySigmaNodeAttributes, MemorySigmaEdg
 };
 
 const SIGMA_CONTAINER_STYLE = {
-  "--sigma-background-color": "#02040a",
-  backgroundColor: "#02040a",
+  "--sigma-background-color": "#18181b",
+  backgroundColor: "#18181b",
   height: "100%",
   width: "100%",
 } as CSSProperties;
@@ -311,14 +311,14 @@ export default function MemoryGraphView() {
   );
   const viewportMode = isFullscreen ? "fullscreen" : "modal";
   const rootClassName = isFullscreen
-    ? "fixed inset-0 z-[10000] flex flex-col gap-3 overflow-hidden bg-[#111318] p-4 sm:p-5"
-    : "min-h-full space-y-3 bg-[#111318] p-4";
+    ? "fixed inset-0 z-[10000] flex flex-col gap-3 overflow-hidden bg-zinc-900 p-4 sm:p-5"
+    : "min-h-full space-y-3 p-4";
   const graphGridClassName = isFullscreen
     ? "grid min-h-0 flex-1 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_320px]"
     : "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3";
   const graphPanelClassName = isFullscreen
-    ? "relative h-full min-h-0 rounded-lg border border-white/10 bg-[#02040a] overflow-hidden shadow-[inset_0_0_0_1px_rgba(255,255,255,0.03)]"
-    : "relative min-h-[520px] rounded-lg border border-white/10 bg-[#02040a] overflow-hidden shadow-[inset_0_0_0_1px_rgba(255,255,255,0.03)]";
+    ? "relative h-full min-h-0 rounded-lg border border-white/10 bg-zinc-900 overflow-hidden"
+    : "relative min-h-[520px] rounded-lg border border-white/10 bg-zinc-900 overflow-hidden";
 
   useEffect(() => {
     if (!isFullscreen) return;
@@ -930,8 +930,8 @@ function MemoryGraphDetails({
   fullscreen?: boolean;
 }) {
   const className = fullscreen
-    ? "h-full min-h-0 overflow-y-auto rounded-lg border border-white/10 bg-[#111318] p-3 text-xs text-white/30"
-    : "min-h-[180px] rounded-lg border border-white/10 bg-[#111318] p-3 text-xs text-white/30";
+    ? "h-full min-h-0 overflow-y-auto rounded-lg border border-white/10 bg-zinc-900 p-3 text-xs text-white/30"
+    : "min-h-[180px] rounded-lg border border-white/10 bg-zinc-900 p-3 text-xs text-white/30";
 
   if (!node || !graph) {
     return (
@@ -950,7 +950,7 @@ function MemoryGraphDetails({
   );
 
   return (
-    <div className={`${fullscreen ? "h-full min-h-0 overflow-y-auto" : "min-h-[300px]"} rounded-lg border border-white/10 bg-[#111318] p-3 space-y-3`}>
+    <div className={`${fullscreen ? "h-full min-h-0 overflow-y-auto" : "min-h-[300px]"} rounded-lg border border-white/10 bg-zinc-900 p-3 space-y-3`}>
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <span className="px-1.5 py-0.5 rounded text-[9px] font-medium" style={{
@@ -1055,7 +1055,7 @@ function drawMemoryNodeHover(
     const boxY = data.y - boxHeight / 2;
 
     drawRoundedRect(context, boxX, boxY, boxWidth, boxHeight, 6);
-    context.fillStyle = "#111318";
+    context.fillStyle = "#18181b";
     context.fill();
     context.lineWidth = 1;
     context.strokeStyle = "rgba(255, 255, 255, 0.18)";
