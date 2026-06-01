@@ -98,6 +98,25 @@ function estimateToolResultPromptTokens(content: string): number {
   return estimateToolResultContentTokens(content) + 20 + MESSAGE_FRAMING_TOKENS;
 }
 
+function estimateMessageContentTokens(m: ChatMessage): number {
+  let tokens = estimateTokens(m.content);
+  if (m.role === "user" && m.images?.length) tokens += m.images.length * 256;
+  if (m.role === "assistant") {
+    if (m.thinking) tokens += estimateTokens(m.thinking);
+    if (m.toolCalls) {
+      for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
+    }
+    if (m.toolResults) {
+      for (const r of m.toolResults) tokens += estimateToolResultContentTokens(r.content) + 20;
+    }
+  }
+  return tokens;
+}
+
+function scaledMessageContentTokens(m: ChatMessage, scaleFactor: number): number {
+  return Math.ceil(estimateMessageContentTokens(m) * scaleFactor);
+}
+
 /**
  * Pure character-based estimate of all in-context messages + system prompt.
  * Does not rely on LLM-reported usage. Cheap, deterministic, and unaffected
@@ -113,23 +132,20 @@ function charEstimateContextSize(
   for (const m of messages) {
     if (m._outOfContext) continue;
     total += MESSAGE_FRAMING_TOKENS;
-    if (m.role === "user") {
-      total += estimateTokens(m.content);
-      if (m.images?.length) total += m.images.length * 256;
-    } else if (m.role === "assistant") {
+    if (m.role === "assistant" && m.toolResults) {
       total += estimateTokens(m.content);
       if (m.thinking) total += estimateTokens(m.thinking);
       if (m.toolCalls) {
         for (const tc of m.toolCalls) total += estimateToolCallTokens(tc);
       }
-      if (m.toolResults) {
-        // Each tool result is its own framed pi-ai message at send time.
-        for (const r of m.toolResults) total += estimateToolResultPromptTokens(r.content);
-      }
+      // Each tool result is its own framed pi-ai message at send time.
+      for (const r of m.toolResults) total += estimateToolResultPromptTokens(r.content);
     } else if (m.role === "system") {
       // Persisted system-delta messages (memory injections) take real space
       // in the prompt — count them so compaction triggers when needed.
       total += estimateTokens(m.content);
+    } else {
+      total += estimateMessageContentTokens(m);
     }
   }
   return total;
@@ -347,17 +363,22 @@ export async function estimateContextTokensWithExactToolResults(
  *   - even the last single pair + content exceeds the budget (split won't help)
  *   - every pair would be kept (no archiving would happen)
  */
-function trySplitAssistantMessage(
-  msg: ChatMessage,
-  budgetTokens: number,
-  scaleFactor: number,
-): {
+type AssistantRetentionSplitMode = "tool-pair-tail" | "tool-payload-stripped";
+
+interface AssistantRetentionSplit {
   head: ChatMessage;
   originalPairs: number;
   archivedPairs: number;
   keptPairs: number;
   archivedTokens: number;
-} | null {
+  mode: AssistantRetentionSplitMode;
+}
+
+function trySplitAssistantMessage(
+  msg: ChatMessage,
+  budgetTokens: number,
+  scaleFactor: number,
+): AssistantRetentionSplit | null {
   if (msg.role !== "assistant") return null;
   const toolCalls = msg.toolCalls;
   const toolResults = msg.toolResults ?? [];
@@ -426,7 +447,100 @@ function trySplitAssistantMessage(
     archivedPairs: archivedCalls.length,
     keptPairs: msg.toolCalls.length,
     archivedTokens,
+    mode: "tool-pair-tail",
   };
+}
+
+function tryStripAssistantToolPayloadForTextRetention(
+  msg: ChatMessage,
+  budgetTokens: number,
+  scaleFactor: number,
+): AssistantRetentionSplit | null {
+  if (msg.role !== "assistant") return null;
+  if (!msg.content.trim()) return null;
+  // Only strip completed tool payloads. A bare tool call with no result may be
+  // a pending protocol item and should stay paired in the active transcript.
+  const hasToolPayload = Boolean(msg.toolResults?.length);
+  if (!hasToolPayload) return null;
+
+  const keptTokens = Math.ceil(estimateTokens(msg.content) * scaleFactor);
+  if (keptTokens > budgetTokens) return null;
+
+  const archivedCalls = msg.toolCalls ? structuredClone(msg.toolCalls) : undefined;
+  const archivedResults = msg.toolResults ? structuredClone(msg.toolResults) : undefined;
+  const archivedPairCount = Math.max(archivedCalls?.length ?? 0, archivedResults?.length ?? 0);
+  const head: ChatMessage = {
+    role: "assistant",
+    content: "",
+    thinking: msg.thinking,
+    toolCalls: archivedCalls,
+    toolResults: archivedResults,
+    timestamp: msg.timestamp,
+    _outOfContext: true,
+  };
+
+  msg.toolCalls = undefined;
+  msg.toolResults = undefined;
+  msg.thinking = undefined;
+
+  return {
+    head,
+    originalPairs: archivedPairCount,
+    archivedPairs: archivedPairCount,
+    keptPairs: 0,
+    archivedTokens: estimateMessageContentTokens(head),
+    mode: "tool-payload-stripped",
+  };
+}
+
+function tryCompactAssistantMessageForRetention(
+  msg: ChatMessage,
+  budgetTokens: number,
+  scaleFactor: number,
+): AssistantRetentionSplit | null {
+  // Visible assistant prose is usually the densest continuity signal. If a row
+  // has final text plus bulky tool payloads, archive the payload and keep the
+  // prose before trying to preserve any tool pairs.
+  return (
+    tryStripAssistantToolPayloadForTextRetention(msg, budgetTokens, scaleFactor) ??
+    trySplitAssistantMessage(msg, budgetTokens, scaleFactor)
+  );
+}
+
+function backfillOlderMessagesAfterSplit(
+  messages: ChatMessage[],
+  inContextIndices: number[],
+  startIC: number,
+  currentKeepFromIC: number,
+  runningTotal: number,
+  targetTokens: number,
+  effectiveEstimates: number[],
+  scaleFactor: number,
+  splitInfos: AssistantRetentionSplit[],
+): { keepFromIC: number; runningTotal: number; backfilled: number } {
+  let keepFromIC = currentKeepFromIC;
+  let backfilled = 0;
+
+  for (let ic = startIC; ic >= 0; ic--) {
+    if (runningTotal + effectiveEstimates[ic] <= targetTokens) {
+      runningTotal += effectiveEstimates[ic];
+      keepFromIC = ic;
+      backfilled++;
+      continue;
+    }
+
+    const remainingBudget = Math.max(0, targetTokens - runningTotal);
+    const candidateIdx = inContextIndices[ic];
+    const splitInfo = tryCompactAssistantMessageForRetention(messages[candidateIdx], remainingBudget, scaleFactor);
+    if (!splitInfo) break;
+
+    splitInfos.push(splitInfo);
+    runningTotal += scaledMessageContentTokens(messages[candidateIdx], scaleFactor);
+    keepFromIC = ic;
+    backfilled++;
+  }
+
+  return { keepFromIC, runningTotal, backfilled };
 }
 
 /**
@@ -525,21 +639,7 @@ export async function truncateBeforeSend(
   // Note: system-role messages contribute estimateTokens(m.content) via the
   // base assignment above — no role-specific addenda needed (no images,
   // thinking, tool calls, or tool results on system deltas).
-  const icEstimates = icIndices.map((idx) => {
-    const m = messages[idx];
-    let tokens = estimateTokens(m.content);
-    if (m.role === "user" && m.images?.length) tokens += m.images.length * 256;
-    if (m.role === "assistant") {
-      if (m.thinking) tokens += estimateTokens(m.thinking);
-      if (m.toolCalls) {
-        for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
-      }
-      if (m.toolResults) {
-        for (const r of m.toolResults) tokens += estimateToolResultContentTokens(r.content) + 20;
-      }
-    }
-    return tokens;
-  });
+  const icEstimates = icIndices.map((idx) => estimateMessageContentTokens(messages[idx]));
 
   // Apply scaling factor for accurate estimates
   const messageContentTokens = icEstimates.reduce((s, t) => s + t, 0);
@@ -571,23 +671,44 @@ export async function truncateBeforeSend(
   // the boundary message at icIndices[keepFromIC - 1] would be archived whole.
   // If it's an assistant turn with ≥2 tool-call pairs, peel its head off so
   // its tail (last N pairs + final content) stays in context.
-  let splitInfo: ReturnType<typeof trySplitAssistantMessage> | null = null;
+  const splitInfos: AssistantRetentionSplit[] = [];
   if (keepFromIC === icIndices.length) {
     // Last-resort: not even the last message fit. Split it.
     const lastOrigIdx = icIndices[icIndices.length - 1];
-    splitInfo = trySplitAssistantMessage(
+    const splitInfo = tryCompactAssistantMessageForRetention(
       messages[lastOrigIdx],
       Math.max(0, target - overheadTokens),
       scaleFactor,
     );
     if (splitInfo) {
       // Archive the split head alongside everything older than the last message.
+      splitInfos.push(splitInfo);
       keepFromIC = icIndices.length - 1;
       console.log(
         `[compaction] Mid-message split (tail): chat=${chat.id} msgIdx=${lastOrigIdx} ` +
         `originalPairs=${splitInfo.originalPairs} archivedPairs=${splitInfo.archivedPairs} ` +
-        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens}`,
+        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens} mode=${splitInfo.mode}`,
       );
+      runningTotal = overheadTokens + scaledMessageContentTokens(messages[lastOrigIdx], scaleFactor);
+      const backfill = backfillOlderMessagesAfterSplit(
+        messages,
+        icIndices,
+        icIndices.length - 2,
+        keepFromIC,
+        runningTotal,
+        target,
+        scaledEstimates,
+        scaleFactor,
+        splitInfos,
+      );
+      keepFromIC = backfill.keepFromIC;
+      runningTotal = backfill.runningTotal;
+      if (backfill.backfilled > 0) {
+        console.log(
+          `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after tail split; ` +
+          `keepFromIC=${keepFromIC} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(target)}`,
+        );
+      }
     } else {
       console.warn(`[compaction] No recent messages fit within target (overhead ${overheadTokens} alone > ${target}), keeping last 2 in-context`);
       keepFromIC = Math.max(0, icIndices.length - 2);
@@ -600,25 +721,49 @@ export async function truncateBeforeSend(
     const boundaryICIdx = keepFromIC - 1;
     const boundaryOrigIdx = icIndices[boundaryICIdx];
     const remainingBudget = Math.max(0, target - runningTotal);
-    splitInfo = trySplitAssistantMessage(
+    const splitInfo = tryCompactAssistantMessageForRetention(
       messages[boundaryOrigIdx],
       remainingBudget,
       scaleFactor,
     );
     if (splitInfo) {
+      splitInfos.push(splitInfo);
       keepFromIC = boundaryICIdx;
       console.log(
         `[compaction] Mid-message split (boundary): chat=${chat.id} msgIdx=${boundaryOrigIdx} ` +
         `originalPairs=${splitInfo.originalPairs} archivedPairs=${splitInfo.archivedPairs} ` +
-        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens}`,
+        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens} mode=${splitInfo.mode}`,
       );
+      runningTotal += scaledMessageContentTokens(messages[boundaryOrigIdx], scaleFactor);
+      const backfill = backfillOlderMessagesAfterSplit(
+        messages,
+        icIndices,
+        boundaryICIdx - 1,
+        keepFromIC,
+        runningTotal,
+        target,
+        scaledEstimates,
+        scaleFactor,
+        splitInfos,
+      );
+      keepFromIC = backfill.keepFromIC;
+      runningTotal = backfill.runningTotal;
+      if (backfill.backfilled > 0) {
+        console.log(
+          `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after boundary split; ` +
+          `keepFromIC=${keepFromIC} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(target)}`,
+        );
+      }
     }
   }
 
   const messagesToMarkCount = keepFromIC;
-  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFromIC=${keepFromIC} marking=${messagesToMarkCount}/${icIndices.length} in-context${splitInfo ? ` + split head (${splitInfo.archivedPairs} pairs)` : ""}`);
+  const splitSummary = splitInfos.length
+    ? ` + ${splitInfos.length} split head(s) (${splitInfos.reduce((sum, s) => sum + s.archivedPairs, 0)} pair(s))`
+    : "";
+  console.log(`[compaction] Pre-send budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} keepFromIC=${keepFromIC} marking=${messagesToMarkCount}/${icIndices.length} in-context${splitSummary}`);
 
-  if (messagesToMarkCount <= 0 && !splitInfo) {
+  if (messagesToMarkCount <= 0 && splitInfos.length === 0) {
     // Budget planning says keep everything AND no split occurred — nothing to
     // archive on this pass. Run the hard-cap pass so it can force aggressive
     // compaction if the actual payload still exceeds the cap.
@@ -640,7 +785,7 @@ export async function truncateBeforeSend(
     removedMessages.push(structuredClone(messages[origIdx]));
     markedIndices.push(origIdx);
   }
-  if (splitInfo) removedMessages.push(structuredClone(splitInfo.head));
+  for (const splitInfo of splitInfos) removedMessages.push(structuredClone(splitInfo.head));
 
   // Also include any already-`_outOfContext` messages that have been stripped
   // by a previous compaction pass. These messages precede the newly-compacted
@@ -708,7 +853,7 @@ export async function truncateBeforeSend(
     thinking: undefined,
     timestamp: Date.now(),
     _isCompactionSummary: true,
-    _compactedMessageCount: messagesToMarkCount + (splitInfo ? 1 : 0),
+    _compactedMessageCount: messagesToMarkCount + splitInfos.length,
     _archiveIds: archiveIds,
   };
   messages.splice(insertionIdx, 0, summaryMessage);
@@ -730,20 +875,7 @@ export async function truncateBeforeSend(
     console.log(`[compaction] Marked ${strippedDeltas} stale system-delta message(s) out-of-context in kept tail`);
   }
 
-  const estimatedRemovedTokens = removedMessages.reduce((sum, m) => {
-    let tokens = estimateTokens(m.content);
-    if (m.role === "user" && m.images?.length) tokens += m.images.length * 256;
-    if (m.role === "assistant") {
-      if (m.thinking) tokens += estimateTokens(m.thinking);
-      if (m.toolCalls) {
-        for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
-      }
-      if (m.toolResults) {
-        for (const r of m.toolResults) tokens += estimateToolResultContentTokens(r.content) + 20;
-      }
-    }
-    return sum + tokens;
-  }, 0);
+  const estimatedRemovedTokens = removedMessages.reduce((sum, m) => sum + estimateMessageContentTokens(m), 0);
 
   const inContextCount = chat.messages.filter(m => !m._outOfContext).length;
   console.log(
@@ -768,7 +900,7 @@ export async function truncateBeforeSend(
   // ("Removed N messages") doesn't report 0 when a partial compaction happened.
   const primaryResult: CompactionResult = {
     truncated: true,
-    removedCount: messagesToMarkCount + (splitInfo ? 1 : 0),
+    removedCount: messagesToMarkCount + splitInfos.length,
     removedMessages,
     estimatedTokenCount: estimatedRemovedTokens,
   };
@@ -1445,25 +1577,7 @@ export async function truncateChatHistory(
   if (!forceCompact && inContextIndices.length <= 2) return noOp;  // Auto-compaction needs 3+ in-context
 
   // Estimate tokens for each in-context message
-  const inContextEstimates = inContextIndices.map((idx) => {
-    const m = messages[idx];
-    let tokens = estimateTokens(m.content);
-    if (m.role === "user" && m.images?.length) {
-      tokens += m.images.length * 256;
-    }
-    if (m.role === "assistant") {
-      if (m.thinking) tokens += estimateTokens(m.thinking);
-      if (m.toolCalls) {
-        for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
-      }
-      if (m.toolResults) {
-        for (const r of m.toolResults) {
-          tokens += estimateToolResultContentTokens(r.content) + 20;
-        }
-      }
-    }
-    return tokens;
-  });
+  const inContextEstimates = inContextIndices.map((idx) => estimateMessageContentTokens(messages[idx]));
 
   // Account for system prompt + tool schema overhead in the budget.
   // When systemPrompt is provided, use the same scale factor approach as
@@ -1510,22 +1624,43 @@ export async function truncateChatHistory(
   // message at inContextIndices[keepFromICIdx - 1] would be archived whole.
   // If it's an assistant turn with ≥2 tool-call pairs, peel its head off so
   // its tail stays in context.
-  let splitInfo: ReturnType<typeof trySplitAssistantMessage> | null = null;
+  const splitInfos: AssistantRetentionSplit[] = [];
   if (keepFromICIdx === inContextIndices.length) {
     // Last-resort: not even the last message fit. Split it.
     const lastOrigIdx = inContextIndices[inContextIndices.length - 1];
-    splitInfo = trySplitAssistantMessage(
+    const splitInfo = tryCompactAssistantMessageForRetention(
       messages[lastOrigIdx],
       Math.max(0, targetTokens - overheadTokens),
       scaleFactor,
     );
     if (splitInfo) {
+      splitInfos.push(splitInfo);
       keepFromICIdx = inContextIndices.length - 1;
       console.log(
         `[compaction] Mid-message split (tail): chat=${chat.id} msgIdx=${lastOrigIdx} ` +
         `originalPairs=${splitInfo.originalPairs} archivedPairs=${splitInfo.archivedPairs} ` +
-        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens}`,
+        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens} mode=${splitInfo.mode}`,
       );
+      runningTotal = overheadTokens + scaledMessageContentTokens(messages[lastOrigIdx], scaleFactor);
+      const backfill = backfillOlderMessagesAfterSplit(
+        messages,
+        inContextIndices,
+        inContextIndices.length - 2,
+        keepFromICIdx,
+        runningTotal,
+        targetTokens,
+        effectiveEstimates,
+        scaleFactor,
+        splitInfos,
+      );
+      keepFromICIdx = backfill.keepFromIC;
+      runningTotal = backfill.runningTotal;
+      if (backfill.backfilled > 0) {
+        console.log(
+          `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after tail split; ` +
+          `keepFromIC=${keepFromICIdx} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(targetTokens)}`,
+        );
+      }
     } else {
       keepFromICIdx = Math.max(0, inContextIndices.length - 1);
     }
@@ -1536,34 +1671,58 @@ export async function truncateChatHistory(
     const boundaryICIdx = keepFromICIdx - 1;
     const boundaryOrigIdx = inContextIndices[boundaryICIdx];
     const remainingBudget = Math.max(0, targetTokens - runningTotal);
-    splitInfo = trySplitAssistantMessage(
+    const splitInfo = tryCompactAssistantMessageForRetention(
       messages[boundaryOrigIdx],
       remainingBudget,
       scaleFactor,
     );
     if (splitInfo) {
+      splitInfos.push(splitInfo);
       keepFromICIdx = boundaryICIdx;
       console.log(
         `[compaction] Mid-message split (boundary): chat=${chat.id} msgIdx=${boundaryOrigIdx} ` +
         `originalPairs=${splitInfo.originalPairs} archivedPairs=${splitInfo.archivedPairs} ` +
-        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens}`,
+        `keptPairs=${splitInfo.keptPairs} archivedTokens=${splitInfo.archivedTokens} mode=${splitInfo.mode}`,
       );
+      runningTotal += scaledMessageContentTokens(messages[boundaryOrigIdx], scaleFactor);
+      const backfill = backfillOlderMessagesAfterSplit(
+        messages,
+        inContextIndices,
+        boundaryICIdx - 1,
+        keepFromICIdx,
+        runningTotal,
+        targetTokens,
+        effectiveEstimates,
+        scaleFactor,
+        splitInfos,
+      );
+      keepFromICIdx = backfill.keepFromIC;
+      runningTotal = backfill.runningTotal;
+      if (backfill.backfilled > 0) {
+        console.log(
+          `[compaction] Backfilled ${backfill.backfilled} compact recent message(s) after boundary split; ` +
+          `keepFromIC=${keepFromICIdx} runningTotal=${Math.ceil(runningTotal)}/${Math.ceil(targetTokens)}`,
+        );
+      }
     }
   }
 
   // For forced compaction (manual /compact), if the budget calculation would keep
   // everything, still compact at least half the in-context messages. The user
   // explicitly asked to compact — don't skip just because it all fits.
-  if (forceCompact && keepFromICIdx === 0 && inContextIndices.length > 3) {
+  if (forceCompact && keepFromICIdx === 0 && splitInfos.length === 0 && inContextIndices.length > 3) {
     keepFromICIdx = Math.ceil(inContextIndices.length / 2);
     console.log(`[compaction] Force compact: budget keeps all, compacting first half (${keepFromICIdx} of ${inContextIndices.length} in-context messages)`);
   }
 
   const messagesToMarkCount = keepFromICIdx;
+  const splitSummary = splitInfos.length
+    ? ` + ${splitInfos.length} split head(s) (${splitInfos.reduce((sum, s) => sum + s.archivedPairs, 0)} pair(s))`
+    : "";
 
-  console.log(`[compaction] Post-response budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} target=${targetTokens} keepFromIC=${keepFromICIdx} marking=${messagesToMarkCount}/${inContextIndices.length} in-context${splitInfo ? ` + split head (${splitInfo.archivedPairs} pairs)` : ""}`);
+  console.log(`[compaction] Post-response budget: overhead=${overheadTokens} scale=${scaleFactor.toFixed(2)} target=${targetTokens} keepFromIC=${keepFromICIdx} marking=${messagesToMarkCount}/${inContextIndices.length} in-context${splitSummary}`);
 
-  if (messagesToMarkCount <= 0 && !splitInfo) return noOp;
+  if (messagesToMarkCount <= 0 && splitInfos.length === 0) return noOp;
 
   onCompacting?.();
 
@@ -1581,7 +1740,7 @@ export async function truncateChatHistory(
     removedMessages.push(structuredClone(messages[origIdx]));
     markedOriginalIndices.push(origIdx);
   }
-  if (splitInfo) removedMessages.push(structuredClone(splitInfo.head));
+  for (const splitInfo of splitInfos) removedMessages.push(structuredClone(splitInfo.head));
 
   // Also include any already-`_outOfContext` messages that have been stripped
   // by a previous compaction pass. These messages precede the newly-compacted
@@ -1646,7 +1805,7 @@ export async function truncateChatHistory(
     content: indexedSummary,
     timestamp: Date.now(),
     _isCompactionSummary: true,
-    _compactedMessageCount: messagesToMarkCount + (splitInfo ? 1 : 0),
+    _compactedMessageCount: messagesToMarkCount + splitInfos.length,
     _archiveIds: archiveIds,
   };
   messages.splice(insertionIndex, 0, summaryMessage);
@@ -1667,20 +1826,7 @@ export async function truncateChatHistory(
   }
 
   // Calculate estimated token count for logging
-  const estimatedRemovedTokens = removedMessages.reduce((sum, m) => {
-    let tokens = estimateTokens(m.content);
-    if (m.role === "user" && m.images?.length) tokens += m.images.length * 256;
-    if (m.role === "assistant") {
-      if (m.thinking) tokens += estimateTokens(m.thinking);
-      if (m.toolCalls) {
-        for (const tc of m.toolCalls) tokens += estimateToolCallTokens(tc);
-      }
-      if (m.toolResults) {
-        for (const r of m.toolResults) tokens += estimateToolResultContentTokens(r.content) + 20;
-      }
-    }
-    return sum + tokens;
-  }, 0);
+  const estimatedRemovedTokens = removedMessages.reduce((sum, m) => sum + estimateMessageContentTokens(m), 0);
 
   const inContextCount = chat.messages.filter(m => !m._outOfContext).length;
   console.log(
@@ -1705,7 +1851,7 @@ export async function truncateChatHistory(
     truncated: true,
     // Count the split (if any) as 1 compacted unit so user-facing messaging
     // ("Removed N messages") doesn't report 0 when a partial compaction happened.
-    removedCount: messagesToMarkCount + (splitInfo ? 1 : 0),
+    removedCount: messagesToMarkCount + splitInfos.length,
     removedMessages,
     estimatedTokenCount: estimatedRemovedTokens,
   };
