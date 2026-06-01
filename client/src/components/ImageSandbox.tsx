@@ -311,13 +311,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                   title="Generation controls"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z" />
-                    <path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />
-                    <path d="M12 2v2" />
-                    <path d="M12 22v-2" />
-                    <path d="m17 20.66-1-1" />
-                    <path d="M11 10a2 2 0 0 0-1-1.73V10" />
-                    <path d="M7 12a2 2 0 0 0 1-1.73V12" />
+                    <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.532a.5.5 0 0 1 0-.962L8.5 8.936A2 2 0 0 0 9.937 7.5l1.532-6.135a.5.5 0 0 1 .963 0L13.963 7.5A2 2 0 0 0 15.4 8.936l6.135 1.532a.5.5 0 0 1 0 .962L15.4 13.963a2 2 0 0 0-1.437 1.437l-1.532 6.135a.5.5 0 0 1-.963 0z" />
                   </svg>
                 </button>
                 {selectedImage && (

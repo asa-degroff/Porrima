@@ -245,12 +245,12 @@ export function ChatListItem({ chat, active, lastActive = false, cacheResidency,
           {onWarmCache && chat.type === "agent" && (
             <ContextMenuItem onClick={handleWarm} disabled={effectiveCacheWarming}>
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={effectiveCacheWarming ? "animate-pulse" : "opacity-70"} style={{ color: `rgba(var(--theme-accent), ${effectiveCacheWarming ? 0.9 : 0.7})` }}>
-                <path d="M12 2c.132 0 .263.001.393.003"/>
-                <path d="M7 5h10"/>
-                <path d="M11 4v2"/>
-                <path d="M13 4v2"/>
-                <path d="M12 8a4 4 0 0 0-4 4c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2 4 4 0 0 0-4-4Z"/>
-                <path d="M12 14v3"/>
+                <path d="M8 18c-2.2 0-4 1.8-4 4" />
+                <path d="M16 18c2.2 0 4 1.8 4 4" />
+                <path d="M7 4c0 0 1 1.3 1 3s-1 3-1 3" />
+                <path d="M12 4c0 0 1 1.3 1 3s-1 3-1 3" />
+                <path d="M17 4c0 0 1 1.3 1 3s-1 3-1 3" />
+                <path d="M5 18h14" />
               </svg>
               {effectiveCacheWarming ? "Warming..." : "Warm Cache"}
             </ContextMenuItem>
