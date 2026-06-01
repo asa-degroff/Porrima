@@ -1423,7 +1423,7 @@ export function Sidebar({
               )}
             </div>
             {projectsExpanded && (
-              <div className="flex-1 overflow-y-auto pb-1">
+              <div className="sidebar-scroll-pane flex-1 overflow-y-auto pb-1">
                 <div className="space-y-1 pl-3 pr-2">
                   {projects.map((project) => (
                     <ProjectSection
@@ -1541,7 +1541,7 @@ export function Sidebar({
           )}
            {/* Scrollable chat list */}
           {agentExpanded && (
-            <div ref={agentScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-1">
+            <div ref={agentScrollRef} className="sidebar-scroll-pane flex-1 overflow-y-auto overflow-x-hidden pb-1">
               <div className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("agent"); onClose(); }}
@@ -1629,7 +1629,7 @@ export function Sidebar({
           )}
           {/* Scrollable chat list */}
           {quickExpanded && (
-            <div ref={quickScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden pb-2">
+            <div ref={quickScrollRef} className="sidebar-scroll-pane flex-1 overflow-y-auto overflow-x-hidden pb-2">
               <div className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("quick"); onClose(); }}

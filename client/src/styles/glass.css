@@ -124,6 +124,13 @@ body::before {
   overflow-anchor: none;
 }
 
+.sidebar-scroll-pane {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  overflow-anchor: none;
+}
+
 /* Custom scrollbar for tool call containers */
 .custom-scrollbar {
   scrollbar-width: thin;

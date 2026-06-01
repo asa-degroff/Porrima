@@ -36,7 +36,13 @@ const DAMPING = 0.85; // velocity damping per frame
 const EDGE_RESISTANCE = 0.3; // resistance factor at boundaries
 const MD_BREAKPOINT = 768; // px — matches Tailwind's md: breakpoint
 const INTENT_THRESHOLD = 8; // px before a touch becomes a drawer gesture
-const AXIS_LOCK_RATIO = 1.15; // vertical intent wins slightly ambiguous gestures
+const AXIS_LOCK_RATIO = 1.15; // drawer-axis intent must win slightly ambiguous gestures
+
+function getEventTargetElement(target: EventTarget | null): Element | null {
+  if (target instanceof Element) return target;
+  if (target instanceof Node) return target.parentElement;
+  return null;
+}
 
 export function useGestureDrawer({
   isOpen,
@@ -202,9 +208,26 @@ export function useGestureDrawer({
     setIsDragging(false);
   }, []);
 
+  const touchStartedInScrollableContent = useCallback((target: EventTarget | null) => {
+    const root = containerRef.current;
+    let el = getEventTargetElement(target);
+
+    while (el && el !== root) {
+      if (el instanceof HTMLElement) {
+        const { overflowY } = window.getComputedStyle(el);
+        const canScrollY = (overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight;
+        if (canScrollY) return true;
+      }
+      el = el.parentElement;
+    }
+
+    return false;
+  }, []);
+
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length !== 1) return;
     if (window.innerWidth >= MD_BREAKPOINT) return;
+    if (isOpenRef.current && touchStartedInScrollableContent(e.target)) return;
 
     // Cancel any running snap animation so the new drag doesn't fight the
     // RAF loop for control of currentOffset.
@@ -217,7 +240,7 @@ export function useGestureDrawer({
 
     const startOffset = isOpenRef.current ? containerSizeRef.current : currentOffsetRef.current;
     startTrackingTouch(e, startOffset);
-  }, [startTrackingTouch]);
+  }, [startTrackingTouch, touchStartedInScrollableContent]);
 
   // Edge swipe: starts drag from closed state (offset 0)
   const onEdgeTouchStart = useCallback((e: React.TouchEvent) => {
@@ -255,7 +278,7 @@ export function useGestureDrawer({
 
       if (absPrimary < INTENT_THRESHOLD && absCross < INTENT_THRESHOLD) return;
 
-      if (absCross > absPrimary * AXIS_LOCK_RATIO) {
+      if (absPrimary <= absCross * AXIS_LOCK_RATIO) {
         resetTouchTracking();
         return;
       }
