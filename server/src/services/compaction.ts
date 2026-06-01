@@ -463,7 +463,8 @@ function tryStripAssistantToolPayloadForTextRetention(
   const hasToolPayload = Boolean(msg.toolResults?.length);
   if (!hasToolPayload) return null;
 
-  const keptTokens = Math.ceil(estimateTokens(msg.content) * scaleFactor);
+  const keptTokens = Math.ceil(estimateTokens(msg.content) * scaleFactor)
+    + Math.ceil(MESSAGE_FRAMING_TOKENS * scaleFactor);
   if (keptTokens > budgetTokens) return null;
 
   const archivedCalls = msg.toolCalls ? structuredClone(msg.toolCalls) : undefined;
