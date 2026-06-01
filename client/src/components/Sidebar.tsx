@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback, useId, useLayoutEffect } from "react";
 import type { ChatListItem as ChatListItemType, ChatType, Project, ProjectLocationType, SshConnection } from "../types";
 import { fetchSshConnections, type CacheResidency } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
@@ -88,6 +88,116 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
       <path d="M9 18l6-6-6-6" />
     </svg>
   );
+}
+
+const SIDEBAR_COLLAPSE_DURATION_MS = 200;
+
+function AnimatedCollapse({
+  open,
+  id,
+  closeFromHeight,
+  children,
+  className = "",
+  innerClassName = "",
+}: {
+  open: boolean;
+  id?: string;
+  closeFromHeight?: number | null;
+  children: React.ReactNode;
+  className?: string;
+  innerClassName?: string;
+}) {
+  const [shouldRender, setShouldRender] = useState(open);
+  const [maxHeight, setMaxHeight] = useState<string | undefined>(open ? undefined : "0px");
+  const [visible, setVisible] = useState(open);
+  const outerRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const outer = outerRef.current;
+    const inner = innerRef.current;
+
+    if (open) {
+      setShouldRender(true);
+      const currentHeight = outer?.offsetHeight ?? 0;
+      const targetHeight = inner?.scrollHeight ?? currentHeight;
+      setMaxHeight(`${currentHeight}px`);
+      setVisible(false);
+
+      const frame = window.requestAnimationFrame(() => {
+        setVisible(true);
+        setMaxHeight(`${targetHeight}px`);
+      });
+
+      const timer = window.setTimeout(() => {
+        setMaxHeight(undefined);
+      }, SIDEBAR_COLLAPSE_DURATION_MS);
+
+      return () => {
+        window.cancelAnimationFrame(frame);
+        window.clearTimeout(timer);
+      };
+    }
+
+    if (!shouldRender) {
+      return;
+    }
+
+    const currentHeight = closeFromHeight ?? outer?.offsetHeight ?? inner?.scrollHeight ?? 0;
+    setMaxHeight(`${currentHeight}px`);
+    setVisible(true);
+
+    const frame = window.requestAnimationFrame(() => {
+      setVisible(false);
+      setMaxHeight("0px");
+    });
+
+    const timer = window.setTimeout(() => {
+      setShouldRender(false);
+    }, SIDEBAR_COLLAPSE_DURATION_MS);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [open, shouldRender, closeFromHeight]);
+
+  if (!shouldRender && !open) return null;
+
+  return (
+    <div
+      ref={outerRef}
+      id={id}
+      aria-hidden={!open}
+      className={`overflow-hidden transition-[max-height,opacity] duration-200 ease-out motion-reduce:transition-none ${
+        visible ? "opacity-100" : "opacity-0 pointer-events-none"
+      } ${className}`}
+      style={{ maxHeight }}
+    >
+      <div ref={innerRef} className={`min-h-0 overflow-hidden ${innerClassName}`}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function useCollapsedPreviewVisible(expanded: boolean, hasPreview: boolean) {
+  const [visible, setVisible] = useState(!expanded && hasPreview);
+
+  useEffect(() => {
+    if (expanded || !hasPreview) {
+      setVisible(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setVisible(true);
+    }, SIDEBAR_COLLAPSE_DURATION_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [expanded, hasPreview]);
+
+  return visible && !expanded && hasPreview;
 }
 
 function SectionDepthShadow({ visible }: { visible: boolean }) {
@@ -662,7 +772,9 @@ function ProjectSection({
   const [changingDirectory, setChangingDirectory] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(project.name);
+  const [expandedCloseHeight, setExpandedCloseHeight] = useState<number | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const expandedContentId = useId();
 
   const handleHeaderContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -674,6 +786,13 @@ function ProjectSection({
     setContextMenu(pos);
   }, []);
   const longPressProps = useLongPress(openHeaderContextMenu);
+
+  const handleToggleExpanded = useCallback(() => {
+    if (expanded) {
+      setExpandedCloseHeight(document.getElementById(expandedContentId)?.offsetHeight ?? null);
+    }
+    onToggleExpanded();
+  }, [expanded, expandedContentId, onToggleExpanded]);
 
   // Focus name input when editing starts
   useEffect(() => {
@@ -699,6 +818,7 @@ function ProjectSection({
   };
 
   const colors = colorClasses[project.color] || colorClasses.emerald;
+  const collapsedPreviewVisible = useCollapsedPreviewVisible(expanded, chats.length > 0);
 
   const handlePinToggle = async () => {
     await onEditProject({ ...project, pinned: !project.pinned });
@@ -747,7 +867,9 @@ function ProjectSection({
         {...longPressProps}
       >
         <button
-          onClick={onToggleExpanded}
+          onClick={handleToggleExpanded}
+          aria-expanded={expanded}
+          aria-controls={expandedContentId}
           className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
         >
           <span className={colors.icon}>
@@ -868,7 +990,7 @@ function ProjectSection({
         />
       )}
       {/* Recent chat when collapsed */}
-      {!expanded && chats.length > 0 && (
+      {collapsedPreviewVisible && (
         <div className="px-2 pb-2">
           <RecentChatItem
             chat={chats[0]}
@@ -886,7 +1008,7 @@ function ProjectSection({
         </div>
       )}
       
-      {expanded && (
+      <AnimatedCollapse open={expanded} id={expandedContentId} closeFromHeight={expandedCloseHeight}>
         <div className="px-1 pb-1.5">
           <button
             onClick={() => onNewChat("agent", project.id)}
@@ -922,7 +1044,7 @@ function ProjectSection({
             </p>
           )}
         </div>
-      )}
+      </AnimatedCollapse>
     </div>
   );
 }
@@ -991,6 +1113,12 @@ export function Sidebar({
   const headerRef = useRef<HTMLDivElement>(null);
   const agentScrollRef = useRef<HTMLDivElement>(null);
   const quickScrollRef = useRef<HTMLDivElement>(null);
+  const projectsContentId = useId();
+  const agentContentId = useId();
+  const quickContentId = useId();
+  const [projectsCloseHeight, setProjectsCloseHeight] = useState<number | null>(null);
+  const [agentCloseHeight, setAgentCloseHeight] = useState<number | null>(null);
+  const [quickCloseHeight, setQuickCloseHeight] = useState<number | null>(null);
   const [agentScrolled, setAgentScrolled] = useState(false);
   const [quickScrolled, setQuickScrolled] = useState(false);
 
@@ -1068,6 +1196,27 @@ export function Sidebar({
     setSearchActive(true);
   }
 
+  const handleToggleProjectsExpanded = useCallback(() => {
+    if (projectsExpanded) {
+      setProjectsCloseHeight(document.getElementById(projectsContentId)?.offsetHeight ?? null);
+    }
+    setProjectsExpanded(!projectsExpanded);
+  }, [projectsExpanded, projectsContentId, setProjectsExpanded]);
+
+  const handleToggleAgentExpanded = useCallback(() => {
+    if (agentExpanded) {
+      setAgentCloseHeight(document.getElementById(agentContentId)?.offsetHeight ?? null);
+    }
+    setAgentExpanded(!agentExpanded);
+  }, [agentExpanded, agentContentId, setAgentExpanded]);
+
+  const handleToggleQuickExpanded = useCallback(() => {
+    if (quickExpanded) {
+      setQuickCloseHeight(document.getElementById(quickContentId)?.offsetHeight ?? null);
+    }
+    setQuickExpanded(!quickExpanded);
+  }, [quickExpanded, quickContentId, setQuickExpanded]);
+
   const agentChats = useMemo(
     () => chats.filter((c) => c.type === "agent" && !c.projectId),
     [chats]
@@ -1080,6 +1229,8 @@ export function Sidebar({
     () => chats.filter((c) => c.type === "system" && !c.projectId),
     [chats]
   );
+  const agentPreviewVisible = useCollapsedPreviewVisible(agentExpanded, agentChats.length > 0);
+  const quickPreviewVisible = useCollapsedPreviewVisible(quickExpanded, quickChats.length > 0);
 
   // Group chats by project
   const chatsByProject = useMemo(() => {
@@ -1395,7 +1546,9 @@ export function Sidebar({
           <div className={`relative flex flex-col min-h-0 border-b border-white/5 ${projectsExpanded ? "flex-1" : "shrink-0"}`}>
             <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center justify-between">
               <button
-                onClick={() => setProjectsExpanded(!projectsExpanded)}
+                onClick={handleToggleProjectsExpanded}
+                aria-expanded={projectsExpanded}
+                aria-controls={projectsContentId}
                 className="flex items-center gap-1.5 px-1 mb-1 group cursor-pointer flex-1 min-w-0"
               >
                 <span className="text-white/30 group-hover:text-white/50 transition-colors">
@@ -1422,7 +1575,7 @@ export function Sidebar({
                 </button>
               )}
             </div>
-            {projectsExpanded && (
+            <AnimatedCollapse open={projectsExpanded} id={projectsContentId} closeFromHeight={projectsCloseHeight} className="flex-1 min-h-0" innerClassName="flex min-h-0">
               <div className="sidebar-scroll-pane flex-1 overflow-y-auto pb-1">
                 <div className="space-y-1 pl-3 pr-2">
                   {projects.map((project) => (
@@ -1468,7 +1621,7 @@ export function Sidebar({
                   ))}
                 </div>
               </div>
-            )}
+            </AnimatedCollapse>
             <SectionDepthShadow visible={projectsExpanded} />
           </div>
         )}
@@ -1494,7 +1647,9 @@ export function Sidebar({
           {/* Section header — always visible */}
           <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center">
             <button
-              onClick={() => setAgentExpanded(!agentExpanded)}
+              onClick={handleToggleAgentExpanded}
+              aria-expanded={agentExpanded}
+              aria-controls={agentContentId}
               className="flex items-center gap-1.5 px-1 mb-1 group cursor-pointer flex-1 min-w-0"
             >
               <span className="text-white/30 group-hover:text-white/50 transition-colors">
@@ -1522,7 +1677,7 @@ export function Sidebar({
             </button>
           </div>
           {/* Recent chat when collapsed */}
-          {!agentExpanded && agentChats.length > 0 && (
+          {agentPreviewVisible && (
             <div className="px-2 pb-2">
               <RecentChatItem
                 chat={agentChats[0]}
@@ -1540,7 +1695,7 @@ export function Sidebar({
             </div>
           )}
            {/* Scrollable chat list */}
-          {agentExpanded && (
+          <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex min-h-0">
             <div ref={agentScrollRef} className="sidebar-scroll-pane flex-1 overflow-y-auto overflow-x-hidden pb-1">
               <div className="space-y-0.5 px-3">
                 <button
@@ -1575,7 +1730,7 @@ export function Sidebar({
                 )}
               </div>
             </div>
-          )}
+          </AnimatedCollapse>
           <SectionDepthShadow visible={agentExpanded} />
         </div>
 
@@ -1584,7 +1739,9 @@ export function Sidebar({
           {/* Section header — always visible */}
           <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center">
             <button
-              onClick={() => setQuickExpanded(!quickExpanded)}
+              onClick={handleToggleQuickExpanded}
+              aria-expanded={quickExpanded}
+              aria-controls={quickContentId}
               className="flex items-center gap-1.5 px-1 mb-1 group cursor-pointer flex-1 min-w-0"
             >
               <span className="text-white/30 group-hover:text-white/50 transition-colors">
@@ -1612,7 +1769,7 @@ export function Sidebar({
             </button>
           </div>
           {/* Recent chat when collapsed */}
-          {!quickExpanded && quickChats.length > 0 && (
+          {quickPreviewVisible && (
             <div className="px-2 pb-2">
               <RecentChatItem
                 chat={quickChats[0]}
@@ -1628,7 +1785,7 @@ export function Sidebar({
             </div>
           )}
           {/* Scrollable chat list */}
-          {quickExpanded && (
+          <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex min-h-0">
             <div ref={quickScrollRef} className="sidebar-scroll-pane flex-1 overflow-y-auto overflow-x-hidden pb-2">
               <div className="space-y-0.5 px-3">
                 <button
@@ -1663,7 +1820,7 @@ export function Sidebar({
                 )}
               </div>
             </div>
-          )}
+          </AnimatedCollapse>
           <SectionDepthShadow visible={quickExpanded} />
         </div>
 
