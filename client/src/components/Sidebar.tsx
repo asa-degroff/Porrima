@@ -181,23 +181,53 @@ function AnimatedCollapse({
   );
 }
 
-function useCollapsedPreviewVisible(expanded: boolean, hasPreview: boolean) {
-  const [visible, setVisible] = useState(!expanded && hasPreview);
+function useCollapsedPreviewFade(expanded: boolean, hasPreview: boolean) {
+  const [fadingIn, setFadingIn] = useState(!expanded && hasPreview);
 
   useEffect(() => {
     if (expanded || !hasPreview) {
-      setVisible(false);
+      setFadingIn(false);
       return;
     }
 
+    // Start invisible, fade in after collapse animation completes
+    setFadingIn(false);
     const timer = window.setTimeout(() => {
-      setVisible(true);
+      setFadingIn(true);
     }, SIDEBAR_COLLAPSE_DURATION_MS);
 
     return () => window.clearTimeout(timer);
   }, [expanded, hasPreview]);
 
-  return visible && !expanded && hasPreview;
+  // Preview is always in the DOM when collapsed (reserves layout space),
+  // but fades in after the collapse animation to avoid visual clutter mid-animation.
+  return { showPreview: !expanded && hasPreview, fadeIn: fadingIn };
+}
+
+function CollapsedPreviewFrame({
+  children,
+  fadeIn = true,
+  measureRef,
+  measuring = false,
+}: {
+  children: React.ReactNode;
+  fadeIn?: boolean;
+  measureRef?: React.RefObject<HTMLDivElement | null>;
+  measuring?: boolean;
+}) {
+  return (
+    <div
+      ref={measureRef}
+      aria-hidden={measuring || !fadeIn}
+      className={`px-2 pb-2 ${
+        measuring
+          ? "absolute left-0 right-0 top-0 invisible pointer-events-none"
+          : `transition-opacity duration-200 ease-out ${fadeIn ? "opacity-100" : "opacity-0 pointer-events-none"}`
+      }`}
+    >
+      {children}
+    </div>
+  );
 }
 
 function SectionDepthShadow({ visible }: { visible: boolean }) {
@@ -774,6 +804,7 @@ function ProjectSection({
   const [nameInput, setNameInput] = useState(project.name);
   const [expandedCloseHeight, setExpandedCloseHeight] = useState<number | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const collapsedPreviewMeasureRef = useRef<HTMLDivElement>(null);
   const expandedContentId = useId();
 
   const handleHeaderContextMenu = useCallback((e: React.MouseEvent) => {
@@ -789,7 +820,9 @@ function ProjectSection({
 
   const handleToggleExpanded = useCallback(() => {
     if (expanded) {
-      setExpandedCloseHeight(document.getElementById(expandedContentId)?.offsetHeight ?? null);
+      const expandedHeight = document.getElementById(expandedContentId)?.offsetHeight ?? 0;
+      const previewHeight = collapsedPreviewMeasureRef.current?.offsetHeight ?? 0;
+      setExpandedCloseHeight(Math.max(0, expandedHeight - previewHeight));
     }
     onToggleExpanded();
   }, [expanded, expandedContentId, onToggleExpanded]);
@@ -818,7 +851,7 @@ function ProjectSection({
   };
 
   const colors = colorClasses[project.color] || colorClasses.emerald;
-  const collapsedPreviewVisible = useCollapsedPreviewVisible(expanded, chats.length > 0);
+  const { showPreview: collapsedPreviewVisible, fadeIn: collapsedPreviewFade } = useCollapsedPreviewFade(expanded, chats.length > 0);
 
   const handlePinToggle = async () => {
     await onEditProject({ ...project, pinned: !project.pinned });
@@ -860,7 +893,24 @@ function ProjectSection({
   }, [project.name]);
 
   return (
-    <div className="rounded-lg bg-white/[0.03] border border-white/[0.06]">
+    <div className="relative rounded-lg bg-white/[0.03] border border-white/[0.06]">
+      {chats.length > 0 && (
+        <CollapsedPreviewFrame measureRef={collapsedPreviewMeasureRef} measuring>
+          <RecentChatItem
+            chat={chats[0]}
+            active={chats[0].id === activeChatId}
+            lastActive={chats[0].id === lastActiveChatId}
+            cacheResidency={cacheResidency?.get(chats[0].id) ?? null}
+            cacheWarming={cacheWarmingChatIds?.has(chats[0].id) ?? false}
+            cacheWarmError={cacheWarmErrors?.get(chats[0].id)}
+            onSelect={() => onSelectChat(chats[0].id)}
+            onDelete={() => onDeleteChat(chats[0].id)}
+            onSendToNotebook={onSendToNotebook}
+            onWarmCache={onWarmCache}
+            color={project.color as any}
+          />
+        </CollapsedPreviewFrame>
+      )}
       <div
         className="flex items-center gap-1.5 px-2 py-1.5 group"
         onContextMenu={handleHeaderContextMenu}
@@ -989,24 +1039,6 @@ function ProjectSection({
           onSave={onEditProject}
         />
       )}
-      {/* Recent chat when collapsed */}
-      {collapsedPreviewVisible && (
-        <div className="px-2 pb-2">
-          <RecentChatItem
-            chat={chats[0]}
-            active={chats[0].id === activeChatId}
-            lastActive={chats[0].id === lastActiveChatId}
-            cacheResidency={cacheResidency?.get(chats[0].id) ?? null}
-            cacheWarming={cacheWarmingChatIds?.has(chats[0].id) ?? false}
-            cacheWarmError={cacheWarmErrors?.get(chats[0].id)}
-            onSelect={() => onSelectChat(chats[0].id)}
-            onDelete={() => onDeleteChat(chats[0].id)}
-            onSendToNotebook={onSendToNotebook}
-            onWarmCache={onWarmCache}
-            color={project.color as any}
-          />
-        </div>
-      )}
       
       <AnimatedCollapse open={expanded} id={expandedContentId} closeFromHeight={expandedCloseHeight}>
         <div className="px-1 pb-1.5">
@@ -1045,6 +1077,24 @@ function ProjectSection({
           )}
         </div>
       </AnimatedCollapse>
+      {/* Recent chat when collapsed — reserves final height immediately, then fades in after collapse */}
+      {collapsedPreviewVisible && (
+        <CollapsedPreviewFrame fadeIn={collapsedPreviewFade}>
+          <RecentChatItem
+            chat={chats[0]}
+            active={chats[0].id === activeChatId}
+            lastActive={chats[0].id === lastActiveChatId}
+            cacheResidency={cacheResidency?.get(chats[0].id) ?? null}
+            cacheWarming={cacheWarmingChatIds?.has(chats[0].id) ?? false}
+            cacheWarmError={cacheWarmErrors?.get(chats[0].id)}
+            onSelect={() => onSelectChat(chats[0].id)}
+            onDelete={() => onDeleteChat(chats[0].id)}
+            onSendToNotebook={onSendToNotebook}
+            onWarmCache={onWarmCache}
+            color={project.color as any}
+          />
+        </CollapsedPreviewFrame>
+      )}
     </div>
   );
 }
@@ -1113,6 +1163,8 @@ export function Sidebar({
   const headerRef = useRef<HTMLDivElement>(null);
   const agentScrollRef = useRef<HTMLDivElement>(null);
   const quickScrollRef = useRef<HTMLDivElement>(null);
+  const agentPreviewMeasureRef = useRef<HTMLDivElement>(null);
+  const quickPreviewMeasureRef = useRef<HTMLDivElement>(null);
   const projectsContentId = useId();
   const agentContentId = useId();
   const quickContentId = useId();
@@ -1205,14 +1257,18 @@ export function Sidebar({
 
   const handleToggleAgentExpanded = useCallback(() => {
     if (agentExpanded) {
-      setAgentCloseHeight(document.getElementById(agentContentId)?.offsetHeight ?? null);
+      const expandedHeight = document.getElementById(agentContentId)?.offsetHeight ?? 0;
+      const previewHeight = agentPreviewMeasureRef.current?.offsetHeight ?? 0;
+      setAgentCloseHeight(Math.max(0, expandedHeight - previewHeight));
     }
     setAgentExpanded(!agentExpanded);
   }, [agentExpanded, agentContentId, setAgentExpanded]);
 
   const handleToggleQuickExpanded = useCallback(() => {
     if (quickExpanded) {
-      setQuickCloseHeight(document.getElementById(quickContentId)?.offsetHeight ?? null);
+      const expandedHeight = document.getElementById(quickContentId)?.offsetHeight ?? 0;
+      const previewHeight = quickPreviewMeasureRef.current?.offsetHeight ?? 0;
+      setQuickCloseHeight(Math.max(0, expandedHeight - previewHeight));
     }
     setQuickExpanded(!quickExpanded);
   }, [quickExpanded, quickContentId, setQuickExpanded]);
@@ -1229,8 +1285,8 @@ export function Sidebar({
     () => chats.filter((c) => c.type === "system" && !c.projectId),
     [chats]
   );
-  const agentPreviewVisible = useCollapsedPreviewVisible(agentExpanded, agentChats.length > 0);
-  const quickPreviewVisible = useCollapsedPreviewVisible(quickExpanded, quickChats.length > 0);
+  const { showPreview: agentPreviewVisible, fadeIn: agentPreviewFade } = useCollapsedPreviewFade(agentExpanded, agentChats.length > 0);
+  const { showPreview: quickPreviewVisible, fadeIn: quickPreviewFade } = useCollapsedPreviewFade(quickExpanded, quickChats.length > 0);
 
   // Group chats by project
   const chatsByProject = useMemo(() => {
@@ -1644,6 +1700,23 @@ export function Sidebar({
 
         {/* Agent Chats Section */}
         <div className={`relative flex flex-col min-h-0 border-b border-white/5 ${agentExpanded ? "flex-1" : "shrink-0"}`}>
+          {agentChats.length > 0 && (
+            <CollapsedPreviewFrame measureRef={agentPreviewMeasureRef} measuring>
+              <RecentChatItem
+                chat={agentChats[0]}
+                active={agentChats[0].id === activeChatId}
+                lastActive={agentChats[0].id === lastActiveChatId}
+                cacheResidency={cacheResidency.get(agentChats[0].id) ?? null}
+                cacheWarming={cacheWarmingChatIds.has(agentChats[0].id)}
+                cacheWarmError={cacheWarmErrors.get(agentChats[0].id)}
+                onSelect={() => { onSelectChat(agentChats[0].id); onClose(); }}
+                onDelete={() => onDeleteChat(agentChats[0].id)}
+                onSendToNotebook={onSendToNotebook}
+                onWarmCache={onWarmCache}
+                color="purple"
+              />
+            </CollapsedPreviewFrame>
+          )}
           {/* Section header — always visible */}
           <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center">
             <button
@@ -1676,24 +1749,6 @@ export function Sidebar({
               </svg>
             </button>
           </div>
-          {/* Recent chat when collapsed */}
-          {agentPreviewVisible && (
-            <div className="px-2 pb-2">
-              <RecentChatItem
-                chat={agentChats[0]}
-                active={agentChats[0].id === activeChatId}
-                lastActive={agentChats[0].id === lastActiveChatId}
-                cacheResidency={cacheResidency.get(agentChats[0].id) ?? null}
-                cacheWarming={cacheWarmingChatIds.has(agentChats[0].id)}
-                cacheWarmError={cacheWarmErrors.get(agentChats[0].id)}
-                onSelect={() => { onSelectChat(agentChats[0].id); onClose(); }}
-                onDelete={() => onDeleteChat(agentChats[0].id)}
-                onSendToNotebook={onSendToNotebook}
-                onWarmCache={onWarmCache}
-                color="purple"
-              />
-            </div>
-          )}
            {/* Scrollable chat list */}
           <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex min-h-0">
             <div ref={agentScrollRef} className="sidebar-scroll-pane flex-1 overflow-y-auto overflow-x-hidden pb-1">
@@ -1731,11 +1786,44 @@ export function Sidebar({
               </div>
             </div>
           </AnimatedCollapse>
+          {/* Recent chat when collapsed — reserves final height immediately, then fades in after collapse */}
+          {agentPreviewVisible && (
+            <CollapsedPreviewFrame fadeIn={agentPreviewFade}>
+              <RecentChatItem
+                chat={agentChats[0]}
+                active={agentChats[0].id === activeChatId}
+                lastActive={agentChats[0].id === lastActiveChatId}
+                cacheResidency={cacheResidency.get(agentChats[0].id) ?? null}
+                cacheWarming={cacheWarmingChatIds.has(agentChats[0].id)}
+                cacheWarmError={cacheWarmErrors.get(agentChats[0].id)}
+                onSelect={() => { onSelectChat(agentChats[0].id); onClose(); }}
+                onDelete={() => onDeleteChat(agentChats[0].id)}
+                onSendToNotebook={onSendToNotebook}
+                onWarmCache={onWarmCache}
+                color="purple"
+              />
+            </CollapsedPreviewFrame>
+          )}
           <SectionDepthShadow visible={agentExpanded} />
         </div>
 
         {/* Quick Chats Section */}
         <div className={`relative flex flex-col min-h-0 ${quickExpanded ? "flex-1" : "shrink-0"}`}>
+          {quickChats.length > 0 && (
+            <CollapsedPreviewFrame measureRef={quickPreviewMeasureRef} measuring>
+              <RecentChatItem
+                chat={quickChats[0]}
+                active={quickChats[0].id === activeChatId}
+                lastActive={quickChats[0].id === lastActiveChatId}
+                cacheResidency={cacheResidency.get(quickChats[0].id) ?? null}
+                cacheWarming={cacheWarmingChatIds.has(quickChats[0].id)}
+                cacheWarmError={cacheWarmErrors.get(quickChats[0].id)}
+                onSelect={() => { onSelectChat(quickChats[0].id); onClose(); }}
+                onDelete={() => onDeleteChat(quickChats[0].id)}
+                color="blue"
+              />
+            </CollapsedPreviewFrame>
+          )}
           {/* Section header — always visible */}
           <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center">
             <button
@@ -1768,22 +1856,6 @@ export function Sidebar({
               </svg>
             </button>
           </div>
-          {/* Recent chat when collapsed */}
-          {quickPreviewVisible && (
-            <div className="px-2 pb-2">
-              <RecentChatItem
-                chat={quickChats[0]}
-                active={quickChats[0].id === activeChatId}
-                lastActive={quickChats[0].id === lastActiveChatId}
-                cacheResidency={cacheResidency.get(quickChats[0].id) ?? null}
-                cacheWarming={cacheWarmingChatIds.has(quickChats[0].id)}
-                cacheWarmError={cacheWarmErrors.get(quickChats[0].id)}
-                onSelect={() => { onSelectChat(quickChats[0].id); onClose(); }}
-                onDelete={() => onDeleteChat(quickChats[0].id)}
-                color="blue"
-              />
-            </div>
-          )}
           {/* Scrollable chat list */}
           <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex min-h-0">
             <div ref={quickScrollRef} className="sidebar-scroll-pane flex-1 overflow-y-auto overflow-x-hidden pb-2">
@@ -1821,6 +1893,22 @@ export function Sidebar({
               </div>
             </div>
           </AnimatedCollapse>
+          {/* Recent chat when collapsed — reserves final height immediately, then fades in after collapse */}
+          {quickPreviewVisible && (
+            <CollapsedPreviewFrame fadeIn={quickPreviewFade}>
+              <RecentChatItem
+                chat={quickChats[0]}
+                active={quickChats[0].id === activeChatId}
+                lastActive={quickChats[0].id === lastActiveChatId}
+                cacheResidency={cacheResidency.get(quickChats[0].id) ?? null}
+                cacheWarming={cacheWarmingChatIds.has(quickChats[0].id)}
+                cacheWarmError={cacheWarmErrors.get(quickChats[0].id)}
+                onSelect={() => { onSelectChat(quickChats[0].id); onClose(); }}
+                onDelete={() => onDeleteChat(quickChats[0].id)}
+                color="blue"
+              />
+            </CollapsedPreviewFrame>
+          )}
           <SectionDepthShadow visible={quickExpanded} />
         </div>
 
