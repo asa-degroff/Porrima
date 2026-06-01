@@ -66,7 +66,7 @@ const SIGMA_SETTINGS: Partial<Settings<MemorySigmaNodeAttributes, MemorySigmaEdg
   labelRenderedSizeThreshold: 8,
   labelSize: 11,
   maxCameraRatio: 8,
-  minEdgeThickness: 0.35,
+  minEdgeThickness: 0.5,
   minCameraRatio: 0.03,
   renderLabels: true,
   zIndex: true,
@@ -808,16 +808,16 @@ function mergeEdgeAttributes(
 
 function edgeWeight(link: MemoryGraphLink): number {
   return link.type === "lineage"
-    ? 0.35
+    ? 1.0
     : Math.max(0.08, Math.min(1, (link.similarity - 0.5) * 2));
 }
 
 function edgeColor(type: MemoryGraphLink["type"]): string {
-  return type === "lineage" ? "rgba(245, 158, 11, 0.7)" : "rgba(100, 116, 139, 0.14)";
+  return type === "lineage" ? "rgba(245, 158, 11, 1.0)" : "rgba(100, 116, 139, 0.5)";
 }
 
 function edgeSize(type: MemoryGraphLink["type"], weight: number): number {
-  return type === "lineage" ? 0.95 : Math.max(0.15, weight * 0.45);
+  return type === "lineage" ? 1.0 : Math.max(0.15, weight * 0.45);
 }
 
 function seedLayout(
