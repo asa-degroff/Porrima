@@ -65,12 +65,6 @@ function hashText(text: string): string {
   return createHash("sha1").update(text).digest("hex").slice(0, 12);
 }
 
-function pushUnique(items: string[], value: string | undefined, maxItems: number): void {
-  const trimmed = value?.trim();
-  if (!trimmed || items.includes(trimmed) || items.length >= maxItems) return;
-  items.push(trimmed);
-}
-
 const OPERATIONAL_FILE_EXTENSIONS =
   "ts|tsx|js|jsx|mjs|cjs|md|json|service|db|sqlite|py|rs|go|css|html|yml|yaml|toml|sql|sh";
 
@@ -143,15 +137,31 @@ function scrubOperationalNoise(text: string | undefined): string {
     .trim();
 }
 
-function formatToolObservations(message: ChatMessage, maxItems = 4): string {
+/**
+ * Extract semantic signal from tool calls — the agent's intent, not its output.
+ * A web_search with query "X" or read_file with path "Y" carries precise signal
+ * about what territory the agent is exploring, without the noise of raw output.
+ */
+function extractToolCallSignal(toolCalls: ChatMessage["toolCalls"], maxChars = 300): string {
+  if (!toolCalls?.length) return "";
   const parts: string[] = [];
-  if (message.toolResults?.length) {
-    for (const result of message.toolResults.slice(-maxItems)) {
-      const observation = scrubOperationalNoise(clampText(result.content, 700));
-      if (observation) parts.push(`Observation: ${observation}`);
+  for (const call of toolCalls) {
+    const args = call.arguments as Record<string, any>;
+    // Extract key semantic arguments by common names
+    const signal = [
+      args.query, args.q, args.search, args.text,
+      args.path, args.file, args.filename,
+      args.url, args.term, args.blockId, args.block_id,
+      args.name, args.category, args.importance,
+    ].filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      .map((v) => v.replace(/\s+/g, " ").trim())
+      .join(" ");
+    if (signal) {
+      parts.push(`${call.name}: ${signal}`);
     }
   }
-  return parts.join("\n");
+  const joined = parts.join(" / ");
+  return joined.length > maxChars ? joined.slice(0, maxChars).trimEnd() : joined;
 }
 
 function activeRecallWindow(messages: ChatMessage[]): ChatMessage[] {
@@ -187,11 +197,18 @@ export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = 6000
       ? scrubOperationalNoise(clampText(message.thinking, 800)).replace(/\s+/g, " ")
       : "";
     const text = scrubOperationalNoise(clampText(message.content, message._isCompactionSummary ? 1600 : 1000));
-    const observations = formatToolObservations(message);
+
+    // Tool call signal — the agent's intent, not its output.
+    // A web_search call's query or read_file's path carries precise semantic signal
+    // about what territory the agent is exploring, without the noise of raw output.
+    const toolSignal = message.role === "assistant"
+      ? extractToolCallSignal(message.toolCalls)
+      : "";
+
     const combined = [
       thinking ? `Thinking: ${thinking}` : "",
       text ? `Assistant: ${text}` : "",
-      observations,
+      toolSignal ? `Tool calls: ${toolSignal}` : "",
     ].filter(Boolean).join("\n");
     if (combined) parts.push(combined);
   }
@@ -217,36 +234,45 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = 900)
     ? scrubOperationalNoise(latestThinking).replace(/\s+/g, " ")
     : "";
 
+  // Agent's visible output — the actual text the agent produced.
+  // This is valuable signal: the answer, analysis, or conclusion the agent
+  // has arrived at. Previously under-budgeted at 350 chars.
   const latestAssistantContent = latestAssistant?.content?.trim()
-    ? scrubOperationalNoise(clampSignal(latestAssistant.content, 350)).replace(/\s+/g, " ")
+    ? scrubOperationalNoise(clampSignal(latestAssistant.content, 500)).replace(/\s+/g, " ")
     : "";
 
-  const observations: string[] = [];
-  const observationMessages = latestAssistant ? [latestAssistant] : active;
-  for (const message of observationMessages) {
-    const observation = formatToolObservations(message, 2).replace(/\s+/g, " ");
-    if (observation) pushUnique(observations, observation, 3);
-  }
+  // Tool call signal — the agent's intent, extracted from call arguments.
+  // A web_search with query "X" or read_file with path "Y" carries precise
+  // semantic signal about what territory the agent is exploring.
+  // Replaces tool observations (raw output), which were noisy.
+  const toolCalls = latestAssistant
+    ? extractToolCallSignal(latestAssistant.toolCalls)
+    : "";
 
-  // Keep the current user request in the compact rerank query. Passive recall
-  // adds trajectory from later tool-loop reasoning, but the task itself is the
-  // best grounding signal when the reranker has a tight input window.
+  // User request — included but with decay. After several tool-loop iterations,
+  // the agent's trajectory (thinking + tool calls + output) is the primary signal.
+  // The user's original request has already been searched for by the initial
+  // retrieval and early passive recall turns. Deep into the run, trajectory matters more.
   const latestUser = scrubOperationalNoise(
     [...active].reverse().find((message) => message.role === "user" && !isAutomationUserPrompt(message))?.content,
   );
 
-  const hasTrajectory = Boolean(agentThinking?.trim() || latestAssistantContent || observations.length);
-  const userBudget = hasTrajectory
-    ? Math.max(260, Math.floor(maxChars * 0.45))
-    : Math.max(0, maxChars - "User request: ".length);
-  const thinkingBudget = Math.max(160, Math.floor(maxChars * 0.35));
-  const contentBudget = Math.max(120, Math.floor(maxChars * 0.25));
+  const trajectoryLength = (agentThinking?.trim().length ?? 0) + (toolCalls?.length ?? 0) + (latestAssistantContent?.length ?? 0);
+  const hasSubstantialTrajectory = trajectoryLength >= 200;
+
+  // Budget allocation: trajectory-first, user-decaying
+  const userBudget = hasSubstantialTrajectory
+    ? Math.max(100, Math.floor(maxChars * 0.15))   // 135 chars at 900 — decayed
+    : Math.max(260, Math.floor(maxChars * 0.45));   // 405 chars — full when no trajectory yet
+  const thinkingBudget = Math.max(160, Math.floor(maxChars * 0.35)); // 315
+  const toolCallBudget = Math.max(80, Math.floor(maxChars * 0.25));  // 225
+  const contentBudget = Math.max(120, Math.floor(maxChars * 0.25));  // 225
 
   const parts: string[] = [];
   if (latestUser?.trim()) parts.push(`User request: ${clampSignal(latestUser, userBudget)}`);
   if (agentThinking?.trim()) parts.push(`Agent thinking: ${clampSignal(agentThinking, thinkingBudget)}`);
+  if (toolCalls) parts.push(`Tool calls: ${clampSignal(toolCalls, toolCallBudget)}`);
   if (latestAssistantContent) parts.push(`Assistant output: ${clampSignal(latestAssistantContent, contentBudget)}`);
-  if (observations.length) parts.push(`Observed facts: ${clampSignal(observations.join(" / "), contentBudget)}`);
 
   const query = parts.join("\n").trim();
   if (!query) return "";
