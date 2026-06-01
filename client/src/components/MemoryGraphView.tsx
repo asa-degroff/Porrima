@@ -1,6 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import Graph from "graphology";
+import "@react-sigma/core/lib/style.css";
+import {
+  SigmaContainer,
+  useLoadGraph,
+  useRegisterEvents,
+  useSetSettings,
+  useSigma,
+} from "@react-sigma/core";
+import { useWorkerLayoutForceAtlas2 } from "@react-sigma/layout-forceatlas2";
+import forceAtlas2 from "graphology-layout-forceatlas2";
+import type { Settings } from "sigma/settings";
+import type { EdgeDisplayData, NodeDisplayData } from "sigma/types";
 import { fetchMemoryGraph } from "../api/client";
-import type { MemoryGraphData, MemoryGraphNode, MemoryGraphScope } from "../types";
+import type { MemoryGraphData, MemoryGraphLink, MemoryGraphNode, MemoryGraphScope } from "../types";
 import { Dropdown } from "./ui/Dropdown";
 import { useDropdown } from "../hooks/useDropdown";
 
@@ -17,12 +30,56 @@ const CATEGORY_COLORS: Record<string, string> = {
   reflection: "#818cf8",
 };
 
+const SIGMA_SETTINGS: Partial<Settings<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>> = {
+  autoCenter: true,
+  autoRescale: true,
+  defaultEdgeType: "line",
+  defaultNodeType: "circle",
+  enableEdgeEvents: false,
+  hideEdgesOnMove: true,
+  hideLabelsOnMove: true,
+  itemSizesReference: "positions",
+  labelDensity: 0.08,
+  labelGridCellSize: 96,
+  labelRenderedSizeThreshold: 8,
+  labelSize: 11,
+  maxCameraRatio: 8,
+  minCameraRatio: 0.03,
+  renderLabels: true,
+  zIndex: true,
+};
+
+type MemoryNodePosition = { x: number; y: number };
+
+type MemorySigmaNodeAttributes = {
+  x: number;
+  y: number;
+  size: number;
+  label: string;
+  color: string;
+  category: string;
+  clusterId: string;
+  hasEmbedding: boolean;
+  importance: number;
+  memoryId: string;
+  projectId?: string;
+  text: string;
+};
+
+type MemorySigmaEdgeAttributes = {
+  color: string;
+  relationType: MemoryGraphLink["type"];
+  size: number;
+  similarity: number;
+  sourceId: string;
+  targetId: string;
+  weight: number;
+};
+
 export default function MemoryGraphView() {
   const [graph, setGraph] = useState<MemoryGraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [d3Ready, setD3Ready] = useState(false);
-  const [d3Module, setD3Module] = useState<any | null>(null);
   const [category, setCategory] = useState("all");
   const [scope, setScope] = useState<MemoryGraphScope>("all");
   const [includeSuperseded, setIncludeSuperseded] = useState(false);
@@ -34,23 +91,7 @@ export default function MemoryGraphView() {
   const scopeDd = useDropdown();
   const neighborsDd = useDropdown();
   const limitDd = useDropdown();
-
-  useEffect(() => {
-    let cancelled = false;
-    import("d3")
-      .then((module) => {
-        if (!cancelled) {
-          setD3Module(module);
-          setD3Ready(true);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err.message || "Failed to load graph renderer");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const positionsRef = useRef<Map<string, MemoryNodePosition>>(new Map());
 
   const loadGraph = useCallback(() => {
     let cancelled = false;
@@ -185,7 +226,7 @@ export default function MemoryGraphView() {
             triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none hover:bg-white/10 transition-all cursor-pointer shrink-0"
             trigger={<span className="truncate flex-1 text-left">{limit}</span>}
           >
-            {[250, 500, 750, 1000].map((value) => (
+            {[250, 500, 750, 1000, 1500, 2000, 2500].map((value) => (
               <button key={value} onClick={() => { limitDd.close(); setLimit(value); }}
                 className={`w-full text-left px-3 py-2 text-[10px] transition-all ${value === limit ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
                 {value}
@@ -228,7 +269,7 @@ export default function MemoryGraphView() {
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3">
         <div className="relative min-h-[520px] rounded-lg border border-white/10 bg-black/20 overflow-hidden">
-          {(loading || !d3Ready) && (
+          {loading && (
             <div className="absolute inset-0 flex items-center justify-center text-xs text-white/35 z-10">
               Loading graph...
             </div>
@@ -238,13 +279,13 @@ export default function MemoryGraphView() {
               {error}
             </div>
           )}
-          {graph && d3Ready && !error && (
+          {graph && !error && (
             <MemoryGraphCanvas
               graph={graph}
               selectedId={selectedId}
               searchQuery={searchQuery}
-              d3={d3Module}
               onSelect={setSelectedId}
+              positionsRef={positionsRef}
             />
           )}
         </div>
@@ -258,150 +299,341 @@ function MemoryGraphCanvas({
   graph,
   selectedId,
   searchQuery,
-  d3,
   onSelect,
+  positionsRef,
 }: {
   graph: MemoryGraphData;
   selectedId: string | null;
   searchQuery: string;
-  d3: any;
   onSelect: (id: string | null) => void;
+  positionsRef: MutableRefObject<Map<string, MemoryNodePosition>>;
 }) {
-  const svgRef = useRef<SVGSVGElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const positionsRef = useRef<Map<string, { x: number; y: number; vx?: number; vy?: number }>>(new Map());
-
-  useEffect(() => {
-    const svgEl = svgRef.current;
-    const wrapEl = wrapRef.current;
-    if (!svgEl || !wrapEl || !d3) return;
-
-    let simulation: any = null;
-
-    const render = () => {
-      simulation?.stop();
-      const width = Math.max(320, wrapEl.clientWidth);
-      const height = Math.max(420, wrapEl.clientHeight);
-      const currentIds = new Set(graph.nodes.map((node) => node.id));
-      for (const id of positionsRef.current.keys()) {
-        if (!currentIds.has(id)) positionsRef.current.delete(id);
-      }
-      const nodes = graph.nodes.map((node) => {
-        const position = positionsRef.current.get(node.id);
-        return position ? { ...node, ...position } : { ...node };
-      });
-      const links = graph.links.map((link) => ({ ...link }));
-      const clusterSize = new Map(graph.clusters.map((cluster) => [cluster.id, cluster.size]));
-
-      d3.select(svgEl).selectAll("*").remove();
-      const svg = d3.select(svgEl).attr("viewBox", `0 0 ${width} ${height}`);
-      const initialTransform = d3.zoomTransform(svgEl);
-      const g = svg.append("g").attr("transform", initialTransform);
-
-      svg.on("click", () => onSelect(null));
-      svg.call(
-        d3.zoom()
-          .scaleExtent([0.25, 4])
-          .on("zoom", (event: any) => g.attr("transform", event.transform))
-      );
-
-      const link = g.append("g")
-        .selectAll("line")
-        .data(links)
-        .join("line")
-        .attr("stroke", (d: any) => d.type === "lineage" ? "rgba(251, 191, 36, 0.55)" : "rgba(148, 163, 184, 0.22)")
-        .attr("stroke-width", (d: any) => d.type === "lineage" ? 1.5 : Math.max(0.5, (d.similarity - 0.5) * 2.5))
-        .attr("stroke-dasharray", (d: any) => d.type === "lineage" ? "4 3" : null);
-
-      const node = g.append("g")
-        .selectAll("circle")
-        .data(nodes)
-        .join("circle")
-        .attr("class", "memory-node")
-        .attr("r", (d: MemoryGraphNode) => nodeRadius(d, clusterSize.get(d.clusterId) || 1))
-        .attr("fill", (d: MemoryGraphNode) => CATEGORY_COLORS[d.category] || "#cbd5e1")
-        .attr("stroke", (d: MemoryGraphNode) => nodeStroke(d, null, ""))
-        .attr("stroke-width", 1)
-        .attr("opacity", 0.9)
-        .style("cursor", "pointer")
-        .on("click", (event: MouseEvent, d: MemoryGraphNode) => {
-          event.stopPropagation();
-          onSelect(d.id);
-        })
-        .call(
-          d3.drag()
-            .on("start", (event: any, d: any) => {
-              if (!event.active) simulation.alphaTarget(0.25).restart();
-              d.fx = d.x;
-              d.fy = d.y;
-            })
-            .on("drag", (event: any, d: any) => {
-              d.fx = event.x;
-              d.fy = event.y;
-            })
-            .on("end", (event: any, d: any) => {
-              if (!event.active) simulation.alphaTarget(0);
-              d.fx = null;
-              d.fy = null;
-            })
-        );
-
-      node.append("title").text((d: MemoryGraphNode) => d.text);
-
-      simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links)
-          .id((d: MemoryGraphNode) => d.id)
-          .distance((d: any) => d.type === "lineage" ? 54 : Math.max(36, 118 - d.similarity * 72))
-          .strength((d: any) => d.type === "lineage" ? 0.18 : 0.1))
-        .force("charge", d3.forceManyBody().strength(-72))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collide", d3.forceCollide().radius((d: MemoryGraphNode) => nodeRadius(d, clusterSize.get(d.clusterId) || 1) + 4))
-        .on("tick", () => {
-          link
-            .attr("x1", (d: any) => d.source.x)
-            .attr("y1", (d: any) => d.source.y)
-            .attr("x2", (d: any) => d.target.x)
-            .attr("y2", (d: any) => d.target.y);
-          node
-            .attr("cx", (d: any) => d.x)
-            .attr("cy", (d: any) => d.y);
-          for (const d of nodes as any[]) {
-            if (Number.isFinite(d.x) && Number.isFinite(d.y)) {
-              positionsRef.current.set(d.id, { x: d.x, y: d.y, vx: d.vx, vy: d.vy });
-            }
-          }
-        });
-    };
-
-    render();
-
-    const observer = new ResizeObserver(() => render());
-    observer.observe(wrapEl);
-
-    return () => {
-      observer.disconnect();
-      simulation?.stop();
-    };
-  }, [d3, graph, onSelect]);
-
-  useEffect(() => {
-    const svgEl = svgRef.current;
-    if (!svgEl || !d3) return;
-
-    const query = searchQuery.trim().toLowerCase();
-    const dimNonMatches = Boolean(query) && graph.stats.mode !== "focused";
-    d3.select(svgEl)
-      .selectAll(".memory-node")
-      .attr("stroke", (d: MemoryGraphNode) => nodeStroke(d, selectedId, query))
-      .attr("stroke-width", (d: MemoryGraphNode) => d.id === selectedId || matchesQuery(d, query) ? 2.5 : 1)
-      .attr("opacity", (d: MemoryGraphNode) => dimNonMatches && !matchesQuery(d, query) ? 0.35 : 0.9);
-  }, [d3, graph, searchQuery, selectedId]);
+  const graphology = useMemo(
+    () => buildSigmaGraph(graph, positionsRef.current),
+    [graph, positionsRef]
+  );
 
   return (
-    <div ref={wrapRef} className="absolute inset-0">
-      <svg ref={svgRef} className="w-full h-full block" />
-    </div>
+    <SigmaContainer<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>
+      className="absolute inset-0 memory-graph-sigma"
+      settings={SIGMA_SETTINGS}
+      style={{ height: "100%", width: "100%" }}
+    >
+      <MemorySigmaController
+        graphData={graph}
+        graphology={graphology}
+        selectedId={selectedId}
+        searchQuery={searchQuery}
+        onSelect={onSelect}
+        positionsRef={positionsRef}
+      />
+    </SigmaContainer>
   );
+}
+
+function MemorySigmaController({
+  graphData,
+  graphology,
+  selectedId,
+  searchQuery,
+  onSelect,
+  positionsRef,
+}: {
+  graphData: MemoryGraphData;
+  graphology: Graph<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>;
+  selectedId: string | null;
+  searchQuery: string;
+  onSelect: (id: string | null) => void;
+  positionsRef: MutableRefObject<Map<string, MemoryNodePosition>>;
+}) {
+  const sigma = useSigma<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>();
+  const loadGraph = useLoadGraph<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>();
+  const registerEvents = useRegisterEvents<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>();
+  const setSettings = useSetSettings<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>();
+  const draggedNodeRef = useRef<string | null>(null);
+  const layoutSettings = useMemo(
+    () => ({
+      getEdgeWeight: "weight" as const,
+      settings: {
+        barnesHutOptimize: graphData.nodes.length > 600,
+        barnesHutTheta: 0.6,
+        edgeWeightInfluence: 0.6,
+        gravity: graphData.nodes.length > 1200 ? 0.35 : 0.55,
+        scalingRatio: graphData.nodes.length > 1200 ? 18 : 12,
+        slowDown: graphData.nodes.length > 1200 ? 9 : 6,
+        strongGravityMode: false,
+      },
+    }),
+    [graphData.nodes.length]
+  );
+  const layout = useWorkerLayoutForceAtlas2(layoutSettings);
+  const { start: startLayout, stop: stopLayout } = layout;
+  const loadKey = `${graphData.stats.mode}:${graphData.stats.query || ""}:${graphData.stats.shown}:${graphData.links.length}:${graphData.stats.minSimilarity}:${graphData.stats.neighbors}`;
+  const query = searchQuery.trim().toLowerCase();
+  const matchingNodeIds = useMemo(() => {
+    if (!query) return new Set<string>();
+    return new Set(
+      graphData.nodes
+        .filter((node) => matchesQuery(node, query))
+        .map((node) => node.id)
+    );
+  }, [graphData.nodes, query]);
+
+  useEffect(() => {
+    pruneSavedPositions(positionsRef.current, graphology);
+    persistGraphPositions(graphology, positionsRef.current);
+    seedLayout(graphology, graphData.nodes.length);
+    repairGraphPositions(graphology, positionsRef.current);
+    persistGraphPositions(graphology, positionsRef.current);
+    loadGraph(graphology, true);
+    sigma.refresh();
+  }, [graphData.nodes.length, graphology, loadGraph, loadKey, positionsRef, sigma]);
+
+  useEffect(() => {
+    registerEvents({
+      clickNode: ({ node }) => onSelect(node),
+      clickStage: () => onSelect(null),
+      downNode: ({ node, preventSigmaDefault }) => {
+        draggedNodeRef.current = node;
+        preventSigmaDefault();
+        setSettings({ enableCameraPanning: false });
+      },
+      mouseleave: () => {
+        if (!draggedNodeRef.current) return;
+        draggedNodeRef.current = null;
+        setSettings({ enableCameraPanning: true });
+      },
+      mousemovebody: (event) => {
+        const node = draggedNodeRef.current;
+        if (!node) return;
+        const activeGraph = sigma.getGraph();
+        if (!activeGraph.hasNode(node)) return;
+        const position = sigma.viewportToGraph(event);
+        activeGraph.setNodeAttribute(node, "x", position.x);
+        activeGraph.setNodeAttribute(node, "y", position.y);
+        positionsRef.current.set(node, position);
+        sigma.refresh({ partialGraph: { nodes: [node] }, schedule: true });
+      },
+      mouseup: () => {
+        if (!draggedNodeRef.current) return;
+        draggedNodeRef.current = null;
+        setSettings({ enableCameraPanning: true });
+      },
+    });
+  }, [onSelect, positionsRef, registerEvents, setSettings, sigma]);
+
+  useEffect(() => {
+    const dimNonMatches = Boolean(query) && graphData.stats.mode !== "focused";
+    setSettings({
+      edgeReducer: (_edge, data): Partial<EdgeDisplayData> => {
+        const connectedToSelection = Boolean(
+          selectedId && (data.sourceId === selectedId || data.targetId === selectedId)
+        );
+        const connectedToMatch = Boolean(
+          query && (matchingNodeIds.has(data.sourceId) || matchingNodeIds.has(data.targetId))
+        );
+        return {
+          ...data,
+          color: connectedToSelection
+            ? data.relationType === "lineage" ? "#facc15" : "#a78bfa"
+            : data.color,
+          hidden: dimNonMatches && !connectedToMatch,
+          size: connectedToSelection ? Math.max(1.4, data.size + 0.8) : data.size,
+          zIndex: connectedToSelection ? 2 : 0,
+        };
+      },
+      nodeReducer: (_node, data): Partial<NodeDisplayData> => {
+        const selected = data.memoryId === selectedId;
+        const matched = query ? matchesQuery(data, query) : false;
+        const dimmed = dimNonMatches && !matched;
+        return {
+          ...data,
+          color: dimmed ? "#334155" : data.color,
+          forceLabel: selected || matched,
+          highlighted: selected,
+          label: selected || matched || data.importance >= 8 ? data.label : "",
+          size: selected ? data.size + 3 : matched ? data.size + 1.6 : data.size,
+          zIndex: selected ? 4 : matched ? 3 : data.importance,
+        };
+      },
+    });
+    sigma.refresh();
+  }, [graphData.stats.mode, matchingNodeIds, query, selectedId, setSettings, sigma]);
+
+  useEffect(() => {
+    startLayout();
+    const positionTimer = window.setInterval(() => {
+      persistGraphPositions(sigma.getGraph(), positionsRef.current);
+    }, 700);
+    const stopTimer = window.setTimeout(() => {
+      stopLayout();
+      persistGraphPositions(sigma.getGraph(), positionsRef.current);
+    }, graphData.nodes.length > 1200 ? 3600 : 2400);
+
+    return () => {
+      window.clearInterval(positionTimer);
+      window.clearTimeout(stopTimer);
+      stopLayout();
+      persistGraphPositions(sigma.getGraph(), positionsRef.current);
+    };
+  }, [graphData.nodes.length, graphology, loadKey, positionsRef, sigma, startLayout, stopLayout]);
+
+  return null;
+}
+
+function buildSigmaGraph(
+  data: MemoryGraphData,
+  savedPositions: Map<string, MemoryNodePosition>
+): Graph<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes> {
+  const sigmaGraph = new Graph<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>({
+    allowSelfLoops: false,
+    multi: true,
+    type: "undirected",
+  });
+  const clusterSize = new Map(data.clusters.map((cluster) => [cluster.id, cluster.size]));
+  const clusterIndex = new Map(data.clusters.map((cluster, index) => [cluster.id, index]));
+  const clusterCount = Math.max(1, data.clusters.length);
+
+  for (const node of data.nodes) {
+    const savedPosition = savedPositions.get(node.id);
+    const position = isFinitePosition(savedPosition)
+      ? savedPosition
+      : initialNodePosition(node, clusterIndex, clusterCount);
+    sigmaGraph.addNode(node.id, {
+      x: position.x,
+      y: position.y,
+      size: nodeRadius(node, clusterSize.get(node.clusterId) || 1),
+      label: memoryLabel(node.text),
+      color: CATEGORY_COLORS[node.category] || "#cbd5e1",
+      category: node.category,
+      clusterId: node.clusterId,
+      hasEmbedding: node.hasEmbedding,
+      importance: node.importance,
+      memoryId: node.id,
+      ...(node.projectId ? { projectId: node.projectId } : {}),
+      text: node.text,
+    });
+  }
+
+  data.links.forEach((link, index) => {
+    if (!sigmaGraph.hasNode(link.source) || !sigmaGraph.hasNode(link.target) || link.source === link.target) {
+      return;
+    }
+    const weight = link.type === "lineage"
+      ? 0.35
+      : Math.max(0.08, Math.min(1, (link.similarity - 0.5) * 2));
+    sigmaGraph.addEdgeWithKey(`${link.source}:${link.target}:${link.type}:${index}`, link.source, link.target, {
+      color: link.type === "lineage" ? "#f59e0b" : "#475569",
+      relationType: link.type,
+      size: link.type === "lineage" ? 1.25 : Math.max(0.45, weight * 1.4),
+      similarity: link.similarity,
+      sourceId: link.source,
+      targetId: link.target,
+      weight,
+    });
+  });
+
+  return sigmaGraph;
+}
+
+function seedLayout(
+  graph: Graph<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>,
+  nodeCount: number
+) {
+  if (graph.order < 2) return;
+  if (nodeCount > 800) return;
+  const iterations = nodeCount > 500 ? 14 : 28;
+  forceAtlas2.assign(graph, {
+    getEdgeWeight: "weight",
+    iterations,
+    settings: {
+      barnesHutOptimize: nodeCount > 600,
+      barnesHutTheta: 0.6,
+      edgeWeightInfluence: 0.6,
+      gravity: 0.55,
+      scalingRatio: 12,
+      slowDown: 6,
+      strongGravityMode: false,
+    },
+  });
+}
+
+function pruneSavedPositions(
+  savedPositions: Map<string, MemoryNodePosition>,
+  graph: Graph<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>
+) {
+  for (const id of savedPositions.keys()) {
+    if (!graph.hasNode(id)) savedPositions.delete(id);
+  }
+}
+
+function persistGraphPositions(
+  graph: Graph<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>,
+  savedPositions: Map<string, MemoryNodePosition>
+) {
+  graph.forEachNode((id, attributes) => {
+    if (Number.isFinite(attributes.x) && Number.isFinite(attributes.y)) {
+      savedPositions.set(id, { x: attributes.x, y: attributes.y });
+    }
+  });
+}
+
+function repairGraphPositions(
+  graph: Graph<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>,
+  savedPositions: Map<string, MemoryNodePosition>
+) {
+  graph.forEachNode((id, attributes) => {
+    if (Number.isFinite(attributes.x) && Number.isFinite(attributes.y)) return;
+    const savedPosition = savedPositions.get(id);
+    const position = isFinitePosition(savedPosition)
+      ? savedPosition
+      : fallbackNodePosition(id);
+    graph.mergeNodeAttributes(id, position);
+    savedPositions.set(id, position);
+  });
+}
+
+function isFinitePosition(position: MemoryNodePosition | undefined): position is MemoryNodePosition {
+  return Boolean(position && Number.isFinite(position.x) && Number.isFinite(position.y));
+}
+
+function initialNodePosition(
+  node: MemoryGraphNode,
+  clusterIndex: Map<string, number>,
+  clusterCount: number
+): MemoryNodePosition {
+  const index = clusterIndex.get(node.clusterId) ?? 0;
+  const clusterAngle = (index / clusterCount) * Math.PI * 2;
+  const clusterRadius = 24 + Math.sqrt(index + 1) * 20;
+  const jitterAngle = hashUnit(`${node.id}:angle`) * Math.PI * 2;
+  const jitterRadius = 8 + hashUnit(`${node.id}:radius`) * 30;
+  return {
+    x: Math.cos(clusterAngle) * clusterRadius + Math.cos(jitterAngle) * jitterRadius,
+    y: Math.sin(clusterAngle) * clusterRadius + Math.sin(jitterAngle) * jitterRadius,
+  };
+}
+
+function fallbackNodePosition(id: string): MemoryNodePosition {
+  const angle = hashUnit(`${id}:fallback-angle`) * Math.PI * 2;
+  const radius = 16 + hashUnit(`${id}:fallback-radius`) * 48;
+  return {
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius,
+  };
+}
+
+function hashUnit(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967295;
+}
+
+function memoryLabel(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length > 90 ? `${compact.slice(0, 87)}...` : compact;
 }
 
 function MemoryGraphDetails({
@@ -488,14 +720,10 @@ function nodeRadius(node: MemoryGraphNode, clusterSize: number): number {
   return Math.min(13, 3.5 + node.importance * 0.45 + Math.log2(clusterSize + 1) * 0.8);
 }
 
-function nodeStroke(node: MemoryGraphNode, selectedId: string | null, query: string): string {
-  if (node.id === selectedId) return "#f8fafc";
-  if (matchesQuery(node, query)) return "#facc15";
-  if (!node.hasEmbedding) return "rgba(248, 113, 113, 0.8)";
-  return "rgba(255, 255, 255, 0.42)";
-}
-
-function matchesQuery(node: MemoryGraphNode, query: string): boolean {
+function matchesQuery(
+  node: { text: string; category: string; projectId?: string },
+  query: string
+): boolean {
   if (!query) return false;
   return (
     node.text.toLowerCase().includes(query) ||
