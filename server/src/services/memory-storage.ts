@@ -28,6 +28,8 @@ const DAILY_DIR = join(MEMORY_DIR, "daily");
 let _db: Database.Database | null = null;
 
 export const DEFAULT_VEC_DIMENSION = 1024;
+const MEMORY_GRAPH_EDGE_VERSION = "vec0-cosine-v1";
+const MEMORY_GRAPH_EDGE_NEIGHBORS = 48;
 
 function readStoredVecDimension(db: Database.Database): number {
   try {
@@ -82,6 +84,24 @@ export function getDb(): Database.Database {
       id TEXT PRIMARY KEY,
       embedding float[${vecDim}] distance_metric=cosine
     );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_graph_edges (
+      source_id TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      similarity REAL NOT NULL,
+      rank INTEGER NOT NULL,
+      embedding_version TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (source_id, target_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_graph_edges_source_rank
+      ON memory_graph_edges(source_id, rank);
+    CREATE INDEX IF NOT EXISTS idx_memory_graph_edges_target
+      ON memory_graph_edges(target_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_graph_edges_similarity
+      ON memory_graph_edges(similarity);
   `);
 
   // FTS5 full-text index (content-sync'd with memories table)
@@ -418,6 +438,7 @@ export function rebuildVecMemoriesTable(newDim: number): void {
   }
   const db = getDb();
   db.exec(`DROP TABLE IF EXISTS vec_memories`);
+  db.prepare("DELETE FROM memory_graph_edges").run();
   db.exec(`
     CREATE VIRTUAL TABLE vec_memories USING vec0(
       id TEXT PRIMARY KEY,
@@ -500,6 +521,7 @@ export async function saveMemoryStore(store: MemoryStore): Promise<void> {
 
   const save = db.transaction(() => {
     db.prepare("DELETE FROM vec_memories").run();
+    db.prepare("DELETE FROM memory_graph_edges").run();
     db.prepare("DELETE FROM memories").run();
 
     const insertMemory = db.prepare(`
@@ -577,6 +599,7 @@ export async function addMemory(memory: Memory): Promise<void> {
       memory.id,
       new Float32Array(memory.embedding)
     );
+    refreshMemoryGraphEdgesBestEffortInDb(db, memory.id, memory.embedding);
   });
   add();
 }
@@ -648,10 +671,12 @@ export async function updateMemory(
     if (updates.embedding) {
       // vec0 doesn't support UPDATE — delete + re-insert
       db.prepare("DELETE FROM vec_memories WHERE id = ?").run(id);
+      deleteMemoryGraphEdgesForMemoryInDb(db, id);
       db.prepare("INSERT INTO vec_memories (id, embedding) VALUES (?, ?)").run(
         id,
         new Float32Array(updates.embedding)
       );
+      refreshMemoryGraphEdgesBestEffortInDb(db, id, updates.embedding);
     }
 
     return true;
@@ -666,6 +691,7 @@ export async function deleteMemory(id: string): Promise<boolean> {
   const del = db.transaction(() => {
     const result = db.prepare("DELETE FROM memories WHERE id = ?").run(id);
     db.prepare("DELETE FROM vec_memories WHERE id = ?").run(id);
+    deleteMemoryGraphEdgesForMemoryInDb(db, id);
     return result.changes > 0;
   });
 
@@ -685,6 +711,206 @@ export interface MemorySearchRankingOptions {
   projectId?: string;
   crossProjectScoreMultiplier?: number;
   globalProjectScoreMultiplier?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Memory graph edge cache
+// ---------------------------------------------------------------------------
+
+export interface MemoryGraphEdgeCacheStatus {
+  requested: number;
+  cachedSources: number;
+  refreshed: number;
+  remainingMissing: number;
+}
+
+export interface MemoryGraphEdgeRow {
+  sourceId: string;
+  targetId: string;
+  similarity: number;
+  rank: number;
+}
+
+export function refreshMemoryGraphEdgesForMemory(
+  id: string,
+  neighborLimit = MEMORY_GRAPH_EDGE_NEIGHBORS
+): number {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT embedding FROM vec_memories WHERE id = ?")
+    .get(id) as { embedding: Buffer } | undefined;
+  if (!row?.embedding) {
+    db.prepare("DELETE FROM memory_graph_edges WHERE source_id = ?").run(id);
+    return 0;
+  }
+
+  return refreshMemoryGraphEdgesForMemoryInDb(
+    db,
+    id,
+    Array.from(new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4)),
+    neighborLimit
+  );
+}
+
+export function ensureMemoryGraphEdgesForIds(
+  ids: string[],
+  options: { maxRefresh?: number; neighborLimit?: number } = {}
+): MemoryGraphEdgeCacheStatus {
+  const db = getDb();
+  const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    return { requested: 0, cachedSources: 0, refreshed: 0, remainingMissing: 0 };
+  }
+
+  const cachedSources = getCachedGraphEdgeSourcesInDb(db, uniqueIds);
+  const missing = uniqueIds.filter((id) => !cachedSources.has(id));
+  const refreshIds = options.maxRefresh === undefined
+    ? missing
+    : missing.slice(0, Math.max(0, options.maxRefresh));
+  let refreshed = 0;
+
+  for (const id of refreshIds) {
+    try {
+      refreshMemoryGraphEdgesForMemory(id, options.neighborLimit ?? MEMORY_GRAPH_EDGE_NEIGHBORS);
+      refreshed += 1;
+    } catch (error: any) {
+      console.warn(`[memory] failed to refresh graph edges for ${id}:`, error?.message || error);
+    }
+  }
+
+  return {
+    requested: uniqueIds.length,
+    cachedSources: cachedSources.size + refreshed,
+    refreshed,
+    remainingMissing: Math.max(0, missing.length - refreshed),
+  };
+}
+
+export function getMemoryGraphEdgeRows(ids: string[], minSimilarity: number): MemoryGraphEdgeRow[] {
+  const db = getDb();
+  const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+  if (uniqueIds.length === 0) return [];
+
+  const idSet = new Set(uniqueIds);
+  const rows: MemoryGraphEdgeRow[] = [];
+  for (const chunk of chunkArray(uniqueIds, 800)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    const chunkRows = db
+      .prepare(
+        `SELECT source_id, target_id, similarity, rank
+         FROM memory_graph_edges
+         WHERE embedding_version = ?
+           AND source_id IN (${placeholders})
+           AND similarity >= ?
+         ORDER BY source_id, rank`
+      )
+      .all(MEMORY_GRAPH_EDGE_VERSION, ...chunk, minSimilarity) as Array<{
+      source_id: string;
+      target_id: string;
+      similarity: number;
+      rank: number;
+    }>;
+
+    for (const row of chunkRows) {
+      if (!idSet.has(row.target_id)) continue;
+      rows.push({
+        sourceId: row.source_id,
+        targetId: row.target_id,
+        similarity: row.similarity,
+        rank: row.rank,
+      });
+    }
+  }
+
+  return rows;
+}
+
+function refreshMemoryGraphEdgesForMemoryInDb(
+  db: Database.Database,
+  id: string,
+  embedding: number[],
+  neighborLimit = MEMORY_GRAPH_EDGE_NEIGHBORS
+): number {
+  if (!embedding.length) {
+    db.prepare("DELETE FROM memory_graph_edges WHERE source_id = ?").run(id);
+    return 0;
+  }
+
+  const limit = Math.max(1, Math.trunc(neighborLimit));
+  const now = new Date().toISOString();
+  const rows = db
+    .prepare("SELECT id, distance FROM vec_memories WHERE embedding MATCH ? ORDER BY distance LIMIT ?")
+    .all(new Float32Array(embedding), limit + 1) as Array<{ id: string; distance: number }>;
+
+  db.prepare("DELETE FROM memory_graph_edges WHERE source_id = ?").run(id);
+  const insert = db.prepare(`
+    INSERT OR REPLACE INTO memory_graph_edges (
+      source_id, target_id, similarity, rank, embedding_version, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  let rank = 0;
+  for (const row of rows) {
+    if (row.id === id) continue;
+    rank += 1;
+    insert.run(
+      id,
+      row.id,
+      roundGraphSimilarity(1 - row.distance),
+      rank,
+      MEMORY_GRAPH_EDGE_VERSION,
+      now
+    );
+    if (rank >= limit) break;
+  }
+
+  return rank;
+}
+
+function refreshMemoryGraphEdgesBestEffortInDb(
+  db: Database.Database,
+  id: string,
+  embedding: number[]
+): void {
+  try {
+    refreshMemoryGraphEdgesForMemoryInDb(db, id, embedding);
+  } catch (error: any) {
+    console.warn(`[memory] failed to refresh graph edges for ${id}:`, error?.message || error);
+  }
+}
+
+function deleteMemoryGraphEdgesForMemoryInDb(db: Database.Database, id: string): void {
+  db.prepare("DELETE FROM memory_graph_edges WHERE source_id = ? OR target_id = ?").run(id, id);
+}
+
+function getCachedGraphEdgeSourcesInDb(db: Database.Database, ids: string[]): Set<string> {
+  const sources = new Set<string>();
+  for (const chunk of chunkArray(ids, 800)) {
+    const placeholders = chunk.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT source_id
+         FROM memory_graph_edges
+         WHERE embedding_version = ?
+           AND source_id IN (${placeholders})`
+      )
+      .all(MEMORY_GRAPH_EDGE_VERSION, ...chunk) as Array<{ source_id: string }>;
+    for (const row of rows) sources.add(row.source_id);
+  }
+  return sources;
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function roundGraphSimilarity(value: number): number {
+  return Math.round(value * 10000) / 10000;
 }
 
 /**

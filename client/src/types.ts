@@ -530,6 +530,9 @@ export interface MemoryGraphData {
     limit: number;
     capped: boolean;
     mode: "overview" | "focused";
+    edgeSource: "pairwise" | "cache" | "hybrid";
+    edgeCacheCoverage: number;
+    edgeCacheRefreshed: number;
     query?: string;
   };
 }

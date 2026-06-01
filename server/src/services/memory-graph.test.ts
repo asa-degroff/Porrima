@@ -83,4 +83,25 @@ describe("memory graph builder", () => {
     expect(graph.stats.shown).toBe(1);
     expect(graph.stats.capped).toBe(false);
   });
+
+  it("can build clusters from cached semantic links instead of pairwise links", () => {
+    const graph = buildMemoryGraph(
+      [
+        memory("a", [1, 0]),
+        memory("b", [0, 1]),
+      ],
+      {
+        minSimilarity: 0.95,
+        semanticLinks: [{ source: "a", target: "b", similarity: 0.98, type: "semantic" }],
+        edgeSource: "cache",
+        edgeCacheCoverage: 1,
+      }
+    );
+
+    expect(graph.links).toEqual([
+      { source: "a", target: "b", similarity: 0.98, type: "semantic" },
+    ]);
+    expect(graph.clusters).toHaveLength(1);
+    expect(graph.stats.edgeSource).toBe("cache");
+  });
 });

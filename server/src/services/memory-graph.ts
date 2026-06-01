@@ -1,5 +1,10 @@
 import type { MemoryCategory, MemorySourceType } from "../types.js";
-import { getDb } from "./memory-storage.js";
+import {
+  ensureMemoryGraphEdgesForIds,
+  getDb,
+  getMemoryGraphEdgeRows,
+  type MemoryGraphEdgeCacheStatus,
+} from "./memory-storage.js";
 
 export type MemoryGraphScope = "all" | "global" | "project";
 
@@ -66,6 +71,9 @@ export interface MemoryGraphData {
     limit: number;
     capped: boolean;
     mode: "overview" | "focused";
+    edgeSource: "pairwise" | "cache" | "hybrid";
+    edgeCacheCoverage: number;
+    edgeCacheRefreshed: number;
     query?: string;
   };
 }
@@ -92,6 +100,8 @@ const DEFAULT_NEIGHBORS = 6;
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 1000;
 const MAX_FOCUSED_CANDIDATES = 4000;
+const PAIRWISE_EDGE_LIMIT = 500;
+const MAX_EDGE_CACHE_REFRESH_PER_REQUEST = 128;
 const RRF_K = 60;
 
 const GRAPH_ROW_FIELDS = `
@@ -144,6 +154,7 @@ export async function getMemoryGraph(options: MemoryGraphOptions = {}): Promise<
   }
 
   const entries = rows.map(rowToGraphEntry);
+  const edgePlan = resolveSemanticLinks(entries, minSimilarity, neighbors);
   return buildMemoryGraph(entries, {
     minSimilarity,
     neighbors,
@@ -151,6 +162,10 @@ export async function getMemoryGraph(options: MemoryGraphOptions = {}): Promise<
     total,
     ...(capped !== undefined ? { capped } : {}),
     mode: focusedMode ? "focused" : "overview",
+    semanticLinks: edgePlan.links,
+    edgeSource: edgePlan.source,
+    edgeCacheCoverage: edgePlan.cacheCoverage,
+    edgeCacheRefreshed: edgePlan.cacheRefreshed,
     ...(focusedMode && query ? { query } : {}),
   });
 }
@@ -164,6 +179,10 @@ export function buildMemoryGraph(
     total?: number;
     capped?: boolean;
     mode?: "overview" | "focused";
+    semanticLinks?: MemoryGraphLink[];
+    edgeSource?: "pairwise" | "cache" | "hybrid";
+    edgeCacheCoverage?: number;
+    edgeCacheRefreshed?: number;
     query?: string;
   } = {}
 ): MemoryGraphData {
@@ -191,7 +210,7 @@ export function buildMemoryGraph(
     clusterId: "",
   }));
 
-  const semanticLinks = buildSemanticLinks(entries, minSimilarity, neighbors);
+  const semanticLinks = options.semanticLinks ?? buildSemanticLinks(entries, minSimilarity, neighbors);
   const lineageLinks = buildLineageLinks(entries);
   const links = [...semanticLinks, ...lineageLinks];
   const clusters = assignClusters(nodes, semanticLinks);
@@ -212,9 +231,91 @@ export function buildMemoryGraph(
       limit,
       capped: options.capped ?? total > nodes.length,
       mode,
+      edgeSource: options.edgeSource ?? "pairwise",
+      edgeCacheCoverage: options.edgeCacheCoverage ?? 1,
+      edgeCacheRefreshed: options.edgeCacheRefreshed ?? 0,
       ...(options.query ? { query: options.query } : {}),
     },
   };
+}
+
+function resolveSemanticLinks(
+  entries: MemoryGraphEntry[],
+  minSimilarity: number,
+  neighbors: number
+): {
+  links: MemoryGraphLink[];
+  source: "pairwise" | "cache" | "hybrid";
+  cacheCoverage: number;
+  cacheRefreshed: number;
+} {
+  const embeddedIds = entries
+    .filter((entry) => entry.embedding?.length)
+    .map((entry) => entry.id);
+
+  if (embeddedIds.length <= PAIRWISE_EDGE_LIMIT) {
+    return {
+      links: buildSemanticLinks(entries, minSimilarity, neighbors),
+      source: "pairwise",
+      cacheCoverage: 1,
+      cacheRefreshed: 0,
+    };
+  }
+
+  const cacheStatus = ensureMemoryGraphEdgesForIds(embeddedIds, {
+    maxRefresh: MAX_EDGE_CACHE_REFRESH_PER_REQUEST,
+  });
+  const cachedLinks = buildCachedSemanticLinks(embeddedIds, minSimilarity, neighbors);
+  const cacheCoverage = computeCacheCoverage(cacheStatus);
+
+  if (cachedLinks.length > 0) {
+    return {
+      links: cachedLinks,
+      source: cacheCoverage >= 0.95 ? "cache" : "hybrid",
+      cacheCoverage,
+      cacheRefreshed: cacheStatus.refreshed,
+    };
+  }
+
+  return {
+    links: buildSemanticLinks(entries, minSimilarity, neighbors),
+    source: "pairwise",
+    cacheCoverage,
+    cacheRefreshed: cacheStatus.refreshed,
+  };
+}
+
+function buildCachedSemanticLinks(
+  ids: string[],
+  minSimilarity: number,
+  neighbors: number
+): MemoryGraphLink[] {
+  const rows = getMemoryGraphEdgeRows(ids, minSimilarity);
+  const perSource = new Map<string, number>();
+  const edgeMap = new Map<string, MemoryGraphLink>();
+
+  for (const row of rows) {
+    const used = perSource.get(row.sourceId) ?? 0;
+    if (used >= neighbors) continue;
+    perSource.set(row.sourceId, used + 1);
+
+    const [a, b] = row.sourceId < row.targetId
+      ? [row.sourceId, row.targetId]
+      : [row.targetId, row.sourceId];
+    const key = `${a}:${b}`;
+    const existing = edgeMap.get(key);
+    const similarity = roundSimilarity(row.similarity);
+    if (!existing || similarity > existing.similarity) {
+      edgeMap.set(key, { source: a, target: b, similarity, type: "semantic" });
+    }
+  }
+
+  return Array.from(edgeMap.values()).sort((a, b) => b.similarity - a.similarity);
+}
+
+function computeCacheCoverage(status: MemoryGraphEdgeCacheStatus): number {
+  if (status.requested === 0) return 1;
+  return Math.max(0, Math.min(1, status.cachedSources / status.requested));
 }
 
 function buildGraphFilter(options: {

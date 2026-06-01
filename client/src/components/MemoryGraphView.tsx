@@ -210,6 +210,15 @@ export default function MemoryGraphView() {
           <span><span className="text-white/60">{graph.clusters.length}</span> clusters</span>
           <span><span className="text-white/60">{graph.stats.semanticLinks}</span> semantic links</span>
           <span><span className="text-white/60">{graph.stats.embedded}</span> embedded</span>
+          <span>
+            <span className="text-white/60">{graph.stats.edgeSource}</span>
+            {graph.stats.edgeSource !== "pairwise" && (
+              <> {Math.round(graph.stats.edgeCacheCoverage * 100)}% cached</>
+            )}
+          </span>
+          {graph.stats.edgeCacheRefreshed > 0 && (
+            <span className="text-emerald-300/60">refreshed {graph.stats.edgeCacheRefreshed}</span>
+          )}
           {graph.stats.mode === "focused" && graph.stats.query && (
             <span className="text-purple-200/60">focused: {graph.stats.query}</span>
           )}
