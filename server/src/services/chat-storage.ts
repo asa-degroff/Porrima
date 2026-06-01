@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { readdirSync, readFileSync, existsSync, renameSync } from "fs";
 import os from "os";
 import { join } from "path";
-import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, Project, Settings, SshConnection } from "../types.js";
+import type { Chat, ChatListItem, ChatMessage, ChatMessageWindow, MemoryCategory, Project, Settings, SshConnection } from "../types.js";
 import { APP_DATA_DIR } from "./paths.js";
 import { normalizeExtractionRequestSettings } from "./extraction-settings.js";
 
@@ -2073,6 +2073,17 @@ export interface UserUIState {
   notebookLastSeen?: string | null;
   activeChatId?: string | null;
   activeView?: 'chats' | 'notebooks' | 'image-sandbox';
+  memoryGraphSettings?: MemoryGraphSettings;
+}
+
+export interface MemoryGraphSettings {
+  category: "all" | MemoryCategory;
+  scope: "all" | "global" | "project";
+  includeSuperseded: boolean;
+  minSimilarity: number;
+  neighbors: number;
+  limit: number;
+  searchQuery: string;
 }
 
 const UI_STATE_KEY = 'user_ui_state';

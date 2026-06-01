@@ -1,4 +1,4 @@
-import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, InferenceModel, Settings } from "../types";
+import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MemoryCategory, MemoryGraphScope, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, InferenceModel, Settings } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -1635,6 +1635,17 @@ export interface UserUIState {
   notebookLastSeen?: string | null;
   activeChatId?: string | null;
   activeView?: 'chats' | 'notebooks' | 'image-sandbox';
+  memoryGraphSettings?: MemoryGraphSettings;
+}
+
+export interface MemoryGraphSettings {
+  category: "all" | MemoryCategory;
+  scope: MemoryGraphScope;
+  includeSuperseded: boolean;
+  minSimilarity: number;
+  neighbors: number;
+  limit: number;
+  searchQuery: string;
 }
 
 export async function fetchUserUIState(): Promise<UserUIState> {

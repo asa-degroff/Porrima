@@ -13,12 +13,29 @@ import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { NodeHoverDrawingFunction } from "sigma/rendering";
 import type { Settings } from "sigma/settings";
 import type { EdgeDisplayData, NodeDisplayData } from "sigma/types";
-import { fetchMemoryGraph } from "../api/client";
+import { fetchMemoryGraph, fetchUserUIState, saveUserUIState, type MemoryGraphSettings } from "../api/client";
 import type { MemoryGraphData, MemoryGraphLink, MemoryGraphNode, MemoryGraphScope } from "../types";
 import { Dropdown } from "./ui/Dropdown";
 import { useDropdown } from "../hooks/useDropdown";
+import { readStoredValue, writeStoredValue } from "../lib/storage";
 
-const MEMORY_CATEGORIES = ["preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"];
+const MEMORY_CATEGORIES = ["preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"] as const;
+const MEMORY_GRAPH_CATEGORIES = ["all", ...MEMORY_CATEGORIES] as const;
+const MEMORY_GRAPH_SCOPES = ["all", "global", "project"] as const;
+const MEMORY_GRAPH_NEIGHBOR_OPTIONS = [3, 4, 6, 8, 10, 12] as const;
+const MEMORY_GRAPH_LIMIT_OPTIONS = [250, 500, 750, 1000, 1500, 2000, 2500] as const;
+const MEMORY_GRAPH_SETTINGS_STORAGE_KEY = "porrima-memory-graph-settings";
+const MIN_SIMILARITY = 0.5;
+const MAX_SIMILARITY = 0.95;
+const DEFAULT_MEMORY_GRAPH_SETTINGS: MemoryGraphSettings = {
+  category: "all",
+  scope: "all",
+  includeSuperseded: false,
+  minSimilarity: 0.9,
+  neighbors: 6,
+  limit: 500,
+  searchQuery: "",
+};
 
 const CATEGORY_COLORS: Record<string, string> = {
   preference: "#a78bfa",
@@ -89,25 +106,163 @@ type MemorySigmaEdgeAttributes = {
   weight: number;
 };
 
+type LocalMemoryGraphSettingsLoad = {
+  settings: MemoryGraphSettings;
+  hasStoredValue: boolean;
+};
+
+function loadLocalMemoryGraphSettings(): LocalMemoryGraphSettingsLoad {
+  try {
+    const stored = readStoredValue(MEMORY_GRAPH_SETTINGS_STORAGE_KEY);
+    if (stored) {
+      return {
+        settings: normalizeMemoryGraphSettings(JSON.parse(stored)),
+        hasStoredValue: true,
+      };
+    }
+  } catch (err) {
+    console.warn("Failed to load memory graph settings from localStorage:", err);
+  }
+
+  return {
+    settings: DEFAULT_MEMORY_GRAPH_SETTINGS,
+    hasStoredValue: false,
+  };
+}
+
+function saveLocalMemoryGraphSettings(settings: MemoryGraphSettings) {
+  try {
+    writeStoredValue(MEMORY_GRAPH_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch (err) {
+    console.warn("Failed to save memory graph settings to localStorage:", err);
+  }
+}
+
+function normalizeMemoryGraphSettings(value: unknown): MemoryGraphSettings {
+  const settings = isRecord(value) ? value : {};
+
+  return {
+    category: isMemoryGraphCategory(settings.category)
+      ? settings.category
+      : DEFAULT_MEMORY_GRAPH_SETTINGS.category,
+    scope: isMemoryGraphScope(settings.scope)
+      ? settings.scope
+      : DEFAULT_MEMORY_GRAPH_SETTINGS.scope,
+    includeSuperseded: typeof settings.includeSuperseded === "boolean"
+      ? settings.includeSuperseded
+      : DEFAULT_MEMORY_GRAPH_SETTINGS.includeSuperseded,
+    minSimilarity: clampPersistedNumber(
+      settings.minSimilarity,
+      MIN_SIMILARITY,
+      MAX_SIMILARITY,
+      DEFAULT_MEMORY_GRAPH_SETTINGS.minSimilarity
+    ),
+    neighbors: nearestPersistedOption(
+      settings.neighbors,
+      MEMORY_GRAPH_NEIGHBOR_OPTIONS,
+      DEFAULT_MEMORY_GRAPH_SETTINGS.neighbors
+    ),
+    limit: nearestPersistedOption(
+      settings.limit,
+      MEMORY_GRAPH_LIMIT_OPTIONS,
+      DEFAULT_MEMORY_GRAPH_SETTINGS.limit
+    ),
+    searchQuery: typeof settings.searchQuery === "string"
+      ? settings.searchQuery.slice(0, 300)
+      : DEFAULT_MEMORY_GRAPH_SETTINGS.searchQuery,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isMemoryGraphCategory(value: unknown): value is MemoryGraphSettings["category"] {
+  return typeof value === "string" && MEMORY_GRAPH_CATEGORIES.includes(value as MemoryGraphSettings["category"]);
+}
+
+function isMemoryGraphScope(value: unknown): value is MemoryGraphScope {
+  return typeof value === "string" && MEMORY_GRAPH_SCOPES.includes(value as MemoryGraphScope);
+}
+
+function clampPersistedNumber(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
+function nearestPersistedOption(
+  value: unknown,
+  options: readonly number[],
+  fallback: number
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return options.reduce((nearest, option) => (
+    Math.abs(option - value) < Math.abs(nearest - value) ? option : nearest
+  ), fallback);
+}
+
 export default function MemoryGraphView() {
+  const [initialGraphSettings] = useState(loadLocalMemoryGraphSettings);
+  const [graphSettings, setGraphSettings] = useState<MemoryGraphSettings>(initialGraphSettings.settings);
+  const [settingsLoaded, setSettingsLoaded] = useState(initialGraphSettings.hasStoredValue);
+  const [uiStateSynced, setUiStateSynced] = useState(false);
   const [graph, setGraph] = useState<MemoryGraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [category, setCategory] = useState("all");
-  const [scope, setScope] = useState<MemoryGraphScope>("all");
-  const [includeSuperseded, setIncludeSuperseded] = useState(false);
-  const [minSimilarity, setMinSimilarity] = useState(0.9);
-  const [neighbors, setNeighbors] = useState(6);
-  const [limit, setLimit] = useState(500);
-  const [searchQuery, setSearchQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const scopeDd = useDropdown();
   const neighborsDd = useDropdown();
   const limitDd = useDropdown();
   const positionsRef = useRef<Map<string, MemoryNodePosition>>(new Map());
+  const settingsTouchedRef = useRef(false);
+  const { category, scope, includeSuperseded, minSimilarity, neighbors, limit, searchQuery } = graphSettings;
+
+  const updateGraphSettings = useCallback((patch: Partial<MemoryGraphSettings>) => {
+    settingsTouchedRef.current = true;
+    setGraphSettings((current) => normalizeMemoryGraphSettings({ ...current, ...patch }));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchUserUIState()
+      .then((state) => {
+        if (cancelled) return;
+        if (state.memoryGraphSettings && !settingsTouchedRef.current) {
+          setGraphSettings(normalizeMemoryGraphSettings(state.memoryGraphSettings));
+        }
+        setSettingsLoaded(true);
+        setUiStateSynced(true);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.warn("Failed to load memory graph settings from server, using localStorage:", err);
+        setSettingsLoaded(true);
+        setUiStateSynced(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!uiStateSynced) return;
+
+    saveLocalMemoryGraphSettings(graphSettings);
+
+    const timer = window.setTimeout(() => {
+      saveUserUIState({ memoryGraphSettings: graphSettings }).catch((err) => {
+        console.warn("Failed to save memory graph settings to server:", err);
+      });
+    }, 500);
+
+    return () => window.clearTimeout(timer);
+  }, [graphSettings, uiStateSynced]);
 
   const loadGraph = useCallback(() => {
+    if (!settingsLoaded) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -135,9 +290,10 @@ export default function MemoryGraphView() {
     return () => {
       cancelled = true;
     };
-  }, [category, includeSuperseded, limit, minSimilarity, neighbors, scope, searchQuery]);
+  }, [category, includeSuperseded, limit, minSimilarity, neighbors, scope, searchQuery, settingsLoaded]);
 
   useEffect(() => {
+    if (!settingsLoaded) return;
     let cleanup: (() => void) | undefined;
     const timer = window.setTimeout(() => {
       cleanup = loadGraph();
@@ -147,7 +303,7 @@ export default function MemoryGraphView() {
       window.clearTimeout(timer);
       cleanup?.();
     };
-  }, [loadGraph]);
+  }, [loadGraph, settingsLoaded]);
 
   const selectedNode = useMemo(
     () => graph?.nodes.find((node) => node.id === selectedId) || null,
@@ -182,10 +338,10 @@ export default function MemoryGraphView() {
     <div className={rootClassName}>
       <div className="flex flex-wrap items-center gap-2 shrink-0">
         <div className="flex gap-1 flex-wrap">
-          {["all", ...MEMORY_CATEGORIES].map((cat) => (
+          {MEMORY_GRAPH_CATEGORIES.map((cat) => (
             <button
               key={cat}
-              onClick={() => setCategory(cat)}
+              onClick={() => updateGraphSettings({ category: cat })}
               className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-all ${
                 category === cat
                   ? "bg-purple-500/30 text-purple-200 border border-purple-400/30"
@@ -202,8 +358,8 @@ export default function MemoryGraphView() {
             triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none hover:bg-white/10 transition-all cursor-pointer shrink-0"
             trigger={<span className="truncate flex-1 text-left">{scope === "all" ? "All scopes" : scope === "global" ? "Global" : "Project"}</span>}
           >
-            {(["all", "global", "project"] as const).map((value) => (
-              <button key={value} onClick={() => { scopeDd.close(); setScope(value); }}
+            {MEMORY_GRAPH_SCOPES.map((value) => (
+              <button key={value} onClick={() => { scopeDd.close(); updateGraphSettings({ scope: value }); }}
                 className={`w-full text-left px-3 py-2 text-[10px] transition-all ${value === scope ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
                 {value === "all" ? "All scopes" : value === "global" ? "Global" : "Project"}
               </button>
@@ -213,7 +369,7 @@ export default function MemoryGraphView() {
             <input
               type="checkbox"
               checked={includeSuperseded}
-              onChange={(event) => setIncludeSuperseded(event.target.checked)}
+              onChange={(event) => updateGraphSettings({ includeSuperseded: event.target.checked })}
               className="accent-purple-400"
             />
             Superseded
@@ -246,7 +402,7 @@ export default function MemoryGraphView() {
             max="0.95"
             step="0.01"
             value={minSimilarity}
-            onChange={(event) => setMinSimilarity(Number(event.target.value))}
+            onChange={(event) => updateGraphSettings({ minSimilarity: Number(event.target.value) })}
             className="w-28 accent-purple-400"
           />
           <span className="text-white/60 tabular-nums">{minSimilarity.toFixed(2)}</span>
@@ -258,8 +414,8 @@ export default function MemoryGraphView() {
             triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none hover:bg-white/10 transition-all cursor-pointer shrink-0"
             trigger={<span className="truncate flex-1 text-left">{neighbors}</span>}
           >
-            {[3, 4, 6, 8, 10, 12].map((value) => (
-              <button key={value} onClick={() => { neighborsDd.close(); setNeighbors(value); }}
+            {MEMORY_GRAPH_NEIGHBOR_OPTIONS.map((value) => (
+              <button key={value} onClick={() => { neighborsDd.close(); updateGraphSettings({ neighbors: value }); }}
                 className={`w-full text-left px-3 py-2 text-[10px] transition-all ${value === neighbors ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
                 {value}
               </button>
@@ -273,8 +429,8 @@ export default function MemoryGraphView() {
             triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none hover:bg-white/10 transition-all cursor-pointer shrink-0"
             trigger={<span className="truncate flex-1 text-left">{limit}</span>}
           >
-            {[250, 500, 750, 1000, 1500, 2000, 2500].map((value) => (
-              <button key={value} onClick={() => { limitDd.close(); setLimit(value); }}
+            {MEMORY_GRAPH_LIMIT_OPTIONS.map((value) => (
+              <button key={value} onClick={() => { limitDd.close(); updateGraphSettings({ limit: value }); }}
                 className={`w-full text-left px-3 py-2 text-[10px] transition-all ${value === limit ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
                 {value}
               </button>
@@ -285,7 +441,7 @@ export default function MemoryGraphView() {
           <input
             type="text"
             value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
+            onChange={(event) => updateGraphSettings({ searchQuery: event.target.value })}
             className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30"
             placeholder="Search memories..."
           />
