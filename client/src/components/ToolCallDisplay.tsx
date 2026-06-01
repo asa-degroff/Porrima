@@ -3,6 +3,7 @@ import type { ChatToolCall, ChatToolResult, ImageAttachment } from "../types";
 import type { ToolStatus } from "../api/client";
 import { DiffView } from "./ui/DiffView";
 import { UserImage } from "./UserImage";
+import { ToolIcon, type ToolIconName } from "./ToolIcons";
 
 const statusColors = {
   running: "border-yellow-400/20 bg-yellow-500/5",
@@ -51,7 +52,7 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
     ? formatArgs(name, toolCall.arguments)
     : undefined;
 
-  const toolIcon = getToolIcon(name);
+  const iconInfo = getToolIcon(name);
 
   return (
     <div className={`my-2 rounded-lg border ${statusColors[status]} overflow-hidden max-w-full`}>
@@ -61,7 +62,9 @@ export function ToolCallDisplay({ toolCall, toolResult, liveStatus }: Props) {
         className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.02] transition-colors min-w-0 overflow-hidden"
       >
         {statusIcons[status]}
-        <span className="text-white/40 text-xs shrink-0">{toolIcon}</span>
+        <span className="text-white text-xs shrink-0 flex items-center">
+          <ToolIcon name={iconInfo} className="opacity-40" />
+        </span>
         <span className="text-xs font-medium text-white/70 shrink-0 whitespace-nowrap">
           {formatToolName(name)}
         </span>
@@ -186,24 +189,24 @@ function formatArgs(toolName: string, args: Record<string, any>): string {
   }
 }
 
-function getToolIcon(name: string): string {
-  switch (name) {
-    case "read_file": return "\u{1F4C4}";
-    case "write_file": return "\u{1F4DD}";
-    case "edit_file": return "\u{270F}\u{FE0F}";
-    case "list_files": return "\u{1F4C1}";
-    case "bash": return "$";
-    case "run_python": return "\u{1F40D}";
-    case "create_artifact": return "\u{1F3A8}";
-    case "save_memory": return "\u{1F4BE}";
-    case "search_memory": return "\u{1F50D}";
-    case "forget_memory": return "\u{1F5D1}\u{FE0F}";
-    case "ask_user": return "?";
-    case "web_fetch": return "\u{1F310}";
-    case "web_search": return "\u{1F50E}";
-    case "search_conversation": return "\u{1F50E}";
-    default: return "\u{1F527}";
-  }
+function getToolIcon(name: string): ToolIconName {
+  const svgTools: Record<string, ToolIconName> = {
+    read_file: "read_file",
+    write_file: "write_file",
+    edit_file: "edit_file",
+    list_files: "list_files",
+    bash: "bash",
+    run_python: "run_python",
+    create_artifact: "create_artifact",
+    save_memory: "save_memory",
+    search_memory: "search_memory",
+    ask_user: "ask_user",
+    web_fetch: "web_fetch",
+    web_search: "web_search",
+    search_conversation: "search_conversation",
+  };
+
+  return svgTools[name] ?? "default";
 }
 
 const MONOSPACE_TOOLS = new Set(["bash", "read_file", "run_python", "list_files", "search_memory"]);
