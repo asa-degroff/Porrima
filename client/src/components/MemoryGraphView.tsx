@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject } from "react";
 import Graph from "graphology";
 import "@react-sigma/core/lib/style.css";
 import {
@@ -10,6 +10,7 @@ import {
 } from "@react-sigma/core";
 import { useWorkerLayoutForceAtlas2 } from "@react-sigma/layout-forceatlas2";
 import forceAtlas2 from "graphology-layout-forceatlas2";
+import type { NodeHoverDrawingFunction } from "sigma/rendering";
 import type { Settings } from "sigma/settings";
 import type { EdgeDisplayData, NodeDisplayData } from "sigma/types";
 import { fetchMemoryGraph } from "../api/client";
@@ -33,21 +34,33 @@ const CATEGORY_COLORS: Record<string, string> = {
 const SIGMA_SETTINGS: Partial<Settings<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>> = {
   autoCenter: true,
   autoRescale: true,
+  defaultEdgeColor: "#334155",
+  defaultDrawNodeHover: drawMemoryNodeHover,
+  defaultNodeColor: "#94a3b8",
   defaultEdgeType: "line",
   defaultNodeType: "circle",
   enableEdgeEvents: false,
   hideEdgesOnMove: true,
   hideLabelsOnMove: true,
   itemSizesReference: "positions",
+  labelColor: { color: "#dbeafe" },
   labelDensity: 0.08,
   labelGridCellSize: 96,
   labelRenderedSizeThreshold: 8,
   labelSize: 11,
   maxCameraRatio: 8,
+  minEdgeThickness: 0.35,
   minCameraRatio: 0.03,
   renderLabels: true,
   zIndex: true,
 };
+
+const SIGMA_CONTAINER_STYLE = {
+  "--sigma-background-color": "#02040a",
+  backgroundColor: "#02040a",
+  height: "100%",
+  width: "100%",
+} as CSSProperties;
 
 type MemoryNodePosition = { x: number; y: number };
 
@@ -88,6 +101,7 @@ export default function MemoryGraphView() {
   const [limit, setLimit] = useState(500);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const scopeDd = useDropdown();
   const neighborsDd = useDropdown();
   const limitDd = useDropdown();
@@ -139,10 +153,34 @@ export default function MemoryGraphView() {
     () => graph?.nodes.find((node) => node.id === selectedId) || null,
     [graph, selectedId]
   );
+  const viewportMode = isFullscreen ? "fullscreen" : "modal";
+  const rootClassName = isFullscreen
+    ? "fixed inset-0 z-[10000] flex flex-col gap-3 overflow-hidden bg-[#111318] p-4 sm:p-5"
+    : "min-h-full space-y-3 bg-[#111318] p-4";
+  const graphGridClassName = isFullscreen
+    ? "grid min-h-0 flex-1 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_320px]"
+    : "grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3";
+  const graphPanelClassName = isFullscreen
+    ? "relative h-full min-h-0 rounded-lg border border-white/10 bg-[#02040a] overflow-hidden shadow-[inset_0_0_0_1px_rgba(255,255,255,0.03)]"
+    : "relative min-h-[520px] rounded-lg border border-white/10 bg-[#02040a] overflow-hidden shadow-[inset_0_0_0_1px_rgba(255,255,255,0.03)]";
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsFullscreen(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isFullscreen]);
 
   return (
-    <div className="p-4 space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className={rootClassName}>
+      <div className="flex flex-wrap items-center gap-2 shrink-0">
         <div className="flex gap-1 flex-wrap">
           {["all", ...MEMORY_CATEGORIES].map((cat) => (
             <button
@@ -187,10 +225,19 @@ export default function MemoryGraphView() {
           >
             Refresh
           </button>
+          <button
+            type="button"
+            onClick={() => setIsFullscreen((value) => !value)}
+            aria-label={isFullscreen ? "Exit fullscreen memory graph" : "Open fullscreen memory graph"}
+            title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            className="w-7 h-7 flex items-center justify-center rounded-lg bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 hover:text-white/85 transition-all"
+          >
+            {isFullscreen ? <ExitFullscreenIcon /> : <FullscreenIcon />}
+          </button>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3 shrink-0">
         <label className="flex items-center gap-2 text-[10px] text-white/45">
           Similarity
           <input
@@ -246,7 +293,7 @@ export default function MemoryGraphView() {
       </div>
 
       {graph && (
-        <div className="flex flex-wrap items-center gap-4 text-[10px] text-white/35">
+        <div className="flex flex-wrap items-center gap-4 text-[10px] text-white/35 shrink-0">
           <span><span className="text-white/60">{graph.stats.shown}</span> / {graph.stats.total} memories</span>
           <span><span className="text-white/60">{graph.clusters.length}</span> clusters</span>
           <span><span className="text-white/60">{graph.stats.semanticLinks}</span> semantic links</span>
@@ -267,8 +314,8 @@ export default function MemoryGraphView() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3">
-        <div className="relative min-h-[520px] rounded-lg border border-white/10 bg-black/20 overflow-hidden">
+      <div className={graphGridClassName}>
+        <div className={graphPanelClassName}>
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center text-xs text-white/35 z-10">
               Loading graph...
@@ -282,6 +329,7 @@ export default function MemoryGraphView() {
           {graph && !error && (
             <MemoryGraphCanvas
               graph={graph}
+              viewportMode={viewportMode}
               selectedId={selectedId}
               searchQuery={searchQuery}
               onSelect={setSelectedId}
@@ -289,7 +337,7 @@ export default function MemoryGraphView() {
             />
           )}
         </div>
-        <MemoryGraphDetails node={selectedNode} graph={graph} />
+        <MemoryGraphDetails node={selectedNode} graph={graph} fullscreen={isFullscreen} />
       </div>
     </div>
   );
@@ -297,12 +345,14 @@ export default function MemoryGraphView() {
 
 function MemoryGraphCanvas({
   graph,
+  viewportMode,
   selectedId,
   searchQuery,
   onSelect,
   positionsRef,
 }: {
   graph: MemoryGraphData;
+  viewportMode: "modal" | "fullscreen";
   selectedId: string | null;
   searchQuery: string;
   onSelect: (id: string | null) => void;
@@ -317,11 +367,12 @@ function MemoryGraphCanvas({
     <SigmaContainer<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>
       className="absolute inset-0 memory-graph-sigma"
       settings={SIGMA_SETTINGS}
-      style={{ height: "100%", width: "100%" }}
+      style={SIGMA_CONTAINER_STYLE}
     >
       <MemorySigmaController
         graphData={graph}
         graphology={graphology}
+        viewportMode={viewportMode}
         selectedId={selectedId}
         searchQuery={searchQuery}
         onSelect={onSelect}
@@ -334,6 +385,7 @@ function MemoryGraphCanvas({
 function MemorySigmaController({
   graphData,
   graphology,
+  viewportMode,
   selectedId,
   searchQuery,
   onSelect,
@@ -341,6 +393,7 @@ function MemorySigmaController({
 }: {
   graphData: MemoryGraphData;
   graphology: Graph<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>;
+  viewportMode: "modal" | "fullscreen";
   selectedId: string | null;
   searchQuery: string;
   onSelect: (id: string | null) => void;
@@ -388,6 +441,14 @@ function MemorySigmaController({
     loadGraph(graphology, true);
     sigma.refresh();
   }, [graphData.nodes.length, graphology, loadGraph, loadKey, positionsRef, sigma]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      sigma.resize(true);
+      sigma.refresh();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [sigma, viewportMode]);
 
   useEffect(() => {
     registerEvents({
@@ -438,7 +499,7 @@ function MemorySigmaController({
             ? data.relationType === "lineage" ? "#facc15" : "#a78bfa"
             : data.color,
           hidden: dimNonMatches && !connectedToMatch,
-          size: connectedToSelection ? Math.max(1.4, data.size + 0.8) : data.size,
+          size: connectedToSelection ? Math.max(1.1, data.size + 0.45) : data.size,
           zIndex: connectedToSelection ? 2 : 0,
         };
       },
@@ -452,7 +513,7 @@ function MemorySigmaController({
           forceLabel: selected || matched,
           highlighted: selected,
           label: selected || matched || data.importance >= 8 ? data.label : "",
-          size: selected ? data.size + 3 : matched ? data.size + 1.6 : data.size,
+          size: selected ? data.size + 2.2 : matched ? data.size + 1.2 : data.size,
           zIndex: selected ? 4 : matched ? 3 : data.importance,
         };
       },
@@ -487,7 +548,6 @@ function buildSigmaGraph(
 ): Graph<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes> {
   const sigmaGraph = new Graph<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>({
     allowSelfLoops: false,
-    multi: true,
     type: "undirected",
   });
   const clusterSize = new Map(data.clusters.map((cluster) => [cluster.id, cluster.size]));
@@ -515,25 +575,91 @@ function buildSigmaGraph(
     });
   }
 
-  data.links.forEach((link, index) => {
+  const edgeMap = new Map<string, {
+    source: string;
+    target: string;
+    attributes: MemorySigmaEdgeAttributes;
+  }>();
+
+  for (const link of data.links) {
     if (!sigmaGraph.hasNode(link.source) || !sigmaGraph.hasNode(link.target) || link.source === link.target) {
-      return;
+      continue;
     }
-    const weight = link.type === "lineage"
-      ? 0.35
-      : Math.max(0.08, Math.min(1, (link.similarity - 0.5) * 2));
-    sigmaGraph.addEdgeWithKey(`${link.source}:${link.target}:${link.type}:${index}`, link.source, link.target, {
-      color: link.type === "lineage" ? "#f59e0b" : "#475569",
-      relationType: link.type,
-      size: link.type === "lineage" ? 1.25 : Math.max(0.45, weight * 1.4),
-      similarity: link.similarity,
-      sourceId: link.source,
-      targetId: link.target,
-      weight,
-    });
-  });
+    const [source, target] = sortEdgeNodes(link.source, link.target);
+    const key = edgePairKey(source, target);
+    const incoming = edgeAttributes(link, source, target);
+    const existing = edgeMap.get(key);
+
+    if (existing) {
+      existing.attributes = mergeEdgeAttributes(existing.attributes, incoming);
+    } else {
+      edgeMap.set(key, { source, target, attributes: incoming });
+    }
+  }
+
+  for (const [key, edge] of edgeMap.entries()) {
+    sigmaGraph.addEdgeWithKey(key, edge.source, edge.target, edge.attributes);
+  }
 
   return sigmaGraph;
+}
+
+function sortEdgeNodes(source: string, target: string): [string, string] {
+  return source < target ? [source, target] : [target, source];
+}
+
+function edgePairKey(source: string, target: string): string {
+  return `${source}:${target}`;
+}
+
+function edgeAttributes(
+  link: MemoryGraphLink,
+  source: string,
+  target: string
+): MemorySigmaEdgeAttributes {
+  const weight = edgeWeight(link);
+  return {
+    color: edgeColor(link.type),
+    relationType: link.type,
+    size: edgeSize(link.type, weight),
+    similarity: link.similarity,
+    sourceId: source,
+    targetId: target,
+    weight,
+  };
+}
+
+function mergeEdgeAttributes(
+  current: MemorySigmaEdgeAttributes,
+  incoming: MemorySigmaEdgeAttributes
+): MemorySigmaEdgeAttributes {
+  const relationType = current.relationType === "lineage" || incoming.relationType === "lineage"
+    ? "lineage"
+    : "semantic";
+  const weight = Math.max(current.weight, incoming.weight);
+
+  return {
+    ...current,
+    color: edgeColor(relationType),
+    relationType,
+    size: Math.max(current.size, incoming.size, edgeSize(relationType, weight)),
+    similarity: Math.max(current.similarity, incoming.similarity),
+    weight,
+  };
+}
+
+function edgeWeight(link: MemoryGraphLink): number {
+  return link.type === "lineage"
+    ? 0.35
+    : Math.max(0.08, Math.min(1, (link.similarity - 0.5) * 2));
+}
+
+function edgeColor(type: MemoryGraphLink["type"]): string {
+  return type === "lineage" ? "rgba(245, 158, 11, 0.7)" : "rgba(100, 116, 139, 0.14)";
+}
+
+function edgeSize(type: MemoryGraphLink["type"], weight: number): number {
+  return type === "lineage" ? 0.95 : Math.max(0.15, weight * 0.45);
 }
 
 function seedLayout(
@@ -639,13 +765,19 @@ function memoryLabel(text: string): string {
 function MemoryGraphDetails({
   node,
   graph,
+  fullscreen = false,
 }: {
   node: MemoryGraphNode | null;
   graph: MemoryGraphData | null;
+  fullscreen?: boolean;
 }) {
+  const className = fullscreen
+    ? "h-full min-h-0 overflow-y-auto rounded-lg border border-white/10 bg-[#111318] p-3 text-xs text-white/30"
+    : "min-h-[180px] rounded-lg border border-white/10 bg-[#111318] p-3 text-xs text-white/30";
+
   if (!node || !graph) {
     return (
-      <div className="min-h-[180px] rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs text-white/30">
+      <div className={className}>
         No memory selected
       </div>
     );
@@ -660,7 +792,7 @@ function MemoryGraphDetails({
   );
 
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 space-y-3 min-h-[300px]">
+    <div className={`${fullscreen ? "h-full min-h-0 overflow-y-auto" : "min-h-[300px]"} rounded-lg border border-white/10 bg-[#111318] p-3 space-y-3`}>
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <span className="px-1.5 py-0.5 rounded text-[9px] font-medium" style={{
@@ -716,8 +848,93 @@ function MemoryGraphDetails({
   );
 }
 
+function FullscreenIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9 3 3 9M15 3l6 6M21 15l-6 6M3 15l6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ExitFullscreenIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M9 3v6H3M15 3v6h6M21 15h-6v6M3 15h6v6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m3 9 6-6M21 9l-6-6M15 21l6-6M9 21l-6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function drawMemoryNodeHover(
+  context: CanvasRenderingContext2D,
+  data: Parameters<NodeHoverDrawingFunction<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>>[1],
+  settings: Settings<MemorySigmaNodeAttributes, MemorySigmaEdgeAttributes>
+) {
+  const label = data.label || "";
+  const fontSize = settings.labelSize;
+  const font = `${settings.labelWeight} ${fontSize}px ${settings.labelFont}`;
+  const paddingX = 8;
+  const paddingY = 5;
+  const gap = 8;
+  const radius = Math.max(4, data.size);
+
+  context.save();
+  context.beginPath();
+  context.arc(data.x, data.y, radius + 2, 0, Math.PI * 2);
+  context.fillStyle = "#0f172a";
+  context.fill();
+  context.lineWidth = 1.5;
+  context.strokeStyle = "#e2e8f0";
+  context.stroke();
+
+  if (label) {
+    context.font = font;
+    const textWidth = context.measureText(label).width;
+    const boxWidth = textWidth + paddingX * 2;
+    const boxHeight = fontSize + paddingY * 2;
+    const boxX = data.x + radius + gap;
+    const boxY = data.y - boxHeight / 2;
+
+    drawRoundedRect(context, boxX, boxY, boxWidth, boxHeight, 6);
+    context.fillStyle = "#111318";
+    context.fill();
+    context.lineWidth = 1;
+    context.strokeStyle = "rgba(255, 255, 255, 0.18)";
+    context.stroke();
+
+    context.fillStyle = "#e5e7eb";
+    context.textBaseline = "middle";
+    context.fillText(label, boxX + paddingX, data.y);
+  }
+
+  context.restore();
+}
+
+function drawRoundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+) {
+  const clampedRadius = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + clampedRadius, y);
+  context.lineTo(x + width - clampedRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + clampedRadius);
+  context.lineTo(x + width, y + height - clampedRadius);
+  context.quadraticCurveTo(x + width, y + height, x + width - clampedRadius, y + height);
+  context.lineTo(x + clampedRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - clampedRadius);
+  context.lineTo(x, y + clampedRadius);
+  context.quadraticCurveTo(x, y, x + clampedRadius, y);
+  context.closePath();
+}
+
 function nodeRadius(node: MemoryGraphNode, clusterSize: number): number {
-  return Math.min(13, 3.5 + node.importance * 0.45 + Math.log2(clusterSize + 1) * 0.8);
+  return Math.min(18, 5.5 + node.importance * 0.55 + Math.log2(clusterSize + 1) * 0.95);
 }
 
 function matchesQuery(
