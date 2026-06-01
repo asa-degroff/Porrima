@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchMemoryGraph } from "../api/client";
 import type { MemoryGraphData, MemoryGraphNode, MemoryGraphScope } from "../types";
+import { Dropdown } from "./ui/Dropdown";
+import { useDropdown } from "../hooks/useDropdown";
 
 const MEMORY_CATEGORIES = ["preference", "fact", "behavior", "instruction", "context", "decision", "note", "reflection"];
 
@@ -29,6 +31,9 @@ export default function MemoryGraphView() {
   const [limit, setLimit] = useState(500);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const scopeDd = useDropdown();
+  const neighborsDd = useDropdown();
+  const limitDd = useDropdown();
 
   useEffect(() => {
     let cancelled = false;
@@ -113,15 +118,18 @@ export default function MemoryGraphView() {
           ))}
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <select
-            value={scope}
-            onChange={(event) => setScope(event.target.value as MemoryGraphScope)}
-            className="bg-white/5 border border-white/15 rounded-lg px-2 py-1 text-[10px] text-white/60 outline-none"
+          <Dropdown
+            state={scopeDd}
+            triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none hover:bg-white/10 transition-all cursor-pointer shrink-0"
+            trigger={<span className="truncate flex-1 text-left">{scope === "all" ? "All scopes" : scope === "global" ? "Global" : "Project"}</span>}
           >
-            <option value="all">All scopes</option>
-            <option value="global">Global</option>
-            <option value="project">Project</option>
-          </select>
+            {(["all", "global", "project"] as const).map((value) => (
+              <button key={value} onClick={() => { scopeDd.close(); setScope(value); }}
+                className={`w-full text-left px-3 py-2 text-[10px] transition-all ${value === scope ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                {value === "all" ? "All scopes" : value === "global" ? "Global" : "Project"}
+              </button>
+            ))}
+          </Dropdown>
           <label className="flex items-center gap-1.5 text-[10px] text-white/50">
             <input
               type="checkbox"
@@ -157,27 +165,33 @@ export default function MemoryGraphView() {
         </label>
         <label className="flex items-center gap-2 text-[10px] text-white/45">
           Neighbors
-          <select
-            value={neighbors}
-            onChange={(event) => setNeighbors(Number(event.target.value))}
-            className="bg-white/5 border border-white/15 rounded-lg px-2 py-1 text-[10px] text-white/60 outline-none"
+          <Dropdown
+            state={neighborsDd}
+            triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none hover:bg-white/10 transition-all cursor-pointer shrink-0"
+            trigger={<span className="truncate flex-1 text-left">{neighbors}</span>}
           >
             {[3, 4, 6, 8, 10, 12].map((value) => (
-              <option key={value} value={value}>{value}</option>
+              <button key={value} onClick={() => { neighborsDd.close(); setNeighbors(value); }}
+                className={`w-full text-left px-3 py-2 text-[10px] transition-all ${value === neighbors ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                {value}
+              </button>
             ))}
-          </select>
+          </Dropdown>
         </label>
         <label className="flex items-center gap-2 text-[10px] text-white/45">
           Limit
-          <select
-            value={limit}
-            onChange={(event) => setLimit(Number(event.target.value))}
-            className="bg-white/5 border border-white/15 rounded-lg px-2 py-1 text-[10px] text-white/60 outline-none"
+          <Dropdown
+            state={limitDd}
+            triggerClassName="flex items-center gap-1.5 bg-white/5 border border-white/15 rounded-lg px-2 py-0.5 text-[10px] text-white/60 outline-none hover:bg-white/10 transition-all cursor-pointer shrink-0"
+            trigger={<span className="truncate flex-1 text-left">{limit}</span>}
           >
             {[250, 500, 750, 1000].map((value) => (
-              <option key={value} value={value}>{value}</option>
+              <button key={value} onClick={() => { limitDd.close(); setLimit(value); }}
+                className={`w-full text-left px-3 py-2 text-[10px] transition-all ${value === limit ? "text-white" : "text-white/60 hover:bg-white/10"}`}>
+                {value}
+              </button>
             ))}
-          </select>
+          </Dropdown>
         </label>
         <div className="relative ml-auto min-w-[220px]">
           <input
