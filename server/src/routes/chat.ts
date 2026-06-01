@@ -67,6 +67,7 @@ import {
 import { sendPush, truncateForBody } from "../services/push-dispatch.js";
 import { appDataPath } from "../services/paths.js";
 import { getDefaultLlamaServerUrl } from "../services/llama-ports.js";
+import { recordContextEstimateObservation } from "../services/token-estimate-observability.js";
 
 const DEFAULT_LLAMACPP_URL = getDefaultLlamaServerUrl("inference");
 const ARTIFACTS_DIR = appDataPath("artifacts");
@@ -934,6 +935,19 @@ async function handleChatStream(
     // re-emits the same tool call instead of moving on.
     duplicateToolCallStreak: 0,
     lastIterationToolCallSignature: null as string | null,
+    pendingTokenEstimateObservation: null as null | {
+      sourceIteration: number;
+      sourceStopReason: string;
+      estimatedInputTokens: number;
+      displayEstimatedInputTokens: number;
+      approximateTokens: number;
+      exactToolResultCount: number;
+      exactDelta: number;
+      signedExactDelta: number;
+      contextWindow: number;
+      toolCallCount: number;
+      toolResultCount: number;
+    },
   };
   const ttsTextQueue = createAsyncTextQueue();
   let audioStreamTask: Promise<void> | null = null;
@@ -971,6 +985,7 @@ async function handleChatStream(
     state.pendingPassiveRecallRows = [];
     state.duplicateToolCallStreak = 0;
     state.lastIterationToolCallSignature = null;
+    state.pendingTokenEstimateObservation = null;
   }
 
   function isPlaceholderEllipsis(text: string | undefined): boolean {
@@ -1985,6 +2000,31 @@ async function handleChatStream(
           }
           captureLlamaRun(msg, iterations + 1, "main");
 
+          const pendingTokenEstimateObservation = state.pendingTokenEstimateObservation;
+          state.pendingTokenEstimateObservation = null;
+          if (pendingTokenEstimateObservation && msg.usage?.input && msg.usage.input > 0) {
+            recordContextEstimateObservation({
+              chatId: chat.id,
+              modelId: piModel.id,
+              sourceIteration: pendingTokenEstimateObservation.sourceIteration,
+              observedIteration: iterations,
+              sourceStopReason: pendingTokenEstimateObservation.sourceStopReason,
+              observedStopReason: stopReason,
+              estimatedInputTokens: pendingTokenEstimateObservation.estimatedInputTokens,
+              displayEstimatedInputTokens: pendingTokenEstimateObservation.displayEstimatedInputTokens,
+              approximateTokens: pendingTokenEstimateObservation.approximateTokens,
+              exactToolResultCount: pendingTokenEstimateObservation.exactToolResultCount,
+              exactDelta: pendingTokenEstimateObservation.exactDelta,
+              signedExactDelta: pendingTokenEstimateObservation.signedExactDelta,
+              toolCallCount: pendingTokenEstimateObservation.toolCallCount,
+              toolResultCount: pendingTokenEstimateObservation.toolResultCount,
+              contextWindow: pendingTokenEstimateObservation.contextWindow,
+              observedInputTokens: msg.usage.input,
+              observedOutputTokens: msg.usage.output,
+              observedTotalTokens: msg.usage.totalTokens,
+            });
+          }
+
           // Snapshot this iteration's new tool calls before the commit below
           // advances committedToolCallCount — the dedup check further down
           // needs the per-iteration slice.
@@ -2015,6 +2055,9 @@ async function handleChatStream(
           let estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
           let displayEstimatedTokens = estimatedTokens;
           const approximateTokens = estimatedTokens;
+          let exactToolResultCount = 0;
+          let exactDelta = 0;
+          let signedExactDelta = 0;
           if (stopReason === "toolUse" && inferenceModel?.provider === "llamacpp" && piModel.baseUrl) {
             const exactEstimate = await estimateContextTokensWithExactToolResults(
               chat.messages,
@@ -2023,11 +2066,16 @@ async function handleChatStream(
               {
                 baseUrl: piModel.baseUrl,
                 modelId: piModel.id,
+                chatId: chat.id,
+                phase: "tool_loop",
                 contextWindow: effectiveCWForCheck,
               },
             );
             estimatedTokens = exactEstimate.estimatedTokens;
             displayEstimatedTokens = exactEstimate.refinedTokens;
+            exactToolResultCount = exactEstimate.exactToolResultCount;
+            exactDelta = exactEstimate.exactDelta;
+            signedExactDelta = exactEstimate.signedExactDelta;
             if (exactEstimate.exactToolResultCount > 0 || exactEstimate.errors.length > 0) {
               console.log(
                 `[token-estimate] chat=${chat.id} iter=${iterations} approx=${approximateTokens} ` +
@@ -2128,6 +2176,27 @@ async function handleChatStream(
               message: `Stopped — reached ${MAX_ITERATIONS} iteration limit`,
             })}\n\n`);
             turnAbortController.abort();
+          }
+
+          if (
+            stopReason === "toolUse" &&
+            !state.needsMidTurnCompaction &&
+            !hitContextLimit &&
+            !turnAbortController.signal.aborted
+          ) {
+            state.pendingTokenEstimateObservation = {
+              sourceIteration: iterations,
+              sourceStopReason: stopReason,
+              estimatedInputTokens: estimatedTokens,
+              displayEstimatedInputTokens: displayEstimatedTokens,
+              approximateTokens,
+              exactToolResultCount,
+              exactDelta,
+              signedExactDelta,
+              contextWindow: effectiveCWForCheck,
+              toolCallCount: state.allToolCalls.length,
+              toolResultCount: state.allToolResults.length,
+            };
           }
 
           // Incremental persistence: save progress after each iteration.

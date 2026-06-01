@@ -10,6 +10,7 @@ import {
   estimateTextTokens,
   shouldExactCountText,
 } from "./token-count.js";
+import { recordToolResultExactTokenEstimate } from "./token-estimate-observability.js";
 
 export interface CompactionResult {
   truncated: boolean;
@@ -252,16 +253,18 @@ function findLastUsageIndex(messages: Chat["messages"]): number {
 
 function collectPostUsageToolResults(messages: Chat["messages"]): Array<{
   label: string;
+  toolName?: string;
   content: string;
   approximateTokens: number;
 }> {
   const lastUsageIndex = findLastUsageIndex(messages);
-  const candidates: Array<{ label: string; content: string; approximateTokens: number }> = [];
+  const candidates: Array<{ label: string; toolName?: string; content: string; approximateTokens: number }> = [];
 
-  const addResult = (messageIndex: number, resultIndex: number, content: string) => {
+  const addResult = (messageIndex: number, resultIndex: number, content: string, toolName?: string) => {
     if (!content) return;
     candidates.push({
       label: `m${messageIndex}.toolResult${resultIndex}`,
+      toolName,
       content,
       approximateTokens: estimateToolResultContentTokens(content),
     });
@@ -271,20 +274,20 @@ function collectPostUsageToolResults(messages: Chat["messages"]): Array<{
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
       if (m._outOfContext || m.role !== "assistant" || !m.toolResults?.length) continue;
-      m.toolResults.forEach((r, idx) => addResult(i, idx, r.content));
+      m.toolResults.forEach((r, idx) => addResult(i, idx, r.content, r.toolName));
     }
     return candidates;
   }
 
   const anchor = messages[lastUsageIndex];
   if (anchor.role === "assistant" && anchor.toolResults?.length) {
-    anchor.toolResults.forEach((r, idx) => addResult(lastUsageIndex, idx, r.content));
+    anchor.toolResults.forEach((r, idx) => addResult(lastUsageIndex, idx, r.content, r.toolName));
   }
 
   for (let i = lastUsageIndex + 1; i < messages.length; i++) {
     const m = messages[i];
     if (m._outOfContext || m.role !== "assistant" || !m.toolResults?.length) continue;
-    m.toolResults.forEach((r, idx) => addResult(i, idx, r.content));
+    m.toolResults.forEach((r, idx) => addResult(i, idx, r.content, r.toolName));
   }
 
   return candidates;
@@ -297,6 +300,8 @@ export async function estimateContextTokensWithExactToolResults(
   options: {
     baseUrl?: string;
     modelId?: string;
+    chatId?: string;
+    phase?: string;
     contextWindow?: number;
     timeoutMs?: number;
     minToolResultChars?: number;
@@ -341,6 +346,17 @@ export async function estimateContextTokensWithExactToolResults(
       );
       base.exactElapsedMs += exact.elapsedMs;
       base.exactToolResultCount++;
+      recordToolResultExactTokenEstimate({
+        chatId: options.chatId,
+        phase: options.phase,
+        modelId: options.modelId,
+        label: candidate.label,
+        toolName: candidate.toolName,
+        content: candidate.content,
+        exactTokens: exact.tokens,
+        exactElapsedMs: exact.elapsedMs,
+        exactCached: exact.cached,
+      });
       const delta = exact.tokens - candidate.approximateTokens;
       if (delta > 0) positiveDelta += delta;
       signedDelta += delta;
@@ -583,6 +599,8 @@ export async function truncateBeforeSend(
 
   const exactEstimate = await estimateContextTokensWithExactToolResults(messages, systemPrompt, tools, {
     ...exactTokenOptions,
+    chatId: chat.id,
+    phase: "pre_send",
     contextWindow,
   });
   const estimatedTokens = exactEstimate.estimatedTokens;

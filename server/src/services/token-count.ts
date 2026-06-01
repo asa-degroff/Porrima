@@ -29,11 +29,21 @@ function setCachedTokenCount(key: string, tokens: number): void {
   tokenCountCache.set(key, tokens);
 }
 
-function analyzeTextDensity(text: string): {
+export interface TextDensityStats {
   chars: number;
   whitespaceRatio: number;
   digitSymbolRatio: number;
-} {
+}
+
+export interface TextTokenEstimateDescription extends TextDensityStats {
+  kind: TokenEstimateKind;
+  dense: boolean;
+  heuristicBranch: string;
+  charsPerToken: number;
+  estimatedTokens: number;
+}
+
+export function analyzeTextDensity(text: string): TextDensityStats {
   const sampleLimit = 24_000;
   const sample = text.length <= sampleLimit
     ? text
@@ -73,25 +83,46 @@ export function isDenseTokenText(text: string): boolean {
   );
 }
 
-function charsPerTokenFor(text: string, kind: TokenEstimateKind): number {
-  if (!text) return 4;
+function tokenHeuristicFor(text: string, kind: TokenEstimateKind): {
+  charsPerToken: number;
+  branch: string;
+  dense: boolean;
+  stats: TextDensityStats;
+} {
+  if (!text) {
+    return {
+      charsPerToken: 4,
+      branch: `${kind}:empty`,
+      dense: false,
+      stats: { chars: 0, whitespaceRatio: 0, digitSymbolRatio: 0 },
+    };
+  }
   const stats = analyzeTextDensity(text);
   const dense = isDenseTokenText(text);
 
   if (kind === "tool_result") {
-    if (dense) return 1.5;
-    if (stats.digitSymbolRatio >= 0.32 && stats.whitespaceRatio < 0.30) return 2.0;
-    return 3.0;
+    if (dense) return { charsPerToken: 1.5, branch: "tool_result:dense", dense, stats };
+    if (stats.digitSymbolRatio >= 0.32 && stats.whitespaceRatio < 0.30) {
+      return { charsPerToken: 2.0, branch: "tool_result:symbolic", dense, stats };
+    }
+    return { charsPerToken: 3.0, branch: "tool_result:default", dense, stats };
   }
 
   if (kind === "structured") {
-    if (dense) return 1.75;
-    return 2.5;
+    if (dense) return { charsPerToken: 1.75, branch: "structured:dense", dense, stats };
+    return { charsPerToken: 2.5, branch: "structured:default", dense, stats };
   }
 
-  if (dense && text.length > 2_000) return 2.0;
-  if (stats.digitSymbolRatio >= 0.36 && stats.whitespaceRatio < 0.24) return 2.5;
-  return 4.0;
+  if (dense && text.length > 2_000) return { charsPerToken: 2.0, branch: "default:dense-long", dense, stats };
+  if (stats.digitSymbolRatio >= 0.36 && stats.whitespaceRatio < 0.24) {
+    return { charsPerToken: 2.5, branch: "default:symbolic", dense, stats };
+  }
+  return { charsPerToken: 4.0, branch: "default:prose", dense, stats };
+}
+
+function charsPerTokenFor(text: string, kind: TokenEstimateKind): number {
+  if (!text) return 4;
+  return tokenHeuristicFor(text, kind).charsPerToken;
 }
 
 /**
@@ -103,6 +134,35 @@ export function estimateTextTokens(text: string | undefined | null, kind: TokenE
   if (!text) return 0;
   const charsPerToken = charsPerTokenFor(text, kind);
   return Math.max(1, Math.ceil(text.length / charsPerToken));
+}
+
+export function describeTextTokenEstimate(
+  text: string | undefined | null,
+  kind: TokenEstimateKind = "default",
+): TextTokenEstimateDescription {
+  if (!text) {
+    return {
+      kind,
+      chars: 0,
+      whitespaceRatio: 0,
+      digitSymbolRatio: 0,
+      dense: false,
+      heuristicBranch: `${kind}:empty`,
+      charsPerToken: 4,
+      estimatedTokens: 0,
+    };
+  }
+  const heuristic = tokenHeuristicFor(text, kind);
+  return {
+    kind,
+    chars: text.length,
+    whitespaceRatio: heuristic.stats.whitespaceRatio,
+    digitSymbolRatio: heuristic.stats.digitSymbolRatio,
+    dense: heuristic.dense,
+    heuristicBranch: heuristic.branch,
+    charsPerToken: heuristic.charsPerToken,
+    estimatedTokens: Math.max(1, Math.ceil(text.length / heuristic.charsPerToken)),
+  };
 }
 
 export function shouldExactCountText(

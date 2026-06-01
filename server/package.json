@@ -6,7 +6,8 @@
     "dev": "PORT=3002 tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "analyze:token-estimates": "tsx src/scripts/analyze-token-estimates.ts"
   },
   "dependencies": {
     "@mariozechner/pi-agent-core": "^0.55.1",
