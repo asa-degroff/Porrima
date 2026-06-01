@@ -882,14 +882,14 @@ export function formatMessageContentForExtraction(message: ChatMessage): string 
     const calls = message.toolCalls
       .map((tc) => `- ${tc.name}: ${formatToolArgumentsForExtraction(tc.arguments)}`)
       .join("\n");
-    parts.push(`Tool calls made by ASSISTANT:\n${calls}`);
+    parts.push(`Tool calls:\n${calls}`);
   }
 
   if (message.toolResults?.length) {
     const results = message.toolResults
       .map(formatToolResultForExtraction)
       .join("\n");
-    parts.push(`Tool results observed by ASSISTANT:\n${results}`);
+    parts.push(`Tool results:\n${results}`);
   }
 
   return parts.join("\n\n") || "(no text content)";
@@ -1598,7 +1598,7 @@ export async function extractMemories(
   projectId?: string
 ): Promise<void> {
   extractionMetrics.totalExtractions++;
-  const extractionPrompt = `User message: ${userMsg}\n\nAssistant response: ${assistantMsg}`;
+  const extractionPrompt = `User message: ${userMsg}\n\nAgent response: ${assistantMsg}`;
   const systemPrompt = await buildExtractionSystemPrompt(projectId);
   const chat = await getChat(chatId).catch(() => null);
   const effectiveModelId = await getEffectiveExtractionModelId(modelId);
