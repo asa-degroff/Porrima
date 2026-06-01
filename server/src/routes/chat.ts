@@ -944,6 +944,13 @@ async function handleChatStream(
       exactToolResultCount: number;
       exactDelta: number;
       signedExactDelta: number;
+      selectedEstimatePath?: "usage_anchor" | "char_estimate";
+      pathAEstimateTokens?: number;
+      pathBEstimateTokens?: number;
+      lastUsageInputTokens?: number;
+      lastUsageOutputTokens?: number;
+      lastUsageTotalTokens?: number;
+      postUsageAdditionalTokens?: number;
       contextWindow: number;
       toolCallCount: number;
       toolResultCount: number;
@@ -2016,6 +2023,13 @@ async function handleChatStream(
               exactToolResultCount: pendingTokenEstimateObservation.exactToolResultCount,
               exactDelta: pendingTokenEstimateObservation.exactDelta,
               signedExactDelta: pendingTokenEstimateObservation.signedExactDelta,
+              selectedEstimatePath: pendingTokenEstimateObservation.selectedEstimatePath,
+              pathAEstimateTokens: pendingTokenEstimateObservation.pathAEstimateTokens,
+              pathBEstimateTokens: pendingTokenEstimateObservation.pathBEstimateTokens,
+              lastUsageInputTokens: pendingTokenEstimateObservation.lastUsageInputTokens,
+              lastUsageOutputTokens: pendingTokenEstimateObservation.lastUsageOutputTokens,
+              lastUsageTotalTokens: pendingTokenEstimateObservation.lastUsageTotalTokens,
+              postUsageAdditionalTokens: pendingTokenEstimateObservation.postUsageAdditionalTokens,
               toolCallCount: pendingTokenEstimateObservation.toolCallCount,
               toolResultCount: pendingTokenEstimateObservation.toolResultCount,
               contextWindow: pendingTokenEstimateObservation.contextWindow,
@@ -2058,6 +2072,13 @@ async function handleChatStream(
           let exactToolResultCount = 0;
           let exactDelta = 0;
           let signedExactDelta = 0;
+          let selectedEstimatePath: "usage_anchor" | "char_estimate" | undefined;
+          let pathAEstimateTokens: number | undefined;
+          let pathBEstimateTokens: number | undefined;
+          let lastUsageInputTokens: number | undefined;
+          let lastUsageOutputTokens: number | undefined;
+          let lastUsageTotalTokens: number | undefined;
+          let postUsageAdditionalTokens: number | undefined;
           if (stopReason === "toolUse" && inferenceModel?.provider === "llamacpp" && piModel.baseUrl) {
             const exactEstimate = await estimateContextTokensWithExactToolResults(
               chat.messages,
@@ -2076,6 +2097,13 @@ async function handleChatStream(
             exactToolResultCount = exactEstimate.exactToolResultCount;
             exactDelta = exactEstimate.exactDelta;
             signedExactDelta = exactEstimate.signedExactDelta;
+            selectedEstimatePath = exactEstimate.contextBreakdown.selectedPath;
+            pathAEstimateTokens = exactEstimate.contextBreakdown.pathATokens;
+            pathBEstimateTokens = exactEstimate.contextBreakdown.pathBTokens;
+            lastUsageInputTokens = exactEstimate.contextBreakdown.lastUsageInput;
+            lastUsageOutputTokens = exactEstimate.contextBreakdown.lastUsageOutput;
+            lastUsageTotalTokens = exactEstimate.contextBreakdown.lastUsageTotal;
+            postUsageAdditionalTokens = exactEstimate.contextBreakdown.postUsageAdditionalTokens;
             if (exactEstimate.exactToolResultCount > 0 || exactEstimate.errors.length > 0) {
               console.log(
                 `[token-estimate] chat=${chat.id} iter=${iterations} approx=${approximateTokens} ` +
@@ -2193,6 +2221,13 @@ async function handleChatStream(
               exactToolResultCount,
               exactDelta,
               signedExactDelta,
+              selectedEstimatePath,
+              pathAEstimateTokens,
+              pathBEstimateTokens,
+              lastUsageInputTokens,
+              lastUsageOutputTokens,
+              lastUsageTotalTokens,
+              postUsageAdditionalTokens,
               contextWindow: effectiveCWForCheck,
               toolCallCount: state.allToolCalls.length,
               toolResultCount: state.allToolResults.length,

@@ -24,7 +24,7 @@ describe("token estimation for dense tool results", () => {
     const svgEstimate = estimateTextTokens(svg, "tool_result");
     const proseEstimate = estimateTextTokens(prose);
 
-    expect(svgEstimate).toBeGreaterThan(Math.ceil(svg.length / 2));
+    expect(svgEstimate).toBeGreaterThan(Math.ceil(svg.length / 3));
     expect(proseEstimate).toBeLessThan(Math.ceil(prose.length / 3));
   });
 

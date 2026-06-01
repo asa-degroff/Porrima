@@ -63,6 +63,13 @@ export interface ContextEstimateObservationInput {
   exactToolResultCount?: number;
   exactDelta?: number;
   signedExactDelta?: number;
+  selectedEstimatePath?: "usage_anchor" | "char_estimate";
+  pathAEstimateTokens?: number;
+  pathBEstimateTokens?: number;
+  lastUsageInputTokens?: number;
+  lastUsageOutputTokens?: number;
+  lastUsageTotalTokens?: number;
+  postUsageAdditionalTokens?: number;
   toolCallCount?: number;
   toolResultCount?: number;
   contextWindow?: number;
@@ -114,6 +121,13 @@ export type TokenEstimateSample =
       exactToolResultCount?: number;
       exactDelta?: number;
       signedExactDelta?: number;
+      selectedEstimatePath?: "usage_anchor" | "char_estimate";
+      pathAEstimateTokens?: number;
+      pathBEstimateTokens?: number;
+      lastUsageInputTokens?: number;
+      lastUsageOutputTokens?: number;
+      lastUsageTotalTokens?: number;
+      postUsageAdditionalTokens?: number;
       toolCallCount?: number;
       toolResultCount?: number;
       contextWindow?: number;
@@ -195,6 +209,13 @@ export function recordContextEstimateObservation(input: ContextEstimateObservati
     exactToolResultCount: input.exactToolResultCount,
     exactDelta: input.exactDelta,
     signedExactDelta: input.signedExactDelta,
+    selectedEstimatePath: input.selectedEstimatePath,
+    pathAEstimateTokens: input.pathAEstimateTokens,
+    pathBEstimateTokens: input.pathBEstimateTokens,
+    lastUsageInputTokens: input.lastUsageInputTokens,
+    lastUsageOutputTokens: input.lastUsageOutputTokens,
+    lastUsageTotalTokens: input.lastUsageTotalTokens,
+    postUsageAdditionalTokens: input.postUsageAdditionalTokens,
     toolCallCount: input.toolCallCount,
     toolResultCount: input.toolResultCount,
     contextWindow: input.contextWindow,

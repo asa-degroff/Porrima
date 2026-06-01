@@ -69,6 +69,13 @@ describe("token estimate observability", () => {
       exactToolResultCount: 1,
       exactDelta: 0,
       signedExactDelta: -3_000,
+      selectedEstimatePath: "usage_anchor",
+      pathAEstimateTokens: 12_000,
+      pathBEstimateTokens: 10_500,
+      lastUsageInputTokens: 7_800,
+      lastUsageOutputTokens: 200,
+      lastUsageTotalTokens: 8_000,
+      postUsageAdditionalTokens: 4_000,
       toolCallCount: 1,
       toolResultCount: 1,
       contextWindow: 32_768,
@@ -82,5 +89,9 @@ describe("token estimate observability", () => {
     expect(sample.sampleType).toBe("context_estimate_observed");
     expect(sample.ratioEstimateToObserved).toBe(1.5);
     expect(sample.ratioDisplayEstimateToObserved).toBe(1.125);
+    expect(sample.selectedEstimatePath).toBe("usage_anchor");
+    expect(sample.pathAEstimateTokens).toBe(12_000);
+    expect(sample.pathBEstimateTokens).toBe(10_500);
+    expect(sample.lastUsageTotalTokens).toBe(8_000);
   });
 });

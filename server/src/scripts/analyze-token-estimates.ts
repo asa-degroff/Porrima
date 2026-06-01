@@ -20,6 +20,13 @@ interface ContextSample {
   ratioDisplayEstimateToObserved?: number;
   estimatedInputTokens?: number;
   displayEstimatedInputTokens?: number;
+  selectedEstimatePath?: "usage_anchor" | "char_estimate";
+  pathAEstimateTokens?: number;
+  pathBEstimateTokens?: number;
+  lastUsageInputTokens?: number;
+  lastUsageOutputTokens?: number;
+  lastUsageTotalTokens?: number;
+  postUsageAdditionalTokens?: number;
   observedInputTokens?: number;
   exactToolResultCount?: number;
   signedExactDelta?: number;
@@ -120,14 +127,40 @@ async function main() {
 
   if (contextSamples.length) {
     console.log("Context estimate observations");
-    summarizeRatios(
-      "conservative estimate / observed input",
-      contextSamples.map((sample) => sample.ratioEstimateToObserved).filter((v): v is number => typeof v === "number"),
-    );
+    const conservativeRatios = contextSamples
+      .map((sample) => sample.ratioEstimateToObserved)
+      .filter((v): v is number => typeof v === "number");
+    summarizeRatios("conservative estimate / observed input", conservativeRatios);
     summarizeRatios(
       "display estimate / observed input",
       contextSamples.map((sample) => sample.ratioDisplayEstimateToObserved).filter((v): v is number => typeof v === "number"),
     );
+
+    console.log("");
+    console.log("Context estimate paths");
+    const byPath = groupBy(contextSamples, (sample) => sample.selectedEstimatePath || "unknown");
+    for (const [pathName, group] of [...byPath.entries()].sort((a, b) => b[1].length - a[1].length)) {
+      const ratios = group
+        .map((sample) => sample.ratioEstimateToObserved)
+        .filter((v): v is number => typeof v === "number");
+      console.log(
+        `- ${pathName}: count=${group.length} mean=${formatNumber(mean(ratios))} ` +
+        `p50=${formatNumber(percentile(ratios, 0.50))} p90=${formatNumber(percentile(ratios, 0.90))}`,
+      );
+    }
+
+    const pathARatios = contextSamples
+      .map((sample) => sample.pathAEstimateTokens && sample.observedInputTokens
+        ? sample.pathAEstimateTokens / sample.observedInputTokens
+        : undefined)
+      .filter((v): v is number => typeof v === "number");
+    const pathBRatios = contextSamples
+      .map((sample) => sample.pathBEstimateTokens && sample.observedInputTokens
+        ? sample.pathBEstimateTokens / sample.observedInputTokens
+        : undefined)
+      .filter((v): v is number => typeof v === "number");
+    summarizeRatios("path A usage-anchor / observed input", pathARatios);
+    summarizeRatios("path B char-estimate / observed input", pathBRatios);
   } else {
     console.log("No context estimate observations.");
   }

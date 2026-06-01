@@ -101,7 +101,7 @@ function tokenHeuristicFor(text: string, kind: TokenEstimateKind): {
   const dense = isDenseTokenText(text);
 
   if (kind === "tool_result") {
-    if (dense) return { charsPerToken: 1.5, branch: "tool_result:dense", dense, stats };
+    if (dense) return { charsPerToken: 2.25, branch: "tool_result:dense", dense, stats };
     if (stats.digitSymbolRatio >= 0.32 && stats.whitespaceRatio < 0.30) {
       return { charsPerToken: 2.0, branch: "tool_result:symbolic", dense, stats };
     }

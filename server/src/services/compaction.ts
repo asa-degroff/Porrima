@@ -171,21 +171,37 @@ function charEstimateContextSize(
  * char estimation doesn't). When the prompt grows, Path B wins.
  */
 export { estimateContextSize as estimateContextTokens };
-function estimateContextSize(
+export interface ContextEstimateBreakdown {
+  estimatedTokens: number;
+  selectedPath: "usage_anchor" | "char_estimate";
+  pathATokens?: number;
+  pathBTokens: number;
+  lastUsageIndex?: number;
+  lastUsageInput?: number;
+  lastUsageOutput?: number;
+  lastUsageTotal?: number;
+  postUsageAdditionalTokens?: number;
+}
+
+function estimateContextBreakdown(
   messages: Chat["messages"],
   systemPrompt: string,
   tools?: unknown,
-): number {
+): ContextEstimateBreakdown {
   // Path B: pure char-based estimate across the whole in-context set + prompt.
   const pathBTokens = charEstimateContextSize(messages, systemPrompt, tools);
 
   // Path A: anchor on the latest in-context assistant's reported usage.
   let lastKnownUsage = 0;
   let lastUsageIndex = -1;
+  let lastUsageInput: number | undefined;
+  let lastUsageOutput: number | undefined;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]._outOfContext) continue;
     if (messages[i].role === "assistant" && messages[i].usage?.totalTokens) {
       lastKnownUsage = messages[i].usage!.totalTokens;
+      lastUsageInput = messages[i].usage!.input;
+      lastUsageOutput = messages[i].usage!.output;
       lastUsageIndex = i;
       break;
     }
@@ -193,7 +209,11 @@ function estimateContextSize(
 
   if (lastKnownUsage === 0 || lastUsageIndex < 0) {
     // Cold start / first turn — no prior usage to anchor on.
-    return pathBTokens;
+    return {
+      estimatedTokens: pathBTokens,
+      selectedPath: "char_estimate",
+      pathBTokens,
+    };
   }
 
   let additionalTokens = 0;
@@ -225,7 +245,25 @@ function estimateContextSize(
   }
   const pathATokens = lastKnownUsage + additionalTokens;
 
-  return Math.max(pathATokens, pathBTokens);
+  return {
+    estimatedTokens: Math.max(pathATokens, pathBTokens),
+    selectedPath: pathATokens >= pathBTokens ? "usage_anchor" : "char_estimate",
+    pathATokens,
+    pathBTokens,
+    lastUsageIndex,
+    lastUsageInput,
+    lastUsageOutput,
+    lastUsageTotal: lastKnownUsage,
+    postUsageAdditionalTokens: additionalTokens,
+  };
+}
+
+function estimateContextSize(
+  messages: Chat["messages"],
+  systemPrompt: string,
+  tools?: unknown,
+): number {
+  return estimateContextBreakdown(messages, systemPrompt, tools).estimatedTokens;
 }
 
 export interface ExactContextTokenEstimate {
@@ -241,6 +279,7 @@ export interface ExactContextTokenEstimate {
   signedExactDelta: number;
   exactElapsedMs: number;
   errors: string[];
+  contextBreakdown: ContextEstimateBreakdown;
 }
 
 function findLastUsageIndex(messages: Chat["messages"]): number {
@@ -307,7 +346,8 @@ export async function estimateContextTokensWithExactToolResults(
     minToolResultChars?: number;
   } = {},
 ): Promise<ExactContextTokenEstimate> {
-  const approximateTokens = estimateContextSize(messages, systemPrompt, tools);
+  const contextBreakdown = estimateContextBreakdown(messages, systemPrompt, tools);
+  const approximateTokens = contextBreakdown.estimatedTokens;
   const base: ExactContextTokenEstimate = {
     estimatedTokens: approximateTokens,
     refinedTokens: approximateTokens,
@@ -317,6 +357,7 @@ export async function estimateContextTokensWithExactToolResults(
     signedExactDelta: 0,
     exactElapsedMs: 0,
     errors: [],
+    contextBreakdown,
   };
 
   if (!options.baseUrl || !options.modelId) return base;
