@@ -552,7 +552,7 @@ function ExtractionTab({
               </div>
               <div className="flex items-center gap-3 text-white/30 text-[10px]">
                 <span className="shrink-0">
-                  {run.results ? `${run.results.facts.length} fact(s)` : "…"}
+                  {run.results ? `${run.results.facts.length} memory(ies)` : "…"}
                 </span>
                 {run.results?.chunks && (
                   <span className={`shrink-0 ${run.results.chunks.failures > 0 ? "text-amber-300/60" : "text-white/30"}`}>
@@ -1026,7 +1026,7 @@ function BlocksTab({
   return (
     <div className="p-4 space-y-3">
       <p className="text-white/30 text-xs">
-        Structured knowledge documents maintained by the agent. Blocks organize related facts into editable documents that reduce redundant memory extraction.
+        Structured knowledge documents maintained by the agent. Blocks organize related memories into editable documents that reduce redundant memory extraction.
       </p>
 
       {/* Scope filter */}
