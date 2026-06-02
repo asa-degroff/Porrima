@@ -91,6 +91,46 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
 }
 
 const SIDEBAR_COLLAPSE_DURATION_MS = 200;
+type SidebarRevealOrigin = "top" | "bottom";
+
+function AnimatedListReveal({
+  open,
+  origin = "top",
+  children,
+  className = "",
+}: {
+  open: boolean;
+  origin?: SidebarRevealOrigin;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const [revealed, setRevealed] = useState(false);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setRevealed(true);
+      return;
+    }
+
+    setRevealed(false);
+    const frame = window.requestAnimationFrame(() => setRevealed(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [open]);
+
+  const isVisible = !open || revealed;
+
+  return (
+    <div
+      className={`min-h-0 transition-[opacity,transform] duration-200 ease-out will-change-transform motion-reduce:transition-none ${className}`}
+      style={{
+        opacity: isVisible ? 1 : 0.45,
+        transform: isVisible ? "translateY(0)" : `translateY(${origin === "bottom" ? "6px" : "-6px"})`,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
 function AnimatedCollapse({
   open,
@@ -1309,6 +1349,8 @@ export function Sidebar({
   );
   const { showPreview: agentPreviewVisible, fadeIn: agentPreviewFade } = useCollapsedPreviewFade(agentExpanded, agentChats.length > 0);
   const { showPreview: quickPreviewVisible, fadeIn: quickPreviewFade } = useCollapsedPreviewFade(quickExpanded, quickChats.length > 0);
+  const agentRevealOrigin: SidebarRevealOrigin = projectsExpanded ? "bottom" : "top";
+  const quickRevealOrigin: SidebarRevealOrigin = projectsExpanded || agentExpanded ? "bottom" : "top";
 
   // Group chats by project
   const chatsByProject = useMemo(() => {
@@ -1660,9 +1702,9 @@ export function Sidebar({
                 </button>
               )}
             </div>
-            <AnimatedCollapse open={projectsExpanded} id={projectsContentId} closeFromHeight={projectsCloseHeight} className="flex-1 min-h-0" innerClassName="flex h-full min-h-0">
+            <AnimatedCollapse open={projectsExpanded} id={projectsContentId} closeFromHeight={projectsCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
               <div data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto pb-1">
-                <div className="space-y-1 pl-3 pr-2">
+                <AnimatedListReveal open={projectsExpanded} origin="top" className="space-y-1 pl-3 pr-2">
                   {projects.map((project) => (
                     <ProjectSection
                       key={project.id}
@@ -1704,7 +1746,7 @@ export function Sidebar({
                       cacheResidency={cacheResidency}
                     />
                   ))}
-                </div>
+                </AnimatedListReveal>
               </div>
             </AnimatedCollapse>
             <SectionDepthShadow visible={projectsExpanded} />
@@ -1779,9 +1821,9 @@ export function Sidebar({
             </button>
           </div>
            {/* Scrollable chat list */}
-          <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex h-full min-h-0">
+          <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
             <div ref={agentScrollRef} data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-1">
-              <div className="space-y-0.5 px-3">
+              <AnimatedListReveal open={agentExpanded} origin={agentRevealOrigin} className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("agent"); onClose(); }}
                   className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2 mb-2"
@@ -1820,7 +1862,7 @@ export function Sidebar({
                     Agent chats have persistent memory
                   </p>
                 )}
-              </div>
+              </AnimatedListReveal>
             </div>
           </AnimatedCollapse>
           {/* Recent chat when collapsed — reserves final height immediately, then fades in after collapse */}
@@ -1894,9 +1936,9 @@ export function Sidebar({
             </button>
           </div>
           {/* Scrollable chat list */}
-          <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex h-full min-h-0">
+          <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
             <div ref={quickScrollRef} data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-2">
-              <div className="space-y-0.5 px-3">
+              <AnimatedListReveal open={quickExpanded} origin={quickRevealOrigin} className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("quick"); onClose(); }}
                   className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-sm font-medium hover:bg-blue-500/25 transition-all flex items-center justify-center gap-2 mb-2"
@@ -1935,7 +1977,7 @@ export function Sidebar({
                     Standalone one-off conversations
                   </p>
                 )}
-              </div>
+              </AnimatedListReveal>
             </div>
           </AnimatedCollapse>
           {/* Recent chat when collapsed — reserves final height immediately, then fades in after collapse */}
