@@ -4,6 +4,7 @@ import {
   formatToolArgumentsForExtraction,
   isSubstantiveForPreCompactionExtraction,
   parseExtractionResponse,
+  readOpenAIContentStream,
   resolveEffectiveExtractionModelId,
 } from "../services/memory-extraction.js";
 import type { ChatMessage } from "../types.js";
@@ -96,6 +97,34 @@ describe("parseExtractionResponse", () => {
     const result = parseExtractionResponse(input);
     expect(result).toHaveLength(1);
     expect(result[0].text).toBe("Found it");
+  });
+
+  it("strips thinking traces before parsing the final JSON array", () => {
+    const input = `<think>I considered a bracketed example: [{"text":"not final"}]</think>
+[{"text": "Final fact", "category": "fact", "importance": 5}]`;
+    const result = parseExtractionResponse(input);
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toBe("Final fact");
+  });
+});
+
+describe("readOpenAIContentStream", () => {
+  it("preserves streamed reasoning_content as a thinking block in raw output", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: {"choices":[{"delta":{"reasoning_content":"checking context"}}]}\n`));
+        controller.enqueue(encoder.encode(`data: {"choices":[{"delta":{"reasoning_content":" before JSON"}}]}\n`));
+        controller.enqueue(encoder.encode(`data: {"choices":[{"delta":{"content":"[]"}}]}\n`));
+        controller.enqueue(encoder.encode("data: [DONE]\n"));
+        controller.close();
+      },
+    });
+
+    const result = await readOpenAIContentStream(stream);
+
+    expect(result.content).toBe("<think>checking context before JSON</think>[]");
+    expect(parseExtractionResponse(result.content)).toEqual([]);
   });
 });
 
