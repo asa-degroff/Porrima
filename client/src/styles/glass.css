@@ -131,24 +131,6 @@ body::before {
   overflow-anchor: none;
 }
 
-.sidebar-activity-logo-touch {
-  display: none;
-}
-
-.sidebar-activity-logo-rich {
-  display: inline-flex;
-}
-
-@media (hover: none), (any-pointer: coarse) {
-  .sidebar-activity-logo-touch {
-    display: inline-flex;
-  }
-
-  .sidebar-activity-logo-rich {
-    display: none;
-  }
-}
-
 /* Custom scrollbar for tool call containers */
 .custom-scrollbar {
   scrollbar-width: thin;

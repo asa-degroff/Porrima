@@ -1645,14 +1645,7 @@ export function Sidebar({
                   className={`pointer-events-none absolute inset-0 flex items-center transition-opacity duration-300 ${sidebarActivityActive ? 'opacity-100' : 'opacity-0'}`}
                   aria-hidden="true"
                 >
-                  <div className="sidebar-activity-logo-touch items-center">
-                    <div className="motion-safe:animate-pulse">
-                      <SidebarLogo size={24} />
-                    </div>
-                  </div>
-                  <div className="sidebar-activity-logo-rich">
-                    <PolyhedronLogo isActive={sidebarActivityActive} shape={activityShape} />
-                  </div>
+                  <PolyhedronLogo isActive={sidebarActivityActive} shape={activityShape} />
                 </div>
               </div>
             </div>
