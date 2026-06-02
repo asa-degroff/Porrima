@@ -93,13 +93,135 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
 const SIDEBAR_COLLAPSE_DURATION_MS = 200;
 type SidebarRevealOrigin = "top" | "bottom";
 
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+
+  useEffect(() => {
+    if (!window.matchMedia) return;
+
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setPrefersReducedMotion(query.matches);
+    update();
+
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
+interface SidebarSectionSnapshot {
+  expanded: boolean[];
+  tops: Array<number | null>;
+}
+
+function measureSectionTops(refs: Array<React.RefObject<HTMLDivElement | null>>) {
+  return refs.map((ref) => ref.current?.getBoundingClientRect().top ?? null);
+}
+
+function useOpeningSectionMotion(
+  refs: Array<React.RefObject<HTMLDivElement | null>>,
+  expandedStates: boolean[],
+  layoutKey: string
+) {
+  const previousSnapshotRef = useRef<SidebarSectionSnapshot | null>(null);
+  const [movingOpenIndex, setMovingOpenIndex] = useState<number | null>(null);
+  const prefersReducedMotion = usePrefersReducedMotion();
+
+  useLayoutEffect(() => {
+    const elements = refs.map((ref) => ref.current);
+    const targetTops = measureSectionTops(refs);
+    const previousSnapshot = previousSnapshotRef.current;
+    const nextSnapshot = { expanded: [...expandedStates], tops: targetTops };
+
+    if (prefersReducedMotion || !previousSnapshot || previousSnapshot.expanded.length !== expandedStates.length) {
+      previousSnapshotRef.current = nextSnapshot;
+      setMovingOpenIndex(null);
+      return;
+    }
+
+    const changedIndexes = expandedStates.flatMap((expanded, index) =>
+      expanded === previousSnapshot.expanded[index] ? [] : [index]
+    );
+    const changedIndex = changedIndexes.length === 1 ? changedIndexes[0] : -1;
+    const isOpening = changedIndex >= 0 && !previousSnapshot.expanded[changedIndex] && expandedStates[changedIndex];
+    const element = changedIndex >= 0 ? elements[changedIndex] : null;
+    const previousTop = changedIndex >= 0 ? previousSnapshot.tops[changedIndex] : null;
+    const targetTop = changedIndex >= 0 ? targetTops[changedIndex] : null;
+    const deltaY = previousTop !== null && targetTop !== null ? previousTop - targetTop : 0;
+
+    previousSnapshotRef.current = nextSnapshot;
+
+    if (!isOpening || !element || Math.abs(deltaY) < 1) {
+      setMovingOpenIndex(null);
+      return;
+    }
+
+    setMovingOpenIndex(changedIndex);
+
+    const previousStyles = {
+      transition: element.style.transition,
+      transform: element.style.transform,
+      zIndex: element.style.zIndex,
+      willChange: element.style.willChange,
+    };
+
+    element.style.transition = "none";
+    element.style.transform = `${previousStyles.transform ? `${previousStyles.transform} ` : ""}translateY(${deltaY}px)`;
+    element.style.zIndex = "20";
+    element.style.willChange = "transform";
+
+    element.getBoundingClientRect();
+
+    const frame = window.requestAnimationFrame(() => {
+      element.style.transition = `transform ${SIDEBAR_COLLAPSE_DURATION_MS}ms ease-out`;
+      element.style.transform = previousStyles.transform;
+    });
+
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      window.cancelAnimationFrame(frame);
+      element.style.transition = previousStyles.transition;
+      element.style.transform = previousStyles.transform;
+      element.style.zIndex = previousStyles.zIndex;
+      element.style.willChange = previousStyles.willChange;
+      previousSnapshotRef.current = {
+        expanded: [...expandedStates],
+        tops: measureSectionTops(refs),
+      };
+      setMovingOpenIndex(null);
+    };
+
+    const timer = window.setTimeout(finish, SIDEBAR_COLLAPSE_DURATION_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      finish();
+    };
+  }, [layoutKey, prefersReducedMotion, refs, expandedStates]);
+
+  useLayoutEffect(() => {
+    if (movingOpenIndex !== null) return;
+    previousSnapshotRef.current = {
+      expanded: [...expandedStates],
+      tops: measureSectionTops(refs),
+    };
+  });
+
+  return movingOpenIndex;
+}
+
 function AnimatedListReveal({
   open,
+  animate = false,
   origin = "top",
   children,
   className = "",
 }: {
   open: boolean;
+  animate?: boolean;
   origin?: SidebarRevealOrigin;
   children: React.ReactNode;
   className?: string;
@@ -107,7 +229,7 @@ function AnimatedListReveal({
   const [revealed, setRevealed] = useState(false);
 
   useLayoutEffect(() => {
-    if (!open) {
+    if (!open || !animate) {
       setRevealed(true);
       return;
     }
@@ -115,9 +237,9 @@ function AnimatedListReveal({
     setRevealed(false);
     const frame = window.requestAnimationFrame(() => setRevealed(true));
     return () => window.cancelAnimationFrame(frame);
-  }, [open]);
+  }, [open, animate]);
 
-  const isVisible = !open || revealed;
+  const isVisible = !open || !animate || revealed;
 
   return (
     <div
@@ -162,10 +284,9 @@ function AnimatedCollapse({
       const currentHeight = outer?.offsetHeight ?? 0;
       const targetHeight = inner?.scrollHeight ?? currentHeight;
       setMaxHeight(`${currentHeight}px`);
-      setVisible(false);
+      setVisible(true);
 
       const frame = window.requestAnimationFrame(() => {
-        setVisible(true);
         setMaxHeight(`${targetHeight}px`);
       });
 
@@ -1220,6 +1341,9 @@ export function Sidebar({
   const [searchResults, setSearchResults] = useState<ConversationSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const headerRef = useRef<HTMLDivElement>(null);
+  const projectsSectionRef = useRef<HTMLDivElement>(null);
+  const agentSectionRef = useRef<HTMLDivElement>(null);
+  const quickSectionRef = useRef<HTMLDivElement>(null);
   const agentScrollRef = useRef<HTMLDivElement>(null);
   const quickScrollRef = useRef<HTMLDivElement>(null);
   const agentPreviewMeasureRef = useRef<HTMLDivElement>(null);
@@ -1235,6 +1359,16 @@ export function Sidebar({
   const [agentShowAll, setAgentShowAll] = useState(false);
   const [quickShowAll, setQuickShowAll] = useState(false);
   const SIDEBAR_CHAT_PAGE_SIZE = 30;
+  const mainSectionRefs = useMemo(
+    () => [projectsSectionRef, agentSectionRef, quickSectionRef],
+    []
+  );
+  const mainSectionExpandedStates = useMemo(
+    () => [projects.length > 0 && projectsExpanded, agentExpanded, quickExpanded],
+    [projects.length, projectsExpanded, agentExpanded, quickExpanded]
+  );
+  const mainSectionLayoutKey = mainSectionExpandedStates.join(":");
+  const movingOpenSectionIndex = useOpeningSectionMotion(mainSectionRefs, mainSectionExpandedStates, mainSectionLayoutKey);
 
   useEffect(() => {
     if (!agentExpanded) { setAgentScrolled(false); setAgentShowAll(false); return; }
@@ -1670,7 +1804,7 @@ export function Sidebar({
 
         {/* Projects Section */}
         {projects.length > 0 && (
-          <div className={`relative flex flex-col min-h-0 border-b border-white/5 ${projectsExpanded ? "flex-1" : "shrink-0"}`}>
+          <div ref={projectsSectionRef} className={`relative flex flex-col min-h-0 border-b border-white/5 ${projectsExpanded ? "flex-1" : "shrink-0"}`}>
             <div className="px-3 pt-2 pb-0.5 shrink-0 flex items-center justify-between">
               <button
                 onClick={handleToggleProjectsExpanded}
@@ -1684,27 +1818,28 @@ export function Sidebar({
                 <span className="text-[10px] font-semibold tracking-wider uppercase text-white/30 group-hover:text-white/50 transition-colors">
                   Projects
                 </span>
-                {!projectsExpanded && projects.length > 0 && (
-                  <span className="text-[10px] text-white/20 ml-auto">{projects.length}</span>
-                )}
               </button>
-            {/* New project button always shown when expanded */}
-              {projectsExpanded && (
-                <button
-                  onClick={onNewProject}
-                  className="mb-1 text-white hover:text-white transition-colors p-1 rounded-lg hover:bg-white/5"
-                  title="New project"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-30 hover:opacity-60 transition-opacity">
-                    <path d="M12 5v14" />
-                    <path d="M5 12h14" />
-                  </svg>
-                </button>
-              )}
+              <div className="mb-1 ml-1 min-w-5 h-5 flex items-center justify-center shrink-0">
+                {projectsExpanded ? (
+                  <button
+                    onClick={onNewProject}
+                    className="w-5 h-5 flex items-center justify-center rounded-md text-emerald-300/70 hover:text-emerald-200 hover:bg-emerald-500/15 transition-colors"
+                    title="New project"
+                    aria-label="New project"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-30 hover:opacity-60 transition-opacity">
+                      <path d="M12 5v14" />
+                      <path d="M5 12h14" />
+                    </svg>
+                  </button>
+                ) : (
+                  <span className="text-[10px] text-white/20 px-1">{projects.length}</span>
+                )}
+              </div>
             </div>
             <AnimatedCollapse open={projectsExpanded} id={projectsContentId} closeFromHeight={projectsCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
               <div data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto pb-1">
-                <AnimatedListReveal open={projectsExpanded} origin="top" className="space-y-1 pl-3 pr-2">
+                <AnimatedListReveal open={projectsExpanded} animate={movingOpenSectionIndex === 0} origin="top" className="space-y-1 pl-3 pr-2">
                   {projects.map((project) => (
                     <ProjectSection
                       key={project.id}
@@ -1770,7 +1905,7 @@ export function Sidebar({
         )}
 
         {/* Agent Chats Section */}
-        <div className={`relative flex flex-col min-h-0 border-b border-white/5 ${agentExpanded ? "flex-1" : "shrink-0"}`}>
+        <div ref={agentSectionRef} className={`relative flex flex-col min-h-0 border-b border-white/5 ${agentExpanded ? "flex-1" : "shrink-0"}`}>
           {agentChats.length > 0 && (
             <CollapsedPreviewFrame measureRef={agentPreviewMeasureRef} measuring>
               <RecentChatItem
@@ -1823,7 +1958,7 @@ export function Sidebar({
            {/* Scrollable chat list */}
           <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
             <div ref={agentScrollRef} data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-1">
-              <AnimatedListReveal open={agentExpanded} origin={agentRevealOrigin} className="space-y-0.5 px-3">
+              <AnimatedListReveal open={agentExpanded} animate={movingOpenSectionIndex === 1} origin={agentRevealOrigin} className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("agent"); onClose(); }}
                   className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2 mb-2"
@@ -1887,7 +2022,7 @@ export function Sidebar({
         </div>
 
         {/* Quick Chats Section */}
-        <div className={`relative flex flex-col min-h-0 ${quickExpanded ? "flex-1" : "shrink-0"}`}>
+        <div ref={quickSectionRef} className={`relative flex flex-col min-h-0 ${quickExpanded ? "flex-1" : "shrink-0"}`}>
           {quickChats.length > 0 && (
             <CollapsedPreviewFrame measureRef={quickPreviewMeasureRef} measuring>
               <RecentChatItem
@@ -1938,7 +2073,7 @@ export function Sidebar({
           {/* Scrollable chat list */}
           <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
             <div ref={quickScrollRef} data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-2">
-              <AnimatedListReveal open={quickExpanded} origin={quickRevealOrigin} className="space-y-0.5 px-3">
+              <AnimatedListReveal open={quickExpanded} animate={movingOpenSectionIndex === 2} origin={quickRevealOrigin} className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("quick"); onClose(); }}
                   className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-sm font-medium hover:bg-blue-500/25 transition-all flex items-center justify-center gap-2 mb-2"
