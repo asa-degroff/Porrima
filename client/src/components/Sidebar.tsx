@@ -93,6 +93,18 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
 const SIDEBAR_COLLAPSE_DURATION_MS = 200;
 type SidebarRevealOrigin = "top" | "bottom";
 
+function snapToDevicePixel(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  const ratio = window.devicePixelRatio || 1;
+  return Math.round(value * ratio) / ratio;
+}
+
+function ceilToDevicePixel(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  const ratio = window.devicePixelRatio || 1;
+  return Math.ceil(value * ratio) / ratio;
+}
+
 function usePrefersReducedMotion() {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
 
@@ -125,7 +137,7 @@ function useOpeningSectionMotion(
   layoutKey: string
 ) {
   const previousSnapshotRef = useRef<SidebarSectionSnapshot | null>(null);
-  const [movingOpenIndex, setMovingOpenIndex] = useState<number | null>(null);
+  const [openingSectionIndex, setOpeningSectionIndex] = useState<number | null>(null);
   const prefersReducedMotion = usePrefersReducedMotion();
 
   useLayoutEffect(() => {
@@ -136,7 +148,7 @@ function useOpeningSectionMotion(
 
     if (prefersReducedMotion || !previousSnapshot || previousSnapshot.expanded.length !== expandedStates.length) {
       previousSnapshotRef.current = nextSnapshot;
-      setMovingOpenIndex(null);
+      setOpeningSectionIndex(null);
       return;
     }
 
@@ -145,53 +157,73 @@ function useOpeningSectionMotion(
     );
     const changedIndex = changedIndexes.length === 1 ? changedIndexes[0] : -1;
     const isOpening = changedIndex >= 0 && !previousSnapshot.expanded[changedIndex] && expandedStates[changedIndex];
-    const element = changedIndex >= 0 ? elements[changedIndex] : null;
-    const previousTop = changedIndex >= 0 ? previousSnapshot.tops[changedIndex] : null;
-    const targetTop = changedIndex >= 0 ? targetTops[changedIndex] : null;
-    const deltaY = previousTop !== null && targetTop !== null ? previousTop - targetTop : 0;
 
     previousSnapshotRef.current = nextSnapshot;
 
-    if (!isOpening || !element || Math.abs(deltaY) < 1) {
-      setMovingOpenIndex(null);
+    if (!isOpening) {
+      setOpeningSectionIndex(null);
       return;
     }
 
-    setMovingOpenIndex(changedIndex);
+    setOpeningSectionIndex(changedIndex);
 
-    const previousStyles = {
-      transition: element.style.transition,
-      transform: element.style.transform,
-      zIndex: element.style.zIndex,
-      willChange: element.style.willChange,
-    };
+    const movingElements = elements.flatMap((element, index) => {
+      const previousTop = previousSnapshot.tops[index];
+      const targetTop = targetTops[index];
+      const deltaY = previousTop !== null && targetTop !== null ? snapToDevicePixel(previousTop - targetTop) : 0;
 
-    element.style.transition = "none";
-    element.style.transform = `${previousStyles.transform ? `${previousStyles.transform} ` : ""}translateY(${deltaY}px)`;
-    element.style.zIndex = "20";
-    element.style.willChange = "transform";
+      if (!element || Math.abs(deltaY) < 0.5) {
+        return [];
+      }
 
-    element.getBoundingClientRect();
-
-    const frame = window.requestAnimationFrame(() => {
-      element.style.transition = `transform ${SIDEBAR_COLLAPSE_DURATION_MS}ms ease-out`;
-      element.style.transform = previousStyles.transform;
+      return [{
+        element,
+        deltaY,
+        previousStyles: {
+          transition: element.style.transition,
+          transform: element.style.transform,
+          zIndex: element.style.zIndex,
+          willChange: element.style.willChange,
+        },
+      }];
     });
+
+    for (const { element, deltaY, previousStyles } of movingElements) {
+      element.style.transition = "none";
+      element.style.transform = `${previousStyles.transform ? `${previousStyles.transform} ` : ""}translateY(${deltaY}px)`;
+      element.style.zIndex = "20";
+      element.style.willChange = "transform";
+    }
+
+    movingElements[0]?.element.getBoundingClientRect();
+
+    const frame = movingElements.length > 0
+      ? window.requestAnimationFrame(() => {
+          for (const { element, previousStyles } of movingElements) {
+            element.style.transition = `transform ${SIDEBAR_COLLAPSE_DURATION_MS}ms ease-out`;
+            element.style.transform = previousStyles.transform;
+          }
+        })
+      : null;
 
     let finished = false;
     const finish = () => {
       if (finished) return;
       finished = true;
-      window.cancelAnimationFrame(frame);
-      element.style.transition = previousStyles.transition;
-      element.style.transform = previousStyles.transform;
-      element.style.zIndex = previousStyles.zIndex;
-      element.style.willChange = previousStyles.willChange;
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      for (const { element, previousStyles } of movingElements) {
+        element.style.transition = previousStyles.transition;
+        element.style.transform = previousStyles.transform;
+        element.style.zIndex = previousStyles.zIndex;
+        element.style.willChange = previousStyles.willChange;
+      }
       previousSnapshotRef.current = {
         expanded: [...expandedStates],
         tops: measureSectionTops(refs),
       };
-      setMovingOpenIndex(null);
+      setOpeningSectionIndex(null);
     };
 
     const timer = window.setTimeout(finish, SIDEBAR_COLLAPSE_DURATION_MS);
@@ -203,14 +235,14 @@ function useOpeningSectionMotion(
   }, [layoutKey, prefersReducedMotion, refs, expandedStates]);
 
   useLayoutEffect(() => {
-    if (movingOpenIndex !== null) return;
+    if (openingSectionIndex !== null) return;
     previousSnapshotRef.current = {
       expanded: [...expandedStates],
       tops: measureSectionTops(refs),
     };
   });
 
-  return movingOpenIndex;
+  return openingSectionIndex;
 }
 
 function AnimatedListReveal({
@@ -239,14 +271,14 @@ function AnimatedListReveal({
     return () => window.cancelAnimationFrame(frame);
   }, [open, animate]);
 
-  const isVisible = !open || !animate || revealed;
+  const isRevealing = open && animate && !revealed;
 
   return (
     <div
-      className={`min-h-0 transition-[opacity,transform] duration-200 ease-out will-change-transform motion-reduce:transition-none ${className}`}
+      className={`min-h-0 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${className}`}
       style={{
-        opacity: isVisible ? 1 : 0.45,
-        transform: isVisible ? "translateY(0)" : `translateY(${origin === "bottom" ? "6px" : "-6px"})`,
+        opacity: isRevealing ? 0.45 : undefined,
+        transform: isRevealing ? `translateY(${origin === "bottom" ? "6px" : "-6px"})` : undefined,
       }}
     >
       {children}
@@ -275,14 +307,31 @@ function AnimatedCollapse({
   const outerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
 
+  const measureOpenHeight = useCallback((outer: HTMLDivElement | null, inner: HTMLDivElement | null, fallbackHeight: number) => {
+    if (!outer) {
+      return ceilToDevicePixel(inner?.scrollHeight ?? fallbackHeight);
+    }
+
+    const previousTransition = outer.style.transition;
+    const previousMaxHeight = outer.style.maxHeight;
+
+    outer.style.transition = "none";
+    outer.style.maxHeight = "none";
+    const allocatedHeight = outer.getBoundingClientRect().height;
+    outer.style.maxHeight = previousMaxHeight;
+    outer.style.transition = previousTransition;
+
+    return ceilToDevicePixel(allocatedHeight || inner?.scrollHeight || fallbackHeight);
+  }, []);
+
   useLayoutEffect(() => {
     const outer = outerRef.current;
     const inner = innerRef.current;
 
     if (open) {
       setShouldRender(true);
-      const currentHeight = outer?.offsetHeight ?? 0;
-      const targetHeight = inner?.scrollHeight ?? currentHeight;
+      const currentHeight = ceilToDevicePixel(outer?.getBoundingClientRect().height ?? 0);
+      const targetHeight = measureOpenHeight(outer, inner, currentHeight);
       setMaxHeight(`${currentHeight}px`);
       setVisible(true);
 
@@ -1368,7 +1417,7 @@ export function Sidebar({
     [projects.length, projectsExpanded, agentExpanded, quickExpanded]
   );
   const mainSectionLayoutKey = mainSectionExpandedStates.join(":");
-  const movingOpenSectionIndex = useOpeningSectionMotion(mainSectionRefs, mainSectionExpandedStates, mainSectionLayoutKey);
+  const openingSectionIndex = useOpeningSectionMotion(mainSectionRefs, mainSectionExpandedStates, mainSectionLayoutKey);
 
   useEffect(() => {
     if (!agentExpanded) { setAgentScrolled(false); setAgentShowAll(false); return; }
@@ -1839,7 +1888,7 @@ export function Sidebar({
             </div>
             <AnimatedCollapse open={projectsExpanded} id={projectsContentId} closeFromHeight={projectsCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
               <div data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto pb-1">
-                <AnimatedListReveal open={projectsExpanded} animate={movingOpenSectionIndex === 0} origin="top" className="space-y-1 pl-3 pr-2">
+                <AnimatedListReveal open={projectsExpanded} animate={openingSectionIndex === 0} origin="top" className="space-y-1 pl-3 pr-2">
                   {projects.map((project) => (
                     <ProjectSection
                       key={project.id}
@@ -1958,7 +2007,7 @@ export function Sidebar({
            {/* Scrollable chat list */}
           <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
             <div ref={agentScrollRef} data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-1">
-              <AnimatedListReveal open={agentExpanded} animate={movingOpenSectionIndex === 1} origin={agentRevealOrigin} className="space-y-0.5 px-3">
+              <AnimatedListReveal open={agentExpanded} animate={openingSectionIndex === 1} origin={agentRevealOrigin} className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("agent"); onClose(); }}
                   className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2 mb-2"
@@ -2073,7 +2122,7 @@ export function Sidebar({
           {/* Scrollable chat list */}
           <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
             <div ref={quickScrollRef} data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-2">
-              <AnimatedListReveal open={quickExpanded} animate={movingOpenSectionIndex === 2} origin={quickRevealOrigin} className="space-y-0.5 px-3">
+              <AnimatedListReveal open={quickExpanded} animate={openingSectionIndex === 2} origin={quickRevealOrigin} className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("quick"); onClose(); }}
                   className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-sm font-medium hover:bg-blue-500/25 transition-all flex items-center justify-center gap-2 mb-2"
