@@ -148,6 +148,13 @@ function useOpeningSectionMotion(
   });
   const prefersReducedMotion = usePrefersReducedMotion();
 
+  const captureSnapshot = useCallback(() => {
+    previousSnapshotRef.current = {
+      expanded: [...expandedStates],
+      tops: measureSectionTops(refs),
+    };
+  }, [refs, expandedStates]);
+
   useLayoutEffect(() => {
     const elements = refs.map((ref) => ref.current);
     const targetTops = measureSectionTops(refs);
@@ -256,7 +263,7 @@ function useOpeningSectionMotion(
     };
   });
 
-  return openingSectionMotion;
+  return { openingSectionMotion, captureSnapshot };
 }
 
 function AnimatedListReveal({
@@ -1431,7 +1438,11 @@ export function Sidebar({
     [projects.length, projectsExpanded, agentExpanded, quickExpanded]
   );
   const mainSectionLayoutKey = mainSectionExpandedStates.join(":");
-  const openingSectionMotion = useOpeningSectionMotion(mainSectionRefs, mainSectionExpandedStates, mainSectionLayoutKey);
+  const { openingSectionMotion, captureSnapshot: captureMainSectionSnapshot } = useOpeningSectionMotion(
+    mainSectionRefs,
+    mainSectionExpandedStates,
+    mainSectionLayoutKey
+  );
 
   useEffect(() => {
     if (!agentExpanded) { setAgentScrolled(false); setAgentShowAll(false); return; }
@@ -1508,29 +1519,32 @@ export function Sidebar({
   }
 
   const handleToggleProjectsExpanded = useCallback(() => {
+    captureMainSectionSnapshot();
     if (projectsExpanded) {
       setProjectsCloseHeight(document.getElementById(projectsContentId)?.offsetHeight ?? null);
     }
     setProjectsExpanded(!projectsExpanded);
-  }, [projectsExpanded, projectsContentId, setProjectsExpanded]);
+  }, [captureMainSectionSnapshot, projectsExpanded, projectsContentId, setProjectsExpanded]);
 
   const handleToggleAgentExpanded = useCallback(() => {
+    captureMainSectionSnapshot();
     if (agentExpanded) {
       const expandedHeight = document.getElementById(agentContentId)?.offsetHeight ?? 0;
       const previewHeight = agentPreviewMeasureRef.current?.offsetHeight ?? 0;
       setAgentCloseHeight(Math.max(0, expandedHeight - previewHeight));
     }
     setAgentExpanded(!agentExpanded);
-  }, [agentExpanded, agentContentId, setAgentExpanded]);
+  }, [captureMainSectionSnapshot, agentExpanded, agentContentId, setAgentExpanded]);
 
   const handleToggleQuickExpanded = useCallback(() => {
+    captureMainSectionSnapshot();
     if (quickExpanded) {
       const expandedHeight = document.getElementById(quickContentId)?.offsetHeight ?? 0;
       const previewHeight = quickPreviewMeasureRef.current?.offsetHeight ?? 0;
       setQuickCloseHeight(Math.max(0, expandedHeight - previewHeight));
     }
     setQuickExpanded(!quickExpanded);
-  }, [quickExpanded, quickContentId, setQuickExpanded]);
+  }, [captureMainSectionSnapshot, quickExpanded, quickContentId, setQuickExpanded]);
 
   const agentChats = useMemo(
     () => chats.filter((c) => c.type === "agent" && !c.projectId),
