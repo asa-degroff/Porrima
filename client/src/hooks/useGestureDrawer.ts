@@ -214,6 +214,7 @@ export function useGestureDrawer({
 
     while (el && el !== root) {
       if (el instanceof HTMLElement) {
+        if (el.hasAttribute("data-gesture-drawer-scroll")) return true;
         const { overflowY } = window.getComputedStyle(el);
         const canScrollY = (overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight;
         if (canScrollY) return true;

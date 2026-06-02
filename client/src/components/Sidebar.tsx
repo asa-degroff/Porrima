@@ -1394,7 +1394,14 @@ export function Sidebar({
                   className={`pointer-events-none absolute inset-0 flex items-center transition-opacity duration-300 ${sidebarActivityActive ? 'opacity-100' : 'opacity-0'}`}
                   aria-hidden="true"
                 >
-                  <PolyhedronLogo isActive={sidebarActivityActive} shape={activityShape} />
+                  <div className="sidebar-activity-logo-touch items-center">
+                    <div className="motion-safe:animate-pulse">
+                      <SidebarLogo size={24} />
+                    </div>
+                  </div>
+                  <div className="sidebar-activity-logo-rich">
+                    <PolyhedronLogo isActive={sidebarActivityActive} shape={activityShape} />
+                  </div>
                 </div>
               </div>
             </div>
@@ -1654,7 +1661,7 @@ export function Sidebar({
               )}
             </div>
             <AnimatedCollapse open={projectsExpanded} id={projectsContentId} closeFromHeight={projectsCloseHeight} className="flex-1 min-h-0" innerClassName="flex h-full min-h-0">
-              <div className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto pb-1">
+              <div data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto pb-1">
                 <div className="space-y-1 pl-3 pr-2">
                   {projects.map((project) => (
                     <ProjectSection
@@ -1773,7 +1780,7 @@ export function Sidebar({
           </div>
            {/* Scrollable chat list */}
           <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex h-full min-h-0">
-            <div ref={agentScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-1">
+            <div ref={agentScrollRef} data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-1">
               <div className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("agent"); onClose(); }}
@@ -1888,7 +1895,7 @@ export function Sidebar({
           </div>
           {/* Scrollable chat list */}
           <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex h-full min-h-0">
-            <div ref={quickScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-2">
+            <div ref={quickScrollRef} data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-2">
               <div className="space-y-0.5 px-3">
                 <button
                   onClick={() => { onNewChat("quick"); onClose(); }}
