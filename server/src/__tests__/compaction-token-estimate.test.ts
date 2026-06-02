@@ -151,4 +151,31 @@ describe("token estimation for dense tool results", () => {
     expect(refined.estimatedTokens).toBe(approximate);
     expect(refined.refinedTokens).toBeLessThan(approximate);
   });
+
+  it("uses usage-anchor tokens for display when char estimates are only the conservative path", async () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "I will continue with the tool results.",
+        usage: { input: 7_800, output: 200, totalTokens: 8_000 },
+        timestamp: 1,
+      },
+    ];
+    const systemPrompt = "Expanded system prompt section. ".repeat(12_000);
+    const conservative = estimateContextTokens(messages, systemPrompt, []);
+
+    const refined = await estimateContextTokensWithExactToolResults(
+      messages,
+      systemPrompt,
+      [],
+    );
+
+    expect(refined.contextBreakdown.selectedPath).toBe("char_estimate");
+    expect(refined.contextBreakdown.displayPath).toBe("usage_anchor");
+    expect(refined.approximateTokens).toBe(conservative);
+    expect(refined.estimatedTokens).toBe(conservative);
+    expect(refined.approximateDisplayTokens).toBe(8_000);
+    expect(refined.refinedTokens).toBe(8_000);
+    expect(refined.estimatedTokens).toBeGreaterThan(refined.refinedTokens);
+  });
 });

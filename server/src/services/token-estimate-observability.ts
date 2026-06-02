@@ -60,10 +60,12 @@ export interface ContextEstimateObservationInput {
   estimatedInputTokens: number;
   displayEstimatedInputTokens?: number;
   approximateTokens?: number;
+  approximateDisplayTokens?: number;
   exactToolResultCount?: number;
   exactDelta?: number;
   signedExactDelta?: number;
   selectedEstimatePath?: "usage_anchor" | "char_estimate";
+  displayEstimatePath?: "usage_anchor" | "char_estimate";
   pathAEstimateTokens?: number;
   pathBEstimateTokens?: number;
   lastUsageInputTokens?: number;
@@ -118,10 +120,12 @@ export type TokenEstimateSample =
       estimatedInputTokens: number;
       displayEstimatedInputTokens?: number;
       approximateTokens?: number;
+      approximateDisplayTokens?: number;
       exactToolResultCount?: number;
       exactDelta?: number;
       signedExactDelta?: number;
       selectedEstimatePath?: "usage_anchor" | "char_estimate";
+      displayEstimatePath?: "usage_anchor" | "char_estimate";
       pathAEstimateTokens?: number;
       pathBEstimateTokens?: number;
       lastUsageInputTokens?: number;
@@ -206,10 +210,12 @@ export function recordContextEstimateObservation(input: ContextEstimateObservati
     estimatedInputTokens: input.estimatedInputTokens,
     displayEstimatedInputTokens: input.displayEstimatedInputTokens,
     approximateTokens: input.approximateTokens,
+    approximateDisplayTokens: input.approximateDisplayTokens,
     exactToolResultCount: input.exactToolResultCount,
     exactDelta: input.exactDelta,
     signedExactDelta: input.signedExactDelta,
     selectedEstimatePath: input.selectedEstimatePath,
+    displayEstimatePath: input.displayEstimatePath,
     pathAEstimateTokens: input.pathAEstimateTokens,
     pathBEstimateTokens: input.pathBEstimateTokens,
     lastUsageInputTokens: input.lastUsageInputTokens,

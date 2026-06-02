@@ -941,10 +941,12 @@ async function handleChatStream(
       estimatedInputTokens: number;
       displayEstimatedInputTokens: number;
       approximateTokens: number;
+      approximateDisplayTokens?: number;
       exactToolResultCount: number;
       exactDelta: number;
       signedExactDelta: number;
       selectedEstimatePath?: "usage_anchor" | "char_estimate";
+      displayEstimatePath?: "usage_anchor" | "char_estimate";
       pathAEstimateTokens?: number;
       pathBEstimateTokens?: number;
       lastUsageInputTokens?: number;
@@ -2020,10 +2022,12 @@ async function handleChatStream(
               estimatedInputTokens: pendingTokenEstimateObservation.estimatedInputTokens,
               displayEstimatedInputTokens: pendingTokenEstimateObservation.displayEstimatedInputTokens,
               approximateTokens: pendingTokenEstimateObservation.approximateTokens,
+              approximateDisplayTokens: pendingTokenEstimateObservation.approximateDisplayTokens,
               exactToolResultCount: pendingTokenEstimateObservation.exactToolResultCount,
               exactDelta: pendingTokenEstimateObservation.exactDelta,
               signedExactDelta: pendingTokenEstimateObservation.signedExactDelta,
               selectedEstimatePath: pendingTokenEstimateObservation.selectedEstimatePath,
+              displayEstimatePath: pendingTokenEstimateObservation.displayEstimatePath,
               pathAEstimateTokens: pendingTokenEstimateObservation.pathAEstimateTokens,
               pathBEstimateTokens: pendingTokenEstimateObservation.pathBEstimateTokens,
               lastUsageInputTokens: pendingTokenEstimateObservation.lastUsageInputTokens,
@@ -2069,10 +2073,12 @@ async function handleChatStream(
           let estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
           let displayEstimatedTokens = estimatedTokens;
           const approximateTokens = estimatedTokens;
+          let approximateDisplayTokens: number | undefined;
           let exactToolResultCount = 0;
           let exactDelta = 0;
           let signedExactDelta = 0;
           let selectedEstimatePath: "usage_anchor" | "char_estimate" | undefined;
+          let displayEstimatePath: "usage_anchor" | "char_estimate" | undefined;
           let pathAEstimateTokens: number | undefined;
           let pathBEstimateTokens: number | undefined;
           let lastUsageInputTokens: number | undefined;
@@ -2094,10 +2100,12 @@ async function handleChatStream(
             );
             estimatedTokens = exactEstimate.estimatedTokens;
             displayEstimatedTokens = exactEstimate.refinedTokens;
+            approximateDisplayTokens = exactEstimate.approximateDisplayTokens;
             exactToolResultCount = exactEstimate.exactToolResultCount;
             exactDelta = exactEstimate.exactDelta;
             signedExactDelta = exactEstimate.signedExactDelta;
             selectedEstimatePath = exactEstimate.contextBreakdown.selectedPath;
+            displayEstimatePath = exactEstimate.contextBreakdown.displayPath;
             pathAEstimateTokens = exactEstimate.contextBreakdown.pathATokens;
             pathBEstimateTokens = exactEstimate.contextBreakdown.pathBTokens;
             lastUsageInputTokens = exactEstimate.contextBreakdown.lastUsageInput;
@@ -2218,10 +2226,12 @@ async function handleChatStream(
               estimatedInputTokens: estimatedTokens,
               displayEstimatedInputTokens: displayEstimatedTokens,
               approximateTokens,
+              approximateDisplayTokens,
               exactToolResultCount,
               exactDelta,
               signedExactDelta,
               selectedEstimatePath,
+              displayEstimatePath,
               pathAEstimateTokens,
               pathBEstimateTokens,
               lastUsageInputTokens,

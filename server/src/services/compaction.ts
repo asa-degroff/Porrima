@@ -172,8 +172,12 @@ function charEstimateContextSize(
  */
 export { estimateContextSize as estimateContextTokens };
 export interface ContextEstimateBreakdown {
+  /** Conservative estimate used for compaction decisions. */
   estimatedTokens: number;
+  /** Lower-noise estimate used for UI display when a usage anchor is available. */
+  displayTokens: number;
   selectedPath: "usage_anchor" | "char_estimate";
+  displayPath: "usage_anchor" | "char_estimate";
   pathATokens?: number;
   pathBTokens: number;
   lastUsageIndex?: number;
@@ -211,7 +215,9 @@ function estimateContextBreakdown(
     // Cold start / first turn — no prior usage to anchor on.
     return {
       estimatedTokens: pathBTokens,
+      displayTokens: pathBTokens,
       selectedPath: "char_estimate",
+      displayPath: "char_estimate",
       pathBTokens,
     };
   }
@@ -247,7 +253,9 @@ function estimateContextBreakdown(
 
   return {
     estimatedTokens: Math.max(pathATokens, pathBTokens),
+    displayTokens: pathATokens,
     selectedPath: pathATokens >= pathBTokens ? "usage_anchor" : "char_estimate",
+    displayPath: "usage_anchor",
     pathATokens,
     pathBTokens,
     lastUsageIndex,
@@ -269,9 +277,10 @@ function estimateContextSize(
 export interface ExactContextTokenEstimate {
   /** Conservative estimate used for compaction decisions. Exact tokenization only raises this value. */
   estimatedTokens: number;
-  /** Exact-adjusted estimate for UI display. This may move down when a tool-result heuristic overcounted. */
+  /** Exact-adjusted estimate for UI display. Uses the usage anchor when available. */
   refinedTokens: number;
   approximateTokens: number;
+  approximateDisplayTokens: number;
   exactToolResultCount: number;
   /** Positive-only exact-token delta applied to `estimatedTokens`. */
   exactDelta: number;
@@ -348,10 +357,12 @@ export async function estimateContextTokensWithExactToolResults(
 ): Promise<ExactContextTokenEstimate> {
   const contextBreakdown = estimateContextBreakdown(messages, systemPrompt, tools);
   const approximateTokens = contextBreakdown.estimatedTokens;
+  const approximateDisplayTokens = contextBreakdown.displayTokens;
   const base: ExactContextTokenEstimate = {
     estimatedTokens: approximateTokens,
-    refinedTokens: approximateTokens,
+    refinedTokens: approximateDisplayTokens,
     approximateTokens,
+    approximateDisplayTokens,
     exactToolResultCount: 0,
     exactDelta: 0,
     signedExactDelta: 0,
@@ -409,7 +420,7 @@ export async function estimateContextTokensWithExactToolResults(
   base.exactDelta = positiveDelta;
   base.signedExactDelta = signedDelta;
   base.estimatedTokens = approximateTokens + positiveDelta;
-  base.refinedTokens = Math.max(0, approximateTokens + signedDelta);
+  base.refinedTokens = Math.max(0, approximateDisplayTokens + signedDelta);
   return base;
 }
 

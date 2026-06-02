@@ -20,7 +20,9 @@ interface ContextSample {
   ratioDisplayEstimateToObserved?: number;
   estimatedInputTokens?: number;
   displayEstimatedInputTokens?: number;
+  approximateDisplayTokens?: number;
   selectedEstimatePath?: "usage_anchor" | "char_estimate";
+  displayEstimatePath?: "usage_anchor" | "char_estimate";
   pathAEstimateTokens?: number;
   pathBEstimateTokens?: number;
   lastUsageInputTokens?: number;
@@ -142,6 +144,19 @@ async function main() {
     for (const [pathName, group] of [...byPath.entries()].sort((a, b) => b[1].length - a[1].length)) {
       const ratios = group
         .map((sample) => sample.ratioEstimateToObserved)
+        .filter((v): v is number => typeof v === "number");
+      console.log(
+        `- ${pathName}: count=${group.length} mean=${formatNumber(mean(ratios))} ` +
+        `p50=${formatNumber(percentile(ratios, 0.50))} p90=${formatNumber(percentile(ratios, 0.90))}`,
+      );
+    }
+
+    console.log("");
+    console.log("Context display paths");
+    const byDisplayPath = groupBy(contextSamples, (sample) => sample.displayEstimatePath || "unknown");
+    for (const [pathName, group] of [...byDisplayPath.entries()].sort((a, b) => b[1].length - a[1].length)) {
+      const ratios = group
+        .map((sample) => sample.ratioDisplayEstimateToObserved)
         .filter((v): v is number => typeof v === "number");
       console.log(
         `- ${pathName}: count=${group.length} mean=${formatNumber(mean(ratios))} ` +
