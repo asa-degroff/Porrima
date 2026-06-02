@@ -1823,7 +1823,7 @@ export function Sidebar({
                 {projectsExpanded ? (
                   <button
                     onClick={onNewProject}
-                    className="w-5 h-5 flex items-center justify-center rounded-md text-emerald-300/70 hover:text-emerald-200 hover:bg-emerald-500/15 transition-colors"
+                    className="w-5 h-5 flex items-center justify-center rounded-md text-white hover:text-white hover:bg-white/5 transition-colors"
                     title="New project"
                     aria-label="New project"
                   >
