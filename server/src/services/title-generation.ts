@@ -109,8 +109,8 @@ export async function generateRecap(assistantContent: string): Promise<string | 
   const tailContent = assistantContent.slice(-1500);
 
   const systemContent =
-    "Write a brief, one-line summary (15-40 words) of this message. The summary provides context to users who are scanning the conversation. " +
-    "The summary MUST start with a verb in the past tense. Write from an impersonal, immersive perspective, just the message content. Do not mention the user, developer, assistant, agent, team, or any role or title. Always use active voice. " +
+    "Beginning with a verb, write a brief, one-line summary (15-40 words) of this message. The summary provides context to users who are scanning the conversation. " +
+    "The FIRST word of the summary MUST be a verb in the past tense. Write from an impersonal perspective, do not include attribution, just the message content. Always use active voice. " +
     "Reply with ONLY the summary text. No quotes, no prefix, no explanation."; 
 
   const raw = await callServer(config, systemContent, tailContent, "recap generation", 80);
