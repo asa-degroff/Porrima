@@ -220,7 +220,7 @@ function ModelCard({
   onLoadDetail,
 }: {
   record: ModelStatsRecord;
-  onLoadDetail: (modelId: string) => void;
+  onLoadDetail: (modelId: string, provider: string) => void;
 }) {
   const { summary } = record;
   const last = summary.lastRun;
@@ -235,7 +235,7 @@ function ModelCard({
         <div className="flex items-center gap-2 shrink-0">
           <span className="text-[10px] text-white/30">{summary.runCount} run{summary.runCount !== 1 ? "s" : ""}</span>
           <button
-            onClick={() => onLoadDetail(record.modelId)}
+            onClick={() => onLoadDetail(record.modelId, record.provider)}
             className="text-[10px] text-purple-300/60 hover:text-purple-300 transition-colors"
           >
             expand →
@@ -672,11 +672,11 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
     }
   }, []);
 
-  const loadDetail = useCallback(async (modelId: string) => {
+  const loadDetail = useCallback(async (modelId: string, provider: string) => {
     setDetailModelId(modelId);
     setDetailLoading(true);
     try {
-      const res = await fetch(`/api/model-stats/${encodeURIComponent(modelId)}`, { credentials: "include" });
+      const res = await fetch(`/api/model-stats/${encodeURIComponent(modelId)}?provider=${encodeURIComponent(provider)}`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setDetailData(data);
@@ -867,7 +867,7 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
             <div className="space-y-3">
               {filteredRecords.map((record) => (
                 <ModelCard
-                  key={record.modelId}
+                  key={`${record.provider}:${record.modelId}`}
                   record={record}
                   onLoadDetail={loadDetail}
                 />

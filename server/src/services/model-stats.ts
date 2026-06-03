@@ -97,6 +97,7 @@ function initSchema() {
       predictedTokensPerSec REAL NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_model_stats_modelId ON model_stats(modelId, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_model_stats_model_provider ON model_stats(modelId, provider, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_model_stats_timestamp ON model_stats(timestamp DESC);
   `);
 
@@ -206,30 +207,30 @@ export function recordModelStats(
     requestDigest: cacheMetrics?.requestDigest ?? null,
   });
 
-  pruneOldRuns(modelId);
+  pruneOldRuns(modelId, provider);
   return entry;
 }
 
-/** Keep only the most recent MAX_RUNS_PER_MODEL entries per model */
-function pruneOldRuns(modelId: string) {
+/** Keep only the most recent MAX_RUNS_PER_MODEL entries per model/provider. */
+function pruneOldRuns(modelId: string, provider: string) {
   const database = getDb();
   database.prepare(`
     DELETE FROM model_stats
     WHERE id IN (
       SELECT id FROM model_stats
-      WHERE modelId = ?
+      WHERE modelId = ? AND provider = ?
       ORDER BY timestamp DESC
       LIMIT -1 OFFSET ?
     )
-  `).run(modelId, MAX_RUNS_PER_MODEL);
+  `).run(modelId, provider, MAX_RUNS_PER_MODEL);
 }
 
 /**
  * Get recent runs for a specific model, most recent first.
  */
-export function getModelRuns(modelId: string, limit = 20): ModelStatsEntry[] {
+export function getModelRuns(modelId: string, limit = 20, provider?: string): ModelStatsEntry[] {
   const database = getDb();
-  const rows = database.prepare(`
+  const select = `
     SELECT id, modelId, provider, timestamp,
       promptTokens, predictedTokens,
       promptMs, predictedMs, sampleMs,
@@ -237,10 +238,10 @@ export function getModelRuns(modelId: string, limit = 20): ModelStatsEntry[] {
       cachePrompt, cacheMode, reportedPromptTokens, inferredCachedTokens,
       inferredCacheHitRatio, requestMessageCount, requestCharCount, requestDigest
     FROM model_stats
-    WHERE modelId = ?
-    ORDER BY timestamp DESC
-    LIMIT ?
-  `).all(modelId, limit) as Row[];
+  `;
+  const rows = provider
+    ? database.prepare(`${select} WHERE modelId = ? AND provider = ? ORDER BY timestamp DESC LIMIT ?`).all(modelId, provider, limit) as Row[]
+    : database.prepare(`${select} WHERE modelId = ? ORDER BY timestamp DESC LIMIT ?`).all(modelId, limit) as Row[];
 
   return rows.map(r => ({
     id: r.id as string,
@@ -269,10 +270,10 @@ export function getModelRuns(modelId: string, limit = 20): ModelStatsEntry[] {
 /**
  * Get a summary for a specific model: last run + EMA averages.
  */
-export function getModelStatsSummary(modelId: string): ModelStatsSummary {
+export function getModelStatsSummary(modelId: string, provider?: string): ModelStatsSummary {
   const database = getDb();
 
-  const lastRow = database.prepare(`
+  const selectLast = `
     SELECT id, modelId, provider, timestamp,
       promptTokens, predictedTokens,
       promptMs, predictedMs, sampleMs,
@@ -280,10 +281,10 @@ export function getModelStatsSummary(modelId: string): ModelStatsSummary {
       cachePrompt, cacheMode, reportedPromptTokens, inferredCachedTokens,
       inferredCacheHitRatio, requestMessageCount, requestCharCount, requestDigest
     FROM model_stats
-    WHERE modelId = ?
-    ORDER BY timestamp DESC
-    LIMIT 1
-  `).get(modelId) as Row | undefined;
+  `;
+  const lastRow = provider
+    ? database.prepare(`${selectLast} WHERE modelId = ? AND provider = ? ORDER BY timestamp DESC LIMIT 1`).get(modelId, provider) as Row | undefined
+    : database.prepare(`${selectLast} WHERE modelId = ? ORDER BY timestamp DESC LIMIT 1`).get(modelId) as Row | undefined;
 
   const lastRun = lastRow ? ({
     id: lastRow.id as string,
@@ -309,13 +310,14 @@ export function getModelStatsSummary(modelId: string): ModelStatsSummary {
   } as ModelStatsEntry) : null;
 
   // Compute EMA from all runs (chronological order for proper EMA)
-  const allRows = database.prepare(`
+  const selectAll = `
     SELECT promptTokensPerSec, predictedTokensPerSec, promptMs, predictedMs,
       inferredCacheHitRatio, inferredCachedTokens
     FROM model_stats
-    WHERE modelId = ?
-    ORDER BY timestamp ASC
-  `).all(modelId) as Row[];
+  `;
+  const allRows = provider
+    ? database.prepare(`${selectAll} WHERE modelId = ? AND provider = ? ORDER BY timestamp ASC`).all(modelId, provider) as Row[]
+    : database.prepare(`${selectAll} WHERE modelId = ? ORDER BY timestamp ASC`).all(modelId) as Row[];
 
   let avgPromptTokensPerSec: number | null = null;
   let avgPredictedTokensPerSec: number | null = null;
@@ -381,7 +383,7 @@ export function getAllModelSummaries(): { modelId: string; provider: string; sum
   return models.map(m => ({
     modelId: m.modelId as string,
     provider: m.provider as string,
-    summary: getModelStatsSummary(m.modelId as string),
+    summary: getModelStatsSummary(m.modelId as string, m.provider as string),
   }));
 }
 

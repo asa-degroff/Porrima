@@ -24,12 +24,13 @@ router.get("/", async (_req: Request, res: Response) => {
  */
 router.get("/:modelId", async (req: Request, res: Response) => {
   try {
+    const provider = typeof req.query.provider === "string" ? req.query.provider : undefined;
     const summaries = getAllModelSummaries();
-    const match = summaries.find(s => s.modelId === req.params.modelId);
+    const match = summaries.find(s => s.modelId === req.params.modelId && (!provider || s.provider === provider));
     if (!match) {
       return res.status(404).json({ error: `No stats found for model: ${req.params.modelId}` });
     }
-    const runs = getModelRuns(req.params.modelId as string, 50);
+    const runs = getModelRuns(req.params.modelId as string, 50, match.provider);
     res.json({
       modelId: req.params.modelId,
       provider: match.provider,

@@ -1336,6 +1336,7 @@ async function runIndexGeneration(
           contextWindow: extractionSettings.ctxSize,
         });
         const requestSignal = AbortSignal.timeout(extractionSettings.timeoutMs);
+        const cachePrompt = process.env.LLAMACPP_CACHE_PROMPT !== "0";
         const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1348,15 +1349,36 @@ async function runIndexGeneration(
             max_tokens: Math.min(extractionSettings.maxTokens, ARCHIVE_INDEX_MAX_TOKENS),
             temperature: 0.3,
             stream: true,
-            ...(process.env.LLAMACPP_CACHE_PROMPT !== "0" ? { cache_prompt: true } : {}),
+            stream_options: { include_usage: true },
+            ...(cachePrompt ? { cache_prompt: true } : {}),
           }),
           signal: requestSignal,
         });
         if (res.ok && res.body) {
           const streamResult = await readOpenAIContentStream(res.body, requestSignal);
           if (streamResult.timings) {
+            const reportedPromptTokens = streamResult.usagePromptTokens;
+            const promptEvalTokens = streamResult.timings.prompt_n;
+            const inferredCachedTokens = typeof reportedPromptTokens === "number"
+              ? Math.max(0, reportedPromptTokens - promptEvalTokens)
+              : undefined;
+            const inferredCacheHitRatio = typeof reportedPromptTokens === "number" && reportedPromptTokens > 0 && typeof inferredCachedTokens === "number"
+              ? inferredCachedTokens / reportedPromptTokens
+              : undefined;
             try {
-              recordModelStats(extractionModelId, "llamacpp-extraction", streamResult.timings);
+              recordModelStats(
+                extractionModelId,
+                "llamacpp-extraction",
+                streamResult.timings,
+                cachePrompt ? {
+                  cachePrompt: true,
+                  cacheMode: "cache_prompt",
+                  reportedPromptTokens,
+                  promptEvalTokens,
+                  inferredCachedTokens,
+                  inferredCacheHitRatio,
+                } : undefined,
+              );
             } catch (e) {
               console.warn("[compaction] Failed to record extraction model stats:", e);
             }

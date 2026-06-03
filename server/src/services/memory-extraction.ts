@@ -142,12 +142,13 @@ export function computeExtractionInputBudget(
 export async function readOpenAIContentStream(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal
-): Promise<{ content: string; timings?: LlamaTimings }> {
+): Promise<{ content: string; timings?: LlamaTimings; usagePromptTokens?: number }> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
   let timings: LlamaTimings | undefined;
+  let usagePromptTokens: number | undefined;
   let thinkingOpen = false;
 
   const appendReasoning = (delta: string): void => {
@@ -193,6 +194,9 @@ export async function readOpenAIContentStream(
       if (chunk.timings) {
         timings = chunk.timings as LlamaTimings;
       }
+      if (typeof chunk.usage?.prompt_tokens === "number") {
+        usagePromptTokens = chunk.usage.prompt_tokens;
+      }
     } catch {
       // Ignore malformed SSE fragments; the final extraction parser validates output.
     }
@@ -212,7 +216,7 @@ export async function readOpenAIContentStream(
       for (const line of lines) {
         if (handleLine(line)) {
           closeReasoning();
-          return { content: content.trim(), timings };
+          return { content: content.trim(), timings, usagePromptTokens };
         }
       }
     }
@@ -221,7 +225,7 @@ export async function readOpenAIContentStream(
       handleLine(buffer);
     }
     closeReasoning();
-    return { content: content.trim(), timings };
+    return { content: content.trim(), timings, usagePromptTokens };
   } finally {
     signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
@@ -329,6 +333,7 @@ async function callDedicatedExtractionLLMWithMessages(
       max_tokens: maxTokens,
       temperature: 0.6,
       stream: true,
+      stream_options: { include_usage: true },
       ...(process.env.LLAMACPP_CACHE_PROMPT !== "0" ? { cache_prompt: true } : {}),
     }),
     signal: requestSignal,
@@ -345,11 +350,29 @@ async function callDedicatedExtractionLLMWithMessages(
 
   // Record model stats from extraction timings (same structure as chat model)
   if (streamResult.timings) {
+    const cachePrompt = process.env.LLAMACPP_CACHE_PROMPT !== "0";
+    const reportedPromptTokens = streamResult.usagePromptTokens;
+    const promptEvalTokens = streamResult.timings.prompt_n;
+    const inferredCachedTokens = (typeof reportedPromptTokens === "number"
+      ? Math.max(0, reportedPromptTokens - promptEvalTokens)
+      : undefined);
+    const inferredCacheHitRatio = (typeof reportedPromptTokens === "number" && reportedPromptTokens > 0 && typeof inferredCachedTokens === "number"
+      ? inferredCachedTokens / reportedPromptTokens
+      : undefined);
+
     try {
       recordModelStats(
         extractionModelId,
         "llamacpp-extraction",
-        streamResult.timings
+        streamResult.timings,
+        cachePrompt ? {
+          cachePrompt: true,
+          cacheMode: "cache_prompt",
+          reportedPromptTokens,
+          promptEvalTokens,
+          inferredCachedTokens,
+          inferredCacheHitRatio,
+        } : undefined,
       );
     } catch (e) {
       console.warn("[memory] Failed to record extraction model stats:", e);

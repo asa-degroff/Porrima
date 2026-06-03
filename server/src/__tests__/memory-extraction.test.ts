@@ -139,6 +139,24 @@ describe("readOpenAIContentStream", () => {
     expect(result.content).toBe("<think>checking context before JSON</think>[]");
     expect(parseExtractionResponse(result.content)).toEqual([]);
   });
+
+  it("captures streamed usage and timings for cache hit inference", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: {"choices":[{"delta":{"content":"[]"}}]}\n`));
+        controller.enqueue(encoder.encode(`data: {"choices":[],"usage":{"prompt_tokens":120},"timings":{"prompt_n":20,"prompt_ms":100,"prompt_per_token_ms":5,"prompt_per_second":200,"predicted_n":1,"predicted_ms":10,"predicted_per_token_ms":10,"predicted_per_second":100}}\n`));
+        controller.enqueue(encoder.encode("data: [DONE]\n"));
+        controller.close();
+      },
+    });
+
+    const result = await readOpenAIContentStream(stream);
+
+    expect(result.content).toBe("[]");
+    expect(result.usagePromptTokens).toBe(120);
+    expect(result.timings?.prompt_n).toBe(20);
+  });
 });
 
 describe("isSubstantiveForPreCompactionExtraction", () => {
