@@ -2562,7 +2562,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
           <h2 className="text-lg font-semibold text-white/90">Settings</h2>
           <button
             onClick={onClose}
-            className="text-white hover:text-white transition-colors"
+            className="text-white hover:text-white transition-colors pressable"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-40 hover:opacity-70 transition-opacity">
               <path d="M18 6L6 18" />
@@ -2651,7 +2651,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               <button
                 type="button"
 	                onClick={() => { refreshModels(); refreshScanPaths(); }}
-                className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/80 hover:bg-white/10 transition-all"
+                className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/80 hover:bg-white/10 transition-all pressable"
                 title="Refresh model list"
               >
                 Refresh
@@ -2672,7 +2672,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                onClick={() => { setDefaultModelId(""); setDefaultModelScanDir(undefined); modelDd.close(); }}
                 className={`w-full text-left px-3 py-2 text-xs transition-all ${
                   !defaultModelId ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                }`}
+                }`} 
                 style={{
                   backgroundColor: !defaultModelId ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                   color: !defaultModelId ? `rgba(var(--theme-secondary-text))` : '',
@@ -2689,7 +2689,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                   onClick={() => { setDefaultModelId(m.id); setDefaultModelScanDir(m.scanDir); modelDd.close(); }}
                   className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center gap-2 ${
                     m.id === defaultModelId && (!defaultModelScanDir || defaultModelScanDir === m.scanDir) ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                  }`}
+                  }`} 
                   style={{
                     backgroundColor: m.id === defaultModelId && (!defaultModelScanDir || defaultModelScanDir === m.scanDir) ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                     color: m.id === defaultModelId && (!defaultModelScanDir || defaultModelScanDir === m.scanDir) ? `rgba(var(--theme-secondary-text))` : '',
@@ -2958,14 +2958,14 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                      type="button"
 	                      onClick={handleConfirmModelsDirConflict}
 	                      disabled={applyingSlot !== null}
-	                      className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-amber-500/15 border border-amber-400/25 text-amber-300 hover:bg-amber-500/25 transition-all disabled:opacity-40"
+	                      className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-amber-500/15 border border-amber-400/25 text-amber-300 hover:bg-amber-500/25 transition-all disabled:opacity-40 pressable"
 	                    >
 	                      Switch & Restart
 	                    </button>
 	                    <button
 	                      type="button"
 	                      onClick={() => setModelsDirConflict(null)}
-	                      className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all"
+	                      className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all pressable"
 	                    >
 	                      Cancel
 	                    </button>
@@ -3137,7 +3137,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            type="button"
 	                            onClick={() => handleLlamaServerAction(server.id, "start")}
 	                            disabled={busy || missingUnit || server.systemd.activeState === "active"}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-green-500/10 border border-green-400/20 text-green-300/80 hover:bg-green-500/20 transition-all disabled:opacity-40"
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-green-500/10 border border-green-400/20 text-green-300/80 hover:bg-green-500/20 transition-all disabled:opacity-40 pressable"
 	                          >
 	                            Start
 	                          </button>
@@ -3145,7 +3145,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            type="button"
 	                            onClick={() => handleLlamaServerAction(server.id, "stop")}
 	                            disabled={busy || missingUnit || server.systemd.activeState === "inactive" || server.systemd.activeState === "unknown"}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40"
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40 pressable"
 	                          >
 	                            Stop
 	                          </button>
@@ -3153,28 +3153,28 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            type="button"
 	                            onClick={() => handleLlamaServerAction(server.id, "restart")}
 	                            disabled={busy || missingUnit}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40"
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 pressable"
 	                          >
 	                            {busy ? "Working..." : "Restart"}
 	                          </button>
 	                          <button
 	                            type="button"
 	                            onClick={() => setLlamaConfigExpanded(configExpanded ? null : server.id)}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all"
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all pressable"
 	                          >
 	                            {configExpanded ? "Hide config" : "Config"}
 	                          </button>
 	                          <button
 	                            type="button"
 	                            onClick={() => toggleLlamaServicePanel(server.id)}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all"
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all pressable"
 	                          >
 	                            {serviceExpanded ? "Hide service" : "Service"}
 	                          </button>
 	                          <button
 	                            type="button"
 	                            onClick={() => setExpandedLlamaServerId(detailsExpanded ? null : server.id)}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all"
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all pressable"
 	                          >
 	                            {detailsExpanded ? "Hide details" : "Details"}
 	                          </button>
@@ -3182,7 +3182,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            type="button"
 	                            onClick={() => handleLlamaServerLogs(server.id)}
 	                            disabled={missingUnit}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40"
+	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40 pressable"
 	                          >
 	                            Logs
 	                          </button>
@@ -3849,23 +3849,23 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                </div>
 	                                <div className="flex items-center gap-2 flex-wrap">
 	                                  <button type="button" onClick={() => handlePreviewLlamaService(server.id)} disabled={state?.saving}
-	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40">
+	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40 pressable">
 	                                    Preview
 	                                  </button>
 	                                  <button type="button" onClick={() => handleApplyLlamaService(server.id)} disabled={state?.saving}
-	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40">
+	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-purple-500/15 border border-purple-400/20 text-purple-300 hover:bg-purple-500/25 transition-all disabled:opacity-40 pressable">
 	                                    {state?.saving ? "Applying..." : "Apply and restart"}
 	                                  </button>
 	                                  <button type="button" onClick={() => handleResetLlamaService(server.id)} disabled={state?.saving}
-	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40">
+	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all disabled:opacity-40 pressable">
 	                                    Reset managed override
 	                                  </button>
 	                                  <button type="button" onClick={() => setLlamaServiceState((prev) => ({ ...prev, [server.id]: { ...(prev[server.id] || {}), previewOpen: !(prev[server.id]?.previewOpen) } }))}
-	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all">
+	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all pressable">
 	                                    {state?.previewOpen ? "Hide drop-in" : "Show drop-in"}
 	                                  </button>
 	                                  <button type="button" onClick={() => setLlamaServiceState((prev) => ({ ...prev, [server.id]: { ...(prev[server.id] || {}), unitOpen: !(prev[server.id]?.unitOpen) } }))}
-	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all">
+	                                    className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all pressable">
 	                                    {state?.unitOpen ? "Hide unit" : "Show unit"}
 	                                  </button>
 	                                </div>
@@ -3923,7 +3923,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 		                              <p className="text-[11px] text-white/35 font-mono truncate">{activeLogs.unitName || activeLogs.id}</p>
 		                            </div>
 		                            <button type="button" onClick={() => setLlamaServerLogs(null)}
-		                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 hover:bg-white/10 transition-all">
+		                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/50 hover:text-white/75 hover:bg-white/10 transition-all pressable">
 		                              Close
 		                            </button>
 		                          </div>
@@ -4034,7 +4034,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     theme === opt.value
                       ? "border-white/30"
                       : "border-white/10 hover:border-white/20"
-                  }`}
+                  }pressable`}
                 >
                   <div className={`absolute inset-0 bg-gradient-to-br ${opt.preview} to-transparent opacity-20`} />
                   <span className="relative z-10">{opt.label}</span>
@@ -4077,7 +4077,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     cornerShape === opt.value
                       ? "border-white/30 bg-white/5"
                       : "border-white/10 hover:border-white/20"
-                  }`}
+                  }pressable`}
                 >
                   <span className={`inline-block w-4 h-4 border border-white/50 ${opt.swatch}`} />
                   {opt.label}
@@ -4107,7 +4107,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     cornerRadius === opt.value
                       ? "border-white/30 bg-white/5"
                       : "border-white/10 hover:border-white/20"
-                  }`}
+                  }pressable`}
                 >
                   <span
                     className={`inline-block border border-white/50 ${opt.swatchSize} ${cornerShape === "squircle" ? "corner-squircle" : "corner-round"}`}
@@ -4138,7 +4138,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     activityShape === opt.value
                       ? "border-white/30 bg-white/5"
                       : "border-white/10 hover:border-white/20"
-                  }`}
+                  }pressable`}
                 >
                   <PolyhedronLogo
                     isActive={true}
@@ -4231,7 +4231,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     backgroundEffect === opt.value
                       ? "border-white/30 bg-white/5"
                       : "border-white/10 hover:border-white/20"
-                  }`}
+                  }pressable`}
                 >
                   <span className="mr-2 opacity-50">{opt.icon}</span>
                   {opt.label}
@@ -4360,7 +4360,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                         setPushTestState({ tone: "err", text: err?.message || "Failed to send test" });
                       }
                     }}
-                    className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
+                    className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all pressable"
                   >
                     Send test notification
                   </button>
@@ -4471,7 +4471,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     onClick={() => { setSshDraft((prev) => ({ ...prev, knownHostsMode: mode })); sshKnownHostsDd.close(); }}
                     className={`w-full text-left px-3 py-2 text-xs transition-all ${
                       mode === sshDraft.knownHostsMode ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`}
+                    }`} 
                     style={{
                       backgroundColor: mode === sshDraft.knownHostsMode ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                       color: mode === sshDraft.knownHostsMode ? `rgba(var(--theme-secondary-text))` : '',
@@ -4485,7 +4485,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 type="button"
                 onClick={handleCreateSshConnection}
                 disabled={sshSaving}
-                className="px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-500/15 border border-emerald-400/25 text-emerald-200 hover:bg-emerald-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-500/15 border border-emerald-400/25 text-emerald-200 hover:bg-emerald-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed pressable"
               >
                 {sshSaving ? "Saving..." : "Add Host"}
               </button>
@@ -4533,7 +4533,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                         <button
                           type="button"
                           onClick={() => handleDeleteSshConnection(connection.id)}
-                          className="px-2 py-1 rounded-md text-[11px] bg-red-500/10 border border-red-400/15 text-red-300/70 hover:bg-red-500/20 transition-all"
+                          className="px-2 py-1 rounded-md text-[11px] bg-red-500/10 border border-red-400/15 text-red-300/70 hover:bg-red-500/20 transition-all pressable"
                         >
                           Delete
                         </button>
@@ -4693,7 +4693,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     <button
                       onClick={handleSavePersona}
                       disabled={personaSaving}
-                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40"
+                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 pressable"
                       style={{
                         backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
                         borderColor: `rgba(var(--theme-primary-border))`,
@@ -4705,7 +4705,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     <button
                       onClick={handleCancelPersonaEdit}
                       disabled={personaSaving}
-                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40"
+                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
                     >
                       Cancel
                     </button>
@@ -4764,7 +4764,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     <button
                       onClick={handleSaveUserDoc}
                       disabled={userDocSaving}
-                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40"
+                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 pressable"
                       style={{
                         backgroundColor: `rgba(16, 185, 129, 0.15)`,
                         borderColor: `rgba(16, 185, 129, 0.3)`,
@@ -4776,7 +4776,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     <button
                       onClick={handleCancelUserDocEdit}
                       disabled={userDocSaving}
-                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40"
+                      className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
                     >
                       Cancel
                     </button>
@@ -4785,7 +4785,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     <button
                       onClick={handleDeleteUserDoc}
                       disabled={userDocSaving}
-                      className="w-full px-3 py-2 rounded-lg text-xs font-medium border border-red-400/20 text-red-300/70 hover:bg-red-500/10 transition-all disabled:opacity-40"
+                      className="w-full px-3 py-2 rounded-lg text-xs font-medium border border-red-400/20 text-red-300/70 hover:bg-red-500/10 transition-all disabled:opacity-40 pressable"
                     >
                       Delete document
                     </button>
@@ -4817,7 +4817,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     setUserDocEditing(true);
                     setUserDocContent("# About Me\n\n**Name:** \n\n**Communication style:** \n\n**Technical background:** \n\n**Preferences:** \n\n---\n\n*Feel free to share as much or as little as you want.*\n");
                   }}
-                  className="text-xs px-3 py-2 rounded-lg border border-emerald-400/20 text-emerald-300/70 hover:bg-emerald-500/10 transition-all"
+                  className="text-xs px-3 py-2 rounded-lg border border-emerald-400/20 text-emerald-300/70 hover:bg-emerald-500/10 transition-all pressable"
                 >
                   + Create document
                 </button>
@@ -4831,7 +4831,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               <label className="block text-sm font-medium text-white/60">System Prompt Presets</label>
               <button
                 onClick={handleAddPreset}
-                className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all"
+                className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all pressable"
               >
                 + Add Preset
               </button>
@@ -4878,7 +4878,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                             <button
                               onClick={handleSavePreset}
                               disabled={presetSaving}
-                              className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40"
+                              className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 pressable"
                               style={{
                                 backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
                                 borderColor: `rgba(var(--theme-primary-border))`,
@@ -4893,7 +4893,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                                 setEditingPresetContent("");
                               }}
                               disabled={presetSaving}
-                              className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40"
+                              className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
                             >
                               Cancel
                             </button>
@@ -4915,7 +4915,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                                 preset.isDefault
                                   ? "border"
                                   : "text-white/30 hover:text-white/50 border border-transparent hover:border-white/10"
-                              }`}
+                              }pressable`}
                               style={{
                                 backgroundColor: preset.isDefault ? `rgba(var(--theme-primary-muted))` : '',
                                 color: preset.isDefault ? `rgba(var(--theme-primary-text))` : '',
@@ -4984,7 +4984,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     onClick={() => { setDefaultWebSearchProvider(provider.id); webSearchProviderDd.close(); }}
                     className={`w-full text-left px-3 py-2 text-xs transition-all ${
                       defaultWebSearchProvider === provider.id ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`}
+                    }`} 
                     style={{
                       backgroundColor: defaultWebSearchProvider === provider.id ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                       color: defaultWebSearchProvider === provider.id ? `rgba(var(--theme-secondary-text))` : '',
@@ -5096,7 +5096,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     onClick={() => { setImageBackend(b); imageBackendDd.close(); }}
                     className={`w-full text-left px-3 py-2 text-xs transition-all ${
                       imageBackend === b ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                    }`}
+                    }`} 
                     style={{
                       backgroundColor: imageBackend === b ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                       color: imageBackend === b ? `rgba(var(--theme-secondary-text))` : '',
@@ -5371,7 +5371,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                  <button
 	                    onClick={handleSaveExtractionPrompt}
 	                    disabled={extractionPromptSaving}
-	                    className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40"
+	                    className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 pressable"
 	                    style={{
 	                      backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
 	                      borderColor: `rgba(var(--theme-primary-border))`,
@@ -5383,7 +5383,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                  <button
 	                    onClick={handleCancelExtractionPromptEdit}
 	                    disabled={extractionPromptSaving}
-	                    className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40"
+	                    className="flex-1 px-3 py-2 rounded-lg text-xs font-medium border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/5 transition-all disabled:opacity-40 pressable"
 	                  >
 	                    Cancel
 	                  </button>
@@ -5428,7 +5428,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                <button
 	                  onClick={refreshAgentSnapshots}
 	                  disabled={agentSnapshotsLoading}
-	                  className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
+	                  className="text-[11px] text-white/40 hover:text-white/70 transition-colors pressable"
 	                >
 	                  {agentSnapshotsLoading ? "Loading…" : "Refresh"}
 	                </button>
@@ -5498,7 +5498,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              <>
 	                                <button
 	                                  onClick={() => handleRestoreAgentSnapshot(s.id)}
-	                                  className="px-2 py-0.5 rounded text-[11px] bg-red-500/20 border border-red-400/30 text-red-200 hover:bg-red-500/30 transition-all"
+	                                  className="px-2 py-0.5 rounded text-[11px] bg-red-500/20 border border-red-400/30 text-red-200 hover:bg-red-500/30 transition-all pressable"
 	                                >
 	                                  Confirm restore
 	                                </button>
@@ -5513,13 +5513,13 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              <>
 	                                <button
 	                                  onClick={() => setConfirmAgentSnapshotRestoreId(s.id)}
-	                                  className="px-2 py-0.5 rounded text-[11px] bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
+	                                  className="px-2 py-0.5 rounded text-[11px] bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all pressable"
 	                                >
 	                                  Restore
 	                                </button>
 	                                <button
 	                                  onClick={() => handleDeleteAgentSnapshot(s.id)}
-	                                  className="px-2 py-0.5 rounded text-[11px] text-white/30 hover:text-red-400/80 transition-all"
+	                                  className="px-2 py-0.5 rounded text-[11px] text-white/30 hover:text-red-400/80 transition-all pressable"
 	                                >
 	                                  Delete
 	                                </button>
@@ -5541,7 +5541,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                <button
 	                  onClick={refreshBackups}
 	                  disabled={backupsLoading}
-	                  className="text-[11px] text-white/40 hover:text-white/70 transition-colors"
+	                  className="text-[11px] text-white/40 hover:text-white/70 transition-colors pressable"
 	                >
 	                  {backupsLoading ? "Loading…" : "Refresh"}
 	                </button>
@@ -5596,7 +5596,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              <>
 	                                <button
 	                                  onClick={() => handleRestoreBackup(b.id)}
-	                                  className="px-2 py-0.5 rounded text-[11px] bg-red-500/20 border border-red-400/30 text-red-200 hover:bg-red-500/30 transition-all"
+	                                  className="px-2 py-0.5 rounded text-[11px] bg-red-500/20 border border-red-400/30 text-red-200 hover:bg-red-500/30 transition-all pressable"
 	                                >
 	                                  Confirm restore
 	                                </button>
@@ -5611,13 +5611,13 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              <>
 	                                <button
 	                                  onClick={() => setConfirmRestoreId(b.id)}
-	                                  className="px-2 py-0.5 rounded text-[11px] bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
+	                                  className="px-2 py-0.5 rounded text-[11px] bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all pressable"
 	                                >
 	                                  Restore
 	                                </button>
 	                                <button
 	                                  onClick={() => handleDeleteBackup(b.id)}
-	                                  className="px-2 py-0.5 rounded text-[11px] text-white/30 hover:text-red-400/80 transition-all"
+	                                  className="px-2 py-0.5 rounded text-[11px] text-white/30 hover:text-red-400/80 transition-all pressable"
 	                                >
 	                                  Delete
 	                                </button>
@@ -5635,7 +5635,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                {!migrationRunning && !confirmMigrate && (
 	                  <button
 	                    onClick={() => setConfirmMigrate(true)}
-	                    className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/25 text-purple-200 hover:bg-purple-500/25 transition-all"
+	                    className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/25 text-purple-200 hover:bg-purple-500/25 transition-all pressable"
 	                  >
 	                    Re-embed all memories &amp; corpus
 	                  </button>
@@ -5650,13 +5650,13 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                    <div className="flex gap-2">
 	                      <button
 	                        onClick={handleRunMigration}
-	                        className="px-3 py-1 rounded text-[11px] font-medium bg-amber-500/25 border border-amber-400/40 text-amber-100 hover:bg-amber-500/40 transition-all"
+	                        className="px-3 py-1 rounded text-[11px] font-medium bg-amber-500/25 border border-amber-400/40 text-amber-100 hover:bg-amber-500/40 transition-all pressable"
 	                      >
 	                        Start migration
 	                      </button>
 	                      <button
 	                        onClick={() => setConfirmMigrate(false)}
-	                        className="px-3 py-1 rounded text-[11px] text-white/50 hover:text-white/80 transition-all"
+	                        className="px-3 py-1 rounded text-[11px] text-white/50 hover:text-white/80 transition-all pressable"
 	                      >
 	                        Cancel
 	                      </button>
@@ -5757,7 +5757,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                        onClick={() => { setSystemStatsBufferSeconds(opt.value); systemStatsBufferDd.close(); }}
 	                        className={`w-full text-left px-3 py-2 text-xs transition-all flex items-center justify-between ${
 	                          opt.value === systemStatsBufferSeconds ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-	                        }`}
+	                        }`} 
 	                        style={{
 	                          backgroundColor: opt.value === systemStatsBufferSeconds ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
 	                          color: opt.value === systemStatsBufferSeconds ? `rgba(var(--theme-secondary-text))` : '',
@@ -6068,7 +6068,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              }}
 	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
 	                                task.schedule.type === "interval" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
-	                              }`}
+	                              }`} 
 	                            >
 	                              Interval
 	                            </button>
@@ -6079,7 +6079,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              }}
 	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
 	                                task.schedule.type === "daily" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
-	                              }`}
+	                              }`} 
 	                            >
 	                              Daily
 	                            </button>
@@ -6137,7 +6137,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              }}
 	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
 	                                task.activationPolicy === "idle" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
-	                              }`}
+	                              }`} 
 	                            >
 	                              Idle
 	                            </button>
@@ -6149,7 +6149,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              }}
 	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
 	                                task.activationPolicy === "sleep_only" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
-	                              }`}
+	                              }`} 
 	                            >
 	                              Sleep only
 	                            </button>
@@ -6161,7 +6161,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              }}
 	                              className={`w-full text-left px-2 py-1.5 text-xs transition-all ${
 	                                task.activationPolicy === "manual_only" ? "text-white" : "text-white/50 hover:bg-white/10 hover:text-white/70"
-	                              }`}
+	                              }`} 
 	                            >
 	                              Manual only
 	                            </button>
@@ -6290,34 +6290,34 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                        <button
 	                          onClick={() => moveAutomation(task.id, -1)}
 	                          disabled={index === 0}
-	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 disabled:opacity-30 disabled:hover:text-white/50 transition-all"
+	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 disabled:opacity-30 disabled:hover:text-white/50 transition-all pressable"
 	                        >
 	                          Up
 	                        </button>
 	                        <button
 	                          onClick={() => moveAutomation(task.id, 1)}
 	                          disabled={index === list.length - 1}
-	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 disabled:opacity-30 disabled:hover:text-white/50 transition-all"
+	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 disabled:opacity-30 disabled:hover:text-white/50 transition-all pressable"
 	                        >
 	                          Down
 	                        </button>
 	                        <button
 	                          onClick={() => handleRunAutomation(task.id)}
 	                          disabled={!!automationsRunningTaskId}
-	                          className="px-2 py-1 rounded-md text-xs bg-purple-500/10 border border-purple-400/20 text-purple-200/80 hover:bg-purple-500/20 disabled:opacity-40 transition-all"
+	                          className="px-2 py-1 rounded-md text-xs bg-purple-500/10 border border-purple-400/20 text-purple-200/80 hover:bg-purple-500/20 disabled:opacity-40 transition-all pressable"
 	                        >
 	                          {isRunning ? "Running" : "Run now"}
 	                        </button>
 	                        <button
 	                          onClick={() => handleToggleAutomationHistory(task.id)}
-	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 transition-all"
+	                          className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 transition-all pressable"
 	                        >
 	                          {historyOpen ? "Hide history" : "History"}
 	                        </button>
 	                        {task.builtIn && (
 	                          <button
 	                            onClick={() => handleResetAutomationPrompts(task.id)}
-	                            className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 transition-all"
+	                            className="px-2 py-1 rounded-md text-xs bg-white/5 border border-white/10 text-white/50 hover:text-white/75 transition-all pressable"
 	                          >
 	                            Reset prompts
 	                          </button>
@@ -6325,7 +6325,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                        {!task.builtIn && (
 	                          <button
 	                            onClick={() => handleDeleteAutomation(task.id)}
-	                            className="ml-auto px-2 py-1 rounded-md text-xs bg-red-500/10 border border-red-400/20 text-red-200/70 hover:bg-red-500/20 transition-all"
+	                            className="ml-auto px-2 py-1 rounded-md text-xs bg-red-500/10 border border-red-400/20 text-red-200/70 hover:bg-red-500/20 transition-all pressable"
 	                          >
 	                            Delete
 	                          </button>
@@ -6339,7 +6339,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            <button
 	                              onClick={() => loadAutomationRuns(task.id)}
 	                              disabled={historyLoading}
-	                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 disabled:opacity-40 transition-all"
+	                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 disabled:opacity-40 transition-all pressable"
 	                            >
 	                              {historyLoading ? "Loading" : "Refresh"}
 	                            </button>
@@ -6489,7 +6489,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                       }}
                       className={`w-full text-left px-3 py-2 text-xs transition-all ${
                         ttsSettings.backend === "kokoro" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                      }`}
+                      }`} 
                       style={{
                         backgroundColor: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                         color: ttsSettings.backend === "kokoro" ? `rgba(var(--theme-secondary-text))` : '',
@@ -6505,7 +6505,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                       }}
                       className={`w-full text-left px-3 py-2 text-xs transition-all ${
                         ttsSettings.backend === "qwen3-tts" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                      }`}
+                      }`} 
                       style={{
                         backgroundColor: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                         color: ttsSettings.backend === "qwen3-tts" ? `rgba(var(--theme-secondary-text))` : '',
@@ -6521,7 +6521,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                       }}
                       className={`w-full text-left px-3 py-2 text-xs transition-all ${
                         ttsSettings.backend === "supertonic-3" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                      }`}
+                      }`} 
                       style={{
                         backgroundColor: ttsSettings.backend === "supertonic-3" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                         color: ttsSettings.backend === "supertonic-3" ? `rgba(var(--theme-secondary-text))` : '',
@@ -6606,7 +6606,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                           }}
                           className={`w-full text-left px-3 py-2 text-xs transition-all ${
                             ttsSettings.streamingBoundaryTier === "clause" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                          }`}
+                          }`} 
                           style={{
                             backgroundColor: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                             color: ttsSettings.streamingBoundaryTier === "clause" ? `rgba(var(--theme-secondary-text))` : '',
@@ -6622,7 +6622,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                           }}
                           className={`w-full text-left px-3 py-2 text-xs transition-all ${
                             ttsSettings.streamingBoundaryTier === "sentence" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                          }`}
+                          }`} 
                           style={{
                             backgroundColor: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                             color: ttsSettings.streamingBoundaryTier === "sentence" ? `rgba(var(--theme-secondary-text))` : '',
@@ -6658,7 +6658,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                       }}
                       className={`w-full text-left px-3 py-2 text-xs transition-all ${
                         ttsSettings.ttsTextMode === "minimal" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                      }`}
+                      }`} 
                       style={{
                         backgroundColor: ttsSettings.ttsTextMode === "minimal" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                         color: ttsSettings.ttsTextMode === "minimal" ? `rgba(var(--theme-secondary-text))` : '',
@@ -6675,7 +6675,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                       }}
                       className={`w-full text-left px-3 py-2 text-xs transition-all ${
                         ttsSettings.ttsTextMode === "standard" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                      }`}
+                      }`} 
                       style={{
                         backgroundColor: ttsSettings.ttsTextMode === "standard" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                         color: ttsSettings.ttsTextMode === "standard" ? `rgba(var(--theme-secondary-text))` : '',
@@ -6692,7 +6692,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                       }}
                       className={`w-full text-left px-3 py-2 text-xs transition-all ${
                         ttsSettings.ttsTextMode === "stripped" ? "text-white" : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                      }`}
+                      }`} 
                       style={{
                         backgroundColor: ttsSettings.ttsTextMode === "stripped" ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                         color: ttsSettings.ttsTextMode === "stripped" ? `rgba(var(--theme-secondary-text))` : '',
@@ -6795,7 +6795,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                               voice.id === ttsSettings.voice
                                 ? "text-white"
                                 : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                            }`}
+                            }`} 
                             style={{
                               backgroundColor: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                               color: voice.id === ttsSettings.voice ? `rgba(var(--theme-secondary-text))` : '',
@@ -6848,7 +6848,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                               ttsSettings.kokoroPitchShiftProcessor === method
                                 ? "bg-purple-500/20 text-purple-300"
                                 : "text-white/40 hover:text-white/70 hover:bg-white/5"
-                            }`}
+                            }pressable`}
                           >
                             {method === "resample" ? "Resample" : "Rubberband"}
                           </button>
@@ -6909,7 +6909,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                               ttsSettings.supertonicLanguage === language.code
                                 ? "text-white"
                                 : "text-white/60 hover:bg-white/10 hover:text-white/80"
-                            }`}
+                            }`} 
                             style={{
                               backgroundColor: ttsSettings.supertonicLanguage === language.code ? `rgba(var(--theme-secondary), 0.15)` : 'transparent',
                               color: ttsSettings.supertonicLanguage === language.code ? `rgba(var(--theme-secondary-text))` : '',
@@ -6935,7 +6935,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                               ttsSettings.supertonicPitchShiftProcessor === method
                                 ? "bg-purple-500/20 text-purple-300"
                                 : "text-white/40 hover:text-white/70 hover:bg-white/5"
-                            }`}
+                            }pressable`}
                           >
                             {method === "resample" ? "Resample" : "Rubberband"}
                           </button>
@@ -7114,7 +7114,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-white/10 shrink-0">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm text-white/60 hover:text-white/80 hover:bg-white/5 transition-all"
+            className="px-4 py-2 rounded-lg text-sm text-white/60 hover:text-white/80 hover:bg-white/5 transition-all pressable"
           >
             Cancel
           </button>
@@ -7124,13 +7124,13 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               setAppliedFeedback(true);
               setTimeout(() => setAppliedFeedback(false), 2000);
             }}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 hover:text-white transition-all"
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-white/80 hover:bg-white/10 hover:text-white transition-all pressable"
           >
             {appliedFeedback ? "Applied" : "Apply"}
           </button>
           <button
             onClick={() => onSave(handleSave())}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 border border-blue-400/25 text-blue-300 hover:bg-blue-500/30 transition-all"
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-500/20 border border-blue-400/25 text-blue-300 hover:bg-blue-500/30 transition-all pressable"
           >
             Save and Close
           </button>
