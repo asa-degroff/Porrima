@@ -574,7 +574,7 @@ async function snapshotSentPrefix(
  * preCompactionFlush (CPU-only extraction LLM), buildSplitAugmentedPrompt
  * (embed + rerank), and archive index generation can each take several
  * seconds with no other SSE events flowing. Without this, the client's
- * 95s timeout fires a spurious "Model appears unresponsive" error mid-compaction.
+ * 95s transport watchdog can fire spuriously mid-compaction.
  *
  * Pings every 10s. SSE comment lines (`: text\n\n`) are discarded by the client
  * parser but reset its inactivity timer because bytes arrived on the stream.

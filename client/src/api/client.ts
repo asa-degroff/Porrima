@@ -256,8 +256,12 @@ export interface StreamCallbacks {
 /** Inactivity timeout for SSE streams — server sends keepalive pings every 30s,
  *  so 95s means we tolerate up to two missed pings before timing out. This gives
  *  more headroom for event loop jitter during heavy operations (e.g., SQLite queries,
- *  large context processing, memory extraction). */
+ *  large context processing, memory extraction). This is a transport watchdog;
+ *  model-aware stalls are reported by the server-side LLM stream wrapper. */
 const SSE_INACTIVITY_TIMEOUT_MS = 95_000;
+const SSE_INACTIVITY_ERROR_PREFIX = "__SSE_INACTIVITY__:";
+const SSE_INACTIVITY_ERROR_MESSAGE =
+  "Live response stream stopped sending updates — checking server state";
 
 /**
  * Read an SSE response body: parse events and forward them to callbacks.
@@ -283,7 +287,7 @@ async function readSSEBody(
     inactivityTimer = setTimeout(() => {
       console.warn("[SSE] inactivity timeout — aborting stream");
       controller.abort();
-      callbacks.onError("__SSE_INACTIVITY__:Model appears unresponsive — try again or switch models");
+      callbacks.onError(`${SSE_INACTIVITY_ERROR_PREFIX}${SSE_INACTIVITY_ERROR_MESSAGE}`);
     }, SSE_INACTIVITY_TIMEOUT_MS);
   };
   resetInactivityTimer();
@@ -442,13 +446,19 @@ export function streamArtifactErrorRepair(
  */
 export async function getChatStatus(
   chatId: string
-): Promise<{ active: boolean; bufferedChunks: number; subscribers: number }> {
+): Promise<{ active: boolean; bufferedChunks: number; subscribers: number; reachable: boolean }> {
   try {
     const res = await apiFetch(`${BASE}/chat/status/${encodeURIComponent(chatId)}`);
-    if (!res.ok) return { active: false, bufferedChunks: 0, subscribers: 0 };
-    return res.json();
+    if (!res.ok) return { active: false, bufferedChunks: 0, subscribers: 0, reachable: true };
+    const data = await res.json();
+    return {
+      active: Boolean(data.active),
+      bufferedChunks: Number(data.bufferedChunks ?? 0),
+      subscribers: Number(data.subscribers ?? 0),
+      reachable: true,
+    };
   } catch {
-    return { active: false, bufferedChunks: 0, subscribers: 0 };
+    return { active: false, bufferedChunks: 0, subscribers: 0, reachable: false };
   }
 }
 

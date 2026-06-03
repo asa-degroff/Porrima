@@ -996,16 +996,17 @@ export function useChat(chatId: string | null) {
         ) : false;
         const serverLikelyHasStream = receivedData || isInactivityError;
 
-        // When the connection drops after receiving data and the browser
-        // reports we're online, this is a background connection kill (especially
-        // on mobile Safari). Don't show an error — silently reconnect to the
-        // server stream so the in-progress response continues seamlessly.
-        // Covers both __OFFLINE__ errors (when navigator.onLine is incorrectly
-        // false during a visibility change), Connection errors (fetch killed
-        // while online), and the client's own SSE inactivity timeout. The
-        // inactivity timeout is not a model failure once an SSE response exists:
-        // the live stream may still be running and replayable server-side.
-        if (bg && serverLikelyHasStream && (isOfflineError || isConnectionError || isInactivityError) && navigator.onLine) {
+        // When the connection drops after receiving data, silently reconnect
+        // to the server stream so the in-progress response continues. The
+        // client's own SSE inactivity timeout is a missing-bytes watchdog, not
+        // a model failure; attempt recovery even if navigator.onLine is stale.
+        const shouldAttemptReconnect =
+          bg &&
+          serverLikelyHasStream &&
+          (isOfflineError || isConnectionError || isInactivityError) &&
+          (navigator.onLine || isInactivityError);
+
+        if (shouldAttemptReconnect) {
           // Don't show error or delete bgStreams. The partial content stays
           // visible. The reconnect attempt below will pick up the server stream.
           console.log(`[chat] stream dropped after receiving data, attempting reconnect for ${streamChatId}`);
@@ -1018,25 +1019,24 @@ export function useChat(chatId: string | null) {
             try {
               const status = await getChatStatus(streamChatId);
               if (bgStreams.get(streamChatId) !== bg) return; // raced with another reconnect/switch
+              if (!status.reachable) {
+                throw new Error("Chat status unreachable");
+              }
               if (!status.active) {
                 // Server stream ended naturally before we reattached. Pull the
                 // authoritative persisted messages so the UI catches up instead
                 // of waiting for a chat switch or full reload.
-                try {
-                  const chat = await apiFetchChat(streamChatId);
-                  if (chat && bgStreams.get(streamChatId) === bg) {
-                    setActiveChatData(chat);
-                    bg.messages = cloneMessages(chat.messages);
-                    bg.messageOffset = chat.messageOffset ?? 0;
-                    bg.messageTotal = chat.messageTotal ?? chat.messages.length;
-                    if (activeChatIdRef.current === streamChatId) {
-                      setMessages([...bg.messages]);
-                      setMessageOffset(bg.messageOffset);
-                      setMessageTotal(bg.messageTotal);
-                    }
+                const chat = await apiFetchChat(streamChatId);
+                if (chat && bgStreams.get(streamChatId) === bg) {
+                  setActiveChatData(chat);
+                  bg.messages = cloneMessages(chat.messages);
+                  bg.messageOffset = chat.messageOffset ?? 0;
+                  bg.messageTotal = chat.messageTotal ?? chat.messages.length;
+                  if (activeChatIdRef.current === streamChatId) {
+                    setMessages([...bg.messages]);
+                    setMessageOffset(bg.messageOffset);
+                    setMessageTotal(bg.messageTotal);
                   }
-                } catch {
-                  // If the refresh fails, still clear local streaming state.
                 }
                 bg.streaming = false;
                 bg.modelProgress = null;
@@ -1071,7 +1071,9 @@ export function useChat(chatId: string | null) {
               }
               if (activeChatIdRef.current === streamChatId) {
                 setReconnecting(false);
-                setError("Connection lost — your message was saved on the server");
+                setError(isInactivityError
+                  ? "Live response stream stopped sending updates — your message was saved on the server"
+                  : "Connection lost — your message was saved on the server");
                 setModelProgress(null);
                 setInferenceActivityPhase(null);
               }
@@ -1147,7 +1149,9 @@ export function useChat(chatId: string | null) {
           // Don't queue since we can't tell if the server received the request.
           const finalDisplayErr = isConnectionError
             ? "Connection interrupted — tap Retry to resend"
-            : displayErr;
+            : isInactivityError
+              ? "Live response stream stopped sending updates — refresh the chat to sync server state"
+              : displayErr;
 
           if (activeChatIdRef.current === streamChatId) {
             setError(finalDisplayErr);
