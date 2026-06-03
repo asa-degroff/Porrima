@@ -23,6 +23,7 @@ export interface CompactionResult {
 export const COMPACTION_TRIGGER_RATIO = 0.85;
 export const COMPACTION_TARGET_RATIO = 0.30;
 export const COMPACTION_HARD_CAP_RATIO = 0.95;
+const USAGE_ANCHOR_HARD_CAP_MULTIPLIER = COMPACTION_HARD_CAP_RATIO / COMPACTION_TRIGGER_RATIO;
 const ARCHIVE_INDEX_MAX_TOKENS = 768;
 
 /**
@@ -279,8 +280,11 @@ export interface ExactContextTokenEstimate {
   estimatedTokens: number;
   /** Exact-adjusted estimate for UI display. Uses the usage anchor when available. */
   refinedTokens: number;
+  /** Hard-cap guard estimate. In active tool loops this is bounded relative to the usage anchor. */
+  hardCapTokens: number;
   approximateTokens: number;
   approximateDisplayTokens: number;
+  approximateHardCapTokens: number;
   exactToolResultCount: number;
   /** Positive-only exact-token delta applied to `estimatedTokens`. */
   exactDelta: number;
@@ -289,6 +293,16 @@ export interface ExactContextTokenEstimate {
   exactElapsedMs: number;
   errors: string[];
   contextBreakdown: ContextEstimateBreakdown;
+}
+
+function estimateHardCapTokens(
+  conservativeTokens: number,
+  displayTokens: number,
+  useUsageAnchorBound: boolean,
+): number {
+  if (!useUsageAnchorBound || displayTokens <= 0) return conservativeTokens;
+  const bounded = Math.ceil(displayTokens * USAGE_ANCHOR_HARD_CAP_MULTIPLIER);
+  return Math.max(displayTokens, Math.min(conservativeTokens, bounded));
 }
 
 function findLastUsageIndex(messages: Chat["messages"]): number {
@@ -358,11 +372,19 @@ export async function estimateContextTokensWithExactToolResults(
   const contextBreakdown = estimateContextBreakdown(messages, systemPrompt, tools);
   const approximateTokens = contextBreakdown.estimatedTokens;
   const approximateDisplayTokens = contextBreakdown.displayTokens;
+  const useUsageAnchorHardCap = options.phase === "tool_loop" && contextBreakdown.displayPath === "usage_anchor";
+  const approximateHardCapTokens = estimateHardCapTokens(
+    approximateTokens,
+    approximateDisplayTokens,
+    useUsageAnchorHardCap,
+  );
   const base: ExactContextTokenEstimate = {
     estimatedTokens: approximateTokens,
     refinedTokens: approximateDisplayTokens,
+    hardCapTokens: approximateHardCapTokens,
     approximateTokens,
     approximateDisplayTokens,
+    approximateHardCapTokens,
     exactToolResultCount: 0,
     exactDelta: 0,
     signedExactDelta: 0,
@@ -421,6 +443,9 @@ export async function estimateContextTokensWithExactToolResults(
   base.signedExactDelta = signedDelta;
   base.estimatedTokens = approximateTokens + positiveDelta;
   base.refinedTokens = Math.max(0, approximateDisplayTokens + signedDelta);
+  base.hardCapTokens = useUsageAnchorHardCap
+    ? Math.max(0, approximateHardCapTokens + signedDelta)
+    : base.estimatedTokens;
   return base;
 }
 

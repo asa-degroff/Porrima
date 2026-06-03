@@ -178,4 +178,31 @@ describe("token estimation for dense tool results", () => {
     expect(refined.refinedTokens).toBe(8_000);
     expect(refined.estimatedTokens).toBeGreaterThan(refined.refinedTokens);
   });
+
+  it("bounds tool-loop hard-cap estimates relative to the usage anchor", async () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "Continue from the current tool loop.",
+        usage: { input: 75_000, output: 400, totalTokens: 75_400 },
+        timestamp: 1,
+      },
+    ];
+    const systemPrompt = "Large stable system prompt section. ".repeat(20_000);
+
+    const refined = await estimateContextTokensWithExactToolResults(
+      messages,
+      systemPrompt,
+      [],
+      { phase: "tool_loop" },
+    );
+
+    expect(refined.contextBreakdown.selectedPath).toBe("char_estimate");
+    expect(refined.contextBreakdown.displayPath).toBe("usage_anchor");
+    expect(refined.refinedTokens).toBe(75_400);
+    expect(refined.estimatedTokens).toBeGreaterThan(100_000);
+    expect(refined.hardCapTokens).toBeGreaterThan(refined.refinedTokens);
+    expect(refined.hardCapTokens).toBeLessThan(refined.estimatedTokens);
+    expect(refined.hardCapTokens).toBe(Math.ceil(75_400 * (0.95 / 0.85)));
+  });
 });

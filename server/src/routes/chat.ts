@@ -12,6 +12,7 @@ import type { InferenceModel } from "../types.js";
 import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
 import { generateTitle, generateRecap, RECAP_THRESHOLD } from "../services/title-generation.js";
 import {
+  COMPACTION_HARD_CAP_RATIO,
   COMPACTION_TRIGGER_RATIO,
   estimateContextTokens,
   estimateContextTokensWithExactToolResults,
@@ -940,8 +941,10 @@ async function handleChatStream(
       sourceStopReason: string;
       estimatedInputTokens: number;
       displayEstimatedInputTokens: number;
+      hardCapInputTokens?: number;
       approximateTokens: number;
       approximateDisplayTokens?: number;
+      approximateHardCapTokens?: number;
       exactToolResultCount: number;
       exactDelta: number;
       signedExactDelta: number;
@@ -2021,8 +2024,10 @@ async function handleChatStream(
               observedStopReason: stopReason,
               estimatedInputTokens: pendingTokenEstimateObservation.estimatedInputTokens,
               displayEstimatedInputTokens: pendingTokenEstimateObservation.displayEstimatedInputTokens,
+              hardCapInputTokens: pendingTokenEstimateObservation.hardCapInputTokens,
               approximateTokens: pendingTokenEstimateObservation.approximateTokens,
               approximateDisplayTokens: pendingTokenEstimateObservation.approximateDisplayTokens,
+              approximateHardCapTokens: pendingTokenEstimateObservation.approximateHardCapTokens,
               exactToolResultCount: pendingTokenEstimateObservation.exactToolResultCount,
               exactDelta: pendingTokenEstimateObservation.exactDelta,
               signedExactDelta: pendingTokenEstimateObservation.signedExactDelta,
@@ -2072,8 +2077,10 @@ async function handleChatStream(
           const effectiveCWForCheck = getEffectiveContextWindow(chat, inferenceModel);
           let estimatedTokens = estimateContextTokens(chat.messages, systemPrompt, agentTools);
           let displayEstimatedTokens = estimatedTokens;
+          let hardCapEstimatedTokens = estimatedTokens;
           const approximateTokens = estimatedTokens;
           let approximateDisplayTokens: number | undefined;
+          let approximateHardCapTokens: number | undefined;
           let exactToolResultCount = 0;
           let exactDelta = 0;
           let signedExactDelta = 0;
@@ -2100,7 +2107,9 @@ async function handleChatStream(
             );
             estimatedTokens = exactEstimate.estimatedTokens;
             displayEstimatedTokens = exactEstimate.refinedTokens;
+            hardCapEstimatedTokens = exactEstimate.hardCapTokens;
             approximateDisplayTokens = exactEstimate.approximateDisplayTokens;
+            approximateHardCapTokens = exactEstimate.approximateHardCapTokens;
             exactToolResultCount = exactEstimate.exactToolResultCount;
             exactDelta = exactEstimate.exactDelta;
             signedExactDelta = exactEstimate.signedExactDelta;
@@ -2117,7 +2126,7 @@ async function handleChatStream(
                 `[token-estimate] chat=${chat.id} iter=${iterations} approx=${approximateTokens} ` +
                 `estimated=${estimatedTokens} exactToolResults=${exactEstimate.exactToolResultCount} ` +
                 `delta=${exactEstimate.exactDelta} signedDelta=${exactEstimate.signedExactDelta} ` +
-                `display=${displayEstimatedTokens} elapsedMs=${exactEstimate.exactElapsedMs}` +
+                `display=${displayEstimatedTokens} hardCap=${hardCapEstimatedTokens} elapsedMs=${exactEstimate.exactElapsedMs}` +
                 (exactEstimate.errors.length ? ` errors=${exactEstimate.errors.length}` : ""),
               );
             }
@@ -2159,16 +2168,22 @@ async function handleChatStream(
             }
           }
 
-          // Mid-turn context protection. Uses the estimator (not raw usage) so
-          // tool results added since the last usage anchor are counted. Trigger
-          // at the same ratio as truncateBeforeSend and leave room for compaction
-          // instead of tipping over the hard cap on the next iteration.
+          // Mid-turn context protection. Use the exact-adjusted usage-anchor
+          // estimate for the normal trigger when available; keep the conservative
+          // char path as a bounded hard-cap guard so biased char estimates do not
+          // preempt the normal usage-anchor trigger in steady-state tool loops.
           if (stopReason === "toolUse" && !hitContextLimit) {
-            if (effectiveCWForCheck > 0 && estimatedTokens > 0) {
-              const usageRatio = estimatedTokens / effectiveCWForCheck;
+            if (effectiveCWForCheck > 0 && displayEstimatedTokens > 0) {
+              const usageRatio = displayEstimatedTokens / effectiveCWForCheck;
+              const hardCapRatio = hardCapEstimatedTokens / effectiveCWForCheck;
               if (usageRatio > COMPACTION_TRIGGER_RATIO) {
                 const rawUsage = state.finalUsage?.totalTokens ?? 0;
-                console.warn(`[chat] Mid-turn context overflow: est ${estimatedTokens}/${effectiveCWForCheck} (${(usageRatio * 100).toFixed(0)}%) at iteration ${iterations} [rawUsage=${rawUsage}] — breaking for compaction`);
+                console.warn(`[chat] Mid-turn context overflow: displayEst ${displayEstimatedTokens}/${effectiveCWForCheck} (${(usageRatio * 100).toFixed(0)}%) at iteration ${iterations} [rawUsage=${rawUsage}, conservative=${estimatedTokens}] — breaking for compaction`);
+                turnAbortController.abort();
+                state.needsMidTurnCompaction = true;
+              } else if (hardCapRatio > COMPACTION_HARD_CAP_RATIO) {
+                const rawUsage = state.finalUsage?.totalTokens ?? 0;
+                console.warn(`[chat] Mid-turn hard-cap safety: hardCapEst ${hardCapEstimatedTokens}/${effectiveCWForCheck} (${(hardCapRatio * 100).toFixed(0)}%) at iteration ${iterations} [rawUsage=${rawUsage}, display=${displayEstimatedTokens}, conservative=${estimatedTokens}] — breaking for compaction`);
                 turnAbortController.abort();
                 state.needsMidTurnCompaction = true;
               }
@@ -2225,8 +2240,10 @@ async function handleChatStream(
               sourceStopReason: stopReason,
               estimatedInputTokens: estimatedTokens,
               displayEstimatedInputTokens: displayEstimatedTokens,
+              hardCapInputTokens: hardCapEstimatedTokens,
               approximateTokens,
               approximateDisplayTokens,
+              approximateHardCapTokens,
               exactToolResultCount,
               exactDelta,
               signedExactDelta,

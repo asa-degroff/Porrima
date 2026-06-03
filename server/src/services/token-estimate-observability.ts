@@ -59,8 +59,10 @@ export interface ContextEstimateObservationInput {
   observedStopReason: string;
   estimatedInputTokens: number;
   displayEstimatedInputTokens?: number;
+  hardCapInputTokens?: number;
   approximateTokens?: number;
   approximateDisplayTokens?: number;
+  approximateHardCapTokens?: number;
   exactToolResultCount?: number;
   exactDelta?: number;
   signedExactDelta?: number;
@@ -119,8 +121,10 @@ export type TokenEstimateSample =
       observedStopReason: string;
       estimatedInputTokens: number;
       displayEstimatedInputTokens?: number;
+      hardCapInputTokens?: number;
       approximateTokens?: number;
       approximateDisplayTokens?: number;
+      approximateHardCapTokens?: number;
       exactToolResultCount?: number;
       exactDelta?: number;
       signedExactDelta?: number;
@@ -140,6 +144,7 @@ export type TokenEstimateSample =
       observedTotalTokens?: number;
       ratioEstimateToObserved?: number;
       ratioDisplayEstimateToObserved?: number;
+      ratioHardCapEstimateToObserved?: number;
     };
 
 let writeChain: Promise<void> = Promise.resolve();
@@ -209,8 +214,10 @@ export function recordContextEstimateObservation(input: ContextEstimateObservati
     observedStopReason: input.observedStopReason,
     estimatedInputTokens: input.estimatedInputTokens,
     displayEstimatedInputTokens: input.displayEstimatedInputTokens,
+    hardCapInputTokens: input.hardCapInputTokens,
     approximateTokens: input.approximateTokens,
     approximateDisplayTokens: input.approximateDisplayTokens,
+    approximateHardCapTokens: input.approximateHardCapTokens,
     exactToolResultCount: input.exactToolResultCount,
     exactDelta: input.exactDelta,
     signedExactDelta: input.signedExactDelta,
@@ -231,6 +238,9 @@ export function recordContextEstimateObservation(input: ContextEstimateObservati
     ratioEstimateToObserved: finiteRatio(input.estimatedInputTokens, input.observedInputTokens),
     ratioDisplayEstimateToObserved: input.displayEstimatedInputTokens !== undefined
       ? finiteRatio(input.displayEstimatedInputTokens, input.observedInputTokens)
+      : undefined,
+    ratioHardCapEstimateToObserved: input.hardCapInputTokens !== undefined
+      ? finiteRatio(input.hardCapInputTokens, input.observedInputTokens)
       : undefined,
   };
   recordTokenEstimateSample(sample);

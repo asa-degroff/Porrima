@@ -65,8 +65,10 @@ describe("token estimate observability", () => {
       observedStopReason: "stop",
       estimatedInputTokens: 12_000,
       displayEstimatedInputTokens: 9_000,
+      hardCapInputTokens: 10_000,
       approximateTokens: 12_000,
       approximateDisplayTokens: 9_000,
+      approximateHardCapTokens: 10_000,
       exactToolResultCount: 1,
       exactDelta: 0,
       signedExactDelta: -3_000,
@@ -91,7 +93,9 @@ describe("token estimate observability", () => {
     expect(sample.sampleType).toBe("context_estimate_observed");
     expect(sample.ratioEstimateToObserved).toBe(1.5);
     expect(sample.ratioDisplayEstimateToObserved).toBe(1.125);
+    expect(sample.ratioHardCapEstimateToObserved).toBe(1.25);
     expect(sample.approximateDisplayTokens).toBe(9_000);
+    expect(sample.approximateHardCapTokens).toBe(10_000);
     expect(sample.selectedEstimatePath).toBe("char_estimate");
     expect(sample.displayEstimatePath).toBe("usage_anchor");
     expect(sample.pathAEstimateTokens).toBe(9_000);

@@ -18,9 +18,12 @@ interface ContextSample {
   sampleType: "context_estimate_observed";
   ratioEstimateToObserved?: number;
   ratioDisplayEstimateToObserved?: number;
+  ratioHardCapEstimateToObserved?: number;
   estimatedInputTokens?: number;
   displayEstimatedInputTokens?: number;
+  hardCapInputTokens?: number;
   approximateDisplayTokens?: number;
+  approximateHardCapTokens?: number;
   selectedEstimatePath?: "usage_anchor" | "char_estimate";
   displayEstimatePath?: "usage_anchor" | "char_estimate";
   pathAEstimateTokens?: number;
@@ -136,6 +139,10 @@ async function main() {
     summarizeRatios(
       "display estimate / observed input",
       contextSamples.map((sample) => sample.ratioDisplayEstimateToObserved).filter((v): v is number => typeof v === "number"),
+    );
+    summarizeRatios(
+      "hard-cap estimate / observed input",
+      contextSamples.map((sample) => sample.ratioHardCapEstimateToObserved).filter((v): v is number => typeof v === "number"),
     );
 
     console.log("");
