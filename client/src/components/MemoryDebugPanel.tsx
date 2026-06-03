@@ -552,7 +552,7 @@ function ExtractionTab({
               </div>
               <div className="flex items-center gap-3 text-white/30 text-[10px]">
                 <span className="shrink-0">
-                  {run.results ? `${run.results.facts.length} memory(ies)` : "…"}
+                  {run.results ? `${run.results.facts.length} ${run.results.facts.length === 1 ? "memory" : "memories"}` : "…"}
                 </span>
                 {run.results?.chunks && (
                   <span className={`shrink-0 ${run.results.chunks.failures > 0 ? "text-amber-300/60" : "text-white/30"}`}>
