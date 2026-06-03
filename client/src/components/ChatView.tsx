@@ -587,7 +587,7 @@ export function ChatView({
         <div className="px-3 py-3 md:hidden">
           <button
             onClick={onOpenSidebar}
-            className="text-white/50 hover:text-white/80 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+            className="text-white/50 hover:text-white/80 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
           >
             {hamburgerIconLg}
           </button>
@@ -626,7 +626,7 @@ export function ChatView({
         <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={onOpenSidebar}
-            className="md:hidden text-white/50 hover:text-white/80 transition-colors p-1 rounded-lg hover:bg-white/5 shrink-0"
+            className="md:hidden text-white/50 hover:text-white/80 transition-colors p-1 rounded-lg hover:bg-white/5 shrink-0 pressable"
           >
             {hamburgerIconSm}
           </button>
@@ -672,7 +672,7 @@ export function ChatView({
               {hasContextWindowOverride && (
                 <button
                   type="button"
-                  className="text-xs text-white/30 hover:text-white/60 px-1"
+                  className="text-xs text-white/30 hover:text-white/60 px-1 pressable"
                   title="Reset to model default"
                   onMouseDown={(e) => {
                     e.preventDefault();
@@ -703,7 +703,7 @@ export function ChatView({
             )
           )}
           <button
-            className="hidden md:inline-block text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors text-white/30 hover:text-white/50"
+            className="hidden md:inline-block text-xs px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors text-white/30 hover:text-white/50 pressable"
             title="View rendered system prompt and tools"
             onClick={openPromptViewer}
           >
@@ -904,7 +904,7 @@ export function ChatView({
         {scrollPaused && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-4 right-4 md:right-6 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 border border-white/20 text-white/70 hover:text-white hover:bg-white/15 hover:border-white/30 transition-all shadow-lg backdrop-blur-sm"
+            className="absolute bottom-4 right-4 md:right-6 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 border border-white/20 text-white/70 hover:text-white hover:bg-white/15 hover:border-white/30 transition-all shadow-lg backdrop-blur-sm pressable"
             title="Scroll to bottom"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

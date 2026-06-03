@@ -48,7 +48,7 @@ export const SpeakerButton = memo(function SpeakerButton({
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors ${
+      className={`flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors pressable ${
         disabled
           ? "opacity-30 cursor-not-allowed"
           : "hover:bg-white/10 cursor-pointer"

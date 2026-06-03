@@ -254,7 +254,7 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
             <div className="relative" ref={versionMenuRef}>
               <button
                 onClick={() => setShowVersionMenu(!showVersionMenu)}
-                className="px-2 py-0.5 text-[10px] rounded bg-white/10 text-white/60 hover:text-white/80 transition-colors flex items-center gap-1"
+                className="px-2 py-0.5 text-[10px] rounded bg-white/10 text-white/60 hover:text-white/80 transition-colors flex items-center gap-1 pressable"
               >
                 v{selectedVersion} of {versions.length}
                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -305,13 +305,13 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
         <div className="flex items-center gap-1">
           <button
             onClick={() => setShowCode(false)}
-            className={`px-2 py-0.5 text-[10px] rounded ${!showCode ? "bg-blue-500/20 text-blue-300" : "text-white/40 hover:text-white/60"}`}
+            className={`px-2 py-0.5 text-[10px] rounded pressable ${!showCode ? "bg-blue-500/20 text-blue-300" : "text-white/40 hover:text-white/60"}`}
           >
             Preview
           </button>
           <button
             onClick={() => setShowCode(true)}
-            className={`px-2 py-0.5 text-[10px] rounded ${showCode ? "bg-blue-500/20 text-blue-300" : "text-white/40 hover:text-white/60"}`}
+            className={`px-2 py-0.5 text-[10px] rounded pressable ${showCode ? "bg-blue-500/20 text-blue-300" : "text-white/40 hover:text-white/60"}`}
           >
             Code
           </button>
@@ -326,7 +326,7 @@ export function ArtifactPanel({ artifact, onArtifactUpdate, isPinnedView, chatId
           {isDesktop && (
             <button
               onClick={() => (pinned ? unpin() : pinArtifact(artifact))}
-              className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
+              className={`px-2 py-0.5 text-[10px] rounded transition-colors pressable ${
                 pinned ? "bg-blue-500/20 text-blue-300" : "text-white/40 hover:text-white/60"
               }`}
               title={pinned ? "Return artifact to inline view" : "Pin artifact to side panel"}

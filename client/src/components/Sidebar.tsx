@@ -1715,7 +1715,7 @@ export function Sidebar({
                 <button
                   onClick={onSynthesisSleep}
                   disabled={sleepModeActive || effectiveSleepCycleActive || isStreaming}
-                  className={`p-2 rounded-lg transition-all cursor-pointer ${
+                  className={`p-2 rounded-lg transition-all cursor-pointer pressable ${
                     effectiveSleepCycleActive
                       ? 'text-indigo-400/80 bg-indigo-500/15 animate-pulse'
                       : sleepModeActive
@@ -1743,7 +1743,7 @@ export function Sidebar({
               {onOpenMemoryDebug && (
                 <button
                   onClick={onOpenMemoryDebug}
-                  className="group p-2 text-white hover:bg-white/5 rounded-lg transition-colors shrink-0"
+                  className="group p-2 text-white hover:bg-white/5 rounded-lg transition-colors shrink-0 pressable"
                   title="Memory"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-30 group-hover:opacity-60 transition-opacity">
@@ -1757,7 +1757,7 @@ export function Sidebar({
               {onOpenModelStats && (
                 <button
                   onClick={onOpenModelStats}
-                  className="p-2 text-white/30 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors shrink-0"
+                  className="p-2 text-white/30 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors shrink-0 pressable"
                   title="Model Stats & Cache"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1770,7 +1770,7 @@ export function Sidebar({
               {/* Settings */}
               <button
                 onClick={() => onOpenSettings()}
-                className="p-2 text-white/30 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors shrink-0"
+                className="p-2 text-white/30 hover:text-white/60 hover:bg-white/5 rounded-lg transition-colors shrink-0 pressable"
                 title="Settings"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1891,7 +1891,7 @@ export function Sidebar({
                 {projectsExpanded ? (
                   <button
                     onClick={onNewProject}
-                    className="w-5 h-5 flex items-center justify-center rounded-md text-white hover:text-white hover:bg-white/5 transition-colors"
+                    className="w-5 h-5 flex items-center justify-center rounded-md text-white hover:text-white hover:bg-white/5 transition-colors pressable"
                     title="New project"
                     aria-label="New project"
                   >
@@ -1966,7 +1966,7 @@ export function Sidebar({
           <div className="px-3 pt-3 pb-1 shrink-0 border-b border-white/5">
             <button
               onClick={onNewProject}
-              className="w-full px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-400/25 text-emerald-300 text-sm font-medium hover:bg-emerald-500/25 transition-all flex items-center justify-center gap-2"
+              className="w-full px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-400/25 text-emerald-300 text-sm font-medium hover:bg-emerald-500/25 transition-all flex items-center justify-center gap-2 pressable"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 5v14" />
@@ -2020,7 +2020,7 @@ export function Sidebar({
               title="New agent chat"
               aria-hidden={!(agentExpanded && agentScrolled)}
               tabIndex={agentExpanded && agentScrolled ? 0 : -1}
-              className={`mb-1 ml-1 w-5 h-5 flex items-center justify-center rounded-md text-purple-300/70 hover:text-purple-200 hover:bg-purple-500/15 transition-opacity cursor-pointer ${agentExpanded && agentScrolled ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+              className={`mb-1 ml-1 w-5 h-5 flex items-center justify-center rounded-md text-purple-300/70 hover:text-purple-200 hover:bg-purple-500/15 transition-opacity cursor-pointer pressable ${agentExpanded && agentScrolled ? "opacity-100" : "opacity-0 pointer-events-none"}`}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 5v14" />
@@ -2039,7 +2039,7 @@ export function Sidebar({
               >
                 <button
                   onClick={() => { onNewChat("agent"); onClose(); }}
-                  className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2 mb-2"
+                  className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-sm font-medium hover:bg-purple-500/25 transition-all flex items-center justify-center gap-2 mb-2 pressable"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 5v14" />
@@ -2065,7 +2065,7 @@ export function Sidebar({
                 {!agentShowAll && agentChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
                   <button
                     onClick={() => setAgentShowAll(true)}
-                    className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-xs font-medium hover:bg-purple-500/25 transition-all"
+                    className="w-full px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-400/25 text-purple-300 text-xs font-medium hover:bg-purple-500/25 transition-all pressable"
                   >
                     Show {agentChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
                   </button>
@@ -2140,7 +2140,7 @@ export function Sidebar({
               title="New quick chat"
               aria-hidden={!(quickExpanded && quickScrolled)}
               tabIndex={quickExpanded && quickScrolled ? 0 : -1}
-              className={`mb-1 ml-1 w-5 h-5 flex items-center justify-center rounded-md text-blue-300/70 hover:text-blue-200 hover:bg-blue-500/15 transition-opacity cursor-pointer ${quickExpanded && quickScrolled ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+              className={`mb-1 ml-1 w-5 h-5 flex items-center justify-center rounded-md text-blue-300/70 hover:text-blue-200 hover:bg-blue-500/15 transition-opacity cursor-pointer pressable ${quickExpanded && quickScrolled ? "opacity-100" : "opacity-0 pointer-events-none"}`}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 5v14" />
@@ -2159,7 +2159,7 @@ export function Sidebar({
               >
                 <button
                   onClick={() => { onNewChat("quick"); onClose(); }}
-                  className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-sm font-medium hover:bg-blue-500/25 transition-all flex items-center justify-center gap-2 mb-2"
+                  className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-sm font-medium hover:bg-blue-500/25 transition-all flex items-center justify-center gap-2 mb-2 pressable"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 5v14" />
@@ -2185,7 +2185,7 @@ export function Sidebar({
                 {!quickShowAll && quickChats.length > SIDEBAR_CHAT_PAGE_SIZE && (
                   <button
                     onClick={() => setQuickShowAll(true)}
-                    className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-xs font-medium hover:bg-blue-500/25 transition-all"
+                    className="w-full px-3 py-2 rounded-xl bg-blue-500/15 border border-blue-400/25 text-blue-300 text-xs font-medium hover:bg-blue-500/25 transition-all pressable"
                   >
                     Show {quickChats.length - SIDEBAR_CHAT_PAGE_SIZE} more
                   </button>
@@ -2225,7 +2225,7 @@ export function Sidebar({
         <div className="flex gap-2">
           <button
             onClick={() => { onSwitchView('notebooks'); onClose(); }}
-            className="relative flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2"
+            className="relative flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2 pressable"
             style={{
               backgroundColor: `rgba(var(--theme-accent), ${activeView === 'notebooks' ? 0.15 : 0.05})`,
               borderColor: `rgba(var(--theme-accent), ${activeView === 'notebooks' ? 0.4 : 0.25})`,
@@ -2245,7 +2245,7 @@ export function Sidebar({
           </button>
           <button
             onClick={() => { onOpenImageSandbox(); onClose(); }}
-            className={`flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2 ${
+            className={`flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2 pressable ${
               activeView === 'notebooks' ? 'opacity-50' : ''
             }`}
             style={{

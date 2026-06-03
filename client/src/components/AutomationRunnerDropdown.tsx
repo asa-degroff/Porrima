@@ -121,7 +121,7 @@ export function AutomationRunnerDropdown({
     <button
       onClick={() => !isStreaming && dropdown.toggle()}
       disabled={isStreaming}
-      className={`p-2 rounded-lg transition-all cursor-pointer ${
+      className={`p-2 rounded-lg transition-all cursor-pointer pressable ${
         isStreaming
           ? 'text-white/15 cursor-not-allowed'
           : 'text-white/30 hover:text-white/60 hover:bg-white/5'

@@ -44,6 +44,26 @@ html[data-radius="generous"] { --radius-scale: 1.6; }
 /* Tailwind's base `.rounded` utility hardcodes 0.25rem, so scale it here too. */
 html .rounded { border-radius: calc(0.25rem * var(--radius-scale)); }
 
+/* Opt-in pressed affordance for command buttons. Uses individual scale so
+   existing translate/rotate transform utilities continue to compose. */
+.pressable {
+  scale: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pressable {
+    transition-property: color, background-color, border-color, outline-color,
+      text-decoration-color, opacity, box-shadow, filter, backdrop-filter,
+      -webkit-backdrop-filter, scale;
+    transition-duration: var(--press-duration, 120ms);
+    transition-timing-function: var(--press-ease, cubic-bezier(0.2, 0, 0, 1));
+  }
+
+  .pressable:active:not(:disabled):not([aria-disabled="true"]) {
+    scale: var(--press-scale, 0.96);
+  }
+}
+
 :root {
   font-family: "Inter", system-ui, -apple-system, sans-serif;
   color-scheme: dark;

@@ -475,7 +475,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
           <div ref={buttonsRef} className="float-right clear-right flex items-center gap-2 ml-2">
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="p-1.5 rounded-lg text-white/40 hover:text-white/70 hover:bg-white/10 transition-colors"
+              className="p-1.5 rounded-lg text-white/40 hover:text-white/70 hover:bg-white/10 transition-colors pressable"
               title="Attach images"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -507,7 +507,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
             {streaming && canSend ? (
               <button
                 onClick={handleSubmit}
-                className="px-4 py-1.5 rounded-lg text-sm theme-accent-btn"
+                className="px-4 py-1.5 rounded-lg text-sm theme-accent-btn pressable"
               >
                 Send
               </button>
@@ -517,7 +517,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
                   heavy();
                   onAbort?.();
                 }}
-                className="px-4 py-1.5 rounded-lg bg-red-500/20 border border-red-400/30 text-red-300 text-sm hover:bg-red-500/30 transition-colors"
+                className="px-4 py-1.5 rounded-lg bg-red-500/20 border border-red-400/30 text-red-300 text-sm hover:bg-red-500/30 transition-colors pressable"
               >
                 Stop
               </button>
@@ -525,7 +525,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
               <button
                 onClick={handleSubmit}
                 disabled={!canSend}
-                className="px-4 py-1.5 rounded-lg bg-amber-500/20 border border-amber-400/30 text-amber-300 text-sm hover:bg-amber-500/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                className="px-4 py-1.5 rounded-lg bg-amber-500/20 border border-amber-400/30 text-amber-300 text-sm hover:bg-amber-500/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center gap-1.5 pressable"
                 title="Message will be sent when back online"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -538,7 +538,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
               <button
                 onClick={handleSubmit}
                 disabled={!canSend}
-                className="px-4 py-1.5 rounded-lg text-sm theme-accent-btn"
+                className="px-4 py-1.5 rounded-lg text-sm theme-accent-btn pressable"
               >
                 Send
               </button>
