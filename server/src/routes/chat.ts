@@ -9,7 +9,7 @@ import { getChat, saveChat, getDb, getSettings, saveSettings, loadPendingState, 
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
 import type { InferenceModel } from "../types.js";
-import { extractMemories, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
+import { enqueueImmediateExtraction, preCompactionFlush, markChatActive, markChatInactive } from "../services/memory-extraction.js";
 import { generateTitle, generateRecap, RECAP_THRESHOLD } from "../services/title-generation.js";
 import {
   COMPACTION_TRIGGER_RATIO,
@@ -3250,12 +3250,12 @@ async function handleChatStream(
 
       // Memory extraction — runs after agent loop is fully complete (no concurrent LLM interference)
       if (!currentTurnIsHidden && isMemoryAugmentedChatType(chat.type) && hasContent) {
-        extractMemories(chat.modelId, chat.id, lastUserMessage, logicalAssistantContent, chat.projectId)
+        enqueueImmediateExtraction(chat.modelId, chat.id, lastUserMessage, logicalAssistantContent, chat.projectId)
           .catch((err) => console.error("[memory] extraction failed:", err));
       }
       // Run any deferred extractions from mid-loop follow-ups
       for (const deferred of deferredExtractions) {
-        extractMemories(chat.modelId, chat.id, deferred.userMsg, deferred.assistantMsg, chat.projectId)
+        enqueueImmediateExtraction(chat.modelId, chat.id, deferred.userMsg, deferred.assistantMsg, chat.projectId)
           .catch((err) => console.error("[memory] deferred extraction failed:", err));
       }
       deferredExtractions.length = 0;

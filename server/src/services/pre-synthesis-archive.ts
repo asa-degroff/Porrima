@@ -516,6 +516,7 @@ async function callExtractionModel(
       max_tokens: maxTokens,
       temperature: 0.3,
       stream: false,
+      ...(process.env.LLAMACPP_CACHE_PROMPT !== "0" ? { cache_prompt: true } : {}),
     }),
     signal: AbortSignal.timeout(timeoutMs),
   });

@@ -1348,6 +1348,7 @@ async function runIndexGeneration(
             max_tokens: Math.min(extractionSettings.maxTokens, ARCHIVE_INDEX_MAX_TOKENS),
             temperature: 0.3,
             stream: true,
+            ...(process.env.LLAMACPP_CACHE_PROMPT !== "0" ? { cache_prompt: true } : {}),
           }),
           signal: requestSignal,
         });

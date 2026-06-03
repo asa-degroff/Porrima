@@ -16,7 +16,11 @@ import {
 } from "./memory-storage.js";
 import { getChat, updateChatExtractionState } from "./chat-storage.js";
 import { invalidateMemoriesCache } from "./memory-context.js";
-import { startExtractionRun, type ExtractionSupersessionResolution } from "./memory-extraction-observability.js";
+import {
+  startExtractionRun,
+  type ExtractionRunMetadata,
+  type ExtractionSupersessionResolution,
+} from "./memory-extraction-observability.js";
 import { recordModelStats } from "./model-stats.js";
 import type { LlamaTimings } from "./model-stats.js";
 import type { ChatMessage, Memory, MemoryCategory, MemorySourceType, Chat, Settings } from "../types.js";
@@ -229,86 +233,160 @@ export async function readOpenAIContentStream(
  * otherwise falls back to streamChat with the main model.
  * The dedicated model avoids GPU VRAM contention and KV cache invalidation.
  */
-async function callExtractionLLM(
-  modelId: string,
-  userContent: string,
-  systemPrompt: string,
-  signal?: AbortSignal
-): Promise<string> {
-  const settings = await getSettings();
-  const extractionUrl = settings.extractionModelUrl;
-  const extractionSettings = await resolveExtractionRequestSettings(settings);
+interface ExtractionDialogueMessage {
+  role: "user" | "assistant";
+  content: string;
+}
 
-  if (extractionUrl) {
-    // Serialize through the mutex — the dedicated extraction server is
-    // --parallel 1, so concurrent requests just pile up in Node.js memory.
-    return withExtractionMutex(async () => {
-      const { ctxSize, maxTokens, timeoutMs } = extractionSettings;
-      const { maxInputChars, sysPromptTokens, inputBudgetTokens } =
-        computeExtractionInputBudget(systemPrompt, ctxSize, { maxTokens });
+type ResolvedExtractionSettings = Awaited<ReturnType<typeof resolveExtractionRequestSettings>>;
 
-      if (inputBudgetTokens < 1000) {
-        console.warn(
-          `[memory] Extraction input budget very small (${inputBudgetTokens} tok, sysPrompt=${sysPromptTokens} tok, ctx=${ctxSize}, maxTokens=${maxTokens}). ` +
-          `System prompt may be too large — consider trimming memory blocks, or reducing extraction max output tokens.`,
-        );
-      }
+interface ExtractionLLMCallOptions {
+  signal?: AbortSignal;
+  settings?: Settings;
+  extractionSettings?: ResolvedExtractionSettings;
+  assumeMutexHeld?: boolean;
+}
 
-      const truncatedContent = userContent.length > maxInputChars
-        ? userContent.slice(0, maxInputChars) + `\n[Truncated: ${(userContent.length / 1024).toFixed(0)}KB → ${(maxInputChars / 1024).toFixed(0)}KB to fit extraction context; sysPrompt=${sysPromptTokens} tok]`
-        : userContent;
+function estimateDialogueChars(messages: ExtractionDialogueMessage[]): number {
+  return messages.reduce((sum, message) => sum + message.content.length + 32, 0);
+}
 
-      // If the slot is in router mode, preflight /models/load with the configured
-      // extraction model and ctx-size. Single-model mode returns "not-router" and
-      // we fall through to the chat completion as before. normalizeRouterModelId
-      // strips legacy `.gguf` suffixes that single-model launches used to carry.
-      const extractionModelId = resolveEffectiveExtractionModelId(modelId, settings);
-      await ensureRouterModelLoaded(extractionUrl, extractionModelId, { contextWindow: ctxSize });
+function truncateDialogueMessagesToBudget(
+  messages: ExtractionDialogueMessage[],
+  maxInputChars: number,
+  sysPromptTokens: number,
+): ExtractionDialogueMessage[] {
+  if (estimateDialogueChars(messages) <= maxInputChars) return messages;
+  if (messages.length === 0) return messages;
 
-      const requestSignal = signal ?? AbortSignal.timeout(timeoutMs);
-      const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: extractionModelId,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: truncatedContent },
-          ],
-          max_tokens: maxTokens,
-          temperature: 0.6,
-          stream: true,
-        }),
-        signal: requestSignal,
-      });
-      if (!res.ok) {
-        const err = await res.text().catch(() => "");
-        throw new Error(`Extraction model error ${res.status}: ${err}`);
-      }
-      if (!res.body) {
-        throw new Error("Extraction model returned an empty stream");
-      }
+  const head = messages.slice(0, -1);
+  const tail = messages[messages.length - 1];
+  const headChars = estimateDialogueChars(head);
+  const availableForTail = Math.max(1000, maxInputChars - headChars - 64);
 
-      const streamResult = await readOpenAIContentStream(res.body, requestSignal);
-
-      // Record model stats from extraction timings (same structure as chat model)
-      if (streamResult.timings) {
-        try {
-          recordModelStats(
-            extractionModelId,
-            "llamacpp-extraction",
-            streamResult.timings
-          );
-        } catch (e) {
-          console.warn("[memory] Failed to record extraction model stats:", e);
-        }
-      }
-
-      return streamResult.content;
-    });
+  if (headChars >= maxInputChars) {
+    const truncated = tail.content.slice(0, Math.max(1000, maxInputChars - 128));
+    return [{
+      ...tail,
+      content: `${truncated}\n[Truncated: extraction prompt history dropped to fit context; sysPrompt=${sysPromptTokens} tok]`,
+    }];
   }
 
-  // Fallback: use streamChat with the main model
+  return [
+    ...head,
+    {
+      ...tail,
+      content: tail.content.length > availableForTail
+        ? `${tail.content.slice(0, availableForTail)}\n[Truncated: ${(tail.content.length / 1024).toFixed(0)}KB → ${(availableForTail / 1024).toFixed(0)}KB to fit extraction context; sysPrompt=${sysPromptTokens} tok]`
+        : tail.content,
+    },
+  ];
+}
+
+async function callDedicatedExtractionLLMWithMessages(
+  modelId: string,
+  messages: ExtractionDialogueMessage[],
+  systemPrompt: string,
+  settings: Settings,
+  extractionSettings: ResolvedExtractionSettings,
+  signal?: AbortSignal,
+): Promise<string> {
+  const extractionUrl = settings.extractionModelUrl;
+  if (!extractionUrl) {
+    throw new Error("Dedicated extraction URL is not configured");
+  }
+
+  const { ctxSize, maxTokens, timeoutMs } = extractionSettings;
+  const { maxInputChars, sysPromptTokens, inputBudgetTokens } =
+    computeExtractionInputBudget(systemPrompt, ctxSize, { maxTokens });
+
+  if (inputBudgetTokens < 1000) {
+    console.warn(
+      `[memory] Extraction input budget very small (${inputBudgetTokens} tok, sysPrompt=${sysPromptTokens} tok, ctx=${ctxSize}, maxTokens=${maxTokens}). ` +
+      `System prompt may be too large — consider trimming memory blocks, or reducing extraction max output tokens.`,
+    );
+  }
+
+  const boundedMessages = truncateDialogueMessagesToBudget(messages, maxInputChars, sysPromptTokens);
+
+  // If the slot is in router mode, preflight /models/load with the configured
+  // extraction model and ctx-size. Single-model mode returns "not-router" and
+  // we fall through to the chat completion as before. normalizeRouterModelId
+  // strips legacy `.gguf` suffixes that single-model launches used to carry.
+  const extractionModelId = resolveEffectiveExtractionModelId(modelId, settings);
+  await ensureRouterModelLoaded(extractionUrl, extractionModelId, { contextWindow: ctxSize });
+
+  const requestSignal = signal ?? AbortSignal.timeout(timeoutMs);
+  const res = await fetch(`${extractionUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: extractionModelId,
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...boundedMessages,
+      ],
+      max_tokens: maxTokens,
+      temperature: 0.6,
+      stream: true,
+      ...(process.env.LLAMACPP_CACHE_PROMPT !== "0" ? { cache_prompt: true } : {}),
+    }),
+    signal: requestSignal,
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    throw new Error(`Extraction model error ${res.status}: ${err}`);
+  }
+  if (!res.body) {
+    throw new Error("Extraction model returned an empty stream");
+  }
+
+  const streamResult = await readOpenAIContentStream(res.body, requestSignal);
+
+  // Record model stats from extraction timings (same structure as chat model)
+  if (streamResult.timings) {
+    try {
+      recordModelStats(
+        extractionModelId,
+        "llamacpp-extraction",
+        streamResult.timings
+      );
+    } catch (e) {
+      console.warn("[memory] Failed to record extraction model stats:", e);
+    }
+  }
+
+  return streamResult.content;
+}
+
+async function callExtractionLLMWithMessages(
+  modelId: string,
+  messages: ExtractionDialogueMessage[],
+  systemPrompt: string,
+  opts: ExtractionLLMCallOptions = {},
+): Promise<string> {
+  const settings = opts.settings ?? await getSettings();
+  const extractionSettings = opts.extractionSettings ?? await resolveExtractionRequestSettings(settings);
+  const extractionUrl = settings.extractionModelUrl;
+
+  if (extractionUrl) {
+    const run = () => callDedicatedExtractionLLMWithMessages(
+      modelId,
+      messages,
+      systemPrompt,
+      settings,
+      extractionSettings,
+      opts.signal,
+    );
+    return opts.assumeMutexHeld ? run() : withExtractionMutex(run);
+  }
+
+  // Fallback: use streamChat with the main model. Multi-message extraction
+  // sessions are collapsed because the fallback path has no dedicated prompt
+  // cache to protect, and pi-ai assistant replay objects carry provider fields.
+  const userContent = messages
+    .map((message) => `${message.role.toUpperCase()}:\n${message.content}`)
+    .join("\n\n---\n\n");
   let responseText = "";
   await streamChat(
     modelId,
@@ -317,9 +395,29 @@ async function callExtractionLLM(
     (event) => {
       if (event.type === "text_delta") responseText += event.delta;
     },
-    { signal: signal ?? AbortSignal.timeout(extractionSettings.timeoutMs) }
+    { signal: opts.signal ?? AbortSignal.timeout(extractionSettings.timeoutMs) }
   );
   return responseText;
+}
+
+/**
+ * Call the extraction LLM — uses dedicated CPU extraction model if configured,
+ * otherwise falls back to streamChat with the main model.
+ * The dedicated model avoids GPU VRAM contention and KV cache invalidation.
+ */
+async function callExtractionLLM(
+  modelId: string,
+  userContent: string,
+  systemPrompt: string,
+  signal?: AbortSignal,
+  opts: Omit<ExtractionLLMCallOptions, "signal"> = {},
+): Promise<string> {
+  return callExtractionLLMWithMessages(
+    modelId,
+    [{ role: "user", content: userContent }],
+    systemPrompt,
+    { ...opts, signal },
+  );
 }
 
 // In-memory extraction metrics (reset on server restart)
@@ -608,6 +706,7 @@ interface ExtractedFact {
   text: string;
   category: MemoryCategory;
   importance: number;
+  sourceExchangeId?: string;
 }
 
 export function parseExtractionResponse(text: string): ExtractedFact[] {
@@ -643,7 +742,10 @@ export function parseExtractionResponse(text: string): ExtractedFact[] {
         if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
           console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
         }
-        return { text: f.text, category, importance: f.importance };
+        const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
+          ? f.sourceExchangeId.trim()
+          : undefined;
+        return { text: f.text, category, importance: f.importance, sourceExchangeId };
       });
   };
 
@@ -947,6 +1049,8 @@ interface ExtractChunkedOptions {
   signal?: AbortSignal;
   /** Label used in chunk-boundary log lines. */
   contextLabel?: string;
+  /** Immediate queue already owns the extraction mutex while draining. */
+  assumeMutexHeld?: boolean;
 }
 
 interface ExtractChunkedResult {
@@ -1090,10 +1194,11 @@ async function callExtractionLLMWithRetry(
   systemPrompt: string,
   retryContext: string,
   signal?: AbortSignal,
+  opts: Omit<ExtractionLLMCallOptions, "signal"> = {},
 ): Promise<string> {
   let result = "";
   await withRetry(async () => {
-    result = await callExtractionLLM(modelId, userContent, systemPrompt, signal);
+    result = await callExtractionLLM(modelId, userContent, systemPrompt, signal, opts);
   }, retryContext, 2, (err) => !isExtractionContextOverflowError(err));
   return result;
 }
@@ -1118,6 +1223,7 @@ async function extractInChunks(
       opts.systemPrompt,
       retryContext,
       opts.signal,
+      { assumeMutexHeld: opts.assumeMutexHeld },
     );
     return {
       facts: parseExtractionResponse(raw),
@@ -1148,6 +1254,7 @@ async function extractInChunks(
       opts.systemPrompt,
       retryContext,
       opts.signal,
+      { assumeMutexHeld: opts.assumeMutexHeld },
     );
     return {
       facts: parseExtractionResponse(raw),
@@ -1224,6 +1331,7 @@ async function extractInChunks(
         opts.systemPrompt,
         `${retryContext} [chunk ${i + 1}/${chunks.length}]`,
         opts.signal,
+        { assumeMutexHeld: opts.assumeMutexHeld },
       );
       chunkTimingsMs.push(Date.now() - chunkT0);
       successCount++;
@@ -1543,6 +1651,29 @@ function findExchangeSourceSpan(chat: Chat | null, userMsg: string, assistantMsg
   return undefined;
 }
 
+function mergeSourceSpans(spans: Array<MemorySourceSpan | undefined>): MemorySourceSpan | undefined {
+  const timestamps: number[] = [];
+  const indices: number[] = [];
+  for (const span of spans) {
+    if (!span) continue;
+    if (span.startTimestamp !== undefined) timestamps.push(span.startTimestamp);
+    if (span.endTimestamp !== undefined) timestamps.push(span.endTimestamp);
+    if (span.startIndex !== undefined) indices.push(span.startIndex);
+    if (span.endIndex !== undefined) indices.push(span.endIndex);
+  }
+  if (timestamps.length === 0 && indices.length === 0) return undefined;
+  return {
+    ...(timestamps.length > 0 ? {
+      startTimestamp: Math.min(...timestamps),
+      endTimestamp: Math.max(...timestamps),
+    } : {}),
+    ...(indices.length > 0 ? {
+      startIndex: Math.min(...indices),
+      endIndex: Math.max(...indices),
+    } : {}),
+  };
+}
+
 async function saveExtractedMemory(
   fact: ExtractedFact,
   embedding: number[],
@@ -1563,7 +1694,7 @@ async function saveExtractedMemory(
     createdAt: now,
     lastAccessed: now,
     accessCount: 0,
-    sourceChatId: sourceType === "chat" || sourceType === "chat_delayed" ? chatId : "",
+    sourceChatId: sourceType === "chat" || sourceType === "chat_delayed" || sourceType === "chat_immediate" ? chatId : "",
     ...(projectId ? { projectId } : {}),
     sourceType,
     sourceId: sourceId || chatId,
@@ -1616,6 +1747,602 @@ export async function dedupAndSave(
   return { added, superseded: 0, skippedDuplicates, ambiguousCandidates: [] };
 }
 
+const IMMEDIATE_SESSION_HISTORY_PAIR_LIMIT = 8;
+
+interface ImmediateExtractionJob {
+  jobId: string;
+  modelId: string;
+  chatId: string;
+  userMsg: string;
+  assistantMsg: string;
+  projectId?: string;
+  enqueuedAt: number;
+  resolve: () => void;
+  reject: (err: unknown) => void;
+}
+
+interface ImmediateExtractionSession {
+  id: string;
+  chatId: string;
+  identityKey: string;
+  systemPrompt: string;
+  history: ExtractionDialogueMessage[];
+  nextExchangeSequence: number;
+}
+
+interface ImmediateExtractionQueueState {
+  jobs: ImmediateExtractionJob[];
+  running: boolean;
+  session?: ImmediateExtractionSession;
+}
+
+interface ImmediateExchange {
+  exchangeId: string;
+  job: ImmediateExtractionJob;
+  sourceSpan?: MemorySourceSpan;
+}
+
+const immediateExtractionQueues = new Map<string, ImmediateExtractionQueueState>();
+
+function getImmediateQueueState(chatId: string): ImmediateExtractionQueueState {
+  let state = immediateExtractionQueues.get(chatId);
+  if (!state) {
+    state = { jobs: [], running: false };
+    immediateExtractionQueues.set(chatId, state);
+  }
+  return state;
+}
+
+function buildImmediateSessionIdentityKey(input: {
+  projectId?: string;
+  effectiveModelId: string;
+  extractionUrl?: string;
+  ctxSize: number;
+  maxTokens: number;
+  systemPrompt: string;
+}): string {
+  return JSON.stringify({
+    projectId: input.projectId || "",
+    effectiveModelId: input.effectiveModelId,
+    extractionUrl: input.extractionUrl || "",
+    ctxSize: input.ctxSize,
+    maxTokens: input.maxTokens,
+    systemPromptHash: shortHash(input.systemPrompt),
+  });
+}
+
+function createImmediateSession(
+  chatId: string,
+  identityKey: string,
+  systemPrompt: string,
+): ImmediateExtractionSession {
+  return {
+    id: uuid(),
+    chatId,
+    identityKey,
+    systemPrompt,
+    history: [],
+    nextExchangeSequence: 1,
+  };
+}
+
+function ensureImmediateSession(
+  state: ImmediateExtractionQueueState,
+  chatId: string,
+  identityKey: string,
+  systemPrompt: string,
+): { session: ImmediateExtractionSession; freshSessionReason?: string } {
+  if (!state.session) {
+    state.session = createImmediateSession(chatId, identityKey, systemPrompt);
+    return { session: state.session, freshSessionReason: "new-session" };
+  }
+  if (state.session.identityKey !== identityKey || state.session.systemPrompt !== systemPrompt) {
+    state.session = createImmediateSession(chatId, identityKey, systemPrompt);
+    return { session: state.session, freshSessionReason: "identity-changed" };
+  }
+  return { session: state.session };
+}
+
+function nextImmediateExchangeId(session: ImmediateExtractionSession): string {
+  return `E${session.nextExchangeSequence++}`;
+}
+
+function renderImmediateExchange(exchange: ImmediateExchange): string {
+  return [
+    `Exchange ${exchange.exchangeId}`,
+    `User message:\n${exchange.job.userMsg || "(empty)"}`,
+    `Agent response:\n${exchange.job.assistantMsg || "(empty)"}`,
+  ].join("\n\n");
+}
+
+function buildImmediateBatchHeader(exchanges: ImmediateExchange[]): string {
+  const ids = exchanges.map((exchange) => exchange.exchangeId).join(", ");
+  return `Review the new conversation exchange${exchanges.length === 1 ? "" : "s"} below and extract memories as the conversation progresses.
+
+For every extracted memory, include "sourceExchangeId" with exactly one of these exchange ids: ${ids}.
+Use the schema: {"text": string, "category": string, "importance": number, "sourceExchangeId": string}.
+If a memory depends on multiple exchanges, use the exchange that best supports it.
+If nothing is significant, output: []`;
+}
+
+function buildImmediateBatchUserPrompt(exchanges: ImmediateExchange[]): string {
+  return `${buildImmediateBatchHeader(exchanges)}\n\nEXCHANGES:\n\n${exchanges.map(renderImmediateExchange).join("\n\n---\n\n")}`;
+}
+
+function immediateExchangeToSegment(exchange: ImmediateExchange): ExtractSegment {
+  return {
+    label: `Exchange ${exchange.exchangeId}`,
+    text: [
+      `User message:\n${exchange.job.userMsg || "(empty)"}`,
+      `Agent response:\n${exchange.job.assistantMsg || "(empty)"}`,
+    ].join("\n\n"),
+    splittable: true,
+  };
+}
+
+function splitImmediateExchangesIntoBatches(
+  exchanges: ImmediateExchange[],
+  maxInputChars: number,
+): ImmediateExchange[][] {
+  const batches: ImmediateExchange[][] = [];
+  let current: ImmediateExchange[] = [];
+
+  for (const exchange of exchanges) {
+    const candidate = [...current, exchange];
+    const candidatePrompt = buildImmediateBatchUserPrompt(candidate);
+    if (candidatePrompt.length <= maxInputChars || current.length === 0) {
+      current = candidate;
+      continue;
+    }
+    batches.push(current);
+    current = [exchange];
+  }
+
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+function pruneImmediateSessionForBudget(
+  session: ImmediateExtractionSession,
+  nextUserPrompt: string,
+  maxInputChars: number,
+): number {
+  let pruned = 0;
+  while (session.history.length > IMMEDIATE_SESSION_HISTORY_PAIR_LIMIT * 2) {
+    session.history.splice(0, 2);
+    pruned += 2;
+  }
+
+  const nextMessage: ExtractionDialogueMessage = { role: "user", content: nextUserPrompt };
+  while (
+    session.history.length > 0 &&
+    estimateDialogueChars([...session.history, nextMessage]) > maxInputChars
+  ) {
+    session.history.splice(0, 2);
+    pruned += 2;
+  }
+
+  return pruned;
+}
+
+function buildImmediateRunMetadata(input: {
+  session: ImmediateExtractionSession;
+  queueDepth: number;
+  batch: ImmediateExchange[];
+  messages: ExtractionDialogueMessage[];
+  systemPrompt: string;
+  prunedPriorMessages: number;
+  freshSessionReason?: string;
+  chunkedFallback?: boolean;
+}): ExtractionRunMetadata {
+  const promptChars = input.systemPrompt.length + estimateDialogueChars(input.messages);
+  return {
+    sessionId: input.session.id,
+    queuedExchangeCount: input.queueDepth,
+    batchedExchangeCount: input.batch.length,
+    sessionMessageCount: input.messages.length,
+    promptChars,
+    estimatedPromptTokens: estimateTokensConservative(input.systemPrompt) + estimateTokensConservative(input.messages.map((m) => m.content).join("\n\n")),
+    prunedPriorMessages: input.prunedPriorMessages,
+    freshSessionReason: input.freshSessionReason,
+    chunkedFallback: input.chunkedFallback || undefined,
+  };
+}
+
+async function callImmediateSessionLLMWithRetry(input: {
+  modelId: string;
+  messages: ExtractionDialogueMessage[];
+  systemPrompt: string;
+  retryContext: string;
+  settings: Settings;
+  extractionSettings: ResolvedExtractionSettings;
+  assumeMutexHeld: boolean;
+}): Promise<string> {
+  let result = "";
+  await withRetry(async () => {
+    result = await callExtractionLLMWithMessages(
+      input.modelId,
+      input.messages,
+      input.systemPrompt,
+      {
+        settings: input.settings,
+        extractionSettings: input.extractionSettings,
+        assumeMutexHeld: input.assumeMutexHeld,
+      },
+    );
+  }, input.retryContext, 2, (err) => !isExtractionContextOverflowError(err));
+  return result;
+}
+
+function groupImmediateFactsBySource(
+  facts: ExtractedFact[],
+  embeddings: number[][],
+  batch: ImmediateExchange[],
+): Array<{ facts: ExtractedFact[]; embeddings: number[][]; sourceSpan?: MemorySourceSpan }> {
+  const exchangeById = new Map(batch.map((exchange) => [exchange.exchangeId, exchange]));
+  const batchSpan = mergeSourceSpans(batch.map((exchange) => exchange.sourceSpan));
+  const groups = new Map<string, { facts: ExtractedFact[]; embeddings: number[][]; sourceSpan?: MemorySourceSpan }>();
+
+  for (let i = 0; i < facts.length; i++) {
+    const fact = facts[i];
+    const exchange = fact.sourceExchangeId ? exchangeById.get(fact.sourceExchangeId) : undefined;
+    const key = exchange?.exchangeId || "__batch__";
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        facts: [],
+        embeddings: [],
+        sourceSpan: exchange?.sourceSpan || batchSpan,
+      };
+      groups.set(key, group);
+    }
+    group.facts.push(fact);
+    group.embeddings.push(embeddings[i]);
+  }
+
+  return [...groups.values()];
+}
+
+async function saveImmediateFacts(
+  facts: ExtractedFact[],
+  embeddings: number[][],
+  batch: ImmediateExchange[],
+  chatId: string,
+  projectId?: string,
+): Promise<{ added: number; superseded: number; skippedDuplicates: number }> {
+  let added = 0;
+  let superseded = 0;
+  let skippedDuplicates = 0;
+
+  for (const group of groupImmediateFactsBySource(facts, embeddings, batch)) {
+    const outcome = await dedupAndSave(
+      group.facts,
+      group.embeddings,
+      chatId,
+      projectId,
+      "chat_immediate",
+      chatId,
+      group.sourceSpan,
+    );
+    added += outcome.added;
+    superseded += outcome.superseded;
+    skippedDuplicates += outcome.skippedDuplicates;
+  }
+
+  return { added, superseded, skippedDuplicates };
+}
+
+async function runImmediateBatch(input: {
+  state: ImmediateExtractionQueueState;
+  session: ImmediateExtractionSession;
+  batch: ImmediateExchange[];
+  queueDepth: number;
+  modelId: string;
+  effectiveModelId: string;
+  chat: Chat | null;
+  chatId: string;
+  projectId?: string;
+  systemPrompt: string;
+  identityKey: string;
+  settings: Settings;
+  extractionSettings: ResolvedExtractionSettings;
+  maxInputChars: number;
+  assumeMutexHeld: boolean;
+  freshSessionReason?: string;
+}): Promise<void> {
+  const userPrompt = buildImmediateBatchUserPrompt(input.batch);
+  const newUserOnly: ExtractionDialogueMessage[] = [{ role: "user", content: userPrompt }];
+  const nextUserTooLarge = estimateDialogueChars(newUserOnly) > input.maxInputChars;
+  let session = input.session;
+  let prunedPriorMessages = 0;
+  let messages = newUserOnly;
+  let chunkedFallback = nextUserTooLarge;
+
+  if (!chunkedFallback) {
+    prunedPriorMessages = pruneImmediateSessionForBudget(session, userPrompt, input.maxInputChars);
+    messages = [...session.history, { role: "user", content: userPrompt }];
+    if (estimateDialogueChars(messages) > input.maxInputChars) {
+      chunkedFallback = true;
+      messages = newUserOnly;
+      input.state.session = createImmediateSession(input.chatId, input.identityKey, input.systemPrompt);
+      session = input.state.session;
+    }
+  }
+
+  const runHandle = startExtractionRun({
+    trigger: "immediate",
+    chatId: input.chatId,
+    chatTitle: input.chat?.title,
+    model: input.effectiveModelId,
+    priorMemoryCount: 0,
+    messages: input.batch.flatMap((exchange) => [
+      { role: `user:${exchange.exchangeId}`, content: exchange.job.userMsg },
+      { role: `assistant:${exchange.exchangeId}`, content: exchange.job.assistantMsg },
+    ]),
+    systemPrompt: input.systemPrompt,
+    userPrompt,
+    metadata: buildImmediateRunMetadata({
+      session,
+      queueDepth: input.queueDepth,
+      batch: input.batch,
+      messages,
+      systemPrompt: input.systemPrompt,
+      prunedPriorMessages,
+      freshSessionReason: input.freshSessionReason,
+      chunkedFallback,
+    }),
+  });
+
+  try {
+    const t0 = Date.now();
+    const chunkResult = chunkedFallback
+      ? await extractInChunks({
+          modelId: input.modelId,
+          systemPrompt: input.systemPrompt,
+          userPromptHeader: `${buildImmediateBatchHeader(input.batch)}\n\nEXCHANGES:`,
+          segments: input.batch.map(immediateExchangeToSegment),
+          contextLabel: `immediateExtraction chat=${input.chatId}`,
+          assumeMutexHeld: input.assumeMutexHeld,
+        })
+      : {
+          rawOutput: await callImmediateSessionLLMWithRetry({
+            modelId: input.modelId,
+            messages,
+            systemPrompt: input.systemPrompt,
+            retryContext: `immediateExtraction chat=${input.chatId}`,
+            settings: input.settings,
+            extractionSettings: input.extractionSettings,
+            assumeMutexHeld: input.assumeMutexHeld,
+          }),
+          facts: [] as ExtractedFact[],
+          chunkCount: 1,
+          chunkTimingsMs: [Date.now() - t0],
+          chunkFailures: 0,
+        };
+
+    if (!chunkedFallback) {
+      chunkResult.facts = parseExtractionResponse(chunkResult.rawOutput);
+    }
+
+    runHandle.attachOutput(chunkResult.rawOutput);
+
+    const facts = chunkResult.facts;
+    if (facts.length === 0) {
+      const rawSample = (chunkResult.rawOutput || "").trim().slice(0, 400);
+      console.log(`[memory] No facts extracted from immediate batch of ${input.batch.length} exchange(s) (raw output: ${rawSample.length ? JSON.stringify(rawSample) : "<empty>"})`);
+      if (!chunkedFallback) {
+        session.history.push({ role: "user", content: userPrompt }, { role: "assistant", content: chunkResult.rawOutput || "[]" });
+      } else {
+        input.state.session = createImmediateSession(input.chatId, input.identityKey, input.systemPrompt);
+      }
+      extractionMetrics.successfulExtractions += input.batch.length;
+      extractionMetrics.lastExtractionAt = new Date().toISOString();
+      runHandle.complete({
+        facts: [],
+        saved: 0,
+        superseded: 0,
+        skippedDuplicates: 0,
+        errors: 0,
+        chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+      });
+      input.batch.forEach((exchange) => exchange.job.resolve());
+      return;
+    }
+
+    console.log(`[memory] Immediate batch extracted ${facts.length} fact(s) from ${input.batch.length} exchange(s), embedding batch...`);
+
+    let embeddings: number[][];
+    try {
+      embeddings = await withRetry(
+        () => embedBatch(facts.map((f) => f.text)),
+        `embedBatch for ${facts.length} immediate facts (chat ${input.chatId})`
+      );
+    } catch (e) {
+      console.error("[memory] Immediate batch embedding failed:", e);
+      runHandle.fail(e);
+      extractionMetrics.failedExtractions += input.batch.length;
+      extractionMetrics.lastFailureAt = new Date().toISOString();
+      input.batch.forEach((exchange) => exchange.job.reject(e));
+      return;
+    }
+
+    const outcome = await saveImmediateFacts(facts, embeddings, input.batch, input.chatId, input.projectId);
+    invalidateMemoriesCache(input.chatId);
+
+    if (!chunkedFallback) {
+      session.history.push({ role: "user", content: userPrompt }, { role: "assistant", content: chunkResult.rawOutput || "[]" });
+      pruneImmediateSessionForBudget(session, "", input.maxInputChars);
+    } else {
+      input.state.session = createImmediateSession(input.chatId, input.identityKey, input.systemPrompt);
+    }
+
+    extractionMetrics.successfulExtractions += input.batch.length;
+    extractionMetrics.totalFactsExtracted += facts.length;
+    extractionMetrics.lastExtractionAt = new Date().toISOString();
+    runHandle.complete({
+      facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance, sourceExchangeId: f.sourceExchangeId })),
+      saved: outcome.added,
+      superseded: outcome.superseded,
+      skippedDuplicates: outcome.skippedDuplicates,
+      errors: 0,
+      chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+    });
+    input.batch.forEach((exchange) => exchange.job.resolve());
+  } catch (e) {
+    extractionMetrics.failedExtractions += input.batch.length;
+    extractionMetrics.lastFailureAt = new Date().toISOString();
+    runHandle.fail(e);
+    input.batch.forEach((exchange) => exchange.job.reject(e));
+  }
+}
+
+async function processImmediateExtractionJobs(
+  state: ImmediateExtractionQueueState,
+  jobs: ImmediateExtractionJob[],
+  opts: {
+    settings: Settings;
+    extractionSettings: ResolvedExtractionSettings;
+    assumeMutexHeld: boolean;
+  },
+): Promise<void> {
+  if (jobs.length === 0) return;
+
+  extractionMetrics.totalExtractions += jobs.length;
+
+  const first = jobs[0];
+  const systemPrompt = await buildExtractionSystemPrompt(first.projectId);
+  const effectiveModelId = resolveEffectiveExtractionModelId(first.modelId, opts.settings);
+  const identityKey = buildImmediateSessionIdentityKey({
+    projectId: first.projectId,
+    effectiveModelId,
+    extractionUrl: opts.settings.extractionModelUrl,
+    ctxSize: opts.extractionSettings.ctxSize,
+    maxTokens: opts.extractionSettings.maxTokens,
+    systemPrompt,
+  });
+  let { session, freshSessionReason } = ensureImmediateSession(state, first.chatId, identityKey, systemPrompt);
+
+  const chat = await getChat(first.chatId).catch(() => null);
+  const exchanges: ImmediateExchange[] = jobs.map((job) => ({
+    exchangeId: nextImmediateExchangeId(session),
+    job,
+    sourceSpan: findExchangeSourceSpan(chat, job.userMsg, job.assistantMsg),
+  }));
+
+  const { maxInputChars } = computeExtractionInputBudget(
+    systemPrompt,
+    opts.extractionSettings.ctxSize,
+    { maxTokens: opts.extractionSettings.maxTokens },
+  );
+  const batches = splitImmediateExchangesIntoBatches(exchanges, maxInputChars);
+
+  for (const batch of batches) {
+    await runImmediateBatch({
+      state,
+      session,
+      batch,
+      queueDepth: jobs.length,
+      modelId: first.modelId,
+      effectiveModelId,
+      chat,
+      chatId: first.chatId,
+      projectId: first.projectId,
+      systemPrompt,
+      identityKey,
+      settings: opts.settings,
+      extractionSettings: opts.extractionSettings,
+      maxInputChars,
+      assumeMutexHeld: opts.assumeMutexHeld,
+      freshSessionReason,
+    });
+    session = state.session ?? session;
+    freshSessionReason = undefined;
+  }
+}
+
+async function drainImmediateExtractionQueue(chatId: string): Promise<void> {
+  const state = getImmediateQueueState(chatId);
+  if (state.running) return;
+  state.running = true;
+
+  try {
+    while (state.jobs.length > 0) {
+      const settings = await getSettings();
+      const extractionSettings = await resolveExtractionRequestSettings(settings);
+
+      if (settings.extractionModelUrl) {
+        await withExtractionMutex(async () => {
+          const jobs = state.jobs.splice(0);
+          try {
+            await processImmediateExtractionJobs(state, jobs, {
+              settings,
+              extractionSettings,
+              assumeMutexHeld: true,
+            });
+          } catch (e) {
+            extractionMetrics.failedExtractions += jobs.length;
+            extractionMetrics.lastFailureAt = new Date().toISOString();
+            jobs.forEach((job) => job.reject(e));
+            throw e;
+          }
+        });
+      } else {
+        const jobs = state.jobs.splice(0);
+        try {
+          await processImmediateExtractionJobs(state, jobs, {
+            settings,
+            extractionSettings,
+            assumeMutexHeld: false,
+          });
+        } catch (e) {
+          extractionMetrics.failedExtractions += jobs.length;
+          extractionMetrics.lastFailureAt = new Date().toISOString();
+          jobs.forEach((job) => job.reject(e));
+          throw e;
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`[memory] immediate extraction queue failed for chat ${chatId}:`, e);
+  } finally {
+    state.running = false;
+    if (state.jobs.length > 0) {
+      void drainImmediateExtractionQueue(chatId);
+    }
+  }
+}
+
+export function enqueueImmediateExtraction(
+  modelId: string,
+  chatId: string,
+  userMsg: string,
+  assistantMsg: string,
+  projectId?: string
+): Promise<void> {
+  const state = getImmediateQueueState(chatId);
+  let resolve!: () => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  state.jobs.push({
+    jobId: uuid(),
+    modelId,
+    chatId,
+    userMsg,
+    assistantMsg,
+    projectId,
+    enqueuedAt: Date.now(),
+    resolve,
+    reject,
+  });
+
+  void drainImmediateExtractionQueue(chatId);
+  return promise;
+}
+
 export async function extractMemories(
   modelId: string,
   chatId: string,
@@ -1623,100 +2350,7 @@ export async function extractMemories(
   assistantMsg: string,
   projectId?: string
 ): Promise<void> {
-  extractionMetrics.totalExtractions++;
-  const extractionPrompt = `User message: ${userMsg}\n\nAgent response: ${assistantMsg}`;
-  const systemPrompt = await buildExtractionSystemPrompt(projectId);
-  const chat = await getChat(chatId).catch(() => null);
-  const effectiveModelId = await getEffectiveExtractionModelId(modelId);
-  const runHandle = startExtractionRun({
-    trigger: "immediate",
-    chatId,
-    chatTitle: chat?.title,
-    model: effectiveModelId,
-    priorMemoryCount: 0,
-    messages: [
-      { role: "user", content: userMsg },
-      { role: "assistant", content: assistantMsg },
-    ],
-    systemPrompt,
-    userPrompt: extractionPrompt,
-  });
-  try {
-
-  // Call the LLM to extract facts (chunked if content exceeds budget;
-  // retry happens per-chunk inside extractInChunks).
-  const chunkResult = await extractInChunks({
-    modelId,
-    systemPrompt,
-    segments: [
-      { label: "User message", text: userMsg, splittable: true },
-      { label: "Assistant response", text: assistantMsg, splittable: true },
-    ],
-    contextLabel: `extractMemories chat=${chatId}`,
-  });
-  runHandle.attachOutput(chunkResult.rawOutput);
-
-  const facts = chunkResult.facts;
-  if (facts.length === 0) {
-    // Surface the raw model output so we can tell "model returned []" (legit
-    // no-facts call) apart from "model returned malformed JSON the parser
-    // bailed on" (parser-side miss). Trimmed to keep log lines bounded.
-    const rawSample = (chunkResult.rawOutput || "").trim().slice(0, 400);
-    console.log(`[memory] No facts extracted from exchange (raw output: ${rawSample.length ? JSON.stringify(rawSample) : "<empty>"})`);
-    extractionMetrics.successfulExtractions++;
-    extractionMetrics.lastExtractionAt = new Date().toISOString();
-    runHandle.complete({
-      facts: [],
-      saved: 0,
-      superseded: 0,
-      skippedDuplicates: 0,
-      errors: 0,
-      chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
-    });
-    return;
-  }
-
-  console.log(`[memory] Extracted ${facts.length} fact(s) across ${chunkResult.chunkCount} chunk(s), embedding batch...`);
-
-  // Batch-embed all facts in a single API call
-  let embeddings: number[][];
-  try {
-    embeddings = await withRetry(
-      () => embedBatch(facts.map((f) => f.text)),
-      `embedBatch for ${facts.length} facts (chat ${chatId})`
-    );
-  } catch (e) {
-    console.error("[memory] Batch embedding failed:", e);
-    runHandle.fail(e);
-    return;
-  }
-
-  // Dedup and save inside a single write lock to prevent concurrent overwrites
-  const sourceSpan = findExchangeSourceSpan(chat, userMsg, assistantMsg);
-  const outcome = await dedupAndSave(facts, embeddings, chatId, projectId, "chat", chatId, sourceSpan);
-
-  // Invalidate the memories cache for this chat so the next turn re-retrieves
-  // with the newly extracted memories included. This keeps the system prompt
-  // stable between turns (byte-identical) until new memories actually change.
-  invalidateMemoriesCache(chatId);
-
-  extractionMetrics.successfulExtractions++;
-  extractionMetrics.totalFactsExtracted += facts.length;
-  extractionMetrics.lastExtractionAt = new Date().toISOString();
-  runHandle.complete({
-    facts: facts.map((f) => ({ text: f.text, category: f.category, importance: f.importance })),
-    saved: outcome.added,
-    superseded: outcome.superseded,
-    skippedDuplicates: outcome.skippedDuplicates,
-    errors: 0,
-    chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
-  });
-  } catch (e) {
-    extractionMetrics.failedExtractions++;
-    extractionMetrics.lastFailureAt = new Date().toISOString();
-    runHandle.fail(e);
-    throw e;
-  }
+  return enqueueImmediateExtraction(modelId, chatId, userMsg, assistantMsg, projectId);
 }
 
 const PRE_COMPACTION_INSTRUCTIONS = `---

@@ -22,6 +22,7 @@ export interface ExtractionParsedFact {
   text: string;
   category?: string;
   importance?: number;
+  sourceExchangeId?: string;
 }
 
 export interface ExtractionChunkInfo {
@@ -57,6 +58,18 @@ export interface ExtractionResults {
   chunks?: ExtractionChunkInfo;
 }
 
+export interface ExtractionRunMetadata {
+  sessionId?: string;
+  queuedExchangeCount?: number;
+  batchedExchangeCount?: number;
+  sessionMessageCount?: number;
+  promptChars?: number;
+  estimatedPromptTokens?: number;
+  prunedPriorMessages?: number;
+  freshSessionReason?: string;
+  chunkedFallback?: boolean;
+}
+
 export interface ExtractionRun {
   id: string;
   trigger: ExtractionTrigger;
@@ -74,6 +87,7 @@ export interface ExtractionRun {
   rawOutput?: string;
   results?: ExtractionResults;
   error?: string;
+  metadata?: ExtractionRunMetadata;
 }
 
 export interface ExtractionEvent {
@@ -119,6 +133,7 @@ export interface StartRunInput {
   messages: ExtractionMessageView[];
   systemPrompt: string;
   userPrompt: string;
+  metadata?: ExtractionRunMetadata;
 }
 
 export interface RunHandle {
@@ -144,6 +159,7 @@ export function startExtractionRun(input: StartRunInput): RunHandle {
     messages: input.messages,
     systemPrompt: input.systemPrompt,
     userPrompt: input.userPrompt,
+    metadata: input.metadata,
   };
   pushRun(run);
   emit({ type: "start", run });

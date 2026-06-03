@@ -106,6 +106,19 @@ describe("parseExtractionResponse", () => {
     expect(result).toHaveLength(1);
     expect(result[0].text).toBe("Final fact");
   });
+
+  it("preserves optional source exchange ids for immediate batches", () => {
+    const input = `[{"text": "User prefers queued extraction batching", "category": "preference", "importance": 7, "sourceExchangeId": "E2"}]`;
+    const result = parseExtractionResponse(input);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      text: "User prefers queued extraction batching",
+      category: "preference",
+      importance: 7,
+      sourceExchangeId: "E2",
+    });
+  });
 });
 
 describe("readOpenAIContentStream", () => {

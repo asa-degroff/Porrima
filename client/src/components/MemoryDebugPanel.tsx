@@ -19,6 +19,7 @@ interface ExtractionParsedFact {
   text: string;
   category?: string;
   importance?: number;
+  sourceExchangeId?: string;
 }
 
 interface ExtractionChunkInfo {
@@ -50,6 +51,18 @@ interface ExtractionResults {
   chunks?: ExtractionChunkInfo;
 }
 
+interface ExtractionRunMetadata {
+  sessionId?: string;
+  queuedExchangeCount?: number;
+  batchedExchangeCount?: number;
+  sessionMessageCount?: number;
+  promptChars?: number;
+  estimatedPromptTokens?: number;
+  prunedPriorMessages?: number;
+  freshSessionReason?: string;
+  chunkedFallback?: boolean;
+}
+
 interface ExtractionRun {
   id: string;
   trigger: ExtractionTrigger;
@@ -67,6 +80,7 @@ interface ExtractionRun {
   rawOutput?: string;
   results?: ExtractionResults;
   error?: string;
+  metadata?: ExtractionRunMetadata;
 }
 
 interface ExtractionEvent {
@@ -561,6 +575,9 @@ function ExtractionTab({
                       : `${run.results.chunks.count} calls${run.results.chunks.failures > 0 ? ` (${run.results.chunks.failures} fail)` : ""}`}
                   </span>
                 )}
+                {run.metadata?.batchedExchangeCount && run.metadata.batchedExchangeCount > 1 && (
+                  <span className="shrink-0 text-purple-300/50">{run.metadata.batchedExchangeCount} exchanges</span>
+                )}
                 <span className="shrink-0">{formatDuration(run.durationMs)}</span>
                 <span className="text-white/20 shrink-0">{formatTime(run.startedAt)}</span>
               </div>
@@ -584,6 +601,16 @@ function RunDetail({ run }: { run: ExtractionRun }) {
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-white/40 pt-2">
         <span>model: <span className="text-white/60">{run.model}</span></span>
         <span>prior memories: <span className="text-white/60">{run.priorMemoryCount}</span></span>
+        {run.metadata?.sessionId && <span>session: <span className="text-white/60">{run.metadata.sessionId.slice(0, 8)}</span></span>}
+        {run.metadata?.queuedExchangeCount !== undefined && <span>queued: <span className="text-white/60">{run.metadata.queuedExchangeCount}</span></span>}
+        {run.metadata?.batchedExchangeCount !== undefined && <span>batched: <span className="text-purple-300/70">{run.metadata.batchedExchangeCount}</span></span>}
+        {run.metadata?.sessionMessageCount !== undefined && <span>prompt messages: <span className="text-white/60">{run.metadata.sessionMessageCount}</span></span>}
+        {run.metadata?.estimatedPromptTokens !== undefined && <span>prompt est: <span className="text-white/60">{run.metadata.estimatedPromptTokens.toLocaleString()} tok</span></span>}
+        {run.metadata?.prunedPriorMessages !== undefined && run.metadata.prunedPriorMessages > 0 && (
+          <span>pruned: <span className="text-amber-300/70">{run.metadata.prunedPriorMessages}</span></span>
+        )}
+        {run.metadata?.freshSessionReason && <span>fresh: <span className="text-sky-300/70">{run.metadata.freshSessionReason}</span></span>}
+        {run.metadata?.chunkedFallback && <span className="text-amber-300/70">chunked fallback</span>}
         {run.results && (
           <>
             <span>saved: <span className="text-emerald-300/70">{run.results.saved}</span></span>
@@ -600,6 +627,7 @@ function RunDetail({ run }: { run: ExtractionRun }) {
               <li key={i} className="text-[11px] flex gap-2">
                 {f.category && <span className="text-white/40 shrink-0 w-20 truncate">[{f.category}]</span>}
                 {f.importance !== undefined && <span className="text-white/40 shrink-0 w-8">i{f.importance}</span>}
+                {f.sourceExchangeId && <span className="text-purple-300/50 shrink-0 w-8">{f.sourceExchangeId}</span>}
                 <span className="text-white/80 flex-1">{f.text}</span>
               </li>
             ))}
