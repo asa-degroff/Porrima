@@ -8,7 +8,7 @@ import {
 import type { ChatMessage } from "../types.js";
 
 describe("passive memory recall query building", () => {
-  it("uses recent user, assistant, and sanitized tool-result context", () => {
+  it("uses recent user and assistant context with sanitized operational noise", () => {
     const messages: ChatMessage[] = [
       { role: "user", content: "Can you inspect the retry behavior?", timestamp: 1000 },
       {
@@ -29,10 +29,11 @@ describe("passive memory recall query building", () => {
 
     const query = buildPassiveRecallQuery(messages);
 
-    expect(query).toContain("User: Can you inspect the retry behavior?");
-    expect(query).toContain("Observation:");
-    expect(query).toContain("hidden system rows");
-    expect(query).not.toContain("read_file");
+    expect(query).toContain("Can you inspect the retry behavior?");
+    expect(query).not.toContain("User:");
+    expect(query).not.toContain("Assistant:");
+    // tool results are not included; only tool call signal (name + arguments)
+    expect(query).not.toContain("hidden system rows");
     expect(query).not.toContain("server/src/routes/chat.ts");
   });
 
@@ -49,7 +50,7 @@ describe("passive memory recall query building", () => {
 
     const query = buildPassiveRecallQuery(messages);
 
-    expect(query).toBe("User: Now continue the implementation.");
+    expect(query).toBe("Now continue the implementation.");
     expect(query).not.toContain("cache setting");
   });
 
@@ -76,12 +77,12 @@ describe("passive memory recall query building", () => {
 
     expect(recallQuery).not.toContain("Daily Synthesis");
     expect(recallQuery).not.toContain("maintain your memory blocks");
-    expect(recallQuery).toContain("Assistant:");
+    expect(recallQuery).not.toContain("Assistant:");
     expect(recallQuery).toContain("memory retrieval themes");
 
     expect(rerankQuery).not.toContain("User request:");
     expect(rerankQuery).not.toContain("Daily Synthesis");
-    expect(rerankQuery).toContain("Agent thinking:");
+    expect(rerankQuery).not.toContain("Agent thinking:");
     expect(rerankQuery).toContain("durable patterns");
   });
 
@@ -115,7 +116,7 @@ describe("passive memory recall query building", () => {
 
     const query = buildPassiveRerankQuery(messages);
 
-    expect(query).toContain("Agent thinking:");
+    expect(query).not.toContain("Agent thinking:");
     expect(query).toContain("durable patterns");
     expect(query).not.toContain("User request:");
     expect(query).not.toContain("notebook design");
@@ -169,15 +170,16 @@ describe("passive memory recall query building", () => {
     const query = buildPassiveRerankQuery(messages, 900);
 
     expect(query.length).toBeLessThanOrEqual(900);
-    expect(query).toContain("Agent thinking:");
+    expect(query).not.toContain("Agent thinking:");
     expect(query).toContain("selecting meta memories");
     expect(query).toContain("topical context");
-    expect(query).toContain("User request:");
+    expect(query).not.toContain("User request:");
     expect(query).toContain("passive memory recall");
-    expect(query).toContain("current batch size");
+    expect(query).not.toContain("current batch size"); // tool results are not in rerank query
     expect(query).not.toContain("Tool activity:");
     expect(query).not.toContain("Concrete anchors:");
-    expect(query).not.toContain("read_file");
+    // tool names are included via extractToolCallSignal for semantic intent
+    expect(query).toContain("read_file:");
     expect(query).not.toContain("server/src/services/passive-memory-recall.ts");
     expect(query).not.toContain("passive-memory-recall.ts");
     expect(query).not.toContain("reranker.service");
@@ -230,7 +232,7 @@ describe("passive memory recall query building", () => {
 
     const query = buildPassiveRerankQuery(messages, 900);
 
-    expect(query).toContain("User request:");
+    expect(query).not.toContain("User request:");
     expect(query).toContain("passive recall follows the wrong topic");
     expect(query).not.toContain("Assistant output:");
     expect(query).not.toContain("notebook design");

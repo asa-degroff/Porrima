@@ -147,8 +147,10 @@ function extractToolCallSignal(toolCalls: ChatMessage["toolCalls"], maxChars = 3
   const parts: string[] = [];
   for (const call of toolCalls) {
     const args = call.arguments as Record<string, any>;
-    // Extract key semantic arguments by common names
-    const signal = [
+    // Extract key semantic arguments by common names.
+    // Scrub file paths and URLs to avoid leaking operational noise,
+    // but keep query/search text that carries topical signal.
+    const rawSignal = [
       args.query, args.q, args.search, args.text,
       args.path, args.file, args.filename,
       args.url, args.term, args.blockId, args.block_id,
@@ -156,8 +158,8 @@ function extractToolCallSignal(toolCalls: ChatMessage["toolCalls"], maxChars = 3
     ].filter((v): v is string => typeof v === "string" && v.trim().length > 0)
       .map((v) => v.replace(/\s+/g, " ").trim())
       .join(" ");
-    if (signal) {
-      parts.push(`${call.name}: ${signal}`);
+    if (rawSignal) {
+      parts.push(`${call.name}: ${scrubOperationalNoise(rawSignal)}`);
     }
   }
   const joined = parts.join(" / ");
@@ -186,7 +188,7 @@ export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = 6000
     if (message.role === "user") {
       if (isAutomationUserPrompt(message)) continue;
       const content = scrubOperationalNoise(clampText(message.content, 1200));
-      if (content) parts.push(`User: ${content}`);
+      if (content) parts.push(content);
       continue;
     }
 
@@ -206,9 +208,9 @@ export function buildPassiveRecallQuery(messages: ChatMessage[], maxChars = 6000
       : "";
 
     const combined = [
-      thinking ? `Thinking: ${thinking}` : "",
-      text ? `Assistant: ${text}` : "",
-      toolSignal ? `Tool calls: ${toolSignal}` : "",
+      thinking,
+      text,
+      toolSignal,
     ].filter(Boolean).join("\n");
     if (combined) parts.push(combined);
   }
@@ -269,10 +271,10 @@ export function buildPassiveRerankQuery(messages: ChatMessage[], maxChars = 900)
   const contentBudget = Math.max(120, Math.floor(maxChars * 0.25));  // 225
 
   const parts: string[] = [];
-  if (latestUser?.trim()) parts.push(`User request: ${clampSignal(latestUser, userBudget)}`);
-  if (agentThinking?.trim()) parts.push(`Agent thinking: ${clampSignal(agentThinking, thinkingBudget)}`);
-  if (toolCalls) parts.push(`Tool calls: ${clampSignal(toolCalls, toolCallBudget)}`);
-  if (latestAssistantContent) parts.push(`Assistant output: ${clampSignal(latestAssistantContent, contentBudget)}`);
+  if (latestUser?.trim()) parts.push(clampSignal(latestUser, userBudget));
+  if (agentThinking?.trim()) parts.push(clampSignal(agentThinking, thinkingBudget));
+  if (toolCalls) parts.push(clampSignal(toolCalls, toolCallBudget));
+  if (latestAssistantContent) parts.push(clampSignal(latestAssistantContent, contentBudget));
 
   const query = parts.join("\n").trim();
   if (!query) return "";
