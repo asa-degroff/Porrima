@@ -1906,7 +1906,7 @@ export function Sidebar({
               </div>
             </div>
             <AnimatedCollapse open={projectsExpanded} id={projectsContentId} closeFromHeight={projectsCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
-              <div data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto pb-1">
+              <div className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto pb-1">
                 <AnimatedListReveal
                   open={projectsExpanded}
                   animate={openingSectionMotion.index === 0}
@@ -2030,7 +2030,7 @@ export function Sidebar({
           </div>
            {/* Scrollable chat list */}
           <AnimatedCollapse open={agentExpanded} id={agentContentId} closeFromHeight={agentCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
-            <div ref={agentScrollRef} data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-1">
+            <div ref={agentScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-1">
               <AnimatedListReveal
                 open={agentExpanded}
                 animate={openingSectionMotion.index === 1}
@@ -2150,7 +2150,7 @@ export function Sidebar({
           </div>
           {/* Scrollable chat list */}
           <AnimatedCollapse open={quickExpanded} id={quickContentId} closeFromHeight={quickCloseHeight} className="flex-1 min-h-0" innerClassName="flex flex-col h-full min-h-0">
-            <div ref={quickScrollRef} data-gesture-drawer-scroll className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-2">
+            <div ref={quickScrollRef} className="sidebar-scroll-pane flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-2">
               <AnimatedListReveal
                 open={quickExpanded}
                 animate={openingSectionMotion.index === 2}
