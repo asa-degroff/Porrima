@@ -2931,18 +2931,22 @@ async function handleChatStream(
             console.log(`[chat] resume turn_end (cycle ${compactionCycle}): stop=${sr} content=${state.fullText.length}ch tokens=${msg.usage?.totalTokens || "?"}`);
 
             let persistedResumeMsg: ChatMessage | null = null;
+            let savedResumeProgress = false;
             if (sr === "toolUse") {
               persistedResumeMsg = buildAssistantMessageFromTurn(msg);
               upsertAssistantMessage(persistedResumeMsg);
               markUncommittedAssistantMessageCommitted(persistedResumeMsg);
+              flushPendingPassiveRecallRows();
               try {
                 await saveChat(chat);
+                savedResumeProgress = true;
                 res.write(`event: message_complete\ndata: ${JSON.stringify({ message: persistedResumeMsg, continues: true })}\n\n`);
               } catch (saveErr) {
                 console.error(`[chat] resume save failed:`, saveErr);
               }
             } else {
               state.pendingFinalAssistantMessage = buildAssistantMessageFromTurn(msg);
+              flushPendingPassiveRecallRows();
             }
 
             // Emit iteration event so client updates token indicator in real-time
@@ -2969,6 +2973,21 @@ async function handleChatStream(
               state.needsMidTurnCompaction = true;
               resumeAbortController.abort();
               stopAgentLoop();
+            }
+
+            if (
+              sr === "toolUse" &&
+              savedResumeProgress &&
+              !resumeAbortController.signal.aborted &&
+              !state.needsMidTurnCompaction
+            ) {
+              passiveRecall?.schedule({
+                iteration: iterations,
+                stopReason: sr,
+                chatMessages: chat.messages,
+                chatType: chat.type,
+                projectId: chat.projectId,
+              });
             }
           }
           },
