@@ -114,6 +114,8 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
 
   const globalSkillsCount = skills.filter((s) => s.source === "global").length;
   const projectSkillsCount = skills.filter((s) => s.source === "project").length;
+  const resourceEntries = (skill: SkillInfo) => Object.entries(skill.resources || {})
+    .flatMap(([dir, files]) => (files || []).map((file) => ({ dir, file })));
 
   return (
     <div className="space-y-3 pt-2">
@@ -184,13 +186,13 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
               />
             </div>
             <div>
-              <label className="block text-xs text-white/50 mb-1">Custom name (optional)</label>
+              <label className="block text-xs text-white/50 mb-1">Expected name (optional)</label>
               <input
                 type="text"
                 value={installForm.name}
                 onChange={(e) => setInstallForm((prev) => ({ ...prev, name: e.target.value }))}
                 className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-emerald-400/30 focus:border-emerald-400/30 transition-all"
-                placeholder="Defaults to name from frontmatter"
+                placeholder="Must match SKILL.md name"
                 disabled={installForm.loading}
               />
             </div>
@@ -288,6 +290,7 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
           filteredSkills.map((skill) => {
             const isExpanded = expandedSkill === skill.name;
             const isGlobal = skill.source === "global";
+            const isManaged = skill.managed !== false;
             const isDeleting = deleting === skill.name;
 
             return (
@@ -305,23 +308,30 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
                       <span className="text-xs font-medium text-white/90">{skill.name}</span>
                       <span
                         className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${
-                          isGlobal
+                          skill.sourceRoot === "agents"
+                            ? "bg-sky-500/15 text-sky-300 border border-sky-400/25"
+                            : isGlobal
                             ? "bg-purple-500/20 text-purple-300 border border-purple-400/30"
                             : "bg-emerald-500/20 text-emerald-300 border border-emerald-400/30"
                         }`}
                       >
-                        {skill.source}
+                        {skill.sourceRoot === "agents" ? "agent global" : skill.source}
                       </span>
                       {skill.projectId && (
                         <span className="text-[9px] text-white/30 truncate max-w-[150px]" title={skill.projectId}>
                           {skill.projectId.slice(0, 8)}...
                         </span>
                       )}
+                      {resourceEntries(skill).length > 0 && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-sky-500/15 text-sky-300 border border-sky-400/25">
+                          {resourceEntries(skill).length} resources
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-white/50 mt-1 line-clamp-2">{skill.description}</p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {isGlobal && (
+                    {isGlobal && isManaged && (
                       <button
                         onClick={() => handleDelete(skill.name)}
                         disabled={isDeleting}
@@ -371,12 +381,57 @@ export function SkillsBrowser({ onClose, projectId }: Props) {
                             <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
                             <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
                           </svg>
-                          <span className="truncate">~/.porrima/skills/{skill.name}/</span>
+                          <span className="truncate">
+                            {skill.sourceRoot === "agents" ? `~/.agents/skills/${skill.name}/` : `~/.porrima/skills/${skill.name}/`}
+                          </span>
                         </div>
                       )}
                       <div className="text-white/50">
                         <span className="font-medium text-white/60">Description:</span> {skill.description}
                       </div>
+                      {skill.compatibility && (
+                        <div className="text-white/50">
+                          <span className="font-medium text-white/60">Compatibility:</span> {skill.compatibility}
+                        </div>
+                      )}
+                      {skill.license && (
+                        <div className="text-white/50">
+                          <span className="font-medium text-white/60">License:</span> {skill.license}
+                        </div>
+                      )}
+                      {skill.allowedTools && (
+                        <div className="text-white/50">
+                          <span className="font-medium text-white/60">Allowed tools:</span> {skill.allowedTools}
+                        </div>
+                      )}
+                      {resourceEntries(skill).length > 0 && (
+                        <div>
+                          <div className="font-medium text-white/60 mb-1">Resources:</div>
+                          <div className="space-y-1">
+                            {resourceEntries(skill).map(({ dir, file }) => (
+                              <div key={file} className="flex items-center gap-2 text-white/40">
+                                <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[9px] text-white/45">
+                                  {dir}
+                                </span>
+                                <span className="truncate">{file}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {skill.metadata && Object.keys(skill.metadata).length > 0 && (
+                        <div>
+                          <div className="font-medium text-white/60 mb-1">Metadata:</div>
+                          <div className="space-y-1">
+                            {Object.entries(skill.metadata).map(([key, value]) => (
+                              <div key={key} className="flex items-center gap-2 text-white/40">
+                                <span className="text-white/50">{key}</span>
+                                <span className="truncate">{value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

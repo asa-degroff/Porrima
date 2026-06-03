@@ -12,7 +12,15 @@ router.get("/", async (req: Request, res: Response) => {
     res.json(skills.map(s => ({
       name: s.name,
       description: s.description,
+      license: s.license,
+      compatibility: s.compatibility,
+      metadata: s.metadata,
+      allowedTools: s.allowedTools,
+      resources: s.resources,
       source: s.source,
+      sourceRoot: s.sourceRoot,
+      managed: s.managed,
+      folderPath: s.folderPath,
       projectId: s.projectId,
     })));
   } catch (err: any) {

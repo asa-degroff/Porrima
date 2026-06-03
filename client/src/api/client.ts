@@ -1367,7 +1367,15 @@ export async function triggerWakeCycle(): Promise<SynthesisDispatchResult> {
 export interface SkillInfo {
   name: string;
   description: string;
+  license?: string;
+  compatibility?: string;
+  metadata?: Record<string, string>;
+  allowedTools?: string;
+  resources?: Partial<Record<"scripts" | "references" | "assets", string[]>>;
   source?: "global" | "project";
+  sourceRoot?: "porrima" | "agents" | "project";
+  managed?: boolean;
+  folderPath?: string;
   projectId?: string;
 }
 

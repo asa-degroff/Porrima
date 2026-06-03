@@ -32,9 +32,13 @@ Dual user/agent notebook for structured notes, reflections, and cross-referencin
 
 ## Skills
 
-- Pluggable skill definitions
+- Agent Skills compatible directory format: `<skill-name>/SKILL.md` with required `name` and `description` frontmatter
+- Global skills are discovered from Porrima-managed `~/.porrima/skills/` and shared read-only `~/.agents/skills/`
+- Skill names must match the parent directory and use lowercase letters, digits, and single hyphens
+- Optional spec fields are preserved: `license`, `compatibility`, `metadata`, and `allowed-tools`
+- Optional `scripts/`, `references/`, and `assets/` directories are discovered and exposed for progressive disclosure
 - Activated per chat, project-scoped vs. global filtering
-- Installation from URL with custom naming
+- Installation from direct `SKILL.md` URLs or GitHub skill-directory URLs
 - UI: `SkillSelector`, `SkillsBrowser` (install, delete, expandable details)
 
 ## Persona

@@ -368,10 +368,10 @@ URL: ${result.url}${warningText}` }], details: {} };
   // Skill management tools
   tools.push({
     name: "install_skill",
-    description: "Install a new skill from a URL (GitHub or direct SKILL.md link). Use this to extend your capabilities by fetching skills from external sources. Returns the installed skill name and path.",
+    description: "Install a new Agent Skills compatible skill from a URL (GitHub skill directory or direct SKILL.md link). Use this to extend your capabilities by fetching skills from external sources. Returns the installed skill name and path.",
     parameters: Type.Object({
-      url: Type.String({ description: "URL to the skill (GitHub blob/tree URL or direct URL to SKILL.md file)" }),
-      name: Type.Optional(Type.String({ description: "Custom name for the skill folder (optional, defaults to name from frontmatter)" })),
+      url: Type.String({ description: "URL to the skill (GitHub tree URL for a skill directory, GitHub blob URL, or direct URL to SKILL.md)" }),
+      name: Type.Optional(Type.String({ description: "Expected skill name. If provided, it must match the SKILL.md frontmatter name." })),
     }),
     label: "install_skill",
     execute: async (_id, params) => {
@@ -439,10 +439,13 @@ URL: ${result.url}${warningText}` }], details: {} };
           };
         }
         
-        const list = skills.map((s, i) => `${i + 1}. **${s.name}** (${s.source})\n   ${s.description}`).join("\n");
+        const list = skills.map((s, i) => {
+          const label = s.sourceRoot === "agents" ? "agent global" : s.source;
+          return `${i + 1}. **${s.name}** (${label})\n   ${s.description}`;
+        }).join("\n");
         return { 
           content: [{ type: "text", text: `**Available Skills** (${skills.length} total)\n\n${list}` }], 
-          details: { skills: skills.map(s => ({ name: s.name, description: s.description, source: s.source })) },
+          details: { skills: skills.map(s => ({ name: s.name, description: s.description, source: s.source, sourceRoot: s.sourceRoot, managed: s.managed })) },
         };
       } catch (e: any) {
         return { 
