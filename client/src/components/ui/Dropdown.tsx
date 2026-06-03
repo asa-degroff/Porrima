@@ -32,16 +32,13 @@ export function Dropdown({
   panelClassName = DEFAULT_PANEL_CLASS,
 }: DropdownProps) {
   const wrapperClass = wrapperClassName ? `relative ${wrapperClassName}` : "relative";
-  const buttonClassName = triggerClassName.includes("pressable")
-    ? triggerClassName
-    : `${triggerClassName} pressable`;
 
   return (
     <div className={wrapperClass} ref={state.ref}>
       <button
         onClick={() => !disabled && state.toggle()}
         disabled={disabled}
-        className={buttonClassName}
+        className={triggerClassName}
         style={triggerStyle}
       >
         {trigger}

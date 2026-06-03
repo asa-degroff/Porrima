@@ -2721,7 +2721,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 type="button"
                 onClick={handleLoadDefaultModel}
                 disabled={!canLoadDefaultModel || defaultModelLoaded || applyingSlot === "inference"}
-                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/20 text-emerald-300 hover:bg-emerald-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/20 text-emerald-300 hover:bg-emerald-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0 pressable"
               >
                 {applyingSlot === "inference" ? "Loading..." : defaultModelLoaded ? "Loaded" : "Load Default Now"}
               </button>
@@ -2804,7 +2804,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     type="button"
                     onClick={refreshLlamaBinaries}
                     disabled={llamaBinariesLoading || !llamaBinaryScanDir.trim()}
-                    className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0"
+                    className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0 pressable"
                   >
                     {llamaBinariesLoading ? "Scanning..." : "Scan"}
                   </button>
@@ -2924,7 +2924,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                  type="button"
 	                  onClick={() => refreshLlamaServers(true)}
 	                  disabled={llamaServersLoading}
-	                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0"
+	                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0 pressable"
 	                >
 	                  {llamaServersLoading ? "Refreshing..." : "Refresh"}
 	                </button>
@@ -3004,7 +3004,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            type="button"
 	                            onClick={() => handleRemoveScanPath(sp.path)}
 	                            disabled={scanPathRemoving === sp.path}
-	                            className="px-1.5 py-0.5 rounded text-[10px] text-red-400/60 hover:text-red-400 hover:bg-red-500/10 transition-all shrink-0"
+	                            className="px-1.5 py-0.5 rounded text-[10px] text-red-400/60 hover:text-red-400 hover:bg-red-500/10 transition-all shrink-0 pressable"
 	                            title="Remove from scan paths"
 	                          >
 	                            {scanPathRemoving === sp.path ? "..." : "remove"}
@@ -3032,7 +3032,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                      type="button"
 	                      onClick={handlePreviewScanPath}
 	                      disabled={scanPathPreviewLoading || !scanPathDraft.trim()}
-	                      className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0"
+	                      className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-40 shrink-0 pressable"
 	                    >
 	                      {scanPathPreviewLoading ? "Scanning..." : "Preview"}
 	                    </button>
@@ -3055,7 +3055,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                            type="button"
 	                            onClick={handleAddScanPath}
 	                            disabled={scanPathAdding}
-	                            className="px-2 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/20 text-emerald-300 hover:bg-emerald-500/25 transition-all disabled:opacity-40 shrink-0"
+	                            className="px-2 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/20 text-emerald-300 hover:bg-emerald-500/25 transition-all disabled:opacity-40 shrink-0 pressable"
 	                          >
 	                            {scanPathAdding ? "Adding..." : "Add"}
 	                          </button>
@@ -3668,7 +3668,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                    <button
 	                                      type="button"
 	                                      onClick={() => handleClearSlotOverride(server.id as OverridableSlotId)}
-	                                      className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all shrink-0"
+	                                      className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all shrink-0 pressable"
 	                                    >
 	                                      Reset to default
 	                                    </button>
@@ -3683,7 +3683,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                  <button
 	                                    type="button"
 	                                    onClick={() => handleConvertToRouter(server.id as RouterCapableSlotId)}
-	                                    className="px-2 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/25 text-emerald-200 hover:bg-emerald-500/25 transition-all shrink-0"
+	                                    className="px-2 py-1 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-400/25 text-emerald-200 hover:bg-emerald-500/25 transition-all shrink-0 pressable"
 	                                  >
 	                                    Switch to router mode
 	                                  </button>
@@ -4034,7 +4034,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     theme === opt.value
                       ? "border-white/30"
                       : "border-white/10 hover:border-white/20"
-                  }pressable`}
+                  } pressable`}
                 >
                   <div className={`absolute inset-0 bg-gradient-to-br ${opt.preview} to-transparent opacity-20`} />
                   <span className="relative z-10">{opt.label}</span>
@@ -4077,7 +4077,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     cornerShape === opt.value
                       ? "border-white/30 bg-white/5"
                       : "border-white/10 hover:border-white/20"
-                  }pressable`}
+                  } pressable`}
                 >
                   <span className={`inline-block w-4 h-4 border border-white/50 ${opt.swatch}`} />
                   {opt.label}
@@ -4107,7 +4107,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     cornerRadius === opt.value
                       ? "border-white/30 bg-white/5"
                       : "border-white/10 hover:border-white/20"
-                  }pressable`}
+                  } pressable`}
                 >
                   <span
                     className={`inline-block border border-white/50 ${opt.swatchSize} ${cornerShape === "squircle" ? "corner-squircle" : "corner-round"}`}
@@ -4138,7 +4138,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     activityShape === opt.value
                       ? "border-white/30 bg-white/5"
                       : "border-white/10 hover:border-white/20"
-                  }pressable`}
+                  } pressable`}
                 >
                   <PolyhedronLogo
                     isActive={true}
@@ -4231,7 +4231,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                     backgroundEffect === opt.value
                       ? "border-white/30 bg-white/5"
                       : "border-white/10 hover:border-white/20"
-                  }pressable`}
+                  } pressable`}
                 >
                   <span className="mr-2 opacity-50">{opt.icon}</span>
                   {opt.label}
@@ -4526,7 +4526,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                           type="button"
                           onClick={() => handleTestSshConnection(connection.id)}
                           disabled={sshTestingId === connection.id}
-                          className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/55 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-50"
+                          className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/55 hover:text-white/80 hover:bg-white/10 transition-all disabled:opacity-50 pressable"
                         >
                           {sshTestingId === connection.id ? "Testing..." : "Test"}
                         </button>
@@ -4659,7 +4659,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                       </label>
                       <button
                         onClick={handleHeaderImageRemove}
-                        className="px-3 py-2 text-xs text-red-300/70 hover:text-red-300 bg-red-500/5 hover:bg-red-500/10 rounded-lg transition-colors border border-red-500/10"
+                        className="px-3 py-2 text-xs text-red-300/70 hover:text-red-300 bg-red-500/5 hover:bg-red-500/10 rounded-lg transition-colors border border-red-500/10 pressable"
                       >
                         Remove
                       </button>
@@ -4726,7 +4726,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                       setPersonaEditing(true);
                       setPersonaContent(persona.content);
                     }}
-                    className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0"
+                    className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
                   >
                     Edit
                   </button>
@@ -4806,7 +4806,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                       setUserDocEditing(true);
                       setUserDocContent(userDoc.content);
                     }}
-                    className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0"
+                    className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
                   >
                     Edit
                   </button>
@@ -4915,7 +4915,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                                 preset.isDefault
                                   ? "border"
                                   : "text-white/30 hover:text-white/50 border border-transparent hover:border-white/10"
-                              }pressable`}
+                              } pressable`}
                               style={{
                                 backgroundColor: preset.isDefault ? `rgba(var(--theme-primary-muted))` : '',
                                 color: preset.isDefault ? `rgba(var(--theme-primary-text))` : '',
@@ -4927,7 +4927,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                             </button>
                             <button
                               onClick={() => handleDeletePreset(preset.id)}
-                              className="text-white/20 hover:text-red-400/70 transition-colors p-0.5 shrink-0"
+                              className="text-white/20 hover:text-red-400/70 transition-colors p-0.5 shrink-0 pressable"
                               title="Delete preset"
                             >
                               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -4950,7 +4950,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                                 setEditingPresetId(preset.id);
                                 setEditingPresetContent(preset.content);
                               }}
-                              className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0"
+                              className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
                             >
                               Edit content
                             </button>
@@ -5123,7 +5123,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 <button
                   onClick={handleTestComfyUI}
                   disabled={comfyuiStatus === "checking"}
-                  className="px-3 py-2 rounded-lg text-sm font-medium bg-amber-500/15 border border-amber-400/20 text-amber-300 hover:bg-amber-500/25 transition-all disabled:opacity-40 shrink-0"
+                  className="px-3 py-2 rounded-lg text-sm font-medium bg-amber-500/15 border border-amber-400/20 text-amber-300 hover:bg-amber-500/25 transition-all disabled:opacity-40 shrink-0 pressable"
                 >
                   {comfyuiStatus === "checking" ? "Testing..." : "Test"}
                 </button>
@@ -5150,7 +5150,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 <button
                   onClick={handleTestSdcpp}
                   disabled={sdcppStatus === "checking"}
-                  className="px-3 py-2 rounded-lg text-sm font-medium bg-amber-500/15 border border-amber-400/20 text-amber-300 hover:bg-amber-500/25 transition-all disabled:opacity-40 shrink-0"
+                  className="px-3 py-2 rounded-lg text-sm font-medium bg-amber-500/15 border border-amber-400/20 text-amber-300 hover:bg-amber-500/25 transition-all disabled:opacity-40 shrink-0 pressable"
                 >
                   {sdcppStatus === "checking" ? "Testing..." : "Test"}
                 </button>
@@ -5176,7 +5176,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
             <div className="flex gap-2">
               <button
                 onClick={() => setSkillsBrowserOpen(!skillsBrowserOpen)}
-                className="flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all"
+                className="flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all pressable"
                 style={{
                   backgroundColor: skillsBrowserOpen
                     ? `rgba(var(--theme-secondary), 0.2)`
@@ -5404,7 +5404,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                    setExtractionPromptEditing(true);
 	                    setExtractionPromptContent(extractionPrompt.content);
 	                  }}
-	                  className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0"
+	                  className="text-xs px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/50 hover:text-white/70 hover:bg-white/10 transition-all shrink-0 pressable"
 	                >
 	                  Edit
 	                </button>
@@ -5457,7 +5457,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                />
 	                <button
 	                  onClick={handleCreateAgentSnapshot}
-	                  className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0"
+	                  className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0 pressable"
 	                >
 	                  Create snapshot
 	                </button>
@@ -5504,7 +5504,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                </button>
 	                                <button
 	                                  onClick={() => setConfirmAgentSnapshotRestoreId(null)}
-	                                  className="px-2 py-0.5 rounded text-[11px] text-white/50 hover:text-white/80"
+	                                  className="px-2 py-0.5 rounded text-[11px] text-white/50 hover:text-white/80 pressable"
 	                                >
 	                                  Cancel
 	                                </button>
@@ -5567,7 +5567,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                />
 	                <button
 	                  onClick={handleCreateBackup}
-	                  className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0"
+	                  className="px-3 py-1 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0 pressable"
 	                >
 	                  Back up now
 	                </button>
@@ -5602,7 +5602,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                </button>
 	                                <button
 	                                  onClick={() => setConfirmRestoreId(null)}
-	                                  className="px-2 py-0.5 rounded text-[11px] text-white/50 hover:text-white/80"
+	                                  className="px-2 py-0.5 rounded text-[11px] text-white/50 hover:text-white/80 pressable"
 	                                >
 	                                  Cancel
 	                                </button>
@@ -5689,7 +5689,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                    )}
 	                    <button
 	                      onClick={handleCancelMigration}
-	                      className="text-[11px] text-red-400/70 hover:text-red-400"
+	                      className="text-[11px] text-red-400/70 hover:text-red-400 pressable"
 	                    >
 	                      Cancel migration
 	                    </button>
@@ -5702,7 +5702,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                       <span>{migrationError}</span>
                       <button
                         onClick={handleDismissMigrationError}
-                        className="text-[11px] text-red-400/70 hover:text-red-400 shrink-0"
+                        className="text-[11px] text-red-400/70 hover:text-red-400 shrink-0 pressable"
                       >
                         Dismiss
                       </button>
@@ -5831,7 +5831,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                           setRetrievalAdvancedOpen(true);
                         }
                       }}
-	                      className={`text-left rounded-lg border px-3 py-2 transition-all ${active ? "border-purple-400/40 bg-purple-400/15 text-white" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80"}`}
+	                      className={`text-left rounded-lg border px-3 py-2 transition-all pressable ${active ? "border-purple-400/40 bg-purple-400/15 text-white" : "border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80"}`}
 	                    >
 	                      <div className="text-xs font-medium">{option.label}</div>
 	                      <div className="text-[10px] text-white/35 mt-0.5 leading-snug">{option.description}</div>
@@ -5842,7 +5842,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	              <button
 	                type="button"
 	                onClick={() => setRetrievalAdvancedOpen((v) => !v)}
-	                className="flex items-center gap-2 text-xs text-white/45 hover:text-white/70"
+	                className="flex items-center gap-2 text-xs text-white/45 hover:text-white/70 pressable"
 	              >
 	                <Chevron open={retrievalAdvancedOpen} size={10} />
 	                Advanced controls
@@ -5970,7 +5970,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	              </div>
 	              <button
 	                onClick={handleAddAutomation}
-	                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0"
+	                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-400/20 text-purple-200 hover:bg-purple-500/25 transition-all shrink-0 pressable"
 	              >
 	                Add
 	              </button>
@@ -6249,7 +6249,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                      <div>
 	                        <button
 	                              onClick={() => setAutomationPromptExpandedTaskId(automationPromptExpandedTaskId === task.id ? null : task.id)}
-	                              className="flex items-center gap-1.5 text-[11px] font-medium text-white/45 hover:text-white/60 transition-colors mb-1.5"
+	                              className="flex items-center gap-1.5 text-[11px] font-medium text-white/45 hover:text-white/60 transition-colors mb-1.5 pressable"
 	                        >
 	                              <Chevron open={automationPromptExpandedTaskId === task.id} size={10} />
 	                              Prompts ({task.promptSteps.length})
@@ -6755,7 +6755,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                         console.error("Test failed:", err);
                       }
                     }}
-                    className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-blue-500/15 border border-blue-400/20 text-blue-300 hover:bg-blue-500/25 transition-all"
+                    className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-blue-500/15 border border-blue-400/20 text-blue-300 hover:bg-blue-500/25 transition-all pressable"
                   >
                     Test Voice
                   </button>
@@ -6848,7 +6848,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                               ttsSettings.kokoroPitchShiftProcessor === method
                                 ? "bg-purple-500/20 text-purple-300"
                                 : "text-white/40 hover:text-white/70 hover:bg-white/5"
-                            }pressable`}
+                            } pressable`}
                           >
                             {method === "resample" ? "Resample" : "Rubberband"}
                           </button>
@@ -6935,7 +6935,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                               ttsSettings.supertonicPitchShiftProcessor === method
                                 ? "bg-purple-500/20 text-purple-300"
                                 : "text-white/40 hover:text-white/70 hover:bg-white/5"
-                            }pressable`}
+                            } pressable`}
                           >
                             {method === "resample" ? "Resample" : "Rubberband"}
                           </button>
@@ -7074,7 +7074,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
             <button
               onClick={handleAddPasskey}
               disabled={passkeyAdding}
-              className="w-full px-3 py-2 rounded-lg text-sm font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="w-full px-3 py-2 rounded-lg text-sm font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 pressable"
               style={{
                 backgroundColor: `rgba(var(--theme-primary-muted), 0.15)`,
                 borderColor: `rgba(var(--theme-primary-border))`,
@@ -7096,7 +7096,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
           <div className="pt-2 border-t border-white/10">
             <button
               onClick={onLogout}
-              className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-red-500/10 border border-red-400/15 text-red-300/80 hover:bg-red-500/20 transition-all flex items-center justify-center gap-2"
+              className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-red-500/10 border border-red-400/15 text-red-300/80 hover:bg-red-500/20 transition-all flex items-center justify-center gap-2 pressable"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
