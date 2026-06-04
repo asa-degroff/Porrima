@@ -711,10 +711,12 @@ export function useChat(chatId: string | null) {
         // Update live usage from iteration events so token indicator stays current during tool loops
         if (activeChatIdRef.current === streamChatId) {
           if (info.usage) setStreamingUsage(info.usage);
-          const displayEstimate = typeof info.displayEstimatedTokens === "number"
-            ? info.displayEstimatedTokens
-            : info.estimatedTokens;
-          if (typeof displayEstimate === "number") setStreamingEstimate(displayEstimate);
+          const displayEstimate = info.stopReason === "toolUse"
+            ? (typeof info.displayEstimatedTokens === "number"
+              ? info.displayEstimatedTokens
+              : info.estimatedTokens)
+            : undefined;
+          setStreamingEstimate(typeof displayEstimate === "number" ? displayEstimate : null);
         }
       },
       onModelProgress: (progress) => {

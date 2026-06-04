@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatMessage } from "../types.js";
-import { estimateContextTokens, estimateContextTokensWithExactToolResults } from "../services/compaction.js";
+import type { Chat, ChatMessage } from "../types.js";
+import { estimateContextTokens, estimateContextTokensWithExactToolResults, truncateBeforeSend } from "../services/compaction.js";
 import { estimateTextTokens, isDenseTokenText } from "../services/token-count.js";
 
 function denseSvg(lines = 140): string {
@@ -204,5 +204,49 @@ describe("token estimation for dense tool results", () => {
     expect(refined.hardCapTokens).toBeGreaterThan(refined.refinedTokens);
     expect(refined.hardCapTokens).toBeLessThan(refined.estimatedTokens);
     expect(refined.hardCapTokens).toBe(Math.ceil(75_400 * (0.95 / 0.85)));
+  });
+
+  it("does not pre-send compact from char-estimate bias when usage anchor is below the trigger", async () => {
+    const contextWindow = 115_000;
+    const systemPrompt = "Large stable system prompt section. ".repeat(12_000);
+    const chat: Chat = {
+      id: "char-bias-chat",
+      title: "Char Bias",
+      type: "agent",
+      modelId: "test-model",
+      systemPrompt: "You are helpful.",
+      createdAt: new Date().toISOString(),
+      lastModified: new Date().toISOString(),
+      messages: [
+        { role: "user", content: "Earlier setup.", timestamp: 1 },
+        {
+          role: "assistant",
+          content: "I inspected the current files.",
+          usage: { input: 79_500, output: 300, totalTokens: 79_800 },
+          timestamp: 2,
+        },
+        { role: "user", content: "Continue with the next check.", timestamp: 3 },
+      ],
+    };
+
+    const conservative = estimateContextTokens(chat.messages, systemPrompt, []);
+    const refined = await estimateContextTokensWithExactToolResults(chat.messages, systemPrompt, []);
+    expect(conservative).toBeGreaterThan(contextWindow * 0.85);
+    expect(conservative).toBeLessThan(contextWindow * 1.15);
+    expect(refined.refinedTokens).toBeLessThan(contextWindow * 0.85);
+    expect(refined.hardCapTokens).toBeLessThan(contextWindow * 0.95);
+
+    let compacting = false;
+    const result = await truncateBeforeSend(
+      chat,
+      contextWindow,
+      systemPrompt,
+      () => { compacting = true; },
+      undefined,
+      [],
+    );
+
+    expect(result).toBeNull();
+    expect(compacting).toBe(false);
   });
 });

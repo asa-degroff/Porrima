@@ -2132,16 +2132,27 @@ async function handleChatStream(
             }
           }
 
-          // Send iteration event with usage AND estimate so client can update
-          // token indicators mid-loop with a number that reflects next-call size.
-          res.write(`event: iteration\ndata: ${JSON.stringify({
+          // Send iteration event with usage so the client can update token
+          // indicators. Estimates reflect next-call size, so only attach them
+          // when the tool loop will continue to another model call.
+          const iterationPayload: {
+            iteration: number;
+            stopReason: string;
+            toolCount: number;
+            usage?: ChatMessage["usage"];
+            estimatedTokens?: number;
+            displayEstimatedTokens?: number;
+          } = {
             iteration: iterations,
             stopReason,
             toolCount: event.toolResults?.length || 0,
             usage: state.finalUsage || undefined,
-            estimatedTokens,
-            displayEstimatedTokens,
-          })}\n\n`);
+          };
+          if (stopReason === "toolUse") {
+            iterationPayload.estimatedTokens = estimatedTokens;
+            iterationPayload.displayEstimatedTokens = displayEstimatedTokens;
+          }
+          res.write(`event: iteration\ndata: ${JSON.stringify(iterationPayload)}\n\n`);
 
           if (stopReason === "length") {
             hitContextLimit = true;

@@ -24,6 +24,7 @@ export const COMPACTION_TRIGGER_RATIO = 0.85;
 export const COMPACTION_TARGET_RATIO = 0.30;
 export const COMPACTION_HARD_CAP_RATIO = 0.95;
 const USAGE_ANCHOR_HARD_CAP_MULTIPLIER = COMPACTION_HARD_CAP_RATIO / COMPACTION_TRIGGER_RATIO;
+const CHAR_ESTIMATE_SAFETY_RATIO = 1.15;
 const ARCHIVE_INDEX_MAX_TOKENS = 768;
 
 /**
@@ -372,7 +373,7 @@ export async function estimateContextTokensWithExactToolResults(
   const contextBreakdown = estimateContextBreakdown(messages, systemPrompt, tools);
   const approximateTokens = contextBreakdown.estimatedTokens;
   const approximateDisplayTokens = contextBreakdown.displayTokens;
-  const useUsageAnchorHardCap = options.phase === "tool_loop" && contextBreakdown.displayPath === "usage_anchor";
+  const useUsageAnchorHardCap = contextBreakdown.displayPath === "usage_anchor";
   const approximateHardCapTokens = estimateHardCapTokens(
     approximateTokens,
     approximateDisplayTokens,
@@ -681,31 +682,36 @@ export async function truncateBeforeSend(
     contextWindow,
   });
   const estimatedTokens = exactEstimate.estimatedTokens;
+  const displayTokens = exactEstimate.refinedTokens;
+  const hardCapTokens = exactEstimate.hardCapTokens;
+  const charEstimate = exactEstimate.contextBreakdown.pathBTokens;
   if (exactEstimate.exactToolResultCount > 0 || exactEstimate.errors.length > 0) {
     console.log(
       `[token-estimate] chat=${chat.id} phase=pre-send approx=${exactEstimate.approximateTokens} ` +
       `estimated=${estimatedTokens} exactToolResults=${exactEstimate.exactToolResultCount} ` +
-      `delta=${exactEstimate.exactDelta} elapsedMs=${exactEstimate.exactElapsedMs}` +
+      `delta=${exactEstimate.exactDelta} display=${displayTokens} hardCap=${hardCapTokens} ` +
+      `elapsedMs=${exactEstimate.exactElapsedMs}` +
       (exactEstimate.errors.length ? ` errors=${exactEstimate.errors.length}` : ""),
     );
   }
-  const charEstimate = charEstimateContextSize(messages, systemPrompt, tools);
   // Trigger and target are decoupled: we only compact when well into the
   // danger zone (85%), but when we do, we compact down to 30% — the same
   // level post-response targets. Compacting to 85% would leave us one turn
   // away from re-triggering and would also guarantee a second compaction
   // from the post-response path in the same turn.
   const trigger = contextWindow * COMPACTION_TRIGGER_RATIO;
+  const hardCap = contextWindow * COMPACTION_HARD_CAP_RATIO;
+  const charSafety = contextWindow * CHAR_ESTIMATE_SAFETY_RATIO;
   const target = contextWindow * COMPACTION_TARGET_RATIO;
 
-  // Fallthrough: if the primary estimator says we're safe, we still enforce
-  // a hard-cap check at the bottom (see "Hard-cap safety pass"). This catches
-  // cases where the usage-anchor path understates the real payload (e.g., the
-  // system prompt grew since the anchor was captured — common on resume after
-  // contextState reset re-freezes memories into the prompt).
-  if (estimatedTokens <= trigger) {
-    return await hardCapSafetyPass(chat, contextWindow, systemPrompt, onCompacting, onKeepalive, tools);
-  }
+  // The usage-anchor/display estimate tracks the next prompt accurately in
+  // steady-state tool loops. Keep the char path as fallback/no-anchor behavior
+  // and as a last-resort safety signal, but do not let its usual 20-35%
+  // positive bias drive the normal 85% pre-send trigger.
+  const normalTriggerExceeded = displayTokens > trigger;
+  const hardCapExceeded = hardCapTokens > hardCap;
+  const charSafetyExceeded = charEstimate > charSafety;
+  if (!normalTriggerExceeded && !hardCapExceeded && !charSafetyExceeded) return noOp;
 
   onCompacting?.();
 
@@ -724,11 +730,17 @@ export async function truncateBeforeSend(
   // drivingPath indicates which estimator path won the max():
   // "usage=N" → Path A (usage anchor) dominated — steady state
   // "charEst" → Path B (char-based) dominated — prompt/tools grew, or no anchor
-  const drivingPath = lastUsage > 0 && estimatedTokens !== charEstimate
+  const triggerReasons = [
+    normalTriggerExceeded ? `display=${displayTokens}` : "",
+    hardCapExceeded ? `hardCap=${hardCapTokens}` : "",
+    charSafetyExceeded ? `charSafety=${charEstimate}` : "",
+  ].filter(Boolean).join(",");
+  const drivingPath = lastUsage > 0 && exactEstimate.contextBreakdown.displayPath === "usage_anchor"
     ? `usage=${lastUsage}`
     : `charEst`;
   console.log(
-    `[compaction] Pre-send truncation triggered: ${estimatedTokens} tokens > ${trigger} trigger, target=${target} (drivingPath=${drivingPath}, charEst=${charEstimate}, ctx=${contextWindow})`
+    `[compaction] Pre-send truncation triggered: ${triggerReasons || `estimated=${estimatedTokens}`} ` +
+    `target=${target} (drivingPath=${drivingPath}, conservative=${estimatedTokens}, charEst=${charEstimate}, ctx=${contextWindow})`
   );
 
   // Build index of in-context messages for budget calculation
@@ -752,7 +764,8 @@ export async function truncateBeforeSend(
   // Apply scaling factor for accurate estimates
   const messageContentTokens = icEstimates.reduce((s, t) => s + t, 0);
   const charEstimateTotal = estimateTokens(systemPrompt) + messageContentTokens;
-  const scaleFactor = charEstimateTotal > 0 ? estimatedTokens / charEstimateTotal : 1;
+  const planningTokens = charSafetyExceeded ? estimatedTokens : (hardCapExceeded ? hardCapTokens : displayTokens);
+  const scaleFactor = charEstimateTotal > 0 ? planningTokens / charEstimateTotal : 1;
   const scaledEstimates = icEstimates.map((t) => Math.ceil(t * scaleFactor));
   const overheadTokens = Math.ceil(estimateTokens(systemPrompt) * scaleFactor);
 
@@ -1030,17 +1043,17 @@ export async function truncateBeforeSend(
 }
 
 /**
- * Hard-cap safety pass. Runs a pure char-based estimate of the current
- * in-context payload and, if it exceeds 95% of the context window, forces
- * aggressive compaction via `truncateChatHistory(forceCompact=true)` which
- * targets 30% of the window.
+ * Hard-cap safety pass. Uses the usage-anchor bounded estimate when available
+ * and keeps raw char estimation as a last-resort impossible-payload guard. If
+ * either safety signal is exceeded, forces aggressive compaction via
+ * `truncateChatHistory(forceCompact=true)` which targets 30% of the window.
  *
  * This is a defensive net for cases where the primary estimator's usage
  * anchor has gone stale — e.g., the system prompt grew between turns (new
  * memories frozen after contextState reset, expanded AGENTS.md, added
- * memory blocks), or tool schemas grew. Without this, the primary estimator
- * can return a value under the 75% threshold while the real payload exceeds
- * the model's context size, causing llama.cpp to hang during prompt ingest.
+ * memory blocks), or tool schemas grew. The raw char path is intentionally
+ * above the real hard cap so its ordinary positive bias does not force early
+ * compaction in steady state.
  *
  * Returns null if the payload is already under the hard cap, otherwise the
  * result of the forced compaction.
@@ -1053,14 +1066,22 @@ async function hardCapSafetyPass(
   onKeepalive?: () => void,
   tools?: unknown,
 ): Promise<CompactionResult | null> {
-  const charEstimate = charEstimateContextSize(chat.messages, systemPrompt, tools);
+  const breakdown = estimateContextBreakdown(chat.messages, systemPrompt, tools);
+  const charEstimate = breakdown.pathBTokens;
+  const hardCapEstimate = estimateHardCapTokens(
+    breakdown.estimatedTokens,
+    breakdown.displayTokens,
+    breakdown.displayPath === "usage_anchor",
+  );
   const hardCap = contextWindow * COMPACTION_HARD_CAP_RATIO;
-  if (charEstimate <= hardCap) return null;
+  const charSafety = contextWindow * CHAR_ESTIMATE_SAFETY_RATIO;
+  if (hardCapEstimate <= hardCap && charEstimate <= charSafety) return null;
 
   const icCount = chat.messages.filter((m) => !m._outOfContext).length;
   if (icCount <= 2) {
     console.error(
       `[compaction] Hard-cap breach but only ${icCount} in-context messages — cannot compact further. ` +
+      `hardCapEstimate=${hardCapEstimate}/${contextWindow} (${((hardCapEstimate / contextWindow) * 100).toFixed(0)}%), ` +
       `charEstimate=${charEstimate}/${contextWindow} (${((charEstimate / contextWindow) * 100).toFixed(0)}%). ` +
       `The payload will be sent anyway and may be truncated or rejected by the model.`
     );
@@ -1068,8 +1089,8 @@ async function hardCapSafetyPass(
   }
 
   console.warn(
-    `[compaction] Hard-cap safety triggered: charEstimate=${charEstimate} > ${hardCap.toFixed(0)} ` +
-    `(95% of ctx=${contextWindow}) — running aggressive compaction (target 30%)`
+    `[compaction] Hard-cap safety triggered: hardCapEstimate=${hardCapEstimate}/${hardCap.toFixed(0)}, ` +
+    `charEstimate=${charEstimate}/${charSafety.toFixed(0)} (ctx=${contextWindow}) — running aggressive compaction (target 30%)`
   );
 
   // Force compaction targeting 30% of the context window. This is the same
