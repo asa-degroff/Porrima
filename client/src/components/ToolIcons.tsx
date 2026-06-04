@@ -86,20 +86,16 @@ const icons: Record<ToolIconName, (props: SVGProps<SVGSVGElement>) => ReactEleme
   ),
   ask_user: (props) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M4 5h16v11H9l-5 4V5Z" />
-      <path d="M10 9a2 2 0 1 1 3.2 1.6c-.8.5-1.2 1-1.2 1.9" />
-      <line x1="12" y1="15.5" x2="12.01" y2="15.5" />
+      <path d="M5 22V19H8A3 3 0 0 1 4 16V8A2 2 0 0 1 6 6H20A2 2 0 0 1 22 8V16A3 3 0 0 1 20 19H8Z" />
+      <path d="M10.75 9.5A1.75 1.75 0 1 1 14.25 11.1C13.4 11.6 13 12.1 13 12.8" />
+      <line x1="13" y1="15.5" x2="13.01" y2="15.5" />
     </svg>
   ),
   web_fetch: (props) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M3.6 9h16.8" />
-      <path d="M3.6 15h16.8" />
-      <path d="M12 3a14 14 0 0 0-2 5" />
-      <path d="M12 3a14 14 0 0 1 2 5" />
-      <path d="M12 10v7" />
-      <path d="m9.5 14.5 2.5 2.5 2.5-2.5" />
+      <path d="M12 3v13" />
+      <path d="m7 13 5 5 5-5" />
+      <path d="M4 19v2h16v-2" />
     </svg>
   ),
   web_search: (props) => (
@@ -113,9 +109,9 @@ const icons: Record<ToolIconName, (props: SVGProps<SVGSVGElement>) => ReactEleme
   ),
   search_conversation: (props) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M4 5h16v10H10l-6 4V5Z" />
-      <circle cx="14" cy="10.5" r="2.5" />
-      <path d="m15.8 12.3 2.2 2.2" />
+      <path d="M5 22V19H8A3 3 0 0 1 4 16V8A2 2 0 0 1 6 6H20A2 2 0 0 1 22 8V16A3 3 0 0 1 20 19H8Z" />
+      <circle cx="13" cy="11" r="2.5" />
+      <path d="m14.8 12.8 2.2 2.2" />
     </svg>
   ),
   default: (props) => (
