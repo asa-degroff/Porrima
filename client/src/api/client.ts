@@ -1685,12 +1685,19 @@ export async function saveUserUIState(state: Partial<UserUIState>): Promise<User
   return res.json();
 }
 
-export async function fetchChat(id: string, opts: { messageLimit?: number } = {}): Promise<Chat> {
+type FetchPriority = "high" | "low" | "auto";
+type PriorityRequestInit = RequestInit & { priority?: FetchPriority };
+
+export async function fetchChat(id: string, opts: { messageLimit?: number; priority?: FetchPriority } = {}): Promise<Chat> {
   const qs = new URLSearchParams();
   if (opts.messageLimit) qs.set("messageLimit", String(opts.messageLimit));
   const query = qs.toString();
   const url = query ? `${BASE}/chats/${id}?${query}` : `${BASE}/chats/${id}`;
-  const res = await apiFetch(url);
+  const init: PriorityRequestInit = {
+    cache: "no-store",
+    ...(opts.priority ? { priority: opts.priority } : {}),
+  };
+  const res = await apiFetch(url, init);
   if (!res.ok) throw new Error("Failed to fetch chat");
   return res.json();
 }
@@ -1698,8 +1705,12 @@ export async function fetchChat(id: string, opts: { messageLimit?: number } = {}
 /** Fetch only chat metadata (no messages) for freshness comparison.
  *  Returns { id, title, type, modelId, lastModified, projectId, contextWindow, messageCount }
  *  This is much faster than fetchChat() for checking if cached data is stale. */
-export async function fetchChatHeader(id: string): Promise<{ id: string; title: string; type: string; modelId: string; lastModified: string; projectId: string | null; contextWindow: number | null; messageCount: number }> {
-  const res = await apiFetch(`${BASE}/chats/${id}/header`);
+export async function fetchChatHeader(id: string, opts: { priority?: FetchPriority } = {}): Promise<{ id: string; title: string; type: ChatType; modelId: string; lastModified: string; projectId: string | null; contextWindow: number | null; messageCount: number }> {
+  const init: PriorityRequestInit = {
+    cache: "no-store",
+    ...(opts.priority ? { priority: opts.priority } : {}),
+  };
+  const res = await apiFetch(`${BASE}/chats/${id}/header`, init);
   if (!res.ok) throw new Error("Failed to fetch chat header");
   return res.json();
 }

@@ -53,6 +53,7 @@ const LEGACY_ACTIVE_VIEW_KEY = "quje-active-view";
 const TTS_AUTO_READ_MESSAGES_KEY = "porrima-tts-auto-read-messages";
 const LEGACY_TTS_AUTO_READ_MESSAGES_KEY = "quje-tts-auto-read-messages";
 const INITIAL_MESSAGE_LIMIT = 200;
+const ACTIVE_CHAT_HEADER_POLL_INTERVAL_MS = 5_000;
 const PCI_ADDRESS_RE = /^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$/;
 
 function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
@@ -117,6 +118,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [activeView, setActiveView] = useState<'chats' | 'notebooks'>('chats');
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
+  const activeChatIdStateRef = useRef<string | null>(null);
+  const activeChatStateRef = useRef<Chat | null>(null);
   const [lastActiveChatId, setLastActiveChatId] = useState<string | null>(settings.lastActiveChatId || null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [memoryDebugOpen, setMemoryDebugOpen] = useState(false);
@@ -134,6 +137,14 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [isAutomationRunning, setIsAutomationRunning] = useState(false);
   const [cacheWarmingChatIds, setCacheWarmingChatIds] = useState<Set<string>>(() => new Set());
   const [cacheWarmErrors, setCacheWarmErrors] = useState<Map<string, string>>(() => new Map());
+
+  useEffect(() => {
+    activeChatIdStateRef.current = activeChatId;
+  }, [activeChatId]);
+
+  useEffect(() => {
+    activeChatStateRef.current = activeChat;
+  }, [activeChat]);
 
   // System stats polling
   const [systemStatsHistory, setSystemStatsHistory] = useState<SystemStatsSample[]>([]);
@@ -289,6 +300,51 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   // Any chat streaming — includes background chats so the sidebar indicator stays correct when viewing a different chat
   const anyStreaming = streaming || getStreamingChatIds().length > 0;
+
+  const applyLoadedChat = useCallback((chat: Chat) => {
+    if (activeChatIdStateRef.current !== chat.id) return false;
+    if (streamingRef.current || hasBackgroundStream(chat.id)) return false;
+
+    activeChatStateRef.current = chat;
+    setActiveChat(chat);
+    setActiveChatData(chat);
+    loadMessages(chat.messages, {
+      offset: chat.messageOffset ?? 0,
+      total: chat.messageTotal ?? chat.messages.length,
+    });
+    setCachedChat(chat).catch(() => {});
+    return true;
+  }, [loadMessages, setActiveChatData]);
+
+  const refreshActiveChatFromServer = useCallback(async (
+    id: string,
+    options: { force?: boolean; priority?: "high" | "low" | "auto" } = {}
+  ) => {
+    if (activeChatIdStateRef.current !== id) return false;
+    if (streamingRef.current || hasBackgroundStream(id)) return false;
+
+    const header = await fetchChatHeader(id, { priority: options.priority });
+    if (activeChatIdStateRef.current !== id) return false;
+    if (streamingRef.current || hasBackgroundStream(id)) return false;
+
+    const current = activeChatStateRef.current?.id === id ? activeChatStateRef.current : null;
+    const currentTotal = current ? current.messageTotal ?? current.messages.length : -1;
+    const isStale =
+      options.force ||
+      !current ||
+      header.lastModified > current.lastModified ||
+      header.messageCount !== currentTotal;
+
+    if (!isStale) return false;
+
+    const chat = await fetchChat(id, { messageLimit: INITIAL_MESSAGE_LIMIT });
+    if (activeChatIdStateRef.current !== id) return false;
+    if (streamingRef.current || hasBackgroundStream(id)) return false;
+
+    const applied = applyLoadedChat(chat);
+    if (applied) refresh();
+    return applied;
+  }, [applyLoadedChat, refresh]);
 
   // Apply theme to document
   useEffect(() => {
@@ -726,38 +782,35 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
       // Refresh the chat list sidebar (titles, previews, ordering)
       refresh();
-
-      // Only refresh the active chat if no stream is in progress
-      if (streaming || hasBackgroundStream(activeChatId)) return;
-
-      // First check if the header indicates the chat has changed.
-      // This avoids the ~100ms-1s full chat download when nothing changed.
-      fetchChatHeader(activeChatId)
-        .then((header) => {
-          setActiveChat((prev) => {
-            // Only re-fetch full messages if the server data is newer
-            if (!prev || header.lastModified <= prev.lastModified) return prev;
-            // Header is newer — fetch full chat data
-            fetchChat(activeChatId, { messageLimit: INITIAL_MESSAGE_LIMIT })
-              .then((chat) => {
-                setActiveChat(chat);
-                setActiveChatData(chat);
-                loadMessages(chat.messages, {
-                  offset: chat.messageOffset ?? 0,
-                  total: chat.messageTotal ?? chat.messages.length,
-                });
-                setCachedChat(chat).catch(() => {});
-              })
-              .catch(() => {});
-            return prev;
-          });
-        })
-        .catch(() => {}); // Network error — cached data is fine
+      refreshActiveChatFromServer(activeChatId).catch(() => {});
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [activeChatId, streaming, refresh, loadMessages, setActiveChatData]);
+  }, [activeChatId, refresh, refreshActiveChatFromServer]);
+
+  // Lightweight active-chat freshness polling. This picks up server-side turns
+  // from automations/system chat and changes made on other devices while the
+  // current tab remains visible.
+  useEffect(() => {
+    if (!activeChatId) return;
+    if (activeView !== "chats" || imageSandboxOpen) return;
+
+    let cancelled = false;
+    const pollActiveChat = () => {
+      if (cancelled) return;
+      if (document.visibilityState !== "visible") return;
+      const id = activeChatIdStateRef.current;
+      if (!id) return;
+      refreshActiveChatFromServer(id, { priority: "low" }).catch(() => {});
+    };
+
+    const timer = window.setInterval(pollActiveChat, ACTIVE_CHAT_HEADER_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeChatId, activeView, imageSandboxOpen, refreshActiveChatFromServer]);
 
   // Update chat title when LLM-generated title arrives
   useEffect(() => {
@@ -799,6 +852,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const selectChat = useCallback(
     async (id: string) => {
       setActiveChatId(id);
+      activeChatIdStateRef.current = id;
 
       // If this chat has a background stream (active or recently completed),
       // the useChat effect will restore its state — skip loadMessages to avoid
@@ -814,6 +868,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       }
       if (cached) {
         setActiveChat(cached);
+        activeChatStateRef.current = cached;
         setActiveChatData(cached);
         if (!hasBackgroundStream(id)) {
           loadMessages(cached.messages, {
@@ -822,43 +877,20 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           });
         }
 
-        // Background refresh: update cache from server without blocking the UI.
-        // Skip the full refetch if the cached data is less than a few seconds
-        // old — avoids redundant work when rapidly switching between chats.
-        const cacheAge = Date.now() - new Date(cached.lastModified).getTime();
-        const FRESHNESS_THRESHOLD_MS = 10_000; // 10 seconds
-
-        if (cacheAge > FRESHNESS_THRESHOLD_MS) {
-          fetchChat(id, { messageLimit: INITIAL_MESSAGE_LIMIT })
-            .then((chat: Chat | null) => {
-              if (!chat) return;
-              // Skip re-render if server data is no newer than cached
-              if (chat.lastModified <= cached.lastModified) return;
-              setCachedChat(chat).catch(() => {});
-              // Only update if this is still the active chat
-              setActiveChatId((currentId) => {
-                if (currentId === id) {
-                  setActiveChat(chat);
-                  setActiveChatData(chat);
-                  if (!hasBackgroundStream(id)) {
-                    loadMessages(chat.messages, {
-                      offset: chat.messageOffset ?? 0,
-                      total: chat.messageTotal ?? chat.messages.length,
-                    });
-                  }
-                }
-                return currentId;
-              });
-            })
-            .catch(() => {}); // Network error — cached data is fine
-        }
+        // Always validate cached chat content against the cheap server header.
+        // The cached lastModified is the content version, not the time we read
+        // the cache, so a local freshness window can hide autonomous/device
+        // updates that happened after this client last loaded the chat.
+        refreshActiveChatFromServer(id).catch(() => {});
         return;
       }
 
       // No cache — must fetch from server (blocking)
       try {
         const chat = await fetchChat(id, { messageLimit: INITIAL_MESSAGE_LIMIT });
+        if (activeChatIdStateRef.current !== id) return;
         setActiveChat(chat);
+        activeChatStateRef.current = chat;
         setActiveChatData(chat);
         if (!hasBackgroundStream(id)) {
           loadMessages(chat.messages, {
@@ -869,10 +901,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         setCachedChat(chat).catch(() => {});
       } catch {
         setActiveChatId(null);
+        activeChatIdStateRef.current = null;
         setActiveChat(null);
+        activeChatStateRef.current = null;
       }
     },
-    [loadMessages, setActiveChatData]
+    [loadMessages, refreshActiveChatFromServer, setActiveChatData]
   );
 
   // Keep ref in sync so the push-click listener always uses the latest selectChat
@@ -903,7 +937,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     const modelId = settings.defaultModelId || models[0]?.id || "qwen3:8b";
     const chat = createChat(modelId, type, projectId);
     setActiveChatId(chat.id);
+    activeChatIdStateRef.current = chat.id;
     setActiveChat(chat);
+    activeChatStateRef.current = chat;
     setActiveChatData(chat);
     loadMessages([]);
   }, [settings.defaultModelId, models, createChat, loadMessages, setActiveChatData]);
@@ -917,7 +953,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       }
       if (activeChatId === id) {
         setActiveChatId(null);
+        activeChatIdStateRef.current = null;
         setActiveChat(null);
+        activeChatStateRef.current = null;
         loadMessages([]);
       }
     },
