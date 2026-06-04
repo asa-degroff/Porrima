@@ -367,7 +367,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
             <button
               key={ar.label}
               onClick={() => handleAspectRatioClick(ar.label, ar.w, ar.h, ar.ratio)}
-              className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all ${
+              className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all pressable ${
                 aspectRatio === ar.label
                   ? "border"
                   : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10"
@@ -432,7 +432,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           {lastSeed !== null && (
             <button
               onClick={() => setSeed(lastSeed.toString())}
-              className="px-2 py-1 rounded-md text-[10px] bg-white/5 border border-white/10 text-white/40 hover:text-white/60 hover:bg-white/10 transition-all"
+              className="px-2 py-1 rounded-md text-[10px] bg-white/5 border border-white/10 text-white/40 hover:text-white/60 hover:bg-white/10 transition-all pressable"
               title={`Reuse: ${lastSeed}`}
             >
               Reuse
@@ -518,7 +518,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
           <button
             onClick={handleGenerate}
             disabled={!positivePrompt.trim() || models.length === 0}
-            className="flex-1 px-4 py-[7px] rounded-xl text-sm font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex-1 px-4 py-[7px] rounded-xl text-sm font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed pressable"
             style={{
               backgroundColor: `rgba(var(--theme-accent), 0.2)`,
               borderColor: `rgba(var(--theme-accent-border))`,
@@ -551,7 +551,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
             </span>
             <button
               onClick={onAbort}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-all"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-all pressable"
               style={{
                 backgroundColor: `rgba(var(--theme-accent), 0.1)`,
                 borderColor: `rgba(var(--theme-accent-border))`,

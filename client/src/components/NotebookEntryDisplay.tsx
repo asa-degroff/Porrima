@@ -125,7 +125,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
               ref={linkButtonRef}
               type="button"
               onClick={handleAddLink}
-              className="text-white/30 hover:text-white/60 transition-colors p-1 rounded hover:bg-white/5"
+              className="text-white/30 hover:text-white/60 transition-colors p-1 rounded hover:bg-white/5 pressable"
               title="Add link"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -137,7 +137,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
           {onEdit && (
             <button
               onClick={() => onEdit(entry.id, entry.content)}
-              className="text-white/30 hover:text-white/60 transition-colors p-1 rounded hover:bg-white/5"
+              className="text-white/30 hover:text-white/60 transition-colors p-1 rounded hover:bg-white/5 pressable"
               title="Edit"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -189,7 +189,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
             </div>
             <button
               onClick={(e) => { e.stopPropagation(); onToggleExpand?.(); }}
-              className="shrink-0 mt-0.5 text-white/30 hover:text-white/60 transition-colors p-1 rounded hover:bg-white/5"
+              className="shrink-0 mt-0.5 text-white/30 hover:text-white/60 transition-colors p-1 rounded hover:bg-white/5 pressable"
               title="Expand entry"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="transition-transform">
@@ -208,14 +208,14 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
                   >
                     <button
                       onClick={() => onLinkClick?.(link.author, link.entryId)}
-                      className="flex items-center gap-1"
+                      className="flex items-center gap-1 pressable"
                     >
                       📓 {link.author}'s entry
                     </button>
                     {onRemoveLink && (
                       <button
                         onClick={() => onRemoveLink('notebook', i)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-red-400 ml-1"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-red-400 ml-1 pressable"
                         title="Remove link"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -233,7 +233,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
                   >
                     <button
                       onClick={() => onChatLinkClick?.(link.chatId)}
-                      className="flex items-center gap-1.5 px-2 py-1"
+                      className="flex items-center gap-1.5 px-2 py-1 pressable"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -243,7 +243,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
                     {onRemoveLink && (
                       <button
                         onClick={() => onRemoveLink('chat', i)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-red-400 ml-1"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-red-400 ml-1 pressable"
                         title="Remove link"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -270,7 +270,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
                     {onRemoveLink && (
                       <button
                         onClick={() => onRemoveLink('url', i)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-blue-400/60 hover:text-red-400 ml-1"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-blue-400/60 hover:text-red-400 ml-1 pressable"
                         title="Remove link"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -328,13 +328,13 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
           <div className="flex gap-2">
             <button
               onClick={handleConfirmDelete}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40 transition-all"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40 transition-all pressable"
             >
               Delete
             </button>
             <button
               onClick={handleCancelDelete}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/15 transition-all"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/15 transition-all pressable"
             >
               Cancel
             </button>
@@ -398,7 +398,7 @@ export const NotebookEntryDisplay = memo(function NotebookEntryDisplay({
             />
             <button
               onClick={() => setLightboxImage(null)}
-              className="absolute top-4 right-4 text-white/60 hover:text-white transition-colors p-2"
+              className="absolute top-4 right-4 text-white/60 hover:text-white transition-colors p-2 pressable"
               title="Close"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

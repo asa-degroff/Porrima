@@ -443,7 +443,7 @@ export function NotebookView({
           {/* Hamburger menu - mobile only */}
           <button
             onClick={onOpenSidebar}
-            className="md:hidden text-white/50 hover:text-white/80 transition-colors p-1 rounded-lg hover:bg-white/5 shrink-0"
+            className="md:hidden text-white/50 hover:text-white/80 transition-colors p-1 rounded-lg hover:bg-white/5 shrink-0 pressable"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="3" y1="6" x2="21" y2="6" />
@@ -478,7 +478,7 @@ export function NotebookView({
             {searchInput && (
               <button
                 onClick={() => { setSearchInput(''); onClearSearch?.(); }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-white/40 hover:text-white/70 transition-colors"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-white/40 hover:text-white/70 transition-colors pressable"
                 title="Clear search"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -491,7 +491,7 @@ export function NotebookView({
           {/* Search toggle - mobile only */}
           <button
             onClick={toggleSearch}
-            className={`md:hidden p-1.5 rounded-lg transition-colors ${showSearch ? 'bg-white/10 text-white' : 'text-white/50 hover:text-white/80 hover:bg-white/5'}`}
+            className={`md:hidden p-1.5 rounded-lg transition-colors pressable ${showSearch ? 'bg-white/10 text-white' : 'text-white/50 hover:text-white/80 hover:bg-white/5'}`}
             title={showSearch ? 'Close search' : 'Search notebooks'}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -501,7 +501,7 @@ export function NotebookView({
           </button>
           <button
             onClick={handleTriggerAgent}
-            className="px-3 py-1.5 text-xs rounded-lg transition-colors bg-purple-500/15 border border-purple-400/25 text-purple-300 font-medium hover:bg-purple-500/25"
+            className="px-3 py-1.5 text-xs rounded-lg transition-colors bg-purple-500/15 border border-purple-400/25 text-purple-300 font-medium hover:bg-purple-500/25 pressable"
             title="Trigger agent review of today's notes"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="inline mr-1">
@@ -564,7 +564,7 @@ export function NotebookView({
             {searchInput && (
               <button
                 onClick={() => { setSearchInput(''); onClearSearch?.(); }}
-                className="p-1 text-white/40 hover:text-white/70 transition-colors"
+                className="p-1 text-white/40 hover:text-white/70 transition-colors pressable"
                 title="Clear search"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

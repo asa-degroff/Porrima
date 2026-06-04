@@ -239,7 +239,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
               {!processingImages.has(i) && (
                 <button
                   onClick={() => handleRemoveImage(i)}
-                  className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pressable"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M18 6 6 18" /><path d="m6 6 12 12" />
@@ -295,7 +295,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
               {onRemovePendingLink && (
                 <button
                   onClick={() => onRemovePendingLink('notebook', i)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-red-400 ml-0.5"
+                  className="opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-red-400 ml-0.5 pressable"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M18 6 6 18" /><path d="m6 6 12 12" />
@@ -321,7 +321,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
               ref={linkButtonRef}
               type="button"
               onClick={handleOpenLinkPicker}
-              className="px-2 py-1 text-xs rounded-lg transition-colors text-white/40 hover:text-white/60 hover:bg-white/5 flex items-center gap-1"
+              className="px-2 py-1 text-xs rounded-lg transition-colors text-white/40 hover:text-white/60 hover:bg-white/5 flex items-center gap-1 pressable"
               title="Add link"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -334,7 +334,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
           {onCancel && (
             <button
               onClick={onCancel}
-              className="px-3 py-1.5 text-xs rounded-lg transition-colors text-white/50 hover:text-white/70 hover:bg-white/5"
+              className="px-3 py-1.5 text-xs rounded-lg transition-colors text-white/50 hover:text-white/70 hover:bg-white/5 pressable"
             >
               Cancel
             </button>
@@ -342,7 +342,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
           <button
             onClick={handleSubmit}
             disabled={!content.trim() || submitting}
-            className="px-3 py-1.5 text-xs rounded-lg transition-colors bg-purple-500/15 border border-purple-400/25 text-purple-300 font-medium hover:bg-purple-500/25 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+            className="px-3 py-1.5 text-xs rounded-lg transition-colors bg-purple-500/15 border border-purple-400/25 text-purple-300 font-medium hover:bg-purple-500/25 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 pressable"
           >
             {submitting && (
               <div className="w-3 h-3 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />

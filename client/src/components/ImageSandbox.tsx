@@ -307,7 +307,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
               <>
                 <button
                   onClick={() => setControlsOpen(true)}
-                  className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                  className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
                   title="Generation controls"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -317,7 +317,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                 {selectedImage && (
                   <button
                     onClick={() => setDetailsOpen(true)}
-                    className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                    className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
                     title="Image details"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -329,7 +329,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
             ) : (
               <button
                 onClick={() => setControlsOpen(true)}
-                className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
                 title="Vision controls"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -376,7 +376,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
 
           <button
             onClick={onClose}
-            className="text-white hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
+            className="text-white hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-40 hover:opacity-70 transition-opacity">
               <path d="M18 6L6 18" />
@@ -429,7 +429,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}
-                        className={`px-3 py-1 text-xs rounded transition-colors flex items-center gap-1.5 ${
+                        className={`px-3 py-1 text-xs rounded transition-colors flex items-center gap-1.5 pressable ${
                           showFavoritesOnly
                             ? 'bg-rose-500/80 text-white'
                             : 'bg-white/10 text-white/60 hover:text-white/90'
@@ -458,7 +458,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                       <div className="flex items-center gap-1">
                         <button
                           onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}
-                          className={`p-1.5 rounded transition-colors ${
+                          className={`p-1.5 rounded transition-colors pressable ${
                             showFavoritesOnly
                               ? 'bg-rose-500/80 text-white'
                               : 'bg-white/10 text-white/60 hover:text-white/90'
@@ -494,7 +494,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                 {/* Close button - returns to gallery */}
                 <button
                   onClick={() => setViewMode('gallery')}
-                  className="absolute top-4 left-4 z-10 p-2 rounded-lg bg-black/40 text-white/60 hover:text-white/90 hover:bg-black/60 transition-all"
+                  className="absolute top-4 left-4 z-10 p-2 rounded-lg bg-black/40 text-white/60 hover:text-white/90 hover:bg-black/60 transition-all pressable"
                   title="Back to gallery"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -505,7 +505,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                 {selectedImage && (
                   <button
                     onClick={() => toggleImageFavorite(selectedImage.id)}
-                    className={`absolute top-4 right-4 z-10 p-2 rounded-lg backdrop-blur-sm transition-all ${
+                    className={`absolute top-4 right-4 z-10 p-2 rounded-lg backdrop-blur-sm transition-all pressable ${
                       selectedImage.isFavorite
                         ? "bg-rose-500/20 text-rose-400"
                         : "bg-black/40 text-white/60 hover:text-rose-400 hover:bg-black/60"
@@ -616,7 +616,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                     <h3 className="text-sm font-semibold text-white/90">Generation Controls</h3>
                     <button
                       onClick={() => setControlsOpen(false)}
-                      className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                      className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M18 6L6 18" />
@@ -691,7 +691,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                     <h3 className="text-sm font-semibold text-white/90">Image Details</h3>
                     <button
                       onClick={() => setDetailsOpen(false)}
-                      className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                      className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M18 6L6 18" />
@@ -718,7 +718,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
               >
                 <button
                   onClick={closeLightbox}
-                  className="absolute top-4 right-4 p-2 rounded-lg text-white hover:text-white hover:bg-white/10 transition-colors z-10"
+                  className="absolute top-4 right-4 p-2 rounded-lg text-white hover:text-white hover:bg-white/10 transition-colors z-10 pressable"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-50 hover:opacity-90 transition-opacity">
                     <path d="M18 6L6 18" />
@@ -729,7 +729,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                 <button
                   onClick={(e) => { e.stopPropagation(); navigateImage(-1); }}
                   disabled={!hasPrevImage}
-                  className="absolute left-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/40 text-white/60 hover:text-white/90 hover:bg-black/60 transition-all disabled:opacity-20 disabled:pointer-events-none z-10"
+                  className="absolute left-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/40 text-white/60 hover:text-white/90 hover:bg-black/60 transition-all disabled:opacity-20 disabled:pointer-events-none z-10 pressable"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M15 18l-6-6 6-6" />
@@ -739,7 +739,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                 <button
                   onClick={(e) => { e.stopPropagation(); navigateImage(1); }}
                   disabled={!hasNextImage}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/40 text-white/60 hover:text-white/90 hover:bg-black/60 transition-all disabled:opacity-20 disabled:pointer-events-none z-10"
+                  className="absolute right-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/40 text-white/60 hover:text-white/90 hover:bg-black/60 transition-all disabled:opacity-20 disabled:pointer-events-none z-10 pressable"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M9 18l6-6-6-6" />
@@ -892,7 +892,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                     <h3 className="text-sm font-semibold text-white/90">Vision Controls</h3>
                     <button
                       onClick={() => setControlsOpen(false)}
-                      className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                      className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M18 6L6 18" />

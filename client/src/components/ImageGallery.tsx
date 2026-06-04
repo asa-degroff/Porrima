@@ -83,7 +83,7 @@ const ImageTile = memo(function ImageTile({
       {onDelete && (
         <div
           onClick={(e) => { e.stopPropagation(); setConfirmDelete(true); }}
-          className="absolute top-1.5 right-1.5 p-1 rounded-md bg-black/50 text-white/40 hover:text-red-400 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-all cursor-pointer z-10"
+          className="absolute top-1.5 right-1.5 p-1 rounded-md bg-black/50 text-white/40 hover:text-red-400 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-all cursor-pointer z-10 pressable"
           title="Delete"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -96,7 +96,7 @@ const ImageTile = memo(function ImageTile({
       {onToggleFavorite && (
         <button
           onClick={(e) => { e.stopPropagation(); onToggleFavorite(image.id); }}
-          className={`absolute top-1.5 left-1.5 p-1.5 rounded-full backdrop-blur-sm transition-all cursor-pointer z-5 ${
+          className={`absolute top-1.5 left-1.5 p-1.5 rounded-full backdrop-blur-sm transition-all cursor-pointer z-5 pressable ${
             image.isFavorite
               ? "bg-rose-500/20 text-rose-400"
               : "bg-black/40 text-white/30 hover:text-rose-400 hover:bg-black/60 opacity-0 group-hover:opacity-100"
@@ -128,13 +128,13 @@ const ImageTile = memo(function ImageTile({
           <div className="flex gap-2">
             <button
               onClick={(e) => { e.stopPropagation(); onDelete?.(image.id); setConfirmDelete(false); }}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40 transition-all"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40 transition-all pressable"
             >
               Delete
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); setConfirmDelete(false); }}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/15 transition-all"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 border border-white/15 text-white/60 hover:text-white/80 hover:bg-white/15 transition-all pressable"
             >
               Cancel
             </button>

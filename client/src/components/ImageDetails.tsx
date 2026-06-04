@@ -89,14 +89,14 @@ export function ImageDetails({ image, onUseParams, onOpenLightbox }: Props) {
         {!isAnalyzed && (
           <button
             onClick={handleUseParams}
-            className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-amber-500/15 border border-amber-400/20 text-amber-300 hover:bg-amber-500/25 transition-all"
+            className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-amber-500/15 border border-amber-400/20 text-amber-300 hover:bg-amber-500/25 transition-all pressable"
           >
             Use as starting point
           </button>
         )}
         <button
           onClick={handleDownload}
-          className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-white/5 border border-white/10 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all"
+          className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-white/5 border border-white/10 text-white/60 hover:text-white/80 hover:bg-white/10 transition-all pressable"
         >
           Download
         </button>
