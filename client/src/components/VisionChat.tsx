@@ -172,7 +172,7 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
                     navigator.clipboard.writeText(image.description);
                     onCopyDescription?.();
                   }}
-                  className="text-[10px] text-white/50 hover:text-white/80 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/10"
+                  className="text-[10px] text-white/50 hover:text-white/80 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/10 pressable"
                   title="Copy markdown"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -183,7 +183,7 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
                 </button>
                 <button
                   onClick={() => onSendToGenerate?.(image.description)}
-                  className="text-[10px] text-amber-300 hover:text-amber-200 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/20"
+                  className="text-[10px] text-amber-300 hover:text-amber-200 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/20 pressable"
                   title="Send to generate"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -237,7 +237,7 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
                     <div className="flex items-center gap-1.5 px-3 pb-2 pt-1 border-t border-white/5">
                       <button
                         onClick={() => navigator.clipboard.writeText(msg.content)}
-                        className="text-[10px] text-white/50 hover:text-white/80 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/10"
+                        className="text-[10px] text-white/50 hover:text-white/80 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/10 pressable"
                         title="Copy"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -248,7 +248,7 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
                       </button>
                       <button
                         onClick={() => onSendToGenerate?.(msg.content)}
-                        className="text-[10px] text-amber-300 hover:text-amber-200 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/20"
+                        className="text-[10px] text-amber-300 hover:text-amber-200 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/20 pressable"
                         title="Send to generate"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
