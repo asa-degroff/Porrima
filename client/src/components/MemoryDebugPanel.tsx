@@ -426,7 +426,7 @@ export function MemoryDebugPanel({ isOpen, onClose }: Props) {
           </div>
           <button
             onClick={onClose}
-            className="p-1 text-white/40 hover:text-white/80 transition-colors"
+            className="p-1 text-white/40 hover:text-white/80 transition-colors pressable"
             title="Close"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -807,7 +807,7 @@ function MemoriesTab({
           <button
             onClick={onRunSynthesis}
             disabled={synthesisRunning || memoryStatus.memoryCount === 0}
-            className="ml-auto px-3 py-1 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="ml-auto px-3 py-1 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed pressable"
             style={{
               backgroundColor: `rgba(var(--theme-primary-muted, 140 50 200), 0.15)`,
               borderColor: `rgba(var(--theme-primary-border, 160 80 240), 0.25)`,
@@ -849,7 +849,7 @@ function MemoriesTab({
                 <button
                   key={cat}
                   onClick={() => onCategoryFilterChange(cat)}
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-all ${
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-all pressable ${
                     categoryFilter === cat
                       ? "bg-purple-500/30 text-purple-200 border border-purple-400/30"
                       : "bg-white/5 text-white/40 border border-white/10 hover:bg-white/10"
@@ -920,7 +920,7 @@ function MemoriesTab({
                     <button
                       onClick={() => onDeleteMemory(memory.id)}
                       disabled={deleting === memory.id}
-                      className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 text-white/30 hover:text-red-400 transition-all disabled:opacity-50"
+                      className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 text-white/30 hover:text-red-400 transition-all disabled:opacity-50 pressable"
                       title="Delete memory"
                     >
                       {deleting === memory.id ? (
@@ -954,7 +954,7 @@ function MemoriesTab({
                     {hasLineage && (
                       <button
                         onClick={() => onToggleLineage(memory.id)}
-                        className="text-[9px] text-purple-400/60 hover:text-purple-300 transition-colors"
+                        className="text-[9px] text-purple-400/60 hover:text-purple-300 transition-colors pressable"
                         title="View memory lineage"
                       >
                         {isExpanded ? "hide lineage" : "lineage"}
@@ -1009,7 +1009,7 @@ function MemoriesTab({
               <button
                 onClick={onLoadMore}
                 disabled={loadingMore}
-                className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-[10px] text-white/60 hover:bg-white/10 hover:text-white/80 transition-all disabled:opacity-50"
+                className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-[10px] text-white/60 hover:bg-white/10 hover:text-white/80 transition-all disabled:opacity-50 pressable"
               >
                 {loadingMore ? "Loading..." : "Load more"}
               </button>
@@ -1063,7 +1063,7 @@ function BlocksTab({
           <button
             key={scope}
             onClick={() => onScopeFilterChange(scope)}
-            className={`px-2 py-1 rounded text-xs transition-all ${
+            className={`px-2 py-1 rounded text-xs transition-all pressable ${
               scopeFilter === scope ? "text-white" : "text-white/40 hover:text-white/60"
             }`}
             style={{
@@ -1110,7 +1110,7 @@ function BlocksTab({
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
                       onClick={() => editingBlockId === block.id ? onCancelEdit() : onStartEdit(block.id, block.content)}
-                      className="p-1 rounded hover:bg-white/10 text-white/30 hover:text-white/60"
+                      className="p-1 rounded hover:bg-white/10 text-white/30 hover:text-white/60 pressable"
                       title="Edit"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -1119,13 +1119,13 @@ function BlocksTab({
                       <div className="flex items-center gap-1">
                         <button
                           onClick={() => onDeleteBlock(block.id)}
-                          className="px-2 py-0.5 rounded bg-red-500/15 border border-red-400/25 text-red-300 hover:bg-red-500/25 text-xs font-medium"
+                          className="px-2 py-0.5 rounded bg-red-500/15 border border-red-400/25 text-red-300 hover:bg-red-500/25 text-xs font-medium pressable"
                         >
                           Confirm
                         </button>
                         <button
                           onClick={onCancelDelete}
-                          className="px-2 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80 text-xs font-medium"
+                          className="px-2 py-0.5 rounded bg-white/10 border border-white/15 text-white/50 hover:text-white/80 text-xs font-medium pressable"
                         >
                           Cancel
                         </button>
@@ -1133,7 +1133,7 @@ function BlocksTab({
                     ) : (
                       <button
                         onClick={() => onDeleteBlock(block.id)}
-                        className="p-1 rounded hover:bg-red-500/20 text-white/30 hover:text-red-400"
+                        className="p-1 rounded hover:bg-red-500/20 text-white/30 hover:text-red-400 pressable"
                         title="Delete"
                       >
                         <svg className="trash-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ overflow: 'visible' }}><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><g className="trash-lid"><path d="M3 6h18" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></g></svg>
@@ -1153,13 +1153,13 @@ function BlocksTab({
                     <div className="flex gap-2 justify-end">
                       <button
                         onClick={onCancelEdit}
-                        className="px-2 py-1 text-xs text-white/40 hover:text-white/60"
+                        className="px-2 py-1 text-xs text-white/40 hover:text-white/60 pressable"
                       >
                         Cancel
                       </button>
                       <button
                         onClick={() => onSaveBlock(block.id, editBlockContent)}
-                        className="px-2 py-1 text-xs rounded"
+                        className="px-2 py-1 text-xs rounded pressable"
                         style={{
                           backgroundColor: `rgba(var(--theme-secondary, 100 100 200), 0.15)`,
                           color: `rgba(var(--theme-secondary-text, 160 160 255))`,

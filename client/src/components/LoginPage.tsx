@@ -46,7 +46,7 @@ export function LoginPage({ authState, error, onRegister, onLogin, agentName, co
           </h1>
           <button
             onClick={isSetup ? onRegister : onLogin}
-            className={`flex-1 px-4 py-2.5 rounded-xl ${cornerClass} bg-purple-500/20 border border-purple-400/30 text-purple-200 text-sm font-medium hover:bg-purple-500/30 transition-all flex items-center justify-center gap-2`}
+            className={`flex-1 px-4 py-2.5 rounded-xl ${cornerClass} bg-purple-500/20 border border-purple-400/30 text-purple-200 text-sm font-medium hover:bg-purple-500/30 transition-all pressable flex items-center justify-center gap-2`}
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
