@@ -49,6 +49,14 @@ interface PushPayload {
   data?: unknown;
 }
 
+// Store the most recent push-click payload + timestamp so a freshly-opened
+// window can request it as a fallback if the postMessage was missed.
+interface StoredPushPayload {
+  payload: PushPayload;
+  timestamp: number;
+}
+let lastPushClickPayload: StoredPushPayload | null = null;
+
 function parsePushData(event: PushEvent): PushPayload {
   if (!event.data) return { title: "Porrima", body: "" };
   try {
@@ -95,25 +103,45 @@ self.addEventListener("notificationclick", (event) => {
   const data = (event.notification.data ?? {}) as PushPayload;
   const targetUrl = data.url || "/";
 
+  // Store the payload + timestamp so the app can request it on mount as
+  // a fallback if the postMessage was missed (race: focus + postMessage
+  // fires before the React listener is attached).
+  lastPushClickPayload = { payload: data, timestamp: Date.now() };
+
   event.waitUntil(
     (async () => {
-      const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      // Prefer focusing an existing window, then nudging it to the route.
-      for (const c of all) {
-        const win = c as WindowClient;
-        try {
-          await win.focus();
-          // Send the route hint to the page so it can navigate via
-          // react-router instead of full reload.
-          win.postMessage({ kind: "push-click", payload: data });
-          return;
-        } catch {
-          // try next client
-        }
+      // Always use openWindow — it focuses existing windows AND navigates
+      // them to the target URL. The URL ?chat= param provides a reliable
+      // navigation path that doesn't depend on postMessage timing.
+      const win = await self.clients.openWindow(targetUrl);
+
+      // Also send the route hint for immediate react-router navigation
+      // (avoids a full page reload). This is best-effort — the URL param
+      // is the primary path.
+      if (win) {
+        (win as WindowClient).postMessage({ kind: "push-click", payload: data });
       }
-      await self.clients.openWindow(targetUrl);
     })()
   );
+});
+
+// Respond to mount-time requests from the app — the app asks "did a
+// notification click happen while I wasn't ready to listen?" and we hand
+// it the stored payload if so. Only deliver payloads within a short window
+// to avoid stale navigation on normal app opens.
+const PUSH_CLICK_MAX_AGE_MS = 30_000; // 30s — covers app launch + mount timing
+self.addEventListener("message", (event) => {
+  if (event.data?.kind === "get-last-push-click") {
+    const source = event.source as MessageEventSource | null;
+    if (source && lastPushClickPayload && Date.now() - lastPushClickPayload.timestamp < PUSH_CLICK_MAX_AGE_MS) {
+      source.postMessage({
+        kind: "last-push-click",
+        payload: lastPushClickPayload.payload,
+      });
+      // Clear after delivering — the app either used it or missed the window.
+      lastPushClickPayload = null;
+    }
+  }
 });
 
 // When the browser rotates the push endpoint, fetch a fresh subscription and

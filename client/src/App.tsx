@@ -19,6 +19,9 @@ const ScanLinesBackground = lazy(() =>
 const RippleDotsBackground = lazy(() =>
   import("./components/RippleDotsBackground").then((m) => ({ default: m.RippleDotsBackground }))
 );
+const GraphPaperBackground = lazy(() =>
+  import("./components/GraphPaperBackground").then((m) => ({ default: m.GraphPaperBackground }))
+);
 import { useChats } from "./hooks/useChats";
 import { useChat, hasBackgroundStream, getStreamingChatIds } from "./hooks/useChat";
 import { useProjects } from "./hooks/useProjects";
@@ -178,8 +181,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   }, [settings.systemStatsHiddenGpus]);
 
   // Load UI state from server on mount
-  // Priority: URL ?chat= param > server state > localStorage
+  // Priority: URL ?chat= param > SW-stored push-click payload > server state > localStorage
   // The URL param is set by the service worker when opening from a push notification.
+  // The SW also stores the last push-click payload — we request it as a fallback in case
+  // the postMessage arrived before our listener was attached (race on background→foreground).
   // We call selectChat directly here rather than relying on the restore effect,
   // because selectChatRef isn't populated until after effects run in order.
   useEffect(() => {
@@ -193,29 +198,69 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       return;
     }
 
-    fetchUserUIState()
-      .then((state) => {
-        if (state.activeChatId) {
-          setActiveChatId(state.activeChatId);
-          selectChat(state.activeChatId);
+    // Fallback: ask the SW for a stored push-click payload. This covers the
+    // race where the SW's postMessage fired before our listener was attached.
+    if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+      navigator.serviceWorker.ready.then((reg) => {
+        if (reg.active) {
+          reg.active.postMessage({ kind: "get-last-push-click" });
+
+          let handled = false;
+          const handler = (e: MessageEvent) => {
+            if (handled) return;
+            if (e.data?.kind === "last-push-click" && e.data.payload?.chatId) {
+              handled = true;
+              const chatId = e.data.payload.chatId;
+              setActiveChatId(chatId);
+              selectChat(chatId);
+              setUiStateSynced(true);
+              return;
+            }
+            // Not our response — fall through to server state
+            handled = true;
+            loadServerState();
+          };
+          navigator.serviceWorker.addEventListener("message", handler);
+
+          // Timeout: if the SW doesn't respond quickly, fall through.
+          setTimeout(() => {
+            if (!handled) {
+              handled = true;
+              loadServerState();
+            }
+          }, 500);
+          return;
         }
-        if (state.activeView) setActiveView(state.activeView as 'chats' | 'notebooks');
-        if (state.activeView === 'image-sandbox') setImageSandboxOpen(true);
-        setUiStateSynced(true);
-      })
-      .catch((err) => {
-        console.warn("Failed to load UI state from server, using localStorage:", err);
-        const cachedChatId = readStoredValue(ACTIVE_CHAT_KEY, LEGACY_ACTIVE_CHAT_KEY);
-        if (cachedChatId) {
-          setActiveChatId(cachedChatId);
-          selectChat(cachedChatId);
-        }
-        if (readStoredValue(ACTIVE_VIEW_KEY, LEGACY_ACTIVE_VIEW_KEY) === "image-sandbox") {
-          setImageSandboxOpen(true);
-        }
-        setUiStateSynced(true);
-      });
+      }).catch(() => {});
+    }
+
+    loadServerState();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- selectChat is useCallback-stable; this effect runs once on mount
+
+    function loadServerState() {
+      fetchUserUIState()
+        .then((state) => {
+          if (state.activeChatId) {
+            setActiveChatId(state.activeChatId);
+            selectChat(state.activeChatId);
+          }
+          if (state.activeView) setActiveView(state.activeView as 'chats' | 'notebooks');
+          if (state.activeView === 'image-sandbox') setImageSandboxOpen(true);
+          setUiStateSynced(true);
+        })
+        .catch((err) => {
+          console.warn("Failed to load UI state from server, using localStorage:", err);
+          const cachedChatId = readStoredValue(ACTIVE_CHAT_KEY, LEGACY_ACTIVE_CHAT_KEY);
+          if (cachedChatId) {
+            setActiveChatId(cachedChatId);
+            selectChat(cachedChatId);
+          }
+          if (readStoredValue(ACTIVE_VIEW_KEY, LEGACY_ACTIVE_VIEW_KEY) === "image-sandbox") {
+            setImageSandboxOpen(true);
+          }
+          setUiStateSynced(true);
+        });
+    }
   }, []);
 
   // Poll synthesis status. Synthesis runs server-side as a background task
@@ -1229,6 +1274,11 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       {settings.backgroundEffect === "ripple-dots" && (
         <Suspense fallback={null}>
           <RippleDotsBackground />
+        </Suspense>
+      )}
+      {settings.backgroundEffect === "graph-paper" && (
+        <Suspense fallback={null}>
+          <GraphPaperBackground />
         </Suspense>
       )}
       <Sidebar
