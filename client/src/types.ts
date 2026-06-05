@@ -290,7 +290,7 @@ export interface ConversationSearchResult {
 }
 
 export type Theme = "default" | "ocean" | "forest" | "crimson" | "mono" | "strawberry" | "coffee" | "emerald" | "copper" | "oxidized-copper" | "iron" | "rust";
-export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots";
+export type BackgroundEffect = "static" | "ripple-grid" | "scan-lines" | "ripple-dots" | "graph-paper";
 export type CornerShape = "round" | "squircle";
 export type CornerRadius = "compact" | "default" | "generous";
 export type ActivityShape = "octahedron" | "cube" | "tetrahedron";
