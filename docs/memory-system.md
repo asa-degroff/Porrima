@@ -35,12 +35,13 @@ Memory retrieval uses a multi-stage pipeline for high-relevance results:
 
 1. **Hybrid search** (`memory-storage.ts`): Vector search (qwen3-embedding:0.6b, 45 candidates) + FTS5 full-text search, fused via RRF (Reciprocal Rank Fusion, K=60). Post-scoring applies recency decay (30-day half-life), importance weight, and supersession penalty.
 
-2. **Cross-encoder reranking** (`reranker.ts`): Top 30 candidates are reranked by Qwen3-Reranker-0.6B (dedicated CPU instance on port 32102) using chat-type-specific instructions:
+2. **Cross-encoder reranking** (`reranker.ts`): Top candidates are reranked by Qwen3-Reranker-0.6B (dedicated CPU instance on port 32102) using source-specific instructions:
    - **Agent**: "judge whether this memory is relevant to the user's current task, question, or topic of discussion"
    - **Quick**: "judge whether this memory contains information useful for responding"
-   - Graceful fallback to RRF-only scoring if reranker is unavailable
+   - **Passive-memory**: instruction tuned for mid-turn context discovery during long agent runs
+   - Graceful fallback to RRF-only scoring if reranker is unavailable (main retrieval only — passive recall bails entirely if reranker is down)
 
-3. **MMR diversity selection** (`memory-storage.ts`): Lambda=0.7 (70% relevance, 30% diversity) to avoid redundant memories
+3. **MMR diversity selection** (`memory-storage.ts`): Lambda=0.7 (70% relevance, 30% diversity) for main retrieval. Passive recall uses λ=0.55 (more diversity-biased) since it accumulates candidates across multiple search rounds.
 
 4. **Project scoping**: Project chats dampen memories from other projects with the configurable cross-project multiplier. Global and system chats use a separate project-memory multiplier so project-scoped memories can compete equally by default, while still allowing users to make no-project chats more global-focused.
 
@@ -81,15 +82,46 @@ See `memory-context.ts` for implementation details: `buildSplitAugmentedPrompt()
 
 ## Passive Mid-Turn Memory Recall
 
-Long-running agent turns can retrieve memories without waiting for the next user message. `PassiveMemoryRecallController` runs from the HTTP chat loop and headless automation runner after tool-use iterations:
+Long-running agent turns can retrieve memories without waiting for the next user message. `PassiveMemoryRecallController` (in `passive-memory-recall.ts`) runs from the HTTP chat loop and headless automation runner via two scheduling paths:
 
-- It builds a topical query from recent visible user/assistant context, preserving agent thinking as the primary directional signal while scrubbing tool names, paths, filenames, endpoints, and command metadata so operational anchors do not dominate retrieval.
-- It runs fast vector + FTS5 hybrid search first, accumulates diverse candidates with MMR, then sends only a small candidate/query set to the slower reranker.
-- It caps injection frequency and total memories per turn, excludes memories already frozen/delta-injected/injected passively, and marks applied memory IDs through the memory context state.
-- Ready recalls are injected before a later provider call, so the agent can use newly relevant memory while continuing the same autonomous turn.
-- In headless automation turns, the search context includes the current in-memory assistant/tool activity, and the runner persists an assistant boundary before storing the hidden recall row so replay keeps the same order as the live transcript.
+**Two scheduling paths:**
+
+- **Tool-use path (mid-turn):** Schedules after each `stopReason === "toolUse"` event. Spaced every 2 iterations (`SEARCH_EVERY_ITERATIONS`) to avoid redundant searches during rapid tool loops. Memories land in a `readyQueue` and are injected via `peekReady()` before the next provider call, gated by a 3-iteration minimum between injections (`MIN_ITERATIONS_BETWEEN_INJECTIONS`).
+- **Conversational stop path (post-turn):** Schedules after `stopReason === "stop"`. Requires meaningful depth — the latest assistant message must have thinking ≥ 150 chars or content ≥ 300 chars — to avoid wasting searches on trivial one-line responses. Bypasses the readyQueue entirely, calling the `onReady` persist callback directly. The persisted row gets `_mergeIntoNextUserMessage: true` so it merges into the next user message on replay rather than sitting as a standalone row.
+
+**Two-query architecture:**
+
+- **Search query** (`buildPassiveRecallQuery`): Wide net. Takes the last 12 non-system, non-out-of-context messages. For each: thinking (up to 800 chars), content (up to 1000 chars, 1600 for compaction summaries), user messages (up to 1200 chars), plus extracted tool-call signal. Capped at 6000 chars by default (configurable via retrieval budget `passiveRecall.queryChars`). Minimum 80 chars required to fire.
+- **Rerank query** (`buildPassiveRerankQuery`): Tight focus on the latest assistant message only — the agent's current trajectory. Budget allocation: thinking 35%, tool-call signal 25%, assistant content 25%, user request with decay (45% when no trajectory exists, drops to 15% once combined trajectory length ≥ 200 chars). Capped at ~900 chars.
+
+**Tool-call signal extraction:** `extractToolCallSignal()` extracts semantic arguments from tool calls (`query`, `path`, `blockId`, etc.) — the agent's *intent*, not its output. Raw tool results are intentionally excluded (noisy). File paths and URLs are scrubbed to topic words via `anchorToTopicWords()` (e.g., `server/src/services/passive-memory-recall.ts` → `passive memory recall`).
+
+**Operational noise scrubbing:** `scrubOperationalNoise()` strips code blocks, tool call XML, tool/command names, file paths, API endpoints, and `path=`/`file=` key-value pairs from all query text. Cross-encoders are sensitive to distributional shift — operational anchors that dominate the query surface cause the reranker to over-weight structurally similar but topically irrelevant memories.
+
+**Search pipeline with candidate accumulation:**
+
+1. Embed the search query. Run hybrid vector + FTS5 search with cross-project score dampening.
+2. Span filter: removes same-chat memories whose source messages are ≥ 80% visible in context.
+3. Exclude: frozen IDs, delta IDs, already-injected IDs, already-queued IDs, superseded memories.
+4. MMR diversity selection (λ = 0.55, more diversity-biased than main retrieval's λ = 0.7).
+5. **Accumulate** candidates in a shared map. Unlike main retrieval (one-shot), passive recall can search multiple times per turn — each round improves candidate scores if it finds something better.
+6. Cross-encoder rerank fires only after `MIN_CANDIDATES_BEFORE_RERANK` (3) candidates accumulate. Uses the `passive-memory` specific reranker instruction.
+7. **Precision-over-recall:** If the reranker model is unavailable, passive recall bails entirely (no fallback to vector scores). The `MIN_RERANK_SCORE` threshold is 0.12 — higher than main retrieval's 0.05 floor.
+8. Final selection capped at `memoriesPerInjection` from the budget, respecting remaining `memoriesPerTurn` headroom (default 12 total).
+
+**Gating:**
+- Query hash dedup: skips search if the query content hasn't changed since the last round.
+- In-flight guard: only one search runs concurrently per chat.
+- Per-turn memory budget: `totalInjected` tracked across all injection rounds; stops once the budget is exhausted.
+- Iteration spacing: 3 iterations minimum between injections (tool-use path only; post-turn bypasses this).
+
+**Injection flow:**
+- Mid-turn: `peekReady(iteration)` → if ready, persist assistant boundary, push hidden system row, convert to synthetic user message via `toReplayUserMessage()`, push to agent messages, call `markApplied()` to track IDs and update delta state.
+- Post-turn: `onReady(content, memoryIds)` callback pushes the system row directly to `chat.messages` and persists. IDs tracked immediately.
 
 Passive recalls preserve the same replay constraints as normal memory deltas. The persisted chat row is hidden as `role: "system"` with `_isPassiveMemoryRecall` for storage/UI filtering, but the live agent context receives the replay-equivalent synthetic `user` message. `chatMessagesToPiMessages()` reconstructs that same synthetic user message from the hidden row on follow-up turns. Do not live-inject raw mid-transcript `system` messages; provider templates normalize or reject them, and replay must remain byte-compatible with the prompt shape the model already saw.
+
+In headless automation turns (`chat-turn-runner.ts`), the search context includes transient in-memory assistant/tool activity appended to persisted messages. The runner persists an assistant boundary before storing the hidden recall row so replay keeps the same order as the live transcript.
 
 ## Agent Tools
 
