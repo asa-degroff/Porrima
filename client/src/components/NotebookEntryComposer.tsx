@@ -342,6 +342,7 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
           <button
             onClick={handleSubmit}
             disabled={!content.trim() || submitting}
+            data-haptic="manual"
             className="px-3 py-1.5 text-xs rounded-lg transition-colors bg-purple-500/15 border border-purple-400/25 text-purple-300 font-medium hover:bg-purple-500/25 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 pressable"
           >
             {submitting && (

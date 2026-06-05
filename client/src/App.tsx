@@ -1213,6 +1213,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   }
 
   return (
+    <HapticsProvider enabled={settings.hapticsEnabled !== false}>
     <ActivityStyleProvider value={activityStyle}>
     <div className="flex h-full overflow-hidden relative isolate" style={totalBottomInset ? { paddingBottom: totalBottomInset } : undefined}>
       {settings.backgroundEffect === "ripple-grid" && (
@@ -1406,6 +1407,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       )}
     </div>
     </ActivityStyleProvider>
+    </HapticsProvider>
   );
 }
 
@@ -1446,10 +1448,8 @@ export default function App() {
   }
 
   return (
-    <HapticsProvider>
-      <PinnedItemProvider>
-        <AuthenticatedApp onLogout={logout} />
-      </PinnedItemProvider>
-    </HapticsProvider>
+    <PinnedItemProvider>
+      <AuthenticatedApp onLogout={logout} />
+    </PinnedItemProvider>
   );
 }

@@ -1,7 +1,6 @@
-import { createContext, useContext, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { createContext, useContext, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { WebHaptics } from "web-haptics";
 import type { HapticInput, TriggerOptions } from "web-haptics";
-import { useSettings } from "./useSettings";
 
 export interface HapticAPI {
   /** Light tap - minimal feedback */
@@ -52,10 +51,22 @@ const CUSTOM_TOOL_COMPLETE = [
   { delay: 30, duration: 40, intensity: 1 },
 ];
 
-export function HapticsProvider({ children }: { children: ReactNode }) {
+function isDisabledPressable(element: Element): boolean {
+  if (element.getAttribute("aria-disabled") === "true") return true;
+  if (element instanceof HTMLButtonElement || element instanceof HTMLInputElement) {
+    return element.disabled;
+  }
+  return false;
+}
+
+export function HapticsProvider({
+  children,
+  enabled = true,
+}: {
+  children: ReactNode;
+  enabled?: boolean;
+}) {
   const instanceRef = useRef<WebHaptics | null>(null);
-  const { settings } = useSettings();
-  const enabled = settings.hapticsEnabled !== false;
 
   useEffect(() => {
     instanceRef.current = new WebHaptics();
@@ -73,18 +84,39 @@ export function HapticsProvider({ children }: { children: ReactNode }) {
     [enabled],
   );
 
-  const api: HapticAPI = {
-    light: () => trigger("light"),
-    medium: () => trigger("medium"),
-    heavy: () => trigger("heavy"),
-    success: () => trigger("success"),
-    error: () => trigger("error"),
-    navigation: () => trigger(CUSTOM_NAVIGATION),
-    toolComplete: () => trigger(CUSTOM_TOOL_COMPLETE),
-    streamingComplete: () => trigger("heavy"),
-    trigger,
-    enabled,
-  };
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!enabled || event.pointerType === "mouse") return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+
+      const pressable = target.closest(".pressable");
+      if (!pressable || pressable.getAttribute("data-haptic") === "manual") return;
+      if (isDisabledPressable(pressable)) return;
+      trigger("light");
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown, { capture: true, passive: true });
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, { capture: true });
+    };
+  }, [enabled, trigger]);
+
+  const api: HapticAPI = useMemo(
+    () => ({
+      light: () => trigger("light"),
+      medium: () => trigger("medium"),
+      heavy: () => trigger("heavy"),
+      success: () => trigger("success"),
+      error: () => trigger("error"),
+      navigation: () => trigger(CUSTOM_NAVIGATION),
+      toolComplete: () => trigger(CUSTOM_TOOL_COMPLETE),
+      streamingComplete: () => trigger("heavy"),
+      trigger,
+      enabled,
+    }),
+    [enabled, trigger],
+  );
 
   return (
     <HapticsContext.Provider value={api}>

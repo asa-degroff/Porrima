@@ -72,6 +72,7 @@ export const TTSControlBar = memo(function TTSControlBar({
               light();
               isPlaying ? onPause() : onResume();
             }}
+            data-haptic="manual"
             className="w-9 h-9 rounded-full theme-accent-bg border theme-accent-border theme-accent-text flex items-center justify-center hover:theme-accent-bg-hover transition-colors shrink-0 pressable"
             title={isPlaying ? "Pause" : "Resume"}
           >
@@ -112,6 +113,7 @@ export const TTSControlBar = memo(function TTSControlBar({
               light();
               onStop();
             }}
+            data-haptic="manual"
             className="w-9 h-9 rounded-full bg-white/10 border border-white/20 theme-primary-text opacity-60 flex items-center justify-center hover:bg-white/20 hover:opacity-80 transition-colors shrink-0 pressable"
             title="Stop"
           >

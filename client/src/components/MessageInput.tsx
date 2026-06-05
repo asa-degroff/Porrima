@@ -507,6 +507,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
             {streaming && canSend ? (
               <button
                 onClick={handleSubmit}
+                data-haptic="manual"
                 className="px-4 py-1.5 rounded-lg text-sm theme-accent-btn pressable"
               >
                 Send
@@ -517,6 +518,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
                   heavy();
                   onAbort?.();
                 }}
+                data-haptic="manual"
                 className="px-4 py-1.5 rounded-lg bg-red-500/20 border border-red-400/30 text-red-300 text-sm hover:bg-red-500/30 transition-colors pressable"
               >
                 Stop
@@ -525,6 +527,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
               <button
                 onClick={handleSubmit}
                 disabled={!canSend}
+                data-haptic="manual"
                 className="px-4 py-1.5 rounded-lg bg-amber-500/20 border border-amber-400/30 text-amber-300 text-sm hover:bg-amber-500/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed inline-flex items-center gap-1.5 pressable"
                 title="Message will be sent when back online"
               >
@@ -538,6 +541,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
               <button
                 onClick={handleSubmit}
                 disabled={!canSend}
+                data-haptic="manual"
                 className="px-4 py-1.5 rounded-lg text-sm theme-accent-btn pressable"
               >
                 Send
