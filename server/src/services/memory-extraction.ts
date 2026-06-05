@@ -732,48 +732,17 @@ interface ExtractedFact {
   sourceExchangeId?: string;
 }
 
-export function parseExtractionResponse(text: string): ExtractedFact[] {
-  // Strip thinking blocks before looking for JSON. Reasoning models can include
-  // bracketed examples in <think>...</think>, and grabbing the first "[" across
-  // the entire raw output can corrupt an otherwise valid final JSON array.
+function cleanJsonArrayOutput(text: string): string {
   let cleaned = text.trim();
   cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 
-  // Strip markdown code fences if present
   if (cleaned.startsWith("```")) {
     cleaned = cleaned.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
   }
-  cleaned = cleaned.trim();
+  return cleaned.trim();
+}
 
-  const parseCandidate = (candidate: string): ExtractedFact[] | null => {
-    let arr: unknown;
-    try {
-      arr = JSON.parse(candidate);
-    } catch {
-      return null;
-    }
-    if (!Array.isArray(arr)) return [];
-    return arr
-      .filter((f: any) =>
-        typeof f.text === "string" &&
-        f.text.length > 0
-      )
-      .map((f: any) => {
-        const category = VALID_MEMORY_CATEGORIES.includes(f.category)
-          ? f.category as MemoryCategory
-          : FALLBACK_MEMORY_CATEGORY;
-        if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
-          console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
-        }
-        const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
-          ? f.sourceExchangeId.trim()
-          : undefined;
-        return { text: f.text, category, importance: f.importance, sourceExchangeId };
-      });
-  };
-
-  // Prefer the last valid array. The final answer is usually after any
-  // reasoning/preamble, while earlier bracketed snippets are often examples.
+function findJsonArrayCandidates(cleaned: string): string[] {
   const candidates: string[] = [];
   for (let start = 0; start < cleaned.length; start++) {
     if (cleaned[start] !== "[") continue;
@@ -807,6 +776,45 @@ export function parseExtractionResponse(text: string): ExtractedFact[] {
       }
     }
   }
+  return candidates;
+}
+
+export function parseExtractionResponse(text: string): ExtractedFact[] {
+  // Strip thinking blocks before looking for JSON. Reasoning models can include
+  // bracketed examples in <think>...</think>, and grabbing the first "[" across
+  // the entire raw output can corrupt an otherwise valid final JSON array.
+  const cleaned = cleanJsonArrayOutput(text);
+
+  const parseCandidate = (candidate: string): ExtractedFact[] | null => {
+    let arr: unknown;
+    try {
+      arr = JSON.parse(candidate);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((f: any) =>
+        typeof f.text === "string" &&
+        f.text.length > 0
+      )
+      .map((f: any) => {
+        const category = VALID_MEMORY_CATEGORIES.includes(f.category)
+          ? f.category as MemoryCategory
+          : FALLBACK_MEMORY_CATEGORY;
+        if (category === FALLBACK_MEMORY_CATEGORY && f.category !== FALLBACK_MEMORY_CATEGORY) {
+          console.warn(`[memory] Remapping invalid extraction category "${f.category}" to "note" for fact: ${f.text.slice(0, 80)}${f.text.length > 80 ? "..." : ""}`);
+        }
+        const sourceExchangeId = typeof f.sourceExchangeId === "string" && f.sourceExchangeId.trim()
+          ? f.sourceExchangeId.trim()
+          : undefined;
+        return { text: f.text, category, importance: f.importance, sourceExchangeId };
+      });
+  };
+
+  // Prefer the last valid array. The final answer is usually after any
+  // reasoning/preamble, while earlier bracketed snippets are often examples.
+  const candidates = findJsonArrayCandidates(cleaned);
 
   for (const candidate of candidates.reverse()) {
     const facts = parseCandidate(candidate);
@@ -1455,35 +1463,48 @@ function isNearDuplicate(
  * Returns an array of resolutions with decisions and reasons.
  */
 interface SupersessionResolution {
+  candidateIndex: number;
   newMemoryId: string;
   oldMemoryId: string;
   decision: "supersede" | "separate" | "unsure";
   reason?: string;
 }
 
-async function batchCompareSupersessions(
-  candidates: DedupAndSaveAmbiguousCandidate[],
-  conversationContext: string,
-  modelId: string
-): Promise<SupersessionResolution[]> {
-  if (candidates.length === 0) return [];
+interface SupersessionComparisonOptions {
+  extractionSystemPrompt?: string;
+  extractionUserPrompt?: string;
+  extractionRawOutput?: string;
+  settings?: Settings;
+  extractionSettings?: ResolvedExtractionSettings;
+  assumeMutexHeld?: boolean;
+}
 
-  // Build the comparison prompt
-  const candidatePairs = candidates.map((c, i) =>
+const COMPARISON_CONTEXT_CHARS = 4000;
+const COMPARISON_MIN_MAX_TOKENS = 800;
+const COMPARISON_MAX_MAX_TOKENS = 4000;
+const COMPARISON_TOKENS_PER_CANDIDATE = 160;
+
+function buildSupersessionCandidatePairs(candidates: DedupAndSaveAmbiguousCandidate[]): string {
+  return candidates.map((c, i) =>
     `Candidate index ${i}:
   New memory: "${c.newText}"
   Existing memory: "${c.oldText}"
   Embedding similarity: ${c.embeddingSimilarity.toFixed(3)}
   Text overlap: ${c.textOverlap.toFixed(2)}`
   ).join("\n\n");
+}
 
-  const prompt = `These are my newly extracted memories from a conversation. Some of them are semantically similar to existing memories, but it's unclear whether they update/replace the old memory or are separate memories about the same topic.
+function buildColdSupersessionComparisonPrompt(
+  candidates: DedupAndSaveAmbiguousCandidate[],
+  conversationContext: string,
+): string {
+  return `These are my newly extracted memories from a conversation. Some of them are semantically similar to existing memories, but it's unclear whether they update/replace the old memory or are separate memories about the same topic.
 
 CONVERSATION CONTEXT:
-${conversationContext.slice(0, 4000)}
+${conversationContext.slice(0, COMPARISON_CONTEXT_CHARS)}
 
 SUPERSESSION CANDIDATES:
-${candidatePairs}
+${buildSupersessionCandidatePairs(candidates)}
 
 For each pair, decide whether the new memory SUPERSEDES the existing memory (same information, updated/corrected), or if they are SEPARATE memories that should be kept.
 If multiple existing memories are shown for the same new memory, choose at most the single best supersession target.
@@ -1493,50 +1514,167 @@ Respond with a JSON array:
   { "index": 0, "decision": "supersede" | "separate" | "unsure", "reason": "brief explanation" },
   ...
 ]`;
+}
 
-  try {
-    const responseText = await callExtractionLLM(
-      modelId,
-      prompt,
-      "I am a careful analyzer that determines whether new memories update existing memories or are distinct. I only mark as supersede when I am confident the new memory replaces the old one."
-    );
+function buildWarmSupersessionComparisonPrompt(candidates: DedupAndSaveAmbiguousCandidate[]): string {
+  return `Using the conversation and extraction result above, resolve whether any newly saved memories supersede older memories.
 
-    // Parse the response
-    const cleaned = responseText.trim();
-    const start = cleaned.indexOf("[");
-    const end = cleaned.lastIndexOf("]");
-    if (start === -1 || end === -1) {
-      console.warn("[memory-comparison] Failed to parse comparison response");
-      return candidates.map((c, i) => ({
+SUPERSESSION CANDIDATES:
+${buildSupersessionCandidatePairs(candidates)}
+
+For each pair, decide whether the new memory SUPERSEDES the existing memory (same information, updated/corrected), or if they are SEPARATE memories that should be kept.
+If multiple existing memories are shown for the same new memory, choose at most the single best supersession target.
+
+Respond ONLY with a JSON array:
+[
+  { "index": 0, "decision": "supersede" | "separate" | "unsure", "reason": "brief explanation" },
+  ...
+]`;
+}
+
+function comparisonMaxTokens(candidateCount: number, configuredMaxTokens: number): number {
+  const desired = Math.max(
+    COMPARISON_MIN_MAX_TOKENS,
+    Math.min(COMPARISON_MAX_MAX_TOKENS, 320 + candidateCount * COMPARISON_TOKENS_PER_CANDIDATE),
+  );
+  return Math.max(100, Math.min(configuredMaxTokens, desired));
+}
+
+function parseSupersessionComparisonResponse(
+  responseText: string,
+  candidates: DedupAndSaveAmbiguousCandidate[],
+): SupersessionResolution[] {
+  const cleaned = cleanJsonArrayOutput(responseText);
+  const arrayCandidates = findJsonArrayCandidates(cleaned).reverse();
+  let decisions: Array<{ index: number; decision: string; reason?: string }> | null = null;
+
+  for (const candidate of arrayCandidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed)) {
+        decisions = parsed;
+        break;
+      }
+    } catch {
+      // Keep looking; reasoning/preamble can include bracketed non-JSON text.
+    }
+  }
+
+  if (!decisions) {
+    console.warn("[memory-comparison] Failed to parse comparison response");
+    return candidates.map((c, i) => ({
+      candidateIndex: i,
+      newMemoryId: c.newMemoryId,
+      oldMemoryId: c.oldMemoryId,
+      decision: "unsure",
+      reason: "Failed to parse model response",
+    }));
+  }
+
+  return candidates.map((c, i) => {
+    const d = decisions.find((dec) => dec.index === i);
+    if (!d || !["supersede", "separate", "unsure"].includes(d.decision)) {
+      return {
+        candidateIndex: i,
         newMemoryId: c.newMemoryId,
         oldMemoryId: c.oldMemoryId,
         decision: "unsure",
-        reason: "Failed to parse model response",
-      }));
+        reason: "Invalid decision in model response",
+      };
+    }
+    return {
+      candidateIndex: i,
+      newMemoryId: c.newMemoryId,
+      oldMemoryId: c.oldMemoryId,
+      decision: d.decision as "supersede" | "separate" | "unsure",
+      reason: d.reason,
+    };
+  });
+}
+
+function buildWarmComparisonMessages(
+  opts: SupersessionComparisonOptions,
+  comparisonPrompt: string,
+): ExtractionDialogueMessage[] | null {
+  if (!opts.extractionUserPrompt || !opts.extractionRawOutput) return null;
+  return [
+    { role: "user", content: opts.extractionUserPrompt },
+    { role: "assistant", content: opts.extractionRawOutput || "[]" },
+    { role: "user", content: comparisonPrompt },
+  ];
+}
+
+async function batchCompareSupersessions(
+  candidates: DedupAndSaveAmbiguousCandidate[],
+  conversationContext: string,
+  modelId: string,
+  opts: SupersessionComparisonOptions = {},
+): Promise<SupersessionResolution[]> {
+  if (candidates.length === 0) return [];
+
+  try {
+    const settings = opts.settings ?? await getSettings();
+    const baseExtractionSettings = opts.extractionSettings ?? await resolveExtractionRequestSettings(settings);
+    const comparisonExtractionSettings = {
+      ...baseExtractionSettings,
+      maxTokens: comparisonMaxTokens(candidates.length, baseExtractionSettings.maxTokens),
+    };
+    const analyzerPrompt = "I am a careful analyzer that determines whether new memories update existing memories or are distinct. I only mark as supersede when I am confident the new memory replaces the old one. I respond only with the requested JSON array.";
+    const warmPrompt = buildWarmSupersessionComparisonPrompt(candidates);
+    const warmMessages = opts.extractionSystemPrompt
+      ? buildWarmComparisonMessages(opts, warmPrompt)
+      : null;
+
+    let responseText: string;
+    if (warmMessages && opts.extractionSystemPrompt) {
+      const { maxInputChars } = computeExtractionInputBudget(
+        opts.extractionSystemPrompt,
+        comparisonExtractionSettings.ctxSize,
+        { maxTokens: comparisonExtractionSettings.maxTokens },
+      );
+      if (estimateDialogueChars(warmMessages) <= maxInputChars) {
+        console.log(
+          `[memory-comparison] Reusing delayed extraction context for ${candidates.length} candidate(s) ` +
+          `(promptChars=${opts.extractionSystemPrompt.length + estimateDialogueChars(warmMessages)}, maxTokens=${comparisonExtractionSettings.maxTokens})`
+        );
+        responseText = await callExtractionLLMWithMessages(
+          modelId,
+          warmMessages,
+          opts.extractionSystemPrompt,
+          {
+            settings,
+            extractionSettings: comparisonExtractionSettings,
+            assumeMutexHeld: opts.assumeMutexHeld,
+          },
+        );
+      } else {
+        console.log(
+          `[memory-comparison] Warm comparison skipped; context would exceed extraction budget ` +
+          `(messages=${estimateDialogueChars(warmMessages)} chars, budget=${maxInputChars} chars)`
+        );
+        responseText = await callExtractionLLM(
+          modelId,
+          buildColdSupersessionComparisonPrompt(candidates, conversationContext),
+          analyzerPrompt,
+          undefined,
+          { settings, extractionSettings: comparisonExtractionSettings, assumeMutexHeld: opts.assumeMutexHeld },
+        );
+      }
+    } else {
+      responseText = await callExtractionLLM(
+        modelId,
+        buildColdSupersessionComparisonPrompt(candidates, conversationContext),
+        analyzerPrompt,
+        undefined,
+        { settings, extractionSettings: comparisonExtractionSettings, assumeMutexHeld: opts.assumeMutexHeld },
+      );
     }
 
-    const decisions: Array<{ index: number; decision: string; reason?: string }> = JSON.parse(cleaned.slice(start, end + 1));
-
-    return candidates.map((c, i) => {
-      const d = decisions.find((dec) => dec.index === i);
-      if (!d || !["supersede", "separate", "unsure"].includes(d.decision)) {
-        return {
-          newMemoryId: c.newMemoryId,
-          oldMemoryId: c.oldMemoryId,
-          decision: "unsure",
-          reason: "Invalid decision in model response",
-        };
-      }
-      return {
-        newMemoryId: c.newMemoryId,
-        oldMemoryId: c.oldMemoryId,
-        decision: d.decision as "supersede" | "separate" | "unsure",
-        reason: d.reason,
-      };
-    });
+    return parseSupersessionComparisonResponse(responseText, candidates);
   } catch (e) {
     console.error("[memory-comparison] Batch comparison failed:", e);
-    return candidates.map((c) => ({
+    return candidates.map((c, i) => ({
+      candidateIndex: i,
       newMemoryId: c.newMemoryId,
       oldMemoryId: c.oldMemoryId,
       decision: "unsure",
@@ -1559,7 +1697,8 @@ async function applyComparisonResolutions(
   const linkedNewMemoryIds = new Set<string>();
 
   for (const res of resolutions) {
-    const candidate = candidates.find((c) => c.newMemoryId === res.newMemoryId);
+    const candidate = candidates[res.candidateIndex] ??
+      candidates.find((c) => c.newMemoryId === res.newMemoryId && c.oldMemoryId === res.oldMemoryId);
     if (!candidate) continue;
 
     if (res.decision === "supersede") {
@@ -2750,7 +2889,7 @@ export async function extractDelayedMemories(
   );
 
   // Serialize whole conversation for observability (what the debug panel will show)
-  const extractionPrompt = `${userPromptHeader}\n${context.messages
+  const extractionPrompt = `${userPromptHeader}\n\n${context.messages
     .map(({ message, index }) => formatMessageForExtraction(message, index))
     .join("\n\n---\n\n")}`;
   const systemPrompt = await buildDelayedExtractionSystemPrompt();
@@ -2900,7 +3039,14 @@ export async function extractDelayedMemories(
       const comparisonResults = await batchCompareSupersessions(
         ambiguousCandidates,
         conversationContext,
-        modelId
+        modelId,
+        chunkResult.chunkCount === 1
+          ? {
+              extractionSystemPrompt: systemPrompt,
+              extractionUserPrompt: extractionPrompt,
+              extractionRawOutput: chunkResult.rawOutput,
+            }
+          : undefined,
       );
 
       const applyResult = await applyComparisonResolutions(comparisonResults, ambiguousCandidates);
@@ -2908,16 +3054,19 @@ export async function extractDelayedMemories(
       comparisonSeparate = applyResult.separate;
 
       // Build resolution records for observability
-      resolutions = comparisonResults.map((res, i) => ({
-        newFactIndex: ambiguousCandidates[i].factIndex,
-        newFactText: ambiguousCandidates[i].newText,
-        existingMemoryId: res.oldMemoryId,
-        existingMemoryText: ambiguousCandidates[i].oldText,
-        embeddingSimilarity: ambiguousCandidates[i].embeddingSimilarity,
-        textDiffOverlap: ambiguousCandidates[i].textOverlap,
-        decision: res.decision,
-        reason: res.reason,
-      }));
+      resolutions = comparisonResults.map((res, i) => {
+        const candidate = ambiguousCandidates[res.candidateIndex] ?? ambiguousCandidates[i];
+        return {
+          newFactIndex: candidate.factIndex,
+          newFactText: candidate.newText,
+          existingMemoryId: res.oldMemoryId,
+          existingMemoryText: candidate.oldText,
+          embeddingSimilarity: candidate.embeddingSimilarity,
+          textDiffOverlap: candidate.textOverlap,
+          decision: res.decision,
+          reason: res.reason,
+        };
+      });
     }
 
     // Update chat tracking fields without touching lastModified
