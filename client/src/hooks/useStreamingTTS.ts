@@ -16,6 +16,7 @@ export interface StreamingTTSState {
 }
 
 const WAV_HEADER_SIZE = 44;
+const WAV_MEDIA_SOURCE_MIME_TYPES = ["audio/wav; codecs=1", "audio/wav"] as const;
 
 function decodeBase64(base64Wav: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64Wav);
@@ -30,6 +31,11 @@ function stripWavHeader(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer>
   if (bytes.length <= WAV_HEADER_SIZE) return bytes;
   const sliced = bytes.slice(WAV_HEADER_SIZE);
   return new Uint8Array<ArrayBuffer>(sliced.buffer, sliced.byteOffset, sliced.byteLength);
+}
+
+function getSupportedWavMediaSourceMimeType(): string | null {
+  if (!window.MediaSource) return null;
+  return WAV_MEDIA_SOURCE_MIME_TYPES.find((mimeType) => MediaSource.isTypeSupported(mimeType)) ?? null;
 }
 
 export function useStreamingTTS() {
@@ -113,8 +119,9 @@ export function useStreamingTTS() {
   }, []);
 
   const initializeStream = useCallback(() => {
-    if (!window.MediaSource) {
-      setState((prev) => ({ ...prev, isReady: false, error: "MediaSource API not supported" }));
+    const mimeType = getSupportedWavMediaSourceMimeType();
+    if (!mimeType) {
+      setState((prev) => ({ ...prev, isReady: false, error: null }));
       return;
     }
 
@@ -130,9 +137,6 @@ export function useStreamingTTS() {
     ms.addEventListener("sourceopen", () => {
       if (mediaSourceRef.current !== ms) return;
       try {
-        const mimeType = MediaSource.isTypeSupported("audio/wav; codecs=1")
-          ? "audio/wav; codecs=1"
-          : "audio/wav";
         const sb = ms.addSourceBuffer(mimeType);
         if ("mode" in sb) {
           (sb as any).mode = "sequence";

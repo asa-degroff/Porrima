@@ -449,6 +449,7 @@ export function useTTS() {
       // first chunk. Queue the complete files instead.
       const streamMode = "url";
       chunkModeRef.current = streamMode;
+      chunkStreamDoneRef.current = false;
 
       const body: Record<string, any> = {
         text,
