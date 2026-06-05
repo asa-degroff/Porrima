@@ -2647,7 +2647,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
           {/* Default Model */}
           <div id="models" className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-white/60">Default Chat Model</label>
+              <label className="text-sm font-medium text-white/60">Main Chat Model</label>
               <button
                 type="button"
 	                onClick={() => { refreshModels(); refreshScanPaths(); }}
@@ -2657,9 +2657,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 Refresh
               </button>
             </div>
-            <p className="text-xs text-white/30 -mt-1">
-              Used for new chats and system/automation turns. Existing chats keep their own model until changed in the chat header.
-            </p>
             <Dropdown
               state={modelDd}
               trigger={
@@ -2733,7 +2730,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
             <div className="min-w-0 space-y-1">
               <label className="block text-sm font-medium text-white/60">Preserve Thinking</label>
               <p className="text-xs text-white/30">
-                Retain historical reasoning traces in context when the active llama.cpp model/template supports it.
+                Retain reasoning traces in context when the active llama.cpp model/template supports it.
               </p>
             </div>
             <ToggleSwitch
@@ -2747,7 +2744,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
           <div id="inference" className="space-y-4">
             <h3 className="text-sm font-semibold text-white/80">Inference Servers</h3>
             <p className="text-xs text-white/40 -mt-2">
-              Main chat, memory extraction, cross-encoder reranker, embedding, title generation. Each URL can point at a separate instance.
+              Each URL points to a separate instance.
             </p>
 
             {/* Server health (HTTP pings against each configured URL) */}
@@ -4308,7 +4305,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               <div className="min-w-0 pr-3">
                 <label className="block text-sm font-medium text-white/60">Push notifications</label>
                 <p className="text-xs text-white/30 mt-0.5">
-                  Notify this device when an agent reply is ready and you're not already viewing the app.
+                  Notify this device when an agent reply is ready and the app is in the background.
                 </p>
               </div>
               <ToggleSwitch
@@ -4567,7 +4564,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
           <div id="persona" className="space-y-3 pt-2 border-t border-white/10">
             <label className="block text-sm font-medium text-white/60">Agent Persona</label>
             <p className="text-white/30 text-xs -mt-2">
-              The agent's core identity, voice, and values. Loaded from <code className="text-white/40">~/.porrima/persona.md</code>.
+              The agent's core identity and voice. Loaded from <code className="text-white/40">~/.porrima/persona.md</code>.
             </p>
 
             {/* Agent Name */}
@@ -4590,7 +4587,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               <div className="flex items-center justify-between">
                 <div>
                   <label className="block text-sm font-medium text-white/60">Header Image</label>
-                  <p className="text-white/30 text-xs -mt-1">Display a custom image in the chat header instead of the model name</p>
+                  <p className="text-white/30 text-xs -mt-1">Display a custom image in the chat header. The model name is shown if no image is provided.</p>
                 </div>
                 <ToggleSwitch checked={headerImageEnabled} onChange={() => setHeaderImageEnabled(!headerImageEnabled)} accentColor="purple" />
               </div>
@@ -5324,7 +5321,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                  />
 	                  <span className="text-xs text-white/30">tokens</span>
 	                </div>
-	                <p className="text-xs text-white/30 mt-1">Maximum output tokens per extraction call. Higher values allow more memories per call but increase cost.</p>
+	                <p className="text-xs text-white/30 mt-1">Maximum output tokens per extraction call. Higher values allow more memories per call. The limit prevents runaway extraction model requests.</p>
 	              </div>
 
 	              <div>
@@ -5347,7 +5344,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 
 	          {/* Extraction Prompt */}
 	          <div id="extraction-prompt" className="border-t border-white/10 pt-6 space-y-3">
-	            <h3 className="text-sm font-semibold text-white/80 mb-1">Extraction Prompt</h3>
+	            <h3 className="text-sm font-semibold text-white/80 mb-1">Extraction Prompt Prefix</h3>
 	            <p className="text-xs text-white/40">
 	              The system prompt prefix that frames how the extraction agent thinks about memory — loaded from <code className="text-white/40">~/.porrima/extraction-prompt.md</code>.
 	            </p>
