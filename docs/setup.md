@@ -79,6 +79,18 @@ Environment=NODE_ENV=production
 WantedBy=default.target
 ```
 
+### Binary Symlink (Recommended)
+
+Porrima manages llama.cpp builds through a `llama-current` symlink. Place your llama.cpp build directories under `~/bin/` (e.g. `~/bin/llama-b9500/`) and create the symlink:
+
+```bash
+ln -sfn ~/bin/llama-b9500 ~/bin/llama-current
+```
+
+All five llama.cpp services reference `~/bin/llama-current/llama-server` by default. To update to a new build, just swap the symlink and restart services — or use the Settings → Inference Servers → Binary Path panel, which handles the swap, service restart, and automatic rollback on failure.
+
+Custom binaries (e.g. a fork with dynamic `.so` libraries) can be set per-slot in Settings. Porrima auto-injects `LD_LIBRARY_PATH` pointing to the custom binary's directory.
+
 ### llama.cpp Server (Optional)
 
 For direct GGUF inference with router mode. Create `~/.config/systemd/user/llama-server.service`:
@@ -90,15 +102,15 @@ After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/path/to/llama.cpp/build
-ExecStart=/path/to/llama-server \
+WorkingDirectory=/home/asa/bin/llama-current
+ExecStart=/home/asa/bin/llama-current/llama-server \
     --models-dir ~/.local/share/llama-models \
     --port 32100 --host 127.0.0.1 \
     --ctx-size 131072 --parallel 1 \
     --n-gpu-layers auto \
     --reasoning-format deepseek \
     --sleep-idle-seconds 172800
-Environment=LD_LIBRARY_PATH=/path/to/llama.cpp/build
+Environment=LD_LIBRARY_PATH=/home/asa/bin/llama-current
 # For AMD GPUs:
 Environment=HSA_OVERRIDE_GFX_VERSION=11.0.0
 Environment=ROCR_VISIBLE_DEVICES=0,1
@@ -136,7 +148,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/path/to/llama-server \
+ExecStart=/home/asa/bin/llama-current/llama-server \
     -m /path/to/qwen3-reranker-0.6b-q8_0.gguf \
     --alias qwen3-reranker \
     --embedding --pooling rank --reranking \
@@ -162,7 +174,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/path/to/llama-server \
+ExecStart=/home/asa/bin/llama-current/llama-server \
     -m /path/to/qwen3-embedding-0.6b.gguf \
     --alias qwen3-embedding \
     --embeddings --pooling cls \

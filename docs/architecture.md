@@ -44,11 +44,22 @@ Multi-provider system supporting multiple inference backends through pi-ai's pro
 
 ## llama.cpp Infrastructure
 
-- **Router mode** (`llama-server.service`): Serves models from `~/.local/share/llama-models/` with dynamic loading/unloading. Config: `--ctx-size 131072`, `--parallel 1`, `--n-gpu-layers auto`, `--reasoning-format deepseek`, `--sleep-idle-seconds 172800`
-- **Model directory structure**: Each model in a subdirectory with the GGUF + optional mmproj file for vision. Router auto-detects `mmproj*` files.
+Five dedicated llama.cpp server roles, each managed as a systemd user service with its own port, mode, and configuration:
+
+| Role | Service Unit | Port | Default Mode | GPU |
+| --- | --- | --- | --- | --- |
+| Inference | `llama-server.service` | 32100 | router | yes (`--split-mode tensor`) |
+| Extraction | `extraction-model.service` | 32101 | single | no |
+| Reranker | `reranker.service` | 32102 | single | no |
+| Embedding | `embedding-model.service` | 32103 | single | no |
+| Title generation | `title-generation.service` | 32104 | single | no |
+
+- **Symlink-based binary management** (`llama-path.ts`): All services reference `~/bin/llama-current` as their binary path. Updating the llama.cpp build is a single symlink swap (`ln -sfn`) followed by a service restart. `updateLlamaPath()` handles the swap, `systemctl daemon-reload`, service restart, health polling (8s timeout per service), and automatic rollback if any service fails to come up.
+- **Per-slot binary overrides** (`llama-launch-templates.ts`): Each slot can use a different binary via `settings.llamaServerBins[slotId]`. Custom binaries (e.g. an ik_llama fork with dynamic `.so` libraries) automatically get `LD_LIBRARY_PATH` injected pointing to their directory. Binary resolution order: override in settings → systemd drop-in → hardcoded default (`~/bin/llama-current/llama-server`).
+- **Service configuration** (`llama-service-config.ts`): Per-slot defaults for mode, ctx size, parallelism, extra args, and environment. `mergeServiceConfig()` overlays user settings onto defaults. `renderServiceExecStart()` builds the full command line; `renderManagedDropIn()` writes a `zz-porrima-managed.conf` systemd drop-in override. `parseManagedServiceConfig()` reverse-parses a running service's ExecStart back into a config object.
+- **Service supervisor** (`llama-supervisor.ts`): Queries systemd for live process state (PID, active state, fragment path, working directory), HTTP health (`/health`, `/v1/models`), and override status. Detects server restarts by PID change to invalidate KV cache residency tracking. Supports start/stop/restart actions and journal log retrieval.
+- **Model directory structure**: Each model in a subdirectory under `~/.local/share/llama-models/` with the GGUF + optional mmproj file for vision. Router auto-detects `mmproj*` files.
 - **Auto-sync** (`sync-llama-models.sh` + `sync-llama-models.timer`): Every 5 min, scans `~/.cache/huggingface/` for new GGUF downloads, creates symlinked subdirectories, restarts llama-server if new models found. Excludes reranker/embedding models.
-- **Reranker service** (`reranker.service`): Dedicated Qwen3-Reranker-0.6B instance on port 32102, CPU-only, for memory retrieval reranking.
-- **Title generation**: Uses a dedicated CPU-only llama.cpp instance with `keep_alive: "0s"` to avoid VRAM contention with larger models.
 
 ## Memory Services
 

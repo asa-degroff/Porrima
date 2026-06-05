@@ -4,9 +4,20 @@
 |--------|----------|-------------|
 | GET | `/api/models` | List available models across configured providers |
 | GET | `/api/llama-servers` | List managed llama.cpp systemd units with process state, HTTP health, and launch metadata |
-| GET | `/api/llama-servers/:id` | Get one managed llama.cpp server status (`inference`, `extraction`, `reranker`, `embedding`) |
+| GET | `/api/llama-servers/:id` | Get one managed llama.cpp server status (`inference`, `extraction`, `reranker`, `embedding`, `title-generation`) |
 | POST | `/api/llama-servers/:id/:action` | Start, stop, or restart an allowlisted llama.cpp systemd unit |
 | GET | `/api/llama-servers/:id/logs` | Recent journal logs for an allowlisted llama.cpp systemd unit |
+| GET | `/api/llama-servers/:id/config` | Get current service configuration with defaults, capabilities, and systemd unit info |
+| PUT | `/api/llama-servers/:id/config` | Save service configuration (writes systemd drop-in override) |
+| POST | `/api/llama-servers/:id/config/preview` | Preview drop-in override without writing |
+| DELETE | `/api/llama-servers/:id/config` | Remove saved override (reverts to defaults) |
+| PUT | `/api/llama-servers/:id/enabled` | Enable/disable systemd unit (`{ enabled: true/false }`) |
+| POST | `/api/llama-servers/:id/apply-model` | Apply model override via systemd drop-in (`{ modelPath, modelId }`) |
+| DELETE | `/api/llama-servers/:id/model-override` | Remove model override |
+| GET | `/api/llama-servers/available-models` | List available models for all configured servers |
+| GET | `/api/settings/llama-path` | Get current `llama-current` symlink info and service health |
+| PUT | `/api/settings/llama-path` | Update symlink and restart all services (`{ path: "..."} `) — rolls back on failure |
+| POST | `/api/settings/llama-path/validate` | Validate a candidate build directory without applying |
 | GET | `/api/chats` | List all chats |
 | POST | `/api/chats` | Create chat (`{ modelId, type: "agent"\|"quick", projectId? }`). The `system` chat is created automatically on server startup — clients don't POST it. |
 | PATCH | `/api/chats/:id` | Update chat metadata |
