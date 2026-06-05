@@ -229,28 +229,30 @@ export function AutomationRunnerDropdown({
                   </button>
                 );
               })}
-              <button
-                type="button"
-                onClick={() => handleResume()}
-                disabled={!onResumeSystem || !systemPause?.active || Boolean(pauseActionId)}
-                title={systemPause?.pending ? "Pause is pending until current background work finishes" : undefined}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-colors text-left ${
-                  !onResumeSystem || !systemPause?.active || Boolean(pauseActionId)
-                    ? "text-white/25 cursor-not-allowed"
-                    : "text-emerald-200/80 hover:bg-white/5 hover:text-emerald-100"
-                }`}
-              >
-                <span>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <polygon points="7 4 19 12 7 20 7 4" />
-                  </svg>
-                </span>
-                <span className="truncate flex-1">Resume</span>
-                {pauseActionId === "resume" && <span className="text-white/30 text-[10px]">...</span>}
-              </button>
+              {systemPause?.active && (
+                <button
+                  type="button"
+                  onClick={() => handleResume()}
+                  disabled={!onResumeSystem || Boolean(pauseActionId)}
+                  title={systemPause.pending ? "Pause is pending until current background work finishes" : undefined}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-colors text-left text-emerald-200/80 hover:bg-white/5 hover:text-emerald-100"
+                >
+                  <span>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <polygon points="7 4 19 12 7 20 7 4" />
+                    </svg>
+                  </span>
+                  <span className="truncate flex-1">Resume</span>
+                  {pauseActionId === "resume" && <span className="text-white/30 text-[10px]">...</span>}
+                </button>
+              )}
             </div>
 
             <div className="h-px bg-white/5" />
+
+            <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-white/30">
+              Run now
+            </div>
 
             {loading ? (
               <div className="px-3 py-2 text-xs text-white/40">Loading...</div>
