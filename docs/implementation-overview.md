@@ -32,7 +32,7 @@ Qwen hybrid architecture (Gated DeltaNet + Gated Attention/SSM recurrent layers)
 RDNA 3 (gfx11xx): Q8_0 quantization optimal (halves KV cache, <5% throughput penalty). EMA hit ratio, `inferredCachedTokens` = `reportedPromptTokens - promptEvalTokens`, CacheBar UI.
 
 ## Memory System
-8 categories + reflection. Retrieval: vector + FTS5 (RRF) → Qwen3 rerank → 0.85 cosine dedup. Extraction: `extractInChunks`, per-chunk retry, 500-char overlap.
+8 categories + reflection. Retrieval: vector + FTS5 (RRF) → Qwen3 rerank → 0.85 cosine dedup. Extraction: `extractInChunks`, per-chunk retry, 500-char overlap. Delayed extraction supersession: two-phase — extract then batch-compare ambiguous candidates (similarity 0.90–0.95 band). Warm continuation reuses extraction KV cache when single-chunk; cold fallback otherwise. Comparison token budget capped 800–4000.
 Passive mid-turn recall: after tool-use iterations, `PassiveMemoryRecallController` runs fast hybrid search/MMR in the background from a topical query that preserves agent thinking but scrubs operational anchors, reranks a small accumulated batch, persists selected memories as hidden system rows, and live-injects replay-equivalent synthetic user context before a later provider call.
 Conscious/subconscious model: atomic memories (subconscious) consolidated into blocks (conscious) during synthesis.
 System chat delayed extraction: synthesis messages flagged `_isSynthesisMessage: true` (both triggers and responses), quarantined from extraction context.
