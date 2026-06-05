@@ -443,8 +443,11 @@ export function useTTS() {
     });
 
     try {
-      // Try data mode first
-      const streamMode = streamingTTS.isReady ? "data" : "url";
+      // The server emits each generated chunk as a complete WAV file. Appending
+      // those chunks into one MediaSource stream is unreliable because WAV
+      // headers describe a finite data section, so browsers can stop after the
+      // first chunk. Queue the complete files instead.
+      const streamMode = "url";
       chunkModeRef.current = streamMode;
 
       const body: Record<string, any> = {
@@ -462,10 +465,6 @@ export function useTTS() {
         kokoroPitchShiftProcessor: settings.kokoroPitchShiftProcessor,
         supertonicPitchShiftProcessor: settings.supertonicPitchShiftProcessor,
       };
-
-      if (streamMode === "data") {
-        body.streamMode = "data";
-      }
 
       const res = await fetch("/api/tts/generate-stream", {
         method: "POST",
