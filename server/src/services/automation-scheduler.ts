@@ -11,6 +11,7 @@ import {
 import { getActiveAutomationTaskId, isAutomationActive } from "./automation-lock.js";
 import { runAutomationTask } from "./automation-runner.js";
 import { isSynthesisActive, isWakeCycleActive } from "./system-chat.js";
+import { isSystemPauseActive } from "./system-pause.js";
 
 const AUTOMATION_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_SLEEP_CYCLE_THRESHOLD_MINUTES = 60;
@@ -91,6 +92,11 @@ export async function checkAndRunDueAutomations(): Promise<void> {
     // time to retry — without this, synthesis can start within seconds of an
     // error-terminated chat.
     const settings = await getSettings();
+    if (isSystemPauseActive(settings)) {
+      console.log("[automation] Skipping check — system pause active");
+      return;
+    }
+
     const lastUserMs = parseTimestamp(settings.lastUserActivityAt);
     const lastAgentMs = parseTimestamp(settings.lastAgentCompletedAt);
     const recentActivityMs = Math.max(lastUserMs ?? 0, lastAgentMs ?? 0);

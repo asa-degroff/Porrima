@@ -14,6 +14,7 @@ import { enrichCorpusBatch } from "./image-corpus.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js";
 import { startAutomationScheduler } from "./automation-scheduler.js";
+import { isSystemPauseActive } from "./system-pause.js";
 
 const SYNTHESIS_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const DELAYED_EXTRACTION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -236,7 +237,7 @@ async function checkAndRunWakeCycle() {
  * Called every 5 minutes to catch chats that cross the inactivity threshold.
  * Processes chats in batches to avoid overwhelming the LLM API.
  */
-async function checkAndRunDelayedExtractions() {
+export async function checkAndRunDelayedExtractions() {
   if (delayedExtractionCheckRunning) {
     console.log("[scheduler] Skipping delayed extraction check — previous check still running");
     return;
@@ -245,6 +246,11 @@ async function checkAndRunDelayedExtractions() {
   delayedExtractionCheckRunning = true;
   try {
     const settings = await getSettings();
+    if (isSystemPauseActive(settings)) {
+      console.log("[scheduler] Skipping delayed extraction — system pause active");
+      return;
+    }
+
     const enabled = settings.delayedExtractionEnabled ?? true;
     const thresholdMinutes = settings.delayedExtractionThresholdMinutes ?? 30;
     const thresholdMs = thresholdMinutes * 60 * 1000;
@@ -409,4 +415,3 @@ export function startScheduler(): void {
   setInterval(checkLlamaServerPids, 30_000);
   console.log("[scheduler] Started (automations every 5min, delayed extraction every 5min, enrichment every 30min, llama PID check every 30s)");
 }
-

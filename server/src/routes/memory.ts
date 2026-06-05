@@ -28,6 +28,7 @@ import { isSleepCycleActive as computeSleepCycleActive } from "../services/sleep
 import { getActiveAutomationTaskId, isAutomationActive } from "../services/automation-lock.js";
 import { runAutomationTask } from "../services/automation-runner.js";
 import { getAutomationTask, SYNTHESIS_AUTOMATION_ID, WAKE_AUTOMATION_ID } from "../services/automation-storage.js";
+import { clearExpiredSystemPause, getSystemPauseState } from "../services/system-pause.js";
 import { getMemoryGraph, type MemoryGraphScope } from "../services/memory-graph.js";
 import type { Memory, MemoryCategory, MemorySummary } from "../types.js";
 import { VALID_MEMORY_CATEGORIES } from "../types.js";
@@ -134,7 +135,7 @@ router.get("/synthesis/status", async (_req, res) => {
   const isExtractionRunning = recentRuns.some((r) => r.status === "running");
 
   // Compute sleep cycle state
-  const settings = await getSettings();
+  const settings = await clearExpiredSystemPause(await getSettings());
   const sleepCycleThresholdMinutes = settings.sleepCycleThresholdMinutes ?? 60;
   const sleepCycleActive = computeSleepCycleActive(settings, {
     hasActiveChats: hasActiveChats(),
@@ -144,13 +145,19 @@ router.get("/synthesis/status", async (_req, res) => {
   const lastWakeCycleAt = await getLastWakeCycleAt();
   const wakeTask = getAutomationTask(WAKE_AUTOMATION_ID);
 
+  const automationRunning = isAutomationActive();
+  const systemPause = getSystemPauseState(settings, {
+    pending: automationRunning || isExtractionRunning,
+  });
+
   res.json({
     lastSynthesis,
     memoryCount,
     isSynthesizing: isSynthesisActive(),
-    isAutomationRunning: isAutomationActive(),
+    isAutomationRunning: automationRunning,
     activeAutomationTaskId: getActiveAutomationTaskId(),
     isExtractionRunning,
+    systemPause,
     // Sleep cycle
     sleepCycleActive,
     sleepCycleThresholdMinutes,

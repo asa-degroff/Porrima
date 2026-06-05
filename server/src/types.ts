@@ -370,6 +370,11 @@ export interface Settings {
   // to autonomous mode. Acts as both: (a) immediate activation of the sleep cycle,
   // and (b) 2h synthesis cooldown (scheduler skips periodic runs while < 2h elapsed).
   sleepModeTriggeredAt?: string;
+  // System pause — when active, scheduled automations and delayed extraction do
+  // not start. Manual user-triggered automation runs remain allowed.
+  systemPauseStartedAt?: string;
+  systemPauseUntil?: string | null;
+  systemPauseIndefinite?: boolean;
   // User activity tracking — stamped on every user-initiated message send.
   lastUserActivityAt?: string;
   // Agent completion tracking — stamped when the agent's last response fully completed
@@ -427,6 +432,14 @@ export interface Settings {
   llamaModelsDirs?: string[];
   // Parent directory scanned for child llama.cpp build directories containing llama-server.
   llamaBinaryScanDir?: string;
+}
+
+export interface SystemPauseStatus {
+  active: boolean;
+  pending: boolean;
+  startedAt: string | null;
+  until: string | null;
+  indefinite: boolean;
 }
 
 export type MemoryCategory = "preference" | "fact" | "behavior" | "instruction" | "context" | "decision" | "note" | "reflection";

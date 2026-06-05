@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback, useId, useLayoutEffect } from "react";
-import type { ChatListItem as ChatListItemType, ChatType, Project, ProjectLocationType, SshConnection } from "../types";
+import type { ChatListItem as ChatListItemType, ChatType, Project, ProjectLocationType, SshConnection, SystemPauseStatus } from "../types";
 import { fetchSshConnections, type CacheResidency } from "../api/client";
 import { ChatListItem } from "./ChatListItem";
 import { ContextMenu, ContextMenuItem, useLongPress } from "./ui/ContextMenu";
@@ -61,6 +61,9 @@ interface Props {
   sleepCycleActive?: boolean;
   isExtractionRunning?: boolean;
   isWakeCycleRunning?: boolean;
+  systemPause?: SystemPauseStatus | null;
+  onPauseSystem?: (durationMs: number | null) => Promise<void> | void;
+  onResumeSystem?: () => Promise<void> | void;
   onSynthesisSleep?: () => void;
   isImageSandboxOpen?: boolean;
   cacheResidency?: Map<string, CacheResidency>;
@@ -1383,6 +1386,9 @@ export function Sidebar({
   sleepCycleActive = false,
   isExtractionRunning = false,
   isWakeCycleRunning = false,
+  systemPause = null,
+  onPauseSystem,
+  onResumeSystem,
   onSynthesisSleep,
   isImageSandboxOpen = false,
   cacheResidency = new Map(),
@@ -1404,6 +1410,8 @@ export function Sidebar({
   } = useSidebarState();
   const activityShape = useActivityShape();
   const effectiveSleepCycleActive = sleepCycleActive && !isStreaming;
+  const systemPauseActive = systemPause?.active ?? false;
+  const systemPausePending = systemPause?.pending ?? false;
   const sidebarActivityActive = hasBackgroundActivity || isExtractionRunning || isSynthesizing || isAutomationRunning;
 
   const [searchActive, setSearchActive] = useState(false);
@@ -1670,7 +1678,12 @@ export function Sidebar({
           <div className="flex items-center gap-1.5">
             {/* Status indicator */}
             <div className="flex items-center gap-1.5 text-[10px] text-white/30 pl-1">
-              {isSynthesizing ? (
+              {systemPausePending ? (
+                <>
+                  <span className="text-amber-400/60">●</span>
+                  <span className="text-amber-300/60">Pause pending</span>
+                </>
+              ) : isSynthesizing ? (
                 <>
                   <span className="text-amber-400/60">●</span>
                   <span className="text-amber-300/60">Synthesizing</span>
@@ -1695,6 +1708,11 @@ export function Sidebar({
                   <span className="text-sky-400/60">●</span>
                   <span className="text-sky-300/60">Active</span>
                 </>
+              ) : systemPauseActive ? (
+                <>
+                  <span className="text-amber-400/60">●</span>
+                  <span className="text-amber-300/60">Paused</span>
+                </>
               ) : effectiveSleepCycleActive ? (
                 <>
                   <span className="text-indigo-400/60">●</span>
@@ -1714,16 +1732,20 @@ export function Sidebar({
               {onSynthesisSleep && !isSynthesizing && !isWakeCycleRunning && (
                 <button
                   onClick={onSynthesisSleep}
-                  disabled={sleepModeActive || effectiveSleepCycleActive || isStreaming}
+                  disabled={sleepModeActive || effectiveSleepCycleActive || isStreaming || systemPauseActive}
                   className={`p-2 rounded-lg transition-all cursor-pointer pressable ${
                     effectiveSleepCycleActive
                       ? 'text-indigo-400/80 bg-indigo-500/15 animate-pulse'
                       : sleepModeActive
                         ? 'text-amber-400/80 bg-amber-500/15 animate-pulse'
+                        : systemPauseActive
+                          ? 'text-white/15 cursor-not-allowed'
                         : 'text-white/30 hover:text-white/60 hover:bg-white/5'
                   }`}
                   title={isStreaming
                     ? "Chat active — release is available after the response completes"
+                    : systemPauseActive
+                    ? "System paused — resume before releasing autonomous mode"
                     : effectiveSleepCycleActive
                     ? "Sleep cycle active — autonomous mode running"
                     : "Release — let the system take over with autonomous synthesis and wake cycles"}
@@ -1738,6 +1760,9 @@ export function Sidebar({
                 isWakeCycleRunning={isWakeCycleRunning}
                 isAutomationRunning={isAutomationRunning}
                 isStreaming={isStreaming}
+                systemPause={systemPause}
+                onPauseSystem={onPauseSystem}
+                onResumeSystem={onResumeSystem}
               />
               {/* Memory — unified memory system interface */}
               {onOpenMemoryDebug && (

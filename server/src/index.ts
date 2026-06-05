@@ -34,6 +34,7 @@ import llamaServersRouter from "./routes/llama-servers.js";
 import pushRouter from "./routes/push.js";
 import automationsRouter from "./routes/automations.js";
 import systemStatsRouter from "./routes/system-stats.js";
+import systemRouter from "./routes/system.js";
 import { requireAuth } from "./middleware/auth.js";
 import { getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
@@ -194,6 +195,7 @@ app.use("/api/llama-servers", llamaServersRouter);
 app.use("/api/push", pushRouter);
 app.use("/api/automations", automationsRouter);
 app.use("/api/system-stats", systemStatsRouter);
+app.use("/api/system", systemRouter);
 
 // Optional: Run corpus cleanup on startup to fix orphans from before the deletion fix
 // Set CORPUS_CLEANUP=true to enable

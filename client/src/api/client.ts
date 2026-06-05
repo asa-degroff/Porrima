@@ -1,4 +1,4 @@
-import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MemoryCategory, MemoryGraphScope, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, InferenceModel, Settings } from "../types";
+import type { Artifact, AutomationRun, AutomationTask, Chat, ChatListItem, ChatMessageWindow, ChatToolCall, ChatToolResult, ChatType, ComfyUIStatus, GeneratedImage, ImageAttachment, ImageGenerationParams, InlineVisual, LlamaBinaryInfo, LlamaPathInfo, LlamaPathUpdateResult, MemoryCategory, MemoryGraphScope, MessageUsage, ModelProgress, NotebookEntry, NotebookIndex, NotebookLink, NotebookSearchResult, InferenceModel, Settings, SystemPauseStatus } from "../types";
 import { readDeviceId } from "../lib/device-id";
 
 const BASE = "/api";
@@ -1240,6 +1240,7 @@ export interface SynthesisStatus {
   isAutomationRunning?: boolean;
   activeAutomationTaskId?: string | null;
   isExtractionRunning: boolean;
+  systemPause: SystemPauseStatus;
   // Sleep cycle
   sleepCycleActive: boolean;
   sleepCycleThresholdMinutes: number;
@@ -1368,6 +1369,28 @@ export async function triggerWakeCycle(): Promise<SynthesisDispatchResult> {
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || "Failed to trigger wake cycle");
+  }
+  return res.json();
+}
+
+export async function pauseSystem(input: { durationMs?: number; indefinite?: boolean }): Promise<SystemPauseStatus> {
+  const res = await apiFetch(`${BASE}/system/pause`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to pause system");
+  }
+  return res.json();
+}
+
+export async function resumeSystem(): Promise<SystemPauseStatus> {
+  const res = await apiFetch(`${BASE}/system/resume`, { method: "POST" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to resume system");
   }
   return res.json();
 }

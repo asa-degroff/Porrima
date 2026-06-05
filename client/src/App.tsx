@@ -41,7 +41,7 @@ import { useNotebooks } from "./hooks/useNotebooks";
 import { useCacheResidency } from "./hooks/useCacheResidency";
 import { fetchSystemStats, updateSystemStatsSettings } from "./api/client";
 import type { SystemStatsSample } from "./types";
-import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis, triggerWakeCycle } from "./api/client";
+import { fetchUserUIState, saveUserUIState, fetchSynthesisStatus, triggerSleepMode, triggerSynthesis, triggerWakeCycle, pauseSystem, resumeSystem } from "./api/client";
 import { PinnedItemProvider } from "./contexts/PinnedItemContext";
 import type { Chat, ChatType, CornerShape, CornerRadius } from "./types";
 
@@ -138,6 +138,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [sleepCycleActive, setSleepCycleActive] = useState(false);
   const [isWakeCycleRunning, setIsWakeCycleRunning] = useState(false);
   const [isAutomationRunning, setIsAutomationRunning] = useState(false);
+  const [systemPause, setSystemPause] = useState<import("./types").SystemPauseStatus | null>(null);
   const [cacheWarmingChatIds, setCacheWarmingChatIds] = useState<Set<string>>(() => new Set());
   const [cacheWarmErrors, setCacheWarmErrors] = useState<Map<string, string>>(() => new Map());
 
@@ -277,6 +278,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         setIsSynthesizing(status.isSynthesizing);
         setIsAutomationRunning(!!status.isAutomationRunning && !status.isSynthesizing && !status.isWakeCycleRunning);
         setIsExtractionRunning(status.isExtractionRunning);
+        setSystemPause(status.systemPause);
         setSleepCycleActive(status.sleepCycleActive);
         setIsWakeCycleRunning(status.isWakeCycleRunning);
         if (status.isSynthesizing) {
@@ -1175,6 +1177,26 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
   }, [isWakeCycleRunning]);
 
+  const handlePauseSystem = useCallback(async (durationMs: number | null) => {
+    try {
+      const next = await pauseSystem(durationMs === null ? { indefinite: true } : { durationMs });
+      setSystemPause(next);
+    } catch (e: any) {
+      console.error("System pause failed:", e.message);
+      throw e;
+    }
+  }, []);
+
+  const handleResumeSystem = useCallback(async () => {
+    try {
+      const next = await resumeSystem();
+      setSystemPause(next);
+    } catch (e: any) {
+      console.error("System resume failed:", e.message);
+      throw e;
+    }
+  }, []);
+
   // Close image sandbox when switching to notebooks
   useEffect(() => {
     if (activeView === 'notebooks' && imageSandboxOpen) {
@@ -1316,6 +1338,9 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         sleepCycleActive={sleepCycleActive}
         isExtractionRunning={isExtractionRunning}
         isWakeCycleRunning={isWakeCycleRunning}
+        systemPause={systemPause}
+        onPauseSystem={handlePauseSystem}
+        onResumeSystem={handleResumeSystem}
         onSynthesisSleep={handleSynthesisSleep}
         isImageSandboxOpen={imageSandboxOpen}
         systemStatsHistory={systemStatsHistory}

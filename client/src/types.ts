@@ -399,6 +399,10 @@ export interface Settings {
   lastActiveChatId?: string;
   // Sleep mode — tracks when the user manually triggered synthesis
   sleepModeTriggeredAt?: string;
+  // System pause — when active, scheduled automations and delayed extraction do not start.
+  systemPauseStartedAt?: string;
+  systemPauseUntil?: string | null;
+  systemPauseIndefinite?: boolean;
   // User activity tracking — stamped on every user-initiated message send
   lastUserActivityAt?: string;
   // Agent completion tracking — stamped when the agent's last response completed
@@ -438,6 +442,14 @@ export interface Settings {
   llamaModelsDirs?: string[];
   // Parent directory scanned for child llama.cpp build directories containing llama-server.
   llamaBinaryScanDir?: string;
+}
+
+export interface SystemPauseStatus {
+  active: boolean;
+  pending: boolean;
+  startedAt: string | null;
+  until: string | null;
+  indefinite: boolean;
 }
 
 export interface LlamaPathInfo {

@@ -32,6 +32,9 @@ const router = Router();
 
 const SERVER_OWNED_ACTIVITY_FIELDS = [
   "sleepModeTriggeredAt",
+  "systemPauseStartedAt",
+  "systemPauseUntil",
+  "systemPauseIndefinite",
   "lastUserActivityAt",
   "lastAgentCompletedAt",
   "llamaServiceConfigs",
