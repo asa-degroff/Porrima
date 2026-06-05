@@ -837,8 +837,9 @@ export function ChatView({
                           }}
                         />
                       ) : isSystemMessage ? (
-                        <div className="mx-2 my-1 rounded-lg bg-amber-500/5 border border-amber-400/10 px-3 py-2 text-[10px] text-amber-200/40 font-medium uppercase tracking-wider">
-                          System Message
+                        <div className="flex items-center gap-3 mx-2 mt-4 mb-1">
+                          <div className="h-px flex-1 bg-amber-400/15"></div>
+                          <span className="text-[10px] text-amber-200/35 font-medium uppercase tracking-wider">system</span>
                         </div>
                       ) : undefined}
                       {!isMidTurnCompaction && (
