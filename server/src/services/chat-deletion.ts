@@ -1,6 +1,6 @@
 import { cancelQueuedWarms } from "./cache-warm-queue.js";
 import { endLiveStream, liveStreams } from "./live-streams.js";
-import { markChatInactive } from "./memory-extraction.js";
+import { cancelImmediateExtractionQueue, markChatInactive } from "./memory-extraction.js";
 import * as messageQueue from "./message-queue.js";
 import { resetMemoryContext } from "./memory-context.js";
 
@@ -20,6 +20,7 @@ export async function cancelDeletedChatWork(chatId: string): Promise<void> {
 
   await messageQueue.clear(chatId);
   cancelQueuedWarms(chatId);
+  cancelImmediateExtractionQueue(chatId);
   resetMemoryContext(chatId);
   markChatInactive(chatId);
 }

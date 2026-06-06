@@ -1877,6 +1877,18 @@ export async function dedupAndSave(
   sourceId?: string,
   sourceSpan?: MemorySourceSpan,
 ): Promise<DedupAndSaveOutcome> {
+  // Guard: if tied to a chat, verify it still exists. Catch races where
+  // the chat was deleted during extraction (immediate queue, pre-compaction,
+  // delayed, or save_memory tool mid-conversation). Empty chatId means
+  // non-chat source (e.g. notebook) — skip the check.
+  if (chatId) {
+    const chatExists = await getChat(chatId).catch(() => null);
+    if (!chatExists) {
+      console.log(`[memory] Chat ${chatId} no longer exists, skipping ${facts.length} memory save`);
+      return { added: 0, superseded: 0, skippedDuplicates: 0, ambiguousCandidates: [] };
+    }
+  }
+
   let added = 0;
   let skippedDuplicates = 0;
 
@@ -1935,6 +1947,7 @@ interface ImmediateExtractionSession {
 interface ImmediateExtractionQueueState {
   jobs: ImmediateExtractionJob[];
   running: boolean;
+  cancelled: boolean;
   session?: ImmediateExtractionSession;
 }
 
@@ -1949,10 +1962,34 @@ const immediateExtractionQueues = new Map<string, ImmediateExtractionQueueState>
 function getImmediateQueueState(chatId: string): ImmediateExtractionQueueState {
   let state = immediateExtractionQueues.get(chatId);
   if (!state) {
-    state = { jobs: [], running: false };
+    state = { jobs: [], running: false, cancelled: false };
     immediateExtractionQueues.set(chatId, state);
   }
   return state;
+}
+
+/**
+ * Cancel pending immediate extraction jobs for a chat.
+ * Resolves all queued jobs silently (no error) so callers' promises don't hang.
+ * Sets a cancellation flag so an in-flight drain will skip processing new batches.
+ * Called from chat-deletion when the user deletes a chat.
+ */
+export function cancelImmediateExtractionQueue(chatId: string): void {
+  const state = immediateExtractionQueues.get(chatId);
+  if (!state) return;
+
+  state.cancelled = true;
+
+  // Resolve all pending jobs so their promises don't hang
+  for (const job of state.jobs) {
+    job.resolve();
+  }
+  state.jobs.length = 0;
+
+  // If nothing is actively draining, clean up the queue entry
+  if (!state.running) {
+    immediateExtractionQueues.delete(chatId);
+  }
 }
 
 function buildImmediateSessionIdentityKey(input: {
@@ -2385,6 +2422,12 @@ async function processImmediateExtractionJobs(
   let { session, freshSessionReason } = ensureImmediateSession(state, first.chatId, identityKey, systemPrompt);
 
   const chat = await getChat(first.chatId).catch(() => null);
+  if (!chat) {
+    // Chat was deleted before extraction ran — resolve jobs silently
+    // rather than saving orphaned memories.
+    jobs.forEach((job) => job.resolve());
+    return;
+  }
   const exchanges: ImmediateExchange[] = jobs.map((job) => ({
     exchangeId: nextImmediateExchangeId(session),
     job,
@@ -2428,7 +2471,7 @@ async function drainImmediateExtractionQueue(chatId: string): Promise<void> {
   state.running = true;
 
   try {
-    while (state.jobs.length > 0) {
+    while (state.jobs.length > 0 && !state.cancelled) {
       const settings = await getSettings();
       const extractionSettings = await resolveExtractionRequestSettings(settings);
 
@@ -2468,7 +2511,12 @@ async function drainImmediateExtractionQueue(chatId: string): Promise<void> {
     console.error(`[memory] immediate extraction queue failed for chat ${chatId}:`, e);
   } finally {
     state.running = false;
-    if (state.jobs.length > 0) {
+    if (state.cancelled) {
+      // Queue was cancelled during drain — clean up the stale entry now
+      // that we're done. Pending jobs were already resolved by the
+      // cancellation, and the in-flight batch hit the getChat guard.
+      immediateExtractionQueues.delete(chatId);
+    } else if (state.jobs.length > 0) {
       void drainImmediateExtractionQueue(chatId);
     }
   }
@@ -2646,6 +2694,23 @@ export async function preCompactionFlush(
     } catch (e) {
       console.error("[memory] Pre-compaction batch embedding failed:", e);
       runHandle.fail(e);
+      return;
+    }
+
+    // Re-check chat exists before saving — race window between the initial
+    // getChat and here (LLM call + embedding). If deleted during
+    // compaction, skip saving to avoid orphaned memories.
+    const chatStillExists = await getChat(chatId).catch(() => null);
+    if (!chatStillExists) {
+      console.log("[memory] Pre-compaction flush: chat was deleted during extraction, skipping save");
+      runHandle.complete({
+        facts,
+        saved: 0,
+        superseded: 0,
+        skippedDuplicates: 0,
+        errors: 0,
+        chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+      });
       return;
     }
 
@@ -2958,6 +3023,23 @@ export async function extractDelayedMemories(
     } catch (e) {
       console.error("[memory-delayed] Batch embedding failed:", e);
       throw e;
+    }
+
+    // Re-check chat exists before saving — narrow race window between the
+    // initial getChat and here (LLM call + embedding). If the chat was
+    // deleted, skip saving to avoid orphaned memories.
+    const chatStillExists = await getChat(chatId).catch(() => null);
+    if (!chatStillExists) {
+      console.log(`[memory-delayed] Chat ${chatId} was deleted during extraction, skipping save`);
+      runHandle.complete({
+        facts,
+        saved: 0,
+        superseded: 0,
+        skippedDuplicates: 0,
+        errors: 0,
+        chunks: { count: chunkResult.chunkCount, failures: chunkResult.chunkFailures, timingsMs: chunkResult.chunkTimingsMs },
+      });
+      return;
     }
 
     // Save with sourceType = 'chat_delayed'
