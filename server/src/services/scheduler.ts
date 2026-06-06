@@ -9,7 +9,7 @@ import {
 import { getDb, getSettings, saveSettings } from "./chat-storage.js";
 import { getLastWakeCycleAt } from "./memory-storage.js";
 import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
-import { getQueueLength } from "./cache-warm-queue.js";
+import { isCacheWarmOrLlamaRuntimeBusy } from "./cache-warm-queue.js";
 import { enrichCorpusBatch } from "./image-corpus.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js";
@@ -196,11 +196,11 @@ async function checkAndRunWakeCycle() {
       return;
     }
 
-    // Don't start a wake cycle while a cache-warm is in progress — the
-    // wake would compete for the same GPU slot and prefill the same context
-    // the cache-warm is already filling.
-    if (getQueueLength() > 0) {
-      console.log("[scheduler] Skipping wake cycle — cache-warm queue busy");
+    // Don't start a wake cycle while a cache-warm or llama.cpp prefill is in
+    // progress. The runtime probe catches timed-out warm requests that are no
+    // longer in the JS queue but are still burning GPU inside llama.cpp.
+    if (await isCacheWarmOrLlamaRuntimeBusy(settings.defaultModelId)) {
+      console.log("[scheduler] Skipping wake cycle — cache-warm/llama runtime busy");
       return;
     }
     

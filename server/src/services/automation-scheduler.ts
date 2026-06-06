@@ -1,6 +1,6 @@
 import type { AutomationTask, Settings } from "../types.js";
 import { hasActiveChats } from "./memory-extraction.js";
-import { getQueueLength } from "./cache-warm-queue.js";
+import { isCacheWarmOrLlamaRuntimeBusy } from "./cache-warm-queue.js";
 import { isSleepCycleActive as computeSleepCycleActive, parseTimestamp } from "./sleep-cycle.js";
 import { getSettings } from "./chat-storage.js";
 import { getMemoryCount } from "./memory-storage.js";
@@ -110,12 +110,11 @@ export async function checkAndRunDueAutomations(): Promise<void> {
       }
     }
 
-    // Don't dispatch new automations while a cache-warm is in progress —
-    // both need the GPU and a cache-warm prefilling the same context the
-    // automation is about to use is pure waste (the cache can't be used anyway
-    // because the automation will invalidate it with new messages).
-    if (getQueueLength() > 0) {
-      console.log("[automation] Skipping check — cache-warm queue busy");
+    // Don't dispatch new automations while a cache-warm or llama.cpp prefill
+    // is in progress. The runtime probe catches the case where an HTTP warm
+    // request timed out but llama.cpp is still processing the slot.
+    if (await isCacheWarmOrLlamaRuntimeBusy(settings.defaultModelId)) {
+      console.log("[automation] Skipping check — cache-warm/llama runtime busy");
       return;
     }
 

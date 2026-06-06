@@ -13,6 +13,8 @@
 import { isActive, waitForIdle } from "./llm-activity.js";
 import { isSynthesisActive, isWakeCycleActive } from "./system-chat.js";
 import { isAutomationActive } from "./automation-lock.js";
+import { normalizeRouterModelId } from "./llama-router-client.js";
+import { getDefaultLlamaServerUrl } from "./llama-ports.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,6 +52,7 @@ export interface CacheWarmResult {
 
 const queue: CacheWarmJob[] = [];
 let mutex: "idle" | CacheWarmJob = "idle";
+const LLAMA_BUSY_PROBE_TIMEOUT_MS = Number(process.env.LLAMA_BUSY_PROBE_TIMEOUT_MS) || 3_000;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -80,6 +83,54 @@ export function enqueueWarm(
  */
 export function getQueueLength(): number {
   return queue.length + (mutex !== "idle" ? 1 : 0);
+}
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, "");
+}
+
+function getSlotArray(payload: any): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.slots)) return payload.slots;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
+function slotHasActiveTask(slot: any): boolean {
+  if (!slot || typeof slot !== "object") return false;
+  if (slot.is_processing === true || slot.processing === true) return true;
+  const taskId = slot.id_task ?? slot.task_id ?? slot.task?.id_task ?? slot.task?.task_id;
+  if (typeof taskId === "number" && Number.isFinite(taskId) && taskId >= 0) return true;
+  const state = String(slot.state ?? slot.status ?? "").toLowerCase();
+  return state.includes("process") || state.includes("busy") || state === "1";
+}
+
+/**
+ * Returns true when app-level cache-warm work is queued/running or the
+ * llama.cpp slot endpoint shows active work. A timed-out slots probe is treated
+ * as busy: long prefills can keep burning GPU after the HTTP caller has timed
+ * out, and during that state /health can still be instant while /slots stalls.
+ */
+export async function isCacheWarmOrLlamaRuntimeBusy(modelId?: string): Promise<boolean> {
+  if (getQueueLength() > 0) return true;
+
+  try {
+    const { getSettings } = await import("./chat-storage.js");
+    const settings = await getSettings();
+    const effectiveModelId = modelId || settings.defaultModelId;
+    if (!effectiveModelId) return false;
+
+    const baseUrl = settings.llamacppUrl || getDefaultLlamaServerUrl("inference");
+    const normalizedModelId = normalizeRouterModelId(effectiveModelId);
+    const url = `${normalizeBaseUrl(baseUrl)}/slots?model=${encodeURIComponent(normalizedModelId)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(LLAMA_BUSY_PROBE_TIMEOUT_MS) });
+    if (!res.ok) return false;
+
+    const payload = await res.json().catch(() => null);
+    return getSlotArray(payload).some(slotHasActiveTask);
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -126,6 +177,7 @@ async function drainQueue(): Promise<void> {
 
   // Acquire mutex
   mutex = job;
+  let shouldDrainNext = true;
 
   try {
     // If LLM is actively generating, wait for it to finish
@@ -153,6 +205,7 @@ async function drainQueue(): Promise<void> {
       // Re-enqueue at the front and back off for a bit
       queue.unshift(job);
       mutex = "idle";
+      shouldDrainNext = false;
       setTimeout(drainQueue, 30_000); // retry in 30s
       return;
     }
@@ -193,7 +246,9 @@ async function drainQueue(): Promise<void> {
   } finally {
     // Release mutex and try next item
     mutex = "idle";
-    drainQueue();
+    if (shouldDrainNext) {
+      drainQueue();
+    }
   }
 }
 

@@ -112,9 +112,12 @@ export function useChats() {
       };
       setChats((prev) => [newItem, ...prev]);
 
-      // Fire server creation in background; refresh list when done
+      // Fire server creation in background. Do NOT call refresh() on success —
+      // the optimistic insert is sufficient. The background poll (30s) will sync
+      // state naturally. Calling refresh() here caused a race condition where
+      // the debounced 300ms fetchChats() replaced the local state before the
+      // server had indexed the new chat, briefly removing it from the sidebar.
       apiCreateChat(id, modelId, type, projectId)
-        .then(() => refresh())
         .catch(() => {
           // Roll back optimistic entry on failure
           setChats((prev) => prev.filter((c) => c.id !== id));
@@ -134,7 +137,7 @@ export function useChats() {
       };
       return chat;
     },
-    [refresh]
+    []
   );
 
   const removeChat = useCallback(
