@@ -975,18 +975,27 @@ export function useChat(chatId: string | null) {
         setTitleUpdate({ chatId, title });
       },
       onError: (err) => {
-        const bg = bgStreams.get(streamChatId);
         const isOfflineError = err.startsWith("__OFFLINE__:");
         const isConnectionError = err.startsWith("Connection error:");
         const isInactivityError = err.startsWith("__SSE_INACTIVITY__:");
         const displayErr = isInactivityError ? err.replace("__SSE_INACTIVITY__:", "") : err;
+        const bg = bgStreams.get(streamChatId);
+
+        // Stream callbacks can race at the end of a turn: `done` removes the
+        // background stream, while a previously queued fetch/SSE watchdog task
+        // may still call onError. Once this stream is finalized or no longer
+        // tracked, the persisted chat state is authoritative and the stale
+        // transport error should not surface in the UI.
+        if (!bg || bg.doneCalled) {
+          return;
+        }
 
         // Determine whether the server received the message before the
         // connection dropped. If any streaming data was received, the server
         // already processed the request. An SSE inactivity timeout also means
         // the POST already reached the server because response headers were
         // accepted and the client was reading the stream body.
-        const receivedData = bg ? (
+        const receivedData =
           bg.content.length > 0 ||
           bg.thinking.length > 0 ||
           bg.tools.length > 0 ||
@@ -994,8 +1003,7 @@ export function useChat(chatId: string | null) {
           bg.compacting ||
           bg.compaction !== null ||
           bg.modelProgress !== null ||
-          bg.inferenceActivityPhase !== null
-        ) : false;
+          bg.inferenceActivityPhase !== null;
         const serverLikelyHasStream = receivedData || isInactivityError;
 
         // When the connection drops after receiving data, silently reconnect
