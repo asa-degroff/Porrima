@@ -3837,12 +3837,12 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                  <div>
 	                                    <label className="block text-xs text-white/50 mb-1">Environment</label>
 	                                    <textarea value={draft.environment.join("\n")} onChange={(e) => updateLlamaServiceDraft(server.id, { environment: e.target.value.split("\n") })}
-	                                      rows={3} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30 resize-y" />
+	                                      rows={2} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30 resize-y" />
 	                                  </div>
-	                                  <div>
+	                                  <div className="sm:col-span-2">
 	                                    <label className="block text-xs text-white/50 mb-1">Extra args</label>
-	                                    <textarea value={draft.extraArgs.join("\n")} onChange={(e) => updateLlamaServiceDraft(server.id, { extraArgs: e.target.value.split("\n") })}
-	                                      rows={3} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30 resize-y" />
+	                                    <textarea value={draft.extraArgs.join(" ")} onChange={(e) => updateLlamaServiceDraft(server.id, { extraArgs: e.target.value.trim() ? e.target.value.trim().split(/\s+/) : [] })}
+	                                      rows={5} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono outline-none focus:ring-1 focus:ring-purple-400/30 resize-y" />
 	                                  </div>
 	                                </div>
 	                                <div className="flex items-center gap-2 flex-wrap">
