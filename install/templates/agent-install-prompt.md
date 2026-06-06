@@ -53,6 +53,14 @@ Core install tasks:
 - Build or install llama.cpp with the best supported backend for this machine.
 - Create `~/bin/llama-current/llama-server`.
 - Create `~/.local/share/llama-models` for GGUF models.
+- Download, import, or symlink GGUF models into the curated layout:
+  - `~/.local/share/llama-models/<chat-model-id>/<model>.gguf`
+  - `~/.local/share/llama-models/<extraction-model-id>/<model>.gguf`
+  - `~/.local/share/llama-models/<reranker-model-id>/<model>.gguf`
+  - `~/.local/share/llama-models/<embedding-model-id>/<model>.gguf`
+  - optional projector files such as `mmproj*.gguf` should live beside the primary model.
+- Do not leave models only in the raw Hugging Face cache; Porrima scans the curated top-level model directories above.
+- Choose stable model aliases that match the directory names and the aliases used in service files/settings.
 - Create user systemd services for:
   - `porrima.service`
   - `llama-server.service` on port 32100
@@ -60,6 +68,12 @@ Core install tasks:
   - `reranker.service` on port 32102
   - `embedding-model.service` on port 32103
   - `title-generation.service` on port 32104
+- Configure each llama.cpp service with the selected model alias:
+  - chat inference: router mode with `--models-dir ~/.local/share/llama-models`
+  - extraction: chat-completion model, CPU-only by default
+  - reranker: `--embedding --reranking --pooling rank`
+  - embedding: `--embedding --pooling mean`
+  - title generation: chat-completion model, CPU-only by default
 - Use CPU-only defaults for extraction, reranker, embedding, and title generation unless spare VRAM is explicitly available.
 - In production, build both workspaces and run the Node server with `NODE_ENV=production` on the configured app port. The production server serves `client/dist` itself.
 - For dual equal GPUs, use tensor split for chat inference.
@@ -91,8 +105,17 @@ Validation:
 - Run `systemctl --user daemon-reload`.
 - Enable and start selected services.
 - Check `systemctl --user status` for every service.
-- Check llama.cpp `/health` and `/v1/models`.
-- Check the embedding server `/health` and a small `/v1/embeddings` request.
+- Check every llama.cpp service `/health` and `/v1/models`:
+  - `http://localhost:32100` chat inference
+  - `http://localhost:32101` extraction
+  - `http://localhost:32102` reranker
+  - `http://localhost:32103` embedding
+  - `http://localhost:32104` title generation
+- For the chat router, load the selected chat model if needed and run a short `/v1/chat/completions` request.
+- For extraction and title generation, run short `/v1/chat/completions` requests using their configured aliases.
+- For the reranker, run a small `/v1/rerank` request.
+- For the embedding server, run a small `/v1/embeddings` request.
+- Confirm Porrima sees the same models through `/api/llama-servers`, `/api/llama-servers/available-models?slot=inference`, `/api/llama-servers/available-models?slot=embedding`, `/api/llama-servers/available-models?slot=reranker`, `/api/llama-servers/available-models?slot=extraction`, and `/api/llama-servers/available-models?slot=title-generation`.
 - Check Porrima `/api/auth/status` locally and, if remote access was configured, through the final HTTPS hostname.
 - Load a small test model if needed and run a short prompt benchmark.
-- Report tokens/sec, selected backend, GPU visibility, VRAM use, passkey setup state, tunnel/access state, and any warnings.
+- Report selected model aliases, tokens/sec, selected backend, GPU visibility, VRAM use, passkey setup state, tunnel/access state, and any warnings.

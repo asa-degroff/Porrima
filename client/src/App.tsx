@@ -5,6 +5,7 @@ import { NotebookView } from "./components/NotebookView";
 import { SettingsModal } from "./components/SettingsModal";
 import { MemoryDebugPanel } from "./components/MemoryDebugPanel";
 import { ModelStatsModal } from "./components/ModelStatsModal";
+import { SetupModal } from "./components/SetupModal";
 import { CreateProjectModal } from "./components/CreateProjectModal";
 import { LoginPage } from "./components/LoginPage";
 
@@ -127,6 +128,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [memoryDebugOpen, setMemoryDebugOpen] = useState(false);
   const [modelStatsOpen, setModelStatsOpen] = useState(false);
+  const [setupModalOpen, setSetupModalOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [imageSandboxOpen, setImageSandboxOpen] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -149,6 +151,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     activeChatStateRef.current = activeChat;
   }, [activeChat]);
+
+  // Auto-show setup wizard on first load if never completed
+  useEffect(() => {
+    if (!settingsLoading && !settings.setupCompleted && !setupModalOpen) {
+      setSetupModalOpen(true);
+    }
+  }, [settingsLoading, settings.setupCompleted, setupModalOpen]);
 
   // System stats polling
   const [systemStatsHistory, setSystemStatsHistory] = useState<SystemStatsSample[]>([]);
@@ -1458,10 +1467,20 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           onSave={handleSaveSettings}
           onClose={handleCloseSettings}
           onLogout={onLogout}
+          onOpenSetup={() => setSetupModalOpen(true)}
         />
       )}
       <MemoryDebugPanel isOpen={memoryDebugOpen} onClose={() => setMemoryDebugOpen(false)} />
       <ModelStatsModal isOpen={modelStatsOpen} onClose={() => setModelStatsOpen(false)} />
+      {setupModalOpen && !settingsLoading && (
+        <SetupModal
+          settings={settings}
+          models={models}
+          refreshModels={refreshModels}
+          onSave={handleSaveSettings}
+          onClose={() => setSetupModalOpen(false)}
+        />
+      )}
       {projectModalOpen && (
         <CreateProjectModal
           onClose={() => setProjectModalOpen(false)}

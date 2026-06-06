@@ -306,6 +306,8 @@ export type WebSearchProvider = "brave" | "exa" | "tavily";
 export type RetrievalDepthProfile = "fast" | "balanced" | "thorough" | "custom";
 
 export interface Settings {
+  /** True after first-time setup wizard has been completed */
+  setupCompleted?: boolean;
   defaultModelId: string;
   defaultVisionModelId?: string;
   useChatModelForVision?: boolean;

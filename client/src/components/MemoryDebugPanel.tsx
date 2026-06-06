@@ -621,7 +621,7 @@ function RunDetail({ run }: { run: ExtractionRun }) {
       </div>
       {run.results?.chunks && <ChunkBreakdown chunks={run.results.chunks} />}
       {run.results && run.results.facts.length > 0 && (
-        <Section title={`Parsed Facts (${run.results.facts.length})`} defaultOpen>
+        <Section title={`Parsed Memories (${run.results.facts.length})`} defaultOpen>
           <ul className="space-y-1.5">
             {run.results.facts.map((f, i) => (
               <li key={i} className="text-[11px] flex gap-2">

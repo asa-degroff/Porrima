@@ -403,6 +403,7 @@ interface Props {
   onSave: (settings: Settings) => void | Promise<void>;
   onClose: () => void;
   onLogout: () => void;
+  onOpenSetup?: () => void;
 }
 
 const PCI_ADDRESS_RE = /^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$/;
@@ -411,7 +412,7 @@ function normalizeSystemStatsHiddenGpus(ids: string[] | undefined): string[] {
   return Array.from(new Set((ids ?? []).filter((id) => PCI_ADDRESS_RE.test(id))));
 }
 
-export function SettingsModal({ settings, models, refreshModels, onApply, onSave, onClose, onLogout }: Props) {
+export function SettingsModal({ settings, models, refreshModels, onApply, onSave, onClose, onLogout, onOpenSetup }: Props) {
   const [defaultModelId, setDefaultModelId] = useState(settings.defaultModelId);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(settings.defaultSystemPrompt);
   const [defaultSystemPromptExpanded, setDefaultSystemPromptExpanded] = useState(false);
@@ -7092,6 +7093,21 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
             </p>
           </div>
 
+          {/* Setup wizard */}
+          <div className="pt-2">
+            <button
+              onClick={onOpenSetup}
+              className="w-full px-3 py-2 rounded-lg text-sm font-medium text-white/50 hover:text-white/70 hover:bg-white/5 transition-all flex items-center justify-center gap-2 pressable"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3v18" />
+                <rect x="4" y="6" width="16" height="12" rx="2" />
+                <path d="M9 12h6" />
+                <path d="M12 9v6" />
+              </svg>
+              Run Setup Wizard
+            </button>
+          </div>
           {/* Sign Out */}
           <div className="pt-2 border-t border-white/10">
             <button
