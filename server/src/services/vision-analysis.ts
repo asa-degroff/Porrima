@@ -21,9 +21,10 @@ const LLAMACPP_DEFAULT_URL = getDefaultLlamaServerUrl("inference");
 
 type VisionBackend = { provider: "llamacpp"; baseUrl: string; contextWindow?: number };
 type VisionRequestOptions = { signal?: AbortSignal };
+type VisionAnalysisResult = { description: string; thinking?: string };
 
 const VISION_MAX_TOKENS = 2048;
-const VISION_CHAT_TEMPLATE_KWARGS = { enable_thinking: false };
+const VISION_CHAT_TEMPLATE_KWARGS = { enable_thinking: true };
 
 async function resolveVisionBackend(modelId: string): Promise<VisionBackend> {
   const settings = await getSettings();
@@ -69,6 +70,7 @@ export interface AnalyzedImage {
   filename: string;
   url: string;
   description: string;
+  thinking?: string;
   preset: string;
   model: string;
   conversation: VisionMessage[];
@@ -310,7 +312,7 @@ export async function analyzeImage(
   imageData: string, // base64
   presetKey: string,
   model?: string
-): Promise<{ description: string; preset: string; model: string }> {
+): Promise<{ description: string; thinking?: string; preset: string; model: string }> {
   beginStream();
   try {
     await ensureVisionDir();
@@ -324,14 +326,19 @@ export async function analyzeImage(
       }`
     );
 
-    const description = await analyzeViaLlamaCpp(
+    const result = await analyzeViaLlamaCpp(
       imageData,
       preset.prompt,
       modelName,
       backend.baseUrl,
       backend.contextWindow
     );
-    return { description, preset: presetKey, model: modelName };
+    return {
+      description: result.description,
+      ...(result.thinking ? { thinking: result.thinking } : {}),
+      preset: presetKey,
+      model: modelName,
+    };
   } finally {
     endStream();
   }
@@ -343,7 +350,7 @@ export async function analyzeImageStream(
   model: string | undefined,
   onEvent: (event: { event: string; data: unknown }) => void,
   options: VisionRequestOptions = {}
-): Promise<{ description: string; preset: string; model: string }> {
+): Promise<{ description: string; thinking?: string; preset: string; model: string }> {
   beginStream();
   try {
     await ensureVisionDir();
@@ -360,20 +367,34 @@ export async function analyzeImageStream(
     // Send initial keepalive to show we're starting
     onEvent({ event: "keepalive", data: { status: "starting", timestamp: Date.now() } });
 
-    const description = await analyzeViaLlamaCpp(
+    const result = await analyzeViaLlamaCpp(
       imageData,
       preset.prompt,
       modelName,
       backend.baseUrl,
       backend.contextWindow,
       (delta) => onEvent({ event: "text_delta", data: { delta } }),
+      (delta) => onEvent({ event: "thinking_delta", data: { delta } }),
       options
     );
     if (options.signal?.aborted) {
       throw new Error("Vision analysis aborted");
     }
-    onEvent({ event: "description_complete", data: { description, preset: presetKey, model: modelName } });
-    return { description, preset: presetKey, model: modelName };
+    onEvent({
+      event: "description_complete",
+      data: {
+        description: result.description,
+        ...(result.thinking ? { thinking: result.thinking } : {}),
+        preset: presetKey,
+        model: modelName,
+      },
+    });
+    return {
+      description: result.description,
+      ...(result.thinking ? { thinking: result.thinking } : {}),
+      preset: presetKey,
+      model: modelName,
+    };
   } finally {
     endStream();
   }
@@ -420,8 +441,9 @@ async function analyzeViaLlamaCpp(
   baseUrl: string,
   contextWindow: number | undefined,
   onDelta?: (delta: string) => void,
+  onThinkingDelta?: (delta: string) => void,
   options: VisionRequestOptions = {}
-): Promise<string> {
+): Promise<VisionAnalysisResult> {
   const dataUrl = await buildImageDataUrl(imageData);
 
   const body = {
@@ -453,10 +475,19 @@ async function analyzeViaLlamaCpp(
 
   if (!onDelta) {
     const json = await res.json();
-    return cleanOutput(json.choices?.[0]?.message?.content ?? "");
+    const message = json.choices?.[0]?.message ?? {};
+    const thinking = cleanThinking(message.reasoning_content ?? "");
+    return {
+      description: cleanOutput(message.content ?? ""),
+      ...(thinking ? { thinking } : {}),
+    };
   }
 
-  return cleanOutput(await streamLlamaCppContent(res, onDelta, options.signal));
+  const streamed = await streamLlamaCppContent(res, onDelta, onThinkingDelta, options.signal);
+  return {
+    description: cleanOutput(streamed.description),
+    ...(streamed.thinking ? { thinking: streamed.thinking } : {}),
+  };
 }
 
 async function requestLlamaCppVisionCompletion(
@@ -552,19 +583,19 @@ async function chatAboutImageViaLlamaCpp(
 }
 
 /**
- * Parse OpenAI-format SSE stream, forwarding content deltas and returning the
- * full concatenated text. Ignores reasoning/thinking tokens — vision output is
- * presentation-only and we don't surface a thinking pane in the analyze UI.
+ * Parse OpenAI-format SSE stream, forwarding content and reasoning deltas.
  */
 async function streamLlamaCppContent(
   res: Response,
   onDelta: (delta: string) => void,
+  onThinkingDelta: ((delta: string) => void) | undefined,
   signal?: AbortSignal
-): Promise<string> {
+): Promise<VisionAnalysisResult> {
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let full = "";
+  let thinking = "";
 
   const cancelReader = () => {
     reader.cancel().catch(() => {});
@@ -588,11 +619,22 @@ async function streamLlamaCppContent(
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith(":")) continue;
-        if (trimmed === "data: [DONE]") return full;
+        if (trimmed === "data: [DONE]") {
+          const cleanedThinking = cleanThinking(thinking);
+          return {
+            description: full,
+            ...(cleanedThinking ? { thinking: cleanedThinking } : {}),
+          };
+        }
         if (!trimmed.startsWith("data: ")) continue;
         try {
           const chunk = JSON.parse(trimmed.slice(6));
           const delta = chunk.choices?.[0]?.delta?.content;
+          const thinkingDelta = chunk.choices?.[0]?.delta?.reasoning_content;
+          if (typeof thinkingDelta === "string" && thinkingDelta.length > 0) {
+            thinking += thinkingDelta;
+            onThinkingDelta?.(thinkingDelta);
+          }
           if (typeof delta === "string" && delta.length > 0) {
             full += delta;
             onDelta(delta);
@@ -602,10 +644,19 @@ async function streamLlamaCppContent(
         }
       }
     }
-    return full;
+    const cleanedThinking = cleanThinking(thinking);
+    return {
+      description: full,
+      ...(cleanedThinking ? { thinking: cleanedThinking } : {}),
+    };
   } finally {
     signal?.removeEventListener("abort", cancelReader);
   }
+}
+
+function cleanThinking(text: string): string | undefined {
+  const cleaned = text.replace(new RegExp('</?think>', 'g'), "").trim();
+  return cleaned || undefined;
 }
 
 function cleanOutput(text: string): string {
@@ -634,6 +685,7 @@ export async function saveAnalyzedImage(
   description: string,
   preset: string,
   model: string,
+  thinking?: string,
   chatId?: string,
   projectId?: string
 ): Promise<AnalyzedImage> {
@@ -655,12 +707,15 @@ export async function saveAnalyzedImage(
     writeFile(join(imageDir, "thumb.webp"), thumbBuffer),
   ]);
 
+  const cleanedThinking = cleanThinking(thinking ?? "");
+
   // Save metadata
   const analyzedImage: AnalyzedImage = {
     id,
     filename,
     url: `/api/vision/images/${id}/${filename}`,
     description,
+    ...(cleanedThinking ? { thinking: cleanedThinking } : {}),
     preset,
     model,
     conversation: [],
@@ -742,7 +797,7 @@ export async function getAnalyzedImage(id: string): Promise<AnalyzedImage | null
 
 export async function updateAnalyzedImage(
   id: string,
-  updates: Partial<AnalyzedImage>
+  updates: Partial<Omit<AnalyzedImage, "thinking">> & { thinking?: string | null }
 ): Promise<AnalyzedImage | null> {
   await ensureVisionDir();
   const metadataPath = join(VISION_DIR, "images", id, "metadata.json");
@@ -750,7 +805,16 @@ export async function updateAnalyzedImage(
   try {
     await access(metadataPath);
     const metadata = JSON.parse(await readFile(metadataPath, "utf-8"));
-    const updated = { ...metadata, ...updates };
+    const { thinking, ...restUpdates } = updates;
+    const updated = { ...metadata, ...restUpdates };
+    if ("thinking" in updates) {
+      const cleanedThinking = cleanThinking(thinking ?? "");
+      if (cleanedThinking) {
+        updated.thinking = cleanedThinking;
+      } else {
+        delete updated.thinking;
+      }
+    }
     await writeFile(metadataPath, JSON.stringify(updated, null, 2));
     return updated;
   } catch {

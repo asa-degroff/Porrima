@@ -22,6 +22,7 @@ export function useVisionSandbox(mainModelId?: string) {
   const [analyzing, setAnalyzing] = useState(false);
   const [chatting, setChatting] = useState(false);
   const [streamingDescription, setStreamingDescription] = useState<string | null>(null);
+  const [streamingThinking, setStreamingThinking] = useState<string | null>(null);
   const [pendingImageData, setPendingImageData] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedPreset, setSelectedPreset] = useState<string>("detailed");
@@ -54,21 +55,29 @@ export function useVisionSandbox(mainModelId?: string) {
   const analyzeImage = useCallback(async (imageData: string, preset: string) => {
     setAnalyzing(true);
     setStreamingDescription("");
+    setStreamingThinking("");
     setPendingImageData(imageData);
     setError(null);
     try {
       return await new Promise<AnalyzedImage>((resolve, reject) => {
+        let thinkingText = "";
         streamAnalyzeImage(imageData, preset, currentModelId, {
           onDelta: (delta) => {
             setStreamingDescription((prev) => (prev ?? "") + delta);
           },
+          onThinkingDelta: (delta) => {
+            thinkingText += delta;
+            setStreamingThinking((prev) => (prev ?? "") + delta);
+          },
           onDone: async (result) => {
             // Save the image with the already-completed description (no re-analysis)
-            const saved = await apiSaveAnalyzedImage(imageData, result.description, result.preset, result.model);
+            const thinking = result.thinking ?? (thinkingText.trim() || undefined);
+            const saved = await apiSaveAnalyzedImage(imageData, result.description, result.preset, result.model, thinking);
             setAnalyzedImages((prev) => [saved, ...prev]);
             const updated = saved;
             setSelectedImage(updated);
             setStreamingDescription(null);
+            setStreamingThinking(null);
             setPendingImageData(null);
             setAnalyzing(false);
             resolve(updated);
@@ -76,6 +85,7 @@ export function useVisionSandbox(mainModelId?: string) {
           onError: (err) => {
             setError(err);
             setStreamingDescription(null);
+            setStreamingThinking(null);
             setPendingImageData(null);
             setAnalyzing(false);
             reject(new Error(err));
@@ -84,6 +94,7 @@ export function useVisionSandbox(mainModelId?: string) {
       });
     } catch (e: any) {
       setError(e.message);
+      setStreamingThinking(null);
       setAnalyzing(false);
       throw e;
     }
@@ -145,12 +156,16 @@ export function useVisionSandbox(mainModelId?: string) {
   const reanalyzeImage = useCallback(async (id: string, preset: string) => {
     setAnalyzing(true);
     setStreamingDescription("");
+    setStreamingThinking("");
     setError(null);
     try {
       return await new Promise<AnalyzedImage>((resolve, reject) => {
         streamReanalyzeImage(id, preset, currentModelId, {
           onDelta: (delta) => {
             setStreamingDescription((prev) => (prev ?? "") + delta);
+          },
+          onThinkingDelta: (delta) => {
+            setStreamingThinking((prev) => (prev ?? "") + delta);
           },
           onDone: (result) => {
             setAnalyzedImages((prev) =>
@@ -159,12 +174,14 @@ export function useVisionSandbox(mainModelId?: string) {
             imageCacheRef.current.delete(id);
             setSelectedImage(result);
             setStreamingDescription(null);
+            setStreamingThinking(null);
             setAnalyzing(false);
             resolve(result);
           },
           onError: (err) => {
             setError(err);
             setStreamingDescription(null);
+            setStreamingThinking(null);
             setAnalyzing(false);
             reject(new Error(err));
           },
@@ -172,6 +189,7 @@ export function useVisionSandbox(mainModelId?: string) {
       });
     } catch (e: any) {
       setError(e.message);
+      setStreamingThinking(null);
       setAnalyzing(false);
       throw e;
     }
@@ -223,6 +241,7 @@ export function useVisionSandbox(mainModelId?: string) {
     analyzing,
     chatting,
     streamingDescription,
+    streamingThinking,
     pendingImageData,
     error,
     selectedPreset,

@@ -124,7 +124,8 @@ router.post("/analyze", async (req, res) => {
       imageData,
       result.description,
       result.preset,
-      result.model
+      result.model,
+      result.thinking
     );
 
     // Don't send imageData in response
@@ -179,9 +180,10 @@ router.post("/analyze-stream", async (req, res) => {
 // Save an already-analyzed image (used after streaming analysis completes)
 router.post("/save", async (req, res) => {
   try {
-    const { imageData, description, preset, model, chatId, projectId } = req.body as {
+    const { imageData, description, thinking, preset, model, chatId, projectId } = req.body as {
       imageData: string;
       description: string;
+      thinking?: string;
       preset: string;
       model: string;
       chatId?: string;
@@ -193,7 +195,7 @@ router.post("/save", async (req, res) => {
     }
 
     const filename = `image-${Date.now()}.png`;
-    const saved = await saveAnalyzedImage(filename, imageData, description, preset, model, chatId, projectId);
+    const saved = await saveAnalyzedImage(filename, imageData, description, preset, model, thinking, chatId, projectId);
     const { imageData: _, ...sanitized } = saved;
     res.json(sanitized);
   } catch (e: any) {
@@ -285,6 +287,7 @@ router.post("/images/:id/reanalyze", async (req, res) => {
 
       const updated = await updateAnalyzedImage(req.params.id, {
         description: result.description,
+        thinking: result.thinking ?? null,
         preset: result.preset,
         model: result.model,
         conversation: [],
@@ -299,6 +302,7 @@ router.post("/images/:id/reanalyze", async (req, res) => {
 
       const updated = await updateAnalyzedImage(req.params.id, {
         description: result.description,
+        thinking: result.thinking ?? null,
         preset: result.preset,
         model: result.model,
         conversation: [],

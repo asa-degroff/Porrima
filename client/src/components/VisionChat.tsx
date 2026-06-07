@@ -3,12 +3,14 @@ import type { AnalyzedImage, VisionMessage } from "../api/client";
 import { MarkdownRenderer } from "./ui/MarkdownRenderer";
 import { MessageInput } from "./MessageInput";
 import { PolyhedronLogo } from "./PolyhedronLogo";
+import { ThinkingBlock } from "./ThinkingBlock";
 import { useActivityShape } from "../hooks/useActivityStyle";
 
 interface Props {
   image: AnalyzedImage;
   analyzing?: boolean;
   streamingDescription?: string | null;
+  streamingThinking?: string | null;
   chatting: boolean;
   onChat: (message: string) => Promise<string>;
   onReanalyze: (preset: string) => Promise<void>;
@@ -16,7 +18,7 @@ interface Props {
   onSendToGenerate?: (description: string) => void;
 }
 
-export function VisionChat({ image, analyzing, streamingDescription, chatting, onChat, onReanalyze, onCopyDescription, onSendToGenerate }: Props) {
+export function VisionChat({ image, analyzing, streamingDescription, streamingThinking, chatting, onChat, onReanalyze, onCopyDescription, onSendToGenerate }: Props) {
   const activityShape = useActivityShape();
   const [messages, setMessages] = useState<VisionMessage[]>(image.conversation);
   const [presetSelectOpen, setPresetSelectOpen] = useState(false);
@@ -138,6 +140,7 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
     { key: "z_image", name: "Z-Image" },
     { key: "sd", name: "Stable Diffusion" },
   ];
+  const visibleThinking = analyzing ? streamingThinking : image.thinking;
 
   return (
     <div className="flex flex-col h-full">
@@ -194,6 +197,14 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
             </div>
           </div>
         </div>
+
+        {visibleThinking && (
+          <ThinkingBlock
+            thinking={visibleThinking}
+            isStreaming={Boolean(analyzing)}
+            thinkingActive={Boolean(analyzing)}
+          />
+        )}
 
         {/* Description with actions */}
         <div className="space-y-2">

@@ -9,6 +9,7 @@ import { ImageCarousel } from "./ImageCarousel";
 import { ProgressiveImage } from "./ProgressiveImage";
 import { VisionControls } from "./VisionControls";
 import { VisionChat } from "./VisionChat";
+import { ThinkingBlock } from "./ThinkingBlock";
 import { MarkdownRenderer } from "./ui/MarkdownRenderer";
 import { PolyhedronLogo } from "./PolyhedronLogo";
 import { useActivityShape } from "../hooks/useActivityStyle";
@@ -128,6 +129,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
     analyzing,
     chatting,
     streamingDescription,
+    streamingThinking,
     pendingImageData,
     error: visionError,
     selectedPreset,
@@ -802,6 +804,13 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                       <span className="text-xs text-white/40">Analyzing...</span>
                     </div>
                   </div>
+                  {streamingThinking && (
+                    <ThinkingBlock
+                      thinking={streamingThinking}
+                      isStreaming={analyzing}
+                      thinkingActive={analyzing}
+                    />
+                  )}
                   {streamingDescription && (
                     <div className="space-y-2">
                       <label className="text-[10px] font-medium text-white/40 uppercase tracking-wider">Description</label>
@@ -816,6 +825,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                   image={selectedAnalyzedImage}
                   analyzing={analyzing}
                   streamingDescription={streamingDescription}
+                  streamingThinking={streamingThinking}
                   chatting={chatting}
                   onChat={handleChat}
                   onReanalyze={handleReanalyze}

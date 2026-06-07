@@ -937,6 +937,7 @@ export interface AnalyzedImage {
   filename: string;
   url: string;
   description: string;
+  thinking?: string;
   preset: string;
   model: string;
   conversation: VisionMessage[];
@@ -988,12 +989,13 @@ export async function saveAnalyzedImage(
   imageData: string,
   description: string,
   preset: string,
-  model: string
+  model: string,
+  thinking?: string
 ): Promise<AnalyzedImage> {
   const res = await apiFetch(`${BASE}/vision/save`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageData, description, preset, model }),
+    body: JSON.stringify({ imageData, description, thinking, preset, model }),
   });
   if (!res.ok) {
     const errText = await res.text();
@@ -1010,7 +1012,8 @@ export async function saveAnalyzedImage(
 
 export interface VisionAnalyzeCallbacks {
   onDelta: (delta: string) => void;
-  onDone: (result: { description: string; preset: string; model: string }) => void;
+  onThinkingDelta?: (delta: string) => void;
+  onDone: (result: { description: string; thinking?: string; preset: string; model: string }) => void;
   onError: (error: string) => void;
 }
 
@@ -1022,11 +1025,16 @@ export function streamAnalyzeImage(
 ): AbortController {
   return streamSSE(`${BASE}/vision/analyze-stream`, { imageData, preset, model }, {
     onDelta: callbacks.onDelta,
-    onThinkingDelta: () => {},
+    onThinkingDelta: callbacks.onThinkingDelta ?? (() => {}),
     onDone: (msg) => {
       const m = msg as any;
       if (m?.description) {
-        callbacks.onDone({ description: m.description, preset: m.preset, model: m.model });
+        callbacks.onDone({
+          description: m.description,
+          ...(m.thinking ? { thinking: m.thinking } : {}),
+          preset: m.preset,
+          model: m.model,
+        });
       }
     },
     onError: callbacks.onError,
@@ -1069,6 +1077,7 @@ export async function reanalyzeImage(
 
 export interface ReanalyzeCallbacks {
   onDelta: (delta: string) => void;
+  onThinkingDelta?: (delta: string) => void;
   onDone: (image: AnalyzedImage) => void;
   onError: (error: string) => void;
 }
@@ -1081,7 +1090,7 @@ export function streamReanalyzeImage(
 ): AbortController {
   return streamSSE(`${BASE}/vision/images/${id}/reanalyze`, { preset, model, stream: true }, {
     onDelta: callbacks.onDelta,
-    onThinkingDelta: () => {},
+    onThinkingDelta: callbacks.onThinkingDelta ?? (() => {}),
     onDone: (msg) => {
       const m = msg as any;
       if (m?.id) {
