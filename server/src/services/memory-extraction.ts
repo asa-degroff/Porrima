@@ -2890,7 +2890,7 @@ function buildDelayedExtractionPrompt(
 ): string {
   const memoriesList = previousMemories.length > 0
     ? previousMemories.map((m, i) => `[${i + 1}]: "${m.text}" (${m.category}, importance: ${m.importance})`).join("\n")
-    : "(none)";
+    : "(none captured yet, please extract everything you can from the conversation below)";
 
   return DELAYED_EXTRACTION_USER_TEMPLATE
     .replace("{{PREVIOUS_MEMORIES}}", memoriesList)
