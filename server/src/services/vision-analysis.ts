@@ -20,6 +20,10 @@ const VISION_DIR = appDataPath("vision");
 const LLAMACPP_DEFAULT_URL = getDefaultLlamaServerUrl("inference");
 
 type VisionBackend = { provider: "llamacpp"; baseUrl: string; contextWindow?: number };
+type VisionRequestOptions = { signal?: AbortSignal };
+
+const VISION_MAX_TOKENS = 2048;
+const VISION_CHAT_TEMPLATE_KWARGS = { enable_thinking: false };
 
 async function resolveVisionBackend(modelId: string): Promise<VisionBackend> {
   const settings = await getSettings();
@@ -337,7 +341,8 @@ export async function analyzeImageStream(
   imageData: string,
   presetKey: string,
   model: string | undefined,
-  onEvent: (event: { event: string; data: unknown }) => void
+  onEvent: (event: { event: string; data: unknown }) => void,
+  options: VisionRequestOptions = {}
 ): Promise<{ description: string; preset: string; model: string }> {
   beginStream();
   try {
@@ -361,8 +366,12 @@ export async function analyzeImageStream(
       modelName,
       backend.baseUrl,
       backend.contextWindow,
-      (delta) => onEvent({ event: "text_delta", data: { delta } })
+      (delta) => onEvent({ event: "text_delta", data: { delta } }),
+      options
     );
+    if (options.signal?.aborted) {
+      throw new Error("Vision analysis aborted");
+    }
     onEvent({ event: "description_complete", data: { description, preset: presetKey, model: modelName } });
     return { description, preset: presetKey, model: modelName };
   } finally {
@@ -410,14 +419,17 @@ async function analyzeViaLlamaCpp(
   modelId: string,
   baseUrl: string,
   contextWindow: number | undefined,
-  onDelta?: (delta: string) => void
+  onDelta?: (delta: string) => void,
+  options: VisionRequestOptions = {}
 ): Promise<string> {
   const dataUrl = await buildImageDataUrl(imageData);
 
   const body = {
     model: modelId,
     stream: Boolean(onDelta),
+    max_tokens: VISION_MAX_TOKENS,
     temperature: 0.7,
+    chat_template_kwargs: VISION_CHAT_TEMPLATE_KWARGS,
     messages: [
       { role: "system", content: systemPrompt },
       {
@@ -435,7 +447,8 @@ async function analyzeViaLlamaCpp(
     baseUrl,
     modelId,
     contextWindow,
-    body
+    body,
+    options.signal
   );
 
   if (!onDelta) {
@@ -443,7 +456,7 @@ async function analyzeViaLlamaCpp(
     return cleanOutput(json.choices?.[0]?.message?.content ?? "");
   }
 
-  return cleanOutput(await streamLlamaCppContent(res, onDelta));
+  return cleanOutput(await streamLlamaCppContent(res, onDelta, options.signal));
 }
 
 async function requestLlamaCppVisionCompletion(
@@ -451,7 +464,8 @@ async function requestLlamaCppVisionCompletion(
   baseUrl: string,
   modelId: string,
   contextWindow: number | undefined,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<Response> {
   for (let attempt = 0; attempt < 2; attempt++) {
     await ensureModelLoaded(
@@ -467,8 +481,12 @@ async function requestLlamaCppVisionCompletion(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal,
       });
     } catch (err) {
+      if (signal?.aborted) {
+        throw err;
+      }
       if (attempt === 0) {
         console.warn(
           `[vision] llama.cpp request for ${modelId} failed before a response; reloading and retrying:`,
@@ -523,7 +541,9 @@ async function chatAboutImageViaLlamaCpp(
   const res = await requestLlamaCppVisionCompletion("Vision chat failed", baseUrl, modelId, contextWindow, {
     model: modelId,
     stream: false,
+    max_tokens: VISION_MAX_TOKENS,
     temperature: 0.7,
+    chat_template_kwargs: VISION_CHAT_TEMPLATE_KWARGS,
     messages,
   });
 
@@ -538,37 +558,54 @@ async function chatAboutImageViaLlamaCpp(
  */
 async function streamLlamaCppContent(
   res: Response,
-  onDelta: (delta: string) => void
+  onDelta: (delta: string) => void,
+  signal?: AbortSignal
 ): Promise<string> {
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let full = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith(":")) continue;
-      if (trimmed === "data: [DONE]") return full;
-      if (!trimmed.startsWith("data: ")) continue;
-      try {
-        const chunk = JSON.parse(trimmed.slice(6));
-        const delta = chunk.choices?.[0]?.delta?.content;
-        if (typeof delta === "string" && delta.length > 0) {
-          full += delta;
-          onDelta(delta);
+  const cancelReader = () => {
+    reader.cancel().catch(() => {});
+  };
+  if (signal?.aborted) {
+    cancelReader();
+  } else {
+    signal?.addEventListener("abort", cancelReader, { once: true });
+  }
+
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        throw new Error("Vision analysis aborted");
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith(":")) continue;
+        if (trimmed === "data: [DONE]") return full;
+        if (!trimmed.startsWith("data: ")) continue;
+        try {
+          const chunk = JSON.parse(trimmed.slice(6));
+          const delta = chunk.choices?.[0]?.delta?.content;
+          if (typeof delta === "string" && delta.length > 0) {
+            full += delta;
+            onDelta(delta);
+          }
+        } catch {
+          // skip malformed
         }
-      } catch {
-        // skip malformed
       }
     }
+    return full;
+  } finally {
+    signal?.removeEventListener("abort", cancelReader);
   }
-  return full;
 }
 
 function cleanOutput(text: string): string {

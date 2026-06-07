@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import {
   analyzeImage,
   analyzeImageStream,
@@ -16,6 +16,67 @@ import { deleteCorpusEntryByVisionId } from "../services/image-corpus.js";
 import { appDataPath } from "../services/paths.js";
 
 const router = Router();
+
+function startVisionSse(req: Request, res: Response) {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.flushHeaders();
+
+  const abortController = new AbortController();
+  let finished = false;
+
+  const writeEvent = (event: string, data: unknown) => {
+    if (res.destroyed || res.writableEnded) return;
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    (res as any).flush?.();
+  };
+
+  const writeKeepalive = () => {
+    if (res.destroyed || res.writableEnded) return;
+    res.write(": keepalive\n\n");
+    (res as any).flush?.();
+  };
+
+  const keepalive = setInterval(writeKeepalive, 25_000);
+  if (typeof (keepalive as any).unref === "function") {
+    (keepalive as any).unref();
+  }
+
+  const finish = () => {
+    finished = true;
+    clearInterval(keepalive);
+  };
+
+  res.on("close", () => {
+    if (!finished) {
+      clearInterval(keepalive);
+      abortController.abort();
+    }
+  });
+  req.on("aborted", () => {
+    if (!finished) {
+      clearInterval(keepalive);
+      abortController.abort();
+    }
+  });
+
+  return {
+    signal: abortController.signal,
+    write: (event: { event: string; data: unknown }) => writeEvent(event.event, event.data),
+    writeEvent,
+    finish,
+  };
+}
+
+function sendSseError(res: Response, message: string) {
+  if (res.destroyed || res.writableEnded) return;
+  res.write(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`);
+  (res as any).flush?.();
+  res.end();
+}
 
 // Get all analyzed images
 router.get("/images", async (_req, res) => {
@@ -88,33 +149,29 @@ router.post("/analyze-stream", async (req, res) => {
       return res.status(400).json({ error: "imageData is required" });
     }
 
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-
-    // Flush headers immediately to keep connection alive
-    res.flushHeaders();
+    const stream = startVisionSse(req, res);
 
     await analyzeImageStream(
       imageData,
       preset || "detailed",
       model,
       (event) => {
-        res.write(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
-        // Flush chunk if available (requires compression middleware)
-        (res as any).flush?.();
-      }
+        stream.write(event);
+      },
+      { signal: stream.signal }
     );
 
-    // Ensure the last event is flushed before ending
-    (res as any).flush?.();
+    stream.finish();
     res.end();
   } catch (e: any) {
+    if (e?.name === "AbortError" || e?.message === "Vision analysis aborted") {
+      return;
+    }
     console.error("Vision stream error:", e);
     if (!res.headersSent) {
       res.status(500).json({ error: e.message });
+    } else {
+      sendSseError(res, e.message || "Vision stream failed");
     }
   }
 });
@@ -214,18 +271,16 @@ router.post("/images/:id/reanalyze", async (req, res) => {
     }
 
     if (stream) {
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      res.setHeader("X-Accel-Buffering", "no");
+      const sse = startVisionSse(req, res);
 
       const result = await analyzeImageStream(
         image.imageData,
         preset || "detailed",
         model || image.model,
         (event) => {
-          res.write(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
-        }
+          sse.write(event);
+        },
+        { signal: sse.signal }
       );
 
       const updated = await updateAnalyzedImage(req.params.id, {
@@ -236,8 +291,8 @@ router.post("/images/:id/reanalyze", async (req, res) => {
       });
 
       const { imageData: _, ...sanitized } = updated!;
-      res.write(`event: reanalyze_complete\ndata: ${JSON.stringify(sanitized)}\n\n`);
-      (res as any).flush?.();
+      sse.writeEvent("reanalyze_complete", sanitized);
+      sse.finish();
       res.end();
     } else {
       const result = await analyzeImage(image.imageData, preset || "detailed", model || image.model);
@@ -253,9 +308,14 @@ router.post("/images/:id/reanalyze", async (req, res) => {
       res.json(sanitized);
     }
   } catch (e: any) {
+    if (e?.name === "AbortError" || e?.message === "Vision analysis aborted") {
+      return;
+    }
     console.error("Vision re-analyze error:", e);
     if (!res.headersSent) {
       res.status(500).json({ error: e.message });
+    } else {
+      sendSseError(res, e.message || "Vision re-analyze failed");
     }
   }
 });
