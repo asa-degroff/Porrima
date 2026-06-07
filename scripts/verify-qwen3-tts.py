@@ -3,10 +3,10 @@
 Qwen3-TTS Verification Script
 
 Tests the Qwen3-TTS installation and model availability.
-Run this after install-qwen3-tts.sh to verify everything works.
+Run this after `./scripts/install-tts-backend.sh qwen3-tts` to verify everything works.
 
 Usage:
-    python scripts/verify-qwen3-tts.py [--model MODEL_ID]
+    ./.venv-tts/qwen3-tts/bin/python scripts/verify-qwen3-tts.py [--model MODEL_ID]
 """
 
 import argparse
@@ -169,7 +169,8 @@ def main():
     
     if not results["imports"]:
         print("\n✗ Import check failed. Please install required packages.")
-        print("  Run: pip install qwen-tts torch soundfile")
+        print("  Run: ./scripts/install-tts-backend.sh qwen3-tts")
+        print("  Then verify with: ./.venv-tts/qwen3-tts/bin/python scripts/verify-qwen3-tts.py")
         sys.exit(1)
     
     if not args.skip_download:
@@ -177,7 +178,7 @@ def main():
         
         if not results["model"].get("loaded"):
             print("\n✗ Model load failed.")
-            print("  Run the install script: ./scripts/install-qwen3-tts.sh")
+            print("  Run the install script: ./scripts/install-tts-backend.sh qwen3-tts")
             sys.exit(1)
         
         results["speakers"] = list_speakers(args.model)

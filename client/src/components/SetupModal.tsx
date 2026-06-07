@@ -42,7 +42,7 @@ type SlotModelMap = Record<RuntimeModelApplyId, AvailableLlamaModel[]>;
 type SlotStringMap = Record<RuntimeModelApplyId, string>;
 
 const SETUP_SLOTS: RuntimeModelApplyId[] = ["inference", "extraction", "reranker", "embedding", "title-generation"];
-const CORE_SLOTS = new Set<RuntimeModelApplyId>(["inference", "embedding"]);
+const REQUIRED_SETUP_SLOTS = new Set<RuntimeModelApplyId>(SETUP_SLOTS);
 
 const SLOT_LABELS: Record<RuntimeModelApplyId, string> = {
   inference: "Chat inference",
@@ -126,11 +126,28 @@ function serverReady(server: LlamaServerStatus | undefined): boolean {
 
 function modelVerified(server: LlamaServerStatus | undefined, modelId: string): boolean {
   if (!server || !modelId || server.http.status !== "ok") return false;
+  if (server.http.routerMode) return server.http.loadedModelId === modelId;
   return (
-    server.expectedModel === modelId ||
     server.http.loadedModelId === modelId ||
     server.http.modelIds.includes(modelId)
   );
+}
+
+function modelKnownToServer(server: LlamaServerStatus | undefined, modelId: string): boolean {
+  if (!server || !modelId || server.http.status !== "ok") return false;
+  return server.http.loadedModelId === modelId || server.http.modelIds.includes(modelId);
+}
+
+function verificationLabel(server: LlamaServerStatus | undefined, modelId: string): string {
+  if (!modelId) return "No model";
+  if (!server || server.http.status !== "ok") return "Unknown";
+  if (modelVerified(server, modelId)) return "Verified";
+  if (modelKnownToServer(server, modelId)) return "Available";
+  return "Not found";
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function statusBadgeClass(type: NoticeType): string {
@@ -259,24 +276,27 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
       const server = serverById.get(slot);
       const modelId = effectiveModelIds[slot];
       const ready = serverReady(server);
+      const modelOption = modelId ? findSelectedOption(slot, modelId) : undefined;
+      const serverKnowsModel = modelKnownToServer(server, modelId);
 
-      if (CORE_SLOTS.has(slot)) {
-        if (!modelId) errors.push(`${label} has no model selected or discovered.`);
+      if (REQUIRED_SETUP_SLOTS.has(slot)) {
+        if (!modelId) {
+          errors.push(`${label} has no model selected or discovered.`);
+        } else if (!modelOption && !serverKnowsModel) {
+          errors.push(`${label} model ${modelId} was not found in configured scan paths or reported by the server.`);
+        }
         if (!ready) errors.push(`${label} server is not ready.`);
-      } else {
-        if (!modelId) warnings.push(`${label} has no model selected.`);
-        if (!ready) warnings.push(`${label} server is not ready; related background features may fall back or be unavailable.`);
       }
 
       if (modelId && ready && !modelVerified(server, modelId)) {
-        warnings.push(`${label} is ready, but ${modelId} is not the verified active model yet.`);
+        warnings.push(`${label} is ready, but ${modelId} is not the active verified model yet. Apply the selection to finish verification.`);
       }
     }
 
     return { errors, warnings };
-  }, [effectiveModelIds, serverById]);
+  }, [effectiveModelIds, findSelectedOption, serverById]);
 
-  const hasCoreFailures = !setupLoading && readiness.errors.length > 0;
+  const hasSetupFailures = !setupLoading && readiness.errors.length > 0;
 
   const refreshSetupState = useCallback(async (showSpinner = false) => {
     if (showSpinner) setSetupLoading(true);
@@ -350,6 +370,39 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
     refreshSetupState(true);
   }, [refreshSetupState]);
 
+  const waitForModelVerification = useCallback(async (): Promise<LlamaServerStatus[]> => {
+    const deadline = Date.now() + 180_000;
+    let lastFailures: string[] = [];
+
+    while (true) {
+      const result = await getLlamaServers();
+      const servers = result.servers;
+      const nextById = new Map<LlamaServerId, LlamaServerStatus>();
+      for (const server of servers) nextById.set(server.id, server);
+      setLlamaServers(servers);
+
+      lastFailures = SETUP_SLOTS.flatMap((slot) => {
+        const label = SLOT_LABELS[slot];
+        const modelId = effectiveModelIds[slot];
+        const server = nextById.get(slot);
+
+        if (!modelId) return [`${label} has no model selected.`];
+        if (!serverReady(server)) return [`${label} server is not ready after applying the model.`];
+        if (!modelVerified(server, modelId)) {
+          const reported = server?.http.loadedModelId || server?.http.modelIds.join(", ") || "none";
+          return [`${label} did not verify ${modelId} as active; reported ${reported}.`];
+        }
+        return [];
+      });
+
+      if (lastFailures.length === 0) return servers;
+      if (Date.now() >= deadline) {
+        throw new Error(lastFailures.join(" "));
+      }
+      await delay(1500);
+    }
+  }, [effectiveModelIds]);
+
   const handleNext = useCallback(() => {
     const idx = STEPS.findIndex((s) => s.id === currentStep);
     if (idx < STEPS.length - 1) setCurrentStep(STEPS[idx + 1].id);
@@ -374,14 +427,14 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
 
         if (!modelId) {
           const text = `${label} has no model selected.`;
-          if (CORE_SLOTS.has(slot)) throw new Error(text);
+          if (REQUIRED_SETUP_SLOTS.has(slot)) throw new Error(text);
           warnings.push(text);
           continue;
         }
 
         if (!serverReady(server)) {
           const text = `${label} server is not ready.`;
-          if (CORE_SLOTS.has(slot)) throw new Error(text);
+          if (REQUIRED_SETUP_SLOTS.has(slot)) throw new Error(text);
           warnings.push(text);
           continue;
         }
@@ -408,7 +461,7 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
           const text = err instanceof ModelsDirConflictError
             ? `${label} model ${err.conflict.modelId} is in ${err.conflict.modelScanDir}, but the service reads ${err.conflict.currentModelsDir}. Reconfigure that service models directory in Settings, then rerun setup.`
             : err?.message || `Failed to apply ${label} model.`;
-          if (CORE_SLOTS.has(slot)) throw new Error(text);
+          if (REQUIRED_SETUP_SLOTS.has(slot)) throw new Error(text);
           warnings.push(text);
           continue;
         }
@@ -417,18 +470,19 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
         setLlamaServers((current) => current.map((serverItem) => serverItem.id === slot ? updated : serverItem));
       }
 
+      await waitForModelVerification();
       await refreshSetupState();
       refreshModels();
       setMessage({
         type: warnings.length ? "warn" : "ok",
-        text: warnings.length ? `Core models verified. ${warnings.join(" ")}` : "Selected models verified.",
+        text: warnings.length ? `Required models verified. ${warnings.join(" ")}` : "Selected models verified.",
       });
     } catch (err: any) {
       throw err;
     } finally {
       setApplyingModels(false);
     }
-  }, [effectiveModelIds, findSelectedOption, refreshModels, refreshSetupState, serverById]);
+  }, [effectiveModelIds, findSelectedOption, refreshModels, refreshSetupState, serverById, waitForModelVerification]);
 
   const handleApplyModels = useCallback(async () => {
     try {
@@ -712,8 +766,8 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-medium text-white/70">{SLOT_LABELS[slot]}</span>
-                            {CORE_SLOTS.has(slot) && (
-                              <span className="text-[9px] px-1.5 py-0.5 rounded border border-purple-400/25 bg-purple-500/10 text-purple-200/80">core</span>
+                            {REQUIRED_SETUP_SLOTS.has(slot) && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded border border-purple-400/25 bg-purple-500/10 text-purple-200/80">required</span>
                             )}
                           </div>
                           <div className="text-[10px] text-white/35 mt-1 truncate">{server?.unitName || "service missing"} · {server?.url || getDefaultLlamaServerUrl(slot)}</div>
@@ -723,8 +777,8 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px] mt-3">
                         <span className="text-white/35">Selected model</span>
                         <span className="text-white/65 text-right truncate">{modelId || "None"}</span>
-                        <span className="text-white/35">Model visible</span>
-                        <span className={`text-right ${verified ? "text-emerald-300/80" : "text-amber-200/80"}`}>{verified ? "Verified" : "Not active"}</span>
+                        <span className="text-white/35">Active model</span>
+                        <span className={`text-right ${verified ? "text-emerald-300/80" : "text-amber-200/80"}`}>{verificationLabel(server, modelId)}</span>
                         <span className="text-white/35">Discovered choices</span>
                         <span className="text-white/65 text-right">{modelOptionsBySlot[slot].length}</span>
                       </div>
@@ -1027,9 +1081,9 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
             ) : (
               <button
                 onClick={handleFinish}
-                disabled={loading || applyingModels || hasCoreFailures}
+                disabled={loading || applyingModels || hasSetupFailures}
                 className="px-5 py-2 rounded-lg text-xs font-medium bg-purple-500/25 border border-purple-400/30 text-purple-200 hover:bg-purple-500/35 transition-all pressable disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
-                title={hasCoreFailures ? readiness.errors.join(" ") : undefined}
+                title={hasSetupFailures ? readiness.errors.join(" ") : undefined}
               >
                 {(loading || applyingModels) && (
                   <div className="w-3.5 h-3.5 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />

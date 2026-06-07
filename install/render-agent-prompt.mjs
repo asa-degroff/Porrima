@@ -23,10 +23,12 @@ let prompt = readFileSync(templatePath, "utf8");
 const ttsInstructions = features.has("tts")
   ? [
       "Install the TTS pack.",
-      "- Create an isolated Python virtual environment under `~/.local/share/porrima/venvs/tts`.",
-      "- Install backend-specific Python dependencies there, not into system Python.",
+      "- Ask which TTS backend or backends to install if I have not specified them: `kokoro`, `qwen3-tts`, `supertonic-3`, or `all`.",
+      "- Use `./scripts/install-tts-backend.sh <backend>` for each selected backend.",
+      "- Let the installer create per-backend virtual environments under `.venv-tts/<backend>` and write interpreter overrides to `server/.env.tts`.",
+      "- Use Python 3.10-3.13 for Kokoro and Qwen3-TTS so native wheels are available; pass `--python /path/to/python3.12` if needed.",
       "- Install or verify `ffmpeg`.",
-      "- Validate the selected TTS backend with a short synthesis test.",
+      "- Validate each selected backend with `/api/tts/status?backend=<backend>` and a short synthesis test.",
     ].join("\n")
   : "Do not install TTS dependencies, voice models, or TTS services during initial setup.";
 

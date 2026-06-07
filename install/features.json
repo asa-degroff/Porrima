@@ -19,7 +19,7 @@
       "label": "Voice Pack",
       "required": false,
       "description": "Python TTS backends and audio tooling. Can be added after core setup.",
-      "dependencies": ["python3", "venv", "pip", "ffmpeg"],
+      "dependencies": ["python3.10-3.13", "python3-venv", "pip", "ffmpeg"],
       "services": []
     },
     "images": {
