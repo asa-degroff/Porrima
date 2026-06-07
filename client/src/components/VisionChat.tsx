@@ -20,15 +20,30 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
   const activityShape = useActivityShape();
   const [messages, setMessages] = useState<VisionMessage[]>(image.conversation);
   const [presetSelectOpen, setPresetSelectOpen] = useState(false);
+  const [copiedTarget, setCopiedTarget] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const presetRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
+  const copiedTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setMessages(image.conversation);
+    setCopiedTarget(null);
+    if (copiedTimerRef.current !== null) {
+      window.clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = null;
+    }
   }, [image.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -94,6 +109,25 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
       console.error("Re-analyze failed:", error);
     }
   }, [onReanalyze]);
+
+  const handleCopy = useCallback(async (target: string, content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      if (target === "description") {
+        onCopyDescription?.();
+      }
+      setCopiedTarget(target);
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+      }
+      copiedTimerRef.current = window.setTimeout(() => {
+        setCopiedTarget((current) => current === target ? null : current);
+        copiedTimerRef.current = null;
+      }, 2000);
+    } catch (error) {
+      console.error("Copy failed:", error);
+    }
+  }, [onCopyDescription]);
 
   const presets = [
     { key: "simple", name: "Simple" },
@@ -168,18 +202,15 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
             {!analyzing && (
               <div className="flex items-center gap-1.5">
                 <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(image.description);
-                    onCopyDescription?.();
-                  }}
-                  className="text-[10px] text-white/50 hover:text-white/80 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/10 pressable"
-                  title="Copy markdown"
+                  onClick={() => handleCopy("description", image.description)}
+                  className="text-[10px] text-white/50 hover:text-white/80 transition-colors flex items-center justify-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/10 pressable min-w-[68px]"
+                  title={copiedTarget === "description" ? "Copied" : "Copy markdown"}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
                     <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
                   </svg>
-                  Copy
+                  <span aria-live="polite">{copiedTarget === "description" ? "Copied" : "Copy"}</span>
                 </button>
                 <button
                   onClick={() => onSendToGenerate?.(image.description)}
@@ -236,15 +267,15 @@ export function VisionChat({ image, analyzing, streamingDescription, chatting, o
                   {msg.role === "assistant" && (
                     <div className="flex items-center gap-1.5 px-3 pb-2 pt-1 border-t border-white/5">
                       <button
-                        onClick={() => navigator.clipboard.writeText(msg.content)}
-                        className="text-[10px] text-white/50 hover:text-white/80 transition-colors flex items-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/10 pressable"
-                        title="Copy"
+                        onClick={() => handleCopy(`message-${idx}`, msg.content)}
+                        className="text-[10px] text-white/50 hover:text-white/80 transition-colors flex items-center justify-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/10 pressable min-w-[68px]"
+                        title={copiedTarget === `message-${idx}` ? "Copied" : "Copy"}
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
                           <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
                         </svg>
-                        Copy
+                        <span aria-live="polite">{copiedTarget === `message-${idx}` ? "Copied" : "Copy"}</span>
                       </button>
                       <button
                         onClick={() => onSendToGenerate?.(msg.content)}
