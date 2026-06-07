@@ -294,6 +294,7 @@ export interface Settings {
   comfyuiUrl?: string;
   sdcppUrl?: string;            // default "http://127.0.0.1:1234" — stable-diffusion.cpp sd-server
   imageBackend?: "comfyui" | "sdcpp";  // default "comfyui"
+  imageSandboxEnabled?: boolean;        // default true — shows the Image Sandbox launcher
   theme?: Theme;
   activityShape?: ActivityShape;
   activityHue?: number;

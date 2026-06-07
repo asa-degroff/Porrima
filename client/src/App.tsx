@@ -254,7 +254,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             setActiveChatId(state.activeChatId);
             selectChat(state.activeChatId);
           }
-          if (state.activeView) setActiveView(state.activeView as 'chats' | 'notebooks');
+          if (state.activeView) setActiveView(state.activeView === 'notebooks' ? 'notebooks' : 'chats');
           if (state.activeView === 'image-sandbox') setImageSandboxOpen(true);
           setUiStateSynced(true);
         })
@@ -265,7 +265,12 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             setActiveChatId(cachedChatId);
             selectChat(cachedChatId);
           }
-          if (readStoredValue(ACTIVE_VIEW_KEY, LEGACY_ACTIVE_VIEW_KEY) === "image-sandbox") {
+          const cachedView = readStoredValue(ACTIVE_VIEW_KEY, LEGACY_ACTIVE_VIEW_KEY);
+          if (cachedView === "notebooks") {
+            setActiveView("notebooks");
+          }
+          if (cachedView === "image-sandbox") {
+            setActiveView("chats");
             setImageSandboxOpen(true);
           }
           setUiStateSynced(true);
@@ -500,6 +505,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
   useEffect(() => {
     if (!uiStateSynced) return;
+    if (imageSandboxOpen) return;
 
     // Also save to localStorage for backward compatibility and offline support
     writeStoredValue(ACTIVE_VIEW_KEY, activeView, LEGACY_ACTIVE_VIEW_KEY);
@@ -511,7 +517,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [activeView, uiStateSynced]);
+  }, [activeView, imageSandboxOpen, uiStateSynced]);
 
   // Load TTS settings on mount
   useEffect(() => {
@@ -1110,16 +1116,19 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     return model?.contextWindow || 32768;
   }, [models, activeChat?.modelId, settings.defaultModelId]);
 
+  const imageSandboxEnabled = settings.imageSandboxEnabled !== false;
+
   const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
   const handleCloseSidebar = useCallback(() => setSidebarOpen(false), []);
   const handleOpenSidebar = useCallback(() => setSidebarOpen(true), []);
   const handleOpenImageSandbox = useCallback(() => {
+    if (!imageSandboxEnabled) return;
     setActiveView('chats');
     setImageSandboxOpen(true);
     saveUserUIState({ activeView: 'image-sandbox' }).catch((err) => {
       console.warn("Failed to save image sandbox state to server:", err);
     });
-  }, []);
+  }, [imageSandboxEnabled]);
 
   const handleCloseImageSandbox = useCallback(() => {
     setImageSandboxOpen(false);
@@ -1127,6 +1136,15 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       console.warn("Failed to save active view to server:", err);
     });
   }, [activeView]);
+  useEffect(() => {
+    if (settingsLoading || imageSandboxEnabled || !imageSandboxOpen) return;
+    const fallbackView = activeView === 'notebooks' ? 'notebooks' : 'chats';
+    setImageSandboxOpen(false);
+    setActiveView(fallbackView);
+    saveUserUIState({ activeView: fallbackView }).catch((err) => {
+      console.warn("Failed to clear disabled image sandbox state:", err);
+    });
+  }, [activeView, imageSandboxEnabled, imageSandboxOpen, settingsLoading]);
   const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
   const handleApplySettings = useCallback(
     async (s: import("./types").Settings) => {
@@ -1352,6 +1370,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onResumeSystem={handleResumeSystem}
         onSynthesisSleep={handleSynthesisSleep}
         isImageSandboxOpen={imageSandboxOpen}
+        imageSandboxEnabled={imageSandboxEnabled}
         systemStatsHistory={systemStatsHistory}
         systemStatsCurrent={systemStatsCurrent}
         systemStatsHiddenGpus={settings.systemStatsHiddenGpus}
@@ -1359,7 +1378,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         agentName={settings.agentName}
       />
       {/* Backdrop is now rendered inside Sidebar with gesture-tracked opacity */}
-      {imageSandboxOpen ? (
+      {imageSandboxEnabled && imageSandboxOpen ? (
         <ImageSandbox
           defaultModelId={activeChat?.modelId || settings.defaultModelId || models[0]?.id || ""}
           onClose={handleCloseImageSandbox}

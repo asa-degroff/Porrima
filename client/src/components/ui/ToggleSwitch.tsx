@@ -10,9 +10,10 @@ interface ToggleSwitchProps {
   onChange: () => void;
   accentColor: "purple" | "blue" | "emerald" | "violet";
   disabled?: boolean;
+  ariaLabel?: string;
 }
 
-export function ToggleSwitch({ checked, onChange, accentColor, disabled }: ToggleSwitchProps) {
+export function ToggleSwitch({ checked, onChange, accentColor, disabled, ariaLabel }: ToggleSwitchProps) {
   const colors = ACCENT_COLORS[accentColor];
   return (
     <button
@@ -24,6 +25,7 @@ export function ToggleSwitch({ checked, onChange, accentColor, disabled }: Toggl
         ${disabled ? "opacity-40 cursor-not-allowed pointer-events-none" : "cursor-pointer"}`}
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
     >
       <span
         className={`absolute top-1 w-4 h-4 rounded-full bg-white/80

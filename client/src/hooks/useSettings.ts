@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS: Settings = {
   exaSearchEnabled: false,
   tavilySearchEnabled: false,
   defaultWebSearchProvider: "brave",
+  imageSandboxEnabled: true,
   hapticsEnabled: true,
   readFileDefaultLines: 1000,
   readFileMaxBytes: 256 * 1024,

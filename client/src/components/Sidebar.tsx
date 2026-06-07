@@ -66,6 +66,7 @@ interface Props {
   onResumeSystem?: () => Promise<void> | void;
   onSynthesisSleep?: () => void;
   isImageSandboxOpen?: boolean;
+  imageSandboxEnabled?: boolean;
   cacheResidency?: Map<string, CacheResidency>;
   systemStatsHistory?: SystemStatsSample[];
   systemStatsCurrent?: SystemStatsSample | null;
@@ -1391,6 +1392,7 @@ export function Sidebar({
   onResumeSystem,
   onSynthesisSleep,
   isImageSandboxOpen = false,
+  imageSandboxEnabled = true,
   cacheResidency = new Map(),
   systemStatsHistory = [],
   systemStatsCurrent,
@@ -2268,22 +2270,24 @@ export function Sidebar({
               />
             )}
           </button>
-          <button
-            onClick={() => { onOpenImageSandbox(); onClose(); }}
-            className={`flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2 pressable ${
-              activeView === 'notebooks' ? 'opacity-50' : ''
-            }`}
-            style={{
-              backgroundColor: `rgba(var(--theme-accent), ${isImageSandboxOpen ? 0.15 : 0.05})`,
-              borderColor: `rgba(var(--theme-accent), ${isImageSandboxOpen ? 0.4 : 0.25})`,
-              color: `rgba(var(--theme-accent-text))`,
-            }}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <path fill-rule="evenodd" clip-rule="evenodd" d="M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2ZM5 5v14h14V5H5ZM9 7a2 2 0 110 4 2 2 0 010-4ZM5 19l3.5-4.5 3 3 4-5.5L19 15v4H5Z" />
-            </svg>
-            Images
-          </button>
+          {imageSandboxEnabled && (
+            <button
+              onClick={() => { onOpenImageSandbox(); onClose(); }}
+              className={`flex-1 px-3 py-2 rounded-xl border text-sm font-medium transition-all hover:brightness-125 flex items-center justify-center gap-2 pressable ${
+                activeView === 'notebooks' ? 'opacity-50' : ''
+              }`}
+              style={{
+                backgroundColor: `rgba(var(--theme-accent), ${isImageSandboxOpen ? 0.15 : 0.05})`,
+                borderColor: `rgba(var(--theme-accent), ${isImageSandboxOpen ? 0.4 : 0.25})`,
+                color: `rgba(var(--theme-accent-text))`,
+              }}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2ZM5 5v14h14V5H5ZM9 7a2 2 0 110 4 2 2 0 010-4ZM5 19l3.5-4.5 3 3 4-5.5L19 15v4H5Z" />
+              </svg>
+              Images
+            </button>
+          )}
         </div>
       </div>
       {/* Spacer for TTS bar */}

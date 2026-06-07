@@ -443,6 +443,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [comfyuiUrl, setComfyuiUrl] = useState(settings.comfyuiUrl || "http://127.0.0.1:8188");
   const [comfyuiStatus, setComfyuiStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   const [imageBackend, setImageBackend] = useState<"comfyui" | "sdcpp">(settings.imageBackend ?? "comfyui");
+  const [imageSandboxEnabled, setImageSandboxEnabled] = useState(settings.imageSandboxEnabled ?? true);
   const [sdcppUrl, setSdcppUrl] = useState(settings.sdcppUrl || "http://127.0.0.1:1234");
   const [sdcppStatus, setSdcppStatus] = useState<"checking" | "connected" | "unavailable" | null>(null);
   // llama.cpp server settings
@@ -1726,6 +1727,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       comfyuiUrl: comfyuiUrl.trim() || undefined,
       sdcppUrl: sdcppUrl.trim() || undefined,
       imageBackend,
+      imageSandboxEnabled,
       llamacppEnabled,
       llamacppUrl: llamacppUrl.trim() || undefined,
       llamacppSharesGpu,
@@ -5017,6 +5019,18 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
           {/* Image Generation */}
           <div id="images" className="space-y-3 pt-2 border-t border-white/10">
             <h3 className="text-sm font-medium text-white/70">Image Generation</h3>
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-3">
+              <div>
+                <label className="block text-sm font-medium text-white/60">Image Sandbox</label>
+                <p className="text-xs text-white/30 mt-0.5">Show the images workspace</p>
+              </div>
+              <ToggleSwitch
+                checked={imageSandboxEnabled}
+                onChange={() => setImageSandboxEnabled(!imageSandboxEnabled)}
+                accentColor="purple"
+                ariaLabel="Enable Image Sandbox"
+              />
+            </div>
             <div className="space-y-2">
               <label className="block text-sm text-white/50">Backend</label>
               <Dropdown

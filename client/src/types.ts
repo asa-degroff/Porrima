@@ -322,6 +322,7 @@ export interface Settings {
   comfyuiUrl?: string;
   sdcppUrl?: string;
   imageBackend?: "comfyui" | "sdcpp";
+  imageSandboxEnabled?: boolean;
   theme?: Theme;
   backgroundEffect?: BackgroundEffect;
   flatBackground?: boolean;
