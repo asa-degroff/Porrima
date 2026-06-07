@@ -21,6 +21,10 @@ const ASPECT_RATIOS = [
 const STORAGE_KEY = "porrima-image-settings";
 const LEGACY_STORAGE_KEY = "quje-image-settings";
 
+interface CustomResolutions {
+  [ratio: string]: { w: number; h: number };
+}
+
 interface Props {
   models: string[];
   generating: boolean;
@@ -46,6 +50,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
   const [scheduler, setScheduler] = useState(initialParams?.scheduler || "normal");
   const [lastSeed, setLastSeed] = useState<number | null>(null);
   const [batchCount, setBatchCount] = useState<string>("1");
+  const [customResolutions, setCustomResolutions] = useState<CustomResolutions>({});
   const modelDd = useDropdown();
   const samplerDd = useDropdown();
   const schedulerDd = useDropdown();
@@ -72,6 +77,7 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
         if (settings.showNegative !== undefined) setShowNegative(settings.showNegative);
         if (settings.negativePrompt) setNegativePrompt(settings.negativePrompt);
         if (settings.seed !== undefined) setSeed(settings.seed.toString());
+        if (settings.customResolutions) setCustomResolutions(settings.customResolutions);
       }
     } catch {}
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -91,16 +97,23 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
         showNegative,
         negativePrompt,
         seed,
+        customResolutions,
       }), LEGACY_STORAGE_KEY);
     } catch {}
-  }, [width, height, aspectRatio, steps, cfgScale, sampler, scheduler, model, showNegative, negativePrompt, seed]);
+  }, [width, height, aspectRatio, steps, cfgScale, sampler, scheduler, model, showNegative, negativePrompt, seed, customResolutions]);
 
-  // Handle aspect ratio button click
+  // Handle aspect ratio button click — use custom resolution if saved, else default
   const handleAspectRatioClick = (label: string, w: number, h: number, ratio: number | null) => {
     setAspectRatio(label);
     if (label === "Free") return;
-    setWidth(w);
-    setHeight(h);
+    const custom = customResolutions[label];
+    if (custom) {
+      setWidth(custom.w);
+      setHeight(custom.h);
+    } else {
+      setWidth(w);
+      setHeight(h);
+    }
   };
 
   // Update model when models list arrives
@@ -160,7 +173,15 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
         const ar = ASPECT_RATIOS.find((a) => a.label === aspectRatio);
         if (ar && ar.ratio !== null) {
           // Calculate exact height from ratio
-          setHeight(Math.round(numValue / ar.ratio));
+          const newHeight = Math.round(numValue / ar.ratio);
+          setHeight(newHeight);
+          // Persist custom resolution for this aspect ratio
+          if (aspectRatio !== "Free") {
+            setCustomResolutions(prev => ({
+              ...prev,
+              [aspectRatio]: { w: numValue, h: newHeight },
+            }));
+          }
         }
       }
     }
@@ -177,7 +198,13 @@ export function ImageControls({ models, generating, progress, onEnqueue, onAbort
       if (!isNaN(numValue)) {
         const ar = ASPECT_RATIOS.find((a) => a.label === aspectRatio);
         if (ar && ar.ratio !== null) {
-          setWidth(Math.round(numValue * ar.ratio));
+          const newWidth = Math.round(numValue * ar.ratio);
+          setWidth(newWidth);
+          // Persist custom resolution for this aspect ratio
+          setCustomResolutions(prev => ({
+            ...prev,
+            [aspectRatio]: { w: newWidth, h: numValue },
+          }));
         }
       }
     }
