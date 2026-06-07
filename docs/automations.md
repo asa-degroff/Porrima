@@ -19,10 +19,19 @@ Custom automations are user-created tasks with:
 - `schedule`: `interval` (`everyMinutes`) or `daily` (`timeOfDay`, local server time)
 - `activationPolicy`: `idle`, `sleep_only`, or `manual_only`
 - ordered `promptSteps`
+- `promptDispatchMode`: `sequence`, `random`, or `cycle`
 - optional push notifications
 - `maxIterations` and `timeoutMs`
 
 Each custom task uses a system chat, defaulting to `automation:<task-id>`, so its history, tool calls, compaction summaries, and results are auditable like any other chat.
+
+Prompt dispatch modes:
+
+- `sequence` preserves the original behavior: every prompt step is sent during one automation run.
+- `random` sends one random non-empty prompt step at the start of the run.
+- `cycle` sends one non-empty prompt step per run and advances `nextPromptStepId` under the automation lock, so manual and scheduled runs share the same cursor.
+
+Synthesis automations always use `sequence` because their prompt steps are phases. Wake and custom automations can use any dispatch mode.
 
 ## Scheduler
 
@@ -55,7 +64,7 @@ Custom automations preserve the same KV-cache-sensitive prompt shape as system c
 3. Run `truncateBeforeSend()` before model dispatch.
 4. Use full system tools except `ask_user`.
 5. Let `runHeadlessChatTurn()` drive the shared `runAgentLoop()` core.
-6. Inject later prompt steps through `getFollowUp` after turn boundaries.
+6. Inject later prompt steps through `getFollowUp` after turn boundaries when the task uses `sequence`.
 
 Prompt text is kept in user-role trigger/follow-up messages. The system prompt remains the stable prefix so editing automation prompts does not unnecessarily invalidate the system chat KV cache.
 

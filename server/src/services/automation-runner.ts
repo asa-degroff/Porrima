@@ -6,8 +6,11 @@ import {
   getAutomationTask,
   startAutomationRun,
   SYNTHESIS_AUTOMATION_ID,
+  updateAutomationPromptCursor,
+  updateAutomationRunPromptSelection,
   WAKE_AUTOMATION_ID,
 } from "./automation-storage.js";
+import { selectAutomationPromptStepsForRun } from "./automation-prompt-selection.js";
 import { runSystemSynthesis, runWakeCycle, type SynthesisResult } from "./system-chat.js";
 import { runHeadlessChatTurn } from "./chat-turn-runner.js";
 import { SYSTEM_CHAT_ID } from "./system-chat.js";
@@ -388,12 +391,25 @@ export async function runAutomationTask(
   let run: AutomationRun | null = null;
   try {
     run = startAutomationRun(task.id, origin);
-    const result = await executeAutomation(task, run);
+    const promptSelection = selectAutomationPromptStepsForRun(task);
+    updateAutomationRunPromptSelection(run.id, promptSelection.selectedSteps);
+
+    if (promptSelection.mode === "cycle") {
+      updateAutomationPromptCursor(task.id, promptSelection.nextPromptStepId);
+    }
+
+    const executionTask =
+      promptSelection.mode === "sequence"
+        ? task
+        : { ...task, promptSteps: promptSelection.selectedSteps };
+    const result = await executeAutomation(executionTask, run);
     await sendAutomationPush(task, result);
     finishAutomationRun(run.id, result.success ? "success" : "failed", {
       error: result.error,
       summary: result.summary,
       toolCallCount: result.toolCalls.length,
+      selectedPromptStepIds: promptSelection.selectedSteps.map((step) => step.id),
+      selectedPromptStepTitles: promptSelection.selectedSteps.map((step) => step.title),
       chatId: result.chatId,
       assistantMessageIndex: result.assistantMessageIndex,
     });

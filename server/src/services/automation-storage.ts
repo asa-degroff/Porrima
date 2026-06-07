@@ -3,6 +3,7 @@ import type {
   AutomationActivationPolicy,
   AutomationKind,
   AutomationNotificationSettings,
+  AutomationPromptDispatchMode,
   AutomationPromptStep,
   AutomationRun,
   AutomationRunStatus,
@@ -35,6 +36,8 @@ interface AutomationTaskRow {
   scheduleJson: string;
   activationPolicy: string;
   promptStepsJson: string;
+  promptDispatchMode: string | null;
+  nextPromptStepId: string | null;
   notificationsJson: string;
   maxIterations: number;
   timeoutMs: number;
@@ -56,6 +59,8 @@ interface AutomationRunRow {
   error: string | null;
   summary: string | null;
   toolCallCount: number | null;
+  selectedPromptStepIdsJson: string | null;
+  selectedPromptStepTitlesJson: string | null;
   chatId: string | null;
   assistantMessageIndex: number | null;
 }
@@ -76,6 +81,8 @@ function ensureSchema(): void {
       scheduleJson TEXT NOT NULL,
       activationPolicy TEXT NOT NULL,
       promptStepsJson TEXT NOT NULL,
+      promptDispatchMode TEXT NOT NULL DEFAULT 'sequence',
+      nextPromptStepId TEXT,
       notificationsJson TEXT NOT NULL,
       maxIterations INTEGER NOT NULL,
       timeoutMs INTEGER NOT NULL,
@@ -97,6 +104,8 @@ function ensureSchema(): void {
       error TEXT,
       summary TEXT,
       toolCallCount INTEGER,
+      selectedPromptStepIdsJson TEXT,
+      selectedPromptStepTitlesJson TEXT,
       chatId TEXT,
       assistantMessageIndex INTEGER
     );
@@ -109,6 +118,24 @@ function ensureSchema(): void {
   if (!taskCols.some((c) => c.name === "consecutiveFailures")) {
     db.exec("ALTER TABLE automation_tasks ADD COLUMN consecutiveFailures INTEGER NOT NULL DEFAULT 0");
     console.log("[automation] Added consecutiveFailures column to automation_tasks");
+  }
+  if (!taskCols.some((c) => c.name === "promptDispatchMode")) {
+    db.exec("ALTER TABLE automation_tasks ADD COLUMN promptDispatchMode TEXT NOT NULL DEFAULT 'sequence'");
+    console.log("[automation] Added promptDispatchMode column to automation_tasks");
+  }
+  if (!taskCols.some((c) => c.name === "nextPromptStepId")) {
+    db.exec("ALTER TABLE automation_tasks ADD COLUMN nextPromptStepId TEXT");
+    console.log("[automation] Added nextPromptStepId column to automation_tasks");
+  }
+
+  const runCols = db.prepare("PRAGMA table_info(automation_runs)").all() as Array<{ name: string }>;
+  if (!runCols.some((c) => c.name === "selectedPromptStepIdsJson")) {
+    db.exec("ALTER TABLE automation_runs ADD COLUMN selectedPromptStepIdsJson TEXT");
+    console.log("[automation] Added selectedPromptStepIdsJson column to automation_runs");
+  }
+  if (!runCols.some((c) => c.name === "selectedPromptStepTitlesJson")) {
+    db.exec("ALTER TABLE automation_runs ADD COLUMN selectedPromptStepTitlesJson TEXT");
+    console.log("[automation] Added selectedPromptStepTitlesJson column to automation_runs");
   }
   schemaReady = true;
 }
@@ -147,6 +174,15 @@ function normalizeActivationPolicy(value: unknown, fallback: AutomationActivatio
   return value === "sleep_only" || value === "manual_only" || value === "idle" ? value : fallback;
 }
 
+function normalizePromptDispatchMode(
+  value: unknown,
+  kind: AutomationKind,
+  fallback: AutomationPromptDispatchMode,
+): AutomationPromptDispatchMode {
+  if (kind === "synthesis") return "sequence";
+  return value === "random" || value === "cycle" || value === "sequence" ? value : fallback;
+}
+
 function normalizeNotifications(value: Partial<AutomationNotificationSettings> | undefined): AutomationNotificationSettings {
   return {
     enabled: value?.enabled === true,
@@ -168,6 +204,17 @@ function normalizePromptSteps(steps: unknown, fallback: AutomationPromptStep[]):
     })
     .filter((step) => step.prompt.trim().length > 0);
   return normalized.length > 0 ? normalized : fallback;
+}
+
+function normalizeNextPromptStepId(
+  value: unknown,
+  steps: AutomationPromptStep[],
+  mode: AutomationPromptDispatchMode,
+): string | undefined {
+  if (mode !== "cycle") return undefined;
+  const ids = steps.map((step) => step.id);
+  if (typeof value === "string" && ids.includes(value)) return value;
+  return ids[0];
 }
 
 function nextDailyRun(timeOfDay: string, fromMs: number): string {
@@ -211,6 +258,12 @@ function taskFromRow(row: AutomationTaskRow): AutomationTask {
     }),
     activationPolicy: normalizeActivationPolicy(row.activationPolicy, "idle"),
     promptSteps: parseJson<AutomationPromptStep[]>(row.promptStepsJson, []),
+    promptDispatchMode: normalizePromptDispatchMode(row.promptDispatchMode, row.kind as AutomationKind, "sequence"),
+    nextPromptStepId: normalizeNextPromptStepId(
+      row.nextPromptStepId,
+      parseJson<AutomationPromptStep[]>(row.promptStepsJson, []),
+      normalizePromptDispatchMode(row.promptDispatchMode, row.kind as AutomationKind, "sequence"),
+    ),
     notifications: parseJson<AutomationNotificationSettings>(row.notificationsJson, { enabled: false }),
     maxIterations: row.maxIterations,
     timeoutMs: row.timeoutMs,
@@ -234,6 +287,12 @@ function runFromRow(row: AutomationRunRow): AutomationRun {
     ...(row.error ? { error: row.error } : {}),
     ...(row.summary ? { summary: row.summary } : {}),
     ...(row.toolCallCount !== null ? { toolCallCount: row.toolCallCount } : {}),
+    ...(row.selectedPromptStepIdsJson
+      ? { selectedPromptStepIds: parseJson<string[]>(row.selectedPromptStepIdsJson, []) }
+      : {}),
+    ...(row.selectedPromptStepTitlesJson
+      ? { selectedPromptStepTitles: parseJson<string[]>(row.selectedPromptStepTitlesJson, []) }
+      : {}),
     ...(row.chatId ? { chatId: row.chatId } : {}),
     ...(row.assistantMessageIndex !== null ? { assistantMessageIndex: row.assistantMessageIndex } : {}),
   };
@@ -245,11 +304,13 @@ function insertTask(task: AutomationTask): void {
     .prepare(
       `INSERT OR REPLACE INTO automation_tasks (
         id, kind, title, enabled, builtIn, orderIndex, chatId, scheduleJson,
-        activationPolicy, promptStepsJson, notificationsJson, maxIterations,
+        activationPolicy, promptStepsJson, promptDispatchMode, nextPromptStepId,
+        notificationsJson, maxIterations,
         timeoutMs, lastRunAt, nextRunAt, lastStatus, consecutiveFailures, createdAt, updatedAt
       ) VALUES (
         @id, @kind, @title, @enabled, @builtIn, @orderIndex, @chatId, @scheduleJson,
-        @activationPolicy, @promptStepsJson, @notificationsJson, @maxIterations,
+        @activationPolicy, @promptStepsJson, @promptDispatchMode, @nextPromptStepId,
+        @notificationsJson, @maxIterations,
         @timeoutMs, @lastRunAt, @nextRunAt, @lastStatus, @consecutiveFailures, @createdAt, @updatedAt
       )`,
     )
@@ -264,6 +325,8 @@ function insertTask(task: AutomationTask): void {
       scheduleJson: JSON.stringify(task.schedule),
       activationPolicy: task.activationPolicy,
       promptStepsJson: JSON.stringify(task.promptSteps),
+      promptDispatchMode: task.promptDispatchMode,
+      nextPromptStepId: task.nextPromptStepId ?? null,
       notificationsJson: JSON.stringify(task.notifications),
       maxIterations: task.maxIterations,
       timeoutMs: task.timeoutMs,
@@ -286,6 +349,8 @@ function makeBuiltinTask(params: {
   schedule: AutomationSchedule;
   activationPolicy: AutomationActivationPolicy;
   promptSteps: AutomationPromptStep[];
+  promptDispatchMode?: AutomationPromptDispatchMode;
+  nextPromptStepId?: string | null;
   maxIterations: number;
   timeoutMs: number;
   lastRunAt?: string | null;
@@ -306,6 +371,12 @@ function makeBuiltinTask(params: {
     schedule: params.schedule,
     activationPolicy: params.activationPolicy,
     promptSteps: params.promptSteps,
+    promptDispatchMode: normalizePromptDispatchMode(params.promptDispatchMode, params.kind, "sequence"),
+    nextPromptStepId: normalizeNextPromptStepId(
+      params.nextPromptStepId,
+      params.promptSteps,
+      normalizePromptDispatchMode(params.promptDispatchMode, params.kind, "sequence"),
+    ),
     notifications: { enabled: false },
     maxIterations: params.maxIterations,
     timeoutMs: params.timeoutMs,
@@ -372,6 +443,12 @@ export async function ensureAutomationDefaults(): Promise<void> {
       kind: fallback.kind,
       chatId: existing.chatId || fallback.chatId,
       promptSteps: existing.promptSteps.length > 0 ? existing.promptSteps : fallback.promptSteps,
+      promptDispatchMode: normalizePromptDispatchMode(existing.promptDispatchMode, fallback.kind, fallback.promptDispatchMode),
+      nextPromptStepId: normalizeNextPromptStepId(
+        existing.nextPromptStepId,
+        existing.promptSteps.length > 0 ? existing.promptSteps : fallback.promptSteps,
+        normalizePromptDispatchMode(existing.promptDispatchMode, fallback.kind, fallback.promptDispatchMode),
+      ),
       schedule: existing.schedule ?? fallback.schedule,
       // Migrate: built-in synthesis task changed from "idle" to "sleep_only"
       // so it respects the sleep cycle (requires inactivity before starting).
@@ -423,6 +500,10 @@ export function createCustomAutomationTask(input: Partial<AutomationTask>): Auto
     .prepare("SELECT COALESCE(MAX(orderIndex), 0) as maxOrder FROM automation_tasks")
     .get() as { maxOrder: number };
   const schedule = normalizeSchedule(input.schedule, DEFAULT_CUSTOM_INTERVAL_MINUTES);
+  const promptSteps = normalizePromptSteps(input.promptSteps, [
+    { id: "step-1", title: "Prompt", prompt: "Describe what you want this automation to do." },
+  ]);
+  const promptDispatchMode = normalizePromptDispatchMode(input.promptDispatchMode, "custom", "sequence");
   const task: AutomationTask = {
     id,
     kind: "custom",
@@ -433,9 +514,9 @@ export function createCustomAutomationTask(input: Partial<AutomationTask>): Auto
     chatId: input.chatId || `automation:${id}`,
     schedule,
     activationPolicy: normalizeActivationPolicy(input.activationPolicy, "idle"),
-    promptSteps: normalizePromptSteps(input.promptSteps, [
-      { id: "step-1", title: "Prompt", prompt: "Describe what you want this automation to do." },
-    ]),
+    promptSteps,
+    promptDispatchMode,
+    nextPromptStepId: normalizeNextPromptStepId(input.nextPromptStepId, promptSteps, promptDispatchMode),
     notifications: normalizeNotifications(input.notifications),
     maxIterations: input.maxIterations ?? 20,
     timeoutMs: input.timeoutMs ?? 30 * 60 * 1000,
@@ -460,6 +541,12 @@ export function updateAutomationTask(id: string, patch: Partial<AutomationTask>)
   const schedule = patch.schedule
     ? normalizeSchedule(patch.schedule, fallbackMinutes)
     : existing.schedule;
+  const promptSteps = patch.promptSteps ? normalizePromptSteps(patch.promptSteps, existing.promptSteps) : existing.promptSteps;
+  const promptDispatchMode = normalizePromptDispatchMode(
+    patch.promptDispatchMode,
+    existing.builtIn ? existing.kind : patch.kind ?? existing.kind,
+    existing.promptDispatchMode,
+  );
   const updated: AutomationTask = {
     ...existing,
     ...patch,
@@ -470,7 +557,13 @@ export function updateAutomationTask(id: string, patch: Partial<AutomationTask>)
     chatId: existing.builtIn ? existing.chatId : patch.chatId || existing.chatId,
     schedule,
     activationPolicy: normalizeActivationPolicy(patch.activationPolicy, existing.activationPolicy),
-    promptSteps: patch.promptSteps ? normalizePromptSteps(patch.promptSteps, existing.promptSteps) : existing.promptSteps,
+    promptSteps,
+    promptDispatchMode,
+    nextPromptStepId: normalizeNextPromptStepId(
+      patch.nextPromptStepId ?? existing.nextPromptStepId,
+      promptSteps,
+      promptDispatchMode,
+    ),
     notifications: patch.notifications ? normalizeNotifications(patch.notifications) : existing.notifications,
     maxIterations: Math.max(1, Math.floor(Number(patch.maxIterations ?? existing.maxIterations))),
     timeoutMs: Math.max(60_000, Math.floor(Number(patch.timeoutMs ?? existing.timeoutMs))),
@@ -505,6 +598,20 @@ export function resetBuiltinAutomationPrompts(id: string): AutomationTask | null
   return updateAutomationTask(id, { promptSteps });
 }
 
+export function updateAutomationPromptCursor(id: string, nextPromptStepId: string | undefined): AutomationTask | null {
+  const task = getAutomationTask(id);
+  if (!task) return null;
+  const promptDispatchMode = normalizePromptDispatchMode(task.promptDispatchMode, task.kind, "sequence");
+  const normalizedNext = normalizeNextPromptStepId(nextPromptStepId, task.promptSteps, promptDispatchMode);
+  const updated: AutomationTask = {
+    ...task,
+    nextPromptStepId: normalizedNext,
+    updatedAt: new Date().toISOString(),
+  };
+  insertTask(updated);
+  return updated;
+}
+
 export function startAutomationRun(taskId: string, origin: AutomationRun["origin"]): AutomationRun {
   ensureSchema();
   const run: AutomationRun = {
@@ -523,6 +630,26 @@ export function startAutomationRun(taskId: string, origin: AutomationRun["origin
   return run;
 }
 
+export function updateAutomationRunPromptSelection(
+  runId: string,
+  steps: AutomationPromptStep[],
+): AutomationRun | null {
+  ensureSchema();
+  getDb()
+    .prepare(
+      `UPDATE automation_runs
+       SET selectedPromptStepIdsJson = @selectedPromptStepIdsJson,
+           selectedPromptStepTitlesJson = @selectedPromptStepTitlesJson
+       WHERE id = @id`,
+    )
+    .run({
+      id: runId,
+      selectedPromptStepIdsJson: JSON.stringify(steps.map((step) => step.id)),
+      selectedPromptStepTitlesJson: JSON.stringify(steps.map((step) => step.title)),
+    });
+  return getAutomationRun(runId);
+}
+
 export function finishAutomationRun(
   runId: string,
   status: AutomationRunStatus,
@@ -533,13 +660,15 @@ export function finishAutomationRun(
   getDb()
     .prepare(
       `UPDATE automation_runs
-       SET status = @status,
-           finishedAt = @finishedAt,
-           error = @error,
-           summary = @summary,
-           toolCallCount = @toolCallCount,
-           chatId = @chatId,
-           assistantMessageIndex = @assistantMessageIndex
+	       SET status = @status,
+	           finishedAt = @finishedAt,
+	           error = @error,
+	           summary = @summary,
+	           toolCallCount = @toolCallCount,
+	           selectedPromptStepIdsJson = COALESCE(@selectedPromptStepIdsJson, selectedPromptStepIdsJson),
+	           selectedPromptStepTitlesJson = COALESCE(@selectedPromptStepTitlesJson, selectedPromptStepTitlesJson),
+	           chatId = @chatId,
+	           assistantMessageIndex = @assistantMessageIndex
        WHERE id = @id`,
     )
     .run({
@@ -549,6 +678,12 @@ export function finishAutomationRun(
       error: details.error ?? null,
       summary: details.summary ?? null,
       toolCallCount: details.toolCallCount ?? null,
+      selectedPromptStepIdsJson: details.selectedPromptStepIds
+        ? JSON.stringify(details.selectedPromptStepIds)
+        : null,
+      selectedPromptStepTitlesJson: details.selectedPromptStepTitles
+        ? JSON.stringify(details.selectedPromptStepTitles)
+        : null,
       chatId: details.chatId ?? null,
       assistantMessageIndex: details.assistantMessageIndex ?? null,
     });

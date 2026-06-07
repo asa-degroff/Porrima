@@ -41,7 +41,7 @@
 | POST | `/api/snapshots/:id/restore` | Restore an agent database snapshot as a full database replacement. Creates a pre-restore snapshot before replacing databases; automatic pre-restore snapshots retain the latest 10 for up to 30 days. |
 | GET | `/api/automations` | List automation tasks plus `{ isRunning, activeTaskId }` |
 | POST | `/api/automations` | Create a custom automation task |
-| PATCH | `/api/automations/:id` | Update schedule, order, enabled state, activation policy, prompt steps, notifications, or runtime limits |
+| PATCH | `/api/automations/:id` | Update schedule, order, enabled state, activation policy, prompt steps, prompt dispatch mode, notifications, or runtime limits |
 | DELETE | `/api/automations/:id` | Delete a custom automation. Built-ins return **400** and must be disabled instead. |
 | POST | `/api/automations/:id/run` | Manually dispatch an automation. Returns **202 Accepted** `{ started: true }`; returns **409 Conflict** if another automation is active. |
 | POST | `/api/automations/:id/reset-prompts` | Restore the default prompt steps for a built-in automation |

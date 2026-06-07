@@ -34,8 +34,8 @@ All data is stored in `~/.porrima/`:
 - `projects` — project metadata
 - `settings` — key-value settings (single 'settings' key)
 - `pending_states` — ask_user tool loop state for resume after server restart
-- `automation_tasks` — built-in and custom automation configuration: kind/title, enabled state, order, target chat, schedule JSON, activation policy, prompt steps, push notification settings, runtime limits, last/next run timestamps, status, and consecutive failure count
-- `automation_runs` — audit history for automation executions: task ID, status, origin (`scheduler`, `manual`, `migration`), start/finish timestamps, error/summary, tool call count, chat ID, and assistant message index
+- `automation_tasks` — built-in and custom automation configuration: kind/title, enabled state, order, target chat, schedule JSON, activation policy, prompt steps, prompt dispatch mode/cycle cursor, push notification settings, runtime limits, last/next run timestamps, status, and consecutive failure count
+- `automation_runs` — audit history for automation executions: task ID, status, origin (`scheduler`, `manual`, `migration`), start/finish timestamps, selected prompt step metadata, error/summary, tool call count, chat ID, and assistant message index
 - `push_subscriptions` — browser push devices and subscription secrets, keyed by `deviceId`, with failure counts and last-seen timestamps
 - `corpus_entries` — image corpus metadata (type, imagePath, prompt, description, elements JSON, chat/project/direction IDs)
 - `vec_corpus` — sqlite-vec virtual table (id, embedding float[1024] with cosine distance)

@@ -376,6 +376,28 @@ function formatAutomationSchedule(task: AutomationTask): string {
   return `Every ${minutes}m`;
 }
 
+const AUTOMATION_PROMPT_DISPATCH_OPTIONS: Array<{
+  mode: AutomationTask["promptDispatchMode"];
+  label: string;
+}> = [
+  { mode: "sequence", label: "All" },
+  { mode: "random", label: "Random" },
+  { mode: "cycle", label: "Cycle" },
+];
+
+function formatAutomationPromptDispatch(task: AutomationTask): string {
+  if (task.kind === "synthesis") return "All phases";
+  if (task.promptDispatchMode === "random") return "Random prompt";
+  if (task.promptDispatchMode === "cycle") return "Cycle prompts";
+  return "All prompts";
+}
+
+function getAutomationCyclePromptTitle(task: AutomationTask): string {
+  const eligibleSteps = task.promptSteps.filter((step) => step.prompt.trim().length > 0);
+  const nextStep = eligibleSteps.find((step) => step.id === task.nextPromptStepId) ?? eligibleSteps[0];
+  return nextStep?.title || "Prompt 1";
+}
+
 function automationStatusTone(status?: AutomationRun["status"]): string {
   if (status === "success") return "bg-green-500/10 text-green-300/80 border-green-400/20";
   if (status === "failed") return "bg-red-500/10 text-red-300/80 border-red-400/20";
@@ -1947,6 +1969,60 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     await saveAutomationPatch(task.id, { schedule });
   };
 
+  const handleAutomationPromptDispatchChange = async (
+    task: AutomationTask,
+    promptDispatchMode: AutomationTask["promptDispatchMode"],
+  ) => {
+    if (task.kind === "synthesis") return;
+    const patch: Partial<AutomationTask> = {
+      promptDispatchMode,
+      nextPromptStepId: promptDispatchMode === "cycle"
+        ? task.nextPromptStepId ?? task.promptSteps.find((step) => step.prompt.trim())?.id ?? task.promptSteps[0]?.id
+        : undefined,
+    };
+    updateAutomationDraft(task.id, patch);
+    await saveAutomationPatch(task.id, patch);
+  };
+
+  const handleAddAutomationPromptStep = (task: AutomationTask) => {
+    if (task.kind === "synthesis") return;
+    const index = task.promptSteps.length + 1;
+    const promptSteps = [
+      ...task.promptSteps,
+      {
+        id: crypto.randomUUID(),
+        title: `Prompt ${index}`,
+        prompt: "",
+      },
+    ];
+    updateAutomationDraft(task.id, { promptSteps });
+    setAutomationPromptExpandedTaskId(task.id);
+  };
+
+  const handleRemoveAutomationPromptStep = async (task: AutomationTask, stepIndex: number) => {
+    if (task.kind === "synthesis" || task.promptSteps.length <= 1) return;
+    const removed = task.promptSteps[stepIndex];
+    const promptSteps = task.promptSteps.filter((_, index) => index !== stepIndex);
+    const nextPromptStepId = task.nextPromptStepId === removed?.id
+      ? promptSteps.find((step) => step.prompt.trim())?.id ?? promptSteps[0]?.id
+      : task.nextPromptStepId;
+    const patch: Partial<AutomationTask> = { promptSteps, nextPromptStepId };
+    updateAutomationDraft(task.id, patch);
+    await saveAutomationPatch(task.id, patch);
+  };
+
+  const handleMoveAutomationPromptStep = async (task: AutomationTask, stepIndex: number, direction: -1 | 1) => {
+    if (task.kind === "synthesis") return;
+    const targetIndex = stepIndex + direction;
+    if (targetIndex < 0 || targetIndex >= task.promptSteps.length) return;
+    const promptSteps = [...task.promptSteps];
+    const [step] = promptSteps.splice(stepIndex, 1);
+    if (!step) return;
+    promptSteps.splice(targetIndex, 0, step);
+    updateAutomationDraft(task.id, { promptSteps });
+    await saveAutomationPatch(task.id, { promptSteps });
+  };
+
   const handleAddAutomation = async () => {
     setAutomationMessage(null);
     try {
@@ -1955,6 +2031,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
         enabled: false,
         schedule: { type: "interval", everyMinutes: 24 * 60 },
         activationPolicy: "idle",
+        promptDispatchMode: "sequence",
         promptSteps: [{ id: "step-1", title: "Prompt", prompt: "Describe what this automation should do." }],
         notifications: { enabled: false },
       });
@@ -5946,10 +6023,12 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                    ? normalizeAutomationTimeOfDay(task.schedule.timeOfDay)
 	                    : DEFAULT_AUTOMATION_DAILY_TIME;
 	                  const isRunning = automationsRunningTaskId === task.id;
-	                  const historyOpen = automationHistoryOpenTaskId === task.id;
-	                  const historyLoading = automationRunsLoadingTaskId === task.id;
-	                  const historyRuns = automationRunsByTaskId[task.id] || [];
-                  const schedRef = scheduleRefMap.current[task.id] || (scheduleRefMap.current[task.id] = { current: null });
+		                  const historyOpen = automationHistoryOpenTaskId === task.id;
+		                  const historyLoading = automationRunsLoadingTaskId === task.id;
+		                  const historyRuns = automationRunsByTaskId[task.id] || [];
+		                  const promptDispatchMode = task.kind === "synthesis" ? "sequence" : task.promptDispatchMode ?? "sequence";
+		                  const canEditPromptList = task.kind !== "synthesis";
+	                  const schedRef = scheduleRefMap.current[task.id] || (scheduleRefMap.current[task.id] = { current: null });
                   const actRef = activationRefMap.current[task.id] || (activationRefMap.current[task.id] = { current: null });
                   const scheduleState = {
                     open: scheduleOpen[task.id] ?? false,
@@ -6198,45 +6277,137 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                        </label>
 	                      </div>
 
-	                      <div>
-	                        <button
-	                              onClick={() => setAutomationPromptExpandedTaskId(automationPromptExpandedTaskId === task.id ? null : task.id)}
-	                              className="flex items-center gap-1.5 text-[11px] font-medium text-white/45 hover:text-white/60 transition-colors mb-1.5 pressable"
-	                        >
-	                              <Chevron open={automationPromptExpandedTaskId === task.id} size={10} />
-	                              Prompts ({task.promptSteps.length})
-	                        </button>
-	                        {automationPromptExpandedTaskId === task.id ? (
-	                              <div className="space-y-2">
-	                                    {task.promptSteps.map((step, stepIndex) => (
-	                                          <label key={step.id} className="block space-y-1">
-	                                                <span className="block text-[11px] text-white/45">{step.title}</span>
-	                                                <textarea
-	                                                      value={step.prompt}
-	                                                      onChange={(e) => {
-	                                                            const promptSteps = task.promptSteps.map((s, i) => i === stepIndex ? { ...s, prompt: e.target.value } : s);
-	                                                            updateAutomationDraft(task.id, { promptSteps });
+		                      <div>
+		                        <div className="flex items-center justify-between gap-2 mb-1.5">
+		                          <button
+		                                onClick={() => setAutomationPromptExpandedTaskId(automationPromptExpandedTaskId === task.id ? null : task.id)}
+		                                className="flex items-center gap-1.5 text-[11px] font-medium text-white/45 hover:text-white/60 transition-colors pressable"
+		                          >
+		                                <Chevron open={automationPromptExpandedTaskId === task.id} size={10} />
+		                                Prompts ({task.promptSteps.length}) · {formatAutomationPromptDispatch(task)}
+		                          </button>
+		                          {canEditPromptList && (
+		                            <button
+		                              type="button"
+		                              onClick={() => handleAddAutomationPromptStep(task)}
+		                              className="px-2 py-1 rounded-md text-[11px] bg-white/5 border border-white/10 text-white/45 hover:text-white/70 transition-all pressable"
+		                            >
+		                              Add prompt
+		                            </button>
+		                          )}
+		                        </div>
+		                        {task.kind !== "synthesis" && (
+		                          <fieldset className="mb-2">
+		                            <legend className="text-[11px] text-white/45 mb-1">Send</legend>
+		                            <div className="grid grid-cols-3 gap-1 rounded-md bg-white/5 border border-white/10 p-1">
+		                              {AUTOMATION_PROMPT_DISPATCH_OPTIONS.map((option) => {
+		                                const checked = promptDispatchMode === option.mode;
+		                                return (
+		                                  <label
+		                                    key={option.mode}
+		                                    className={`min-h-8 flex items-center justify-center rounded px-2 text-[11px] font-medium cursor-pointer transition-all ${
+		                                      checked
+		                                        ? "bg-purple-500/20 text-purple-100 border border-purple-400/25"
+		                                        : "text-white/45 border border-transparent hover:text-white/70 hover:bg-white/5"
+		                                    }`}
+		                                  >
+		                                    <input
+		                                      type="radio"
+		                                      name={`automation-prompt-dispatch-${task.id}`}
+		                                      value={option.mode}
+		                                      checked={checked}
+		                                      onChange={() => handleAutomationPromptDispatchChange(task, option.mode)}
+		                                      className="sr-only"
+		                                    />
+		                                    {option.label}
+		                                  </label>
+		                                );
+		                              })}
+		                            </div>
+		                            {promptDispatchMode === "cycle" && (
+		                              <p className="text-[11px] text-white/30 mt-1">Next: {getAutomationCyclePromptTitle(task)}</p>
+		                            )}
+		                          </fieldset>
+		                        )}
+		                        {automationPromptExpandedTaskId === task.id ? (
+		                              <div className="space-y-2">
+		                                    {task.promptSteps.map((step, stepIndex) => (
+		                                          <div key={step.id} className="space-y-1 rounded-md border border-white/10 bg-white/[0.02] p-2">
+		                                                <div className="flex items-center gap-2">
+		                                                  {canEditPromptList ? (
+		                                                    <input
+		                                                      value={step.title}
+		                                                      onChange={(e) => {
+		                                                        const promptSteps = task.promptSteps.map((s, i) => i === stepIndex ? { ...s, title: e.target.value } : s);
+		                                                        updateAutomationDraft(task.id, { promptSteps });
+		                                                      }}
+		                                                      onBlur={() => saveAutomationPatch(task.id, { promptSteps: task.promptSteps })}
+		                                                      className="min-w-0 flex-1 bg-white/5 border border-white/10 rounded-md px-2 py-1 text-[11px] text-white/65 outline-none focus:border-purple-400/30"
+		                                                    />
+		                                                  ) : (
+		                                                    <span className="block text-[11px] text-white/45 flex-1">{step.title}</span>
+		                                                  )}
+		                                                  {canEditPromptList && (
+		                                                    <div className="flex items-center gap-1 shrink-0">
+		                                                      <button
+		                                                        type="button"
+		                                                        onClick={() => handleMoveAutomationPromptStep(task, stepIndex, -1)}
+		                                                        disabled={stepIndex === 0}
+		                                                        className="px-1.5 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-white/40 hover:text-white/70 disabled:opacity-30 transition-all pressable"
+		                                                      >
+		                                                        Up
+		                                                      </button>
+		                                                      <button
+		                                                        type="button"
+		                                                        onClick={() => handleMoveAutomationPromptStep(task, stepIndex, 1)}
+		                                                        disabled={stepIndex === task.promptSteps.length - 1}
+		                                                        className="px-1.5 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-white/40 hover:text-white/70 disabled:opacity-30 transition-all pressable"
+		                                                      >
+		                                                        Down
+		                                                      </button>
+		                                                      <button
+		                                                        type="button"
+		                                                        onClick={() => handleRemoveAutomationPromptStep(task, stepIndex)}
+		                                                        disabled={task.promptSteps.length <= 1}
+		                                                        className="px-1.5 py-1 rounded text-[10px] bg-red-500/10 border border-red-400/20 text-red-200/60 hover:bg-red-500/20 disabled:opacity-30 transition-all pressable"
+		                                                      >
+		                                                        Remove
+		                                                      </button>
+		                                                    </div>
+		                                                  )}
+		                                                </div>
+		                                                <textarea
+		                                                      value={step.prompt}
+		                                                      onChange={(e) => {
+		                                                            const promptSteps = task.promptSteps.map((s, i) => i === stepIndex ? { ...s, prompt: e.target.value } : s);
+		                                                            updateAutomationDraft(task.id, { promptSteps });
 	                                                      }}
 	                                                      onBlur={() => saveAutomationPatch(task.id, { promptSteps: task.promptSteps })}
-	                                                      rows={task.kind === "synthesis" ? 5 : 4}
-	                                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-2 text-xs text-white/75 placeholder-white/25 outline-none focus:border-purple-400/30 resize-y"
-	                                                />
-	                                          </label>
-	                                    ))}
-	                              </div>
-	                        ) : (
-	                              <div className="space-y-1.5">
-	                                    {task.promptSteps.map((step) => (
+		                                                      rows={task.kind === "synthesis" ? 5 : 4}
+		                                                      className="w-full bg-white/5 border border-white/10 rounded-md px-2.5 py-2 text-xs text-white/75 placeholder-white/25 outline-none focus:border-purple-400/30 resize-y"
+		                                                />
+		                                          </div>
+		                                    ))}
+		                              </div>
+		                        ) : (
+		                              <div className="space-y-1.5">
+		                                    {task.promptSteps.map((step) => (
 	                                          <div key={step.id} className="flex items-start gap-2">
 	                                                <span className="text-[11px] text-white/35 shrink-0 mt-px">{step.title}</span>
-	                                                <span className="text-[11px] text-white/20 truncate flex-1">
-	                                                      {step.prompt ? step.prompt.split("\n")[0]?.substring(0, 80) : "—"}
-	                                                </span>
-	                                          </div>
-	                                    ))}
-	                              </div>
-	                        )}
-	                      </div>
+		                                                <span className="text-[11px] text-white/20 truncate flex-1">
+		                                                      {step.prompt ? step.prompt.split("\n")[0]?.substring(0, 80) : "—"}
+		                                                </span>
+		                                          </div>
+		                                    ))}
+		                                    {promptDispatchMode === "cycle" && task.kind !== "synthesis" && (
+		                                      <div className="flex items-start gap-2">
+		                                        <span className="text-[11px] text-white/35 shrink-0 mt-px">Next</span>
+		                                        <span className="text-[11px] text-white/20 truncate flex-1">{getAutomationCyclePromptTitle(task)}</span>
+		                                      </div>
+		                                    )}
+		                              </div>
+		                        )}
+		                      </div>
 
 	                      <div className="flex flex-wrap items-center gap-2">
 	                        <button
@@ -6313,12 +6484,19 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                      <span className="text-white/45">{formatAutomationDate(run.startedAt)}</span>
 	                                      <span className="text-white/30">{run.origin}</span>
 	                                      {duration && <span className="text-white/30">{duration}</span>}
-	                                      {typeof run.toolCallCount === "number" && (
-	                                        <span className="text-white/30">{run.toolCallCount} tools</span>
-	                                      )}
-	                                      {typeof run.assistantMessageIndex === "number" && (
-	                                        <span className="text-white/25">message {run.assistantMessageIndex + 1}</span>
-	                                      )}
+		                                      {typeof run.toolCallCount === "number" && (
+		                                        <span className="text-white/30">{run.toolCallCount} tools</span>
+		                                      )}
+		                                      {run.selectedPromptStepTitles && run.selectedPromptStepTitles.length > 0 && (
+		                                        <span className="text-white/25">
+		                                          {run.selectedPromptStepTitles.length === 1
+		                                            ? run.selectedPromptStepTitles[0]
+		                                            : `${run.selectedPromptStepTitles.length} prompts`}
+		                                        </span>
+		                                      )}
+		                                      {typeof run.assistantMessageIndex === "number" && (
+		                                        <span className="text-white/25">message {run.assistantMessageIndex + 1}</span>
+		                                      )}
 	                                    </div>
 	                                    {run.error ? (
 	                                      <p className="text-xs text-red-200/70 whitespace-pre-wrap">{run.error}</p>

@@ -170,6 +170,7 @@ export interface ChatListItem {
 export type AutomationKind = "synthesis" | "wake" | "custom";
 export type AutomationScheduleType = "interval" | "daily";
 export type AutomationActivationPolicy = "idle" | "sleep_only" | "manual_only";
+export type AutomationPromptDispatchMode = "sequence" | "random" | "cycle";
 export type AutomationRunStatus = "running" | "success" | "failed" | "skipped";
 
 export interface AutomationSchedule {
@@ -202,6 +203,8 @@ export interface AutomationTask {
   schedule: AutomationSchedule;
   activationPolicy: AutomationActivationPolicy;
   promptSteps: AutomationPromptStep[];
+  promptDispatchMode: AutomationPromptDispatchMode;
+  nextPromptStepId?: string;
   notifications: AutomationNotificationSettings;
   maxIterations: number;
   timeoutMs: number;
@@ -223,6 +226,8 @@ export interface AutomationRun {
   error?: string;
   summary?: string;
   toolCallCount?: number;
+  selectedPromptStepIds?: string[];
+  selectedPromptStepTitles?: string[];
   chatId?: string;
   assistantMessageIndex?: number;
 }
