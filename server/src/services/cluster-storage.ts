@@ -77,6 +77,17 @@ export async function setClusters(map: ClusterMap): Promise<void> {
   await persistClusters(map);
 }
 
+/**
+ * Invalidate the in-memory cluster cache without touching the persisted file.
+ * Forces clusterStorage to reload/rebuild on the next access.
+ */
+export function invalidateClusterCache(): void {
+  clusterCache = null;
+}
+
+/**
+ * Clear clusters entirely — both in-memory cache and persisted file.
+ */
 export async function clearClusters(): Promise<void> {
   clusterCache = null;
   try {

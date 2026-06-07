@@ -3,6 +3,7 @@ import * as sqliteVec from "sqlite-vec";
 import { existsSync, mkdirSync, readFileSync, renameSync } from "fs";
 import { join } from "path";
 import { APP_DATA_DIR } from "./paths.js";
+import { invalidateClusterCache } from "./cluster-storage.js";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -432,7 +433,7 @@ export async function updateCorpusEntry(
   return getCorpusEntry(id);
 }
 
-export async function deleteCorpusEntry(id: string): Promise<boolean> {
+function doDeleteCorpusEntry(id: string): boolean {
   const db = getDb();
   const del = db.transaction(() => {
     db.prepare("DELETE FROM vec_corpus WHERE id = ?").run(id);
@@ -440,6 +441,30 @@ export async function deleteCorpusEntry(id: string): Promise<boolean> {
     return result.changes > 0;
   });
   return del();
+}
+
+// invalidateClusterCache is imported from cluster-storage.js
+
+export async function deleteCorpusEntry(id: string): Promise<boolean> {
+  const deleted = doDeleteCorpusEntry(id);
+  invalidateClusterCache();
+  return deleted;
+}
+
+/**
+ * Delete a corpus entry by its image_path (for generated images).
+ * image_path stores the image storage ID, not the corpus entry UUID.
+ */
+export async function deleteCorpusEntryByImagePath(imagePath: string): Promise<boolean> {
+  const db = getDb();
+  const entry = db.prepare("SELECT id FROM corpus_entries WHERE image_path = ?").get(imagePath) as
+    | { id: string }
+    | undefined;
+  if (!entry) return false;
+
+  const deleted = doDeleteCorpusEntry(entry.id);
+  invalidateClusterCache();
+  return deleted;
 }
 
 /**
@@ -450,13 +475,10 @@ export async function deleteCorpusEntryByVisionId(visionId: string): Promise<boo
   const db = getDb();
   const entry = db.prepare("SELECT id FROM corpus_entries WHERE vision_id = ?").get(visionId) as { id: string } | undefined;
   if (!entry) return false;
-  
-  const del = db.transaction(() => {
-    db.prepare("DELETE FROM vec_corpus WHERE id = ?").run(entry.id);
-    const result = db.prepare("DELETE FROM corpus_entries WHERE id = ?").run(entry.id);
-    return result.changes > 0;
-  });
-  return del();
+
+  const deleted = doDeleteCorpusEntry(entry.id);
+  invalidateClusterCache();
+  return deleted;
 }
 
 /**
@@ -550,12 +572,12 @@ export async function cleanupOrphanedEntries(): Promise<{
   // Delete orphaned entries
   const deletedIds: string[] = [];
   for (const orphan of orphans) {
-    const del = db.transaction(() => {
-      db.prepare("DELETE FROM vec_corpus WHERE id = ?").run(orphan.id);
-      db.prepare("DELETE FROM corpus_entries WHERE id = ?").run(orphan.id);
-    });
-    del();
-    deletedIds.push(orphan.id);
+    if (doDeleteCorpusEntry(orphan.id)) {
+      deletedIds.push(orphan.id);
+    }
+  }
+  if (deletedIds.length > 0) {
+    invalidateClusterCache();
   }
   
   return {
