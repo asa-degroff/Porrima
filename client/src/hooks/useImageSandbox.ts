@@ -16,6 +16,34 @@ function isActiveGeneration(gen: GenerationState): boolean {
   return gen.status === "queued" || gen.status === "processing";
 }
 
+function isOptimisticGeneration(gen: GenerationState): boolean {
+  return gen.id.startsWith("optimistic-");
+}
+
+function normalizeActiveGenerations(generations: GenerationState[]): GenerationState[] {
+  const unique = new Map<string, GenerationState>();
+  for (const gen of generations) {
+    if (isActiveGeneration(gen)) unique.set(gen.id, gen);
+  }
+  return Array.from(unique.values()).sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function reconcilePolledGenerations(
+  current: GenerationState[],
+  polled: GenerationState[]
+): GenerationState[] {
+  const pendingOptimistic = current.filter((gen) => isOptimisticGeneration(gen) && isActiveGeneration(gen));
+  return normalizeActiveGenerations([...polled, ...pendingOptimistic]);
+}
+
+function upsertActiveGeneration(
+  current: GenerationState[],
+  generation: GenerationState
+): GenerationState[] {
+  const withoutGeneration = current.filter((gen) => gen.id !== generation.id);
+  return normalizeActiveGenerations([...withoutGeneration, generation]);
+}
+
 export function useImageSandbox() {
   const [images, setImages] = useState<GeneratedImage[]>([]);
   const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
@@ -47,15 +75,7 @@ export function useImageSandbox() {
     const abortController = subscribeToGeneration(generationId, {
       onState: (state) => {
         // Update active generations list with latest state
-        setActiveGenerations((prev) => {
-          const idx = prev.findIndex((g) => g.id === state.id);
-          if (idx >= 0) {
-            const copy = [...prev];
-            copy[idx] = state;
-            return copy;
-          }
-          return prev;
-        });
+        setActiveGenerations((prev) => upsertActiveGeneration(prev, state));
 
         // Update UI state for the primary generation display
         if (state.status === "processing" && state.progress) {
@@ -66,6 +86,7 @@ export function useImageSandbox() {
           setGenerating(false);
           setProgress(null);
           setError(null);
+          setActiveGenerations((prev) => prev.filter((gen) => gen.id !== state.id));
           subscribedGenerationIds.current.delete(generationId);
           // Schedule error dismiss to clear any transient errors
           scheduleErrorDismiss();
@@ -76,6 +97,7 @@ export function useImageSandbox() {
         } else if (state.status === "error") {
           setGenerating(false);
           setProgress(null);
+          setActiveGenerations((prev) => prev.filter((gen) => gen.id !== state.id));
           subscribedGenerationIds.current.delete(generationId);
           setError(state.error || "Generation failed");
         }
@@ -84,11 +106,12 @@ export function useImageSandbox() {
         setError(err);
         setGenerating(false);
         setProgress(null);
+        setActiveGenerations((prev) => prev.filter((gen) => gen.id !== generationId));
         subscribedGenerationIds.current.delete(generationId);
       },
     });
     abortRef.current = abortController;
-  }, []);
+  }, [scheduleErrorDismiss]);
 
   // Listen for corpus image generation events and refresh gallery
   useEffect(() => {
@@ -145,7 +168,7 @@ export function useImageSandbox() {
       const active = generations.filter(isActiveGeneration);
       if (active.length > 0) {
         console.log(`[image-sandbox] recovering ${active.length} active generation(s)`);
-        setActiveGenerations(active);
+        setActiveGenerations(normalizeActiveGenerations(active));
         // Subscribe to all active generations, but validate they still exist first
         active.forEach((gen) => {
           // Only subscribe if generation is truly active (not stale from server restart)
@@ -162,7 +185,7 @@ export function useImageSandbox() {
     const refreshInterval = setInterval(() => {
       fetchGenerations().then((generations) => {
         const active = generations.filter(isActiveGeneration);
-        setActiveGenerations(active);
+        setActiveGenerations((prev) => reconcilePolledGenerations(prev, active));
       }).catch(() => {});
     }, 2000);
 
@@ -180,18 +203,19 @@ export function useImageSandbox() {
       
       // Create optimistic generation state for immediate visual feedback
       const optimisticId = `optimistic-${Date.now()}-${i}`;
+      const optimisticCreatedAt = Date.now();
       const optimisticGen: GenerationState = {
         id: optimisticId,
         clientId: "",
         params: genParams,
         status: "queued",
         progress: null,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        createdAt: optimisticCreatedAt,
+        updatedAt: optimisticCreatedAt,
       };
       
       // Add to active generations immediately for visual feedback
-      setActiveGenerations((prev) => [...prev, optimisticGen]);
+      setActiveGenerations((prev) => upsertActiveGeneration(prev, optimisticGen));
       
       // This will create a new generation and start it immediately
       // The server handles queuing via generations.json state
@@ -201,20 +225,42 @@ export function useImageSandbox() {
           currentGenerationId = generationId;
           subscribeToGenerationEvents(generationId);
           
-          // Replace optimistic entry with real generation state
+          // Replace the optimistic row in-place with the real server id so the
+          // gallery never renders an empty frame between the two SSE streams.
           setActiveGenerations((prev) => {
-            const idx = prev.findIndex((g) => g.id === optimisticId);
-            if (idx >= 0) {
-              const copy = [...prev];
-              // Remove optimistic, will be replaced by real one from SSE
-              copy.splice(idx, 1);
-              return copy;
-            }
-            return prev;
+            const existing = prev.find((g) => g.id === optimisticId);
+            const realQueuedGeneration: GenerationState = {
+              id: generationId,
+              clientId: "",
+              params: existing?.params ?? genParams,
+              status: existing?.status ?? "queued",
+              progress: existing?.progress ?? null,
+              createdAt: existing?.createdAt ?? optimisticCreatedAt,
+              updatedAt: Date.now(),
+            };
+            return upsertActiveGeneration(
+              prev.filter((g) => g.id !== optimisticId),
+              realQueuedGeneration
+            );
           });
         },
         onProgress: (step, totalSteps) => {
           setProgress({ step, total: totalSteps });
+          if (currentGenerationId) {
+            const generationId = currentGenerationId;
+            setActiveGenerations((prev) => {
+              const existing = prev.find((g) => g.id === generationId);
+              return upsertActiveGeneration(prev, {
+                id: generationId,
+                clientId: existing?.clientId ?? "",
+                params: existing?.params ?? genParams,
+                status: "processing",
+                progress: { step, total: totalSteps },
+                createdAt: existing?.createdAt ?? optimisticCreatedAt,
+                updatedAt: Date.now(),
+              });
+            });
+          }
           // Clear coordinator status once real progress starts — coordination
           // is done, the model is generating.
           setCoordinatorStatus(null);
@@ -248,6 +294,9 @@ export function useImageSandbox() {
           setGenerating(false);
           setProgress(null);
           setCoordinatorStatus(null);
+          setActiveGenerations((prev) => prev.filter((gen) => (
+            gen.id !== optimisticId && gen.id !== currentGenerationId
+          )));
           setError(null); // Clear error on success
           scheduleErrorDismiss(); // Ensure error stays cleared
           if (currentGenerationId) {
@@ -259,8 +308,9 @@ export function useImageSandbox() {
           setGenerating(false);
           setProgress(null);
           setCoordinatorStatus(null);
-          // Remove optimistic entry on error
-          setActiveGenerations((prev) => prev.filter((g) => g.id !== optimisticId));
+          setActiveGenerations((prev) => prev.filter((gen) => (
+            gen.id !== optimisticId && gen.id !== currentGenerationId
+          )));
           if (currentGenerationId) {
             subscribedGenerationIds.current.delete(currentGenerationId);
           }

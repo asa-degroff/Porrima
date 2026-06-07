@@ -279,6 +279,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, onTogg
     const source = searchResults ?? images;
     return showFavoritesOnly ? source.filter((i) => i.isFavorite) : source;
   }, [images, searchResults, showFavoritesOnly]);
+  const visibleActiveGenerations = hasSearch ? [] : activeGenerations;
 
   const emptyCopy = hasSearch
     ? ["No images match your search", "Try different keywords"]
@@ -289,7 +290,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, onTogg
   return (
     <div className="flex-1 overflow-hidden relative">
       <div className="absolute inset-0 overflow-y-auto p-4">
-        {visibleImages.length === 0 ? (
+        {visibleImages.length === 0 && visibleActiveGenerations.length === 0 ? (
           emptyState(Boolean(isSearching), emptyCopy[0], emptyCopy[1])
         ) : (
           <ImageGrid
@@ -298,7 +299,7 @@ export function ImageGallery({ images, selectedImage, onSelect, onDelete, onTogg
             onSelect={onSelect}
             onDelete={onDelete}
             onToggleFavorite={onToggleFavorite}
-            activeGenerations={hasSearch ? [] : activeGenerations}
+            activeGenerations={visibleActiveGenerations}
             activityShape={activityShape}
           />
         )}
