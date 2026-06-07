@@ -198,14 +198,6 @@ export function VisionChat({ image, analyzing, streamingDescription, streamingTh
           </div>
         </div>
 
-        {visibleThinking && (
-          <ThinkingBlock
-            thinking={visibleThinking}
-            isStreaming={Boolean(analyzing)}
-            thinkingActive={Boolean(analyzing)}
-          />
-        )}
-
         {/* Description with actions */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
@@ -236,6 +228,13 @@ export function VisionChat({ image, analyzing, streamingDescription, streamingTh
               </div>
             )}
           </div>
+          {visibleThinking && (
+            <ThinkingBlock
+              thinking={visibleThinking}
+              isStreaming={Boolean(analyzing)}
+              thinkingActive={Boolean(analyzing)}
+            />
+          )}
           {analyzing ? (
             <div className="space-y-3">
               <div className="flex items-center gap-2.5">
