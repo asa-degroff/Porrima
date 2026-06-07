@@ -532,7 +532,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     loading: boolean;
     error?: string;
   } | null>(null);
-  const [llamaServiceExpanded, setLlamaServiceExpanded] = useState<LlamaServerId | null>(null);
+  const [llamaConfigureExpanded, setLlamaConfigureExpanded] = useState<LlamaServerId | null>(null);
   const [llamaServiceState, setLlamaServiceState] = useState<Record<LlamaServerId, {
     loading: boolean;
     saving: boolean;
@@ -1065,8 +1065,8 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     }
   }, []);
 
-  const toggleLlamaServicePanel = useCallback((id: LlamaServerId) => {
-    setLlamaServiceExpanded((current) => {
+  const toggleLlamaConfigurePanel = useCallback((id: LlamaServerId) => {
+    setLlamaConfigureExpanded((current) => {
       const next = current === id ? null : id;
       if (next && !llamaServiceState[next]?.data && !llamaServiceState[next]?.loading) {
         void loadLlamaServiceConfig(next);
@@ -1158,7 +1158,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   }, []);
 
   // Track which server card has its config section expanded
-  const [llamaConfigExpanded, setLlamaConfigExpanded] = useState<LlamaServerId | null>(null);
 
   // Server currently mid-apply (router load or drop-in override + restart).
   const [applyingSlot, setApplyingSlot] = useState<LlamaServerId | null>(null);
@@ -3081,10 +3080,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 		                {llamaServers.map((server) => {
 		                  const busy = Boolean(llamaServerActionInFlight?.startsWith(`${server.id}:`));
 			                  const missingUnit = server.systemd.loadState === "not-found";
-			                  const detailsExpanded = expandedLlamaServerId === server.id;
-			                  const configExpanded = llamaConfigExpanded === server.id;
-			                  const serviceExpanded = llamaServiceExpanded === server.id;
-			                  const hideExtractionCtxSize = server.id === "extraction" && server.override.active;
+			                  const detailsExpanded = expandedLlamaServerId === server.id;			                  const hideExtractionCtxSize = server.id === "extraction" && server.override.active;
 			                  const activeLogs = llamaServerLogs?.id === server.id ? llamaServerLogs : null;
 			                  const modelsPreview = server.http.modelIds.length > 0
 			                    ? server.http.modelIds.slice(0, 3).join(", ") + (server.http.modelIds.length > 3 ? ` +${server.http.modelIds.length - 3}` : "")
@@ -3157,17 +3153,10 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                          </button>
 	                          <button
 	                            type="button"
-	                            onClick={() => setLlamaConfigExpanded(configExpanded ? null : server.id)}
+	                            onClick={() => toggleLlamaConfigurePanel(server.id)}
 	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all pressable"
 	                          >
-	                            {configExpanded ? "Hide config" : "Config"}
-	                          </button>
-	                          <button
-	                            type="button"
-	                            onClick={() => toggleLlamaServicePanel(server.id)}
-	                            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/10 text-white/60 hover:bg-white/10 transition-all pressable"
-	                          >
-	                            {serviceExpanded ? "Hide service" : "Service"}
+	                            {llamaConfigureExpanded === server.id ? "Hide config" : "Configure"}
 	                          </button>
 	                          <button
 	                            type="button"
@@ -3188,26 +3177,11 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                      </div>
 
 	                      {/* Inline config section */}
-	                      {configExpanded && (
-	                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3 last:rounded-b-[7px]">
+            {llamaConfigureExpanded === server.id && (
+              <div className="border-t border-white/5 bg-black/10 p-3 space-y-3 last:rounded-b-[7px]">
 	                          {server.id === "inference" && (
 	                            <div className="space-y-2">
-	                              <div className="flex items-center gap-2">
-	                                <label className="flex items-center gap-2 cursor-pointer">
-	                                  <input
-	                                    type="checkbox"
-	                                    checked={llamacppEnabled}
-	                                    onChange={(e) => {
-	                                      setLlamacppEnabled(e.target.checked);
-	                                      handleLlamaServerSettings("inference", { enabled: e.target.checked });
-	                                    }}
-	                                    className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
-	                                  />
-	                                  <span className="text-xs text-white/70">Enabled</span>
-	                                </label>
-	                              </div>
-	                              {llamacppEnabled && (
-	                                <div className="space-y-2">
+	                              <div className="space-y-2">
 	                                  <div className="flex gap-2">
 	                                    <label className="block text-xs text-white/50 w-12">URL</label>
 	                                    <input
@@ -3218,21 +3192,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 font-mono"
 	                                      placeholder={DEFAULT_INFERENCE_URL}
 	                                    />
-	                                  </div>
-	                                  <div className="flex items-center gap-2">
-	                                    <label className="flex items-center gap-2 cursor-pointer">
-	                                      <input
-	                                        type="checkbox"
-	                                        checked={llamacppSharesGpu}
-	                                        onChange={(e) => {
-	                                          setLlamacppSharesGpu(e.target.checked);
-	                                          handleLlamaServerSettings("inference", { sharesGpu: e.target.checked });
-	                                        }}
-	                                        className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
-	                                      />
-	                                      <span className="text-xs text-white/70">Shares GPU</span>
-	                                    </label>
-	                                    <span className="text-xs text-white/30">Coordinate VRAM with image generation</span>
 	                                  </div>
 	                                  <div className="flex items-center gap-2">
 	                                    <label className="block text-xs text-white/50 w-16">Slots</label>
@@ -3257,7 +3216,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                    {renderServerBinaryDropdown(server, inferenceBinaryDd)}
 	                                  </div>
 	                                </div>
-	                              )}
 	                              <p className="text-xs text-white/30">Main GPU inference server (router mode).</p>
 	                            </div>
 	                          )}
@@ -3369,17 +3327,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                          )}
 	                          {server.id === "reranker" && (
 	                            <div className="space-y-2">
-	                              <div className="flex items-center gap-2">
-	                                <label className="flex items-center gap-2 cursor-pointer">
-	                                  <input type="checkbox" checked={rerankerEnabled} onChange={(e) => {
-	                                    setRerankerEnabled(e.target.checked);
-	                                    handleLlamaServerSettings("reranker", { enabled: e.target.checked });
-	                                  }} className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30" />
-	                                  <span className="text-xs text-white/70">Enabled</span>
-	                                </label>
-	                              </div>
-	                              {rerankerEnabled && (
-	                                <div className="space-y-2">
+	                              <div className="space-y-2">
 	                                  <div className="flex gap-2">
 	                                    <label className="block text-xs text-white/50 w-12">URL</label>
 	                                    <input type="text" value={rerankerUrl} onChange={(e) => setRerankerUrl(e.target.value)}
@@ -3420,7 +3368,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                    )}
 	                                  </div>
 	                                </div>
-	                              )}
 	
                               {/* Binary selector */}
                               <div>
@@ -3559,17 +3506,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 						  )}
 						  {server.id === "title-generation" && (
 	                            <div className="space-y-2">
-	                              <div className="flex items-center gap-2">
-	                                <label className="flex items-center gap-2 cursor-pointer">
-	                                  <input type="checkbox" checked={titleGenerationEnabled} onChange={(e) => {
-	                                    setTitleGenerationEnabled(e.target.checked);
-	                                    handleLlamaServerSettings("title-generation", { enabled: e.target.checked });
-	                                  }} className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30" />
-	                                  <span className="text-xs text-white/70">Enabled</span>
-	                                </label>
-	                              </div>
-	                              {titleGenerationEnabled && (
-	                                <div className="space-y-2">
+	                              <div className="space-y-2">
 	                                  <div className="flex gap-2">
 	                                    <label className="block text-xs text-white/50 w-12">URL</label>
 	                                    <input type="text" value={titleGenerationUrl} onChange={(e) => setTitleGenerationUrl(e.target.value)}
@@ -3605,7 +3542,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                    )}
 	                                  </div>
 	                                </div>
-	                              )}
 	
                               {/* Binary selector */}
                               <div>
@@ -3689,12 +3625,12 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              )}
 	                            </>
 	                          )}
-	                        </div>
-	                      )}
+                <div className="flex items-center gap-3 my-1">
+                  <div className="flex-1 h-px bg-white/10" />
+                  <span className="text-[10px] uppercase tracking-widest text-white/30 font-medium">Service</span>
+                  <div className="flex-1 h-px bg-white/10" />
+                </div>
 
-	                      {/* Service section */}
-	                      {serviceExpanded && (
-	                        <div className="border-t border-white/5 bg-black/10 p-3 space-y-3 last:rounded-b-[7px]">
 	                          {(() => {
 	                            const state = llamaServiceState[server.id];
 	                            const draft = state?.draft;
@@ -3886,8 +3822,9 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              </div>
 	                            );
 	                          })()}
-	                        </div>
-	                      )}
+              </div>
+            )}
+
 
 	                      {/* Details section */}
 	                      {detailsExpanded && (
