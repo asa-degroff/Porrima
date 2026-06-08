@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef, useId } from "react";
 import { useImageSandbox } from "../hooks/useImageSandbox";
 import { useVisionSandbox } from "../hooks/useVisionSandbox";
 import { useSettings } from "../hooks/useSettings";
@@ -29,7 +29,7 @@ type ViewMode = "gallery" | "detail";
 const SANDBOX_MODE_KEY = "porrima-sandbox-mode";
 const LEGACY_SANDBOX_MODE_KEY = "quje-sandbox-mode";
 
-export function ImageSandbox({ defaultModelId, onClose }: Props) {
+export function ImageSandbox({ defaultModelId }: Props) {
   const activityShape = useActivityShape();
   const { settings } = useSettings();
   const backendLabel = settings.imageBackend === "sdcpp" ? "sd-server" : "ComfyUI";
@@ -60,6 +60,7 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
   
   // Filter: show favorites only
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  const [desktopDetailsOpen, setDesktopDetailsOpen] = useState(true);
   
   // Search
   const [searchResults, setSearchResults] = useState<Array<GeneratedImage & { score: number }> | undefined>(undefined);
@@ -303,6 +304,18 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
         </div>
 
         <div className="flex items-center gap-2">
+          {mode === "generate" && selectedImage && !desktopDetailsOpen && (
+            <button
+              type="button"
+              onClick={() => setDesktopDetailsOpen(true)}
+              className="hidden lg:inline-flex text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
+              title="Image details"
+              aria-label="Show image details"
+            >
+              <InfoIcon />
+            </button>
+          )}
+
           {/* Drawer toggles - shown on mobile and iPad portrait (lg-), hidden on desktop */}
           <div className="flex lg:hidden items-center gap-1">
             {mode === "generate" ? (
@@ -321,10 +334,9 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                     onClick={() => setDetailsOpen(true)}
                     className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
                     title="Image details"
+                    aria-label="Image details"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                      <path fill-rule="evenodd" clip-rule="evenodd" d="M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2ZM5 5v14h14V5H5ZM9 7a2 2 0 110 4 2 2 0 010-4ZM5 19l3.5-4.5 3 3 4-5.5L19 15v4H5Z" />
-                    </svg>
+                    <InfoIcon />
                   </button>
                 )}
               </>
@@ -376,15 +388,6 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
             </button>
           </div>
 
-          <button
-            onClick={onClose}
-            className="text-white hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-40 hover:opacity-70 transition-opacity">
-              <path d="M18 6L6 18" />
-              <path d="M6 6l12 12" />
-            </svg>
-          </button>
         </div>
       </div>
 
@@ -555,13 +558,27 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
             </div>
 
             {/* Details panel - desktop sidebar (lg+ only, iPad portrait uses slide-over) */}
-            {selectedImage && (
+            {selectedImage && desktopDetailsOpen && (
               <div className="hidden lg:flex w-80 shrink-0 border-l border-white/10 p-4 backdrop-blur-xl bg-white/[0.03] flex-col">
-                <ImageDetails
-                  image={selectedImage}
-                  onUseParams={handleUseParams}
-                  onOpenLightbox={setLightboxImage}
-                />
+                <div className="shrink-0 flex items-center justify-between pb-3 mb-3 border-b border-white/10">
+                  <h3 className="text-sm font-semibold text-white/90">Image Details</h3>
+                  <button
+                    type="button"
+                    onClick={() => setDesktopDetailsOpen(false)}
+                    className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
+                    title="Hide image details"
+                    aria-label="Hide image details"
+                  >
+                    <MaskedXIcon />
+                  </button>
+                </div>
+                <div className="flex-1 min-h-0">
+                  <ImageDetails
+                    image={selectedImage}
+                    onUseParams={handleUseParams}
+                    onOpenLightbox={setLightboxImage}
+                  />
+                </div>
               </div>
             )}
 
@@ -617,13 +634,12 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                   <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b border-white/10">
                     <h3 className="text-sm font-semibold text-white/90">Generation Controls</h3>
                     <button
+                      type="button"
                       onClick={() => setControlsOpen(false)}
                       className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
+                      aria-label="Close generation controls"
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M18 6L6 18" />
-                        <path d="M6 6l12 12" />
-                      </svg>
+                      <MaskedXIcon />
                     </button>
                   </div>
                   <div className="flex-1 overflow-y-auto p-4">
@@ -692,13 +708,12 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                   <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b border-white/10">
                     <h3 className="text-sm font-semibold text-white/90">Image Details</h3>
                     <button
+                      type="button"
                       onClick={() => setDetailsOpen(false)}
                       className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
+                      aria-label="Close image details"
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M18 6L6 18" />
-                        <path d="M6 6l12 12" />
-                      </svg>
+                      <MaskedXIcon />
                     </button>
                   </div>
                   <div className="flex-1 overflow-y-auto p-4">
@@ -719,13 +734,12 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                 onClick={closeLightbox}
               >
                 <button
+                  type="button"
                   onClick={closeLightbox}
                   className="absolute top-4 right-4 p-2 rounded-lg text-white hover:text-white hover:bg-white/10 transition-colors z-10 pressable"
+                  aria-label="Close lightbox"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-50 hover:opacity-90 transition-opacity">
-                    <path d="M18 6L6 18" />
-                    <path d="M6 6l12 12" />
-                  </svg>
+                  <MaskedXIcon size={24} className="opacity-50 hover:opacity-90 transition-opacity" />
                 </button>
                 {/* Prev button */}
                 <button
@@ -901,13 +915,12 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
                   <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b border-white/10">
                     <h3 className="text-sm font-semibold text-white/90">Vision Controls</h3>
                     <button
+                      type="button"
                       onClick={() => setControlsOpen(false)}
                       className="text-white/40 hover:text-white/70 transition-colors p-1.5 rounded-lg hover:bg-white/5 pressable"
+                      aria-label="Close vision controls"
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M18 6L6 18" />
-                        <path d="M6 6l12 12" />
-                      </svg>
+                      <MaskedXIcon />
                     </button>
                   </div>
                   <div className="flex-1 overflow-y-auto p-4">
@@ -931,5 +944,29 @@ export function ImageSandbox({ defaultModelId, onClose }: Props) {
         )}
       </div>
     </div>
+  );
+}
+
+function InfoIcon() {
+  return (
+    <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </svg>
+  );
+}
+
+function MaskedXIcon({ size = 18, className }: { size?: number; className?: string }) {
+  const maskId = `image-sandbox-x-${useId().replace(/:/g, "")}`;
+
+  return (
+    <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" className={className}>
+      <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+        <rect width="24" height="24" fill="black" />
+        <path d="M18 6L6 18M6 6l12 12" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </mask>
+      <rect width="24" height="24" fill="currentColor" mask={`url(#${maskId})`} />
+    </svg>
   );
 }
