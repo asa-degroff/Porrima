@@ -467,6 +467,22 @@ function formatRerankerSource(source: string | undefined): string {
   return source || "memory";
 }
 
+function CollapsibleDocSection({ title, count, children, defaultOpen }: { title: string; count: number; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-[9px] uppercase tracking-wider text-white/30 hover:text-white/50 transition-colors mb-1 w-full"
+      >
+        <span>{open ? "▼" : "▶"}</span>
+        <span>{title} ({count})</span>
+      </button>
+      {open && <div className="space-y-1 max-h-64 overflow-y-auto">{children}</div>}
+    </div>
+  );
+}
+
 function RerankerRunRow({ run, timeoutMs }: { run: RerankerStatsRun; timeoutMs: number }) {
   const [expanded, setExpanded] = useState(false);
   const hasQuery = !!run.query;
@@ -478,23 +494,23 @@ function RerankerRunRow({ run, timeoutMs }: { run: RerankerStatsRun; timeoutMs: 
     <div className="border-b border-white/5 last:border-b-0">
       <button
         onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-2 text-[10px] py-1.5 px-2 rounded w-full hover:bg-white/5 text-left"
+        className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] py-1.5 px-2 rounded w-full hover:bg-white/5 text-left"
       >
-        <span className="text-white/30 w-14 shrink-0">{formatTimeAgo(run.timestamp)}</span>
-        <span className={`w-10 shrink-0 font-mono ${run.usedModel ? "text-emerald-300" : "text-red-300/70"}`}>
+        <span className="text-white/30">{formatTimeAgo(run.timestamp)}</span>
+        <span className={`font-mono ${run.usedModel ? "text-emerald-300" : "text-red-300/70"}`}>
           {run.usedModel ? "model" : "fall"}
         </span>
-        <span className={`w-14 shrink-0 font-mono ${latencyColor(run.latencyMs, timeoutMs)}`}>
+        <span className={`font-mono ${latencyColor(run.latencyMs, timeoutMs)}`}>
           {formatDuration(run.latencyMs)}
         </span>
-        <span className="text-white/30 w-10 shrink-0">{run.documentCount}doc</span>
-        <span className="text-white/30 w-16 shrink-0">{run.totalTokens.toLocaleString()}tok</span>
-        <span className="text-white/35 w-14 shrink-0">{formatRerankerSource(run.source)}</span>
-        <span className="text-white/40 shrink-0">
+        <span className="text-white/30">{run.documentCount} doc</span>
+        <span className="text-white/30">{run.totalTokens.toLocaleString()} tok</span>
+        <span className="text-white/35">{formatRerankerSource(run.source)}</span>
+        <span className="text-white/40">
           {run.scoreMin.toFixed(3)}–{run.scoreMax.toFixed(3)}
         </span>
         {hasSelected && (
-          <span className="text-emerald-300/50 shrink-0">
+          <span className="text-emerald-300/50">
             {run.selectedResults?.length} injected
           </span>
         )}
@@ -516,36 +532,26 @@ function RerankerRunRow({ run, timeoutMs }: { run: RerankerStatsRun; timeoutMs: 
             </div>
           )}
           {run.documents && run.documents.length > 0 && (
-            <div>
-              <div className="text-[9px] uppercase tracking-wider text-white/30 mb-1">
-                Documents ({run.documents.length})
-              </div>
-              <div className="space-y-1 max-h-64 overflow-y-auto">
-                {run.documents.map((doc, i) => (
-                  <div key={i} className="bg-black/20 rounded p-2 text-[10px] text-white/50 font-mono leading-relaxed">
-                    <span className="text-purple-300/50 select-none">[{i + 1}] </span>
-                    {doc.slice(0, 800)}
-                    {doc.length > 800 ? "…" : ""}
-                  </div>
-                ))}
-              </div>
-            </div>
+            <CollapsibleDocSection title="Documents" count={run.documents.length}>
+              {run.documents.map((doc, i) => (
+                <div key={i} className="bg-black/20 rounded p-2 text-[10px] text-white/50 font-mono leading-relaxed break-words">
+                  <span className="text-purple-300/50 select-none">[{i + 1}] </span>
+                  {doc.slice(0, 800)}
+                  {doc.length > 800 ? "…" : ""}
+                </div>
+              ))}
+            </CollapsibleDocSection>
           )}
           {run.selectedResults && run.selectedResults.length > 0 && (
-            <div>
-              <div className="text-[9px] uppercase tracking-wider text-emerald-300/40 mb-1">
-                Selected for injection ({run.selectedResults.length})
-              </div>
-              <div className="space-y-1 max-h-48 overflow-y-auto">
-                {run.selectedResults.map((result, i) => (
-                  <div key={i} className="bg-emerald-900/10 border border-emerald-500/10 rounded p-2 text-[10px] text-emerald-200/60 font-mono leading-relaxed">
-                    <span className="text-emerald-400/50 select-none">[{result.score.toFixed(3)}] </span>
-                    {result.text.slice(0, 600)}
-                    {result.text.length > 600 ? "…" : ""}
-                  </div>
-                ))}
-              </div>
-            </div>
+            <CollapsibleDocSection title="Selected for injection" count={run.selectedResults.length} defaultOpen>
+              {run.selectedResults.map((result, i) => (
+                <div key={i} className="bg-emerald-900/10 border border-emerald-500/10 rounded p-2 text-[10px] text-emerald-200/60 font-mono leading-relaxed break-words">
+                  <span className="text-emerald-400/50 select-none">[{result.score.toFixed(3)}] </span>
+                  {result.text.slice(0, 600)}
+                  {result.text.length > 600 ? "…" : ""}
+                </div>
+              ))}
+            </CollapsibleDocSection>
           )}
         </div>
       )}
@@ -616,9 +622,9 @@ function RerankerStatsPanel({ data }: { data: RerankerStatsData }) {
             "Last chat type": last ? last.chatType : "—",
             "Last source": last ? formatRerankerSource(last.source) : "—",
           }) as [string, string][]).map(([k, v]) => (
-            <div key={k} className="flex justify-between text-[11px]">
-              <span className="text-white/40">{k}</span>
-              <span className="text-white/70 font-mono">{v}</span>
+            <div key={k} className="flex items-baseline justify-between gap-2 text-[11px]">
+              <span className="text-white/40 shrink-0">{k}</span>
+              <span className="text-white/70 font-mono text-right break-words">{v}</span>
             </div>
           ))}
           {last && (
@@ -742,38 +748,36 @@ export function ModelStatsModal({ isOpen, onClose }: Props) {
         className="bg-zinc-900/95 border border-white/10 rounded-xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
-          <div className="flex items-center flex-wrap gap-2">
-            <h2 className="text-sm font-medium text-white/90">Model Stats</h2>
-            <div className="flex items-center bg-white/5 rounded-lg p-0.5">
-              <button
-                onClick={() => { setActiveTab("chat"); setDetailModelId(null); }}
-                className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "chat" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
-              >
-                Chat
-              </button>
-              <button
-                onClick={() => { setActiveTab("extraction"); setDetailModelId(null); }}
-                className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "extraction" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
-              >
-                Extraction
-              </button>
-              <button
-                onClick={() => { setActiveTab("reranker"); setDetailModelId(null); fetchRerankerStats(); }}
-                className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "reranker" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
-              >
-                Reranker
-              </button>
-              <button
-                onClick={() => { setActiveTab("cache"); setDetailModelId(null); fetchCacheResidency(); }}
-                className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "cache" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
-              >
-                Cache
-              </button>
-            </div>
-            <span className="text-[10px] text-white/30">{activeTab === "cache" ? `${cacheResidency.length} tracked` : activeTab === "reranker" ? `${rerankerData?.summary.runCount ?? 0} runs` : `${filteredRecords.length} model${filteredRecords.length !== 1 ? "s" : ""}`}</span>
+        <header className="flex items-center flex-wrap gap-2 px-4 py-3 border-b border-white/10 shrink-0">
+          <h2 className="text-sm font-medium text-white/90 shrink-0">Model Stats</h2>
+          <div className="flex items-center bg-white/5 rounded-lg p-0.5">
+            <button
+              onClick={() => { setActiveTab("chat"); setDetailModelId(null); }}
+              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "chat" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+            >
+              Chat
+            </button>
+            <button
+              onClick={() => { setActiveTab("extraction"); setDetailModelId(null); }}
+              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "extraction" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+            >
+              Extraction
+            </button>
+            <button
+              onClick={() => { setActiveTab("reranker"); setDetailModelId(null); fetchRerankerStats(); }}
+              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "reranker" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+            >
+              Reranker
+            </button>
+            <button
+              onClick={() => { setActiveTab("cache"); setDetailModelId(null); fetchCacheResidency(); }}
+              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${activeTab === "cache" ? "bg-purple-500/30 text-purple-200" : "text-white/30 hover:text-white/60"}`}
+            >
+              Cache
+            </button>
           </div>
-          <div className="flex items-center gap-2">
+          <span className="text-[10px] text-white/30">{activeTab === "cache" ? `${cacheResidency.length} tracked` : activeTab === "reranker" ? `${rerankerData?.summary.runCount ?? 0} runs` : `${filteredRecords.length} model${filteredRecords.length !== 1 ? "s" : ""}`}</span>
+          <div className="flex items-center gap-2 ml-auto shrink-0">
             {loading && <span className="text-[10px] text-amber-300/60">loading…</span>}
             <button
               onClick={onClose}
