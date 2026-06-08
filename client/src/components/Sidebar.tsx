@@ -2072,7 +2072,7 @@ export function Sidebar({
                     <path d="M12 5v14" />
                     <path d="M5 12h14" />
                   </svg>
-                  New Agent Chat
+                  New Chat
                 </button>
                 {(agentShowAll ? agentChats : agentChats.slice(0, SIDEBAR_CHAT_PAGE_SIZE)).map((chat) => (
                   <ChatListItem

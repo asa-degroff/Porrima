@@ -6217,7 +6217,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                              }}
 	                              className="w-3.5 h-3.5 rounded border-white/20 bg-white/5 text-purple-400 focus:ring-purple-400/30"
 	                            />
-	                            <span className="text-[11px] text-white/45">Push on response</span>
+	                            <span className="text-[11px] text-white/45">Push notify</span>
 	                          </label>
 	                        </div>
 
