@@ -662,6 +662,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [automationRunsByTaskId, setAutomationRunsByTaskId] = useState<Record<string, AutomationRun[]>>({});
   const [automationRunsLoadingTaskId, setAutomationRunsLoadingTaskId] = useState<string | null>(null);
   const [automationPromptExpandedTaskId, setAutomationPromptExpandedTaskId] = useState<string | null>(null);
+  const [automationConfirmDeleteId, setAutomationConfirmDeleteId] = useState<string | null>(null);
   const automationTimeoutOriginalRef = useRef<number>(0);
   const automationMaxItersOriginalRef = useRef<number>(0);
   const [extractionModelId, setExtractionModelId] = useState(settings.extractionModelId || settings.defaultModelId);
@@ -2041,7 +2042,12 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
     }
   };
 
-  const handleDeleteAutomation = async (id: string) => {
+  const handleDeleteAutomationClick = (id: string) => {
+    setAutomationConfirmDeleteId(id);
+  };
+
+  const handleConfirmDeleteAutomation = async (id: string) => {
+    setAutomationConfirmDeleteId(null);
     setAutomationMessage(null);
     try {
       await deleteAutomation(id);
@@ -6446,12 +6452,30 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                          </button>
 	                        )}
 	                        {!task.builtIn && (
-	                          <button
-	                            onClick={() => handleDeleteAutomation(task.id)}
-	                            className="ml-auto px-2 py-1 rounded-md text-xs bg-red-500/10 border border-red-400/20 text-red-200/70 hover:bg-red-500/20 transition-all pressable"
-	                          >
-	                            Delete
-	                          </button>
+	                          automationConfirmDeleteId === task.id ? (
+	                            <div className="ml-auto flex items-center gap-2 px-2 py-1 rounded-md bg-red-500/10 border border-red-400/20">
+	                              <span className="text-xs text-white/70 shrink-0">Delete this automation?</span>
+	                              <button
+	                                onClick={() => handleConfirmDeleteAutomation(task.id)}
+	                                className="px-2 py-0.5 rounded text-[11px] font-medium bg-red-500/25 border border-red-400/30 text-red-300 hover:bg-red-500/40 transition-all pressable"
+	                              >
+	                                Delete
+	                              </button>
+	                              <button
+	                                onClick={() => setAutomationConfirmDeleteId(null)}
+	                                className="px-2 py-0.5 rounded text-[11px] font-medium bg-white/10 border border-white/15 text-white/50 hover:text-white/80 transition-all pressable"
+	                              >
+	                                Cancel
+	                              </button>
+	                            </div>
+	                          ) : (
+	                            <button
+	                              onClick={() => handleDeleteAutomationClick(task.id)}
+	                              className="ml-auto px-2 py-1 rounded-md text-xs bg-red-500/10 border border-red-400/20 text-red-200/70 hover:bg-red-500/20 transition-all pressable"
+	                            >
+	                              Delete
+	                            </button>
+	                          )
 	                        )}
 	                      </div>
 
