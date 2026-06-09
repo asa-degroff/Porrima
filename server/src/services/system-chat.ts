@@ -532,6 +532,9 @@ async function buildSynthesisTriggerContent(
   }
 
   // --- Notebook entries ---
+  // Agent entries: show all (the agent builds on its own prior thoughts)
+  // User entries: filter by lastSynthesis to avoid repeating the same entries
+  // across cycles (same pattern as the memory section above)
   const agentEntries: any[] = [];
   const userEntries: any[] = [];
   try {
@@ -544,7 +547,10 @@ async function buildSynthesisTriggerContent(
     console.warn("[system-chat] agent notebook load failed:", e);
   }
   try {
-    const idx = await listNotebookEntries("user");
+    const cutoff = memoryStore.lastSynthesis
+      ? memoryStore.lastSynthesis
+      : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const idx = await listNotebookEntries("user", cutoff);
     for (const info of idx.entries.slice(0, 5)) {
       const e = await getNotebookEntry("user", info.id);
       if (e) userEntries.push(e);

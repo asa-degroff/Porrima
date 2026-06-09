@@ -119,12 +119,19 @@ function rowToUserEntry(row: any): NotebookEntry {
   };
 }
 
-async function listUserNotebookEntries(): Promise<NotebookIndex> {
+async function listUserNotebookEntries(since?: string): Promise<NotebookIndex> {
   ensureUserEntryTables();
   const db = getDb();
-  const rows = db.prepare(
-    "SELECT id, createdAt, content FROM user_notebook_entries ORDER BY createdAt DESC"
-  ).all() as Array<{ id: string; createdAt: string; content: string }>;
+  let rows: Array<{ id: string; createdAt: string; content: string }>;
+  if (since) {
+    rows = db.prepare(
+      "SELECT id, createdAt, content FROM user_notebook_entries WHERE createdAt > ? ORDER BY createdAt DESC"
+    ).all(since) as Array<{ id: string; createdAt: string; content: string }>;
+  } else {
+    rows = db.prepare(
+      "SELECT id, createdAt, content FROM user_notebook_entries ORDER BY createdAt DESC"
+    ).all() as Array<{ id: string; createdAt: string; content: string }>;
+  }
 
   const entries = rows.map((r) => ({
     id: r.id,
@@ -233,10 +240,13 @@ function notebookEntryAttachments(entry: Partial<NotebookEntry>): BlockAttachmen
   return has ? att : undefined;
 }
 
-function listAgentNotebookEntries(): NotebookIndex {
-  const blocks = listMemoryBlocks({ includeInternal: true }).filter(
+function listAgentNotebookEntries(since?: string): NotebookIndex {
+  let blocks = listMemoryBlocks({ includeInternal: true }).filter(
     (b) => b.blockType === "notebook" || b.blockType === "synthesis"
   );
+  if (since) {
+    blocks = blocks.filter((b) => b.createdAt > since);
+  }
   const entries = blocks.map((b) => ({
     id: b.id,
     createdAt: b.createdAt,
@@ -490,11 +500,11 @@ function extractSearchExcerpt(text: string, query: string, radius = 200): string
 // Public API — dispatches by author. User = SQLite, agent = memory blocks.
 // ---------------------------------------------------------------------------
 
-export async function listNotebookEntries(author: 'user' | 'agent'): Promise<NotebookIndex> {
+export async function listNotebookEntries(author: 'user' | 'agent', since?: string): Promise<NotebookIndex> {
   if (author === 'user') {
-    return await listUserNotebookEntries();
+    return await listUserNotebookEntries(since);
   }
-  return listAgentNotebookEntries();
+  return listAgentNotebookEntries(since);
 }
 
 export async function getNotebookEntry(author: 'user' | 'agent', id: string): Promise<NotebookEntry | null> {
