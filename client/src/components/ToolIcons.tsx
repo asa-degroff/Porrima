@@ -2,6 +2,7 @@ import { type SVGProps, type ReactElement } from "react";
 
 export type ToolIconName =
   | "read_file"
+  | "read_pdf"
   | "write_file"
   | "edit_file"
   | "list_files"
@@ -23,6 +24,15 @@ const icons: Record<ToolIconName, (props: SVGProps<SVGSVGElement>) => ReactEleme
       <polyline points="14 2 14 8 20 8" />
       <line x1="8" y1="13" x2="16" y2="13" />
       <line x1="8" y1="17" x2="13" y2="17" />
+    </svg>
+  ),
+  read_pdf: (props) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="8" y1="13" x2="16" y2="13" />
+      <line x1="8" y1="17" x2="13" y2="17" />
+      <circle cx="15.5" cy="17" r="3" />
     </svg>
   ),
   write_file: (props) => (
