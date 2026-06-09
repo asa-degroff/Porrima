@@ -5,7 +5,6 @@ import {
   createNotebookEntry,
   updateNotebookEntry,
   deleteNotebookEntry,
-  triggerAgentNotebookReview,
   fetchUserUIState,
   saveUserUIState,
   searchNotebooks,
@@ -104,12 +103,6 @@ export function useNotebooks() {
     [refresh]
   );
 
-  const triggerAgentReview = useCallback(async () => {
-    const result = await triggerAgentNotebookReview();
-    await refresh();
-    return result;
-  }, [refresh]);
-
   const hasUnreadAgentEntries = useCallback(() => {
     if (!agentNotebooks.lastActivityDate) return false;
     if (!notebookLastSeen) return true;
@@ -162,7 +155,6 @@ export function useNotebooks() {
     createAgentEntry,
     updateEntry,
     removeEntry,
-    triggerAgentReview,
     hasUnreadAgentEntries,
     markAgentEntriesSeen,
     refresh,

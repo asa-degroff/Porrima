@@ -535,24 +535,6 @@ export async function deleteNotebookEntry(author: 'user' | 'agent', id: string):
   return deleteAgentNotebookEntry(id);
 }
 
-export async function hasUserActivityToday(): Promise<boolean> {
-  const index = await listUserNotebookEntries();
-  if (!index.lastActivityDate) return false;
-  const today = new Date().toDateString();
-  const lastActivity = new Date(index.lastActivityDate).toDateString();
-  return today === lastActivity;
-}
-
-export async function getUserEntriesToday(): Promise<NotebookEntry[]> {
-  const db = getDb();
-  ensureUserEntryTables();
-  const today = new Date().toISOString().split('T')[0];
-  const rows = db.prepare(
-    "SELECT * FROM user_notebook_entries WHERE date(createdAt) = date(?) ORDER BY createdAt DESC"
-  ).all(today) as any[];
-  return rows.map(rowToUserEntry);
-}
-
 /**
  * Extract a brief description from notebook content for use as a memory block description.
  * Strips leading markdown headers and takes the first ~150 characters.

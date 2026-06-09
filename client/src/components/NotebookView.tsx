@@ -21,7 +21,6 @@ interface Props {
   onUpdateEntry: (author: 'user' | 'agent', id: string, updates: { content?: string; links?: NotebookLink }) => Promise<void>;
   onDeleteEntry: (author: 'user' | 'agent', id: string) => Promise<void>;
   onReadAloud?: (text: string) => void;
-  onTriggerAgentReview: () => Promise<{ skipped?: boolean; reason?: string } | NotebookEntry>;
   chats: ChatListItem[];
   onChatSelect: (chatId: string) => void;
   onVisible?: () => void;
@@ -43,7 +42,6 @@ export function NotebookView({
   onUpdateEntry,
   onDeleteEntry,
   onReadAloud,
-  onTriggerAgentReview,
   chats,
   onChatSelect,
   onVisible,
@@ -236,13 +234,6 @@ export function NotebookView({
   }, []);
 
   // --- Entry handlers ---
-
-  const handleTriggerAgent = useCallback(async () => {
-    const result = await onTriggerAgentReview();
-    if ('skipped' in result && result.skipped) {
-      console.log("Agent review skipped:", result.reason);
-    }
-  }, [onTriggerAgentReview]);
 
   const handleEdit = useCallback((author: 'user' | 'agent', id: string, content: string) => {
     setEditingEntry({ author, id, content });
@@ -498,16 +489,6 @@ export function NotebookView({
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-          </button>
-          <button
-            onClick={handleTriggerAgent}
-            className="px-3 py-1.5 text-xs rounded-lg transition-colors bg-purple-500/15 border border-purple-400/25 text-purple-300 font-medium hover:bg-purple-500/25 pressable"
-            title="Trigger agent review of today's notes"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="inline mr-1">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-            Review Notes
           </button>
         </div>
       </div>

@@ -1652,18 +1652,6 @@ export async function searchNotebooks(query: string, author?: 'user' | 'agent', 
   return res.json();
 }
 
-export async function triggerAgentNotebookReview(): Promise<{ skipped?: boolean; reason?: string } | NotebookEntry> {
-  const res = await apiFetch(`${BASE}/notebooks/agent/trigger`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as any).error || "Failed to trigger agent review");
-  }
-  return res.json();
-}
-
 export async function createChat(id: string, modelId: string, type: ChatType = "quick", projectId?: string): Promise<Chat> {
   const res = await apiFetch(`${BASE}/chats`, {
     method: "POST",
