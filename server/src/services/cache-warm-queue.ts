@@ -96,13 +96,35 @@ function getSlotArray(payload: any): any[] {
   return [];
 }
 
-function slotHasActiveTask(slot: any): boolean {
+export function slotHasActiveTask(slot: any): boolean {
   if (!slot || typeof slot !== "object") return false;
   if (slot.is_processing === true || slot.processing === true) return true;
-  const taskId = slot.id_task ?? slot.task_id ?? slot.task?.id_task ?? slot.task?.task_id;
-  if (typeof taskId === "number" && Number.isFinite(taskId) && taskId >= 0) return true;
+
+  const nextTokens = Array.isArray(slot.next_token)
+    ? slot.next_token
+    : slot.next_token && typeof slot.next_token === "object"
+      ? [slot.next_token]
+      : [];
+  if (
+    nextTokens.some(
+      (token: any) =>
+        token?.has_next_token === true ||
+        (typeof token?.n_remain === "number" && Number.isFinite(token.n_remain) && token.n_remain > 0),
+    )
+  ) {
+    return true;
+  }
+
   const state = String(slot.state ?? slot.status ?? "").toLowerCase();
-  return state.includes("process") || state.includes("busy") || state === "1";
+  if (state.includes("process") || state.includes("busy") || state === "1") return true;
+
+  // Recent llama.cpp slot payloads retain the last non-negative task id even
+  // after the slot has gone idle. Trust explicit idle signals over stale ids.
+  if (slot.is_processing === false || slot.processing === false) return false;
+  if (state.includes("idle") || state.includes("complete") || state.includes("done")) return false;
+
+  const taskId = slot.id_task ?? slot.task_id ?? slot.task?.id_task ?? slot.task?.task_id;
+  return typeof taskId === "number" && Number.isFinite(taskId) && taskId >= 0;
 }
 
 /**
