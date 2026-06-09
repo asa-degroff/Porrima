@@ -1480,9 +1480,6 @@ interface SupersessionComparisonOptions {
 }
 
 const COMPARISON_CONTEXT_CHARS = 4000;
-const COMPARISON_MIN_MAX_TOKENS = 800;
-const COMPARISON_MAX_MAX_TOKENS = 4000;
-const COMPARISON_TOKENS_PER_CANDIDATE = 160;
 
 function buildSupersessionCandidatePairs(candidates: DedupAndSaveAmbiguousCandidate[]): string {
   return candidates.map((c, i) =>
@@ -1530,14 +1527,6 @@ Respond ONLY with a JSON array:
   { "index": 0, "decision": "supersede" | "separate" | "unsure", "reason": "brief explanation" },
   ...
 ]`;
-}
-
-function comparisonMaxTokens(candidateCount: number, configuredMaxTokens: number): number {
-  const desired = Math.max(
-    COMPARISON_MIN_MAX_TOKENS,
-    Math.min(COMPARISON_MAX_MAX_TOKENS, 320 + candidateCount * COMPARISON_TOKENS_PER_CANDIDATE),
-  );
-  return Math.max(100, Math.min(configuredMaxTokens, desired));
 }
 
 function parseSupersessionComparisonResponse(
@@ -1615,10 +1604,10 @@ async function batchCompareSupersessions(
   try {
     const settings = opts.settings ?? await getSettings();
     const baseExtractionSettings = opts.extractionSettings ?? await resolveExtractionRequestSettings(settings);
-    const comparisonExtractionSettings = {
-      ...baseExtractionSettings,
-      maxTokens: comparisonMaxTokens(candidates.length, baseExtractionSettings.maxTokens),
-    };
+    // Use the same output budget as extraction. Warm comparisons keep the
+    // extraction prompt cached, and small JSON-only caps can be exhausted by
+    // reasoning/preamble before the final array is emitted.
+    const comparisonExtractionSettings = baseExtractionSettings;
     const analyzerPrompt = "I am a careful analyzer that determines whether new memories update existing memories or are distinct. I only mark as supersede when I am confident the new memory replaces the old one. I respond only with the requested JSON array.";
     const warmPrompt = buildWarmSupersessionComparisonPrompt(candidates);
     const warmMessages = opts.extractionSystemPrompt
