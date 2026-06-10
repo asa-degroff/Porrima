@@ -74,7 +74,7 @@
 | POST | `/api/corpus/rebuild-clusters` | Rebuild clusters from current corpus |
 | GET | `/api/corpus/visualization` | Get D3 force-directed graph HTML |
 | GET | `/api/corpus/stats` | Get corpus statistics |
-| GET | `/api/corpus/stats-public` | Get corpus statistics (public) |
+| GET | `/api/corpus/stats-public` | Get aggregate corpus statistics (legacy route name; auth required) |
 | POST | `/api/corpus/cleanup` | Delete orphaned corpus entries whose backing files no longer exist |
 | GET | `/api/corpus/cleanup/dry-run` | Preview orphaned corpus entries without deleting them |
 | POST | `/api/auth/register` | Register passkey |

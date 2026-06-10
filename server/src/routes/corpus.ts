@@ -58,7 +58,7 @@ router.post("/rebuild-clusters", async (req, res) => {
   }
 });
 
-// GET /api/corpus/visualization - Get force-graph HTML (public, no auth required for iframe)
+// GET /api/corpus/visualization - Get force-graph HTML for the authenticated same-origin iframe
 router.get("/visualization", async (req, res) => {
   try {
     const { generateForceGraphHTML } = await import("../services/visualization.js");
@@ -75,7 +75,8 @@ router.get("/visualization", async (req, res) => {
   }
 });
 
-// GET /api/corpus/stats-public - Corpus statistics (public, no auth required)
+// GET /api/corpus/stats-public - Legacy aggregate corpus statistics route.
+// Despite the name, this router is protected by the global /api auth middleware.
 router.get("/stats-public", async (req, res) => {
   try {
     const corpus = await getAllCorpusEntries();
