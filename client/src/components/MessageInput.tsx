@@ -16,6 +16,7 @@ interface Props {
   onSlashDeleted?: () => void;
   inputRef?: React.RefObject<HTMLDivElement | null>;
   availableSkills?: string[];
+  autoFocusInput?: boolean;
 }
 
 /**
@@ -59,7 +60,7 @@ async function processFiles(files: FileList | File[]): Promise<ImageAttachment[]
   );
 }
 
-export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, onSlashDeleted, inputRef, availableSkills }: Props) {
+export const MessageInput = memo(function MessageInput({ chatId, onSend, disabled, onAbort, streaming, waitingForInput, isOnline = true, placeholder, onSlashTyping, onSlashDeleted, inputRef, availableSkills, autoFocusInput }: Props) {
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [processingImages, setProcessingImages] = useState<Set<number>>(new Set());
   const [hasContent, setHasContent] = useState(false);
@@ -160,6 +161,13 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
       }
     }
   }, [chatId]);
+
+  // Auto-focus the editor when a new chat is created
+  useEffect(() => {
+    if (autoFocusInput && chatId && editorRef.current) {
+      editorRef.current.focus();
+    }
+  }, [autoFocusInput, chatId]);
 
   const canSend = (hasContent || images.length > 0) && (!disabled || streaming || !isOnline);
 

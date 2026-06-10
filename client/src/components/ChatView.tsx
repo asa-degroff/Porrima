@@ -298,6 +298,7 @@ interface Props {
   onArtifactRuntimeError?: (report: ArtifactRuntimeErrorReport) => void;
   headerImageEnabled?: boolean;
   headerImageId?: string;
+  autoFocusInput?: boolean;
 }
 
 export function ChatView({
@@ -359,6 +360,7 @@ export function ChatView({
   onArtifactRuntimeError,
   headerImageEnabled = false,
   headerImageId,
+  autoFocusInput,
 }: Props) {
   const { unpin, pinnedItem } = usePinnedItem();
   useEffect(() => {
@@ -940,6 +942,7 @@ export function ChatView({
           onSlashDeleted={closeSkillSelector}
           inputRef={inputRef}
           availableSkills={availableSkillNames}
+          autoFocusInput={autoFocusInput}
         />
       </div>
 

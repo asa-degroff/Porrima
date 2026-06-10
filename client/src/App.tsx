@@ -120,6 +120,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const { residency: cacheResidency, refresh: refreshCacheResidency } = useCacheResidency();
   const [activeView, setActiveView] = useState<'chats' | 'notebooks'>('chats');
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [autoFocusInput, setAutoFocusInput] = useState(false);
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const activeChatIdStateRef = useRef<string | null>(null);
   const activeChatStateRef = useRef<Chat | null>(null);
@@ -501,6 +502,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
     return () => clearTimeout(timer);
   }, [activeChatId, uiStateSynced]);
+
+  // Reset autoFocus flag after it's consumed by ChatView/MessageInput
+  useEffect(() => {
+    if (autoFocusInput) {
+      requestAnimationFrame(() => setAutoFocusInput(false));
+    }
+  }, [autoFocusInput]);
 
   useEffect(() => {
     if (!uiStateSynced) return;
@@ -1003,6 +1011,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     activeChatStateRef.current = chat;
     setActiveChatData(chat);
     loadMessages([]);
+    setAutoFocusInput(true);
   }, [settings.defaultModelId, models, createChat, loadMessages, setActiveChatData]);
 
   const handleDeleteChat = useCallback(
@@ -1473,6 +1482,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         onArtifactRuntimeError={reportArtifactRuntimeError}
         headerImageEnabled={settings.headerImageEnabled}
         headerImageId={settings.headerImageId}
+        autoFocusInput={autoFocusInput}
       />
       )}
       {settingsOpen && !settingsLoading && (
