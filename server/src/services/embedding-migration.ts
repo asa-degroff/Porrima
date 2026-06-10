@@ -10,7 +10,7 @@
  *
  * Migration rebuilds vec_memories and vec_corpus at whatever dimension the
  * currently-configured embedding model produces, then re-embeds every stored
- * memory text and corpus prompt.
+ * memory text and corpus prompt/description.
  */
 
 import { copyFile, mkdir, readdir, readFile, stat, writeFile, rm } from "fs/promises";
@@ -281,17 +281,20 @@ export async function migrate(
       wrapProgress({ phase: "memories", processed, total: memRows.length })
   );
 
-  // Gather corpus entries that have prompt text
+  // Gather corpus entries that have prompt text, falling back to descriptions
+  // for analyzed/uploaded images.
   const corpusDb = getCorpusDb();
   const corpusRows = corpusDb
     .prepare(
-      "SELECT id, prompt FROM corpus_entries WHERE prompt IS NOT NULL AND prompt != ''"
+      `SELECT id, COALESCE(NULLIF(prompt, ''), NULLIF(description, '')) AS text
+       FROM corpus_entries
+       WHERE (prompt IS NOT NULL AND prompt != '') OR description != ''`
     )
-    .all() as Array<{ id: string; prompt: string }>;
+    .all() as Array<{ id: string; text: string }>;
 
   const corpusVectors = await embedInBatches(
     cfg,
-    corpusRows.map((r) => r.prompt),
+    corpusRows.map((r) => r.text),
     (processed) =>
       wrapProgress({ phase: "corpus", processed, total: corpusRows.length })
   );

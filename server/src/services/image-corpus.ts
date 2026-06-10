@@ -64,6 +64,25 @@ function readStoredVecDimension(db: Database.Database): number {
   }
 }
 
+export function getCorpusVecDimension(): number {
+  return readStoredVecDimension(getDb());
+}
+
+function prepareEmbeddingForInsert(
+  db: Database.Database,
+  embedding: number[],
+  context: string
+): Float32Array | null {
+  const expectedDim = readStoredVecDimension(db);
+  if (embedding.length !== expectedDim) {
+    console.warn(
+      `[image-corpus] Skipping ${context} embedding: vector length ${embedding.length} does not match vec_corpus dimension ${expectedDim}`
+    );
+    return null;
+  }
+  return new Float32Array(embedding);
+}
+
 export function rebuildCorpusVecTable(newDim: number): void {
   if (!Number.isInteger(newDim) || newDim <= 0) {
     throw new Error(`Invalid embedding dimension: ${newDim}`);
@@ -216,6 +235,7 @@ function migrateFromJson(db: Database.Database): void {
     const insertVec = db.prepare(
       "INSERT OR IGNORE INTO vec_corpus (id, embedding) VALUES (?, ?)"
     );
+    const vecDim = readStoredVecDimension(db);
 
     const migrate = db.transaction(() => {
       for (const e of entries) {
@@ -235,7 +255,7 @@ function migrateFromJson(db: Database.Database): void {
           e.visionId ?? null,
         );
 
-        if (e.promptEmbedding && e.promptEmbedding.length === 1024) {
+        if (e.promptEmbedding && e.promptEmbedding.length === vecDim) {
           insertVec.run(e.id, new Float32Array(e.promptEmbedding));
         }
       }
@@ -372,12 +392,15 @@ export async function addCorpusEntry(entry: ImageCorpusEntry): Promise<ImageCorp
       entry.visionId ?? null,
     );
 
-    if (entry.promptEmbedding && entry.promptEmbedding.length === 1024) {
-      db.prepare("DELETE FROM vec_corpus WHERE id = ?").run(entry.id);
-      db.prepare("INSERT INTO vec_corpus (id, embedding) VALUES (?, ?)").run(
-        entry.id,
-        new Float32Array(entry.promptEmbedding)
-      );
+    if (entry.promptEmbedding) {
+      const embedding = prepareEmbeddingForInsert(db, entry.promptEmbedding, `entry ${entry.id}`);
+      if (embedding) {
+        db.prepare("DELETE FROM vec_corpus WHERE id = ?").run(entry.id);
+        db.prepare("INSERT INTO vec_corpus (id, embedding) VALUES (?, ?)").run(
+          entry.id,
+          embedding
+        );
+      }
     }
   });
   insert();
@@ -396,6 +419,25 @@ export async function updateCorpusEntry(
   // Merge existing elements with update
   const existingElements = JSON.parse(existing.elements || "{}");
   const mergedElements = updates.elements ?? existingElements;
+  const hasRowUpdates = (
+    updates.type !== undefined ||
+    updates.imagePath !== undefined ||
+    updates.thumbnailPath !== undefined ||
+    updates.prompt !== undefined ||
+    updates.description !== undefined ||
+    updates.elements !== undefined ||
+    updates.chatId !== undefined ||
+    updates.projectId !== undefined ||
+    updates.generationId !== undefined ||
+    updates.visionId !== undefined
+  );
+  const embedding = updates.promptEmbedding
+    ? prepareEmbeddingForInsert(db, updates.promptEmbedding, `entry ${id}`)
+    : null;
+
+  if (!hasRowUpdates && !embedding) {
+    return getCorpusEntry(id);
+  }
 
   const update = db.transaction(() => {
     db.prepare(`
@@ -419,11 +461,11 @@ export async function updateCorpusEntry(
       id,
     );
 
-    if (updates.promptEmbedding && updates.promptEmbedding.length === 1024) {
+    if (embedding) {
       db.prepare("DELETE FROM vec_corpus WHERE id = ?").run(id);
       db.prepare("INSERT INTO vec_corpus (id, embedding) VALUES (?, ?)").run(
         id,
-        new Float32Array(updates.promptEmbedding)
+        embedding
       );
     }
   });
@@ -629,14 +671,32 @@ export async function embedPrompt(prompt: string): Promise<number[]> {
   }
 }
 
-export async function enrichCorpusEntry(
+export interface CorpusEnrichmentEntryResult {
+  entry?: ImageCorpusEntry;
+  changed: boolean;
+  embedded: boolean;
+  extractedElements: boolean;
+}
+
+export interface CorpusEnrichmentBatchResult {
+  processed: number;
+  changed: number;
+  embedded: number;
+  extractedElements: number;
+  selectedForEmbedding: number;
+  selectedForElements: number;
+}
+
+export async function enrichCorpusEntryDetailed(
   id: string,
   prompt?: string,
   description?: string,
   modelId?: string
-): Promise<ImageCorpusEntry | undefined> {
+): Promise<CorpusEnrichmentEntryResult> {
   const entry = await getCorpusEntry(id);
-  if (!entry) return undefined;
+  if (!entry) {
+    return { changed: false, embedded: false, extractedElements: false };
+  }
 
   const updates: Partial<ImageCorpusEntry> = {};
   const effectivePrompt = prompt ?? entry.prompt;
@@ -648,7 +708,10 @@ export async function enrichCorpusEntry(
   if (embeddingSource && (!entry.promptEmbedding || entry.promptEmbedding.length === 0)) {
     const embedding = await embedPrompt(embeddingSource);
     if (embedding.length > 0) {
-      updates.promptEmbedding = embedding;
+      const prepared = prepareEmbeddingForInsert(getDb(), embedding, `entry ${id}`);
+      if (prepared) {
+        updates.promptEmbedding = embedding;
+      }
     }
   }
 
@@ -668,13 +731,33 @@ export async function enrichCorpusEntry(
   }
 
   if (Object.keys(updates).length > 0) {
-    return updateCorpusEntry(id, updates);
+    const updated = await updateCorpusEntry(id, updates);
+    const changed = Boolean(updated);
+    return {
+      entry: updated,
+      changed,
+      embedded: changed && updates.promptEmbedding !== undefined,
+      extractedElements: changed && updates.elements !== undefined,
+    };
   }
 
-  return entry;
+  return { entry, changed: false, embedded: false, extractedElements: false };
 }
 
-export async function enrichCorpusBatch(batchSize = 10, modelId?: string): Promise<number> {
+export async function enrichCorpusEntry(
+  id: string,
+  prompt?: string,
+  description?: string,
+  modelId?: string
+): Promise<ImageCorpusEntry | undefined> {
+  const result = await enrichCorpusEntryDetailed(id, prompt, description, modelId);
+  return result.entry;
+}
+
+export async function enrichCorpusBatchDetailed(
+  batchSize = 10,
+  modelId?: string
+): Promise<CorpusEnrichmentBatchResult> {
   const db = getDb();
 
   // Find entries needing embeddings (have prompt or description but no embedding)
@@ -700,14 +783,30 @@ export async function enrichCorpusBatch(batchSize = 10, modelId?: string): Promi
     if (!toEnrich.has(r.id)) toEnrich.set(r.id, { id: r.id, prompt: r.prompt ?? undefined, description: r.description });
   }
 
-  let enrichedCount = 0;
+  let changed = 0;
+  let embedded = 0;
+  let extractedElements = 0;
   const batch = Array.from(toEnrich.values()).slice(0, batchSize);
   for (const item of batch) {
-    const result = await enrichCorpusEntry(item.id, item.prompt, item.description, modelId);
-    if (result) enrichedCount++;
+    const result = await enrichCorpusEntryDetailed(item.id, item.prompt, item.description, modelId);
+    if (result.changed) changed++;
+    if (result.embedded) embedded++;
+    if (result.extractedElements) extractedElements++;
   }
 
-  return enrichedCount;
+  return {
+    processed: batch.length,
+    changed,
+    embedded,
+    extractedElements,
+    selectedForEmbedding: needsEmbed.length,
+    selectedForElements: needsElements.length,
+  };
+}
+
+export async function enrichCorpusBatch(batchSize = 10, modelId?: string): Promise<number> {
+  const result = await enrichCorpusBatchDetailed(batchSize, modelId);
+  return result.changed;
 }
 
 // ---------------------------------------------------------------------------

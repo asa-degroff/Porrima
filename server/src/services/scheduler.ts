@@ -10,7 +10,7 @@ import { getDb, getSettings, saveSettings } from "./chat-storage.js";
 import { getLastWakeCycleAt } from "./memory-storage.js";
 import { extractDelayedMemories, hasActiveChats, isChatActive } from "./memory-extraction.js";
 import { isCacheWarmOrLlamaRuntimeBusy } from "./cache-warm-queue.js";
-import { enrichCorpusBatch } from "./image-corpus.js";
+import { enrichCorpusBatchDetailed } from "./image-corpus.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
 import { isSleepCycleActive as computeSleepCycleActive } from "./sleep-cycle.js";
 import { startAutomationScheduler } from "./automation-scheduler.js";
@@ -103,11 +103,24 @@ async function checkAndRunEnrichment() {
       ? normalizeRouterModelId(configuredExtractionModelId)
       : configuredExtractionModelId;
 
-    console.log(`[scheduler] Running enrichment batch (size: ${batchSize}, model: ${extractionModelId || 'default'})...`);
-    const enrichedCount = await enrichCorpusBatch(batchSize, extractionModelId);
+    const result = await enrichCorpusBatchDetailed(batchSize, extractionModelId);
 
-    if (enrichedCount > 0) {
-      console.log(`[scheduler] Enriched ${enrichedCount} corpus entries`);
+    if (result.processed === 0) {
+      return;
+    }
+
+    if (result.changed > 0) {
+      console.log(
+        `[scheduler] Enriched ${result.changed}/${result.processed} corpus entries ` +
+        `(${result.embedded} embeddings, ${result.extractedElements} element sets; ` +
+        `model: ${extractionModelId || 'default'})`
+      );
+    } else {
+      console.log(
+        `[scheduler] Enrichment processed ${result.processed} candidate(s) but made no changes ` +
+        `(selected ${result.selectedForEmbedding} for embedding, ${result.selectedForElements} for elements; ` +
+        `model: ${extractionModelId || 'default'})`
+      );
     }
   } catch (e) {
     console.error("[scheduler] Enrichment check failed:", e);
