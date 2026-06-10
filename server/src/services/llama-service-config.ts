@@ -94,10 +94,10 @@ const ROLE_DEFAULTS: Record<LlamaServerId, Omit<LlamaServiceConfig, "binaryPath"
     host: LLAMA_SERVER_HOST,
     port: LLAMA_SERVER_PORTS.extraction,
     gpuLayers: 0,
-    ctxSize: 16384,
+    ctxSize: 32768,
     parallel: 1,
     reasoningFormat: "deepseek",
-    chatTemplateKwargs: JSON.stringify({ enable_thinking: false }),
+    chatTemplateKwargs: JSON.stringify({ enable_thinking: true }),
     extraArgs: [],
   },
   reranker: {
