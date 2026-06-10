@@ -76,15 +76,20 @@ Core install tasks:
   - title generation: chat-completion model, CPU-only by default
 - Use CPU-only defaults for extraction, reranker, embedding, and title generation unless spare VRAM is explicitly available.
 - In production, build both workspaces and run the Node server with `NODE_ENV=production` on the configured app port. The production server serves `client/dist` itself.
+- Configure `porrima.service` itself, or a systemd drop-in under `~/.config/systemd/user/porrima.service.d/`, with explicit WebAuthn environment values before the first production start:
+  - local-only setup: `Environment=ORIGIN=http://localhost:<port>` and `Environment=RP_ID=localhost`
+  - remote setup: `Environment=ORIGIN=https://<public-hostname>` and `Environment=RP_ID=<public-hostname without port>`
+  - the `ORIGIN` value must be the exact browser origin used for passkey registration; the `RP_ID` must match that origin's hostname.
 - Do not set `PORRIMA_DEV_TOKEN` in production; Porrima refuses to start with the development bearer-token bypass variable set under `NODE_ENV=production`.
 - For dual equal GPUs, use tensor split for chat inference.
 - Preserve performance flags such as flash attention, tensor split, batch/ubatch sizing, visible GPU environment variables, and llama.cpp library paths.
 
 Passkey and Cloudflare setup:
 - If I want remote access, ask for the final HTTPS hostname before passkey registration. WebAuthn passkeys are origin/RP-bound, so a passkey registered only on `localhost` will not be usable on the Cloudflare hostname.
-- Production startup requires explicit WebAuthn settings:
+- Production startup requires explicit WebAuthn settings in the `porrima.service` environment, not just shell-local exports:
   - `ORIGIN=https://<public-hostname>`
   - `RP_ID=<public-hostname without port>`
+- If using a Cloudflare Tunnel such as `https://porrima.example.com -> http://localhost:3001`, keep `PORT=3001`, set `ORIGIN=https://porrima.example.com`, and set `RP_ID=porrima.example.com`. Do not set `ORIGIN` to the localhost target for a public passkey registration flow.
 - Preferred safe sequence:
   1. Build and start Porrima locally, bound only to localhost.
   2. Confirm the first-run setup token exists at `~/.porrima/auth/setup-token.txt` after the server starts.
@@ -107,6 +112,7 @@ Validation:
 - Run `systemctl --user daemon-reload`.
 - Enable and start selected services.
 - Check `systemctl --user status` for every service.
+- Confirm `systemctl --user show porrima.service -p Environment -p ExecStart -p WorkingDirectory` shows `NODE_ENV=production`, the intended `PORT`, and matching `ORIGIN`/`RP_ID`; missing WebAuthn values will make Porrima exit during startup and can surface as proxy 502 errors.
 - Check every llama.cpp service `/health` and `/v1/models`:
   - `http://localhost:32100` chat inference
   - `http://localhost:32101` extraction
