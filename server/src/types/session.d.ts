@@ -4,6 +4,7 @@ declare module "express-session" {
   interface SessionData {
     authenticated: boolean;
     currentChallenge?: string;
+    currentUserVerification?: "preferred" | "required";
     registrationSetupAuthorized?: boolean;
   }
 }

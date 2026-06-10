@@ -8,6 +8,9 @@ Type=simple
 WorkingDirectory=${PORRIMA_DIR}/server
 Environment=NODE_ENV=production
 Environment=PORT=3001
+# Replace these with the final HTTPS origin and hostname when using remote access.
+Environment=ORIGIN=http://localhost:3001
+Environment=RP_ID=localhost
 ExecStart=${NODE_BIN} dist/index.js
 Restart=always
 RestartSec=5

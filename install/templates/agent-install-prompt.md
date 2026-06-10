@@ -22,7 +22,7 @@ Requirements:
 - Prefer reversible user-local installation.
 - Use systemd user services, not root services, unless OS package installation is required.
 - Install the core llama.cpp-based agent first. TTS and image generation are optional packs; only install the packs listed in the install profile.
-- Do not expose Porrima on an unprotected public URL until an owner passkey exists for that public origin.
+- Do not expose first-run Porrima on a public URL unless the first-run setup token exists and `ORIGIN`/`RP_ID` are configured for that public origin.
 
 Probe:
 Run and summarize:
@@ -82,7 +82,7 @@ Core install tasks:
 
 Passkey and Cloudflare setup:
 - If I want remote access, ask for the final HTTPS hostname before passkey registration. WebAuthn passkeys are origin/RP-bound, so a passkey registered only on `localhost` will not be usable on the Cloudflare hostname.
-- Configure Porrima with:
+- Production startup requires explicit WebAuthn settings:
   - `ORIGIN=https://<public-hostname>`
   - `RP_ID=<public-hostname without port>`
 - Preferred safe sequence:

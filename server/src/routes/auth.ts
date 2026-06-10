@@ -22,6 +22,70 @@ const router = Router();
 
 const rpName = "Porrima";
 const setupTokenHeader = "x-porrima-setup-token";
+type WebAuthnUserVerification = "preferred" | "required";
+
+function isProduction(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
+function requireEnv(name: "ORIGIN" | "RP_ID", errors: string[]): string {
+  const value = (process.env[name] ?? "").trim();
+  if (!value) {
+    errors.push(`${name} is required when NODE_ENV=production`);
+  }
+  return value;
+}
+
+function isLocalhost(hostname: string): boolean {
+  return hostname === "localhost";
+}
+
+export function assertProductionWebAuthnConfig(): void {
+  if (!isProduction()) return;
+
+  const errors: string[] = [];
+  const origin = requireEnv("ORIGIN", errors);
+  const rpID = requireEnv("RP_ID", errors);
+
+  let parsedOrigin: URL | null = null;
+  if (origin) {
+    try {
+      parsedOrigin = new URL(origin);
+      if (origin !== parsedOrigin.origin) {
+        errors.push("ORIGIN must be an origin only, for example https://porrima.example.com");
+      }
+      const isAllowedLocalOrigin =
+        parsedOrigin.protocol === "http:" && isLocalhost(parsedOrigin.hostname);
+      if (parsedOrigin.protocol !== "https:" && !isAllowedLocalOrigin) {
+        errors.push("ORIGIN must use https except for http://localhost local-only setup");
+      }
+    } catch {
+      errors.push("ORIGIN must be a valid absolute origin");
+    }
+  }
+
+  if (rpID) {
+    if (rpID.includes("://") || rpID.includes("/") || rpID.includes(":")) {
+      errors.push("RP_ID must be a hostname without protocol, port, or path");
+    }
+    if (parsedOrigin && rpID.toLowerCase() !== parsedOrigin.hostname.toLowerCase()) {
+      errors.push("RP_ID must match the ORIGIN hostname");
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Invalid production WebAuthn configuration: ${errors.join("; ")}`);
+  }
+}
+
+export function getWebAuthnUserVerification(): WebAuthnUserVerification {
+  return isProduction() ? "required" : "preferred";
+}
+
+export function shouldRequireUserVerification(req: Request): boolean {
+  const expected = req.session?.currentUserVerification ?? getWebAuthnUserVerification();
+  return expected === "required";
+}
 
 function getRpID(req: Request): string {
   if (process.env.RP_ID) return process.env.RP_ID;
@@ -98,6 +162,7 @@ router.post("/register/options", async (req, res) => {
   }));
 
   const rpID = getRpID(req);
+  const userVerification = getWebAuthnUserVerification();
   const options = await generateRegistrationOptions({
     rpName,
     rpID,
@@ -106,11 +171,12 @@ router.post("/register/options", async (req, res) => {
     excludeCredentials,
     authenticatorSelection: {
       residentKey: "preferred",
-      userVerification: "preferred",
+      userVerification,
     },
   });
 
   req.session!.currentChallenge = options.challenge;
+  req.session!.currentUserVerification = userVerification;
   res.json(options);
 });
 
@@ -136,7 +202,7 @@ router.post("/register/verify", async (req, res) => {
       expectedChallenge,
       expectedOrigin: getExpectedOrigin(req),
       expectedRPID: rpID,
-      requireUserVerification: false,
+      requireUserVerification: shouldRequireUserVerification(req),
     });
 
     if (!verification.verified || !verification.registrationInfo) {
@@ -157,6 +223,7 @@ router.post("/register/verify", async (req, res) => {
     // Auto-login after registration
     req.session!.authenticated = true;
     delete req.session!.currentChallenge;
+    delete req.session!.currentUserVerification;
     delete req.session!.registrationSetupAuthorized;
     await clearSetupToken();
 
@@ -175,13 +242,15 @@ router.post("/login/options", async (req, res) => {
   }));
 
   const rpID = getRpID(req);
+  const userVerification = getWebAuthnUserVerification();
   const options = await generateAuthenticationOptions({
     rpID,
     allowCredentials,
-    userVerification: "preferred",
+    userVerification,
   });
 
   req.session!.currentChallenge = options.challenge;
+  req.session!.currentUserVerification = userVerification;
   res.json(options);
 });
 
@@ -207,7 +276,7 @@ router.post("/login/verify", async (req, res) => {
       expectedChallenge,
       expectedOrigin: getExpectedOrigin(req),
       expectedRPID: rpID,
-      requireUserVerification: false,
+      requireUserVerification: shouldRequireUserVerification(req),
       credential: {
         id: stored.id,
         publicKey: isoBase64URL.toBuffer(stored.publicKey),
@@ -228,6 +297,7 @@ router.post("/login/verify", async (req, res) => {
 
     req.session!.authenticated = true;
     delete req.session!.currentChallenge;
+    delete req.session!.currentUserVerification;
 
     res.json({ verified: true });
   } catch (err: any) {

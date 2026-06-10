@@ -74,10 +74,14 @@ ExecStart=/usr/bin/node dist/index.js
 Restart=on-failure
 RestartSec=5
 Environment=NODE_ENV=production
+Environment=ORIGIN=http://localhost:3001
+Environment=RP_ID=localhost
 
 [Install]
 WantedBy=default.target
 ```
+
+For remote access, replace `ORIGIN` and `RP_ID` with the final HTTPS browser origin and hostname before registering passkeys, for example `ORIGIN=https://porrima.example.com` and `RP_ID=porrima.example.com`.
 
 ### Binary Symlink (Recommended)
 

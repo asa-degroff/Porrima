@@ -15,7 +15,7 @@ import imagesRouter from "./routes/images.js";
 import visionRouter from "./routes/vision.js";
 import imageCorpusRouter from "./routes/image-corpus.js";
 import corpusRouter from "./routes/corpus.js";
-import authRouter from "./routes/auth.js";
+import authRouter, { assertProductionWebAuthnConfig } from "./routes/auth.js";
 import personaRouter from "./routes/persona.js";
 import extractionPromptRouter from "./routes/extraction-prompt.js";
 import userRouter from "./routes/user.js";
@@ -92,6 +92,7 @@ process.once("SIGINT", () => forceExitTimer("SIGINT"));
 
 const isProd = process.env.NODE_ENV === "production";
 assertNoProductionDevTokenBypass();
+assertProductionWebAuthnConfig();
 const PORT = parseInt(process.env.PORT || "3001");
 const backgroundJobsSetting = process.env.ENABLE_BACKGROUND_JOBS?.toLowerCase();
 const backgroundJobsEnabled = backgroundJobsSetting === "true"
