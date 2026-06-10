@@ -86,11 +86,12 @@ Passkey and Cloudflare setup:
   - `RP_ID=<public-hostname without port>`
 - Preferred safe sequence:
   1. Build and start Porrima locally, bound only to localhost.
-  2. Create the Cloudflare Tunnel and DNS route only behind Cloudflare Access or an equivalent temporary access policy.
-  3. Visit the final HTTPS hostname through that temporary protection and register the first owner passkey in Porrima.
-  4. Confirm `GET /api/auth/status` reports `setupComplete: true`.
-  5. Only then remove the temporary Cloudflare Access policy if I want the Porrima passkey gate to be the only public gate.
-- If Cloudflare Access or an equivalent temporary protection is not available, stop before opening the public route and explain the security risk. Do not create an unprotected public tunnel to a first-run Porrima instance.
+  2. Confirm the first-run setup token exists at `~/.porrima/auth/setup-token.txt` after the server starts.
+  3. Create the Cloudflare Tunnel and DNS route. Use Cloudflare Access or an equivalent temporary access policy when available as an extra guard.
+  4. Visit the final HTTPS hostname and register the first owner passkey in Porrima using the setup token.
+  5. Confirm `GET /api/auth/status` reports `setupComplete: true`.
+  6. Only then remove the temporary Cloudflare Access policy if I want the Porrima passkey gate to be the only public gate.
+- Do not bypass the setup-token gate or expose a first-run Porrima instance whose setup token is missing or unreadable.
 - If I choose local-only setup, register the first passkey from `localhost` and leave Cloudflare Tunnel disabled.
 - Install or verify `cloudflared` only if remote access is requested.
 - For a Cloudflare-managed service, create a user-local tunnel config and systemd user service, keep the tunnel target pointed at the production Porrima server on localhost, and include commands to inspect tunnel health and logs.

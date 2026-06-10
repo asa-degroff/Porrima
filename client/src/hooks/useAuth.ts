@@ -43,13 +43,14 @@ export function useAuth() {
     return () => window.removeEventListener("auth:unauthorized", handler);
   }, []);
 
-  const register = useCallback(async () => {
+  const register = useCallback(async (setupToken?: string) => {
     setError(null);
     try {
-      const options = await fetchRegisterOptions();
+      const token = setupToken?.trim();
+      const options = await fetchRegisterOptions(token);
       const { startRegistration } = await import("@simplewebauthn/browser");
       const response = await startRegistration({ optionsJSON: options });
-      const result = await verifyRegistration(response);
+      const result = await verifyRegistration(response, token);
       if (result.verified) {
         setAuthState("authenticated");
       }

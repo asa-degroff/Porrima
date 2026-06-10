@@ -1,4 +1,4 @@
-import { Router, type Request } from "express";
+import { Router, type Request, type Response } from "express";
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -8,6 +8,9 @@ import {
 import { isoBase64URL } from "@simplewebauthn/server/helpers";
 import {
   isSetupComplete,
+  getOrCreateSetupToken,
+  verifySetupToken,
+  clearSetupToken,
   loadAuthStore,
   addCredential,
   getCredentialById,
@@ -18,6 +21,7 @@ import type { AuthenticatorTransportFuture } from "@simplewebauthn/server";
 const router = Router();
 
 const rpName = "Porrima";
+const setupTokenHeader = "x-porrima-setup-token";
 
 function getRpID(req: Request): string {
   if (process.env.RP_ID) return process.env.RP_ID;
@@ -37,20 +41,53 @@ function getExpectedOrigin(req: Request): string {
   return `${proto}://${host}`;
 }
 
+function getSetupToken(req: Request): string | undefined {
+  const headerToken = req.get(setupTokenHeader);
+  if (headerToken) return headerToken;
+  const bodyToken = (req.body as { setupToken?: unknown } | undefined)?.setupToken;
+  return typeof bodyToken === "string" ? bodyToken : undefined;
+}
+
+export async function authorizeRegistration(req: Request, setupComplete: boolean): Promise<boolean> {
+  if (setupComplete) {
+    return req.session?.authenticated === true;
+  }
+
+  if (req.session?.registrationSetupAuthorized === true) {
+    return true;
+  }
+
+  const authorized = await verifySetupToken(getSetupToken(req));
+  if (authorized) {
+    req.session!.registrationSetupAuthorized = true;
+  }
+  return authorized;
+}
+
+function sendRegistrationDenied(res: Response, setupComplete: boolean) {
+  if (setupComplete) {
+    res.status(403).json({ error: "Registration not allowed" });
+  } else {
+    res.status(403).json({ error: "Valid setup token required" });
+  }
+}
+
 // GET /api/auth/status
 router.get("/status", async (_req, res) => {
   const setupComplete = await isSetupComplete();
+  if (!setupComplete) {
+    await getOrCreateSetupToken();
+  }
   const authenticated = _req.session?.authenticated === true;
-  res.json({ authenticated, setupComplete });
+  res.json({ authenticated, setupComplete, setupTokenRequired: !setupComplete });
 });
 
 // POST /api/auth/register/options
 router.post("/register/options", async (req, res) => {
   const setupComplete = await isSetupComplete();
 
-  // If credentials already exist and session is not authenticated, deny
-  if (setupComplete && !req.session?.authenticated) {
-    res.status(403).json({ error: "Registration not allowed" });
+  if (!(await authorizeRegistration(req, setupComplete))) {
+    sendRegistrationDenied(res, setupComplete);
     return;
   }
 
@@ -81,8 +118,8 @@ router.post("/register/options", async (req, res) => {
 router.post("/register/verify", async (req, res) => {
   const setupComplete = await isSetupComplete();
 
-  if (setupComplete && !req.session?.authenticated) {
-    res.status(403).json({ error: "Registration not allowed" });
+  if (!(await authorizeRegistration(req, setupComplete))) {
+    sendRegistrationDenied(res, setupComplete);
     return;
   }
 
@@ -120,6 +157,8 @@ router.post("/register/verify", async (req, res) => {
     // Auto-login after registration
     req.session!.authenticated = true;
     delete req.session!.currentChallenge;
+    delete req.session!.registrationSetupAuthorized;
+    await clearSetupToken();
 
     res.json({ verified: true });
   } catch (err: any) {
