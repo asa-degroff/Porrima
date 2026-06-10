@@ -76,6 +76,7 @@ Core install tasks:
   - title generation: chat-completion model, CPU-only by default
 - Use CPU-only defaults for extraction, reranker, embedding, and title generation unless spare VRAM is explicitly available.
 - In production, build both workspaces and run the Node server with `NODE_ENV=production` on the configured app port. The production server serves `client/dist` itself.
+- Do not set `PORRIMA_DEV_TOKEN` in production; Porrima refuses to start with the development bearer-token bypass variable set under `NODE_ENV=production`.
 - For dual equal GPUs, use tensor split for chat inference.
 - Preserve performance flags such as flash attention, tensor split, batch/ubatch sizing, visible GPU environment variables, and llama.cpp library paths.
 

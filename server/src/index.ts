@@ -35,7 +35,7 @@ import pushRouter from "./routes/push.js";
 import automationsRouter from "./routes/automations.js";
 import systemStatsRouter from "./routes/system-stats.js";
 import systemRouter from "./routes/system.js";
-import { requireAuth } from "./middleware/auth.js";
+import { assertNoProductionDevTokenBypass, requireAuth } from "./middleware/auth.js";
 import { ensureSetupTokenForFirstRun, getSessionSecret } from "./services/auth-storage.js";
 import { startScheduler } from "./services/scheduler.js";
 import { startSystemStatsPolling } from "./services/system-stats.js";
@@ -91,6 +91,7 @@ process.once("SIGTERM", () => forceExitTimer("SIGTERM"));
 process.once("SIGINT", () => forceExitTimer("SIGINT"));
 
 const isProd = process.env.NODE_ENV === "production";
+assertNoProductionDevTokenBypass();
 const PORT = parseInt(process.env.PORT || "3001");
 const backgroundJobsSetting = process.env.ENABLE_BACKGROUND_JOBS?.toLowerCase();
 const backgroundJobsEnabled = backgroundJobsSetting === "true"
