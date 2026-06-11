@@ -10,6 +10,8 @@
 
 **Persistence**: `ChatMessage.artifacts?: Artifact[]` stores `{ id, title, url }` for each artifact created during the message's tool loop. Artifacts survive server restarts because both the HTML files on disk and the URL references in chat JSON are stable.
 
+**Automatic preview review**: Successful `create_artifact`, `create_visual`, and `update_artifact` calls render the persisted versioned HTML in headless Chromium and attach a PNG screenshot to the tool result. The next model step reviews that image and can either confirm the result or call `update_artifact` again with complete corrected HTML. Screenshot capture is non-fatal; if Chromium is unavailable or `PORRIMA_ARTIFACT_REVIEW_SCREENSHOTS=0`, the tool result notes that no screenshot was attached. Automatic screenshot-driven updates are capped per artifact/visual in a turn to avoid revision loops.
+
 **Client rendering** (`client/src/components/ArtifactPanel.tsx`):
 - Fetches artifact HTML via `fetch(artifact.url)`, creates a `Blob` URL, and uses it as the iframe `src`.
 - **Blob URLs are same-origin**, which avoids Chrome's `requestAnimationFrame` throttling on cross-origin iframes. Do NOT use `sandbox` attribute or direct `/api/artifacts/` URLs as iframe src — animations will freeze.

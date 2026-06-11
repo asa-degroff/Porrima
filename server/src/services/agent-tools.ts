@@ -10,6 +10,7 @@ import { MEMORY_TOOLS, executeMemoryTool } from "./memory-tools.js";
 import { WEB_TOOLS, executeWebTool } from "./web-tools.js";
 import { executePython, createArtifact, createVisual, updateArtifact, updateVisual } from "./sandbox.js";
 import { P5_INSTANCE_MODE_GUIDANCE, formatArtifactGuidanceWarnings, getArtifactGuidanceWarnings } from "./artifact-guidance.js";
+import { renderArtifactPreviewScreenshot, type PreviewObjectKind } from "./artifact-preview.js";
 import { getSettings } from "./chat-storage.js";
 import { getWorkspaceForProject } from "./workspace.js";
 import { v4 as uuid } from "uuid";
@@ -18,6 +19,7 @@ import { appDataPath } from "./paths.js";
 
 const HOME = homedir();
 const VISUALS_DIR = appDataPath("visuals");
+const MAX_AUTOMATIC_ARTIFACT_REVIEW_UPDATES = 2;
 
 // --- Filesystem tool definitions ---
 
@@ -172,6 +174,68 @@ function createWrapResult(contextWindow: number) {
   };
 }
 
+interface ArtifactReviewTarget {
+  id: string;
+  title: string;
+  url: string;
+  version: number;
+  objectKind: PreviewObjectKind;
+  automaticUpdateCount: number;
+}
+
+function artifactReviewInstruction(target: ArtifactReviewTarget, width: number, height: number): string {
+  const objectLabel = target.objectKind === "visual" ? "visual" : "artifact";
+  const remainingUpdates = MAX_AUTOMATIC_ARTIFACT_REVIEW_UPDATES - target.automaticUpdateCount;
+  const budgetInstruction = remainingUpdates > 0
+    ? `If the screenshot shows a visible issue, call update_artifact with the complete corrected HTML for canonical ID ${target.id}.`
+    : `This ${objectLabel} has reached the automatic screenshot-review update limit for this turn. Do not call update_artifact again unless the user explicitly asks for another revision; briefly describe any remaining concern instead.`;
+
+  return [
+    `Rendered preview screenshot attached (${width}x${height}) for ${objectLabel} "${target.title}" version ${target.version}.`,
+    `Canonical ID: ${target.id}`,
+    `URL: ${target.url}`,
+    "Review the screenshot against the user's request and the visible result, not just the HTML source.",
+    budgetInstruction,
+    "If it looks correct, there's no need to revise it further; just briefly confirm the result.",
+  ].join("\n");
+}
+
+function screenshotUnavailableInstruction(target: ArtifactReviewTarget, error: unknown): string {
+  const objectLabel = target.objectKind === "visual" ? "visual" : "artifact";
+  const message = error instanceof Error ? error.message : String(error);
+  return [
+    `Rendered preview screenshot unavailable for ${objectLabel} "${target.title}" version ${target.version}: ${message}`,
+    "Continue from the tool result and source.",
+  ].join("\n");
+}
+
+async function withArtifactPreviewReview(
+  resultText: string,
+  target: ArtifactReviewTarget,
+): Promise<AgentToolResult<{}>> {
+  const content: any[] = [{ type: "text", text: resultText }];
+  try {
+    const screenshot = await renderArtifactPreviewScreenshot({
+      id: target.id,
+      version: target.version,
+      objectKind: target.objectKind,
+    });
+    content[0].text += `\n\n${artifactReviewInstruction(target, screenshot.width, screenshot.height)}`;
+    content.push({
+      type: "image",
+      data: screenshot.data,
+      mimeType: screenshot.mimeType,
+    });
+  } catch (error) {
+    console.warn(
+      `[artifact-preview] screenshot unavailable for ${target.objectKind} ${target.id} v${target.version}:`,
+      error instanceof Error ? error.message : error,
+    );
+    content[0].text += `\n\n${screenshotUnavailableInstruction(target, error)}`;
+  }
+  return { content, details: {} };
+}
+
 /** Build a pi-ai ToolCall object for existing executor functions */
 function makeToolCall(id: string, name: string, args: Record<string, any>): ToolCall {
   return { type: "toolCall", id, name, arguments: args };
@@ -203,6 +267,14 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
   const baseDir = typeof project === "string" ? project : project?.path || HOME;
   const wrapResult = createWrapResult(contextWindow);
   const tools: AgentTool[] = [];
+  const artifactReviewUpdateCounts = new Map<string, number>();
+
+  const automaticUpdateCountForCreate = (id: string) => artifactReviewUpdateCounts.get(id) ?? 0;
+  const automaticUpdateCountForUpdate = (id: string) => {
+    const next = (artifactReviewUpdateCounts.get(id) ?? 0) + 1;
+    artifactReviewUpdateCounts.set(id, next);
+    return next;
+  };
 
   // Memory tools
   for (const tool of MEMORY_TOOLS) {
@@ -299,10 +371,15 @@ export function getAgentTools(chatId: string, effects: ToolSideEffects, contextW
       const id = uuid();
       const result = await createArtifact(id, args.html, args.title);
       const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
-      effects.onArtifact({ id, title: args.title, url: result.url, version: result.version });
-      return { content: [{ type: "text", text: `Artifact created: "${args.title}"
+      const artifact = { id, title: args.title, url: result.url, version: result.version };
+      effects.onArtifact(artifact);
+      return withArtifactPreviewReview(`Artifact created: "${args.title}"
 Canonical ID: ${id}
-URL: ${result.url}${warningText}` }], details: {} };
+URL: ${result.url}${warningText}`, {
+        ...artifact,
+        objectKind: "artifact",
+        automaticUpdateCount: automaticUpdateCountForCreate(id),
+      });
     },
   });
 
@@ -319,8 +396,16 @@ URL: ${result.url}${warningText}` }], details: {} };
         await access(visualPath);
         const result = await updateVisual(args.artifactId, args.html, args.changeSummary);
         const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
-        effects.onVisual({ id: args.artifactId, title: "Updated visual", html: args.html, url: result.url, version: result.version });
-        return { content: [{ type: "text", text: `Visual updated to version ${result.version} (${result.url})${warningText}` }], details: {} };
+        const visual = { id: args.artifactId, title: "Updated visual", html: args.html, url: result.url, version: result.version };
+        effects.onVisual(visual);
+        return withArtifactPreviewReview(`Visual updated to version ${result.version} (${result.url})${warningText}`, {
+          id: visual.id,
+          title: visual.title,
+          url: visual.url,
+          version: visual.version,
+          objectKind: "visual",
+          automaticUpdateCount: automaticUpdateCountForUpdate(visual.id),
+        });
       } catch {
         // Not a visual; fall through to the artifact store.
       }
@@ -329,8 +414,13 @@ URL: ${result.url}${warningText}` }], details: {} };
         const result = await updateArtifact(args.artifactId, args.html, args.changeSummary);
         const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
         // Emit artifact event with new version - client will update the display
-        effects.onArtifact({ id: args.artifactId, title: "Updated artifact", url: result.url, version: result.version });
-        return { content: [{ type: "text", text: `Artifact updated to version ${result.version} (${result.url})${warningText}` }], details: {} };
+        const artifact = { id: args.artifactId, title: "Updated artifact", url: result.url, version: result.version };
+        effects.onArtifact(artifact);
+        return withArtifactPreviewReview(`Artifact updated to version ${result.version} (${result.url})${warningText}`, {
+          ...artifact,
+          objectKind: "artifact",
+          automaticUpdateCount: automaticUpdateCountForUpdate(artifact.id),
+        });
       } catch (e: any) {
         return { content: [{ type: "text", text: `Error updating: ${e.message}. Make sure the ID is from a previously created artifact or visual.` }], details: {}, isError: true };
       }
@@ -346,10 +436,18 @@ URL: ${result.url}${warningText}` }], details: {} };
       const id = uuid();
       const result = await createVisual(id, args.html, args.title);
       const warningText = formatArtifactGuidanceWarnings(getArtifactGuidanceWarnings(args.html));
-      effects.onVisual({ id, title: args.title, html: args.html, url: result.url, version: result.version });
-      return { content: [{ type: "text", text: `Visual created: "${args.title}"
+      const visual = { id, title: args.title, html: args.html, url: result.url, version: result.version };
+      effects.onVisual(visual);
+      return withArtifactPreviewReview(`Visual created: "${args.title}"
 Canonical ID: ${id}
-URL: ${result.url}${warningText}` }], details: {} };
+URL: ${result.url}${warningText}`, {
+        id: visual.id,
+        title: visual.title,
+        url: visual.url,
+        version: visual.version,
+        objectKind: "visual",
+        automaticUpdateCount: automaticUpdateCountForCreate(id),
+      });
     },
   });
 

@@ -734,6 +734,24 @@ async function persistToolResultImages(images: ImageAttachment[]): Promise<Image
   );
 }
 
+function imageExtensionForMimeType(mimeType: string | undefined): string {
+  switch ((mimeType || "").toLowerCase()) {
+    case "image/jpeg":
+    case "image/jpg":
+      return "jpg";
+    case "image/png":
+      return "png";
+    case "image/webp":
+      return "webp";
+    case "image/gif":
+      return "gif";
+    case "image/jxl":
+      return "jxl";
+    default:
+      return "bin";
+  }
+}
+
 // Keep SSE connections alive while the model or tools are silent.
 const SSE_KEEPALIVE_INTERVAL_MS = 30_000; // 30s keepalive pings to prevent client timeout
 
@@ -1846,7 +1864,11 @@ async function handleChatStream(
 
             const extractedImages: ImageAttachment[] | undefined = event.result?.content
                 ?.filter((c: any) => c.type === "image")
-                .map((c: any) => ({ data: c.data, mimeType: c.mimeType, name: `generated-${event.toolCallId}.jxl` }));
+                .map((c: any) => ({
+                  data: c.data,
+                  mimeType: c.mimeType,
+                  name: `tool-result-${event.toolCallId}.${imageExtensionForMimeType(c.mimeType)}`,
+                }));
             const images = extractedImages?.length ? await persistToolResultImages(extractedImages) : undefined;
 
             if (images?.length) {

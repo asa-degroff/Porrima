@@ -4,12 +4,12 @@ import puppeteer from "puppeteer-core";
 import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
 import { parseHTML } from "linkedom";
-import { existsSync } from "fs";
 import { createHash } from "crypto";
 import { writeFile, mkdir, readFile, rm } from "fs/promises";
 import { join } from "path";
 import { getSettings } from "./chat-storage.js";
 import { appDataPath } from "./paths.js";
+import { findChromePath } from "./chrome.js";
 
 const MAX_CONTENT_LENGTH = 250_000;
 const WEB_SEARCH_PROVIDERS = ["brave", "exa", "tavily"] as const;
@@ -133,23 +133,6 @@ function pickAllowedBooleanOrString<T extends string>(
   if (typeof normalized === "boolean") return normalized;
   if (normalized && (allowed as readonly string[]).includes(normalized)) return normalized as T;
   return undefined;
-}
-
-// --- Chrome path discovery ---
-
-function findChromePath(): string | null {
-  const candidates = [
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/chromium",
-    "/snap/bin/chromium",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  ];
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-  return null;
 }
 
 // --- Tool definitions ---

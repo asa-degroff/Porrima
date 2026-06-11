@@ -121,6 +121,24 @@ function resultText(result: any): string {
     .join("\n");
 }
 
+function imageExtensionForMimeType(mimeType: string | undefined): string {
+  switch ((mimeType || "").toLowerCase()) {
+    case "image/jpeg":
+    case "image/jpg":
+      return "jpg";
+    case "image/png":
+      return "png";
+    case "image/webp":
+      return "webp";
+    case "image/gif":
+      return "gif";
+    case "image/jxl":
+      return "jxl";
+    default:
+      return "bin";
+  }
+}
+
 async function resultImages(result: any, toolCallId: string): Promise<ImageAttachment[] | undefined> {
   const content = Array.isArray(result?.content) ? result.content : [];
   const images = content
@@ -128,7 +146,7 @@ async function resultImages(result: any, toolCallId: string): Promise<ImageAttac
     .map((c: any) => ({
       data: c.data,
       mimeType: c.mimeType,
-      name: `generated-${toolCallId}.jxl`,
+      name: `tool-result-${toolCallId}.${imageExtensionForMimeType(c.mimeType)}`,
     }));
   if (!images.length) return undefined;
 
