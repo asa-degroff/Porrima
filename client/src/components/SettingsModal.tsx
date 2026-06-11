@@ -36,7 +36,6 @@ import { getDefaultLlamaServerUrl } from "../utils/llamaPorts";
 const SECTIONS = [
   { id: 'models', label: 'Models' },
   { id: 'inference', label: 'Inference Servers' },
-  { id: 'favorites', label: 'Favorites' },
   { id: 'theme', label: 'Appearance' },
   { id: 'background', label: 'Background' },
   { id: 'haptics', label: 'Haptics' },
@@ -588,8 +587,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [scanPathAdding, setScanPathAdding] = useState(false);
   const [scanPathRemoving, setScanPathRemoving] = useState<string | null>(null);
   const [scanPathMessage, setScanPathMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-  const [favoriteModels, setFavoriteModels] = useState<Set<string>>(new Set(settings.favoriteModels || []));
-  const [showOnlyFavorites, setShowOnlyFavorites] = useState(settings.showOnlyFavorites ?? false);
   const [preserveThinking, setPreserveThinking] = useState(
     settings.preserveThinking ?? Object.values(settings.modelPreserveThinking ?? {}).some(Boolean)
   );
@@ -671,7 +668,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [extractionServerModels, setExtractionServerModels] = useState<DiscoveredModel[]>([]);
   const [extractionServerModelsLoading, setExtractionServerModelsLoading] = useState(false);
   const [extractionUseCustom, setExtractionUseCustom] = useState(false);
-  const [extractionFallbackEnabled, setExtractionFallbackEnabled] = useState(settings.extractionFallbackEnabled ?? true);
   // Tool options — read_file truncation
   const [readFileDefaultLines, setReadFileDefaultLines] = useState(settings.readFileDefaultLines ?? 1000);
   const [readFileMaxBytes, setReadFileMaxBytes] = useState(settings.readFileMaxBytes ?? 256 * 1024);
@@ -764,7 +760,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const embeddingModelDd = useDropdown();
   const rerankerModelDd = useDropdown();
   const titleGenerationModelDd = useDropdown();
-  const favoritesDd = useDropdown();
 
   const applyTtsSettingsUpdate = (updated: TTSSettings | null | undefined) => {
     if (!updated) return;
@@ -1767,8 +1762,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       embeddingProvider,
       embeddingUrl: embeddingUrl.trim() || undefined,
       embeddingModel: embeddingModel.trim() || undefined,
-      favoriteModels: favoriteModels.size > 0 ? [...favoriteModels] : undefined,
-      showOnlyFavorites,
       theme,
       backgroundEffect,
       flatBackground,
@@ -1799,7 +1792,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       headerImageId,
       extractionModelId,
       extractionModelUrl: extractionModelUrl.trim() || undefined,
-      extractionFallbackEnabled,
       readFileDefaultLines,
       readFileMaxBytes,
       maxBlockChars,
@@ -3359,17 +3351,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                                  )}
 	                                </div>
 	                              </div>
-	                              <div className="flex items-center justify-between">
-	                                <div>
-	                                  <label className="block text-xs text-white/70">Fallback to available model</label>
-	                                  <p className="text-xs text-white/30 mt-0.5">Use first available model if selected is not loaded</p>
-	                                </div>
-	                                <ToggleSwitch checked={extractionFallbackEnabled} onChange={() => {
-	                                  const v = !extractionFallbackEnabled;
-	                                  setExtractionFallbackEnabled(v);
-	                                  handleLlamaServerSettings("extraction", { fallbackEnabled: v });
-	                                }} accentColor="purple" />
-	                              </div>
 	
                               {/* Binary selector */}
                               <div>
@@ -3958,76 +3939,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 		              </div>
 		            </div>
 		          </div>
-
-          {/* Model Favorites */}
-          <div id="favorites" className="space-y-2 pt-2 border-t border-white/10">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-white/60">Model Favorites</label>
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showOnlyFavorites}
-                  onChange={(e) => setShowOnlyFavorites(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded border-white/20 bg-white/5 text-amber-400 focus:ring-amber-400/30"
-                />
-                <span className="text-xs text-white/50">Show only favorites in chat</span>
-              </label>
-            </div>
-            <Dropdown
-              state={favoritesDd}
-              trigger={
-                <span className="truncate flex-1 text-left">
-                  {favoriteModels.size === 0
-                    ? "No favorites selected"
-                    : `${favoriteModels.size} favorite${favoriteModels.size === 1 ? "" : "s"} selected`}
-                </span>
-              }
-            >
-	              {defaultChatModelOptions.map((m) => {
-	                const isFav = favoriteModels.has(m.id);
-	                return (
-	                  <button
-	                    key={modelOptionKey(m)}
-                    onClick={() => {
-                      setFavoriteModels((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(m.id)) next.delete(m.id);
-                        else next.add(m.id);
-                        return next;
-                      });
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-white/10 transition-all"
-                    title={isFav ? "Remove from favorites" : "Add to favorites"}
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill={isFav ? "currentColor" : "none"}
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className={`shrink-0 transition-colors ${isFav ? "text-amber-400" : "text-white/30"}`}
-                    >
-                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                    </svg>
-	                    <span className="truncate flex-1 text-white/70">{m.name}</span>
-	                    {m.scanDir ? (
-	                      <span className="text-[10px] text-white/30 shrink-0 max-w-[160px] truncate">{displayPath(m.scanDir)}</span>
-	                    ) : (
-	                      (m as any).parameterSize && <span className="text-[10px] text-white/30 shrink-0">{(m as any).parameterSize}</span>
-	                    )}
-	                    <ProviderIcon
-	                      provider="llamacpp"
-	                      className="text-[#ff8236] shrink-0"
-	                    />
-	                  </button>
-                );
-              })}
-            </Dropdown>
-          </div>
 
           {/* Color Theme */}
           <div id="theme" className="space-y-2">

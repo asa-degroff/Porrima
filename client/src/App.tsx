@@ -892,19 +892,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     updateChatTitle(titleUpdate.chatId, titleUpdate.title);
   }, [titleUpdate]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Filter models for the chat header selector (favorites mode)
-  const headerModels = useMemo(() => {
-    if (!settings.showOnlyFavorites || !settings.favoriteModels?.length) return models;
-    const favSet = new Set(settings.favoriteModels);
-    const filtered = models.filter((m) => favSet.has(m.id));
-    // Always include the currently selected model even if not favorited
-    const selectedId = activeChat?.modelId || settings.defaultModelId;
-    if (selectedId && !filtered.some((m) => m.id === selectedId)) {
-      const selected = models.find((m) => m.id === selectedId);
-      if (selected) filtered.unshift(selected);
-    }
-    return filtered.length > 0 ? filtered : models;
-  }, [models, settings.showOnlyFavorites, settings.favoriteModels, activeChat, settings.defaultModelId]);
 
   // Find context window for active model
   // Priority: chat override → detected value → fallback
@@ -1441,7 +1428,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         contextWindow={contextWindow}
         error={error}
         warning={warning}
-        models={headerModels}
+        models={models}
         selectedModelId={activeChat?.modelId || settings.defaultModelId || models[0]?.id || ""}
         systemPrompt={activeChat?.systemPrompt || "You are a helpful assistant."}
         systemPromptPresets={settings.systemPromptPresets}

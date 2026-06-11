@@ -394,9 +394,6 @@ export interface Settings {
   embeddingModel?: string;
   embeddingDimension?: number;
   embeddedByModel?: string;     // model that produced the current vectors; set by migration/restore
-  // Model favorites
-  favoriteModels?: string[];
-  showOnlyFavorites?: boolean;
   // Global llama.cpp chat_template_kwargs. When true, passes
   // preserve_thinking:true so models/templates that support it can see
   // historical reasoning traces (Qwen3.6+ feature).
