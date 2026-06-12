@@ -748,6 +748,8 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [ttsError, setTtsError] = useState<string | null>(null);
   const [ttsBackendStatus, setTtsBackendStatus] = useState<TTSBackendStatus | null>(null);
   const [ttsBackendStatusLoading, setTtsBackendStatusLoading] = useState(false);
+  const [ttsTestText, setTtsTestText] = useState("Hello! This is a test of the text-to-speech system.");
+  const [ttsTesting, setTtsTesting] = useState(false);
   const ttsSliderSaveTimersRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
   const ttsSliderSaveSeqRef = useRef<Partial<Record<keyof TTSSettings, number>>>({});
   const modelDd = useDropdown();
@@ -6786,17 +6788,27 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                   />
                 </div>
 
-                {/* Test button */}
-                <div className="pt-2">
+                {/* Test TTS */}
+                <div className="pt-2 space-y-2">
+                  <label className="block text-sm font-medium text-white/60">Test TTS</label>
+                  <textarea
+                    value={ttsTestText}
+                    onChange={(e) => setTtsTestText(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-blue-400/50 resize-y"
+                    placeholder="Type something to hear it read aloud…"
+                  />
                   <button
                     onClick={async () => {
+                      if (!ttsTestText.trim()) return;
+                      setTtsTesting(true);
                       try {
                         const res = await fetch("/api/tts/generate", {
                           method: "POST",
                           credentials: "include",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({
-                            text: "Hello! This is a test of the text-to-speech system.",
+                            text: ttsTestText,
                             voice: ttsSettings.voice,
                             speed: ttsSettings.speed,
                             pitch: ttsSettings.pitch,
@@ -6814,15 +6826,21 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                         if (res.ok) {
                           const data = await res.json();
                           const audio = new Audio(data.audioUrl);
+                          audio.addEventListener("ended", () => setTtsTesting(false));
+                          audio.addEventListener("error", () => setTtsTesting(false));
                           audio.play();
+                        } else {
+                          setTtsTesting(false);
                         }
                       } catch (err) {
                         console.error("Test failed:", err);
+                        setTtsTesting(false);
                       }
                     }}
-                    className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-blue-500/15 border border-blue-400/20 text-blue-300 hover:bg-blue-500/25 transition-all pressable"
+                    disabled={ttsTesting || !ttsTestText.trim()}
+                    className="w-full px-3 py-2 rounded-lg text-sm font-medium bg-blue-500/15 border border-blue-400/20 text-blue-300 hover:bg-blue-500/25 transition-all pressable disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    Test Voice
+                    {ttsTesting ? "Playing…" : "Test Voice"}
                   </button>
                 </div>
 
