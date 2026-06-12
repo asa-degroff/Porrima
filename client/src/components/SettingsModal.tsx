@@ -669,7 +669,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   // Tool options — read_file truncation
   const [readFileDefaultLines, setReadFileDefaultLines] = useState(settings.readFileDefaultLines ?? 1000);
   const [readFileMaxBytes, setReadFileMaxBytes] = useState(settings.readFileMaxBytes ?? 256 * 1024);
-  const [maxBlockChars, setMaxBlockChars] = useState(settings.maxBlockChars ?? 4000);
+  const [maxBlockChars, setMaxBlockChars] = useState(settings.maxBlockChars ?? 6000);
   const [crossProjectScoreMultiplier, setCrossProjectScoreMultiplier] = useState(settings.crossProjectScoreMultiplier ?? 0.3);
   const [globalProjectScoreMultiplier, setGlobalProjectScoreMultiplier] = useState(settings.globalProjectScoreMultiplier ?? 1.0);
   const [retrievalDepthProfile, setRetrievalDepthProfile] = useState<RetrievalDepthProfile>(coerceRetrievalDepthProfile(settings.retrievalDepthProfile));
@@ -5843,8 +5843,8 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	              </div>
 	              <input
 	                type="range"
-	                min={1000}
-	                max={10000}
+	                min={5000}
+	                max={20000}
 	                step={500}
 	                value={maxBlockChars}
 	                onChange={(e) => setMaxBlockChars(Number(e.target.value))}

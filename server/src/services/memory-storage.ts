@@ -1838,12 +1838,21 @@ export async function saveDailyLog(
 // Memory Blocks — structured, editable knowledge documents
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MAX_BLOCK_CHARS = 4000;
+const DEFAULT_MAX_BLOCK_CHARS = 6000;
+const MIN_MAX_BLOCK_CHARS = 5000;
+const MAX_MAX_BLOCK_CHARS = 20000;
+
+function clampMaxBlockChars(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return DEFAULT_MAX_BLOCK_CHARS;
+  return Math.min(MAX_MAX_BLOCK_CHARS, Math.max(MIN_MAX_BLOCK_CHARS, Math.round(numeric)));
+}
 
 export async function getMaxBlockChars(): Promise<number> {
   const { getSettings } = await import("./chat-storage.js");
   const settings = await getSettings();
-  return settings.maxBlockChars ?? DEFAULT_MAX_BLOCK_CHARS;
+  if (settings.maxBlockChars == null) return DEFAULT_MAX_BLOCK_CHARS;
+  return clampMaxBlockChars(settings.maxBlockChars);
 }
 
 // blockType distinguishes the different kinds of entries that all live in the
@@ -2212,4 +2221,4 @@ export function getBlockHistory(blockId: string): MemoryBlock[] {
   return history;
 }
 
-export { DEFAULT_MAX_BLOCK_CHARS };
+export { DEFAULT_MAX_BLOCK_CHARS, MIN_MAX_BLOCK_CHARS, MAX_MAX_BLOCK_CHARS };
