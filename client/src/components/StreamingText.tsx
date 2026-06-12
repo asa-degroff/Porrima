@@ -12,17 +12,15 @@ interface Props {
 export function StreamingText({ content, isStreaming }: Props) {
   if (!content && isStreaming) {
     return (
-      <span className="streaming-cursor text-white/50 text-sm">
+      <span className="text-white/50 text-sm">
         Thinking
       </span>
     );
   }
 
   return (
-    <span className={isStreaming ? "streaming-cursor" : ""}>
-      <Suspense fallback={<span className="text-sm whitespace-pre-wrap">{content}</span>}>
-        <MarkdownRenderer content={content} />
-      </Suspense>
-    </span>
+    <Suspense fallback={<span className="text-sm whitespace-pre-wrap">{content}</span>}>
+      <MarkdownRenderer content={content} isStreaming={isStreaming} />
+    </Suspense>
   );
 }

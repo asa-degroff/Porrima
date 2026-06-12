@@ -339,17 +339,9 @@ body::before {
   border-radius: 2px;
 }
 
-/* Streaming cursor animation */
-@keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
-}
-
-.streaming-cursor::after {
-  content: "▋";
-  animation: blink 1s infinite;
-  color: rgba(var(--theme-secondary-text), 0.8);
-}
+/* Streaming cursor — the ▋ character (U+258B) is appended to streaming content
+   in MarkdownRenderer so it renders inline inside the last text element.
+   No CSS pseudo-element needed — the character itself is the cursor. */
 
 /* Polyhedron prefill animation */
 @keyframes polyhedron-prefill-spin {

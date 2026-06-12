@@ -13,9 +13,12 @@ const rehypePlugins: any[] = [[rehypeKatex, { throwOnError: false }]];
 
 interface Props {
   content: string;
+  isStreaming?: boolean;
 }
 
-export function MarkdownRenderer({ content }: Props) {
+export function MarkdownRenderer({ content, isStreaming }: Props) {
+  // Append cursor char to content so it renders inline inside the last text element
+  const cursorContent = isStreaming ? content + "\u258b" : content;
   return (
     <div className="markdown-body">
       <ReactMarkdown
@@ -40,7 +43,7 @@ export function MarkdownRenderer({ content }: Props) {
           ),
         }}
       >
-        {content}
+        {cursorContent}
       </ReactMarkdown>
     </div>
   );
