@@ -4055,7 +4055,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 
           {/* Activity Shape */}
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-white/60">Activity Shape</label>
+            <label className="block text-sm font-medium text-white/60">Activity Spinner Shape</label>
             <div className="flex gap-2">
               {([
                 { value: "octahedron" as ActivityShape, label: "Octahedron" },
@@ -4085,13 +4085,13 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               ))}
             </div>
             <p className="text-white/30 text-xs">
-              The 3D shape used for activity indicators throughout the interface.
+              Used for activity indicators throughout the interface.
             </p>
           </div>
 
           {/* Activity Hue */}
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-white/60">Activity Color</label>
+            <label className="block text-sm font-medium text-white/60">Activity Spinner Color</label>
             <div className="flex items-center gap-3">
               <input
                 type="range"
@@ -4190,7 +4190,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 <div>
                   <label className="block text-sm font-medium text-white/60">Chromatic Aberration</label>
                   <p className="text-white/30 text-xs mt-0.5">
-                    Red/blue fringing that grows toward the screen edges
+                    Red/blue fringing effect that grows toward the screen edges
                   </p>
                 </div>
                 <ToggleSwitch
@@ -4227,7 +4227,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               <div className="min-w-0 pr-3">
                 <label className="block text-sm font-medium text-white/60">Push notifications</label>
                 <p className="text-xs text-white/30 mt-0.5">
-                  Notify this device when an agent reply is ready and the app is in the background.
+                  Notify this device when an agent reply is ready and the app is not in the foreground.
                 </p>
               </div>
               <ToggleSwitch
@@ -4324,7 +4324,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
             <div>
               <h3 className="text-sm font-medium text-white/70">Remote Hosts</h3>
               <p className="text-xs text-white/30 mt-1">
-                SSH hosts can be attached to projects so file and bash tools run in the remote workspace.
+                SSH hosts enable opening a project on a remote machine.
               </p>
             </div>
 
@@ -4756,7 +4756,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               </button>
             </div>
             <p className="text-white/30 text-xs -mt-2">
-              Prompts that append to the base agent prompt.
+              Prompts that prepend to the base agent prompt.
             </p>
 
             {presetMessage && (
@@ -4915,7 +4915,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 ))}
               </Dropdown>
               <p className="text-white/30 text-xs">
-                Used when the web_search agent tool does not specify a provider. Agents can still override it for a specific search.
+                Default for the web_search tool when not overridden by the agent.
               </p>
             </div>
             {/* Provider enable toggles */}
@@ -5132,7 +5132,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               <div className="flex items-center justify-between">
                 <div>
                   <label className="block text-sm font-medium text-white/60">Enable delayed extraction</label>
-                  <p className="text-xs text-white/30 mt-0.5">Extract memories from chats after inactivity</p>
+                  <p className="text-xs text-white/30 mt-0.5">Extract memories from the chat history and compare similar memories for supersession after a period inactivity in a chat</p>
                 </div>
                 <ToggleSwitch
                   checked={delayedExtractionEnabled}
@@ -5194,7 +5194,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                   onChange={(e) => setEnrichmentBatchSize(Number(e.target.value))}
                   className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
                 />
-                <p className="text-xs text-white/30">How many unenriched images to process every 10 minutes</p>
+                <p className="text-xs text-white/30">After generating images in the image sandboc, process this many for the corpus every 10 minutes</p>
               </div>
 
               {/* Sleep Cycle & Wake Cycle */}
@@ -5239,7 +5239,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 
 	          {/* Extraction Server Settings */}
 	          <div className="border-t border-white/10 pt-6">
-	            <h3 className="text-sm font-semibold text-white/80 mb-4">Server Settings</h3>
+	            <h3 className="text-sm font-semibold text-white/80 mb-4">Extraction Server Settings</h3>
 
 	            <div className="space-y-4">
 	              <div>
@@ -5383,7 +5383,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                  type="text"
 	                  value={agentSnapshotLabel}
 	                  onChange={(e) => setAgentSnapshotLabel(e.target.value)}
-	                  placeholder="Optional label (e.g., 'before cleanup')"
+	                  placeholder="Optional label"
 	                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
 	                />
 	                <button
@@ -5493,7 +5493,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                  type="text"
 	                  value={backupLabel}
 	                  onChange={(e) => setBackupLabel(e.target.value)}
-	                  placeholder="Optional label (e.g., 'before qwen3 switch')"
+	                  placeholder="Optional label"
 	                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
 	                />
 	                <button
@@ -5576,7 +5576,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                  <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 p-2.5 text-xs space-y-2">
 	                    <p className="text-amber-200/90 font-medium">Re-embed with <code className="font-mono text-amber-100">{embeddingModel}</code>?</p>
 	                    <p className="text-amber-100/70">
-	                      This rewrites every vector. It may take minutes, and the chat is unavailable while it runs. Create a backup first if you haven't.
+	                      This rewrites every vector. It may take several minutes, and chat is unavailable while it runs. Create a backup first if you haven't.
 	                    </p>
 	                    <div className="flex gap-2">
 	                      <button
