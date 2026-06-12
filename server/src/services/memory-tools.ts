@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { StringEnum, Type, type Tool, type ToolCall } from "@earendil-works/pi-ai";
 import { embed } from "./embeddings.js";
 import {
   deleteMemory,
@@ -15,10 +15,8 @@ import {
 } from "./memory-storage.js";
 import { searchChatMessages, getChatMessageRange, getChatTitle, getArchive, searchArchives } from "./chat-storage.js";
 import { dedupAndSave } from "./memory-extraction.js";
-import type { Tool, ToolCall } from "@mariozechner/pi-ai";
 import type { MemoryCategory } from "../types.js";
 import { VALID_MEMORY_CATEGORIES } from "../types.js";
-import { StringEnum } from "@mariozechner/pi-ai";
 
 export const MEMORY_TOOLS: Tool[] = [
   {

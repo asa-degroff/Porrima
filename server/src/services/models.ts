@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import type { InferenceModel, Settings } from "../types.js";
 import { getSettings } from "./chat-storage.js";
 import { getDefaultLlamaServerUrl } from "./llama-ports.js";

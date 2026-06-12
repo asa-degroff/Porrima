@@ -3,8 +3,8 @@ import type { Request, Response } from "express";
 import { randomUUID, createHash } from "crypto";
 import { readFile } from "fs/promises";
 import { join } from "path";
-import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@mariozechner/pi-ai";
-import type { AgentContext } from "@mariozechner/pi-agent-core";
+import type { Message, ToolCall, ToolResultMessage, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import type { AgentContext } from "@earendil-works/pi-agent-core";
 import { getChat, saveChat, getDb, getSettings, saveSettings, loadPendingState, savePendingState, clearPendingState, getProject } from "../services/chat-storage.js";
 import { chatMessagesToHydratedPiMessages, mergeSystemContextWithUserContent, type ReplayModelIdentity } from "../services/agent.js";
 import { createPiModelFromProvider, discoverAllModels, getEffectiveContextWindow } from "../services/models.js";
@@ -1705,7 +1705,7 @@ async function handleChatStream(
     // Start the agent loop (uses turnAbortController declared earlier)
     console.log(`[chat] Starting agent loop: userPiMessage=${!!userPiMessage}, context.messages.length=${context.messages.length}, tools=${context.tools?.length || 0}`);
     console.log(`[chat] Context messages: ${context.messages.map(m => {
-      const c: any = m.content;
+      const c: any = "content" in m ? m.content : undefined;
       if (typeof c === "string") return `${m.role}:${c.length}ch`;
       if (Array.isArray(c)) {
         let chars = 0;

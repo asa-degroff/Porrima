@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { chatMessagesToPiMessages } from "../services/agent.js";
 import type { ChatMessage } from "../types.js";
-import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 
 const MODEL_ID = "test-model:latest";
 

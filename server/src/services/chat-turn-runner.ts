@@ -1,5 +1,5 @@
-import type { AgentContext, AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, Message, Model, StopReason, ToolCall } from "@mariozechner/pi-ai";
+import type { AgentContext, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, Message, Model, StopReason, ToolCall } from "@earendil-works/pi-ai";
 import { randomUUID } from "crypto";
 import type { Chat, ChatMessage, ChatToolResult, ImageAttachment } from "../types.js";
 import { chatMessagesToHydratedPiMessages, type ReplayModelIdentity } from "./agent.js";

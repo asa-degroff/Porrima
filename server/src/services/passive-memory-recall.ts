@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { embed } from "./embeddings.js";
 import { searchMemories, mmrRerank, updateMemory, type ScoredMemory } from "./memory-storage.js";
 import { rerank, RERANK_INSTRUCTIONS, type RerankOutput } from "./reranker.js";

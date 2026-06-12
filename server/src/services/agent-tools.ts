@@ -1,6 +1,5 @@
-import { Type } from "@sinclair/typebox";
-import type { Tool, ToolCall } from "@mariozechner/pi-ai";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { Type, type Tool, type ToolCall } from "@earendil-works/pi-ai";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { execFile } from "child_process";
 import { readFile, writeFile, mkdir, readdir, stat, access } from "fs/promises";
 import { resolve, dirname, join, relative } from "path";

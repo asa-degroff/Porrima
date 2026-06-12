@@ -4,9 +4,9 @@ import type {
   AgentLoopConfig,
   AgentMessage,
   StreamFn,
-} from "@mariozechner/pi-agent-core";
-import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
-import type { Message, Model } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-agent-core";
+import { agentLoop, agentLoopContinue } from "@earendil-works/pi-agent-core";
+import type { Message, Model } from "@earendil-works/pi-ai";
 
 export interface CreateAgentLoopConfigOptions {
   model: Model<string>;

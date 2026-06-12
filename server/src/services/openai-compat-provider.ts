@@ -2,7 +2,7 @@ import {
   registerApiProvider,
   createAssistantMessageEventStream,
   parseStreamingJson,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import type {
   Model,
   Api,
@@ -13,15 +13,14 @@ import type {
   AssistantMessageEvent,
   Tool,
   StopReason,
-} from "@mariozechner/pi-ai";
-import { transformMessages } from "@mariozechner/pi-ai/dist/providers/transform-messages.js";
-import { sanitizeSurrogates } from "@mariozechner/pi-ai/dist/utils/sanitize-unicode.js";
+} from "@earendil-works/pi-ai";
 import { createHash, randomUUID } from "crypto";
 import { fetch as undiciFetch, Agent as UndiciAgent } from "undici";
 import sharp from "sharp";
 import type { LlamaSlotLease } from "./llama-slot-leases.js";
 import type { ModelProgressCallback, ModelProgressEvent } from "./model-progress.js";
 import { compareWithWarmPrompt, digestPromptText } from "./llama-prompt-debug.js";
+import { sanitizeSurrogates, transformMessagesForProvider } from "./pi-message-utils.js";
 
 // llama.cpp's mtmd decoder (stb_image-based) supports JPEG/PNG/BMP/GIF but NOT WebP.
 // The client encodes uploads as WebP for size, so we re-encode unsupported formats
@@ -826,7 +825,7 @@ function startLlamaPrefillMonitor(input: {
 // ---------------------------------------------------------------------------
 
 async function convertMessages(model: Model<Api>, context: Context): Promise<any[]> {
-  const transformed = transformMessages(context.messages, model);
+  const transformed = transformMessagesForProvider(context.messages, model);
   const params: any[] = [];
 
   if (context.systemPrompt) {

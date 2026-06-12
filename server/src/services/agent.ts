@@ -8,10 +8,10 @@ import {
   type ToolCall,
   type ToolResultMessage,
   type StopReason,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { createPiModelFromProvider, discoverAllModels, getExtractionRoute } from "./models.js";
 import { normalizeRouterModelId } from "./llama-router-client.js";
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import type { ChatMessage, ImageAttachment, MessageUsage } from "../types.js";
 import { hydrateUserImageAttachments } from "./user-image-storage.js";
 import { hydrateToolResultImageAttachments } from "./tool-result-image-storage.js";

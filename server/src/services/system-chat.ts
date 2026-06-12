@@ -1,5 +1,5 @@
 import type { ToolSideEffects } from "./agent-tools.js";
-import type { ToolCall } from "@mariozechner/pi-ai";
+import type { ToolCall } from "@earendil-works/pi-ai";
 import type { AutomationPromptStep, Chat, ChatMessage } from "../types.js";
 import { runHeadlessChatTurn } from "./chat-turn-runner.js";
 

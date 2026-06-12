@@ -1,5 +1,4 @@
-import { Type } from "@sinclair/typebox";
-import type { Tool, ToolCall } from "@mariozechner/pi-ai";
+import { Type, type Tool, type ToolCall } from "@earendil-works/pi-ai";
 import puppeteer from "puppeteer-core";
 import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
