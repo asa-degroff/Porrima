@@ -114,6 +114,8 @@ export function useTTS() {
   // Buffers live audio chunks that arrive during snapshot playback, so they can
   // be played after the snapshot finishes instead of being dropped.
   const pendingLiveChunksRef = useRef<TTSQueueItem[]>([]);
+  // Fires when a live-mode handoff (resumeLivePlayback) finishes naturally.
+  const livePlaybackEndRef = useRef<(() => void) | null>(null);
 
   // Fetch TTS settings from server on mount
   useEffect(() => {
@@ -247,6 +249,7 @@ export function useTTS() {
     chunkAudioActiveRef.current = false;
     chunkModeRef.current = null;
     liveStreamDoneDuringSnapshotRef.current = false;
+    livePlaybackEndRef.current = null;
     loadingRef.current = false;
   }, []);
 
@@ -286,11 +289,19 @@ export function useTTS() {
           isLoading: false,
           currentTime: 0,
         }));
-        // URL-mode playback finished — fire onPlaybackEnd if set (snapshot→live handoff)
+        // URL-mode playback finished. Fire the appropriate callback:
+        // - onPlaybackEnd for snapshot playback (used to chain follow-up reads)
+        // - livePlaybackEnd for live-mode handoff (used to clear the follow state)
         if (onPlaybackEndRef.current) {
           snapshotPlayingRef.current = false;
           const cb = onPlaybackEndRef.current;
           onPlaybackEndRef.current = undefined;
+          if (cb) cb();
+        }
+        if (livePlaybackEndRef.current) {
+          liveAgentAudioActiveRef.current = false;
+          const cb = livePlaybackEndRef.current;
+          livePlaybackEndRef.current = null;
           if (cb) cb();
         }
       } else {
@@ -796,8 +807,12 @@ export function useTTS() {
    * Hand off from snapshot ("read now") playback to live streaming audio.
    * Called when snapshot playback naturally ends while the agent is still streaming.
    * Transfers any buffered live chunks to the active queue and starts playback.
+   *
+   * `onPlaybackEnd` is fired when the live queue drains naturally (either because
+   * the agent stream ended or because the buffered chunks finished with no
+   * more coming). It is NOT fired on user-initiated stop/reset.
    */
-  const resumeLivePlayback = useCallback(() => {
+  const resumeLivePlayback = useCallback((options?: { onPlaybackEnd?: () => void }) => {
     snapshotPlayingRef.current = false;
 
     // Transfer live audio chunks that were buffered during snapshot playback
@@ -821,6 +836,10 @@ export function useTTS() {
     chunkModeRef.current = "url";
     chunkAudioActiveRef.current = false;
 
+    // Store the handoff callback so the URL-mode "queue drained" branch can
+    // fire it when live playback completes.
+    livePlaybackEndRef.current = options?.onPlaybackEnd ?? null;
+
     const hasChunks = chunkQueueRef.current.length > 0;
     setPlaybackState((prev) => ({
       ...prev,
@@ -840,7 +859,10 @@ export function useTTS() {
       void playQueuedChunk(playIdRef.current);
     } else if (!hasChunks && chunkStreamDoneRef.current) {
       // No chunks to play and the agent stream is already done
+      const endCb = livePlaybackEndRef.current;
+      livePlaybackEndRef.current = null;
       setPlaybackState((prev) => ({ ...prev, isPlaying: false, isLoading: false }));
+      if (endCb) endCb();
     }
   }, [playQueuedChunk]);
 

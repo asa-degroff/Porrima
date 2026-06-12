@@ -98,7 +98,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const selectChatRef = useRef<((id: string) => Promise<void>) | null>(null);
   const streamingRef = useRef(false);
   const tts = useTTS();
-  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, setContinuationWaiting: setTtsContinuationWaiting, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio } = tts;
+  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, setContinuationWaiting: setTtsContinuationWaiting, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio, resumeLivePlayback } = tts;
   const {
     userNotebooks,
     agentNotebooks,
@@ -635,6 +635,28 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     follow.cursor = latestText.length;
 
     if (unreadText.trim()) {
+      // When the server is generating live TTS audio for the agent's stream,
+      // switch into live mode after the snapshot so the user hears the
+      // already-generated audio chunks for the unread text and any new chunks
+      // as they arrive — instead of discarding the live chunks and
+      // re-generating fresh TTS for the same text. The server emits audio
+      // chunks only when TTS is enabled and auto-read is on for a streaming
+      // backend, mirroring the server-side `ttsEnabled` flag.
+      const liveAudioExpected =
+        ttsSettings.enabled &&
+        ttsSettings.autoReadEnabled &&
+        (ttsSettings.backend === "qwen3-tts" ||
+          ttsSettings.backend === "supertonic-3" ||
+          ttsSettings.backend === "kokoro");
+
+      if (liveAudioExpected) {
+        setTtsContinuationWaiting(false);
+        resumeLivePlayback({
+          onPlaybackEnd: () => continueManualReadAloudFollowRef.current(id),
+        });
+        return;
+      }
+
       setTtsContinuationWaiting(false);
       void playTts(unreadText, {
         onPlaybackEnd: () => continueManualReadAloudFollowRef.current(id),
@@ -655,7 +677,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
 
     clearManualReadAloudFollow();
-  }, [clearManualReadAloudFollow, playTts, setTtsContinuationWaiting]);
+  }, [clearManualReadAloudFollow, playTts, resumeLivePlayback, setTtsContinuationWaiting, ttsSettings.autoReadEnabled, ttsSettings.backend, ttsSettings.enabled]);
 
   useEffect(() => {
     continueManualReadAloudFollowRef.current = continueManualReadAloudFollow;
