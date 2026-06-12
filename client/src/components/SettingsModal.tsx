@@ -5095,6 +5095,22 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 </div>
               )}
             </div>
+            <div className="space-y-2 pt-2 border-t border-white/10">
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-medium text-white/60">Enrichment batch size</label>
+                <span className="text-xs text-white/40">{enrichmentBatchSize} entries</span>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={20}
+                step={1}
+                value={enrichmentBatchSize}
+                onChange={(e) => setEnrichmentBatchSize(Number(e.target.value))}
+                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+              />
+              <p className="text-xs text-white/30">After generating images in the image sandboc, process this many for the corpus every 10 minutes</p>
+            </div>
           </div>
 
           {/* Skills Section */}
@@ -5179,61 +5195,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
                 <p className="text-xs text-white/30">Maximum messages to include in extraction context</p>
               </div>
 
-              {/* Enrichment batch size */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="block text-sm font-medium text-white/60">Enrichment batch size</label>
-                  <span className="text-xs text-white/40">{enrichmentBatchSize} entries</span>
-                </div>
-                <input
-                  type="range"
-                  min={1}
-                  max={20}
-                  step={1}
-                  value={enrichmentBatchSize}
-                  onChange={(e) => setEnrichmentBatchSize(Number(e.target.value))}
-                  className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
-                />
-                <p className="text-xs text-white/30">After generating images in the image sandboc, process this many for the corpus every 10 minutes</p>
-              </div>
-
-              {/* Sleep Cycle & Wake Cycle */}
-              <div className="pt-4 border-t border-white/10 space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-white/60">Sleep cycle threshold</label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="range"
-                      min={15}
-                      max={240}
-                      step={15}
-                      value={sleepCycleThreshold}
-                      onChange={(e) => setSleepCycleThreshold(Number(e.target.value))}
-                      className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
-                    />
-                    <span className="text-xs text-white/40 w-16 text-right">{sleepCycleThreshold} min</span>
-                  </div>
-                  <p className="text-xs text-white/30">After this period of inactivity, the sleep cycle begins and autonomous modes activate</p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-white/60">Post-synthesis cache warm</label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="range"
-                      min={0}
-                      max={10}
-                      step={1}
-                      value={postSynthesisWarmCount}
-                      onChange={(e) => setPostSynthesisWarmCount(Number(e.target.value))}
-                      className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
-                    />
-                    <span className="text-xs text-white/40 w-16 text-right">{postSynthesisWarmCount === 0 ? 'off' : `${postSynthesisWarmCount} chats`}</span>
-                  </div>
-                  <p className="text-xs text-white/30">Warm caches for recent chats after synthesis. 0 disables. System chat is always warmed.</p>
-                </div>
-
-	              </div>
 	            </div>
 	          </div>
 
@@ -5912,6 +5873,43 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                {automationMessage.text}
 	              </div>
 	            )}
+
+	            {/* Sleep Cycle & Post-synthesis warm */}
+	            <div className="pt-4 border-t border-white/10 space-y-4 mb-4">
+	              <div>
+	                <label className="block text-sm font-medium text-white/60">Sleep cycle threshold</label>
+	                <div className="flex items-center gap-3">
+	                  <input
+	                    type="range"
+	                    min={15}
+	                    max={240}
+	                    step={15}
+	                    value={sleepCycleThreshold}
+	                    onChange={(e) => setSleepCycleThreshold(Number(e.target.value))}
+	                    className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+	                  />
+	                  <span className="text-xs text-white/40 w-16 text-right">{sleepCycleThreshold} min</span>
+	                </div>
+	                <p className="text-xs text-white/30">After this period of inactivity, the sleep cycle begins and autonomous modes activate</p>
+	              </div>
+
+	              <div>
+	                <label className="block text-sm font-medium text-white/60">Post-synthesis cache warm</label>
+	                <div className="flex items-center gap-3">
+	                  <input
+	                    type="range"
+	                    min={0}
+	                    max={10}
+	                    step={1}
+	                    value={postSynthesisWarmCount}
+	                    onChange={(e) => setPostSynthesisWarmCount(Number(e.target.value))}
+	                    className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-400 [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:hover:scale-110"
+	                  />
+	                  <span className="text-xs text-white/40 w-16 text-right">{postSynthesisWarmCount === 0 ? 'off' : `${postSynthesisWarmCount} chats`}</span>
+	                </div>
+	                <p className="text-xs text-white/30">Warm caches for recent chats after synthesis. 0 disables. System chat is always warmed.</p>
+	              </div>
+	            </div>
 
 	            {automationsLoading ? (
 	              <p className="text-xs text-white/40">Loading automations...</p>
