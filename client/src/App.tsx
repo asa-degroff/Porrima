@@ -98,7 +98,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const selectChatRef = useRef<((id: string) => Promise<void>) | null>(null);
   const streamingRef = useRef(false);
   const tts = useTTS();
-  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, setContinuationWaiting: setTtsContinuationWaiting, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio, resumeLivePlayback } = tts;
+  const { settings: ttsSettings, playbackState, loadSettings: loadTtsSettings, updateSettings: updateTtsSettings, play: playTts, stop: stopTts, pause: pauseTts, resume: resumeTts, setContinuationWaiting: setTtsContinuationWaiting, handleAgentAudioChunk, handleAgentAudioDone, cleanupLiveAudio, resumeLivePlayback, isLiveAudioDraining } = tts;
   const {
     userNotebooks,
     agentNotebooks,
@@ -657,11 +657,15 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         return;
       }
 
-      setTtsContinuationWaiting(false);
-      void playTts(unreadText, {
-        onPlaybackEnd: () => continueManualReadAloudFollowRef.current(id),
-      });
-      return;
+      // Don't interrupt live audio that's still draining its queue —
+      // the livePlaybackEnd callback will handle continuation naturally.
+      if (!isLiveAudioDraining()) {
+        setTtsContinuationWaiting(false);
+        void playTts(unreadText, {
+          onPlaybackEnd: () => continueManualReadAloudFollowRef.current(id),
+        });
+        return;
+      }
     }
 
     if (streamStillActive) {
@@ -677,7 +681,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     }
 
     clearManualReadAloudFollow();
-  }, [clearManualReadAloudFollow, playTts, resumeLivePlayback, setTtsContinuationWaiting, ttsSettings.autoReadEnabled, ttsSettings.backend, ttsSettings.enabled]);
+  }, [clearManualReadAloudFollow, isLiveAudioDraining, playTts, resumeLivePlayback, setTtsContinuationWaiting, ttsSettings.autoReadEnabled, ttsSettings.backend, ttsSettings.enabled]);
 
   useEffect(() => {
     continueManualReadAloudFollowRef.current = continueManualReadAloudFollow;
