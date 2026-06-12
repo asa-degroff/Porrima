@@ -119,6 +119,41 @@ export async function updateSettings(settings: Settings): Promise<Settings> {
   return res.json();
 }
 
+export interface AppBuildInfo {
+  version: string;
+  gitCommit: string | null;
+  gitBranch: string | null;
+  buildTime: string;
+  releaseChannel: string;
+}
+
+export interface AppUpdateStatus {
+  current: AppBuildInfo;
+  latest: {
+    version: string;
+    tagName: string;
+    name: string | null;
+    htmlUrl: string;
+    publishedAt: string | null;
+  } | null;
+  updateAvailable: boolean;
+  checkedAt: string;
+  error?: string;
+}
+
+export async function fetchAppVersion(): Promise<AppBuildInfo> {
+  const res = await apiFetch(`${BASE}/app/version`);
+  if (!res.ok) throw new Error("Failed to fetch app version");
+  return res.json();
+}
+
+export async function checkAppUpdate(force = false): Promise<AppUpdateStatus> {
+  const init = { priority: "low" } as RequestInit & { priority?: "low" };
+  const res = await apiFetch(`${BASE}/app/update-check${force ? "?force=1" : ""}`, init);
+  if (!res.ok) throw new Error("Failed to check for updates");
+  return res.json();
+}
+
 // --- Header Image ---
 
 export interface HeaderImageInfo {

@@ -18,8 +18,8 @@ function useMediaQuery(query: string): boolean {
 }
 // @simplewebauthn/browser is dynamically imported in handleAddPasskey
 import { fetchRegisterOptions, verifyRegistration } from "../api/auth";
-import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, getEmbeddingMigrationProgress, clearEmbeddingMigrationProgress, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, ModelsDirConflictError, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, getLlamaScanPaths, previewLlamaScanPath, addLlamaScanPath, removeLlamaScanPath, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, type OverridableSlotId, type RouterCapableSlotId, type RuntimeModelApplyId } from "../api/client";
-import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, EmbeddingMigrationProgressState, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse } from "../api/client";
+import { getLlamaPath, updateLlamaPathApi, listLlamaBinaries, listEmbeddingBackups, createEmbeddingBackup, deleteEmbeddingBackup, restoreEmbeddingBackup, runEmbeddingMigration, getEmbeddingMigrationProgress, clearEmbeddingMigrationProgress, listAgentSnapshots, createAgentSnapshot, deleteAgentSnapshot, restoreAgentSnapshot, discoverModels, getAllServerHealth, getLlamaServers, controlLlamaServer, getLlamaServerLogs, updateLlamaServerSettings, listAvailableLlamaModels, applyLlamaSlotModel, ModelsDirConflictError, clearLlamaSlotModelOverride, convertSlotToRouterMode, getLlamaServiceConfig, previewLlamaServiceConfig, applyLlamaServiceConfig, resetLlamaServiceConfig, setLlamaServiceEnabled, getLlamaScanPaths, previewLlamaScanPath, addLlamaScanPath, removeLlamaScanPath, fetchAutomations, createAutomation, updateAutomation, deleteAutomation, runAutomationNow, resetAutomationPrompts, fetchAutomationRuns, fetchSshConnections, createSshConnection, updateSshConnection, deleteSshConnection, testSshConnection, fetchAppVersion, checkAppUpdate, type OverridableSlotId, type RouterCapableSlotId, type RuntimeModelApplyId } from "../api/client";
+import type { AgentSnapshot, EmbeddingBackup, MigrationProgressEvent, EmbeddingMigrationProgressState, DiscoveredModel, ServerHealthMap, LlamaServerAction, LlamaServerId, LlamaServerStatus, LlamaServiceConfig, LlamaServiceConfigResponse, AppBuildInfo, AppUpdateStatus } from "../api/client";
 import { getPersona, updatePersona, getPersonaHistory, getPersonaVersion } from "../api/persona";
 import { getExtractionPrompt, updateExtractionPrompt } from "../api/extraction-prompt";
 import type { ExtractionPromptStore } from "../api/extraction-prompt";
@@ -55,6 +55,7 @@ const SECTIONS = [
   { id: 'tools', label: 'Tool Options' },
   { id: 'tts', label: 'TTS' },
   { id: 'passkeys', label: 'Security' },
+  { id: 'about', label: 'About' },
 ] as const;
 
 const DEFAULT_EXTRACTION_CTX_SIZE = 16384;
@@ -415,6 +416,19 @@ function formatAutomationDuration(startedAt: string, finishedAt?: string): strin
   return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
 }
 
+function formatBuildDate(value: string | null | undefined): string {
+  if (!value) return "Unknown";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 interface Props {
   settings: Settings;
   models: InferenceModel[];
@@ -453,6 +467,10 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [userDocContent, setUserDocContent] = useState("");
   const [userDocSaving, setUserDocSaving] = useState(false);
   const [userDocMessage, setUserDocMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [appVersion, setAppVersion] = useState<AppBuildInfo | null>(null);
+  const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null);
+  const [appUpdateLoading, setAppUpdateLoading] = useState(false);
+  const [appUpdateError, setAppUpdateError] = useState<string | null>(null);
   const [braveApiKey, setBraveApiKey] = useState(settings.braveApiKey || "");
   const [exaApiKey, setExaApiKey] = useState(settings.exaApiKey || "");
   const [tavilyApiKey, setTavilyApiKey] = useState(settings.tavilyApiKey || "");
@@ -1429,6 +1447,50 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
         setUserDocContent(data?.content || "");
       })
       .catch(() => {});
+  }, []);
+
+  const refreshAppUpdate = useCallback(async (force = false) => {
+    setAppUpdateLoading(true);
+    setAppUpdateError(null);
+    try {
+      const status = await checkAppUpdate(force);
+      setAppUpdate(status);
+      setAppVersion(status.current);
+      setAppUpdateError(status.error || null);
+    } catch (err) {
+      setAppUpdateError(err instanceof Error ? err.message : "Failed to check GitHub releases");
+    } finally {
+      setAppUpdateLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAppUpdateLoading(true);
+    fetchAppVersion()
+      .then((info) => {
+        if (!cancelled) setAppVersion(info);
+      })
+      .catch(() => {});
+    checkAppUpdate()
+      .then((status) => {
+        if (!cancelled) {
+          setAppUpdate(status);
+          setAppVersion(status.current);
+          setAppUpdateError(status.error || null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setAppUpdateError(err instanceof Error ? err.message : "Failed to check GitHub releases");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setAppUpdateLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const refreshAutomations = useCallback(async () => {
@@ -7170,6 +7232,81 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               </svg>
               Run Setup Wizard
             </button>
+          </div>
+
+          {/* About & Updates */}
+          <div id="about" className="space-y-3 pt-2 border-t border-white/10">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-medium text-white/70">About</h3>
+              <button
+                type="button"
+                onClick={() => void refreshAppUpdate(true)}
+                disabled={appUpdateLoading}
+                className="px-2 py-1 rounded-md text-[11px] font-medium bg-white/5 border border-white/15 text-white/50 hover:text-white/80 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all pressable"
+              >
+                {appUpdateLoading ? "Checking..." : "Check"}
+              </button>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 space-y-3">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div>
+                  <div className="text-xs text-white/35">Current build</div>
+                  <div className="text-sm font-medium text-white/80">
+                    v{appVersion?.version || "unknown"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-white/35">Commit</div>
+                  <div className="text-sm font-mono text-white/70 truncate">
+                    {appVersion?.gitCommit || "unknown"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-white/35">Built</div>
+                  <div className="text-sm text-white/70">
+                    {formatBuildDate(appVersion?.buildTime)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-white/35">Channel</div>
+                  <div className="text-sm text-white/70">
+                    {appVersion?.releaseChannel || "stable"}
+                  </div>
+                </div>
+              </div>
+              <div className="border-t border-white/10 pt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <div className="text-xs text-white/35">Latest GitHub release</div>
+                  <div className={`text-sm font-medium ${appUpdate?.updateAvailable ? "text-green-300/90" : "text-white/70"}`}>
+                    {appUpdate?.latest
+                      ? `${appUpdate.latest.tagName}${appUpdate.updateAvailable ? " available" : " is current"}`
+                      : appUpdateError
+                        ? "Unable to check releases"
+                        : "Not checked yet"}
+                  </div>
+                  {appUpdate?.checkedAt && (
+                    <div className="text-xs text-white/30 mt-0.5">
+                      Checked {formatBuildDate(appUpdate.checkedAt)}
+                    </div>
+                  )}
+                  {appUpdateError && (
+                    <div className="text-xs text-red-300/70 mt-1">
+                      {appUpdateError}
+                    </div>
+                  )}
+                </div>
+                {appUpdate?.latest?.htmlUrl && (
+                  <a
+                    href={appUpdate.latest.htmlUrl}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-medium bg-white/5 border border-white/10 text-white/70 hover:text-white hover:bg-white/10 transition-all pressable"
+                  >
+                    Open Release
+                  </a>
+                )}
+              </div>
+            </div>
           </div>
           {/* Sign Out */}
           <div className="pt-2 border-t border-white/10">

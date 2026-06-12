@@ -3,6 +3,8 @@
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/models` | List available models across configured providers |
+| GET | `/api/app/version` | Current baked Porrima build metadata |
+| GET | `/api/app/update-check` | Check the latest GitHub release against the current build. Optional `?force=1` bypasses the short server cache |
 | GET | `/api/llama-servers` | List managed llama.cpp systemd units with process state, HTTP health, and launch metadata |
 | GET | `/api/llama-servers/:id` | Get one managed llama.cpp server status (`inference`, `extraction`, `reranker`, `embedding`, `title-generation`) |
 | POST | `/api/llama-servers/:id/:action` | Start, stop, or restart an allowlisted llama.cpp systemd unit |

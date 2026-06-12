@@ -1,10 +1,15 @@
 {
   "name": "porrima",
+  "version": "0.1.0",
   "private": true,
   "workspaces": [
     "server",
     "client"
   ],
+  "scripts": {
+    "build": "npm run build -w server && npm run build -w client",
+    "write-build-info": "node scripts/write-build-info.mjs"
+  },
   "devDependencies": {
     "@types/node": "^22.19.21",
     "typescript": "^5.9.3",
