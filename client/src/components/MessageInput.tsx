@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback, useLayoutEffect, useEffect, memo } from "react";
 import type { ImageAttachment } from "../types";
-import { useHaptics } from "../hooks/useHaptics";
 import { getDraft, setDraft, clearDraft } from "../hooks/useChat";
 
 interface Props {
@@ -72,7 +71,6 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
   const spacerRef = useRef<HTMLDivElement>(null);
   const buttonsRef = useRef<HTMLDivElement>(null);
   const dragCounterRef = useRef(0);
-  const { medium, heavy, success } = useHaptics();
 
   /**
    * Insert skill chips for /skill-name patterns in text.
@@ -189,7 +187,6 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
   const handleSubmit = useCallback(() => {
     const trimmed = textRef.current.trim();
     if ((!trimmed && images.length === 0) || (disabled && !streaming && isOnline)) return;
-    medium();
     onSend(trimmed, images.length > 0 ? images : undefined);
     textRef.current = "";
     setHasContent(false);
@@ -201,7 +198,7 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
     // Clear draft for this chat
     if (chatId) clearDraft(chatId);
     updateLayout();
-  }, [images, disabled, isOnline, onSend, medium, updateLayout, chatId]);
+  }, [images, disabled, isOnline, onSend, updateLayout, chatId]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing) return;
@@ -312,7 +309,6 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
       try {
         const newImages = await processFiles(f);
         if (newImages.length > 0) {
-          success();
           setImages((prev) => [...prev, ...newImages]);
         }
       } finally {
@@ -523,7 +519,6 @@ export const MessageInput = memo(function MessageInput({ chatId, onSend, disable
             ) : streaming ? (
               <button
                 onClick={() => {
-                  heavy();
                   onAbort?.();
                 }}
                 data-haptic="manual"

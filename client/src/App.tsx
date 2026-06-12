@@ -34,7 +34,6 @@ import { useKeyboardInset } from "./hooks/useKeyboardInset";
 import { fetchChat, fetchChatHeader, updateChat as apiUpdateChat } from "./api/client";
 import { setCachedChat, getCachedChat, clearCachedChat } from "./lib/db";
 import { readStoredValue, removeStoredValue, writeStoredValue } from "./lib/storage";
-import { HapticsProvider } from "./hooks/useHaptics";
 import { ActivityStyleProvider } from "./hooks/useActivityStyle";
 import { useTTS } from "./hooks/useTTS";
 import { TTSControlBar } from "./components/TTSControlBar";
@@ -1302,7 +1301,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   }
 
   return (
-    <HapticsProvider enabled={settings.hapticsEnabled !== false}>
     <ActivityStyleProvider value={activityStyle}>
     <div className="flex h-full overflow-hidden relative isolate" style={totalBottomInset ? { paddingBottom: totalBottomInset } : undefined}>
       {settings.backgroundEffect === "ripple-grid" && (
@@ -1515,7 +1513,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       )}
     </div>
     </ActivityStyleProvider>
-    </HapticsProvider>
   );
 }
 

@@ -339,7 +339,6 @@ export interface Settings {
   activityHue?: number;
   activitySaturation?: number;
   systemPromptPresets?: SystemPromptPreset[];
-  hapticsEnabled?: boolean;
   defaultVisionPreset?: string;
   // Delayed memory extraction settings
   delayedExtractionEnabled?: boolean;

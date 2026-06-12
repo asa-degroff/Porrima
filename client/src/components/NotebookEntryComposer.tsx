@@ -1,6 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { NotebookLink, ImageAttachment } from "../types";
-import { useHaptics } from "../hooks/useHaptics";
 
 const MAX_IMAGES = 5;
 
@@ -28,7 +27,6 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
   const linkButtonRef = useRef<HTMLButtonElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragCounterRef = useRef(0);
-  const { medium } = useHaptics();
 
   // Use pendingLinks from parent (controlled) or initialLinks (uncontrolled edit mode)
   const displayLinks = pendingLinks || initialLinks;
@@ -82,7 +80,6 @@ export function NotebookEntryComposer({ onSubmit, onCancel, placeholder, initial
   };
 
   const handleFileSelect = async (files: FileList) => {
-    medium();
     const startIndex = images.length;
     const processed = await processFiles(files, startIndex);
     setImages(prev => {

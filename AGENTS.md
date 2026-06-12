@@ -78,7 +78,7 @@ See [docs/integrations.md](docs/integrations.md) for full details.
 
 See [docs/ui-patterns.md](docs/ui-patterns.md) for full details.
 
-SSE streaming with thinking blocks, token usage indicator, compaction indicator. Mobile: gesture drawer, keyboard inset, haptic feedback. Conversation search via FTS5. Tailwind v4 glassmorphism. Purple for agent, blue for quick, emerald for projects.
+SSE streaming with thinking blocks, token usage indicator, compaction indicator. Mobile: gesture drawer, keyboard inset. Conversation search via FTS5. Tailwind v4 glassmorphism. Purple for agent, blue for quick, emerald for projects.
 
 ## Project Structure
 
@@ -160,7 +160,7 @@ porrima/
 ├── client/src/
 │   ├── types.ts                     # Shared interfaces (client copy)
 │   ├── api/client.ts                # Fetch API client + SSE parser
-│   ├── hooks/                       # React hooks (useChat, useChats, useProjects, useModels, useSettings, useTTS, useNotebooks, useStreamingTTS, useGestureDrawer, useHaptics, useOnlineStatus, etc.)
+│   ├── hooks/                       # React hooks (useChat, useChats, useProjects, useModels, useSettings, useTTS, useNotebooks, useStreamingTTS, useGestureDrawer, useOnlineStatus, etc.)
 │   ├── components/                  # React components (Sidebar, ChatView, MessageBubble, ArtifactPanel, ImageSandbox, VisionGallery, NotebookView, ConversationSearch, SidebarSearch, CompactionIndicator, OfflineIndicator, TokenIndicator, SkillsBrowser, etc.)
 │   ├── styles/                      # Tailwind styles
 │   ├── lib/                         # IndexedDB cache, utils

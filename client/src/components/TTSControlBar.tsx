@@ -1,5 +1,4 @@
 import { memo } from "react";
-import { useHaptics } from "../hooks/useHaptics";
 import type { PlaybackState } from "../hooks/useTTS";
 
 interface Props {
@@ -40,8 +39,6 @@ export const TTSControlBar = memo(function TTSControlBar({
   onResume,
   onStop,
 }: Props) {
-  const { light } = useHaptics();
-
   const { isPlaying, isPaused, isLoading, currentTime, duration, waitingForContinuation } = playbackState;
   const isChunked = playbackState.mode === "chunked-url" || playbackState.mode === "chunked-stream";
   const chunkLabel = isChunked && playbackState.totalChunks
@@ -69,7 +66,6 @@ export const TTSControlBar = memo(function TTSControlBar({
         ) : (
           <button
             onClick={() => {
-              light();
               isPlaying ? onPause() : onResume();
             }}
             data-haptic="manual"
@@ -110,7 +106,6 @@ export const TTSControlBar = memo(function TTSControlBar({
         {(!isLoading || waitingForContinuation) && (
           <button
             onClick={() => {
-              light();
               onStop();
             }}
             data-haptic="manual"

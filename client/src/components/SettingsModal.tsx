@@ -38,7 +38,6 @@ const SECTIONS = [
   { id: 'inference', label: 'Inference Servers' },
   { id: 'theme', label: 'Appearance' },
   { id: 'background', label: 'Background' },
-  { id: 'haptics', label: 'Haptics' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'ssh', label: 'Remote Hosts' },
   { id: 'persona', label: 'Persona' },
@@ -605,7 +604,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
   const [editingPresetContent, setEditingPresetContent] = useState<string>("");
   const [presetSaving, setPresetSaving] = useState(false);
   const [presetMessage, setPresetMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-  const [hapticsEnabled, setHapticsEnabled] = useState(settings.hapticsEnabled ?? true);
   const push = usePushNotifications();
   const [pushTestState, setPushTestState] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [sshConnections, setSshConnections] = useState<SshConnection[]>([]);
@@ -740,6 +738,7 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       passiveRecallMemoriesPerTurn: settings.passiveRecallMemoriesPerTurn ?? 12,
     });
   };
+
   const [passkeyAdding, setPasskeyAdding] = useState(false);
   const [passkeyMessage, setPasskeyMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [ttsSettings, setTtsSettings] = useState<TTSSettings | null>(null);
@@ -1775,7 +1774,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
       activityHue,
       activitySaturation,
       systemPromptPresets: presets.length > 0 ? presets : undefined,
-      hapticsEnabled,
 
       preserveThinking,
       modelPreserveThinking: undefined,
@@ -4222,21 +4220,6 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
               </div>
             </div>
           )}
-
-          {/* Haptic Feedback */}
-          <div id="haptics" className="space-y-2">
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="block text-sm font-medium text-white/60">Haptic Feedback</label>
-                <p className="text-xs text-white/30 mt-0.5">Vibration feedback for interactions (mobile only)</p>
-              </div>
-              <ToggleSwitch
-                checked={hapticsEnabled}
-                onChange={() => setHapticsEnabled(!hapticsEnabled)}
-                accentColor="blue"
-              />
-            </div>
-          </div>
 
           {/* Push Notifications */}
           <div id="notifications" className="space-y-3 pt-2 border-t border-white/10">

@@ -16,7 +16,6 @@
 
 - **Gesture drawer** (`useGestureDrawer.ts`): Up/right direction swipe with velocity-based snapping, 30% threshold
 - **Keyboard inset** (`useKeyboardInset.ts`): VisualViewport API detection for mobile keyboard handling
-- **Haptic feedback** (`useHaptics.tsx`): Web Haptics API with patterns — light, medium, heavy, success, error, navigation, toolComplete, streamingComplete; settings-gated
 
 ## Conversation Search
 
