@@ -327,10 +327,25 @@ export function useTTS() {
     chunkAudioActiveRef.current = true;
     currentAudioUrlRef.current = next.audioUrl;
     loadingRef.current = true;
-    onAudioEndedRef.current = () => {
+    // The global `ended` listener registered in the useEffect will also fire
+    // for this same `ended` event. In URL mode we want exactly one
+    // playQueuedChunk call per chunk, so let the per-chunk listener below
+    // own the handoff and neutralize the global dispatch for this chunk.
+    onAudioEndedRef.current = () => {};
+
+    // Attach a per-chunk `ended` listener with { once: true } so the recursive
+    // handoff to the next chunk fires exactly once per chunk. The global
+    // `ended` listener can fire more than once across a single chunk
+    // transition in some browsers when the audio src changes rapidly: the
+    // stale `ended` for the previous source can arrive after we've already
+    // started loading the next one, which would otherwise shift another
+    // chunk off the queue and cut the in-flight chunk off after a few hundred
+    // milliseconds of audio.
+    const handleChunkEnded = () => {
       if (playId !== playIdRef.current || chunkModeRef.current !== "url") return;
       void playQueuedChunk(playId);
     };
+    audio.addEventListener("ended", handleChunkEnded, { once: true });
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -370,6 +385,7 @@ export function useTTS() {
       const message = err instanceof Error ? err.message : "Failed to play audio chunk";
       setError(message);
       console.error("[TTS] Chunk playback error:", err);
+      audio.removeEventListener("ended", handleChunkEnded);
       loadingRef.current = false;
       chunkAudioActiveRef.current = false;
       setPlaybackState((prev) => ({ ...prev, isLoading: false, isPlaying: false }));
