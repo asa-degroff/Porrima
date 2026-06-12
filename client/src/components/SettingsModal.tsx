@@ -218,7 +218,7 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
     memoryContextRerankDocumentLimit: 12,
     memoryContextRerankTopN: 10,
     passiveRecallQueryChars: 4000,
-    passiveRecallRerankQueryChars: 700,
+    passiveRecallRerankQueryChars: 1200,
     passiveRecallSearchLimit: 28,
     passiveRecallCandidatePool: 18,
     passiveRecallDiverseCandidateLimit: 12,
@@ -237,7 +237,7 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
     memoryContextRerankDocumentLimit: 16,
     memoryContextRerankTopN: 15,
     passiveRecallQueryChars: 6000,
-    passiveRecallRerankQueryChars: 900,
+    passiveRecallRerankQueryChars: 2000,
     passiveRecallSearchLimit: 40,
     passiveRecallCandidatePool: 24,
     passiveRecallDiverseCandidateLimit: 16,
@@ -256,7 +256,7 @@ const RETRIEVAL_PRESETS: Record<Exclude<RetrievalDepthProfile, "custom">, Retrie
     memoryContextRerankDocumentLimit: 24,
     memoryContextRerankTopN: 20,
     passiveRecallQueryChars: 8000,
-    passiveRecallRerankQueryChars: 1200,
+    passiveRecallRerankQueryChars: 2400,
     passiveRecallSearchLimit: 64,
     passiveRecallCandidatePool: 36,
     passiveRecallDiverseCandidateLimit: 24,
@@ -5770,13 +5770,13 @@ export function SettingsModal({ settings, models, refreshModels, onApply, onSave
 	                        <div className="text-[10px] text-white/30">Runs during tool loops and after substantial responses.</div>
 	                      </div>
 	                      <RetrievalRange label="Recall query length" description="Maximum recent transcript text used for passive search." value={passiveRecallQueryChars} min={2000} max={12000} step={500} suffix="chars" onChange={setPassiveRecallQueryChars} onCommit={switchToCustom} />
-	                      <RetrievalRange label="Recall rerank query length" description="Maximum trajectory text sent to the reranker." value={passiveRecallRerankQueryChars} min={400} max={2000} step={100} suffix="chars" onChange={setPassiveRecallRerankQueryChars} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Recall rerank query length" description="Maximum trajectory text sent to the reranker." value={passiveRecallRerankQueryChars} min={400} max={3000} step={100} suffix="chars" onChange={setPassiveRecallRerankQueryChars} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Recall search results" description="Hybrid retrieval results kept for passive recall." value={passiveRecallSearchLimit} min={12} max={96} step={2} suffix="docs" onChange={setPassiveRecallSearchLimit} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Recall candidate pool" description="Adjusted-score candidates accumulated before reranking." value={passiveRecallCandidatePool} min={8} max={96} step={2} suffix="docs" onChange={setPassiveRecallCandidatePool} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Recall diverse candidates" description="MMR-selected candidates eligible for the passive reranker batch." value={passiveRecallDiverseCandidateLimit} min={8} max={48} step={1} suffix="docs" onChange={setPassiveRecallDiverseCandidateLimit} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Recall reranked documents" description="Documents scored by the reranker for passive recall." value={passiveRecallRerankDocumentLimit} min={8} max={32} step={1} suffix="docs" onChange={setPassiveRecallRerankDocumentLimit} onCommit={switchToCustom} />
                       <RetrievalRange label="Recall document length" description="Maximum memory text sent to the reranker for scoring." value={passiveRecallRerankDocumentChars} min={400} max={4000} step={100} suffix="chars" onChange={setPassiveRecallRerankDocumentChars} onCommit={switchToCustom} />
-	                      <RetrievalRange label="Recall returned results" description="Top passive reranker scores retained before precision filtering." value={passiveRecallRerankTopN} min={2} max={32} step={1} suffix="docs" onChange={setPassiveRecallRerankTopN} onCommit={switchToCustom} />
+	                      <RetrievalRange label="Recall returned results" description="Top passive reranker scores retained before precision filtering." value={passiveRecallRerankTopN} min={2} max={8} step={1} suffix="docs" onChange={setPassiveRecallRerankTopN} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Memories per injection" description="Maximum passive memories injected at once." value={passiveRecallMemoriesPerInjection} min={1} max={5} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerInjection} onCommit={switchToCustom} />
 	                      <RetrievalRange label="Memories per turn" description="Maximum passive memories injected across one assistant turn." value={passiveRecallMemoriesPerTurn} min={0} max={30} step={1} suffix="memories" onChange={setPassiveRecallMemoriesPerTurn} onCommit={switchToCustom} />
 	                    </div>
