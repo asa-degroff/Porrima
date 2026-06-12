@@ -695,7 +695,6 @@ export function SetupModal({ settings, models, refreshModels, onSave, onClose }:
                   type="text"
                   value={agentName}
                   onChange={(e) => setAgentName(e.target.value)}
-                  placeholder="e.g. Porrima, Qje, Assistant"
                   className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-sm text-white/80 placeholder-white/30 outline-none focus:ring-1 focus:ring-purple-400/30 focus:border-purple-400/30 transition-all"
                 />
                 <p className="text-[10px] text-white/30 mt-1">Shown in the sidebar and throughout the UI</p>
