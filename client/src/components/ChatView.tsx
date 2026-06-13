@@ -14,6 +14,7 @@ import { SkillSelector } from "./SkillSelector";
 import { PinnedPanel } from "./PinnedPanel";
 import { usePinnedItem } from "../contexts/PinnedItemContext";
 import { PrefillActivityIcon } from "./PrefillActivityIcon";
+import { getGreeting } from "../utils/greeting";
 
 const hamburgerIconLg = (
   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -856,6 +857,9 @@ export function ChatView({
             {isFirstMessageMode ? (
               <div className="h-full flex items-center justify-center">
                 <div className="relative z-20 w-full max-w-3xl mx-auto">
+                  <p className="text-left text-xl md:text-2xl text-white/30 font-bold mb-4">
+                    {getGreeting()}
+                  </p>
                   {renderMessageInput("centered")}
                   {hasStatusNotice && (
                     <div className="mt-3 space-y-2">
