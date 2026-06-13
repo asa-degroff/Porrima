@@ -1,6 +1,6 @@
 # Porrima
 
-A self-hosted, memory-native AI agent framework. Persistent first-person memory, project context, agentic tool execution, web tools, speech, image workflows, and full model/hardware observability — all running on your own hardware.
+A self-hosted, memory-native AI agent framework and cross-platform GUI application. 
 
 ## Features
 
@@ -91,7 +91,7 @@ Full sovereignty over data, model, infrastructure, and operation. Safe from depr
 
 | Slot | Pick |
 |---|---|
-| Main chat | Qwen 3.6 27B (Q6_K) or Gemma 4 31B |
+| Main chat | Qwen 3.6 27B or Gemma 4 31B |
 | Memory extraction | Same family as the main model — Qwen 3.5 9B / 4B or Gemma 4 26B A4B / 12B / E4B |
 | Title generation | Gemma 4 E2B (or E4B) |
 | Reranker | Qwen3-reranker 0.6B |
@@ -101,6 +101,8 @@ Full sovereignty over data, model, infrastructure, and operation. Safe from depr
 Use an extraction model from the same family as the main chat model. The main and extraction models share a first-person perspective, and matching families keep the main model from perceiving its memories as messages from an external entity.
 
 The main model should run on the GPU; the extraction, reranker, title, and embedding models typically run on CPU in parallel, drawing from a separate pool of system RAM and not contending with the interactive main model.
+
+These are recommendations, but you can run it with whatever model you want, and the choices will likely change in the future.
 
 ## Setup
 
