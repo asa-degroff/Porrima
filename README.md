@@ -1,5 +1,7 @@
 # Porrima
 
+![Porrima brand image](/assets/porrima-brand-image.avif)
+
 A self-hosted, memory-native AI agent framework and cross-platform GUI application. 
 
 ## Features
