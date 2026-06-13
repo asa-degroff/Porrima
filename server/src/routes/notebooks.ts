@@ -7,8 +7,6 @@ import {
   deleteNotebookEntry,
   searchNotebookEntries,
 } from "../services/notebook-storage.js";
-import { getSettings } from "../services/chat-storage.js";
-import { extractMemoriesFromText } from "../services/memory-extraction.js";
 import { saveUserImage, stripImageAttachmentData } from "../services/user-image-storage.js";
 import type { ImageAttachment, NotebookEntry } from "../types.js";
 
@@ -106,18 +104,15 @@ router.post("/user", async (req, res) => {
     await updateNotebookEntry('user', entry.id, { images: persistedImages });
   }
 
-  // Auto-extract memories from user entry (fire-and-forget)
-  const settings = await getSettings();
-  const modelId = settings.extractionModelId || settings.defaultModelId;
-  extractMemoriesFromText(modelId, content, 'user', entry.id).catch(e =>
-    console.error("[notebook] User entry memory extraction failed:", e)
-  );
-
   res.status(201).json(entry);
 });
 
 // NOTE: The manual agent review trigger endpoint was removed.
 // Agent notebook writing now happens via the automation/synthesis system.
+// Per-entry memory extraction has also been retired — the agent reviews
+// notebook content autonomously during synthesis cycles, and notebook
+// entries surface into context as memory blocks (blockType 'notebook' /
+// 'synthesis') rather than as atomic-fact extractions.
 
 // Update entry (add links, edit content, attach images)
 router.patch("/:author/:id", async (req, res) => {

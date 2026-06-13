@@ -1868,8 +1868,7 @@ export async function dedupAndSave(
 ): Promise<DedupAndSaveOutcome> {
   // Guard: if tied to a chat, verify it still exists. Catch races where
   // the chat was deleted during extraction (immediate queue, pre-compaction,
-  // delayed, or save_memory tool mid-conversation). Empty chatId means
-  // non-chat source (e.g. notebook) — skip the check.
+  // delayed, or save_memory tool mid-conversation).
   if (chatId) {
     const chatExists = await getChat(chatId).catch(() => null);
     if (!chatExists) {
@@ -2724,57 +2723,6 @@ export async function preCompactionFlush(
     });
   } catch (e) {
     runHandle.fail(e);
-    throw e;
-  }
-}
-
-/**
- * Extract memories from notebook entry content.
- * Reuses the same extraction pipeline as chat messages.
- */
-export async function extractMemoriesFromText(
-  modelId: string,
-  text: string,
-  author: 'user' | 'agent',
-  entryId: string
-): Promise<void> {
-  console.log(`[memory] Extracting from ${author} notebook entry ${entryId}`);
-
-  const systemPrompt = await buildExtractionSystemPrompt();
-  const authorLabel = author === 'user' ? 'User notebook entry' : 'Agent notebook entry';
-
-  try {
-    // Retry happens per-chunk inside extractInChunks.
-    const chunkResult = await extractInChunks({
-      modelId,
-      systemPrompt,
-      segments: [{ label: authorLabel, text, splittable: true }],
-      contextLabel: `extractMemoriesFromText entry=${entryId}`,
-    });
-
-    const facts = chunkResult.facts;
-    if (facts.length === 0) {
-      console.log("[memory] No memories extracted from notebook entry");
-      return;
-    }
-
-    console.log(`[memory] Extracted ${facts.length} memory(ies) from notebook across ${chunkResult.chunkCount} chunk(s), embedding batch...`);
-
-    let embeddings: number[][];
-    try {
-      embeddings = await withRetry(
-        () => embedBatch(facts.map((f) => f.text)),
-        `embedBatch for ${facts.length} notebook memories (entry ${entryId})`
-      );
-    } catch (e) {
-      console.error("[memory] Batch embedding failed:", e);
-      return;
-    }
-
-    await dedupAndSave(facts, embeddings, '', undefined, author === 'user' ? 'notebook' : 'notebook', entryId);
-    console.log("[memory] Notebook memory extraction complete");
-  } catch (e) {
-    console.error("[memory] Notebook extraction failed:", e);
     throw e;
   }
 }

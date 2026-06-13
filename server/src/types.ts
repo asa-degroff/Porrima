@@ -459,7 +459,7 @@ export const VALID_MEMORY_CATEGORIES: readonly MemoryCategory[] = [
 /** Fallback category assigned when the extraction model produces an invalid category. */
 export const FALLBACK_MEMORY_CATEGORY: MemoryCategory = "note";
 
-export type MemorySourceType = 'chat' | 'chat_delayed' | 'chat_immediate' | 'notebook' | 'explicit' | 'synthesis';
+export type MemorySourceType = 'chat' | 'chat_delayed' | 'chat_immediate' | 'explicit' | 'synthesis';
 
 export interface Memory {
   id: string;
@@ -474,7 +474,7 @@ export interface Memory {
   projectId?: string;
   // Temporal layering fields
   sourceType?: MemorySourceType;
-  sourceId?: string;  // chatId or notebookEntryId
+  sourceId?: string;  // chatId for chat-sourced memories
   sourceMessageStartTimestamp?: number;
   sourceMessageEndTimestamp?: number;
   sourceMessageStartIndex?: number;
