@@ -92,6 +92,12 @@ export function extractTextForTTS(markdown: string, mode: TTSTextMode = "strippe
       // Remove LaTeX (always)
       .replace(/\$\$[\s\S]*?\$\$/g, "")
       .replace(/\$[^$\n]+\$/g, "")
+      // Normalize arrow/symbol characters that TTS models read as glyph names
+      // ("right arrow", "left right arrow", etc.) — convert to punctuation for natural pauses
+      .replace(/[→⇒➔➜➝➞]/g, ", ")     // right arrows → comma
+      .replace(/[←⇐]/g, ", ")           // left arrows → comma
+      .replace(/[↔⇔⇄↕⇅⇵]/g, " — ")   // bidirectional/up-down arrows → em dash
+      .replace(/↵/g, " return ")        // return/enter symbol → word
       // Convert parentheses to commas for natural pauses in TTS
       // (parenthetical content) → , parenthetical content,
       .replace(/\(/g, ", ")
